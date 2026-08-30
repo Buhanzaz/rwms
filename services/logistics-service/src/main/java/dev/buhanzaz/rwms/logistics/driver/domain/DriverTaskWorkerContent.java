@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.driver.domain;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -12,22 +13,49 @@ import java.util.UUID;
  * route transitions remain owned by their existing aggregates.
  */
 public record DriverTaskWorkerContent(
-    String taskText, List<Work> works, List<Material> materials, List<Comment> comments) {
+    String taskText,
+    List<Work> works,
+    List<Material> materials,
+    List<Comment> comments,
+    List<SourceMedia> sourceMedia) {
   public DriverTaskWorkerContent {
     taskText = optionalText(taskText, 2_000, "taskText");
     works = copy(works, 100, "works");
     materials = copy(materials, 100, "materials");
     comments = copy(comments, 100, "comments");
+    sourceMedia = copy(sourceMedia, 100, "sourceMedia");
+    java.util.Set<UUID> mediaIds = new java.util.LinkedHashSet<>();
+    for (SourceMedia media : sourceMedia) {
+      if (!mediaIds.add(media.mediaId())) {
+        throw new IllegalArgumentException("Driver task source media identities must be unique");
+      }
+    }
+    for (Work work : works) {
+      if (!mediaIds.containsAll(work.sourceMediaIds())) {
+        throw new IllegalArgumentException("Driver work references unknown source media");
+      }
+    }
+  }
+
+  /** Preserves source compatibility for tasks created before source gallery support. */
+  public DriverTaskWorkerContent(
+      String taskText, List<Work> works, List<Material> materials, List<Comment> comments) {
+    this(taskText, works, materials, comments, List.of());
   }
 
   /** Returns an empty snapshot used by driver workflows that have no structured worker content. */
   public static DriverTaskWorkerContent empty() {
-    return new DriverTaskWorkerContent(null, List.of(), List.of(), List.of());
+    return new DriverTaskWorkerContent(null, List.of(), List.of(), List.of(), List.of());
   }
 
   /** Returns whether this snapshot adds no content beyond the legacy route description. */
+  @JsonIgnore
   public boolean isEmpty() {
-    return taskText == null && works.isEmpty() && materials.isEmpty() && comments.isEmpty();
+    return taskText == null
+        && works.isEmpty()
+        && materials.isEmpty()
+        && comments.isEmpty()
+        && sourceMedia.isEmpty();
   }
 
   /** One ordered, immutable operation displayed inside the existing worker task. */
@@ -37,7 +65,8 @@ public record DriverTaskWorkerContent(
       double quantity,
       String unit,
       Integer durationMinutes,
-      String comment) {
+      String comment,
+      List<UUID> sourceMediaIds) {
     public Work {
       if (id == null
           || !Double.isFinite(quantity)
@@ -48,6 +77,36 @@ public record DriverTaskWorkerContent(
       name = requiredText(name, 1_000, "work.name");
       unit = optionalText(unit, 32, "work.unit");
       comment = optionalText(comment, 2_000, "work.comment");
+      sourceMediaIds = copy(sourceMediaIds, 100, "work.sourceMediaIds");
+      if (sourceMediaIds.stream().distinct().count() != sourceMediaIds.size()) {
+        throw new IllegalArgumentException("Work source media identities must be unique");
+      }
+    }
+
+    /** Preserves source compatibility for work rows without gallery references. */
+    public Work(
+        UUID id,
+        String name,
+        double quantity,
+        String unit,
+        Integer durationMinutes,
+        String comment) {
+      this(id, name, quantity, unit, durationMinutes, comment, List.of());
+    }
+  }
+
+  /** Immutable READY source photo reference resolved by task-board through its existing read path. */
+  public record SourceMedia(
+      UUID mediaId,
+      long generation,
+      String contentType,
+      OffsetDateTime capturedAt,
+      OffsetDateTime recordedAt) {
+    public SourceMedia {
+      if (mediaId == null || generation < 1 || recordedAt == null) {
+        throw new IllegalArgumentException("Driver task source media snapshot is invalid");
+      }
+      contentType = optionalText(contentType, 128, "sourceMedia.contentType");
     }
   }
 

@@ -413,6 +413,7 @@ public class DriverBoardService {
                 repair.repairId(),
                 repair.version(),
                 repair.rentalItemId(),
+                cabin.version(),
                 cabin.number(),
                 repair.priority(),
                 repair.complexity().name(),

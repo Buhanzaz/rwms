@@ -943,6 +943,7 @@ export function MapCanvas({
           onUnschedule={onUnscheduleRequest}
           onMoveTask={onMoveTask}
           onClose={() => onSelect(null)}
+          warehouses={workspace.warehouses}
         />
       ) : null}
       {!mapReady ? <div className="map-overlay progress-card"><span className="spinner">Карта запускается…</span></div> : null}

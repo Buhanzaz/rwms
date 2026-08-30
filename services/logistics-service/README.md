@@ -62,8 +62,15 @@ slot/tariff extension in
 explicit fixed/flexible slot kind in
 [`V66`](src/main/resources/db/migration/V66__customer_delivery_slot_kind.sql).
 
-Delivery offers are the fixed warehouse-local windows `09:00-12:00`, `12:00-15:00` and
-`15:00-18:00`, plus one `DURING_DAY` choice spanning the complete configured delivery day.
+For an ordinary warehouse, delivery offers are the fixed warehouse-local windows `09:00-12:00`,
+`12:00-15:00` and `15:00-18:00`, plus one `DURING_DAY` choice spanning the complete configured
+delivery day. A representative warehouse exposes only `DURING_DAY`: local published shifts still
+use the same route-capacity planner, while a locally infeasible day may remain a flexible,
+logistics-confirmed candidate only when a direct active incoming support link permits that date and
+overlaps the customer day, and either permits both drivers and vehicles or contractor fallback.
+Excluded dates override explicit dates and weekday recurrence. This fallback is re-evaluated during
+hold, creates no synthetic shift or external resource reservation, and never opens a fixed window;
+ordinary warehouses without local capacity continue to fail closed.
 [`CustomerDeliverySlotService`](src/main/java/dev/buhanzaz/rwms/logistics/customer/service/CustomerDeliverySlotService.java)
 persists offered and held capacity and uses a private Valhalla truck matrix to calculate exact road
 time. `travelZoneHours` remains an informational unbounded depot band; it does not determine either
@@ -139,8 +146,13 @@ idempotent arrival records one destination receipt and releases the reservations
 furniture-only. The resulting task-board registration reuses the existing structured `taskText`,
 `works`, `materials` and `comments` fields. Logistics freezes the exact route, cabin
 characteristics, required/actual furniture difference and ordered load/travel/unload instructions
-in `driver_logistics_task.worker_content_json`, so a lost registration response or a pre-start
-content correction converges on the same DriverApp/WorkerApp projection without a second mobile API.
+plus generation-aware source-cabin gallery references in
+`driver_logistics_task.worker_content_json`, so a lost registration response or a pre-start content
+correction converges on the same DriverApp/WorkerApp projection without a second mobile API. A
+create command may also name active capital-repair cabins at the destination as independent
+top-level return lines. Under stable asset/repair locks it atomically creates a linked ordinary
+concrete-line transfer back to the source warehouse, assigns the same trip driver and keeps that
+post-unload reverse cargo out of the outbound capacity calculation.
 
 `POST /api/logistics/v1/historical-rental-movements` records one past shipment or return directly
 from a cabin card. It accepts a visible logistics client, the current cabin version and a
@@ -498,7 +510,7 @@ services and leaf clients.
 | `LogisticsShipmentCancellationRecovery` | Shipment-cancellation evidence checks, historical reconciliation audit closure and exact lost-response lease-attempt reopening; the shipment coordinator retains the document state machine and compensation ordering |
 | `DocumentDriverTaskPlanner` | One idempotent document-owned task with ordered cabin members for each new scheduled shipment, return or transfer; waiting legacy line tasks converge to the group and started ones fence replanning |
 | `TransferPlanService`, `TransferPlanWorkflowStore` | Versioned transfer draft/confirmation/departure/arrival/cancellation owner; coordinates fenced asset reservations, trip commitments and explicit resource reposition without changing stock during draft evaluation |
-| `TransferDriverTaskContentService`, `DriverTaskWorkerContentCodec` | Deterministic exact transfer route/cargo/furniture instructions over the existing task-board DriverApp/WorkerApp projection, durably retained for idempotent retries and pre-start replacement |
+| `TransferDriverTaskContentService`, `CapitalRepairDriverTaskContentService`, `DriverTaskWorkerContentCodec` | Deterministic exact transfer/return route, cargo, source-media and furniture instructions over the existing task-board DriverApp/WorkerApp projection, durably retained for idempotent retries and pre-start replacement |
 | `DriverTripProjectionService` | Structured task/board trip facts with one asset read per distinct order and explicit unavailable readiness on dependency failure |
 | `ShipmentTaskSettingsService` | Warehouse-scoped, version-fenced cap reused by every grouped trip; materializes default one atomically and rejects over-limit planning |
 | Rental-order shipment/completion and reconciliation coordinators | Document hooks for rental shipment, terminal return and reconciliation request commands |

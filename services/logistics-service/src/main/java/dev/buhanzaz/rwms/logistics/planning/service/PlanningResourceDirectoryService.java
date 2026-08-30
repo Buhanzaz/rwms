@@ -92,6 +92,61 @@ public class PlanningResourceDirectoryService {
         .toList();
   }
 
+  /** Returns every active direct support edge adjacent to the selected planning warehouse. */
+  public List<PlanningWarehouseSupportLinkResource> supportNetwork(UUID warehouseId) {
+    Objects.requireNonNull(warehouseId, "warehouseId");
+    WarehouseIdentity selected = dependencies.readWarehouseIdentity(warehouseId);
+    requireActiveWarehouse(selected, warehouseId);
+    List<WarehouseSupportLink> links = dependencies.listWarehouseSupportNetwork(warehouseId);
+    if (links == null) {
+      throw malformed("Warehouse-service returned no support-network directory");
+    }
+    Set<UUID> linkIds = new HashSet<>();
+    return links.stream()
+        .map(
+            link -> {
+              if (link == null
+                  || link.id() == null
+                  || link.version() < 0
+                  || link.priority() < 1
+                  || !linkIds.add(link.id())
+                  || link.supportWarehouse() == null
+                  || link.servedWarehouse() == null
+                  || (!warehouseId.equals(link.supportWarehouse().id())
+                      && !warehouseId.equals(link.servedWarehouse().id()))) {
+                throw malformed("Warehouse-service returned an invalid support-network directory");
+              }
+              requireActiveWarehouse(link.supportWarehouse(), link.supportWarehouse().id());
+              requireActiveWarehouse(link.servedWarehouse(), link.servedWarehouse().id());
+              if (!link.servedWarehouse().representative()) {
+                throw malformed("Warehouse-service returned a non-representative served endpoint");
+              }
+              return supportLinkResource(link);
+            })
+        .toList();
+  }
+
+  private static PlanningWarehouseSupportLinkResource supportLinkResource(
+      WarehouseSupportLink link) {
+    return new PlanningWarehouseSupportLinkResource(
+        link.id(),
+        link.version(),
+        warehouseResource(link.supportWarehouse()),
+        warehouseResource(link.servedWarehouse()),
+        link.priority(),
+        link.allowDrivers(),
+        link.allowVehicles(),
+        link.allowInventory(),
+        link.allowDirectFulfillment(),
+        link.allowInterwarehouseTransfer(),
+        link.allowContractorFallback(),
+        link.allowedWeekdays(),
+        link.allowedDates(),
+        link.excludedDates(),
+        link.serviceStart(),
+        link.serviceEnd());
+  }
+
   /** Returns task-board-qualified drivers after validating the exact active warehouse identity. */
   public List<PlanningDriverResource> drivers(UUID warehouseId) {
     return drivers(warehouseId, null, false);

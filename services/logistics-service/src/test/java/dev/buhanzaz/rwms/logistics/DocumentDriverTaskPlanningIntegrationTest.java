@@ -8,13 +8,25 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateReturnRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateShipmentRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateTransferRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnLineRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnCapitalRepairLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnPickupRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferLineRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferPlanRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferResourceRepositionRequest;
+import dev.buhanzaz.rwms.logistics.domain.TransferResourceRepositionMode;
+import dev.buhanzaz.rwms.logistics.domain.TransferPlanState;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskPlanningMode;
+import dev.buhanzaz.rwms.logistics.driver.service.DriverTaskService;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -60,11 +72,21 @@ class DocumentDriverTaskPlanningIntegrationTest {
       UUID.fromString("00000000-0000-0000-0000-000000000a08");
   private static final UUID SECOND_SHIPMENT_ASSET =
       UUID.fromString("00000000-0000-0000-0000-000000000a09");
+  private static final UUID FIRST_REPAIR =
+      UUID.fromString("00000000-0000-0000-0000-000000000a10");
+  private static final UUID SECOND_REPAIR =
+      UUID.fromString("00000000-0000-0000-0000-000000000a11");
+  private static final UUID FIRST_REPAIR_ASSET =
+      UUID.fromString("00000000-0000-0000-0000-000000000a12");
+  private static final UUID SECOND_REPAIR_ASSET =
+      UUID.fromString("00000000-0000-0000-0000-000000000a13");
 
   @Container @ServiceConnection
   static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
   @Autowired LogisticsDocumentService documents;
+  @Autowired LogisticsWarehouseLifecycle lifecycle;
+  @Autowired DriverTaskService driverTaskService;
   @Autowired JdbcTemplate jdbc;
 
   @MockitoBean LogisticsDependencyGateway dependencies;
@@ -89,6 +111,10 @@ class DocumentDriverTaskPlanningIntegrationTest {
         .thenReturn(
             new LogisticsDependencyGateway.WarehouseDriverQueue(
                 WAREHOUSE, QUEUE_DEFINITION, UUID.randomUUID()));
+    when(dependencies.readWarehouseDriverQueue(DESTINATION))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseDriverQueue(
+                DESTINATION, QUEUE_DEFINITION, UUID.randomUUID()));
     when(dependencies.readRentalItemSnapshot(SHIPMENT_ASSET))
         .thenReturn(snapshot(SHIPMENT_ASSET, "БТ-201"));
     when(dependencies.readRentalItemSnapshot(SECOND_SHIPMENT_ASSET))
@@ -96,7 +122,22 @@ class DocumentDriverTaskPlanningIntegrationTest {
     when(dependencies.readRentalItemSnapshot(RETURN_ASSET))
         .thenReturn(snapshot(RETURN_ASSET, "БТ-202"));
     when(dependencies.readRentalItemSnapshot(TRANSFER_ASSET))
-        .thenReturn(snapshot(TRANSFER_ASSET, "БТ-203"));
+        .thenReturn(
+            new LogisticsDependencyGateway.RentalItemSnapshot(
+                TRANSFER_ASSET, 9, WAREHOUSE, "БТ-203", "FREE", List.of()));
+    when(dependencies.readWarehouseIdentity(WAREHOUSE))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseIdentity(
+                WAREHOUSE, 1, true, "Санкт-Петербург", null, "Europe/Moscow"));
+    when(dependencies.readWarehouseIdentity(DESTINATION))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseIdentity(
+                DESTINATION, 1, true, "Великий Новгород", null, "Europe/Moscow"));
+    when(dependencies.readCabinMediaSnapshots(WAREHOUSE, List.of(TRANSFER_ASSET)))
+        .thenReturn(
+            List.of(
+                new LogisticsDependencyGateway.CabinMediaSnapshot(
+                    TRANSFER_ASSET, 0, List.of())));
   }
 
   @Test
@@ -249,6 +290,264 @@ class DocumentDriverTaskPlanningIntegrationTest {
     assertThat(jdbc.queryForObject("select count(*) from logistics_document", Long.class)).isZero();
     assertThat(jdbc.queryForObject("select count(*) from driver_logistics_task", Long.class))
         .isZero();
+  }
+
+  @Test
+  void plannedOutboundCreatesOneIdempotentReverseCapitalRepairTransferForTheAssignedDriver() {
+    jdbc.update(
+        """
+        insert into shipment_task_settings(
+          warehouse_id, version, max_cabins_per_shipment_task, updated_by_subject_id, updated_at)
+        values (?, 0, 2, ?, clock_timestamp())
+        """,
+        DESTINATION,
+        SUBJECT);
+    UUID firstPhoto = UUID.randomUUID();
+    OffsetDateTime departure =
+        OffsetDateTime.of(2026, 9, 14, 8, 30, 0, 0, ZoneOffset.ofHours(3));
+    when(dependencies.readCapitalRepair(FIRST_REPAIR))
+        .thenReturn(
+            new LogisticsDependencyGateway.CapitalRepair(
+                FIRST_REPAIR, FIRST_REPAIR_ASSET, DESTINATION, 2, null, 4));
+    when(dependencies.readCapitalRepair(SECOND_REPAIR))
+        .thenReturn(
+            new LogisticsDependencyGateway.CapitalRepair(
+                SECOND_REPAIR, SECOND_REPAIR_ASSET, DESTINATION, 3, null, 6));
+    when(dependencies.readRentalItemSnapshot(FIRST_REPAIR_ASSET))
+        .thenReturn(
+            new LogisticsDependencyGateway.RentalItemSnapshot(
+                FIRST_REPAIR_ASSET, 11, DESTINATION, "172", "REPAIR", List.of()));
+    when(dependencies.readRentalItemSnapshot(SECOND_REPAIR_ASSET))
+        .thenReturn(
+            new LogisticsDependencyGateway.RentalItemSnapshot(
+                SECOND_REPAIR_ASSET, 12, DESTINATION, "311", "CAPITAL_REPAIR", List.of()));
+    when(dependencies.listWarehouseDrivers(WAREHOUSE, departure, false))
+        .thenReturn(List.of(new LogisticsDependencyGateway.WarehouseDriverIdentity(DRIVER, "Петров")));
+    when(
+            dependencies.readCabinMediaSnapshots(
+                DESTINATION, List.of(FIRST_REPAIR_ASSET, SECOND_REPAIR_ASSET)))
+        .thenReturn(
+            List.of(
+                new LogisticsDependencyGateway.CabinMediaSnapshot(
+                    FIRST_REPAIR_ASSET,
+                    1,
+                    List.of(
+                        new LogisticsDependencyGateway.CabinMediaPhoto(
+                            firstPhoto, 2, 0, List.of("thumbnail")))),
+                new LogisticsDependencyGateway.CabinMediaSnapshot(
+                    SECOND_REPAIR_ASSET, 0, List.of())));
+    TransferResourceRepositionRequest none =
+        new TransferResourceRepositionRequest(null, TransferResourceRepositionMode.NONE, null);
+    TransferPlanRequest plan =
+        new TransferPlanRequest(
+            departure,
+            departure.plusHours(4),
+            "Забрать бытовки капитального ремонта",
+            DRIVER,
+            null,
+            none,
+            none,
+            List.of(),
+            List.of());
+    CreateTransferRequest request =
+        new CreateTransferRequest(
+            WAREHOUSE,
+            DESTINATION,
+            LocalDate.of(2026, 9, 14),
+            List.of(),
+            List.of(),
+            plan,
+            List.of(
+                new ReturnCapitalRepairLineRequest(FIRST_REPAIR, FIRST_REPAIR_ASSET, 11),
+                new ReturnCapitalRepairLineRequest(SECOND_REPAIR, SECOND_REPAIR_ASSET, 12)));
+    UUID key = UUID.randomUUID();
+    UUID correlation = UUID.randomUUID();
+
+    var created = documents.createTransfer(SUBJECT, key, correlation, request);
+    var replay = documents.createTransfer(SUBJECT, key, correlation, request);
+
+    assertThat(replay.replayed()).isTrue();
+    assertThat(replay.response().id()).isEqualTo(created.response().id());
+    assertThat(replay.response().linkedReturnTransferId())
+        .isEqualTo(created.response().linkedReturnTransferId())
+        .isNotNull();
+    assertThat(jdbc.queryForObject("select count(*) from logistics_document", Long.class))
+        .isEqualTo(2L);
+    assertThat(
+            jdbc.queryForList(
+                """
+                select line.asset_id
+                from logistics_document_line line
+                join logistics_document document on document.id=line.document_id
+                where document.id=?
+                order by line.line_number
+                """,
+                UUID.class,
+                created.response().linkedReturnTransferId()))
+        .containsExactly(FIRST_REPAIR_ASSET, SECOND_REPAIR_ASSET);
+    Map<String, Object> reverseTask =
+        jdbc.queryForMap(
+            """
+            select driver_audience_mode,planned_driver_worker_id,warehouse_id,worker_content_json
+            from driver_logistics_task
+            where source_id=?
+            """,
+            created.response().linkedReturnTransferId());
+    assertThat(reverseTask)
+        .containsEntry("driver_audience_mode", "ASSIGNED_DRIVER")
+        .containsEntry("planned_driver_worker_id", DRIVER)
+        .containsEntry("warehouse_id", DESTINATION);
+    assertThat(reverseTask.get("worker_content_json").toString())
+        .contains("172", "311", firstPhoto.toString(), "Великий Новгород", "Санкт-Петербург");
+    assertThatThrownBy(
+            () -> documents.createTransfer(SUBJECT, UUID.randomUUID(), UUID.randomUUID(), request))
+        .isInstanceOf(LogisticsConflictException.class)
+        .hasMessageContaining("уже выбрана");
+    assertThat(jdbc.queryForObject("select count(*) from logistics_document", Long.class))
+        .isEqualTo(2L);
+  }
+
+  @Test
+  void emptyRouteDraftIsPersistedWhileConfirmationRequiresCargoOrResourceIntent() {
+    TransferResourceRepositionRequest none =
+        new TransferResourceRepositionRequest(null, TransferResourceRepositionMode.NONE, null);
+    OffsetDateTime departure =
+        OffsetDateTime.of(2026, 9, 16, 8, 30, 0, 0, ZoneOffset.ofHours(3));
+    CreateTransferRequest emptyRequest =
+        new CreateTransferRequest(
+            WAREHOUSE,
+            DESTINATION,
+            departure.toLocalDate(),
+            List.of(),
+            List.of(),
+            new TransferPlanRequest(
+                departure,
+                departure.plusHours(4),
+                null,
+                null,
+                null,
+                none,
+                none,
+                List.of(),
+                List.of()));
+    var emptyDraft =
+        documents.createTransfer(SUBJECT, UUID.randomUUID(), UUID.randomUUID(), emptyRequest);
+    UUID emptyConfirmKey = UUID.randomUUID();
+
+    assertThatThrownBy(
+            () ->
+                documents.confirmTransferPlan(
+                    SUBJECT,
+                    emptyConfirmKey,
+                    UUID.randomUUID(),
+                    emptyDraft.response().id(),
+                    emptyDraft.response().version(),
+                    confirmationAdmission(emptyConfirmKey)))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("planned cargo lines");
+
+    CreateTransferRequest resourceRequest =
+        new CreateTransferRequest(
+            WAREHOUSE,
+            DESTINATION,
+            departure.toLocalDate(),
+            List.of(),
+            List.of(),
+            new TransferPlanRequest(
+                departure,
+                departure.plusHours(4),
+                null,
+                DRIVER,
+                null,
+                none,
+                none,
+                List.of(),
+                List.of()));
+    var resourceDraft =
+        documents.createTransfer(SUBJECT, UUID.randomUUID(), UUID.randomUUID(), resourceRequest);
+    UUID resourceConfirmKey = UUID.randomUUID();
+    var confirmed =
+        documents.confirmTransferPlan(
+            SUBJECT,
+            resourceConfirmKey,
+            UUID.randomUUID(),
+            resourceDraft.response().id(),
+            resourceDraft.response().version(),
+            confirmationAdmission(resourceConfirmKey));
+
+    assertThat(confirmed.response().state()).isEqualTo(TransferPlanState.CONFIRMED);
+    assertThat(confirmed.response().totalCabinCount()).isZero();
+  }
+
+  @Test
+  void activeCapitalToProductionTaskFencesTheSameCabinFromAReverseTransfer() {
+    LocalDate scheduled = LocalDate.of(2026, 9, 17);
+    when(dependencies.readCapitalRepair(FIRST_REPAIR))
+        .thenReturn(
+            new LogisticsDependencyGateway.CapitalRepair(
+                FIRST_REPAIR, FIRST_REPAIR_ASSET, DESTINATION, 2, null, 4));
+    when(dependencies.readRentalItemSnapshot(FIRST_REPAIR_ASSET))
+        .thenReturn(
+            new LogisticsDependencyGateway.RentalItemSnapshot(
+                FIRST_REPAIR_ASSET, 11, DESTINATION, "172", "REPAIR", List.of()));
+    when(dependencies.readCabinMediaSnapshots(DESTINATION, List.of(FIRST_REPAIR_ASSET)))
+        .thenReturn(
+            List.of(
+                new LogisticsDependencyGateway.CabinMediaSnapshot(
+                    FIRST_REPAIR_ASSET, 0, List.of())));
+    UUID taskKey = UUID.randomUUID();
+    driverTaskService.createCapitalMovement(
+        SUBJECT,
+        taskKey,
+        DESTINATION,
+        FIRST_REPAIR,
+        DriverTaskPlanningMode.FIXED_DATE,
+        scheduled,
+        lifecycle.disabledTicket(
+            SUBJECT,
+            "CREATE_DRIVER_LOGISTICS_TASK",
+            taskKey,
+            List.of(
+                new AdmissionRequirement(
+                    DESTINATION, WarehouseOperationDirection.OUTGOING))));
+    TransferResourceRepositionRequest none =
+        new TransferResourceRepositionRequest(null, TransferResourceRepositionMode.NONE, null);
+    OffsetDateTime departure =
+        OffsetDateTime.of(2026, 9, 17, 8, 30, 0, 0, ZoneOffset.ofHours(3));
+    CreateTransferRequest request =
+        new CreateTransferRequest(
+            WAREHOUSE,
+            DESTINATION,
+            scheduled,
+            List.of(),
+            List.of(),
+            new TransferPlanRequest(
+                departure,
+                departure.plusHours(4),
+                null,
+                DRIVER,
+                null,
+                none,
+                none,
+                List.of(),
+                List.of()),
+            List.of(new ReturnCapitalRepairLineRequest(FIRST_REPAIR, FIRST_REPAIR_ASSET, 11)));
+
+    assertThatThrownBy(
+            () -> documents.createTransfer(SUBJECT, UUID.randomUUID(), UUID.randomUUID(), request))
+        .isInstanceOf(LogisticsConflictException.class)
+        .hasMessageContaining("активное задание возврата");
+    assertThat(jdbc.queryForObject("select count(*) from logistics_document", Long.class)).isZero();
+  }
+
+  private LogisticsWarehouseLifecycle.AdmissionTicket confirmationAdmission(UUID key) {
+    return lifecycle.disabledTicket(
+        SUBJECT,
+        "CONFIRM_TRANSFER_PLAN",
+        key,
+        List.of(
+            new AdmissionRequirement(WAREHOUSE, WarehouseOperationDirection.OUTGOING),
+            new AdmissionRequirement(DESTINATION, WarehouseOperationDirection.INCOMING)));
   }
 
   private static Map<String, Object> row(List<Map<String, Object>> rows, String taskKind) {

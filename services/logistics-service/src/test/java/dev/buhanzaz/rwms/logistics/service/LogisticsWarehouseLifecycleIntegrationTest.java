@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
@@ -524,7 +525,7 @@ class LogisticsWarehouseLifecycleIntegrationTest {
     List<Map<String, Object>> marksBefore =
         jdbc.queryForList(
             """
-            select warehouse_id,admission_direction,admission_warehouse_version,state,attempt_count
+            select warehouse_id,admission_direction,admission_warehouse_version
               from warehouse_operation_mark_outbox
              where operation_id=? order by warehouse_id
             """,
@@ -562,7 +563,7 @@ class LogisticsWarehouseLifecycleIntegrationTest {
     assertThat(
             jdbc.queryForList(
                 """
-                select warehouse_id,admission_direction,admission_warehouse_version,state,attempt_count
+                select warehouse_id,admission_direction,admission_warehouse_version
                   from warehouse_operation_mark_outbox
                  where operation_id=? order by warehouse_id
                 """,
@@ -749,10 +750,23 @@ class LogisticsWarehouseLifecycleIntegrationTest {
         .thenReturn(
             new LogisticsDependencyGateway.WarehouseDriverQueue(
                 WAREHOUSE, DRIVER_QUEUE_DEFINITION, DRIVER_QUEUE_CATEGORY));
+    doReturn(
+            new LogisticsDependencyGateway.WarehouseIdentity(
+                WAREHOUSE, 0, true, "Склад отправления", "", "UTC"))
+        .when(dependencies)
+        .readWarehouseIdentity(WAREHOUSE);
+    doReturn(
+            new LogisticsDependencyGateway.WarehouseIdentity(
+                DESTINATION_WAREHOUSE, 0, true, "Склад назначения", "", "UTC"))
+        .when(dependencies)
+        .readWarehouseIdentity(DESTINATION_WAREHOUSE);
     when(dependencies.readRentalItemSnapshot(ASSET))
         .thenReturn(
             new LogisticsDependencyGateway.RentalItemSnapshot(
                 ASSET, 7, WAREHOUSE, "БТ-QA", "FREE", List.of()));
+    doReturn(List.of(new LogisticsDependencyGateway.CabinMediaSnapshot(ASSET, 0, List.of())))
+        .when(dependencies)
+        .readCabinMediaSnapshots(WAREHOUSE, List.of(ASSET));
   }
 
   private ResultActions performCreate(UUID idempotencyKey, CreateReturnRequest request)

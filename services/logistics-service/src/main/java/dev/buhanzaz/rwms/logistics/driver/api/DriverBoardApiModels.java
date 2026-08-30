@@ -90,6 +90,7 @@ public final class DriverBoardApiModels {
       UUID repairId,
       long repairVersion,
       UUID cabinId,
+      long assetVersion,
       String unitNumber,
       int priority,
       String complexityName,

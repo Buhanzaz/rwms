@@ -326,6 +326,20 @@ def build_assignments_command(
         source_by_request[request.id] = source
 
     assignments: list[RwmsPlanningAssignment] = []
+
+    def service_warehouse_id(request: LogisticsRequest) -> UUID:
+        """Resolve the request owner while retaining the root warehouse as legacy fallback."""
+
+        if request.warehouse_id == plan.warehouse_id:
+            return warehouse_id
+        if request.warehouse is None or request.warehouse.external_warehouse_id is None:
+            raise ApiError(
+                422,
+                "RWMS_SERVICE_WAREHOUSE_NOT_LINKED",
+                "Every cross-warehouse request must retain its canonical service warehouse",
+            )
+        return request.warehouse.external_warehouse_id
+
     ordered_stops = sorted(
         delivery_stops,
         key=lambda item: (
@@ -350,6 +364,7 @@ def build_assignments_command(
         assignments.append(
             RwmsPlanningAssignment(
                 order_id=source.order_id,
+                service_warehouse_id=service_warehouse_id(request),
                 expected_order_version=source.order_version,
                 scheduled_date=plan.date,
                 driver_audience_mode=driver.rwms_assignment_mode,
@@ -367,6 +382,7 @@ def build_assignments_command(
         assignments.append(
             RwmsPlanningAssignment(
                 order_id=source.order_id,
+                service_warehouse_id=service_warehouse_id(task.request),
                 expected_order_version=source.order_version,
                 scheduled_date=plan.date,
                 driver_audience_mode="WAREHOUSE_DRIVERS",
@@ -536,10 +552,18 @@ async def _load_plan_for_rwms_apply(session: AsyncSession, plan_id: UUID) -> Rou
             .selectinload(RouteStop.task)
             .selectinload(PlanningTask.request)
             .selectinload(LogisticsRequest.tasks),
+            cycles.selectinload(RouteCycle.stops)
+            .selectinload(RouteStop.task)
+            .selectinload(PlanningTask.request)
+            .selectinload(LogisticsRequest.warehouse),
             selectinload(RoutePlan.unassigned_tasks)
             .selectinload(UnassignedTask.task)
             .selectinload(PlanningTask.request)
             .selectinload(LogisticsRequest.tasks),
+            selectinload(RoutePlan.unassigned_tasks)
+            .selectinload(UnassignedTask.task)
+            .selectinload(PlanningTask.request)
+            .selectinload(LogisticsRequest.warehouse),
         )
         .with_for_update()
     )

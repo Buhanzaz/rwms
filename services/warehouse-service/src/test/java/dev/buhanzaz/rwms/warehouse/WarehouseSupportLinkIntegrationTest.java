@@ -278,6 +278,44 @@ class WarehouseSupportLinkIntegrationTest {
   }
 
   @Test
+  void returnsEveryActiveAdjacentEdgeWithoutCalendarFiltering() throws Exception {
+    WarehouseResponse support = create("Network support", false, null, null);
+    WarehouseResponse first = create("Network served first", true, null, null);
+    WarehouseResponse second = create("Network served second", true, null, null);
+    supportLinks.replace(
+        first.id(),
+        new ReplaceWarehouseSupportLinksRequest(
+            first.version(),
+            List.of(input(support.id(), true, 2, Set.of(DayOfWeek.MONDAY)))));
+    supportLinks.replace(
+        second.id(),
+        new ReplaceWarehouseSupportLinksRequest(
+            second.version(),
+            List.of(input(support.id(), true, 1, Set.of(DayOfWeek.TUESDAY)))));
+
+    JsonNode response =
+        objectMapper.readTree(
+            mockMvc
+                .perform(
+                    get(
+                            "/api/internal/warehouse/v1/warehouses/logistics/{warehouseId}/support-network",
+                            support.id())
+                        .with(logisticsServiceJwt()))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString());
+
+    assertThat(response).hasSize(2);
+    assertThat(response.get(0).get("servedWarehouse").get("id").stringValue())
+        .isEqualTo(second.id().toString());
+    assertThat(response.get(1).get("servedWarehouse").get("id").stringValue())
+        .isEqualTo(first.id().toString());
+    assertThat(response.get(0).get("allowedWeekdays").get(0).stringValue())
+        .isEqualTo("TUESDAY");
+  }
+
+  @Test
   void managerApiRequiresManageOnBothEndpointsAndReturnsTheSavedCollection() throws Exception {
     WarehouseResponse served = create("Manager served", true, null, null);
     WarehouseResponse support = create("Manager support", false, null, null);

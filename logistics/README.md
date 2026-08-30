@@ -518,6 +518,13 @@ links and contractor availability are resolved through their private RWMS
 directories; the panel does not ask the operator to connect or refresh a
 warehouse manually.
 
+The selected warehouse is resolved to one non-transitive planning root. A main
+warehouse and its directly served, routing-ready representative warehouses share
+the same dated plan and root resources, while every regional request retains its
+canonical `serviceWarehouseId`. Exact link exclusions, allowed dates and
+recurring weekdays are applied for the planning date; selecting a representative
+changes the visible map context without creating a duplicate day plan.
+
 Planning reads and commands remain on the simulator's same-origin FastAPI. The
 in-map **Create transfer** action is the narrow exception: it opens a local
 dialog and submits one authoritative draft to the existing public
@@ -535,6 +542,13 @@ no physical cabin allocation, reservation or stock movement. In the primary
 panel the **Prepare cabins and contents** action opens that same canonical plan;
 confirmation atomically reserves the selected stock and uses the existing
 furniture-difference task workflow.
+
+The dialog can also select active capital-repair cabins at the destination as
+independent return cargo. The canonical create command locks their exact repair,
+asset and asset-version facts and atomically creates a linked concrete-line
+reverse transfer. Those cabins are loaded only after the outbound cargo is
+unloaded, so they do not consume outbound capacity; their numbers and existing
+gallery photos flow through the same offline-capable task-board worker content.
 
 The dispatcher selects a local source date and departure time. When the source
 has an active physical vehicle projection, the dialog calls the read-only
@@ -599,7 +613,10 @@ period-based shifts, vehicle capacity and that warehouse's complete hourly tarif
 mutation advances a warehouse capacity generation, so retries are idempotent
 and delayed older generations are rejected. Manual requests and imported RWMS
 orders are not re-published as generated demand; replacing capacity never
-deletes a real RWMS booking. `POST
+deletes a real RWMS booking. The simulator commits generated workload first;
+an unavailable optional RWMS capacity projection is reported as `FAILED` with
+an operator warning and never rolls back or converts test demand into an RWMS
+order. `POST
 /api/warehouses/{warehouse_id}/rwms/capacity` is an operational reconciliation
 endpoint, not a panel button.
 

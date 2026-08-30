@@ -716,6 +716,29 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/internal/logistics/v1/planning/warehouses/{warehouseId}/support-network:
+    get:
+      operationId: listRoutePlanningWarehouseSupportNetwork
+      description: >-
+        Returns every active warehouse-service-owned directed support edge where the selected
+        warehouse is either endpoint. No calendar rule is evaluated by this read; the standalone
+        planner evaluates the returned policy for each candidate. Requires the exact
+        logistics-planner credential and mutates no inventory or availability.
+      parameters:
+        - name: warehouseId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Active adjacent support links with both endpoint identities.
+          content:
+            application/json:
+              schema:
+                { $ref: "#/components/schemas/PlanningWarehouseSupportLinkResourceList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/internal/logistics/v1/planning/drivers:
     get:
       operationId: listRoutePlanningDrivers
@@ -3798,6 +3821,13 @@ components:
       required: [orderId, expectedOrderVersion, scheduledDate, driverName, unitIds]
       properties:
         orderId: { type: string, format: uuid }
+        serviceWarehouseId:
+          type: [string, "null"]
+          format: uuid
+          description: >-
+            Regional warehouse that owns the order. Omission preserves legacy behavior and uses
+            ApplyPlanningAssignmentsRequest.warehouseId. The root warehouse still owns the
+            driver shift plan.
         expectedOrderVersion: { type: integer, format: int64, minimum: 0 }
         scheduledDate: { type: string, format: date }
         driverAudienceMode:
@@ -4110,6 +4140,7 @@ components:
           state,
           warehouseId,
           destinationWarehouseId,
+          linkedReturnTransferId,
           partySnapshot,
           driverSnapshot,
           driverWorkerId,
@@ -4133,6 +4164,12 @@ components:
         state: { $ref: "#/components/schemas/LogisticsDocumentState" }
         warehouseId: { type: string, format: uuid }
         destinationWarehouseId: { type: [string, "null"], format: uuid }
+        linkedReturnTransferId:
+          type: [string, "null"]
+          format: uuid
+          description: >-
+            Reverse concrete-line transfer created atomically for selected capital-repair cabins;
+            null for ordinary documents and reads that have no linked return leg.
         partySnapshot:
           {
             type: [string, "null"],
@@ -4829,11 +4866,12 @@ components:
       type: object
       additionalProperties: false
       required:
-        [repairId, repairVersion, cabinId, unitNumber, priority, complexityName, complexityColor, plannedMinutes, forcedCapital]
+        [repairId, repairVersion, cabinId, assetVersion, unitNumber, priority, complexityName, complexityColor, plannedMinutes, forcedCapital]
       properties:
         repairId: { type: string, format: uuid }
         repairVersion: { type: integer, format: int64, minimum: 0 }
         cabinId: { type: string, format: uuid }
+        assetVersion: { type: integer, format: int64, minimum: 0 }
         unitNumber: { type: string }
         priority: { type: integer, minimum: 1, maximum: 5 }
         complexityName: { type: string, const: "Капитальный ремонт" }
@@ -5276,6 +5314,15 @@ components:
           oneOf:
             - { $ref: "#/components/schemas/TransferPlanRequest" }
             - { type: "null" }
+        returnCapitalRepairLines:
+          type: array
+          maxItems: 100
+          description: >-
+            Optional active capital-repair cabins transported on the independent reverse leg from
+            destinationWarehouseId back to warehouseId. The server creates a linked ordinary
+            concrete-line TRANSFER in the same transaction; outbound capacity is not consumed by
+            this post-unload leg.
+          items: { $ref: "#/components/schemas/ReturnCapitalRepairLineRequest" }
     TransferLineRequest:
       type: object
       additionalProperties: false
@@ -5283,6 +5330,14 @@ components:
       properties:
         assetId: { type: string, format: uuid }
         assetVersion: { type: integer, minimum: 0 }
+    ReturnCapitalRepairLineRequest:
+      type: object
+      additionalProperties: false
+      required: [repairId, assetId, assetVersion]
+      properties:
+        repairId: { type: string, format: uuid }
+        assetId: { type: string, format: uuid }
+        assetVersion: { type: integer, format: int64, minimum: 0 }
     TransferResourceRepositionMode:
       type: string
       enum: [NONE, TEMPORARY, PERMANENT]

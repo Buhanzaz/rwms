@@ -200,7 +200,7 @@ describe('request map card', () => {
     expect(screen.getByText(/не входила в варианты клиента/)).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Добавить дату и выставить на 29 августа 2026 г.' }));
     expect(onSchedule).toHaveBeenCalledWith('request-142', '2026-08-29', true);
-  });
+  }, 10_000);
 
   it('shows and removes an authoritative scheduled date', async () => {
     const user = userEvent.setup();

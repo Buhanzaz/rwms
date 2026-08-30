@@ -26,11 +26,35 @@ from app.services.planner_runtime import request_is_available_on_date
 from app.services.plans import PENDING_REQUEST_REFRESH_METRIC, PlannerFacade
 
 
+async def invalidate_mutable_group_root_plans(
+    session: AsyncSession,
+    warehouse_id: UUID,
+    planning_dates: Iterable[date],
+) -> None:
+    """Remove recomputable root plans before refreshing demand owned by group members."""
+
+    dates = tuple(sorted(set(planning_dates)))
+    if not dates:
+        return
+    await session.execute(
+        delete(RoutePlan).where(
+            RoutePlan.warehouse_id == warehouse_id,
+            RoutePlan.date.in_(dates),
+            RoutePlan.status.in_(
+                (PlanStatus.DRAFT, PlanStatus.GENERATED, PlanStatus.VALIDATED)
+            ),
+        )
+    )
+    await session.flush()
+
+
 async def generate_missing_draft_plans(
     session: AsyncSession,
     planner: PlannerFacade,
     warehouse_id: UUID,
     planning_dates: Iterable[date],
+    *,
+    request_warehouse_ids: Iterable[UUID] | None = None,
 ) -> tuple[OptimizationRun, ...]:
     """Refresh marked plans in place, then generate one missing plan per ready date.
 
@@ -53,6 +77,25 @@ async def generate_missing_draft_plans(
     )
     if warehouse is None:
         return ()
+    demand_warehouse_ids = tuple(
+        dict.fromkeys((warehouse_id, *(request_warehouse_ids or ())))
+    )
+    demand_requests = (
+        warehouse.requests
+        if demand_warehouse_ids == (warehouse_id,)
+        else list(
+            (
+                await session.scalars(
+                    select(LogisticsRequest)
+                    .where(LogisticsRequest.warehouse_id.in_(demand_warehouse_ids))
+                    .options(selectinload(LogisticsRequest.date_options))
+                    .order_by(LogisticsRequest.created_at, LogisticsRequest.id)
+                )
+            )
+            .unique()
+            .all()
+        )
+    )
 
     closed_dates = set(
         await session.scalars(
@@ -100,7 +143,7 @@ async def generate_missing_draft_plans(
             continue
         ready = [
             request
-            for request in warehouse.requests
+            for request in demand_requests
             if request.status == RequestStatus.READY
             and request_is_available_on_date(
                 request.scheduled_date,

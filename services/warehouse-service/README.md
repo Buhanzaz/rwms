@@ -44,11 +44,14 @@ daily interval. Self-links and duplicate support warehouses are rejected. The co
 is replaced atomically under the served warehouse's aggregate-version fence; clearing the
 representative characteristic is rejected while links still exist.
 
-Logistics reads the same warehouse UUID, owner-held coordinates, representative flag and
-date-filtered support links through the private warehouse boundary. It does not create a second
-warehouse or map identity. The standalone planner reconciles this directory by warehouse UUID and
-version; a changed version or coordinate pair invalidates its mutable route plans before the
-updated point is used. See [`Warehouse`](src/main/java/dev/buhanzaz/rwms/warehouse/domain/Warehouse.java),
+Logistics reads the same warehouse UUID, owner-held coordinates, representative flag and support
+links through the private warehouse boundary. The date-filtered read serves one representative
+warehouse at a supplied instant; the adjacent-network read returns every active incoming or
+outgoing edge so a standalone planner can resolve one non-transitive main-warehouse planning group
+without inventing a parent field. It does not create a second warehouse or map identity. The
+standalone planner reconciles this directory by warehouse UUID and version; a changed version or
+coordinate pair invalidates its mutable route plans before the updated point is used. See
+[`Warehouse`](src/main/java/dev/buhanzaz/rwms/warehouse/domain/Warehouse.java),
 [`WarehouseSupportLinkService`](src/main/java/dev/buhanzaz/rwms/warehouse/service/WarehouseSupportLinkService.java),
 [`LogisticsWarehouseController`](src/main/java/dev/buhanzaz/rwms/warehouse/api/LogisticsWarehouseController.java)
 and the planner's
@@ -102,6 +105,7 @@ The public gateway exposes `/api/warehouse/**` unchanged.
 | `/api/internal/warehouse/v1/warehouses/inventory/**` | Exact inventory-service credential/scope | Inventory metadata snapshot |
 | `/api/internal/warehouse/v1/warehouses/logistics/**` | Exact logistics-service credential/scope | Logistics identity/directory view |
 | `/api/internal/warehouse/v1/warehouses/logistics/{id}/support-links` | Exact logistics-service credential/scope | Active support edges eligible at the supplied instant, including both endpoint coordinates |
+| `/api/internal/warehouse/v1/warehouses/logistics/{id}/support-network` | Exact logistics-service credential/scope | Every active edge adjacent to one warehouse; calendar evaluation remains with the dated planner candidate |
 | `/api/internal/warehouse/v1/warehouses/{id}/admission` | Contract-defined operation owner | Directional lifecycle admission |
 | `/api/internal/warehouse/v1/warehouses/{id}/lifecycle-readiness` | Contract-defined operation owner | Exact-version readiness confirmation |
 | `/api/internal/warehouse/v1/lifecycle/readiness-work` | Service credential | Reconciliation work for incomplete confirmations |

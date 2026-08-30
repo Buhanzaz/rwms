@@ -1129,7 +1129,7 @@ private fun formatSlotTime(value: String): String = value.take(5)
 /** Renders the customer-facing promise without disguising a flexible arrival as a fixed window. */
 internal fun deliverySlotTimeLabel(slot: DeliverySlot): String =
     if (slot.kind == DeliverySlotKind.DURING_DAY) {
-        "В течение дня"
+        "В течение дня. Точное время подтвердит логист"
     } else {
         "${formatSlotTime(slot.start)}–${formatSlotTime(slot.end)}"
     }

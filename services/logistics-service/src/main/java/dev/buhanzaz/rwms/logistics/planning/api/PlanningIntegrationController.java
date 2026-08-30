@@ -61,6 +61,14 @@ public class PlanningIntegrationController {
     return resources.supportLinks(servedWarehouseId, at);
   }
 
+  /** Returns every active direct support edge for planning-group discovery. */
+  @GetMapping("/warehouses/{warehouseId}/support-network")
+  public java.util.List<PlanningWarehouseSupportLinkResource> supportNetwork(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID warehouseId) {
+    access.requirePlanningIntegration(jwt);
+    return resources.supportNetwork(warehouseId);
+  }
+
   /** Returns active task-board-qualified drivers for one validated RWMS warehouse. */
   @GetMapping("/drivers")
   public java.util.List<PlanningDriverResource> drivers(

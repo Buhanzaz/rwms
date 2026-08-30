@@ -90,6 +90,10 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
     return warehouse.listWarehouseSupportLinks(servedWarehouseId, at);
   }
 
+  public List<WarehouseSupportLink> listWarehouseSupportNetwork(UUID warehouseId) {
+    return warehouse.listWarehouseSupportNetwork(warehouseId);
+  }
+
   public List<WarehouseDriverIdentity> listWarehouseDrivers(UUID warehouseId) {
     return taskBoard.listWarehouseDrivers(warehouseId);
   }

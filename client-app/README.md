@@ -73,8 +73,8 @@ slot. Delivery is a focused four-step Navigation
 3 flow: full-screen Yandex map/address, server-returned dates, exact returned
 fixed-window or full-day slots, then per-cabin term review and checkout. Every slot carries the
 required `kind`: `FIXED_WINDOW` displays its exact interval, while `DURING_DAY` displays
-`В течение дня` in the date preview, slot choice and confirmation without hiding its non-null
-server bounds.
+`В течение дня. Точное время подтвердит логист` in the date preview, slot choice and confirmation
+without hiding its non-null server bounds.
 
 The map starts with Yandex's third-party raster `MapType.MAP` at the
 logistics-owned depot, keeps pan/pinch inside MapKit and shows plus, minus and a

@@ -25,6 +25,21 @@ public interface WarehouseSupportLinkRepository
   List<WarehouseSupportLink> findAllByServedWarehouseId(
       @Param("servedWarehouseId") UUID servedWarehouseId);
 
+  /**
+   * Returns every active edge adjacent to one warehouse without applying its calendar policy.
+   * Stable ordering makes the projection suitable for deterministic planning-group discovery.
+   */
+  @EntityGraph(attributePaths = {"allowedWeekdays", "allowedDates", "excludedDates"})
+  @Query(
+      """
+      select distinct link
+        from WarehouseSupportLink link
+       where link.active = true
+         and (link.supportWarehouseId = :warehouseId or link.servedWarehouseId = :warehouseId)
+       order by link.priority, link.supportWarehouseId, link.servedWarehouseId, link.id
+      """)
+  List<WarehouseSupportLink> findActiveSupportNetwork(@Param("warehouseId") UUID warehouseId);
+
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @EntityGraph(attributePaths = {"allowedWeekdays", "allowedDates", "excludedDates"})
   @Query(

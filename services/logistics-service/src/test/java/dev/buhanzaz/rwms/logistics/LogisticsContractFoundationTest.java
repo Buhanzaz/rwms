@@ -55,6 +55,7 @@ class LogisticsContractFoundationTest {
             "/api/logistics/v1/admin/warehouse-operation-marks/{operationId}/recovery",
             "/api/internal/logistics/v1/planning/requests",
             "/api/internal/logistics/v1/planning/warehouses",
+            "/api/internal/logistics/v1/planning/warehouses/{warehouseId}/support-network",
             "/api/internal/logistics/v1/planning/drivers",
             "/api/internal/logistics/v1/planning/assignments",
             "/api/internal/logistics/v1/planning/capacity-snapshots/{warehouseId}",
@@ -652,6 +653,7 @@ class LogisticsContractFoundationTest {
             "recoverLogisticsWarehouseOperationMark",
             "listRoutePlanningWarehouses",
             "listRoutePlanningWarehouseSupportLinks",
+            "listRoutePlanningWarehouseSupportNetwork",
             "listRoutePlanningDrivers",
             "getRoutePlanningRequests",
             "getRoutePlanningAssignmentStatuses",
@@ -956,6 +958,10 @@ class LogisticsContractFoundationTest {
     assertThat(child(commandProperties, "driverShiftPlans"))
         .containsEntry("default", List.of())
         .containsEntry("maxItems", 500);
+    Map<String, Object> assignment = child(schemas, "PlanningAssignment");
+    assertThat(child(assignment, "properties")).containsKey("serviceWarehouseId");
+    assertThat((List<?>) assignment.get("required"))
+        .noneMatch("serviceWarehouseId"::equals);
 
     Map<String, Object> plan = child(schemas, "PlanningDriverShiftPlan");
     assertThat(child(plan, "properties"))
@@ -1149,6 +1155,12 @@ class LogisticsContractFoundationTest {
     assertThat(transferRequired).contains("scheduledDate", "furnitureReplacements");
     assertThat(child(createTransfer, "properties"))
         .doesNotContainKeys("scheduledTime", "scheduledAt", "driverSnapshot", "driverWorkerId");
+    assertThat(child(child(createTransfer, "properties"), "returnCapitalRepairLines"))
+        .containsEntry("maxItems", 100);
+    assertThat(child(child(schemas, "LogisticsDocument"), "properties"))
+        .containsKey("linkedReturnTransferId");
+    assertThat(child(child(schemas, "CapitalRepairCard"), "properties"))
+        .containsKey("assetVersion");
     assertThat(child(child(createTransfer, "properties"), "scheduledDate").get("format"))
         .isEqualTo("date");
     assertThat(cabinFurnitureTask.get("required"))

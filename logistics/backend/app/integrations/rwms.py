@@ -160,6 +160,46 @@ class RwmsPlanningClient:
             )
         return links
 
+    async def list_support_network(
+        self,
+        warehouse_id: UUID,
+    ) -> list[RwmsWarehouseSupportLink]:
+        """Read active directed support edges adjacent to one canonical warehouse."""
+
+        self.ensure_enabled()
+        response = await self._authorized_request(
+            "GET",
+            (
+                "/api/internal/logistics/v1/planning/warehouses/"
+                f"{warehouse_id}/support-network"
+            ),
+        )
+        links = self._validate_response_list(
+            response,
+            RwmsWarehouseSupportLink,
+            "RWMS_WAREHOUSE_SUPPORT_NETWORK_RESPONSE_INVALID",
+        )
+        if len({link.support_link_id for link in links}) != len(links):
+            raise ApiError(
+                502,
+                "RWMS_WAREHOUSE_SUPPORT_NETWORK_RESPONSE_INVALID",
+                "RWMS logistics-service response contains duplicate support links",
+            )
+        if any(
+            warehouse_id
+            not in {
+                link.support_warehouse.warehouse_id,
+                link.served_warehouse.warehouse_id,
+            }
+            for link in links
+        ):
+            raise ApiError(
+                502,
+                "RWMS_WAREHOUSE_SUPPORT_NETWORK_RESPONSE_INVALID",
+                "RWMS logistics-service response contains a disconnected support link",
+            )
+        return links
+
     async def list_drivers(
         self,
         warehouse_id: UUID,

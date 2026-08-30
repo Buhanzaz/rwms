@@ -7,7 +7,7 @@ import { CatalogDialog, RequestDialog } from '../src/components/EntityDialogs';
 import type { DriverInput, LogisticsRequestInput, VehicleInput } from '../src/api/client';
 import { NotificationCenter, ThemeSwitch, Toasts } from '../src/components/ui';
 import { useUiStore } from '../src/stores/ui-store';
-import { warehouseFixture } from './fixtures';
+import { requestFixture, warehouseFixture, workspaceFixture } from './fixtures';
 
 vi.mock('../src/map/MapCanvas', () => ({
   MapCanvas: () => <div data-testid="logistics-map" />,
@@ -101,6 +101,120 @@ describe('application states', () => {
 
     await user.click(warehouseHome);
     expect(useUiStore.getState()).toMatchObject({ mode: 'PLAN_DAY', section: 'WAREHOUSE', selected: { kind: 'warehouse', id: warehouse.id } });
+  });
+
+  it('opens a new RWMS request from a direct representative warehouse on its planning date', async () => {
+    const mainWarehouse = warehouseFixture({ id: 'warehouse-main', name: 'Опорный склад' });
+    const representativeWarehouse = warehouseFixture({
+      id: 'warehouse-representative',
+      external_warehouse_id: '22222222-2222-4222-8222-222222222222',
+      name: 'Представительский склад',
+      city: 'Региональный город',
+      representative: true,
+    });
+    const regionalRequest = requestFixture({
+      id: 'regional-request',
+      warehouse_id: representativeWarehouse.id,
+      source_system: 'RWMS',
+      name: 'Заказ 427',
+      scheduled_date: '2026-09-02',
+      date_options: [{
+        date: '2026-09-02',
+        priority: 1,
+        window_start: null,
+        window_end: null,
+        is_hard: false,
+      }],
+    });
+    const workspace = workspaceFixture({
+      warehouse: mainWarehouse,
+      planning_root_warehouse_id: mainWarehouse.id,
+      planning_group_warehouse_ids: [mainWarehouse.id, representativeWarehouse.id],
+      warehouses: [mainWarehouse, representativeWarehouse],
+      requests: [
+        regionalRequest,
+        requestFixture({ id: 'generated-request', warehouse_id: representativeWarehouse.id, source_system: 'WAREHOUSE_WORKLOAD_GENERATOR' }),
+        requestFixture({ id: 'manual-request', warehouse_id: representativeWarehouse.id, source_system: null }),
+      ],
+      plans: [],
+    });
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      let body: unknown = null;
+      if (url.endsWith('/warehouses/available')) body = [];
+      else if (url.endsWith('/warehouses')) body = [mainWarehouse];
+      else if (url.includes(`/warehouses/${mainWarehouse.id}/workspace`)) body = workspace;
+      else if (url.includes('/planning-days/')) body = {
+        warehouse_id: mainWarehouse.id,
+        date: url.split('/').at(-1),
+        accepting_requests: true,
+        closed_at: null,
+        closed_by: null,
+        plan_id: null,
+      };
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    }));
+    const user = userEvent.setup();
+    renderApp();
+
+    expect(await screen.findByText('Новая заявка · Представительский склад')).toBeVisible();
+    expect(useUiStore.getState().notifications).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: 'Уведомления: 1 новых' }));
+    await user.click(screen.getByRole('button', { name: 'Открыть заявку: Новая заявка · Представительский склад' }));
+
+    expect(screen.queryByRole('region', { name: 'История уведомлений' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Дата планирования' })).toHaveTextContent('2 сентября 2026');
+    expect(useUiStore.getState()).toMatchObject({
+      mode: 'PLAN_DAY',
+      section: 'REQUESTS',
+      selected: { kind: 'request', id: regionalRequest.id },
+    });
+  });
+
+  it('builds and closes the common day through the planning root when a representative is open', async () => {
+    const mainWarehouse = warehouseFixture({ id: 'warehouse-main', name: 'Опорный склад' });
+    const representativeWarehouse = warehouseFixture({
+      id: 'warehouse-representative',
+      external_warehouse_id: '22222222-2222-4222-8222-222222222222',
+      name: 'Представительский склад',
+      representative: true,
+    });
+    const workspace = workspaceFixture({
+      warehouse: representativeWarehouse,
+      planning_root_warehouse_id: mainWarehouse.id,
+      planning_group_warehouse_ids: [mainWarehouse.id, representativeWarehouse.id],
+      warehouses: [mainWarehouse, representativeWarehouse],
+      requests: [],
+      plans: [],
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      let body: unknown = null;
+      if (url.endsWith('/warehouses/available')) body = [];
+      else if (url.endsWith('/warehouses')) body = [representativeWarehouse];
+      else if (url.includes(`/warehouses/${representativeWarehouse.id}/workspace`)) body = workspace;
+      else if (url.includes(`/warehouses/${mainWarehouse.id}/plans/ensure`)) body = null;
+      else if (url.includes(`/warehouses/${mainWarehouse.id}/planning-days/`)) body = {
+        warehouse_id: mainWarehouse.id,
+        date: representativeWarehouse.default_planning_date,
+        accepting_requests: true,
+        closed_at: null,
+        closed_by: null,
+        plan_id: null,
+      };
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderApp();
+
+    expect(await screen.findByRole('combobox', { name: 'Главный склад группы' })).toHaveValue(mainWarehouse.id);
+    await waitFor(() => {
+      const urls = fetchMock.mock.calls.map(([input]) => requestUrl(input));
+      expect(urls.some((url) => url.includes(`/warehouses/${mainWarehouse.id}/plans/ensure`))).toBe(true);
+      expect(urls.some((url) => url.includes(`/warehouses/${mainWarehouse.id}/planning-days/`))).toBe(true);
+      expect(urls.some((url) => url.includes(`/warehouses/${representativeWarehouse.id}/plans/ensure`))).toBe(false);
+    });
   });
 });
 

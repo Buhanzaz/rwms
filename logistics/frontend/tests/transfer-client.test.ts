@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createTransferContractor,
   createTransferDraft,
   estimateTransferArrival,
+  loadCapitalRepairCards,
   loadTransferCargoCatalog,
+  loadTransferDrivers,
   loadTransferRouteVehicles,
 } from '../src/features/transfers/transfer-client';
 
@@ -19,6 +22,11 @@ describe('canonical transfer client', () => {
       warehouseId: '11111111-1111-4111-8111-111111111111',
       destinationWarehouseId: '22222222-2222-4222-8222-222222222222',
       scheduledDate: '2026-08-30',
+      returnCapitalRepairLines: [{
+        repairId: '33333333-3333-4333-8333-333333333333',
+        assetId: '44444444-4444-4444-8444-444444444444',
+        assetVersion: 7,
+      }],
       plan: {
         plannedDepartureAt: null,
         plannedArrivalAt: null,
@@ -44,6 +52,11 @@ describe('canonical transfer client', () => {
       scheduledDate: '2026-08-30',
       lines: [],
       furnitureReplacements: [],
+      returnCapitalRepairLines: [{
+        repairId: '33333333-3333-4333-8333-333333333333',
+        assetId: '44444444-4444-4444-8444-444444444444',
+        assetVersion: 7,
+      }],
       plan: {
         plannedDepartureAt: null,
         plannedArrivalAt: null,
@@ -135,5 +148,85 @@ describe('canonical transfer client', () => {
       vehicle_id: 'vehicle-1',
       cabin_count: 2,
     });
+  });
+
+  it('loads canonical source-qualified drivers through the simulator boundary', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify([
+      { worker_id: 'worker-1', display_name: 'Петров Алексей' },
+    ]), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await loadTransferDrivers('local-spb')).toEqual([
+      { workerId: 'worker-1', displayName: 'Петров Алексей' },
+    ]);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/warehouses/local-spb/available-drivers');
+  });
+
+  it('creates a contractor through the public task-board boundary', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      workerId: 'worker-2',
+      displayName: 'Иванов Илья',
+    }), { status: 201, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(createTransferContractor({
+      accessToken: 'panel-token',
+      warehouseId: 'warehouse-1',
+      contractorId: 'contractor-1',
+      displayName: 'Иванов Илья',
+      phone: '+79990001122',
+      availableFrom: '2026-08-30T05:00:00Z',
+      availableUntil: '2026-08-30T17:00:00Z',
+      comment: 'На один день',
+    })).resolves.toEqual({ workerId: 'worker-2', displayName: 'Иванов Илья' });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/task-board/warehouses/warehouse-1/logistics-drivers/contractors');
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer panel-token');
+    expect(JSON.parse(init.body as string)).toEqual({
+      contractorId: 'contractor-1',
+      displayName: 'Иванов Илья',
+      phone: '+79990001122',
+      availableFrom: '2026-08-30T05:00:00Z',
+      availableUntil: '2026-08-30T17:00:00Z',
+      comment: 'На один день',
+    });
+  });
+
+  it('maps the canonical capital repair board cards used by a return transfer leg', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      warehouseId: 'warehouse-2',
+      capitalRepairs: [{
+        repairId: 'repair-1',
+        repairVersion: 3,
+        cabinId: 'cabin-172',
+        assetVersion: 8,
+        unitNumber: 'ВН-172',
+        priority: 1,
+        complexityName: 'Капитальный ремонт',
+        complexityColor: '#D92D20',
+        plannedMinutes: '120',
+        forcedCapital: true,
+      }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await loadCapitalRepairCards('panel-token', 'warehouse-2')).toEqual([{
+      repairId: 'repair-1',
+      assetId: 'cabin-172',
+      assetVersion: 8,
+      assetNumber: 'ВН-172',
+      priority: 1,
+      complexity: 'Капитальный ремонт',
+    }]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/logistics/v1/driver-board?warehouseId=warehouse-2',
+      {
+        headers: {
+          Accept: 'application/json, application/problem+json',
+          Authorization: 'Bearer panel-token',
+        },
+      },
+    );
   });
 });

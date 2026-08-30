@@ -137,6 +137,7 @@ export function App() {
   const [routesNeedRefresh, setRoutesNeedRefresh] = useState(false);
   const surfacedPlanIdRef = useRef<UUID | null>(null);
   const surfacedNotificationIdsRef = useRef(new Set<UUID>());
+  const surfacedRepresentativeRequestIdsRef = useRef(new Set<UUID>());
   const mode = useUiStore((state) => state.mode);
   const sidebarsCollapsed = useUiStore((state) => state.sidebarsCollapsed);
   const setMode = useUiStore((state) => state.setMode);
@@ -235,6 +236,46 @@ export function App() {
   }, [clearLocalPlanningState, workspaceDefaultPlanningDate, workspaceWarehouseId, workspaceTimeZone]);
 
   const workspace = baseWorkspace;
+  const planningWarehouseId = workspace?.planning_root_warehouse_id ?? workspaceWarehouseId;
+  const planningRoots = useMemo(
+    () => (workspace?.warehouses ?? []).filter((candidate) => !candidate.representative && candidate.routing_ready),
+    [workspace?.warehouses],
+  );
+  useEffect(() => {
+    if (!workspace) return;
+    const planningGroupWarehouseIds = new Set(
+      workspace.planning_group_warehouse_ids ?? [workspace.warehouse.id],
+    );
+    const representativeWarehouses = new Map(
+      workspace.warehouses
+        .filter((candidate) => candidate.representative && planningGroupWarehouseIds.has(candidate.id))
+        .map((candidate) => [candidate.id, candidate]),
+    );
+    workspace.requests.forEach((request) => {
+      const representativeWarehouse = representativeWarehouses.get(request.warehouse_id);
+      if (!representativeWarehouse || request.source_system !== 'RWMS') return;
+      const requestDate = request.scheduled_date ?? [...request.date_options]
+        .sort((left, right) => left.priority - right.priority || left.date.localeCompare(right.date))[0]?.date;
+      if (!requestDate || surfacedRepresentativeRequestIdsRef.current.has(request.id)) return;
+      surfacedRepresentativeRequestIdsRef.current.add(request.id);
+      toast({
+        tone: 'info',
+        replacementKey: `representative-request-${request.id}`,
+        title: `Новая заявка · ${representativeWarehouse.name}`,
+        detail: `${formatDate(requestDate)} · ${request.name}`,
+        action: {
+          label: 'Открыть заявку',
+          onActivate: () => {
+            setMode('PLAN_DAY');
+            selectPlanningDate(requestDate);
+            setSection('REQUESTS');
+            setMapTool('SELECT');
+            setSelected({ kind: 'request', id: request.id });
+          },
+        },
+      });
+    });
+  }, [selectPlanningDate, setMapTool, setMode, setSection, setSelected, toast, workspace]);
   const availableDriversQuery = useQuery({
     queryKey: ['available-drivers', workspaceWarehouseId],
     queryFn: () => api.listAvailableDrivers(workspaceWarehouseId as UUID),
@@ -248,23 +289,23 @@ export function App() {
   const automaticPlanQuery = useQuery({
     queryKey: [
       'automatic-plan',
-      workspaceWarehouseId,
+      planningWarehouseId,
       planningDate,
     ],
     queryFn: ({ signal }) => api.ensureAutomaticPlan(
-      workspaceWarehouseId as UUID,
+      planningWarehouseId as UUID,
       planningDate,
       workspace!,
       signal,
     ),
-    enabled: Boolean(workspaceWarehouseId && workspace && !workspaceQuery.isFetching),
+    enabled: Boolean(planningWarehouseId && workspace && !workspaceQuery.isFetching),
     retry: false,
     staleTime: Infinity,
   });
   const planningDayStatusQuery = useQuery({
-    queryKey: ['planning-day-status', workspaceWarehouseId, planningDate],
-    queryFn: () => api.getPlanningDayStatus(workspaceWarehouseId as UUID, planningDate),
-    enabled: Boolean(workspaceWarehouseId && workspace),
+    queryKey: ['planning-day-status', planningWarehouseId, planningDate],
+    queryFn: () => api.getPlanningDayStatus(planningWarehouseId as UUID, planningDate),
+    enabled: Boolean(planningWarehouseId && workspace),
     retry: false,
   });
   const acceptingRequests = planningDayStatusQuery.data?.accepting_requests ?? false;
@@ -428,9 +469,11 @@ export function App() {
     ]);
     if (warehouseId) {
       await queryClient.invalidateQueries({ queryKey: ['workspace', warehouseId] });
-      await queryClient.invalidateQueries({ queryKey: ['planning-day-status', warehouseId] });
     }
-  }, [queryClient, warehouseId]);
+    if (planningWarehouseId) {
+      await queryClient.invalidateQueries({ queryKey: ['planning-day-status', planningWarehouseId] });
+    }
+  }, [planningWarehouseId, queryClient, warehouseId]);
 
   const reportActionError = useCallback(async (error: unknown): Promise<void> => {
     const { refreshPlan, ...message } = actionErrorFeedback(error);
@@ -613,7 +656,7 @@ export function App() {
     if (!workspace || !plan || plan.status === 'CONFIRMED') return;
     await execute(async () => {
       const refreshed = await api.ensureAutomaticPlan(
-        workspace.warehouse.id,
+        planningWarehouseId as UUID,
         planningDate,
         workspace,
       );
@@ -623,7 +666,7 @@ export function App() {
       setValidation(null);
       setRoutesNeedRefresh(false);
       queryClient.setQueryData(
-        ['automatic-plan', workspace.warehouse.id, planningDate],
+        ['automatic-plan', planningWarehouseId, planningDate],
         refreshed,
       );
       queryClient.setQueryData(
@@ -641,7 +684,7 @@ export function App() {
       if (refreshExistingPlan) {
         flagCurrentRoutesForRefresh();
       } else {
-        await queryClient.invalidateQueries({ queryKey: ['automatic-plan', workspaceWarehouseId, input.date] });
+        await queryClient.invalidateQueries({ queryKey: ['automatic-plan', planningWarehouseId, input.date] });
       }
       setMode('PLAN_DAY');
       setSection('PLAN_DAY');
@@ -710,7 +753,7 @@ export function App() {
           title: result.replaced_requests > 0 || result.deleted_plans > 0
             ? `Нагрузка заменена: ${result.created_requests} позиций`
             : `Нагрузка создана: ${result.created_requests} позиций`,
-          detail: `${result.created_deliveries} доставок · ${result.created_pickups} вывозов · ${formatDate(result.start_date)}–${formatDate(result.end_date)} · заменено прежних позиций: ${result.replaced_requests} · удалено планов: ${result.deleted_plans}`,
+          detail: `Тестовая нагрузка: ${result.created_deliveries} доставок · ${result.created_pickups} вывозов · ${formatDate(result.start_date)}–${formatDate(result.end_date)} · заменено прежних позиций: ${result.replaced_requests} · удалено планов: ${result.deleted_plans}${result.capacity_projection_status === 'FAILED' && result.capacity_projection_warning ? ` · Внимание: ${result.capacity_projection_warning}` : ''}`,
         });
       });
     } catch (error: unknown) {
@@ -725,7 +768,7 @@ export function App() {
         const feedback = actionErrorFeedback(error);
         toast({
           tone: 'warning',
-          title: 'Нагрузка сохранена; публикация в RWMS требует повтора',
+          title: 'Тестовая нагрузка сохранена; ёмкость не опубликована',
           detail: `${error.code}: ${feedback.detail ?? feedback.title}`,
         });
         return;
@@ -788,7 +831,17 @@ export function App() {
       <header className="topbar">
         <div className="topbar__brand">
           <Button className="brand-mark" onClick={() => { setMode('PLAN_DAY'); setSection('WAREHOUSE'); setMapTool('SELECT'); setSelected({ kind: 'warehouse', id: warehouseId }); }} aria-label="Открыть склад" title="Открыть склад">L</Button>
-          <span className="topbar__warehouse-context"><strong>{workspace.warehouse.name}</strong>{workspace.warehouse.city ? ` · ${workspace.warehouse.city}` : ''}</span>
+          <label className="topbar__warehouse-selector">
+            <span className="sr-only">Главный склад группы</span>
+            <select aria-label="Главный склад группы" value={workspace.planning_root_warehouse_id ?? workspace.warehouse.id} onChange={(event) => setWarehouseId(event.target.value)}>
+              {(planningRoots.length ? planningRoots : [workspace.warehouse]).map((candidate) => (
+                <option key={candidate.id} value={candidate.id}>
+                  {candidate.name}{candidate.city && candidate.city !== candidate.name ? ` · ${candidate.city}` : ''}
+                </option>
+              ))}
+            </select>
+            <span className="sr-only"><strong>{workspace.warehouse.name}</strong>{workspace.warehouse.city ? ` · ${workspace.warehouse.city}` : ''}</span>
+          </label>
         </div>
         <div className="topbar__date">
           {routesNeedRefresh && plan && plan.status !== 'CONFIRMED' ? <Button variant="primary" disabled={busy} onClick={() => void refreshRoutes()}><RefreshCw size={15} aria-hidden="true" /><span>Обновить маршруты</span></Button> : null}
@@ -936,7 +989,7 @@ export function App() {
         if (dialog.date === planningDate) clearLocalPlanningState();
         setDialog(null);
         toast(result.deleted_requests > 0 || result.deleted_plans > 0
-          ? { tone: 'success', title: `Удалено позиций: ${result.deleted_requests} · планов: ${result.deleted_plans}`, detail: formatDate(result.date) }
+          ? { tone: 'success', title: `Тестовая нагрузка удалена: ${result.deleted_requests} позиций · ${result.deleted_plans} планов`, detail: `${formatDate(result.date)}${result.capacity_projection_status === 'FAILED' && result.capacity_projection_warning ? ` · Внимание: ${result.capacity_projection_warning}` : ''}` }
           : { tone: 'info', title: 'На выбранную дату нагрузки генератора нет', detail: formatDate(result.date) });
       }, undefined).catch(() => undefined); }} /> : null}
       {dialog?.kind === 'close-planning-day' ? <ConfirmDialog
@@ -946,7 +999,7 @@ export function App() {
         busy={busy}
         onClose={() => setDialog(null)}
         onConfirm={async () => {
-          const targetWarehouseId = workspace.warehouse.id;
+          const targetWarehouseId = planningWarehouseId as UUID;
           const targetDate = dialog.date;
           await queryClient.cancelQueries({ queryKey: ['automatic-plan', targetWarehouseId, targetDate] });
           try {

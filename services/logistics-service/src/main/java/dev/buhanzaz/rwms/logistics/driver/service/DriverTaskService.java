@@ -20,6 +20,8 @@ import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.Admi
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseOperationMarkStore;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -48,6 +50,8 @@ public class DriverTaskService {
   private final LogisticsWarehouseOperationMarkStore warehouseOperationMarks;
   private final LogisticsTransactionLock transactionLock;
   private final CustomerDeliveryCapacityFence capacityFence;
+  private final CapitalRepairDriverTaskContentService capitalRepairContent;
+  private final DriverTaskWorkerContentCodec workerContentCodec;
 
   public DriverTaskResponse get(UUID taskId) {
     DriverLogisticsTask task = required(taskId);
@@ -297,7 +301,7 @@ public class DriverTaskService {
       return new CreateResult(mapper.toResponse(replay), true, true);
     }
     LogisticsDependencyGateway.CapitalRepair repair = dependencies.readCapitalRepair(repairId);
-    if (!warehouseId.equals(repair.warehouseId())) {
+    if (repair == null || !warehouseId.equals(repair.warehouseId())) {
       throw new LogisticsConflictException("Капитальный ремонт не принадлежит выбранному складу");
     }
     return createInternal(
@@ -388,29 +392,46 @@ public class DriverTaskService {
       throw new LogisticsConflictException(
           "Бытовка не принадлежит выбранному складу или не имеет номера");
     }
+    LogisticsDependencyGateway.CapitalRepair capitalRepair = null;
+    if (request.kind() == DriverTaskKind.CAPITAL_TO_PRODUCTION) {
+      capitalRepair = dependencies.readCapitalRepair(request.sourceId());
+      if (capitalRepair == null
+          || !request.sourceId().equals(capitalRepair.repairId())
+          || !request.cabinId().equals(capitalRepair.rentalItemId())
+          || !request.warehouseId().equals(capitalRepair.warehouseId())) {
+        throw new LogisticsConflictException(
+            "Капитальный ремонт не принадлежит выбранному складу или бытовке");
+      }
+    }
     String checksum = checksum(request, cabin.number(), queue.queueDefinitionId());
 
     warehouseLifecycle.consume(admission);
     capacityFence.acquireTaskDay(request.warehouseId(), scheduledDate, request.kind());
 
     DriverLogisticsTask task =
-        tasks.saveAndFlush(
-            DriverLogisticsTask.create(
-                request.warehouseId(),
-                request.cabinId(),
-                request.repairId(),
-                request.sourceType(),
-                request.sourceId(),
-                request.kind(),
-                request.planningMode(),
-                scheduledDate,
-                request.priority(),
-                request.comment(),
-                cabin.number(),
-                queue.queueDefinitionId(),
-                actorSubjectId,
-                idempotencyKey,
-                checksum));
+        DriverLogisticsTask.create(
+            request.warehouseId(),
+            request.cabinId(),
+            request.repairId(),
+            request.sourceType(),
+            request.sourceId(),
+            request.kind(),
+            request.planningMode(),
+            scheduledDate,
+            request.priority(),
+            request.comment(),
+            cabin.number(),
+            queue.queueDefinitionId(),
+            actorSubjectId,
+            idempotencyKey,
+            checksum);
+    if (capitalRepair != null) {
+      task.captureWorkerContent(
+          workerContentCodec.encode(
+              capitalRepairContent.build(
+                  capitalRepair, cabin, OffsetDateTime.now(ZoneOffset.UTC))));
+    }
+    task = tasks.saveAndFlush(task);
     warehouseOperationMarks.enqueue(
         task.getWarehouseId(),
         task.getId(),

@@ -45,6 +45,7 @@ import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
+import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -54,6 +55,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -68,6 +70,8 @@ class RentalOrderPlanningIntegrationServiceTest {
       UUID.fromString("10000000-0000-0000-0000-000000000002");
   private static final UUID DRIVER_ID =
       UUID.fromString("10000000-0000-0000-0000-000000000003");
+  private static final UUID REPRESENTATIVE_WAREHOUSE_ID =
+      UUID.fromString("10000000-0000-0000-0000-000000000007");
   private static final UUID UNIT_ONE =
       UUID.fromString("10000000-0000-0000-0000-000000000004");
   private static final UUID UNIT_TWO =
@@ -476,6 +480,125 @@ class RentalOrderPlanningIntegrationServiceTest {
     assertThat(snapshot.getValue().vehicle().configurationType())
         .isEqualTo("TRUCK_WITH_TRAILER");
     assertThat(snapshot.getValue().trailer().registrationNumber()).isEqualTo("В456ВВ78");
+  }
+
+  @Test
+  void rootShiftCanApplyARepresentativeOrderThroughAnEligibleSupportEdge() {
+    LocalDate scheduled = LocalDate.now(MOSCOW).plusDays(3);
+    when(order.getWarehouseId()).thenReturn(REPRESENTATIVE_WAREHOUSE_ID);
+    when(order.getDesiredDeliveryWindows())
+        .thenReturn(List.of(DesiredDeliveryWindow.create(scheduled, scheduled)));
+    var unitReservation = reservation(UNIT_ONE);
+    when(reads.readUnits(order)).thenReturn(List.of(unitReservation));
+    when(dependencies.warehouseTimeZoneAt(eq(REPRESENTATIVE_WAREHOUSE_ID), any()))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseTimeZone(
+                REPRESENTATIVE_WAREHOUSE_ID,
+                MOSCOW.getId(),
+                OffsetDateTime.now(ZoneOffset.UTC).minusDays(1)));
+    var rootIdentity =
+        new LogisticsDependencyGateway.WarehouseIdentity(
+            WAREHOUSE_ID, 1, true, "Санкт-Петербург", null, MOSCOW.getId());
+    var representativeIdentity =
+        new LogisticsDependencyGateway.WarehouseIdentity(
+            REPRESENTATIVE_WAREHOUSE_ID,
+            1,
+            true,
+            "Великий Новгород",
+            null,
+            MOSCOW.getId());
+    when(dependencies.listWarehouseSupportNetwork(WAREHOUSE_ID))
+        .thenReturn(
+            List.of(
+                new LogisticsDependencyGateway.WarehouseSupportLink(
+                    UUID.randomUUID(),
+                    1,
+                    rootIdentity,
+                    representativeIdentity,
+                    1,
+                    true,
+                    true,
+                    true,
+                    true,
+                    true,
+                    true,
+                    Set.of(scheduled.getDayOfWeek()),
+                    Set.of(),
+                    Set.of(),
+                    null,
+                    null)));
+    when(lifecycle.prepareDocument(any(), any(), any(), any())).thenReturn(mockAdmission());
+    when(rentalOrders.createRentalShipment(any(), any(), any(), any(), any(), any()))
+        .thenReturn(documentResult(UUID.randomUUID()));
+
+    var response =
+        service.apply(
+            UUID.randomUUID(),
+            request(
+                List.of(
+                    new PlanningAssignmentRequest(
+                        ORDER_ID,
+                        REPRESENTATIVE_WAREHOUSE_ID,
+                        7L,
+                        scheduled,
+                        DRIVER_ID,
+                        "Водитель 1",
+                        List.of(UNIT_ONE))),
+                List.of(shiftPlan(scheduled))));
+
+    assertThat(response.rejected()).isEmpty();
+    assertThat(response.applied()).hasSize(1);
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<AdmissionRequirement>> requirements =
+        ArgumentCaptor.forClass(List.class);
+    verify(lifecycle)
+        .prepareDocument(any(), eq("CREATE_RENTAL_ORDER_SHIPMENT"), any(), requirements.capture());
+    assertThat(requirements.getValue())
+        .singleElement()
+        .satisfies(
+            admission ->
+                assertThat(admission.warehouseId()).isEqualTo(REPRESENTATIVE_WAREHOUSE_ID));
+    verify(dependencies).registerDriverShiftPlan(any(), any(), any());
+  }
+
+  @Test
+  void representativeOrderIsRejectedWhenTheRootHasNoEligibleDriverSupportEdge() {
+    LocalDate scheduled = LocalDate.now(MOSCOW).plusDays(3);
+    when(order.getWarehouseId()).thenReturn(REPRESENTATIVE_WAREHOUSE_ID);
+    when(order.getDesiredDeliveryWindows())
+        .thenReturn(List.of(DesiredDeliveryWindow.create(scheduled, scheduled)));
+    var unitReservation = reservation(UNIT_ONE);
+    when(reads.readUnits(order)).thenReturn(List.of(unitReservation));
+    when(dependencies.warehouseTimeZoneAt(eq(REPRESENTATIVE_WAREHOUSE_ID), any()))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseTimeZone(
+                REPRESENTATIVE_WAREHOUSE_ID,
+                MOSCOW.getId(),
+                OffsetDateTime.now(ZoneOffset.UTC).minusDays(1)));
+    when(dependencies.listWarehouseSupportNetwork(WAREHOUSE_ID)).thenReturn(List.of());
+
+    var response =
+        service.apply(
+            UUID.randomUUID(),
+            request(
+                List.of(
+                    new PlanningAssignmentRequest(
+                        ORDER_ID,
+                        REPRESENTATIVE_WAREHOUSE_ID,
+                        7L,
+                        scheduled,
+                        DRIVER_ID,
+                        "Водитель 1",
+                        List.of(UNIT_ONE)))));
+
+    assertThat(response.applied()).isEmpty();
+    assertThat(response.rejected())
+        .singleElement()
+        .satisfies(
+            rejected ->
+                assertThat(rejected.code()).isEqualTo("SUPPORT_WAREHOUSE_NOT_AUTHORIZED"));
+    verify(lifecycle, never()).prepareDocument(any(), any(), any(), any());
+    verify(rentalOrders, never()).createRentalShipment(any(), any(), any(), any(), any(), any());
   }
 
   @Test

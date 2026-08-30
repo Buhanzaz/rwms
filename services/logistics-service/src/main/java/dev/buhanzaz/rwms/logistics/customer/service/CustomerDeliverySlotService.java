@@ -30,6 +30,7 @@ import dev.buhanzaz.rwms.logistics.customer.routing.CustomerVehicleRouteProfile;
 import dev.buhanzaz.rwms.logistics.customer.routing.ValhallaCustomerTravelTimeClient;
 import dev.buhanzaz.rwms.logistics.customer.security.CustomerIdentity;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseIdentity;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -68,6 +69,7 @@ public class CustomerDeliverySlotService {
   private final WarehouseCapacitySnapshotRepository warehouseCapacitySnapshots;
   private final ValhallaCustomerTravelTimeClient travelTimes;
   private final CustomerRouteCapacityPlanner capacity;
+  private final RepresentativeDeliverySlotPolicy representativePolicy;
   private final DriverLogisticsTaskRepository driverTasks;
   private final Clock clock;
 
@@ -86,7 +88,8 @@ public class CustomerDeliverySlotService {
     }
     int siteCabinCapacity = cabinCount == 1 ? 1 : request.siteCabinCapacity();
     OffsetDateTime now = now();
-    ZoneId zone = ZoneId.of(warehouses.required(session.getWarehouseId()).timeZone());
+    WarehouseIdentity warehouse = warehouses.required(session.getWarehouseId());
+    ZoneId zone = ZoneId.of(warehouse.timeZone());
     LocalDate first = now.toInstant().atZone(zone).toLocalDate().plusDays(configuration.earliestDeliveryDays());
     LocalDate last =
         now.toInstant().atZone(zone).toLocalDate().plusDays(configuration.bookingHorizonDays());
@@ -102,7 +105,7 @@ public class CustomerDeliverySlotService {
               configuration,
               now);
       if (context.points().isEmpty()) continue;
-      for (Window window : windows(configuration)) {
+      for (Window window : windows(configuration, warehouse.representative())) {
         OfferDecision decision =
             evaluate(
                 context,
@@ -111,10 +114,18 @@ public class CustomerDeliverySlotService {
                 cabinCount,
                 siteCabinCapacity,
                 configuration);
-        if (!decision.capacity().feasible()) continue;
         long oneWay = decision.matrix().travelSeconds(0, decision.candidateIndex());
         PriceDecision price = price(context, oneWay);
         if (price == null) continue;
+        RepresentativeDeliverySlotPolicy.Decision policy =
+            representativePolicy.evaluate(
+                warehouse,
+                date,
+                window.kind(),
+                window.start(),
+                window.end(),
+                decision.capacity().feasible());
+        if (!policy.allowed()) continue;
         int zoneHours = (int) Math.max(1, (oneWay + 3_599L) / 3_600L);
         offers.add(
             CustomerDeliverySlot.offer(
@@ -131,7 +142,7 @@ public class CustomerDeliverySlotService {
                 cabinCount,
                 oneWay,
                 zoneHours,
-                decision.capacity().capacityRemaining(),
+                policy.flexibleSupport() ? 0 : decision.capacity().capacityRemaining(),
                 siteCabinCapacity,
                 price.deliveryPriceRubles(),
                 price.priceIsochroneMinutes(),
@@ -213,7 +224,7 @@ public class CustomerDeliverySlotService {
             offered.getCabinCount(),
             offered.getSiteCabinCapacity(),
             configuration);
-    if (!decision.capacity().feasible()) {
+    if (decision.matrix() == null) {
       throw new OrderProblemException(
           HttpStatus.CONFLICT,
           "CUSTOMER_DELIVERY_SLOT_TAKEN",
@@ -232,6 +243,21 @@ public class CustomerDeliverySlotService {
           "CUSTOMER_DELIVERY_SLOT_TAKEN",
           "Тариф или правила доставки изменились; выберите доступное время заново");
     }
+    WarehouseIdentity warehouse = warehouses.required(session.getWarehouseId());
+    RepresentativeDeliverySlotPolicy.Decision policy =
+        representativePolicy.evaluate(
+            warehouse,
+            offered.getDeliveryDate(),
+            offered.getKind(),
+            offered.getWindowStart(),
+            offered.getWindowEnd(),
+            decision.capacity().feasible());
+    if (!policy.allowed()) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "CUSTOMER_DELIVERY_SLOT_TAKEN",
+          "Этот слот больше недоступен; выберите другое время");
+    }
     CustomerDeliverySlotHoldStore.HeldSlot held =
         holdStore.hold(
             new CustomerDeliverySlotHoldStore.HoldCommand(
@@ -243,7 +269,7 @@ public class CustomerDeliverySlotService {
                 offered.getWarehouseId(),
                 offered.getDeliveryDate(),
                 context.workloadSha256(),
-                decision.capacity().capacityRemaining(),
+                policy.flexibleSupport() ? 0 : decision.capacity().capacityRemaining(),
                 privateSiteAccessConfirmed,
                 failedTripChargeAcknowledged,
                 configuration.holdLifetime()));
@@ -339,7 +365,10 @@ public class CustomerDeliverySlotService {
     int candidateIndex = points.size();
     points.add(new GeoPoint(latitude.doubleValue(), longitude.doubleValue()));
     int maximumShiftCapacity =
-        shifts.stream().mapToInt(WarehouseCapacityShift::getCabinCapacity).max().orElse(1);
+        shifts.stream()
+            .mapToInt(WarehouseCapacityShift::getCabinCapacity)
+            .max()
+            .orElse(siteCabinCapacity);
     int conservativeTripCapacity = Math.min(siteCabinCapacity, maximumShiftCapacity);
     for (CustomerDeliverySlot slot : existing) {
       conservativeTripCapacity =
@@ -473,13 +502,16 @@ public class CustomerDeliverySlotService {
         .truncatedTo(ChronoUnit.MICROS);
   }
 
-  private static List<Window> windows(CustomerDeliveryProperties.Validated configuration) {
+  private static List<Window> windows(
+      CustomerDeliveryProperties.Validated configuration, boolean representativeWarehouse) {
     List<Window> windows = new ArrayList<>();
-    LocalTime start = configuration.customerDeliveryStart();
-    while (start.isBefore(configuration.customerDeliveryEnd())) {
-      LocalTime end = start.plusMinutes(configuration.deliverySlotMinutes());
-      windows.add(new Window(CustomerDeliverySlotKind.FIXED_WINDOW, start, end));
-      start = end;
+    if (!representativeWarehouse) {
+      LocalTime start = configuration.customerDeliveryStart();
+      while (start.isBefore(configuration.customerDeliveryEnd())) {
+        LocalTime end = start.plusMinutes(configuration.deliverySlotMinutes());
+        windows.add(new Window(CustomerDeliverySlotKind.FIXED_WINDOW, start, end));
+        start = end;
+      }
     }
     windows.add(
         new Window(

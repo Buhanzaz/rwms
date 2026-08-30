@@ -55,6 +55,41 @@ export interface TransferRouteVehicle {
   capacity: number;
 }
 
+/** Canonical worker who may execute a transfer from the source warehouse. */
+export interface TransferDriver {
+  workerId: string;
+  displayName: string;
+}
+
+/** Time-bounded contractor command owned by task-board. */
+export interface CreateTransferContractorInput {
+  accessToken: string;
+  warehouseId: string;
+  contractorId: string;
+  displayName: string;
+  phone: string;
+  availableFrom: string;
+  availableUntil: string;
+  comment: string | null;
+}
+
+/** Explicit post-arrival assignment kept separate from the driver executing the trip. */
+export interface TransferResourceRepositionInput {
+  resourceId: string;
+  mode: 'TEMPORARY' | 'PERMANENT';
+  until: string | null;
+}
+
+/** Destination cabin awaiting a capital-repair return leg. */
+export interface CapitalRepairCard {
+  repairId: string;
+  assetId: string;
+  assetVersion: number;
+  assetNumber: string;
+  priority: number | null;
+  complexity: string | null;
+}
+
 /** Side-effect-free exact road estimate for the planned warehouse leg. */
 export interface TransferArrivalEstimate {
   departure_at: string;
@@ -75,10 +110,17 @@ export interface TransferPlanDraftInput {
   logisticsComment: string | null;
   tripDriverId: string | null;
   tripVehicleId: string | null;
-  driverReposition: null;
+  driverReposition: TransferResourceRepositionInput | null;
   vehicleReposition: null;
   cabinGroups: TransferCabinGroupInput[];
   looseFurniture: [];
+}
+
+/** A destination cabin selected for the return journey to capital repair. */
+export interface ReturnCapitalRepairLine {
+  repairId: string;
+  assetId: string;
+  assetVersion: number;
 }
 
 /** Authenticated, idempotent command for one exact canonical transfer-draft intention. */
@@ -89,6 +131,7 @@ export interface CreateTransferDraftInput {
   destinationWarehouseId: string;
   scheduledDate: string;
   plan: TransferPlanDraftInput;
+  returnCapitalRepairLines?: ReturnCapitalRepairLine[];
 }
 
 /** Minimum transfer-document identity needed by the standalone success feedback. */
@@ -225,6 +268,64 @@ export async function loadTransferRouteVehicles(localWarehouseId: string): Promi
   });
 }
 
+/** Loads source-qualified canonical drivers without creating a simulator-owned employee. */
+export async function loadTransferDrivers(localWarehouseId: string): Promise<TransferDriver[]> {
+  const response = await fetch(simulatorApiUrl(`/warehouses/${encodeURIComponent(localWarehouseId)}/available-drivers`), {
+    headers: { Accept: 'application/json, application/problem+json' },
+  });
+  const value = await readJson(response, 'Не удалось получить водителей склада');
+  if (!Array.isArray(value)) throw new Error('Логистика вернула некорректный список водителей');
+  return value.flatMap((candidate): TransferDriver[] => {
+    if (!isRecord(candidate) || typeof candidate.worker_id !== 'string' || typeof candidate.display_name !== 'string') return [];
+    return [{ workerId: candidate.worker_id, displayName: candidate.display_name }];
+  });
+}
+
+/** Creates an explicit time-bounded contractor without provisioning a permanent employee login. */
+export async function createTransferContractor(input: CreateTransferContractorInput): Promise<TransferDriver> {
+  const response = await fetch(`/api/task-board/warehouses/${encodeURIComponent(input.warehouseId)}/logistics-drivers/contractors`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json, application/problem+json',
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${input.accessToken}`,
+    },
+    body: JSON.stringify({
+      contractorId: input.contractorId,
+      displayName: input.displayName,
+      phone: input.phone,
+      availableFrom: input.availableFrom,
+      availableUntil: input.availableUntil,
+      comment: input.comment,
+    }),
+  });
+  const value = await readJson(response, 'Не удалось создать наёмного водителя');
+  if (!isRecord(value) || typeof value.workerId !== 'string' || typeof value.displayName !== 'string') {
+    throw new Error('RWMS вернул некорректного наёмного водителя');
+  }
+  return { workerId: value.workerId, displayName: value.displayName };
+}
+
+/** Loads destination cabins currently awaiting capital repair for a return leg. */
+export async function loadCapitalRepairCards(accessToken: string, destinationWarehouseId: string): Promise<CapitalRepairCard[]> {
+  const response = await fetch(`/api/logistics/v1/driver-board?warehouseId=${encodeURIComponent(destinationWarehouseId)}`, {
+    headers: { Accept: 'application/json, application/problem+json', Authorization: `Bearer ${accessToken}` },
+  });
+  const value = await readJson(response, 'Не удалось получить бытовки на капремонт');
+  const cards = isRecord(value) && Array.isArray(value.capitalRepairs) ? value.capitalRepairs : [];
+  return cards.flatMap((item) => {
+    if (!isRecord(item) || typeof item.repairId !== 'string' || typeof item.cabinId !== 'string' || typeof item.assetVersion !== 'number') return [];
+    return [{
+      repairId: item.repairId,
+      assetId: item.cabinId,
+      assetVersion: item.assetVersion,
+      assetNumber: typeof item.unitNumber === 'string' ? item.unitNumber : item.cabinId,
+      priority: typeof item.priority === 'number' ? item.priority : null,
+      complexity: typeof item.complexityName === 'string' ? item.complexityName : null,
+    }];
+  });
+}
+
 /** Calculates exact warehouse-to-warehouse arrival using the selected physical vehicle profile. */
 export async function estimateTransferArrival(input: {
   sourceWarehouseId: string;
@@ -279,6 +380,7 @@ export async function createTransferDraft(input: CreateTransferDraftInput): Prom
       lines: [],
       furnitureReplacements: [],
       plan: input.plan,
+      returnCapitalRepairLines: input.returnCapitalRepairLines ?? [],
     }),
   });
   const value = await readJson(response, 'Не удалось создать перемещение');

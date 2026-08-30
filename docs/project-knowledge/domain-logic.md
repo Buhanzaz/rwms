@@ -992,14 +992,40 @@ assignment only after physical arrival. Candidate evaluation is side-effect
 free and exposes structured reason codes; inventory, driver and vehicle holds
 remain confirmation effects.
 
-The transfer's DriverApp/WorkerApp representation is a frozen execution projection, not a second movement
-aggregate. Logistics derives exact cabin characteristics, actual/required furniture differences,
-loose furniture, the dispatcher comment and ordered load/travel/unload instructions from the
-confirmed transfer and owner snapshots. It stores canonical JSON beside the durable driver intent
-and registers the same task-board `taskText`, `works`, `materials` and `comments` fields already
-used by offline sync. Presentation rows never mutate stock; asset reservations and transfer
-departure/arrival remain the only physical custody commands. Evidence:
+The standalone planning workspace resolves one main warehouse plus its directly
+served representative warehouses as a non-transitive dated group. Selecting
+either endpoint opens the same root plan: regional requests retain their
+`serviceWarehouseId`, while drivers, vehicles and the day-plan aggregate remain
+rooted at the main warehouse. Exact excluded dates override allowed dates, which
+override the recurring weekday set. Generated/manual workload stays
+simulator-owned and is never converted into an RWMS order, notification or
+assignment.
+
+Customer promises are intentionally narrower than planner candidates. A
+non-representative warehouse keeps the existing fixed-window and full-day
+capacity behavior. A representative warehouse exposes only `DURING_DAY`: local
+feasible capacity can back it directly; otherwise an active incoming support
+edge must overlap the customer day and permit a driver plus vehicle or an
+explicit contractor fallback. Search and hold both recompute that policy. A
+potential external resource therefore never fabricates a shift, resource
+reservation or guaranteed exact window.
+
+The transfer's DriverApp/WorkerApp representation is a frozen execution
+projection, not a second movement aggregate. Logistics derives exact cabin
+characteristics, actual/required furniture differences, loose furniture, the
+dispatcher comment and ordered load/travel/unload instructions from the
+confirmed transfer and owner snapshots. Source-cabin media is resolved through
+the existing media gallery and frozen as generation-aware references. When the
+dispatcher selects active capital-repair cabins at the representative
+destination, the same create transaction also creates a linked concrete-line
+reverse transfer back to the main warehouse; the trip driver owns that return
+task, but the outbound cargo is unloaded before reverse capacity is evaluated.
+It stores canonical JSON beside the durable driver intent and registers the same
+task-board `taskText`, `works`, `materials` and `comments` fields already used by
+offline sync. Presentation rows never mutate stock; asset reservations and
+transfer departure/arrival remain the only physical custody commands. Evidence:
 [`TransferDriverTaskContentService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/TransferDriverTaskContentService.java),
+[`CapitalRepairDriverTaskContentService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/CapitalRepairDriverTaskContentService.java),
 [`DriverLogisticsTask.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/domain/DriverLogisticsTask.java), and
 [`TransferPlanWorkflowStore.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/service/TransferPlanWorkflowStore.java).
 
@@ -1009,8 +1035,12 @@ furniture quantities as a requirement while leaving `allocatedCabins` empty;
 only the logistics-service confirmation transition may allocate and reserve
 physical stock. Its planned-arrival preview is also side-effect free: the
 simulator routes one source-local vehicle snapshot with the current zero-to-two
-cabin `VehicleLegState`, returns exact road time, and never writes the selected
-local vehicle ID into the canonical trip assignment. Evidence:
+cabin `VehicleLegState` and returns exact road time. The selected route vehicle
+is then persisted as the canonical trip vehicle; capacity still remains
+server-validated by the existing route and transfer owners rather than by a
+second browser calculator. Reverse capital-repair lines are sent as their own
+top-level command component and never mixed into the outbound cabin requirement.
+Evidence:
 [`TransferDraftDialog.tsx`](../../logistics/frontend/src/features/transfers/TransferDraftDialog.tsx),
 [`transfer-client.ts`](../../logistics/frontend/src/features/transfers/transfer-client.ts), and
 [`routing.py`](../../logistics/backend/app/api/routing.py).

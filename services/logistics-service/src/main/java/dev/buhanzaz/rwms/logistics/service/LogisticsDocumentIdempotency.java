@@ -65,6 +65,29 @@ class LogisticsDocumentIdempotency {
         .orElse(null);
   }
 
+  /**
+   * Reads an additive command receipt when present while retaining replay compatibility with
+   * records written before that receipt existed.
+   */
+  <T> T replayOptionalResponse(
+      UUID subjectId,
+      UUID idempotencyKey,
+      String operation,
+      String checksum,
+      Class<T> responseType) {
+    return receipt(subjectId, idempotencyKey, operation, checksum)
+        .map(
+            record -> {
+              if (record.getResponseJson() == null) return null;
+              try {
+                return objectMapper.readValue(record.getResponseJson(), responseType);
+              } catch (JacksonException exception) {
+                throw new IllegalStateException("Idempotency response is invalid", exception);
+              }
+            })
+        .orElse(null);
+  }
+
   void remember(
       UUID subjectId,
       UUID idempotencyKey,

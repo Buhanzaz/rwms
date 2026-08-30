@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useUiStore } from '../src/stores/ui-store';
 
 describe('notification history', () => {
@@ -46,5 +46,28 @@ describe('notification history', () => {
 
     useUiStore.getState().clearNotifications();
     expect(useUiStore.getState().notifications).toEqual([]);
+  });
+
+  it('replaces an actionable notification in memory without duplicating its history row', () => {
+    const firstAction = vi.fn();
+    const latestAction = vi.fn();
+    useUiStore.getState().toast({
+      tone: 'info',
+      replacementKey: 'representative-request-request-1',
+      title: 'Новая заявка',
+      action: { label: 'Открыть заявку', onActivate: firstAction },
+    });
+    useUiStore.getState().toast({
+      tone: 'info',
+      replacementKey: 'representative-request-request-1',
+      title: 'Заявка обновлена',
+      action: { label: 'Открыть заявку', onActivate: latestAction },
+    });
+
+    const notifications = useUiStore.getState().notifications;
+    expect(notifications).toHaveLength(1);
+    notifications[0]?.action?.onActivate();
+    expect(latestAction).toHaveBeenCalledOnce();
+    expect(firstAction).not.toHaveBeenCalled();
   });
 });

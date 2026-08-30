@@ -1,17 +1,20 @@
 package dev.buhanzaz.rwms.logistics.customer.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.same;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.DeliverySlotSearchRequest;
+import dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.HoldCustomerDeliverySlotRequest;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityIsochroneTariff;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityIsochroneTariffRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityJobRepository;
@@ -21,6 +24,7 @@ import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityShi
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacitySnapshot;
 import dev.buhanzaz.rwms.logistics.customer.config.CustomerDeliveryProperties;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotKind;
+import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlot;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerRentalSession;
 import dev.buhanzaz.rwms.logistics.customer.routing.CustomerRouteCapacityPlanner;
 import dev.buhanzaz.rwms.logistics.customer.routing.CustomerRouteCapacityPlanner.CapacityDecision;
@@ -30,7 +34,10 @@ import dev.buhanzaz.rwms.logistics.customer.routing.CustomerVehicleRouteProfile;
 import dev.buhanzaz.rwms.logistics.customer.routing.ValhallaCustomerTravelTimeClient;
 import dev.buhanzaz.rwms.logistics.customer.security.CustomerIdentity;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseIdentity;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseSupportLink;
+import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
@@ -41,6 +48,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -70,6 +78,8 @@ class CustomerDeliverySlotServiceTest {
     ValhallaCustomerTravelTimeClient travelTimes =
         mock(ValhallaCustomerTravelTimeClient.class);
     CustomerRouteCapacityPlanner capacity = mock(CustomerRouteCapacityPlanner.class);
+    RepresentativeDeliverySlotPolicy representativePolicy =
+        new RepresentativeDeliverySlotPolicy(mock(LogisticsDependencyGateway.class));
     DriverLogisticsTaskRepository driverTasks = mock(DriverLogisticsTaskRepository.class);
     CustomerDeliverySlotService service =
         new CustomerDeliverySlotService(
@@ -84,6 +94,7 @@ class CustomerDeliverySlotServiceTest {
             snapshots,
             travelTimes,
             capacity,
+            representativePolicy,
             driverTasks,
             CLOCK);
     CustomerRentalSession session = CustomerRentalSession.create(INQUIRY, SUBJECT, WAREHOUSE);
@@ -189,6 +200,98 @@ class CustomerDeliverySlotServiceTest {
             });
   }
 
+  @Test
+  void representativeWarehouseWithLocalCapacityOffersOnlyDuringDay() {
+    SlotHarness harness =
+        new SlotHarness(1, 1_800, snapshot(4), true, true, true, List.of());
+
+    assertThat(harness.search())
+        .singleElement()
+        .satisfies(
+            offer -> {
+              assertThat(offer.kind()).isEqualTo(CustomerDeliverySlotKind.DURING_DAY);
+              assertThat(offer.capacityRemaining()).isZero();
+            });
+  }
+
+  @Test
+  void ordinaryWarehouseWithoutLocalCapacityRemainsFailClosed() {
+    SlotHarness harness =
+        new SlotHarness(1, 1_800, snapshot(4), false, false, false, List.of());
+
+    assertThat(harness.search()).isEmpty();
+    verify(harness.dependencies, never()).listWarehouseSupportNetwork(WAREHOUSE);
+  }
+
+  @Test
+  void eligibleSupportEdgeOffersFlexibleDayWithoutLocalShift() {
+    SlotHarness harness =
+        new SlotHarness(
+            1, 1_800, snapshot(4), true, false, false, List.of(eligibleSupportLink(Set.of())));
+
+    assertThat(harness.search())
+        .singleElement()
+        .satisfies(
+            offer -> {
+              assertThat(offer.kind()).isEqualTo(CustomerDeliverySlotKind.DURING_DAY);
+              assertThat(offer.capacityRemaining()).isZero();
+              assertThat(offer.roadRouteConfirmed()).isTrue();
+            });
+  }
+
+  @Test
+  void flexibleTwoCabinDayStillRequiresTruckAndTrailerRoadProfile() {
+    SlotHarness harness =
+        new SlotHarness(
+            2, 1_800, snapshot(4), true, false, false, List.of(eligibleSupportLink(Set.of())));
+
+    assertThat(harness.search())
+        .singleElement()
+        .satisfies(
+            offer -> {
+              assertThat(offer.routeProfile().combinationLengthMeters()).isEqualTo(12.0);
+              assertThat(offer.routeProfile().axleCount()).isEqualTo(3);
+            });
+  }
+
+  @Test
+  void excludedSupportDateLeavesRepresentativeWarehouseWithoutOffers() {
+    SlotHarness harness =
+        new SlotHarness(
+            1,
+            1_800,
+            snapshot(4),
+            true,
+            false,
+            false,
+            List.of(eligibleSupportLink(Set.of(LocalDate.of(2026, 8, 28)))));
+
+    assertThat(harness.search()).isEmpty();
+  }
+
+  @Test
+  void holdRechecksSupportPolicyAndRejectsEdgeRemovedAfterSearch() {
+    SlotHarness harness =
+        new SlotHarness(
+            1, 1_800, snapshot(4), true, false, false, List.of(eligibleSupportLink(Set.of())));
+    harness.search();
+    CustomerDeliverySlot offered = harness.latestOffers.getFirst();
+    when(harness.dependencies.listWarehouseSupportNetwork(WAREHOUSE)).thenReturn(List.of());
+    when(harness.slotStore.required(SUBJECT, INQUIRY, offered.getId())).thenReturn(offered);
+
+    assertThatThrownBy(
+            () ->
+                harness.service.hold(
+                    new CustomerIdentity(SUBJECT, "customer"),
+                    offered.getId(),
+                    offered.getVersion(),
+                    new HoldCustomerDeliverySlotRequest(INQUIRY, 0L, 1, true, true)))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            problem -> assertThat(problem.code()).isEqualTo("CUSTOMER_DELIVERY_SLOT_TAKEN"));
+    verify(harness.holdStore, never()).hold(any());
+  }
+
   /** Minimal deterministic collaborator set for dynamic isochrone search cases. */
   private static final class SlotHarness {
     private final CustomerRentalService rentals = mock(CustomerRentalService.class);
@@ -207,14 +310,29 @@ class CustomerDeliverySlotServiceTest {
     private final ValhallaCustomerTravelTimeClient travelTimes =
         mock(ValhallaCustomerTravelTimeClient.class);
     private final CustomerRouteCapacityPlanner capacity = mock(CustomerRouteCapacityPlanner.class);
+    private final LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
+    private final RepresentativeDeliverySlotPolicy representativePolicy =
+        new RepresentativeDeliverySlotPolicy(dependencies);
     private final DriverLogisticsTaskRepository driverTasks =
         mock(DriverLogisticsTaskRepository.class);
+    private final List<CustomerDeliverySlot> latestOffers = new java.util.ArrayList<>();
     private final CustomerDeliverySlotService service;
 
     private SlotHarness(
         int cabinCount,
         long oneWayTravelSeconds,
         WarehouseCapacitySnapshot snapshot) {
+      this(cabinCount, oneWayTravelSeconds, snapshot, false, true, true, List.of());
+    }
+
+    private SlotHarness(
+        int cabinCount,
+        long oneWayTravelSeconds,
+        WarehouseCapacitySnapshot snapshot,
+        boolean representative,
+        boolean localShift,
+        boolean localCapacityFeasible,
+        List<WarehouseSupportLink> supportNetwork) {
       CustomerRentalSession session = CustomerRentalSession.create(INQUIRY, SUBJECT, WAREHOUSE);
       CustomerDeliveryProperties.Validated configuration = configuration();
       CustomerTravelTimeMatrix matrix =
@@ -233,7 +351,7 @@ class CustomerDeliverySlotServiceTest {
       when(sessions.required(SUBJECT, INQUIRY)).thenReturn(session);
       when(warehouses.validated(WAREHOUSE)).thenReturn(configuration);
       when(warehouses.required(WAREHOUSE))
-          .thenReturn(new WarehouseIdentity(WAREHOUSE, 0, true, "Europe/Moscow"));
+          .thenReturn(warehouseIdentity(WAREHOUSE, representative));
       when(rentals.selectedCabinIds(any(), eq(INQUIRY)))
           .thenReturn(
               cabinCount == 1
@@ -241,7 +359,8 @@ class CustomerDeliverySlotServiceTest {
                   : List.of(UUID.randomUUID(), UUID.randomUUID()));
       when(slotStore.workload(eq(WAREHOUSE), any(), any())).thenReturn(List.of());
       when(generated.findCapacityWorkload(eq(WAREHOUSE), any())).thenReturn(List.of());
-      when(shifts.findCapacityShifts(eq(WAREHOUSE), any())).thenReturn(List.of(shift));
+      when(shifts.findCapacityShifts(eq(WAREHOUSE), any()))
+          .thenReturn(localShift ? List.of(shift) : List.of());
       when(isochroneTariffs.findTariffs(WAREHOUSE))
           .thenReturn(snapshot.getIsochroneTariffs());
       when(snapshots.findByWarehouseId(WAREHOUSE)).thenReturn(Optional.ofNullable(snapshot));
@@ -253,9 +372,15 @@ class CustomerDeliverySlotServiceTest {
               any(CustomerVehicleRouteProfile.class)))
           .thenReturn(matrix);
       when(capacity.evaluate(same(matrix), anyList(), same(configuration), anyList(), anyInt()))
-          .thenReturn(new CapacityDecision(true, 0));
+          .thenReturn(new CapacityDecision(localCapacityFeasible, 0));
+      when(dependencies.listWarehouseSupportNetwork(WAREHOUSE)).thenReturn(supportNetwork);
       when(slotStore.replaceOffers(eq(SUBJECT), eq(INQUIRY), anyList()))
-          .thenAnswer(invocation -> invocation.getArgument(2));
+          .thenAnswer(
+              invocation -> {
+                latestOffers.clear();
+                latestOffers.addAll(invocation.getArgument(2));
+                return List.copyOf(latestOffers);
+              });
       service =
           new CustomerDeliverySlotService(
               rentals,
@@ -269,6 +394,7 @@ class CustomerDeliverySlotServiceTest {
               snapshots,
               travelTimes,
               capacity,
+              representativePolicy,
               driverTasks,
               CLOCK);
     }
@@ -286,6 +412,42 @@ class CustomerDeliverySlotServiceTest {
               false,
               false));
     }
+  }
+
+  private static WarehouseSupportLink eligibleSupportLink(Set<LocalDate> excludedDates) {
+    UUID supportWarehouseId =
+        UUID.fromString("00000000-0000-0000-0000-000000000504");
+    return new WarehouseSupportLink(
+        UUID.fromString("00000000-0000-0000-0000-000000000505"),
+        0,
+        warehouseIdentity(supportWarehouseId, false),
+        warehouseIdentity(WAREHOUSE, true),
+        1,
+        true,
+        true,
+        false,
+        false,
+        false,
+        false,
+        Set.of(),
+        Set.of(),
+        excludedDates,
+        LocalTime.of(8, 0),
+        LocalTime.of(20, 0));
+  }
+
+  private static WarehouseIdentity warehouseIdentity(UUID id, boolean representative) {
+    return new WarehouseIdentity(
+        id,
+        0,
+        true,
+        representative ? "Представительский склад" : "Основной склад",
+        "",
+        null,
+        null,
+        null,
+        "Europe/Moscow",
+        representative);
   }
 
   private static WarehouseCapacitySnapshot snapshot(int tierCount) {

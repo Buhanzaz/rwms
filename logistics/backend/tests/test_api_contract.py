@@ -53,8 +53,12 @@ def test_openapi_exposes_only_warehouse_rooted_product_operations() -> None:
     assert "/api/vehicle-load-profiles/{profile_id}" not in paths
 
     workspace = document["components"]["schemas"]["WarehouseWorkspaceRead"]
+    assert "planning_root_warehouse_id" in workspace["properties"]
+    assert "planning_group_warehouse_ids" in workspace["properties"]
     assert set(workspace["required"]) == {
         "warehouse",
+        "planning_root_warehouse_id",
+        "planning_group_warehouse_ids",
         "warehouses",
         "drivers",
         "vehicles",

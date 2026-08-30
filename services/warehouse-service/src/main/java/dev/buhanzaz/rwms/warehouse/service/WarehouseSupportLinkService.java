@@ -221,6 +221,55 @@ public class WarehouseSupportLinkService {
         .toList();
   }
 
+  /**
+   * Returns the complete active support network adjacent to one active warehouse.
+   *
+   * <p>No calendar rule is evaluated here: the planning owner needs the stable topology first and
+   * evaluates every edge against the candidate date and time. Both endpoint identities remain
+   * warehouse-owned and inactive endpoints are excluded.
+   *
+   * @param warehouseId support or served warehouse whose direct network is requested
+   * @return active adjacent edges ordered by priority and stable identities
+   */
+  @Transactional(readOnly = true)
+  public List<LogisticsWarehouseSupportLinkResponse> logisticsNetwork(UUID warehouseId) {
+    Warehouse requested = require(warehouseId);
+    if (!requested.isActive()) return List.of();
+    List<WarehouseSupportLink> network = links.findActiveSupportNetwork(warehouseId);
+    if (network.isEmpty()) return List.of();
+
+    Set<UUID> endpointIds = new LinkedHashSet<>();
+    network.forEach(
+        link -> {
+          endpointIds.add(link.getSupportWarehouseId());
+          endpointIds.add(link.getServedWarehouseId());
+        });
+    Map<UUID, Warehouse> endpoints =
+        warehouses.findAllById(endpointIds).stream()
+            .filter(Warehouse::isActive)
+            .collect(Collectors.toMap(Warehouse::getId, Function.identity()));
+    OffsetDateTime now = timeZones.databaseNow();
+    Map<UUID, String> effectiveZones =
+        timeZones.effectiveTimeZonesAt(new ArrayList<>(endpoints.keySet()), now);
+    Map<UUID, LogisticsWarehouseIdentityResponse> identities = new HashMap<>();
+    endpoints.forEach(
+        (id, endpoint) ->
+            identities.put(
+                id, warehouseResponses.toLogisticsIdentity(endpoint, effectiveZones.get(id))));
+    return network.stream()
+        .filter(
+            link ->
+                identities.containsKey(link.getSupportWarehouseId())
+                    && identities.containsKey(link.getServedWarehouseId()))
+        .map(
+            link ->
+                linkResponses.toLogisticsResponse(
+                    link,
+                    identities.get(link.getSupportWarehouseId()),
+                    identities.get(link.getServedWarehouseId())))
+        .toList();
+  }
+
   private WarehouseSupportLinksResponse response(
       Warehouse served, List<WarehouseSupportLink> configured) {
     return new WarehouseSupportLinksResponse(

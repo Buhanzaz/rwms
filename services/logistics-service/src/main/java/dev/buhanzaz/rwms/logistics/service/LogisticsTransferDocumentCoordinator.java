@@ -2,6 +2,8 @@ package dev.buhanzaz.rwms.logistics.service;
 
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ArriveTransferLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateTransferRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnCapitalRepairLineRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferPlanRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferPlanView;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferArrivalPreflightView;
@@ -17,6 +19,10 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsTargetService;
 import dev.buhanzaz.rwms.logistics.domain.TransferPlan;
 import dev.buhanzaz.rwms.logistics.domain.TransferPlanSnapshot;
 import dev.buhanzaz.rwms.logistics.driver.service.DocumentDriverTaskPlanner;
+import dev.buhanzaz.rwms.logistics.driver.service.TransferDriverTaskContentService;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
+import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.equipment.api.EquipmentMovementTaskApiModels.CancelEquipmentMovementTaskRequest;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskService;
@@ -27,6 +33,7 @@ import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.Wareho
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsMediaReferenceRepository;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import java.nio.charset.StandardCharsets;
@@ -68,8 +75,11 @@ class LogisticsTransferDocumentCoordinator {
   private final LogisticsDocumentReadProjection readProjection;
   private final LogisticsDocumentAttemptWriter attemptWriter;
   private final DocumentDriverTaskPlanner driverTaskPlanner;
+  private final TransferDriverTaskContentService driverTaskContent;
   private final TransferPlanService transferPlanning;
   private final TransferPlanWorkflowStore transferPlanWorkflow;
+  private final LogisticsTransactionLock transactionLock;
+  private final DriverLogisticsTaskRepository driverTasks;
 
   LogisticsDocumentCommandResult createTransfer(
       UUID subjectId, UUID idempotencyKey, UUID correlationId, CreateTransferRequest request) {
@@ -96,12 +106,25 @@ class LogisticsTransferDocumentCoordinator {
     idempotency.acquireLock(subjectId, CREATE_TRANSFER, idempotencyKey);
     LogisticsDocument replay =
         idempotency.replay(subjectId, idempotencyKey, CREATE_TRANSFER, checksum);
-    if (replay != null) return result(replay, true);
+    if (replay != null) {
+      TransferCreateReceipt receipt =
+          idempotency.replayOptionalResponse(
+              subjectId,
+              idempotencyKey,
+              CREATE_TRANSFER,
+              checksum,
+              TransferCreateReceipt.class);
+      return result(
+          replay,
+          true,
+          receipt == null ? null : receipt.linkedReturnTransferId());
+    }
 
     List<AdmissionRequirement> requirements = transferAdmission(request);
     warehouseAdmission.requireAdmission(admission, requirements);
     validateTransferSchedule(request, admission.localDate(request.warehouseId()));
     validateTransferCreateShape(request);
+    List<TransferLineRequest> returnLines = validateReturnCapitalRepairLines(request);
 
     LogisticsDocument document =
         documentRepository.saveAndFlush(
@@ -115,7 +138,7 @@ class LogisticsTransferDocumentCoordinator {
     int eventLineCount;
     if (request.plan() == null) {
       lines = lineRepository.saveAllAndFlush(transferLines(document, request.lines()));
-      driverTaskPlanner.plan(document, lines);
+      driverTaskPlanner.plan(document, lines, driverTaskContent.build(document, lines));
       createMediaOwnerProofAttempts(document, lines);
       transferFurnitureTasks.createForTransfer(
           subjectId, document, request.scheduledDate(), request.furnitureReplacements(), admission);
@@ -123,13 +146,75 @@ class LogisticsTransferDocumentCoordinator {
     } else {
       TransferPlan plan =
           transferPlanning.createDraft(document, request.scheduledDate(), request.plan());
-      eventLineCount = transferPlanning.auditLineCount(plan);
+      eventLineCount = transferEventLineCount(plan);
     }
     eventStore.initialize(document, eventLineCount, correlationId, subjectId);
+    LogisticsDocument returnTransfer =
+        returnLines.isEmpty()
+            ? null
+            : createReturnTransfer(
+                subjectId, correlationId, request, returnLines, admission);
     warehouseAdmission.enqueue(document, document.getWarehouseId(), admission);
     warehouseAdmission.enqueue(document, document.getDestinationWarehouseId(), admission);
-    idempotency.remember(subjectId, idempotencyKey, CREATE_TRANSFER, checksum, document);
-    return result(document, false);
+    idempotency.remember(
+        subjectId,
+        idempotencyKey,
+        CREATE_TRANSFER,
+        checksum,
+        document,
+        new TransferCreateReceipt(returnTransfer == null ? null : returnTransfer.getId()));
+    return result(document, false, returnTransfer == null ? null : returnTransfer.getId());
+  }
+
+  /** Creates the ordinary reverse concrete-line transfer inside the primary command transaction. */
+  private LogisticsDocument createReturnTransfer(
+      UUID subjectId,
+      UUID correlationId,
+      CreateTransferRequest request,
+      List<TransferLineRequest> returnLines,
+      AdmissionTicket admission) {
+    LogisticsDocument reverse =
+        documentRepository.saveAndFlush(
+            LogisticsDocument.createTransfer(
+                request.destinationWarehouseId(),
+                request.warehouseId(),
+                request.scheduledDate(),
+                subjectId,
+                correlationId));
+    LogisticsDependencyGateway.WarehouseDriverIdentity tripDriver = returnTripDriver(request);
+    if (tripDriver != null) {
+      reverse.assignTransferTripDriver(tripDriver.workerId(), tripDriver.displayName());
+      reverse = documentRepository.saveAndFlush(reverse);
+    }
+    List<LogisticsDocumentLine> lines =
+        lineRepository.saveAllAndFlush(transferLines(reverse, returnLines));
+    driverTaskPlanner.plan(
+        reverse,
+        lines,
+        driverTaskContent.build(
+            reverse,
+            lines,
+            request.plan() == null ? null : request.plan().logisticsComment()));
+    createMediaOwnerProofAttempts(reverse, lines);
+    eventStore.initialize(reverse, lines.size(), correlationId, subjectId);
+    warehouseAdmission.enqueue(reverse, reverse.getWarehouseId(), admission);
+    warehouseAdmission.enqueue(reverse, reverse.getDestinationWarehouseId(), admission);
+    return reverse;
+  }
+
+  private LogisticsDependencyGateway.WarehouseDriverIdentity returnTripDriver(
+      CreateTransferRequest request) {
+    if (request.plan() == null || request.plan().tripDriverId() == null) return null;
+    List<LogisticsDependencyGateway.WarehouseDriverIdentity> drivers =
+        request.plan().plannedDepartureAt() == null
+            ? dependencies.listWarehouseDrivers(request.warehouseId())
+            : dependencies.listWarehouseDrivers(
+                request.warehouseId(), request.plan().plannedDepartureAt(), false);
+    return drivers.stream()
+        .filter(driver -> request.plan().tripDriverId().equals(driver.workerId()))
+        .findFirst()
+        .orElseThrow(
+            () -> new LogisticsConflictException("Назначенный водитель обратного рейса недоступен"));
   }
 
   /** Replaces one complete transfer plan under document and idempotency fences. */
@@ -177,7 +262,7 @@ class LogisticsTransferDocumentCoordinator {
     documentRepository.saveAndFlush(document);
     eventStore.append(
         document,
-        transferPlanning.auditLineCount(plan),
+        transferEventLineCount(plan),
         correlationId,
         subjectId,
         LogisticsEventType.TRANSFER_PLAN_UPDATED,
@@ -248,7 +333,7 @@ class LogisticsTransferDocumentCoordinator {
     transferPlanWorkflow.enqueueConfirmation(document, plan, lines);
     eventStore.append(
         document,
-        transferPlanning.auditLineCount(plan),
+        transferEventLineCount(plan),
         correlationId,
         subjectId,
         LogisticsEventType.TRANSFER_CONFIRMED,
@@ -541,7 +626,7 @@ class LogisticsTransferDocumentCoordinator {
     }
     int eventLineCount =
         lines.isEmpty()
-            ? transferPlanning.auditLineCount(transferPlanning.required(documentId))
+            ? transferEventLineCount(transferPlanning.required(documentId))
             : lines.size();
     eventStore.append(
         document,
@@ -633,7 +718,22 @@ class LogisticsTransferDocumentCoordinator {
   }
 
   private LogisticsDocumentCommandResult result(LogisticsDocument document, boolean replayed) {
-    return new LogisticsDocumentCommandResult(readProjection.view(document), replayed);
+    return result(document, replayed, null);
+  }
+
+  /**
+   * Preserves the event contract's non-zero audit cardinality for a resource-only plan.
+   * Physical line count remains zero; this synthetic audit row represents the transfer resource
+   * intent and has no inventory meaning.
+   */
+  private static int transferEventLineCount(TransferPlan plan) {
+    return Math.max(1, plan.auditLineCount());
+  }
+
+  private LogisticsDocumentCommandResult result(
+      LogisticsDocument document, boolean replayed, UUID linkedReturnTransferId) {
+    return new LogisticsDocumentCommandResult(
+        readProjection.view(document, linkedReturnTransferId), replayed);
   }
 
   private static void requireTransferCommand(
@@ -746,6 +846,15 @@ class LogisticsTransferDocumentCoordinator {
   }
 
   private static List<AdmissionRequirement> transferAdmission(CreateTransferRequest request) {
+    if (request.returnCapitalRepairLines() != null
+        && !request.returnCapitalRepairLines().isEmpty()) {
+      // Both warehouses receive cargo in a paired round trip. INCOMING is the stricter lifecycle
+      // decision: only ACTIVE admits it, and ACTIVE also admits the required outbound direction.
+      return List.of(
+          new AdmissionRequirement(request.warehouseId(), WarehouseOperationDirection.INCOMING),
+          new AdmissionRequirement(
+              request.destinationWarehouseId(), WarehouseOperationDirection.INCOMING));
+    }
     return List.of(
         new AdmissionRequirement(request.warehouseId(), WarehouseOperationDirection.OUTGOING),
         new AdmissionRequirement(
@@ -831,6 +940,17 @@ class LogisticsTransferDocumentCoordinator {
       values.add("TRANSFER_PLAN_V1");
       appendPlanFingerprint(values, request.plan());
     }
+    if (!request.returnCapitalRepairLines().isEmpty()) {
+      values.add("RETURN_CAPITAL_REPAIR_V1");
+      request.returnCapitalRepairLines().stream()
+          .sorted(Comparator.comparing(value -> value.repairId().toString()))
+          .forEach(
+              line -> {
+                values.add(line.repairId().toString());
+                values.add(line.assetId().toString());
+                values.add(Long.toString(line.assetVersion()));
+              });
+    }
     return values;
   }
 
@@ -854,6 +974,75 @@ class LogisticsTransferDocumentCoordinator {
           "A planned transfer cannot mix legacy concrete lines with planning detail");
     }
   }
+
+  private List<TransferLineRequest> validateReturnCapitalRepairLines(
+      CreateTransferRequest request) {
+    List<ReturnCapitalRepairLineRequest> inputs = request.returnCapitalRepairLines();
+    if (inputs == null || inputs.size() > 100) {
+      throw new IllegalArgumentException("Return capital-repair lines are invalid");
+    }
+    Set<UUID> repairIds = new HashSet<>();
+    Set<UUID> assetIds = new HashSet<>();
+    for (ReturnCapitalRepairLineRequest input : inputs) {
+      if (input == null
+          || input.repairId() == null
+          || input.assetId() == null
+          || input.assetVersion() < 0
+          || !repairIds.add(input.repairId())
+          || !assetIds.add(input.assetId())) {
+        throw new IllegalArgumentException("Return capital-repair line is invalid");
+      }
+    }
+    transactionLock.acquireAll(
+        java.util.stream.Stream.concat(
+                assetIds.stream().map(id -> "transfer:return-capital-asset:" + id),
+                repairIds.stream()
+                    .map(
+                        id ->
+                            "driver-task:create:CAPITAL_REPAIR:"
+                                + id
+                                + ":CAPITAL_TO_PRODUCTION"))
+            .toList());
+
+    List<TransferLineRequest> result = new ArrayList<>();
+    for (ReturnCapitalRepairLineRequest input : inputs) {
+      if (lineRepository.existsActiveDocumentSelection(input.assetId())) {
+        throw new LogisticsConflictException(
+            "Бытовка обратного рейса уже выбрана другим логистическим документом");
+      }
+      if (driverTasks
+          .findActiveBySourceTypeAndSourceIdAndKind(
+              DriverTaskSourceType.CAPITAL_REPAIR,
+              input.repairId(),
+              DriverTaskKind.CAPITAL_TO_PRODUCTION)
+          .filter(task -> !task.getState().isTerminal())
+          .isPresent()) {
+        throw new LogisticsConflictException(
+            "Для капитального ремонта уже создано активное задание возврата");
+      }
+      LogisticsDependencyGateway.CapitalRepair repair =
+          dependencies.readCapitalRepair(input.repairId());
+      LogisticsDependencyGateway.RentalItemSnapshot cabin =
+          dependencies.readRentalItemSnapshot(input.assetId());
+      if (repair == null
+          || cabin == null
+          || !input.repairId().equals(repair.repairId())
+          || !input.assetId().equals(repair.rentalItemId())
+          || !request.destinationWarehouseId().equals(repair.warehouseId())
+          || !input.assetId().equals(cabin.assetId())
+          || input.assetVersion() != cabin.version()
+          || !request.destinationWarehouseId().equals(cabin.warehouseId())
+          || !Set.of("REPAIR", "CAPITAL_REPAIR").contains(cabin.status())) {
+        throw new LogisticsConflictException(
+            "Бытовка обратного рейса не соответствует активному капитальному ремонту");
+      }
+      result.add(new TransferLineRequest(input.assetId(), input.assetVersion()));
+    }
+    return List.copyOf(result);
+  }
+
+  /** Immutable additive create receipt that retains the linked reverse leg across replay. */
+  private record TransferCreateReceipt(UUID linkedReturnTransferId) {}
 
   private static void validateTransferFurnitureReplacements(CreateTransferRequest request) {
     if (request.lines() == null || request.lines().isEmpty() || request.lines().size() > 100) {

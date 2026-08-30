@@ -59,6 +59,8 @@ async def test_configurable_generator_creates_three_day_deterministic_load(
     assert result.created_requests == 18
     assert result.created_deliveries == 12
     assert result.created_pickups == 6
+    assert result.capacity_projection_status == "NOT_REQUESTED"
+    assert result.capacity_projection_warning is None
     assert [item.deliveries + item.pickups for item in result.daily_counts] == [6, 6, 6]
     assert len(requests) == 18
     assert all(request.source_system == GENERATOR_SOURCE_SYSTEM for request in requests)

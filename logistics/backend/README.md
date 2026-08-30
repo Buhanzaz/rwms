@@ -94,6 +94,25 @@ Operator address search uses backend-only `YANDEX_GEOSUGGEST_API_KEY` and
 fallback. Keys are never returned by the API. Configuration validation lives
 in [`app/config.py`](app/config.py).
 
+The warehouse workspace reads the canonical active support network and exposes
+one non-transitive planning root plus its directly served representative
+warehouses. Requests from those members are shown together; drivers, vehicles,
+trailers and shifts remain owned by the root. A dated root plan admits a direct
+representative only when the link calendar allows that date and the link allows
+drivers, direct fulfilment or contractor fallback. See
+[`app/services/planning_group.py`](app/services/planning_group.py) and
+[`app/services/planner_runtime.py`](app/services/planner_runtime.py).
+Plan application keeps the top-level warehouse as the route origin and carries
+each regional order's canonical `serviceWarehouseId` on its assignment.
+
+Generated workload is simulator-owned test demand. Its optional RWMS capacity
+snapshot contains only anonymous capacity facts, never orders or assets. The
+local create/delete command commits first and reports the later projection as
+`NOT_REQUESTED`, `PUBLISHED` or `FAILED`; a remote projection failure is a
+warning and does not turn the completed local command into an error. See
+[`app/api/catalog.py`](app/api/catalog.py) and
+[`app/services/capacity_projection.py`](app/services/capacity_projection.py).
+
 ## Schema, contract and checks
 
 Alembic is the only schema mutation mechanism. Migration

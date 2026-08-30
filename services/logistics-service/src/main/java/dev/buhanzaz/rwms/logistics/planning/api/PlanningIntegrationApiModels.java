@@ -271,6 +271,7 @@ public final class PlanningIntegrationApiModels {
   /** One planner-selected shipment bound to an exact order version and concrete cabins. */
   public record PlanningAssignmentRequest(
       @NotNull UUID orderId,
+      UUID serviceWarehouseId,
       @NotNull @Min(0) Long expectedOrderVersion,
       @NotNull LocalDate scheduledDate,
       PlanningDriverAudienceMode driverAudienceMode,
@@ -287,11 +288,51 @@ public final class PlanningIntegrationApiModels {
         UUID orderId,
         Long expectedOrderVersion,
         LocalDate scheduledDate,
+        PlanningDriverAudienceMode driverAudienceMode,
         UUID driverWorkerId,
         String driverName,
         List<UUID> unitIds) {
       this(
           orderId,
+          null,
+          expectedOrderVersion,
+          scheduledDate,
+          driverAudienceMode,
+          driverWorkerId,
+          driverName,
+          unitIds);
+    }
+
+    public PlanningAssignmentRequest(
+        UUID orderId,
+        Long expectedOrderVersion,
+        LocalDate scheduledDate,
+        UUID driverWorkerId,
+        String driverName,
+        List<UUID> unitIds) {
+      this(
+          orderId,
+          null,
+          expectedOrderVersion,
+          scheduledDate,
+          PlanningDriverAudienceMode.ASSIGNED_DRIVER,
+          driverWorkerId,
+          driverName,
+          unitIds);
+    }
+
+    /** Constructor for an explicit regional service warehouse within a root planning group. */
+    public PlanningAssignmentRequest(
+        UUID orderId,
+        UUID serviceWarehouseId,
+        Long expectedOrderVersion,
+        LocalDate scheduledDate,
+        UUID driverWorkerId,
+        String driverName,
+        List<UUID> unitIds) {
+      this(
+          orderId,
+          serviceWarehouseId,
           expectedOrderVersion,
           scheduledDate,
           PlanningDriverAudienceMode.ASSIGNED_DRIVER,

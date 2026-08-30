@@ -203,10 +203,13 @@ public final class LogisticsApiModels {
       @Size(max = 100) List<@Valid TransferLineRequest> lines,
       @NotNull @Size(max = 100)
           List<@NotNull @Valid TransferFurnitureReplacementRequest> furnitureReplacements,
-      @Valid TransferPlanRequest plan) {
+      @Valid TransferPlanRequest plan,
+      @Size(max = 100) List<@NotNull @Valid ReturnCapitalRepairLineRequest> returnCapitalRepairLines) {
     public CreateTransferRequest {
       lines = lines == null ? List.of() : lines;
       furnitureReplacements = furnitureReplacements == null ? List.of() : furnitureReplacements;
+      returnCapitalRepairLines =
+          returnCapitalRepairLines == null ? List.of() : List.copyOf(returnCapitalRepairLines);
     }
 
     /** Retains the original concrete-line Java client constructor and HTTP payload semantics. */
@@ -222,11 +225,34 @@ public final class LogisticsApiModels {
           scheduledDate,
           lines,
           furnitureReplacements,
-          null);
+          null,
+          List.of());
+    }
+
+    /** Retains the planned-transfer Java constructor before optional return cargo was added. */
+    public CreateTransferRequest(
+        UUID warehouseId,
+        UUID destinationWarehouseId,
+        LocalDate scheduledDate,
+        List<TransferLineRequest> lines,
+        List<TransferFurnitureReplacementRequest> furnitureReplacements,
+        TransferPlanRequest plan) {
+      this(
+          warehouseId,
+          destinationWarehouseId,
+          scheduledDate,
+          lines,
+          furnitureReplacements,
+          plan,
+          List.of());
     }
   }
 
   public record TransferLineRequest(@NotNull UUID assetId, @Min(0) long assetVersion) {}
+
+  /** One active capital-repair cabin selected for the independent reverse transfer leg. */
+  public record ReturnCapitalRepairLineRequest(
+      @NotNull UUID repairId, @NotNull UUID assetId, @Min(0) long assetVersion) {}
 
   /** Complete editable planning detail for an interwarehouse transfer draft. */
   public record TransferPlanRequest(
@@ -453,6 +479,7 @@ public final class LogisticsApiModels {
       LogisticsDocumentState state,
       UUID warehouseId,
       UUID destinationWarehouseId,
+      UUID linkedReturnTransferId,
       String partySnapshot,
       String driverSnapshot,
       UUID driverWorkerId,
@@ -467,5 +494,53 @@ public final class LogisticsApiModels {
       String inventorySourceDispositionKind,
       List<LogisticsLineView> lines,
       OffsetDateTime createdAt,
-      OffsetDateTime updatedAt) {}
+      OffsetDateTime updatedAt) {
+    /** Preserves source compatibility for projections created before linked reverse transfers. */
+    public LogisticsDocumentView(
+        UUID id,
+        long version,
+        LogisticsDocumentType documentType,
+        LogisticsDocumentState state,
+        UUID warehouseId,
+        UUID destinationWarehouseId,
+        String partySnapshot,
+        String driverSnapshot,
+        UUID driverWorkerId,
+        UUID clientId,
+        boolean historicalRentalImport,
+        UUID equipmentMovementTaskId,
+        LocalDate scheduledDate,
+        UUID rentalOrderId,
+        UUID rentalShipmentId,
+        UUID inventorySourceId,
+        UUID inventorySourceFindingId,
+        String inventorySourceDispositionKind,
+        List<LogisticsLineView> lines,
+        OffsetDateTime createdAt,
+        OffsetDateTime updatedAt) {
+      this(
+          id,
+          version,
+          documentType,
+          state,
+          warehouseId,
+          destinationWarehouseId,
+          null,
+          partySnapshot,
+          driverSnapshot,
+          driverWorkerId,
+          clientId,
+          historicalRentalImport,
+          equipmentMovementTaskId,
+          scheduledDate,
+          rentalOrderId,
+          rentalShipmentId,
+          inventorySourceId,
+          inventorySourceFindingId,
+          inventorySourceDispositionKind,
+          lines,
+          createdAt,
+          updatedAt);
+    }
+  }
 }

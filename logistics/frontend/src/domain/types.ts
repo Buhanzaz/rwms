@@ -541,6 +541,10 @@ export interface OptimizationRun {
 export interface WarehouseWorkspace {
   warehouse: Warehouse;
   warehouses: Warehouse[];
+  /** Root warehouse selected for the current planning group, when supplied by logistics. */
+  planning_root_warehouse_id?: UUID | null;
+  /** Warehouse ids participating in the selected planning group. */
+  planning_group_warehouse_ids?: UUID[];
   drivers: Driver[];
   vehicles: Vehicle[];
   trailers?: Trailer[];

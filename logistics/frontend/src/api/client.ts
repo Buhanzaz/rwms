@@ -254,6 +254,8 @@ export interface WorkloadGenerationResult {
   daily_counts: WorkloadGenerationDailyCount[];
   auto_plan_run_ids?: UUID[];
   auto_plan_ids?: UUID[];
+  capacity_projection_status: 'NOT_REQUESTED' | 'PUBLISHED' | 'FAILED';
+  capacity_projection_warning?: string | null;
 }
 
 /** Result of deleting generator-owned workload for one planning day. */
@@ -262,6 +264,8 @@ export interface GeneratedWorkloadDeletionResult {
   date: string;
   deleted_requests: number;
   deleted_plans: number;
+  capacity_projection_status: 'NOT_REQUESTED' | 'PUBLISHED' | 'FAILED';
+  capacity_projection_warning?: string | null;
 }
 
 export interface DriverInput {

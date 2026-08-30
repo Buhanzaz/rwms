@@ -93,7 +93,9 @@ describe('warehouse automatic planning', () => {
     const fetchMock = installRouter();
     renderApp();
 
-    expect(await screen.findByText('Склад СПб', { selector: '.topbar__warehouse-context strong' })).toBeVisible();
+    expect(
+      await screen.findByRole('combobox', { name: 'Главный склад группы' }),
+    ).toHaveDisplayValue('Склад СПб · Санкт-Петербург');
     expect(screen.getByTestId('common-map')).toBeVisible();
     await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) =>
       url === '/api/warehouses/warehouse-1/plans/ensure?date=2026-08-30'
@@ -118,7 +120,7 @@ describe('warehouse automatic planning', () => {
     const fetchMock = installRouter();
     renderApp();
 
-    await screen.findByText('Склад СПб', { selector: '.topbar__warehouse-context strong' });
+    await screen.findByRole('combobox', { name: 'Главный склад группы' });
     await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) =>
       url === '/api/warehouses/warehouse-1/plans/ensure?date=2026-08-30').length).toBe(1));
     await user.click(screen.getByRole('button', { name: /^Доставки/ }));

@@ -477,7 +477,12 @@ public class TransferPlan {
       }
     }
     int auditLines = Math.addExact(cabinCount, loose.size());
-    if (auditLines < 1 || auditLines > 100) {
+    boolean resourceIntent =
+        draft.tripDriverId() != null
+            || draft.tripVehicleId() != null
+            || driverIntent.mode() != TransferResourceRepositionMode.NONE
+            || vehicleIntent.mode() != TransferResourceRepositionMode.NONE;
+    if ((confirmation && auditLines < 1 && !resourceIntent) || auditLines > 100) {
       throw new IllegalArgumentException("Transfer must contain 1 to 100 planned cargo lines");
     }
     return new TransferPlanDraft(

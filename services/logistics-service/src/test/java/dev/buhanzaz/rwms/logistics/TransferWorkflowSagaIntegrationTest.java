@@ -27,6 +27,7 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferResourceReposi
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.UpdateTransferPlanRequest;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsLineState;
 import dev.buhanzaz.rwms.logistics.domain.TransferPlanState;
@@ -124,7 +125,9 @@ class TransferWorkflowSagaIntegrationTest {
         cascade
         """);
     org.mockito.Mockito.reset(dependencies, driverTaskPlanner, driverTaskContent);
-    when(driverTaskContent.build(any(), any())).thenReturn(DriverTaskWorkerContent.empty());
+    when(driverTaskContent.build(
+            any(LogisticsDocument.class), any(List.class)))
+        .thenReturn(DriverTaskWorkerContent.empty());
   }
 
   @Test

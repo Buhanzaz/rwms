@@ -101,6 +101,7 @@ from app.routing.truck_profile import (
 )
 from app.schemas.domain import CyclePatch, GeneratePlanRequest, ManualChangeRequest
 from app.services import plans as plan_service
+from app.services.planning_group import resolve_planning_warehouse_group
 from app.services.support_resource_candidates import (
     RoutedSupportResource,
     load_support_resource_facts,
@@ -716,6 +717,16 @@ class RuntimePlannerFacade:
         workspace = await session.scalar(statement)
         if workspace is None:
             raise not_found("warehouse", warehouse_id)
+        planning_group = (
+            await resolve_planning_warehouse_group(
+                session,
+                self._rwms_client,
+                workspace,
+                planning_date=planning_date,
+            )
+            if not workspace.representative
+            else None
+        )
         closure = await session.scalar(
             select(PlanningDayClosure.id).where(
                 PlanningDayClosure.warehouse_id == warehouse_id,
@@ -734,9 +745,30 @@ class RuntimePlannerFacade:
             command_settings,
             settings.seed,
         )
-        request_entities = sorted(
-            workspace.requests,
-            key=lambda item: (item.created_at, item.id),
+        planning_members = (
+            planning_group.members if planning_group is not None else (workspace,)
+        )
+        member_zone_by_id = {
+            member.id: ZoneInfo(member.timezone) for member in planning_members
+        }
+        request_entities = list(
+            (
+                await session.scalars(
+                    select(DbLogisticsRequest)
+                    .where(
+                        DbLogisticsRequest.warehouse_id.in_(
+                            tuple(member.id for member in planning_members)
+                        )
+                    )
+                    .options(
+                        selectinload(DbLogisticsRequest.date_options),
+                        selectinload(DbLogisticsRequest.tasks),
+                    )
+                    .order_by(DbLogisticsRequest.created_at, DbLogisticsRequest.id)
+                )
+            )
+            .unique()
+            .all()
         )
         eligible_request_entities = [
             request
@@ -752,7 +784,7 @@ class RuntimePlannerFacade:
             planning_date,
         )
         requests = tuple(
-            self._core_request(request, zone_info)
+            self._core_request(request, member_zone_by_id[request.warehouse_id])
             for request in eligible_request_entities
         )
         vehicles = tuple(
@@ -792,7 +824,7 @@ class RuntimePlannerFacade:
         core_task_by_uuid: dict[UUID, PlanningTask] = {}
         request_task_uuids: dict[str, tuple[UUID, ...]] = {}
         core_request_by_id = {request.id: request for request in requests}
-        for request_entity in workspace.requests:
+        for request_entity in request_entities:
             request_id = str(request_entity.id)
             core_request = core_request_by_id.get(request_id)
             if core_request is None:
@@ -813,7 +845,7 @@ class RuntimePlannerFacade:
                 workspace.id,
                 sorted(
                     (request.id, request.latitude, request.longitude)
-                    for request in workspace.requests
+                    for request in request_entities
                 ),
                 asdict(routing_settings),
                 accepting_requests,

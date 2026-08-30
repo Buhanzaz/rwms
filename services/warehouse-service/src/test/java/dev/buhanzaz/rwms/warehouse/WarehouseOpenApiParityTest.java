@@ -52,6 +52,7 @@ class WarehouseOpenApiParityTest {
             "/api/internal/warehouse/v1/warehouses/inventory/{id}/metadata",
             "/api/internal/warehouse/v1/warehouses/logistics/{id}/identity",
             "/api/internal/warehouse/v1/warehouses/logistics/{servedWarehouseId}/support-links",
+            "/api/internal/warehouse/v1/warehouses/logistics/{warehouseId}/support-network",
             "/api/internal/warehouse/v1/warehouses/{id}/time-zone",
             "/api/internal/warehouse/v1/warehouses/{id}/operation-marks",
             "/api/internal/warehouse/v1/warehouses/{id}/admission",

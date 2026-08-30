@@ -2,7 +2,7 @@ import { CalendarCheck2, CalendarX2, Clock3, MapPin, PackageOpen, Route, UserRou
 import maplibregl, { type Map as MapLibreMap } from 'maplibre-gl';
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { LogisticsRequest, PlanningTask, RouteCycle, RoutePlan, UUID } from '../domain/types';
+import type { LogisticsRequest, PlanningTask, RouteCycle, RoutePlan, UUID, Warehouse } from '../domain/types';
 import type { PlanMove } from '../features/planning/PlanPanel';
 import { formatDate, formatTime } from '../utils/format';
 import { DatePicker } from '../components/DatePicker';
@@ -16,6 +16,7 @@ interface RequestMapCardProps {
   onUnschedule: (requestId: UUID) => void;
   onMoveTask?: (move: PlanMove) => void;
   onClose: () => void;
+  warehouses?: Warehouse[];
 }
 
 interface RequestMapPopupProps extends RequestMapCardProps {
@@ -59,6 +60,7 @@ export function RequestMapCard({
   onUnschedule,
   onMoveTask,
   onClose,
+  warehouses = [],
 }: RequestMapCardProps) {
   const [selectedDate, setSelectedDate] = useState(() => initialDate(request, planningDate));
   useEffect(() => setSelectedDate(initialDate(request, planningDate)), [planningDate, request]);
@@ -89,6 +91,7 @@ export function RequestMapCard({
     });
   }, [plan, request.id, request.tasks]);
   const planReadOnly = !plan || plan.status === 'CONFIRMED';
+  const serviceWarehouse = warehouses.find((warehouse) => warehouse.id === request.warehouse_id);
 
   const moveAssignment = (assignment: TaskAssignment, targetCycleId: UUID) => {
     if (!onMoveTask || !targetCycleId || targetCycleId === assignment.sourceCycleId) return;
@@ -116,6 +119,7 @@ export function RequestMapCard({
 
       <h3>{request.name}</h3>
       <div className="request-map-menu__status">{requestStatusLabels[request.status]}</div>
+      {serviceWarehouse?.representative ? <div className="request-map-menu__service-warehouse">Склад обслуживания: <strong>{serviceWarehouse.name}</strong></div> : null}
       <dl className="request-map-menu__details">
         <div><dt><MapPin size={12} aria-hidden="true" />Адрес</dt><dd>{request.address_label}</dd></div>
         <div><dt><PackageOpen size={12} aria-hidden="true" />Объём</dt><dd>{request.quantity} бытов. · обслуживание {request.service_minutes} мин</dd></div>
@@ -222,6 +226,7 @@ export function RequestMapPopup({
   onUnschedule,
   onMoveTask,
   onClose,
+  warehouses = [],
 }: RequestMapPopupProps) {
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
 
@@ -259,6 +264,7 @@ export function RequestMapPopup({
       onUnschedule={onUnschedule}
       {...(onMoveTask ? { onMoveTask } : {})}
       onClose={onClose}
+      warehouses={warehouses}
     />,
     portalRoot,
   );

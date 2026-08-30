@@ -28,6 +28,11 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
   }
 
   @Override
+  public java.util.List<WarehouseSupportLink> listWarehouseSupportNetwork(UUID warehouseId) {
+    throw unavailable();
+  }
+
+  @Override
   public WarehouseLifecycleReadinessWorkPage warehouseLifecycleReadinessWork(
       UUID after, int limit) {
     throw unavailable();

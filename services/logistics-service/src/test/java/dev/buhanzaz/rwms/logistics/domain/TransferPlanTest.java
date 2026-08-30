@@ -75,6 +75,47 @@ class TransferPlanTest {
   }
 
   @Test
+  void routeOnlyDraftIsValidButConfirmationRequiresCargoOrAConcreteResourceIntent() {
+    TransferPlan routeOnly =
+        TransferPlan.draft(
+            transfer(),
+            new TransferPlanDraft(
+                departure(),
+                departure().plusHours(4),
+                null,
+                null,
+                null,
+                none(),
+                none(),
+                List.of(),
+                List.of()));
+
+    assertThat(routeOnly.getState()).isEqualTo(TransferPlanState.DRAFT);
+    assertThat(routeOnly.auditLineCount()).isZero();
+    assertThatThrownBy(routeOnly::confirm)
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("planned cargo lines");
+
+    TransferPlan resourceOnly =
+        TransferPlan.draft(
+            transfer(),
+            new TransferPlanDraft(
+                departure(),
+                departure().plusHours(4),
+                null,
+                UUID.randomUUID(),
+                null,
+                none(),
+                none(),
+                List.of(),
+                List.of()));
+    resourceOnly.confirm();
+
+    assertThat(resourceOnly.getState()).isEqualTo(TransferPlanState.CONFIRMED);
+    assertThat(resourceOnly.auditLineCount()).isZero();
+  }
+
+  @Test
   void samePhysicalCabinCannotBeAllocatedAcrossGroups() {
     UUID asset = UUID.randomUUID();
     TransferPlanDraft.Allocation allocation = new TransferPlanDraft.Allocation(asset, 4);

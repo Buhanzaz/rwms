@@ -128,7 +128,7 @@ class WorkloadGenerationDailyCount(ApiModel):
 
 
 class WorkloadGenerationResult(ApiModel):
-    """Auditable summary of one workload generation command."""
+    """Auditable local generation summary plus anonymous test-capacity publication state."""
 
     warehouse_id: UUID
     seed: int
@@ -142,15 +142,23 @@ class WorkloadGenerationResult(ApiModel):
     daily_counts: list[WorkloadGenerationDailyCount]
     auto_plan_run_ids: list[UUID] = Field(default_factory=list)
     auto_plan_ids: list[UUID] = Field(default_factory=list)
+    capacity_projection_status: Literal["NOT_REQUESTED", "PUBLISHED", "FAILED"] = (
+        "NOT_REQUESTED"
+    )
+    capacity_projection_warning: str | None = None
 
 
 class WorkloadDeletionResult(ApiModel):
-    """Summary of idempotently deleting dated generated workload and its plans."""
+    """Local deletion summary plus anonymous test-capacity publication state."""
 
     warehouse_id: UUID
     date: date
     deleted_requests: int
     deleted_plans: int = 0
+    capacity_projection_status: Literal["NOT_REQUESTED", "PUBLISHED", "FAILED"] = (
+        "NOT_REQUESTED"
+    )
+    capacity_projection_warning: str | None = None
 
 
 class IsochroneTariff(ApiModel):
@@ -786,9 +794,11 @@ class LogisticsRequestRead(ApiModel):
 
 
 class WarehouseWorkspaceRead(ApiModel):
-    """Selected warehouse resources plus connected warehouse markers in one read."""
+    """Selected warehouse, its direct planning group, and root-owned resources."""
 
     warehouse: WarehouseRead
+    planning_root_warehouse_id: UUID
+    planning_group_warehouse_ids: list[UUID]
     warehouses: list[WarehouseRead]
     drivers: list[DriverRead]
     vehicles: list[VehicleRead]
@@ -1185,6 +1195,7 @@ class RwmsPlanningAssignment(RwmsApiModel):
     """One vehicle-sized delivery assignment submitted back to RWMS."""
 
     order_id: UUID = Field(alias="orderId")
+    service_warehouse_id: UUID | None = Field(default=None, alias="serviceWarehouseId")
     expected_order_version: int = Field(alias="expectedOrderVersion", ge=0)
     scheduled_date: date = Field(alias="scheduledDate")
     driver_audience_mode: Literal["ASSIGNED_DRIVER", "WAREHOUSE_DRIVERS"] = Field(

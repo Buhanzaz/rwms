@@ -86,4 +86,18 @@ public class LogisticsWarehouseController {
     access.requireInternalLogisticsService(jwt);
     return supportLinks.logisticsLinks(servedWarehouseId, at);
   }
+
+  /**
+   * Returns every active support edge adjacent to one warehouse without calendar filtering.
+   *
+   * @param jwt authenticated logistics-service credential
+   * @param warehouseId warehouse acting as either support or served endpoint
+   * @return stable direct support network with both endpoint identities
+   */
+  @GetMapping("/{warehouseId}/support-network")
+  public List<LogisticsWarehouseSupportLinkResponse> supportNetwork(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID warehouseId) {
+    access.requireInternalLogisticsService(jwt);
+    return supportLinks.logisticsNetwork(warehouseId);
+  }
 }

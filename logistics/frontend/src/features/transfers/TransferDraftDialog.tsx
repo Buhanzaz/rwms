@@ -1,19 +1,24 @@
-import { ArrowRightLeft, LogIn, PackageOpen, Plus, Trash2, Truck } from 'lucide-react';
+import { ArrowRightLeft, LogIn, PackageOpen, Plus, Trash2, Truck, UserRound } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { beginPanelLogin, restorePanelUser } from '../../auth/panel-oidc';
 import { Button, CheckboxField, EmptyState, Field, Modal, SelectField, Spinner } from '../../components/ui';
 import type { AvailableWarehouse } from '../../domain/types';
 import { formatDistance, formatDuration, localDateTimeToIso } from '../../utils/format';
 import {
+  createTransferContractor,
   createTransferDraft,
   estimateTransferArrival,
   loadTransferCargoCatalog,
+  loadTransferDrivers,
   loadTransferRouteVehicles,
   type CreateTransferDraftInput,
   type CreatedTransferDraft,
   type TransferArrivalEstimate,
   type TransferCargoCatalog,
+  type TransferDriver,
   type TransferRouteVehicle,
+  loadCapitalRepairCards,
+  type CapitalRepairCard,
 } from './transfer-client';
 
 /** Shared panel authentication state visible while the transfer dialog is open. */
@@ -115,18 +120,38 @@ export function TransferDraftDialog({
   const [catalogState, setCatalogState] = useState<LoadState<TransferCargoCatalog>>({ status: 'idle' });
   const [vehicleState, setVehicleState] = useState<LoadState<TransferRouteVehicle[]>>({ status: 'idle' });
   const [selectedRouteVehicleId, setSelectedRouteVehicleId] = useState('');
+  const [driverState, setDriverState] = useState<LoadState<TransferDriver[]>>({ status: 'idle' });
+  const [selectedDriverId, setSelectedDriverId] = useState('');
+  const [repositionDriver, setRepositionDriver] = useState(false);
+  const [repositionMode, setRepositionMode] = useState<'TEMPORARY' | 'PERMANENT'>('TEMPORARY');
+  const [repositionUntilDate, setRepositionUntilDate] = useState('');
+  const [contractorOpen, setContractorOpen] = useState(false);
+  const [contractorName, setContractorName] = useState('');
+  const [contractorPhone, setContractorPhone] = useState('');
+  const [contractorFrom, setContractorFrom] = useState(`${scheduledDate}T08:00`);
+  const [contractorUntil, setContractorUntil] = useState(`${scheduledDate}T20:00`);
+  const [contractorComment, setContractorComment] = useState('');
+  const [contractorBusy, setContractorBusy] = useState(false);
   const [estimateState, setEstimateState] = useState<EstimateState>({ status: 'idle' });
+  const [repairState, setRepairState] = useState<LoadState<CapitalRepairCard[]>>({ status: 'idle' });
+  const [includeCapitalRepairs, setIncludeCapitalRepairs] = useState(false);
+  const [selectedRepairIds, setSelectedRepairIds] = useState<string[]>([]);
   const [session, setSession] = useState<SessionState>({ status: 'loading' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const idempotencyIntentRef = useRef<{ fingerprint: string; key: string } | null>(null);
+  const contractorIntentRef = useRef<{ fingerprint: string; id: string } | null>(null);
   const groupSequenceRef = useRef(0);
 
   const sourceWarehouse = warehouses.find((warehouse) => warehouse.warehouse_id === sourceWarehouseId) ?? null;
   const destinationWarehouse = warehouses.find((warehouse) => warehouse.warehouse_id === targetWarehouseId) ?? null;
   const cargoCatalog = catalogState.status === 'ready' ? catalogState.value : null;
   const vehicles = vehicleState.status === 'ready' ? vehicleState.value : [];
+  const drivers = driverState.status === 'ready' ? driverState.value : [];
   const cabinCount = includeCabins ? groups.reduce((sum, group) => sum + group.quantity, 0) : 0;
+  // Outbound cabins are unloaded before the return cargo is loaded. Capacity therefore belongs
+  // to the reverse route leg and must not subtract cabins carried on the preceding leg.
+  const reverseCapacity = vehicles.find((vehicle) => vehicle.id === selectedRouteVehicleId)?.capacity ?? 0;
   const plannedDepartureAt = date && departureTime && sourceWarehouse
     ? localDateTimeToIso(date, departureTime, sourceWarehouse.timezone)
     : null;
@@ -176,6 +201,24 @@ export function TransferDraftDialog({
   }, []);
 
   useEffect(() => {
+    if (session.status !== 'authenticated' || !sourceWarehouseId || !targetWarehouseId || sourceWarehouseId === targetWarehouseId) {
+      setRepairState({ status: 'idle' });
+      setSelectedRepairIds([]);
+      return undefined;
+    }
+    let active = true;
+    setRepairState({ status: 'loading' });
+    void loadCapitalRepairCards(session.accessToken, targetWarehouseId)
+      .then((value) => { if (active) setRepairState({ status: 'ready', value }); })
+      .catch((loadError: unknown) => { if (active) setRepairState({ status: 'error', message: errorMessage(loadError, 'Не удалось получить бытовки на капремонт') }); });
+    return () => { active = false; };
+  }, [session, sourceWarehouseId, targetWarehouseId]);
+
+  useEffect(() => {
+    setSelectedRepairIds((current) => current.slice(0, reverseCapacity));
+  }, [reverseCapacity]);
+
+  useEffect(() => {
     if (session.status !== 'authenticated' || !includeCabins || !sourceWarehouseId) {
       setCatalogState({ status: 'idle' });
       return undefined;
@@ -213,6 +256,25 @@ export function TransferDraftDialog({
   }, [sourceWarehouse?.local_warehouse_id]);
 
   useEffect(() => {
+    const localWarehouseId = sourceWarehouse?.local_warehouse_id;
+    setSelectedDriverId('');
+    setRepositionDriver(false);
+    setRepositionUntilDate('');
+    if (!localWarehouseId) {
+      setDriverState({ status: 'idle' });
+      return undefined;
+    }
+    let active = true;
+    setDriverState({ status: 'loading' });
+    void loadTransferDrivers(localWarehouseId)
+      .then((value) => { if (active) setDriverState({ status: 'ready', value }); })
+      .catch((driverError: unknown) => {
+        if (active) setDriverState({ status: 'error', message: errorMessage(driverError, 'Не удалось получить водителей склада') });
+      });
+    return () => { active = false; };
+  }, [sourceWarehouse?.local_warehouse_id]);
+
+  useEffect(() => {
     setEstimateState({ status: 'idle' });
     if (
       !plannedDepartureAt
@@ -244,6 +306,49 @@ export function TransferDraftDialog({
       await beginPanelLogin(currentReturnTo());
     } catch (loginError: unknown) {
       setError(errorMessage(loginError, 'Не удалось открыть вход RWMS'));
+    }
+  };
+
+  const addContractor = async () => {
+    setError(null);
+    if (session.status !== 'authenticated' || !sourceWarehouse || !contractorName.trim() || !contractorPhone.trim() || !contractorFrom || !contractorUntil) {
+      setError('Заполните имя, телефон и период доступности наёмного водителя');
+      return;
+    }
+    const [fromDate, fromTime] = contractorFrom.split('T');
+    const [untilDate, untilTime] = contractorUntil.split('T');
+    if (!fromDate || !fromTime || !untilDate || !untilTime) {
+      setError('Период доступности наёмного водителя задан некорректно');
+      return;
+    }
+    const availableFrom = localDateTimeToIso(fromDate, fromTime, sourceWarehouse.timezone);
+    const availableUntil = localDateTimeToIso(untilDate, untilTime, sourceWarehouse.timezone);
+    if (new Date(availableUntil) <= new Date(availableFrom)) {
+      setError('Окончание смены наёмного водителя должно быть позже начала');
+      return;
+    }
+    const fingerprint = JSON.stringify({ sourceWarehouseId, contractorName: contractorName.trim(), contractorPhone: contractorPhone.trim(), availableFrom, availableUntil, contractorComment: contractorComment.trim() });
+    if (contractorIntentRef.current?.fingerprint !== fingerprint) contractorIntentRef.current = { fingerprint, id: crypto.randomUUID() };
+    setContractorBusy(true);
+    try {
+      const driver = await createTransferContractor({
+        accessToken: session.accessToken,
+        warehouseId: sourceWarehouseId,
+        contractorId: contractorIntentRef.current.id,
+        displayName: contractorName.trim(),
+        phone: contractorPhone.trim(),
+        availableFrom,
+        availableUntil,
+        comment: contractorComment.trim() || null,
+      });
+      setDriverState((current) => ({ status: 'ready', value: current.status === 'ready' && current.value.some((item) => item.workerId === driver.workerId) ? current.value : [...(current.status === 'ready' ? current.value : []), driver] }));
+      setSelectedDriverId(driver.workerId);
+      setContractorOpen(false);
+      contractorIntentRef.current = null;
+    } catch (contractorError: unknown) {
+      setError(errorMessage(contractorError, 'Не удалось создать наёмного водителя'));
+    } finally {
+      setContractorBusy(false);
     }
   };
 
@@ -291,6 +396,14 @@ export function TransferDraftDialog({
       setError(cabinError);
       return;
     }
+    if (repositionDriver && !selectedDriverId) {
+      setError('Выберите водителя, которого нужно переместить после рейса');
+      return;
+    }
+    if (repositionDriver && repositionMode === 'TEMPORARY' && !repositionUntilDate) {
+      setError('Укажите дату окончания временного назначения водителя');
+      return;
+    }
     setBusy(true);
     try {
       const user = await restorePanelUser();
@@ -307,9 +420,17 @@ export function TransferDraftDialog({
           plannedDepartureAt,
           plannedArrivalAt,
           logisticsComment: comment.trim() || null,
-          tripDriverId: null,
-          tripVehicleId: null,
-          driverReposition: null,
+          tripDriverId: selectedDriverId || null,
+          tripVehicleId: selectedRouteVehicleId || null,
+          driverReposition: repositionDriver && selectedDriverId && destinationWarehouse
+            ? {
+                resourceId: selectedDriverId,
+                mode: repositionMode,
+                until: repositionMode === 'TEMPORARY'
+                  ? localDateTimeToIso(repositionUntilDate, '23:59', destinationWarehouse.timezone)
+                  : null,
+              }
+            : null,
           vehicleReposition: null,
           cabinGroups: includeCabins ? groups.map((group) => ({
             rentalTypeId: group.rentalTypeId,
@@ -323,6 +444,9 @@ export function TransferDraftDialog({
           })) : [],
           looseFurniture: [],
         },
+        ...(includeCapitalRepairs && selectedRepairIds.length && repairState.status === 'ready'
+          ? { returnCapitalRepairLines: repairState.value.filter((card) => selectedRepairIds.includes(card.repairId)).map(({ repairId, assetId, assetVersion }) => ({ repairId, assetId, assetVersion })) }
+          : {}),
       };
       const fingerprint = JSON.stringify(intention);
       if (idempotencyIntentRef.current?.fingerprint !== fingerprint) {
@@ -380,7 +504,7 @@ export function TransferDraftDialog({
               </SelectField>
               <Field label="Плановая дата" type="date" value={date} onChange={(event) => setDate(event.target.value)} />
               <Field label="Плановое отправление" type="time" value={departureTime} onChange={(event) => setDepartureTime(event.target.value)} />
-              <SelectField label="Автомобиль для расчёта маршрута" value={selectedRouteVehicleId} disabled={vehicleState.status !== 'ready' || vehicles.length === 0} onChange={(event) => setSelectedRouteVehicleId(event.target.value)}>
+              <SelectField label="Автомобиль рейса" value={selectedRouteVehicleId} disabled={vehicleState.status !== 'ready' || vehicles.length === 0} onChange={(event) => setSelectedRouteVehicleId(event.target.value)}>
                 <option value="">Не выбран</option>
                 {vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.name} · {vehicle.registrationNumber} · до {vehicle.capacity} бытовок</option>)}
               </SelectField>
@@ -393,6 +517,35 @@ export function TransferDraftDialog({
               </div>
               {vehicleState.status === 'error' ? <p className="field__error span-2">{vehicleState.message}</p> : null}
             </div>
+          </section>
+
+          <section className="transfer-section" aria-labelledby="transfer-driver-title">
+            <header className="transfer-section__header">
+              <span><UserRound size={16} aria-hidden="true" /></span>
+              <div><h3 id="transfer-driver-title">Исполнитель и дальнейшее назначение</h3><p>Водитель рейса и изменение его оперативного склада — разные решения.</p></div>
+            </header>
+            <div className="form-grid">
+              <SelectField label="Водитель рейса" value={selectedDriverId} disabled={driverState.status !== 'ready'} onChange={(event) => setSelectedDriverId(event.target.value)}>
+                <option value="">Не назначен</option>
+                {drivers.map((driver) => <option key={driver.workerId} value={driver.workerId}>{driver.displayName}</option>)}
+              </SelectField>
+              <div className="field"><span className="field__label">После прибытия</span><CheckboxField label="Переместить водителя на склад назначения" checked={repositionDriver} disabled={!selectedDriverId} onChange={(checked) => { setRepositionDriver(checked); if (!checked) setRepositionUntilDate(''); }} /></div>
+              {repositionDriver ? <SelectField label="Срок назначения" value={repositionMode} onChange={(event) => setRepositionMode(event.target.value as 'TEMPORARY' | 'PERMANENT')}><option value="TEMPORARY">Временно</option><option value="PERMANENT">Постоянно</option></SelectField> : null}
+              {repositionDriver && repositionMode === 'TEMPORARY' ? <Field label="Назначение действует по" type="date" min={date} value={repositionUntilDate} onChange={(event) => setRepositionUntilDate(event.target.value)} /> : null}
+              {driverState.status === 'loading' ? <Spinner label="Загружаем доступных водителей…" /> : null}
+              {driverState.status === 'error' ? <p className="field__error span-2">{driverState.message}</p> : null}
+            </div>
+            <div className="toolbar-row">
+              <Button type="button" size="sm" onClick={() => setContractorOpen((current) => !current)}>Добавить наёмного водителя</Button>
+            </div>
+            {contractorOpen ? <div className="form-grid transfer-contractor-form" aria-label="Наёмный водитель">
+              <Field label="Имя наёмного водителя" value={contractorName} onChange={(event) => setContractorName(event.target.value)} />
+              <Field label="Телефон наёмного водителя" type="tel" value={contractorPhone} onChange={(event) => setContractorPhone(event.target.value)} />
+              <Field label="Доступен с" type="datetime-local" value={contractorFrom} onChange={(event) => setContractorFrom(event.target.value)} />
+              <Field label="Доступен до" type="datetime-local" value={contractorUntil} onChange={(event) => setContractorUntil(event.target.value)} />
+              <Field className="span-2" label="Комментарий по наёмному водителю" value={contractorComment} onChange={(event) => setContractorComment(event.target.value)} />
+              <Button type="button" variant="primary" disabled={contractorBusy} onClick={() => void addContractor()}>{contractorBusy ? 'Сохраняем…' : 'Подтвердить доступность'}</Button>
+            </div> : null}
           </section>
 
           <section className="transfer-section" aria-labelledby="transfer-cargo-title">
@@ -462,6 +615,15 @@ export function TransferDraftDialog({
                 <Button type="button" className="transfer-add-cabin" onClick={() => setGroups((current) => [...current, nextGroup()])}><Plus size={15} aria-hidden="true" />Добавить ещё бытовку</Button>
               </div>
             ) : null}
+          </section>
+
+          <section className="transfer-section" aria-labelledby="transfer-repair-title">
+            <header className="transfer-section__header"><span><Truck size={16} aria-hidden="true" /></span><div><h3 id="transfer-repair-title">Обратный рейс</h3><p>После задач водитель возвращается на исходный склад; обратные бытовки продолжат капремонт там.</p></div></header>
+            <CheckboxField label="Забрать бытовки на капремонт обратным рейсом" checked={includeCapitalRepairs} disabled={repairState.status !== 'ready' || reverseCapacity === 0} onChange={(checked) => { setIncludeCapitalRepairs(checked); if (!checked) setSelectedRepairIds([]); }} />
+            {repairState.status === 'loading' ? <Spinner label="Загружаем бытовки назначения…" /> : null}
+            {repairState.status === 'error' ? <div className="error-panel" role="alert"><strong>Капремонт недоступен</strong><p>{repairState.message}</p></div> : null}
+            {includeCapitalRepairs && repairState.status === 'ready' ? <div className="transfer-repair-list">{repairState.value.map((card) => <label key={card.repairId} className="checkbox-field"><input type="checkbox" checked={selectedRepairIds.includes(card.repairId)} disabled={!selectedRepairIds.includes(card.repairId) && selectedRepairIds.length >= reverseCapacity} onChange={(event) => setSelectedRepairIds((current) => event.target.checked ? [...current, card.repairId] : current.filter((id) => id !== card.repairId))} /><span><strong>{card.assetNumber}</strong> · приоритет {card.priority ?? '—'} · сложность {card.complexity ?? '—'}</span></label>)}</div> : null}
+            {includeCapitalRepairs ? <small className="field__hint">Выбрано: {selectedRepairIds.length} из {reverseCapacity} доступных мест</small> : null}
           </section>
 
           <section className="transfer-section transfer-summary" aria-labelledby="transfer-summary-title">

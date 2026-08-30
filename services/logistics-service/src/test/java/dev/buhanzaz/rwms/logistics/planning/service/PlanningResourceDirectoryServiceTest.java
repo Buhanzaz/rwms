@@ -170,6 +170,91 @@ class PlanningResourceDirectoryServiceTest {
   }
 
   @Test
+  void exposesTheWholeAdjacentSupportNetworkWithoutApplyingCalendarRules() {
+    LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
+    UUID supportWarehouseId = UUID.randomUUID();
+    UUID secondServedWarehouseId = UUID.randomUUID();
+    WarehouseIdentity selected =
+        new WarehouseIdentity(
+            WAREHOUSE,
+            3,
+            true,
+            "Опорный",
+            "Город A",
+            null,
+            new BigDecimal("59.900000"),
+            new BigDecimal("30.300000"),
+            "Europe/Moscow",
+            false);
+    WarehouseIdentity firstServed =
+        new WarehouseIdentity(
+            supportWarehouseId,
+            4,
+            true,
+            "Регион 1",
+            "Город B",
+            null,
+            new BigDecimal("58.500000"),
+            new BigDecimal("31.200000"),
+            "Europe/Moscow",
+            true);
+    WarehouseIdentity secondServed =
+        new WarehouseIdentity(
+            secondServedWarehouseId,
+            5,
+            true,
+            "Регион 2",
+            "Город C",
+            null,
+            new BigDecimal("57.600000"),
+            new BigDecimal("32.100000"),
+            "Europe/Moscow",
+            true);
+    when(dependencies.readWarehouseIdentity(WAREHOUSE)).thenReturn(selected);
+    when(dependencies.listWarehouseSupportNetwork(WAREHOUSE))
+        .thenReturn(
+            List.of(
+                new WarehouseSupportLink(
+                    UUID.randomUUID(),
+                    1,
+                    selected,
+                    firstServed,
+                    1,
+                    true,
+                    true,
+                    true,
+                    true,
+                    true,
+                    true,
+                    java.util.Set.of(java.time.DayOfWeek.MONDAY),
+                    java.util.Set.of(),
+                    java.util.Set.of(),
+                    null,
+                    null),
+                new WarehouseSupportLink(
+                    UUID.randomUUID(),
+                    1,
+                    selected,
+                    secondServed,
+                    2,
+                    true,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    java.util.Set.of(java.time.DayOfWeek.TUESDAY),
+                    java.util.Set.of(),
+                    java.util.Set.of(),
+                    null,
+                    null)));
+
+    List<?> network = new PlanningResourceDirectoryService(dependencies).supportNetwork(WAREHOUSE);
+
+    assertThat(network).hasSize(2);
+  }
+
+  @Test
   void rejectsInactiveWarehouseAndDuplicateDriverIdentity() {
     LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
     PlanningResourceDirectoryService service =

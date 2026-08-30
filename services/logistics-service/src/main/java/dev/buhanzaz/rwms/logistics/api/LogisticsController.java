@@ -378,11 +378,17 @@ public class LogisticsController {
             subjectId,
             "CREATE_TRANSFER",
             idempotencyKey,
-            List.of(
-                new AdmissionRequirement(
-                    request.warehouseId(), WarehouseOperationDirection.OUTGOING),
-                new AdmissionRequirement(
-                    request.destinationWarehouseId(), WarehouseOperationDirection.INCOMING)));
+            request.returnCapitalRepairLines().isEmpty()
+                ? List.of(
+                    new AdmissionRequirement(
+                        request.warehouseId(), WarehouseOperationDirection.OUTGOING),
+                    new AdmissionRequirement(
+                        request.destinationWarehouseId(), WarehouseOperationDirection.INCOMING))
+                : List.of(
+                    new AdmissionRequirement(
+                        request.warehouseId(), WarehouseOperationDirection.INCOMING),
+                    new AdmissionRequirement(
+                        request.destinationWarehouseId(), WarehouseOperationDirection.INCOMING)));
     LogisticsDocumentService.CreateResult result =
         service.createTransfer(
             subjectId, idempotencyKey, correlationId(servletRequest), request, admission);

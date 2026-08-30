@@ -24,7 +24,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 class TransferDriverTaskContentServiceTest {
   private final LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
   private final TransferDriverTaskContentService service =
-      new TransferDriverTaskContentService(dependencies);
+      new TransferDriverTaskContentService(
+          dependencies, new DriverTaskSourceMediaService(dependencies));
 
   @Test
   void buildsOrderedCabinFurnitureAndCommentSnapshotWithoutDoubleCountingLooseCargo() {
@@ -36,6 +37,7 @@ class TransferDriverTaskContentServiceTest {
     UUID bed = UUID.randomUUID();
     UUID table = UUID.randomUUID();
     UUID bench = UUID.randomUUID();
+    UUID firstPhoto = UUID.randomUUID();
     LogisticsDocument document =
         LogisticsDocument.createTransfer(
             source,
@@ -92,6 +94,16 @@ class TransferDriverTaskContentServiceTest {
                 List.of(
                     new LogisticsDependencyGateway.EquipmentContent(bed, 4),
                     new LogisticsDependencyGateway.EquipmentContent(table, 1))));
+    when(dependencies.readCabinMediaSnapshots(source, List.of(firstCabin, secondCabin)))
+        .thenReturn(
+            List.of(
+                new LogisticsDependencyGateway.CabinMediaSnapshot(
+                    firstCabin,
+                    1,
+                    List.of(
+                        new LogisticsDependencyGateway.CabinMediaPhoto(
+                            firstPhoto, 3, 0, List.of("thumbnail")))),
+                new LogisticsDependencyGateway.CabinMediaSnapshot(secondCabin, 0, List.of())));
 
     TransferPlanSnapshot snapshot =
         transferSnapshot(firstCabin, secondCabin, bed, table, bench);
@@ -136,6 +148,21 @@ class TransferDriverTaskContentServiceTest {
     assertThat(content.comments())
         .singleElement()
         .satisfies(value -> assertThat(value.text()).isEqualTo("Проверить крепления перед выездом"));
+    assertThat(content.sourceMedia())
+        .singleElement()
+        .satisfies(
+            media -> {
+              assertThat(media.mediaId()).isEqualTo(firstPhoto);
+              assertThat(media.generation()).isEqualTo(3);
+            });
+    assertThat(content.works())
+        .filteredOn(work -> work.name().equals("Загрузить бытовку №172"))
+        .singleElement()
+        .satisfies(work -> assertThat(work.sourceMediaIds()).containsExactly(firstPhoto));
+    assertThat(content.works())
+        .filteredOn(work -> work.name().equals("Загрузить бытовку №311"))
+        .singleElement()
+        .satisfies(work -> assertThat(work.sourceMediaIds()).isEmpty());
     assertThat(service.build(document, snapshot)).isEqualTo(content);
   }
 

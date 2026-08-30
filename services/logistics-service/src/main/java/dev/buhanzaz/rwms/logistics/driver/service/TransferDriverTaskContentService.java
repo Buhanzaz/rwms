@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.logistics.driver.service;
 
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.domain.TransferPlanSnapshot;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskWorkerContent;
@@ -29,10 +30,13 @@ import org.springframework.stereotype.Service;
 @Service
 public class TransferDriverTaskContentService {
   private final LogisticsDependencyGateway dependencies;
+  private final DriverTaskSourceMediaService sourceMedia;
 
   /** Creates the builder over the existing service-to-service dependency boundary. */
-  public TransferDriverTaskContentService(LogisticsDependencyGateway dependencies) {
+  public TransferDriverTaskContentService(
+      LogisticsDependencyGateway dependencies, DriverTaskSourceMediaService sourceMedia) {
     this.dependencies = dependencies;
+    this.sourceMedia = sourceMedia;
   }
 
   /** Builds one durable native-task snapshot for a confirmed interwarehouse transfer. */
@@ -49,13 +53,130 @@ public class TransferDriverTaskContentService {
         equipmentNames(
             document.getWarehouseId(), equipmentIds, transfer.totalCabinCount() > 0);
     List<CabinCargo> cabins = cabins(document, transfer, equipmentNames);
+    DriverTaskSourceMediaService.Snapshot media =
+        sourceMedia.read(
+            document.getWarehouseId(),
+            cabins.stream().map(CabinCargo::assetId).toList(),
+            document.getCreatedAt());
     List<DriverTaskWorkerContent.Work> works =
-        works(document.getId(), source, destination, cabins, transfer, equipmentNames);
+        works(document.getId(), source, destination, cabins, transfer, equipmentNames, media);
     List<DriverTaskWorkerContent.Material> materials =
         materials(document.getId(), cabins, transfer, equipmentNames);
     List<DriverTaskWorkerContent.Comment> comments = comments(document, transfer);
     String taskText = taskText(source, destination, cabins, transfer, equipmentNames);
-    return new DriverTaskWorkerContent(taskText, works, materials, comments);
+    return new DriverTaskWorkerContent(
+        taskText, works, materials, comments, media.sourceMedia());
+  }
+
+  /**
+   * Builds the native route for the original concrete-line transfer flow.
+   *
+   * <p>Each line is revalidated against its source warehouse and frozen asset version before its
+   * exact unit number and READY gallery are persisted in the offline task snapshot.
+   */
+  public DriverTaskWorkerContent build(
+      LogisticsDocument document, List<LogisticsDocumentLine> lines) {
+    return build(document, lines, null);
+  }
+
+  /** Builds a concrete-line route and preserves an optional logistics comment. */
+  public DriverTaskWorkerContent build(
+      LogisticsDocument document, List<LogisticsDocumentLine> lines, String logisticsComment) {
+    requireLegacyTransfer(document, lines);
+    String source = warehouseLabel(dependencies.readWarehouseIdentity(document.getWarehouseId()));
+    String destination =
+        warehouseLabel(
+            dependencies.readWarehouseIdentity(document.getDestinationWarehouseId()));
+    List<LegacyCabinCargo> cabins = new ArrayList<>();
+    for (LogisticsDocumentLine line : lines.stream()
+        .sorted(Comparator.comparingInt(LogisticsDocumentLine::getLineNumber))
+        .toList()) {
+      var cabin = dependencies.readRentalItemSnapshot(line.getAssetId());
+      if (cabin == null
+          || !line.getAssetId().equals(cabin.assetId())
+          || line.getAssetVersion() != cabin.version()
+          || !line.getInventorySourceWarehouseId().equals(cabin.warehouseId())
+          || !document.getWarehouseId().equals(cabin.warehouseId())
+          || cabin.number() == null
+          || cabin.number().isBlank()) {
+        throw new LogisticsConflictException(
+            "Конкретная бытовка перемещения изменилась или находится на другом складе");
+      }
+      cabins.add(new LegacyCabinCargo(cabin.assetId(), cabin.number().trim()));
+    }
+    DriverTaskSourceMediaService.Snapshot media =
+        sourceMedia.read(
+            document.getWarehouseId(),
+            cabins.stream().map(LegacyCabinCargo::assetId).toList(),
+            document.getCreatedAt());
+    List<DriverTaskWorkerContent.Work> works = new ArrayList<>();
+    addWork(works, document.getId(), "arrive-source", "Прибыть на склад «" + source + "»", null);
+    for (LegacyCabinCargo cabin : cabins) {
+      addWork(
+          works,
+          document.getId(),
+          "load-cabin:" + cabin.assetId(),
+          "Загрузить бытовку №" + cabin.number(),
+          "Сверить номер и состояние до погрузки",
+          media.mediaIds(cabin.assetId()));
+      addWork(
+          works,
+          document.getId(),
+          "verify-cabin:" + cabin.assetId(),
+          "Проверить бытовку №" + cabin.number(),
+          "Фотографии показывают исходное состояние",
+          media.mediaIds(cabin.assetId()));
+    }
+    addWork(works, document.getId(), "confirm-load", "Подтвердить загрузку всего груза", null);
+    addWork(
+        works,
+        document.getId(),
+        "travel",
+        "Ехать на склад «" + destination + "»",
+        source + " → " + destination);
+    for (LegacyCabinCargo cabin : cabins) {
+      addWork(
+          works,
+          document.getId(),
+          "unload-cabin:" + cabin.assetId(),
+          "Выгрузить бытовку №" + cabin.number(),
+          "Подтвердить фактическую выгрузку на складе назначения");
+    }
+    addWork(
+        works,
+        document.getId(),
+        "confirm-unload",
+        "Подтвердить межскладскую выгрузку",
+        "Все бытовки должны быть фактически выгружены");
+    List<DriverTaskWorkerContent.Material> materials =
+        cabins.stream()
+            .map(
+                cabin ->
+                    new DriverTaskWorkerContent.Material(
+                        stableId(document.getId(), "material:cabin:" + cabin.assetId()),
+                        "Бытовка №" + cabin.number(),
+                        1,
+                        "шт."))
+            .toList();
+    String taskText =
+        source
+            + " → "
+            + destination
+            + "\nБытовки: "
+            + cabins.stream()
+                .map(cabin -> "№" + cabin.number())
+                .collect(Collectors.joining(", "));
+    List<DriverTaskWorkerContent.Comment> comments =
+        logisticsComment == null || logisticsComment.isBlank()
+            ? List.of()
+            : List.of(
+                new DriverTaskWorkerContent.Comment(
+                    stableId(document.getId(), "comment:logistics"),
+                    logisticsComment,
+                    "Логист",
+                    document.getCreatedAt()));
+    return new DriverTaskWorkerContent(
+        taskText, List.copyOf(works), materials, comments, media.sourceMedia());
   }
 
   private List<CabinCargo> cabins(
@@ -122,7 +243,8 @@ public class TransferDriverTaskContentService {
       String destination,
       List<CabinCargo> cabins,
       TransferPlanSnapshot transfer,
-      Map<UUID, String> equipmentNames) {
+      Map<UUID, String> equipmentNames,
+      DriverTaskSourceMediaService.Snapshot media) {
     List<DriverTaskWorkerContent.Work> result = new ArrayList<>();
     addWork(result, documentId, "arrive-source", "Прибыть на склад «" + source + "»", null);
     for (CabinCargo cabin : cabins) {
@@ -131,7 +253,8 @@ public class TransferDriverTaskContentService {
           documentId,
           "load-cabin:" + cabin.assetId(),
           "Загрузить бытовку №" + cabin.number(),
-          cabin.description());
+          cabin.description(),
+          media.mediaIds(cabin.assetId()));
     }
     if (!transfer.looseFurniture().isEmpty()) {
       addWork(
@@ -147,7 +270,8 @@ public class TransferDriverTaskContentService {
           documentId,
           "verify-cabin:" + cabin.assetId(),
           "Проверить наполнение бытовки №" + cabin.number(),
-          comparison(cabin, equipmentNames));
+          comparison(cabin, equipmentNames),
+          media.mediaIds(cabin.assetId()));
     }
     addWork(result, documentId, "confirm-load", "Подтвердить загрузку всего груза", null);
     addWork(
@@ -191,9 +315,25 @@ public class TransferDriverTaskContentService {
       String key,
       String name,
       String comment) {
+    addWork(target, documentId, key, name, comment, List.of());
+  }
+
+  private static void addWork(
+      List<DriverTaskWorkerContent.Work> target,
+      UUID documentId,
+      String key,
+      String name,
+      String comment,
+      List<UUID> sourceMediaIds) {
     target.add(
         new DriverTaskWorkerContent.Work(
-            stableId(documentId, "work:" + key), name, 1, null, null, comment));
+            stableId(documentId, "work:" + key),
+            name,
+            1,
+            null,
+            null,
+            comment,
+            sourceMediaIds));
   }
 
   private static List<DriverTaskWorkerContent.Material> materials(
@@ -391,6 +531,29 @@ public class TransferDriverTaskContentService {
     }
   }
 
+  private static void requireLegacyTransfer(
+      LogisticsDocument document, List<LogisticsDocumentLine> lines) {
+    if (document == null
+        || document.getId() == null
+        || document.getDocumentType() != LogisticsDocumentType.TRANSFER
+        || document.getWarehouseId() == null
+        || document.getDestinationWarehouseId() == null
+        || document.getCreatedAt() == null
+        || lines == null
+        || lines.isEmpty()
+        || lines.size() > 100
+        || lines.stream()
+            .anyMatch(
+                line ->
+                    line == null
+                        || line.getId() == null
+                        || line.getAssetId() == null
+                        || line.getDocument() == null
+                        || !document.getId().equals(line.getDocument().getId()))) {
+      throw new IllegalArgumentException("Persisted concrete transfer lines are required");
+    }
+  }
+
   private static UUID stableId(UUID documentId, String key) {
     return UUID.nameUUIDFromBytes(
         ("driver-transfer:" + documentId + ":" + key).getBytes(StandardCharsets.UTF_8));
@@ -404,4 +567,7 @@ public class TransferDriverTaskContentService {
       String description,
       Map<UUID, Long> requiredFurniture,
       Map<UUID, Long> factualFurniture) {}
+
+  /** Exact physical cabin identity used by the original concrete-line transfer route. */
+  private record LegacyCabinCargo(UUID assetId, String number) {}
 }

@@ -17,12 +17,21 @@ class DriverTaskWorkerContentCodecTest {
 
   @Test
   void roundTripsStructuredContentAndReadsPreMigrationEmptyObject() {
+    UUID mediaId = UUID.randomUUID();
+    OffsetDateTime recordedAt =
+        OffsetDateTime.of(2026, 9, 14, 7, 55, 0, 0, ZoneOffset.UTC);
     DriverTaskWorkerContent content =
         new DriverTaskWorkerContent(
             "Источник → Назначение",
             List.of(
                 new DriverTaskWorkerContent.Work(
-                    UUID.randomUUID(), "Загрузить №172", 1, "шт.", 15, "Проверить груз")),
+                    UUID.randomUUID(),
+                    "Загрузить №172",
+                    1,
+                    "шт.",
+                    15,
+                    "Проверить груз",
+                    List.of(mediaId))),
             List.of(
                 new DriverTaskWorkerContent.Material(
                     UUID.randomUUID(), "Бытовка №172", 1, "шт.")),
@@ -31,7 +40,10 @@ class DriverTaskWorkerContentCodecTest {
                     UUID.randomUUID(),
                     "Комментарий",
                     "Логист",
-                    OffsetDateTime.of(2026, 9, 14, 8, 0, 0, 0, ZoneOffset.UTC))));
+                    OffsetDateTime.of(2026, 9, 14, 8, 0, 0, 0, ZoneOffset.UTC))),
+            List.of(
+                new DriverTaskWorkerContent.SourceMedia(
+                    mediaId, 2, "image/jpeg", null, recordedAt)));
 
     assertThat(codec.decode(codec.encode(content))).isEqualTo(content);
     assertThat(codec.decode("{}")).isEqualTo(DriverTaskWorkerContent.empty());

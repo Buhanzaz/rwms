@@ -52,6 +52,25 @@ public interface LogisticsDocumentLineRepository
   List<LogisticsDocumentLine> findAllForUpdateByDocumentIdIn(
       @Param("documentIds") Collection<UUID> documentIds);
 
+  /**
+   * Detects a cabin already selected by a live logistics document.
+   *
+   * <p>Callers acquire the transaction-scoped cabin key before this read. Completed and cancelled
+   * documents release the logistics-local selection; physical availability is still validated by
+   * the asset owner.
+   */
+  @Query(
+      """
+      select case when count(line) > 0 then true else false end
+      from LogisticsDocumentLine line
+      join line.document document
+      where line.assetId = :assetId
+        and document.state not in (
+          dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState.COMPLETED,
+          dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState.CANCELLED)
+      """)
+  boolean existsActiveDocumentSelection(@Param("assetId") UUID assetId);
+
   @Query(
       """
       select line.assetId

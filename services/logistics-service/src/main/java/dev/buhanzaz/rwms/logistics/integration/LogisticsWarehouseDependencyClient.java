@@ -247,6 +247,50 @@ final class LogisticsWarehouseDependencyClient {
         .toList();
   }
 
+  List<WarehouseSupportLink> listWarehouseSupportNetwork(UUID warehouseId) {
+    if (warehouseId == null) {
+      throw new IllegalArgumentException("Warehouse support-network identity is required");
+    }
+    List<WarehouseSupportLinkResponse> response =
+        transport.getList(
+            warehouseBase + "/" + warehouseId + "/support-network",
+            new ParameterizedTypeReference<>() {},
+            WAREHOUSE_CLIENT,
+            WAREHOUSE_SCOPE,
+            "Warehouse-service returned an empty support-network list",
+            DEFAULT);
+    Set<UUID> linkIds = new HashSet<>();
+    return response.stream()
+        .map(
+            value -> {
+              if (invalidSupportNetworkLink(value, warehouseId) || !linkIds.add(value.id())) {
+                throw malformed("Warehouse-service returned invalid support-network truth");
+              }
+              return supportLink(value);
+            })
+        .toList();
+  }
+
+  private static WarehouseSupportLink supportLink(WarehouseSupportLinkResponse value) {
+    return new WarehouseSupportLink(
+        value.id(),
+        value.version(),
+        identity(value.supportWarehouse()),
+        identity(value.servedWarehouse()),
+        value.priority(),
+        value.allowDrivers(),
+        value.allowVehicles(),
+        value.allowInventory(),
+        value.allowDirectFulfillment(),
+        value.allowInterwarehouseTransfer(),
+        value.allowContractorFallback(),
+        Set.copyOf(value.allowedWeekdays()),
+        Set.copyOf(value.allowedDates()),
+        Set.copyOf(value.excludedDates()),
+        value.serviceStart(),
+        value.serviceEnd());
+  }
+
   private static WarehouseIdentity identity(WarehouseIdentityResponse response) {
     return new WarehouseIdentity(
         response.id(),
@@ -273,6 +317,33 @@ final class LogisticsWarehouseDependencyClient {
         || value.servedWarehouse().id() == null
         || value.supportWarehouse().id().equals(value.servedWarehouse().id())
         || !servedWarehouseId.equals(value.servedWarehouse().id())
+        || !value.supportWarehouse().active()
+        || !value.servedWarehouse().active()
+        || !value.servedWarehouse().representative()
+        || value.allowedWeekdays() == null
+        || value.allowedDates() == null
+        || value.excludedDates() == null
+        || ((value.serviceStart() == null) != (value.serviceEnd() == null))
+        || (value.serviceStart() != null && !value.serviceStart().isBefore(value.serviceEnd()));
+  }
+
+  private static boolean invalidSupportNetworkLink(
+      WarehouseSupportLinkResponse value, UUID warehouseId) {
+    return invalidSupportLinkShape(value)
+        || (!warehouseId.equals(value.supportWarehouse().id())
+            && !warehouseId.equals(value.servedWarehouse().id()));
+  }
+
+  private static boolean invalidSupportLinkShape(WarehouseSupportLinkResponse value) {
+    return value == null
+        || value.id() == null
+        || value.version() < 0
+        || value.priority() < 1
+        || value.supportWarehouse() == null
+        || value.servedWarehouse() == null
+        || value.supportWarehouse().id() == null
+        || value.servedWarehouse().id() == null
+        || value.supportWarehouse().id().equals(value.servedWarehouse().id())
         || !value.supportWarehouse().active()
         || !value.servedWarehouse().active()
         || !value.servedWarehouse().representative()

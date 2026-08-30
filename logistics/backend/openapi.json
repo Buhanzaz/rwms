@@ -6990,7 +6990,7 @@
       },
       "WarehouseWorkspaceRead": {
         "additionalProperties": false,
-        "description": "Selected warehouse resources plus connected warehouse markers in one read.",
+        "description": "Selected warehouse, its direct planning group, and root-owned resources.",
         "properties": {
           "drivers": {
             "items": {
@@ -6998,6 +6998,19 @@
             },
             "title": "Drivers",
             "type": "array"
+          },
+          "planning_group_warehouse_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Planning Group Warehouse Ids",
+            "type": "array"
+          },
+          "planning_root_warehouse_id": {
+            "format": "uuid",
+            "title": "Planning Root Warehouse Id",
+            "type": "string"
           },
           "requests": {
             "items": {
@@ -7040,6 +7053,8 @@
         },
         "required": [
           "warehouse",
+          "planning_root_warehouse_id",
+          "planning_group_warehouse_ids",
           "warehouses",
           "drivers",
           "vehicles",
@@ -7052,8 +7067,29 @@
       },
       "WorkloadDeletionResult": {
         "additionalProperties": false,
-        "description": "Summary of idempotently deleting dated generated workload and its plans.",
+        "description": "Local deletion summary plus anonymous test-capacity publication state.",
         "properties": {
+          "capacity_projection_status": {
+            "default": "NOT_REQUESTED",
+            "enum": [
+              "NOT_REQUESTED",
+              "PUBLISHED",
+              "FAILED"
+            ],
+            "title": "Capacity Projection Status",
+            "type": "string"
+          },
+          "capacity_projection_warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capacity Projection Warning"
+          },
           "date": {
             "format": "date",
             "title": "Date",
@@ -7110,7 +7146,7 @@
       },
       "WorkloadGenerationResult": {
         "additionalProperties": false,
-        "description": "Auditable summary of one workload generation command.",
+        "description": "Auditable local generation summary plus anonymous test-capacity publication state.",
         "properties": {
           "auto_plan_ids": {
             "items": {
@@ -7127,6 +7163,27 @@
             },
             "title": "Auto Plan Run Ids",
             "type": "array"
+          },
+          "capacity_projection_status": {
+            "default": "NOT_REQUESTED",
+            "enum": [
+              "NOT_REQUESTED",
+              "PUBLISHED",
+              "FAILED"
+            ],
+            "title": "Capacity Projection Status",
+            "type": "string"
+          },
+          "capacity_projection_warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capacity Projection Warning"
           },
           "created_deliveries": {
             "title": "Created Deliveries",

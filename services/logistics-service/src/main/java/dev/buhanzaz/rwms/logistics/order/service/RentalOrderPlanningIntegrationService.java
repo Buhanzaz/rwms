@@ -246,6 +246,7 @@ public class RentalOrderPlanningIntegrationService {
     List<AppliedPlanningAssignment> applied = new ArrayList<>();
     List<RejectedPlanningAssignment> rejected = new ArrayList<>();
     for (PlanningAssignmentRequest assignment : request.assignments()) {
+      UUID serviceWarehouseId = effectiveServiceWarehouse(request, assignment);
       UUID commandKey = commandKey(batchIdempotencyKey, request, assignment);
       CreateOrderRentalShipmentRequest shipmentRequest =
           new CreateOrderRentalShipmentRequest(
@@ -265,7 +266,10 @@ public class RentalOrderPlanningIntegrationService {
                   assignment.orderId(), replay.response().id(), true));
           continue;
         }
-        RentalOrder order = validateAssignment(request.warehouseId(), today, assignment);
+        LocalDate serviceToday = warehouseToday(serviceWarehouseId, generatedAt);
+        RentalOrder order = validateAssignment(serviceWarehouseId, serviceToday, assignment);
+        requireAuthorizedSupport(
+            request.warehouseId(), serviceWarehouseId, assignment.scheduledDate());
         var admission =
             warehouseLifecycle.prepareDocument(
                 PLANNER_SUBJECT,
@@ -273,7 +277,7 @@ public class RentalOrderPlanningIntegrationService {
                 commandKey,
                 List.of(
                     new AdmissionRequirement(
-                        request.warehouseId(), WarehouseOperationDirection.OUTGOING)));
+                        serviceWarehouseId, WarehouseOperationDirection.OUTGOING)));
         var result =
             rentalOrders.createRentalShipment(
                 plannerActor(),
@@ -537,11 +541,51 @@ public class RentalOrderPlanningIntegrationService {
             + ":"
             + assignment.orderId()
             + ":"
+            + effectiveServiceWarehouse(request, assignment)
+            + ":"
             + assignment.scheduledDate()
             + ":"
             + assignment.driverAudienceMode()
             + ":"
             + sortedUnitIds);
+  }
+
+  private static UUID effectiveServiceWarehouse(
+      ApplyPlanningAssignmentsRequest request, PlanningAssignmentRequest assignment) {
+    return assignment.serviceWarehouseId() == null
+        ? request.warehouseId()
+        : assignment.serviceWarehouseId();
+  }
+
+  private LocalDate warehouseToday(UUID warehouseId, OffsetDateTime generatedAt) {
+    String timeZone = dependencies.warehouseTimeZoneAt(warehouseId, generatedAt).timeZone();
+    return generatedAt.toInstant().atZone(ZoneId.of(timeZone)).toLocalDate();
+  }
+
+  private void requireAuthorizedSupport(
+      UUID rootWarehouseId, UUID serviceWarehouseId, LocalDate scheduledDate) {
+    if (rootWarehouseId.equals(serviceWarehouseId)) return;
+    List<LogisticsDependencyGateway.WarehouseSupportLink> network =
+        dependencies.listWarehouseSupportNetwork(rootWarehouseId);
+    boolean eligible =
+        network != null
+            && network.stream()
+                .filter(java.util.Objects::nonNull)
+                .anyMatch(
+                    link ->
+                        rootWarehouseId.equals(link.supportWarehouse().id())
+                            && serviceWarehouseId.equals(link.servedWarehouse().id())
+                            && link.allowDrivers()
+                            && !link.excludedDates().contains(scheduledDate)
+                            && (link.allowedDates().contains(scheduledDate)
+                                || link.allowedWeekdays().isEmpty()
+                                || link.allowedWeekdays().contains(scheduledDate.getDayOfWeek())));
+    if (!eligible) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "SUPPORT_WAREHOUSE_NOT_AUTHORIZED",
+          "Основной склад не может обслужить выбранный региональный склад в эту дату");
+    }
   }
 
   private static UUID deterministic(String value) {

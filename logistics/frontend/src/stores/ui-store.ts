@@ -42,6 +42,10 @@ export interface NotificationMessage {
   createdAt: string;
   visible: boolean;
   read: boolean;
+  action?: {
+    label: string;
+    onActivate: () => void;
+  };
 }
 
 interface UiState {

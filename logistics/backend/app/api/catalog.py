@@ -1,5 +1,6 @@
 """REST endpoints for warehouse workspaces, resources, and requests."""
 
+import logging
 from datetime import date, datetime, timedelta
 from typing import Annotated
 from uuid import UUID
@@ -18,7 +19,10 @@ from app.api.dependencies import (
 from app.api.geocoding import GeocodingClientDep
 from app.api.serializers import request_read
 from app.errors import ApiError
-from app.integrations.rwms_sync import refresh_warehouse_directory, refresh_warehouse_requests
+from app.integrations.rwms_sync import (
+    refresh_warehouse_directory,
+    sync_warehouse_requests,
+)
 from app.models import (
     Driver,
     DriverShift,
@@ -44,6 +48,8 @@ from app.schemas.domain import (
     RequestPlanningDetailsInput,
     RequestScheduleInput,
     RequestTaskSplitInput,
+    RwmsSyncRequest,
+    RwmsSyncResult,
     RwmsWarehouseIdentity,
     ShiftCreate,
     ShiftRead,
@@ -64,9 +70,13 @@ from app.schemas.domain import (
     WorkloadGeneratorInput,
 )
 from app.services import catalog as service
-from app.services.auto_planning import generate_missing_draft_plans
+from app.services.auto_planning import (
+    generate_missing_draft_plans,
+    invalidate_mutable_group_root_plans,
+)
 from app.services.capacity_mutations import publish_capacity_after_mutation
 from app.services.capacity_projection import publish_warehouse_capacity
+from app.services.planning_group import resolve_planning_warehouse_group
 from app.services.workload_generator import (
     GENERATOR_SOURCE_SYSTEM,
     delete_generated_workload,
@@ -74,6 +84,32 @@ from app.services.workload_generator import (
 )
 
 router = APIRouter(tags=["catalog"])
+logger = logging.getLogger(__name__)
+
+
+async def _publish_anonymous_test_capacity(
+    session: SessionDep,
+    warehouse_id: UUID,
+    client: CapacityRwmsClientDep,
+) -> tuple[str, str | None]:
+    """Publish generated anonymous capacity without rolling back the committed simulator state."""
+
+    try:
+        await publish_warehouse_capacity(session, warehouse_id, client)
+    except Exception as exc:
+        logger.exception(
+            "Anonymous test-capacity projection failed for warehouse %s",
+            warehouse_id,
+        )
+        code = exc.code if isinstance(exc, ApiError) else type(exc).__name__
+        return (
+            "FAILED",
+            (
+                "Тестовая нагрузка сохранена локально, но анонимная проекция "
+                f"мощности не опубликована ({code})."
+            ),
+        )
+    return "PUBLISHED", None
 
 
 def _warehouse_geocoding_query(identity: RwmsWarehouseIdentity) -> str:
@@ -257,7 +293,17 @@ async def generate_workload(
     )
     if settings.rwms_capacity_publish_enabled:
         await session.commit()
-        await publish_warehouse_capacity(session, warehouse_id, client)
+        projection_status, projection_warning = await _publish_anonymous_test_capacity(
+            session,
+            warehouse_id,
+            client,
+        )
+        result = result.model_copy(
+            update={
+                "capacity_projection_status": projection_status,
+                "capacity_projection_warning": projection_warning,
+            }
+        )
     return result
 
 
@@ -277,7 +323,17 @@ async def delete_workload(
     result = await delete_generated_workload(session, warehouse_id, target_date)
     if settings.rwms_capacity_publish_enabled and result.deleted_requests > 0:
         await session.commit()
-        await publish_warehouse_capacity(session, warehouse_id, client)
+        projection_status, projection_warning = await _publish_anonymous_test_capacity(
+            session,
+            warehouse_id,
+            client,
+        )
+        result = result.model_copy(
+            update={
+                "capacity_projection_status": projection_status,
+                "capacity_projection_warning": projection_warning,
+            }
+        )
     return result
 
 
@@ -300,22 +356,47 @@ async def get_warehouse_workspace(
     """Refresh RWMS demand by default, or read persisted state for explicit recovery."""
 
     warehouse = await service.require_warehouse(session, warehouse_id)
+    date_from = datetime.now(ZoneInfo(warehouse.timezone)).date()
     if refresh_rwms and settings.rwms_sync_enabled:
-        date_from = datetime.now(ZoneInfo(warehouse.timezone)).date()
-        refresh = await refresh_warehouse_requests(
+        await refresh_warehouse_directory(session, client)
+        warehouse = await service.require_warehouse(session, warehouse_id)
+        planning_group = await resolve_planning_warehouse_group(
             session,
-            warehouse_id,
-            date_from=date_from,
-            date_to=date_from + timedelta(days=30),
-            client=client,
-            planner=planner,
+            client,
+            warehouse,
         )
+        planning_dates = tuple(date_from + timedelta(days=offset) for offset in range(31))
+        if len(planning_group.members) > 1:
+            await invalidate_mutable_group_root_plans(
+                session,
+                planning_group.root.id,
+                planning_dates,
+            )
+        refresh_results: list[tuple[UUID, RwmsSyncResult]] = []
+        for member in planning_group.members:
+            result = await sync_warehouse_requests(
+                session,
+                member.id,
+                RwmsSyncRequest(
+                    warehouse_id=member.external_warehouse_id,
+                    date_from=date_from,
+                    date_to=date_from + timedelta(days=30),
+                ),
+                client,
+                None,
+            )
+            refresh_results.append(
+                (
+                    member.external_warehouse_id,
+                    result,
+                )
+            )
         failures = [
             {
-                "warehouse_id": str(result.warehouse_id),
+                "warehouse_id": str(external_warehouse_id),
                 **failure.model_dump(mode="json"),
             }
-            for result in refresh.warehouses
+            for external_warehouse_id, result in refresh_results
             for failure in result.failures
         ]
         if failures:
@@ -325,12 +406,26 @@ async def get_warehouse_workspace(
                 "RWMS_WORKSPACE_SYNC_INCOMPLETE",
                 "RWMS workspace refresh contains orders that could not be synchronized",
                 extra={
-                    "date_from": refresh.date_from.isoformat(),
-                    "date_to": refresh.date_to.isoformat(),
+                    "date_from": date_from.isoformat(),
+                    "date_to": (date_from + timedelta(days=30)).isoformat(),
                     "failures": failures,
                 },
             )
+        await generate_missing_draft_plans(
+            session,
+            planner,
+            planning_group.root.id,
+            planning_dates,
+            request_warehouse_ids=(
+                member.id for member in planning_group.members
+            ),
+        )
         warehouse = await service.require_warehouse(session, warehouse_id)
+    planning_group = await resolve_planning_warehouse_group(
+        session,
+        client if settings.rwms_sync_enabled else None,
+        warehouse,
+    )
     warehouses = list(
         await session.scalars(
             select(Warehouse)
@@ -338,25 +433,44 @@ async def get_warehouse_workspace(
             .order_by(Warehouse.name)
         )
     )
-    requests = await service.list_requests(session, warehouse_id)
+    request_entities = [
+        request
+        for member in planning_group.members
+        for request in await service.list_requests(session, member.id)
+    ]
+    requests = sorted(request_entities, key=lambda item: (item.created_at, item.id))
     return WarehouseWorkspaceRead(
         warehouse=WarehouseRead.model_validate(warehouse),
+        planning_root_warehouse_id=planning_group.root.id,
+        planning_group_warehouse_ids=[member.id for member in planning_group.members],
         warehouses=[WarehouseRead.model_validate(item) for item in warehouses],
         drivers=[
             DriverRead.model_validate(item)
-            for item in await service.list_catalog(session, Driver, warehouse_id)
+            for item in await service.list_catalog(
+                session,
+                Driver,
+                planning_group.root.id,
+            )
         ],
         vehicles=[
             VehicleRead.model_validate(item)
-            for item in await service.list_vehicles(session, warehouse_id)
+            for item in await service.list_vehicles(session, planning_group.root.id)
         ],
         trailers=[
             TrailerRead.model_validate(item)
-            for item in await service.list_catalog(session, Trailer, warehouse_id)
+            for item in await service.list_catalog(
+                session,
+                Trailer,
+                planning_group.root.id,
+            )
         ],
         shifts=[
             ShiftRead.model_validate(item)
-            for item in await service.list_catalog(session, DriverShift, warehouse_id)
+            for item in await service.list_catalog(
+                session,
+                DriverShift,
+                planning_group.root.id,
+            )
         ],
         requests=[await request_read(session, item) for item in requests],
     )

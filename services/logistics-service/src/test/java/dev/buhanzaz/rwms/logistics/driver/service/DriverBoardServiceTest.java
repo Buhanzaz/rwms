@@ -480,7 +480,11 @@ class DriverBoardServiceTest {
 
     assertThat(response.capitalRepairs())
         .singleElement()
-        .satisfies(card -> assertThat(card.repairId()).isEqualTo(task.getSourceId()));
+        .satisfies(
+            card -> {
+              assertThat(card.repairId()).isEqualTo(task.getSourceId());
+              assertThat(card.assetVersion()).isEqualTo(1);
+            });
   }
 
   @Test

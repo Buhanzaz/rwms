@@ -847,10 +847,19 @@ independent capabilities, priority and recurring/date-exception availability.
 Public commands reject self-links, duplicate support warehouses and links on a
 non-representative served warehouse. The private logistics directory and
 date-filtered support-link read reuse those owner-held identities and
-coordinates.
+coordinates. The adjacent `support-network` read returns active incoming and
+outgoing edges without evaluating a date so the standalone planner can resolve
+one direct, non-transitive planning group and apply the same calendar to each
+candidate date.
 
 Actual inter-warehouse movement is represented by
 [`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml).
+Planning assignments may carry a nullable `serviceWarehouseId`; omission keeps
+the request warehouse for compatible callers, while a regional assignment can
+retain its representative owner inside the main warehouse's root plan. Transfer
+creation may also carry top-level `returnCapitalRepairLines`. Those exact repair,
+asset and asset-version fences create one linked reverse concrete-line transfer
+atomically instead of adding reverse cargo to the outbound plan.
 When an arrived line continues an active repair, logistics reads the exact
 post-`TRANSFER_ARRIVE` asset version from its released guard, includes it in the
 durable maintenance-attempt fingerprint and sends it as required

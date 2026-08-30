@@ -1486,11 +1486,34 @@ and
    cancelled/released through the same transfer lifecycle. A contractor is a time-bounded worker
    profile without an automatically provisioned login and participates only inside the confirmed
    availability interval.
+6. The simulator resolves a non-transitive dated planning group from the warehouse-service
+   adjacent support network. A main warehouse and every directly served, routing-ready
+   representative share one root plan and root resources; each imported order keeps its own
+   `serviceWarehouseId`. Selecting a representative therefore changes the visible map context but
+   never creates a second regional day plan. Exact calendar exclusions win over allowed dates and
+   recurring weekdays.
+7. Only real RWMS regional requests create dispatcher notifications. Synthetic/manual workload is
+   deliberately filtered. Activating a notification selects the planning date, request layer and
+   exact regional request without changing its owner or inventory source.
+8. Representative customer search emits only `DURING_DAY`. If local capacity is infeasible, the
+   service requires an active incoming support edge whose interval/calendar covers the day and
+   whose capabilities admit a driver plus vehicle or contractor fallback. Hold recomputes the same
+   rule immediately before persistence; no support candidate fabricates a fixed slot or external
+   resource reservation.
+9. A transfer draft may include outbound cabin requirement groups and independent top-level
+   capital-repair return lines. Creation locks the selected repair/assets in stable order and
+   atomically creates a linked concrete-line reverse transfer. Confirmation/departure/arrival retain
+   the ordinary reservation and in-transit rules for each direction. Driver content freezes exact
+   cabin numbers and generation-aware gallery media; an unload cannot be inferred from a photo or
+   from presentation state.
 
 Evidence:
 [`support-link owner`](../../services/warehouse-service/src/main/java/dev/buhanzaz/rwms/warehouse/service/WarehouseSupportLinkService.java),
+[`adjacent support boundary`](../../services/warehouse-service/src/main/java/dev/buhanzaz/rwms/warehouse/api/LogisticsWarehouseController.java),
+[`planning group`](../../logistics/backend/app/services/planning_group.py),
 [`support candidates`](../../logistics/backend/app/services/support_resource_candidates.py),
 [`planner runtime`](../../logistics/backend/app/services/planner_runtime.py),
+[`representative slot policy`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/service/RepresentativeDeliverySlotPolicy.java),
 [`transfer workflow`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/service/TransferPlanWorkflowStore.java), and
 [`operational assignments`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/WorkerOperationalAssignmentService.java).
 

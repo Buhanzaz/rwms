@@ -1,4 +1,4 @@
-"""Deterministic warehouse capacity and isochrone tariffs published to RWMS."""
+"""Anonymous simulator test capacity and isochrone tariffs published to RWMS."""
 
 from __future__ import annotations
 
@@ -133,7 +133,7 @@ async def build_capacity_projection(
     session: AsyncSession,
     warehouse_id: UUID,
 ) -> CapacityProjection:
-    """Read generated route capacity and ordered tariffs for one linked warehouse."""
+    """Read generator-owned anonymous test capacity and tariffs for one linked warehouse."""
 
     warehouse = await session.scalar(
         select(Warehouse).where(Warehouse.id == warehouse_id).with_for_update()

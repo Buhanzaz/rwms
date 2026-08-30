@@ -880,7 +880,15 @@ final class LogisticsTaskBoardDependencyClient {
       List<DriverWorkSnapshotRequest> works,
       List<DriverMaterialSnapshotRequest> materials,
       List<DriverCommentSnapshotRequest> comments,
-      List<Object> sourceMedia) {}
+      List<DriverSourceMediaSnapshotRequest> sourceMedia) {}
+
+  /** Immutable source-media revision resolved by task-board through its established worker path. */
+  private record DriverSourceMediaSnapshotRequest(
+      UUID mediaId,
+      long generation,
+      String contentType,
+      OffsetDateTime capturedAt,
+      OffsetDateTime recordedAt) {}
 
   /**
    * Complete driver-task registration command carrying scheduling, route, source, lane, and
@@ -1018,7 +1026,7 @@ final class LogisticsTaskBoardDependencyClient {
                         work.unit(),
                         work.durationMinutes(),
                         work.comment(),
-                        List.of()))
+                        work.sourceMediaIds()))
             .toList(),
         content.materials().stream()
             .map(
@@ -1038,7 +1046,16 @@ final class LogisticsTaskBoardDependencyClient {
                         comment.authorDisplayName(),
                         comment.createdAt()))
             .toList(),
-        List.of());
+        content.sourceMedia().stream()
+            .map(
+                media ->
+                    new DriverSourceMediaSnapshotRequest(
+                        media.mediaId(),
+                        media.generation(),
+                        media.contentType(),
+                        media.capturedAt(),
+                        media.recordedAt()))
+            .toList());
   }
 
   private static DriverTaskAudienceRequest audienceRequest(DriverTaskAudience audience) {

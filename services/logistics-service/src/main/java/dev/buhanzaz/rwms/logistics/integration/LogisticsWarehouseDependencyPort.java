@@ -44,4 +44,9 @@ interface LogisticsWarehouseDependencyPort {
       UUID servedWarehouseId, OffsetDateTime at) {
     throw unavailable("Warehouse support links are not configured");
   }
+
+  /** Active direct support topology without date filtering for planning-group discovery. */
+  default List<WarehouseSupportLink> listWarehouseSupportNetwork(UUID warehouseId) {
+    throw unavailable("Warehouse support network is not configured");
+  }
 }

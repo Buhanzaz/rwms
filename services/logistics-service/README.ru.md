@@ -62,8 +62,16 @@ terminal-session и её booking не переоткрываются и не п�
 тип фиксированного/гибкого слота в
 [`V66`](src/main/resources/db/migration/V66__customer_delivery_slot_kind.sql).
 
-Предложения доставки используют фиксированные warehouse-local окна `09:00-12:00`, `12:00-15:00`
-и `15:00-18:00`, а также один вариант `DURING_DAY` на весь настроенный день доставки.
+Для обычного склада предложения доставки используют фиксированные warehouse-local окна
+`09:00-12:00`, `12:00-15:00` и `15:00-18:00`, а также один вариант `DURING_DAY` на весь
+настроенный день доставки. Представительский склад показывает только `DURING_DAY`: локальные
+опубликованные смены по-прежнему проверяются тем же route-capacity planner, а при отсутствии
+локально выполнимого плана день может остаться гибким вариантом с подтверждением логистом только
+при активной прямой входящей support-связи, разрешённой на эту дату, пересекающей клиентский день
+и допускающей либо водителей вместе с автомобилями, либо fallback на подрядчика. Исключённая дата
+имеет приоритет над явной разрешённой датой и недельным расписанием. При hold этот fallback
+проверяется заново, не создаёт фиктивную смену или внешнее резервирование ресурса и никогда не
+открывает фиксированное окно; обычный склад без локальной ёмкости по-прежнему закрывается.
 [`CustomerDeliverySlotService`](src/main/java/dev/buhanzaz/rwms/logistics/customer/service/CustomerDeliverySlotService.java)
 сохраняет предложенную и удержанную ёмкость и через private Valhalla truck matrix рассчитывает
 точное дорожное время. `travelZoneHours` остаётся информационной неограниченной полосой от склада и
@@ -141,8 +149,13 @@ fenced-резервы asset-service; выезд переводит точное 
 Transfer может содержать только мебель. Регистрация в task-board повторно использует существующие
 структурированные поля `taskText`, `works`, `materials` и `comments`. Logistics фиксирует точный
 маршрут, характеристики бытовок, разницу требуемой и фактической мебели и упорядоченные инструкции
-погрузки/поездки/выгрузки в `driver_logistics_task.worker_content_json`, поэтому потерянный ответ
-регистрации или исправление до старта сходятся к одной DriverApp/WorkerApp-проекции без второго mobile API.
+погрузки/поездки/выгрузки вместе с generation-aware ссылками на исходную галерею бытовки в
+`driver_logistics_task.worker_content_json`, поэтому потерянный ответ регистрации или исправление
+до старта сходятся к одной DriverApp/WorkerApp-проекции без второго mobile API. Create-команда может
+дополнительно передать активные бытовки капремонта склада назначения как независимые top-level
+строки обратного рейса. Под стабильными блокировками asset/repair она атомарно создаёт связанный
+обычный concrete-line transfer обратно на склад-источник, назначает того же водителя рейса и не
+учитывает этот груз после выгрузки в исходящей вместимости.
 
 `POST /api/logistics/v1/historical-rental-movements` фиксирует одну прошлую отгрузку или возврат
 прямо из карточки бытовки. Команда принимает доступного пользователю клиента логистики, текущую
@@ -514,7 +527,7 @@ port. Его неизменённый constructor собирает шесть ow
 | `LogisticsShipmentCancellationRecovery` | Проверки evidence отмены shipment, закрытие audit исторической reconciliation и exact повторное открытие lease-attempt с потерянным ответом; shipment coordinator сохраняет document state machine и порядок компенсации |
 | `DocumentDriverTaskPlanner` | Одно idempotent document-owned задание с упорядоченными участниками-бытовками на каждую новую запланированную shipment, return или transfer; ожидающие legacy line tasks сходятся в группу, а начатые блокируют replanning |
 | `TransferPlanService`, `TransferPlanWorkflowStore` | Владелец versioned-жизненного цикла transfer draft/confirmation/departure/arrival/cancellation; координирует fenced-резервы asset, trip commitments и явное перемещение ресурсов без изменения остатков во время оценки черновика |
-| `TransferDriverTaskContentService`, `DriverTaskWorkerContentCodec` | Детерминированные точные инструкции маршрута/груза/мебели transfer поверх существующей DriverApp/WorkerApp-проекции task-board, сохранённые для идемпотентных retries и замены до старта |
+| `TransferDriverTaskContentService`, `CapitalRepairDriverTaskContentService`, `DriverTaskWorkerContentCodec` | Детерминированные точные инструкции transfer/обратного рейса, груза, source-media и мебели поверх существующей DriverApp/WorkerApp-проекции task-board, сохранённые для идемпотентных retries и замены до старта |
 | `DriverTripProjectionService` | Structured task/board facts ходки с одним asset read на отдельный заказ и явным unavailable readiness при dependency failure |
 | `ShipmentTaskSettingsService` | Warehouse-scoped version-fenced лимит, повторно используемый каждой сгруппированной ходкой; атомарно материализует default one и отклоняет over-limit planning |
 | Coordinators rental-order shipment/completion и reconciliation | Document hooks для rental shipment, terminal return и команды reconciliation request |

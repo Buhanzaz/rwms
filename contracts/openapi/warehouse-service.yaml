@@ -405,6 +405,31 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /api/internal/warehouse/v1/warehouses/logistics/{warehouseId}/support-network:
+    parameters:
+      - name: warehouseId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: listWarehouseSupportNetworkForLogisticsService
+      description: >-
+        Requires principal_type SERVICE, matching logistics-service sub/client_id and exactly
+        warehouse.logistics. Returns every active directed support edge where the requested active
+        warehouse is either the support or served endpoint. No calendar filtering is applied; the
+        planner evaluates the returned policy for each candidate date and time. Inactive endpoints
+        are excluded and both owner-held identities are included.
+      responses:
+        '200':
+          description: Active adjacent support links ordered by priority and stable identities.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/LogisticsWarehouseSupportLink' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/internal/warehouse/v1/warehouses/{id}/time-zone:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'

@@ -43,11 +43,14 @@ Owner также хранит направленный many-to-many граф о�
 дубликаты опорного склада запрещены. Полная коллекция заменяется атомарно под aggregate-version
 fence обслуживаемого склада; снять представительский признак при существующих связях нельзя.
 
-Логистика читает тот же UUID склада, owner-held координаты, представительский признак и
-отфильтрованные по дате опорные связи через private warehouse boundary. Она не создаёт вторую
-identity склада или точки карты. Самостоятельный планировщик сверяет directory по UUID и версии
-склада; изменение версии или координат инвалидирует изменяемые планы маршрутов до использования
-новой точки. См. [`Warehouse`](src/main/java/dev/buhanzaz/rwms/warehouse/domain/Warehouse.java),
+Логистика читает тот же UUID склада, owner-held координаты, представительский признак и опорные
+связи через private warehouse boundary. Отфильтрованный по дате read обслуживает один
+представительский склад в переданный момент; adjacent-network read возвращает все активные
+входящие и исходящие связи, чтобы самостоятельный планировщик мог определить одну нетранзитивную
+группу основного склада без выдуманного parent-поля. Она не создаёт вторую identity склада или
+точки карты. Самостоятельный планировщик сверяет directory по UUID и версии склада; изменение
+версии или координат инвалидирует изменяемые планы маршрутов до использования новой точки. См.
+[`Warehouse`](src/main/java/dev/buhanzaz/rwms/warehouse/domain/Warehouse.java),
 [`WarehouseSupportLinkService`](src/main/java/dev/buhanzaz/rwms/warehouse/service/WarehouseSupportLinkService.java),
 [`LogisticsWarehouseController`](src/main/java/dev/buhanzaz/rwms/warehouse/api/LogisticsWarehouseController.java)
 и
@@ -101,6 +104,7 @@ owner сохраняет pending, ambiguous, quarantined и non-terminal work к
 | `/api/internal/warehouse/v1/warehouses/inventory/**` | Exact inventory-service credential/scope | Inventory metadata snapshot |
 | `/api/internal/warehouse/v1/warehouses/logistics/**` | Exact logistics-service credential/scope | Logistics identity/directory view |
 | `/api/internal/warehouse/v1/warehouses/logistics/{id}/support-links` | Exact logistics-service credential/scope | Активные опорные связи, допустимые в переданный момент, с координатами обоих endpoints |
+| `/api/internal/warehouse/v1/warehouses/logistics/{id}/support-network` | Exact logistics-service credential/scope | Все активные связи, смежные с одним складом; календарь проверяется для датированного кандидата планировщика |
 | `/api/internal/warehouse/v1/warehouses/{id}/admission` | Contract-defined operation owner | Directional lifecycle admission |
 | `/api/internal/warehouse/v1/warehouses/{id}/lifecycle-readiness` | Contract-defined operation owner | Exact-version readiness confirmation |
 | `/api/internal/warehouse/v1/lifecycle/readiness-work` | Service credential | Reconciliation незавершённых подтверждений |

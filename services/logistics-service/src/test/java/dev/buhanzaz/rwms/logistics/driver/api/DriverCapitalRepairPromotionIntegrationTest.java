@@ -123,6 +123,10 @@ class DriverCapitalRepairPromotionIntegrationTest {
         .thenReturn(
             new LogisticsDependencyGateway.RentalItemSnapshot(
                 CABIN, 0, WAREHOUSE, "БЫТ-901", "CAPITAL_REPAIR", List.of()));
+    when(dependencies.readCabinMediaSnapshots(WAREHOUSE, List.of(CABIN)))
+        .thenReturn(
+            List.of(
+                new LogisticsDependencyGateway.CabinMediaSnapshot(CABIN, 0, List.of())));
     when(dependencies.readCapitalRepair(REPAIR))
         .thenReturn(
             new LogisticsDependencyGateway.CapitalRepair(

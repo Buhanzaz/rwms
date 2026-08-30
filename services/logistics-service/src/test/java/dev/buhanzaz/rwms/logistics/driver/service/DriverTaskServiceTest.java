@@ -35,6 +35,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
+import tools.jackson.databind.ObjectMapper;
 
 class DriverTaskServiceTest {
   private final DriverLogisticsTaskRepository tasks = mock(DriverLogisticsTaskRepository.class);
@@ -49,6 +50,10 @@ class DriverTaskServiceTest {
   private final LogisticsTransactionLock transactionLock = mock(LogisticsTransactionLock.class);
   private final CustomerDeliveryCapacityFence capacityFence =
       mock(CustomerDeliveryCapacityFence.class);
+  private final CapitalRepairDriverTaskContentService capitalContent =
+      mock(CapitalRepairDriverTaskContentService.class);
+  private final DriverTaskWorkerContentCodec workerContentCodec =
+      new DriverTaskWorkerContentCodec(new ObjectMapper());
   private final DriverTaskService service =
       new DriverTaskService(
           tasks,
@@ -58,7 +63,9 @@ class DriverTaskServiceTest {
           warehouseLifecycle,
           warehouseOperationMarks,
           transactionLock,
-          capacityFence);
+          capacityFence,
+          capitalContent,
+          workerContentCodec);
 
   @Test
   void rediscoveryReusesExistingCurrentRemovalDespiteChecksumDrift() {

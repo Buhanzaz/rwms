@@ -51,6 +51,7 @@ from app.schemas.domain import (
     RwmsPlanningRequest,
     RwmsSyncFailure,
     RwmsSyncRequest,
+    RwmsSyncResult,
     RwmsWarehouseIdentity,
     RwmsWarehouseRefreshResult,
     RwmsWarehouseSyncResult,
@@ -288,6 +289,76 @@ async def test_directory_client_uses_frozen_warehouse_and_driver_contract() -> N
     assert drivers[0].worker_id == worker_id
     assert drivers[0].display_name == "Иван Иванов"
     assert [request.url.path for request in requests].count("/oauth2/token") == 1
+
+
+@pytest.mark.asyncio
+async def test_directory_client_reads_frozen_adjacent_support_network() -> None:
+    """Read active adjacent support edges without adding a second local warehouse graph."""
+
+    root_id = uuid4()
+    served_id = uuid4()
+    link_id = uuid4()
+
+    def identity(identifier: UUID, *, representative: bool) -> dict[str, object]:
+        """Build one strict warehouse identity nested in the network response."""
+
+        return {
+            "warehouseId": str(identifier),
+            "warehouseVersion": 1,
+            "name": "Representative" if representative else "Main",
+            "city": "Test city",
+            "address": None,
+            "latitude": 59.93,
+            "longitude": 30.32,
+            "timeZone": "Europe/Moscow",
+            "representative": representative,
+            "routingReady": True,
+        }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "auth.internal":
+            return httpx.Response(
+                200,
+                json={"access_token": "opaque-token", "expires_in": 300},
+                request=request,
+            )
+        assert request.method == "GET"
+        assert request.url.path.endswith(f"/{root_id}/support-network")
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "supportLinkId": str(link_id),
+                    "supportLinkVersion": 1,
+                    "supportWarehouse": identity(root_id, representative=False),
+                    "servedWarehouse": identity(served_id, representative=True),
+                    "priority": 1,
+                    "allowDrivers": True,
+                    "allowVehicles": True,
+                    "allowInventory": True,
+                    "allowDirectFulfillment": True,
+                    "allowInterwarehouseTransfer": True,
+                    "allowContractorFallback": True,
+                    "allowedWeekdays": [],
+                    "allowedDates": [],
+                    "excludedDates": [],
+                    "serviceStart": None,
+                    "serviceEnd": None,
+                }
+            ],
+            request=request,
+        )
+
+    client = RwmsPlanningClient(
+        _enabled_settings(),
+        transport=httpx.MockTransport(handler),
+    )
+
+    links = await client.list_support_network(root_id)
+
+    assert [link.support_link_id for link in links] == [link_id]
+    assert links[0].support_warehouse.warehouse_id == root_id
+    assert links[0].served_warehouse.warehouse_id == served_id
 
 
 def test_warehouse_directory_schema_rejects_partial_or_inconsistent_coordinates() -> None:
@@ -567,6 +638,7 @@ def test_shared_driver_builds_explicit_warehouse_audience_assignment() -> None:
 
     assert command.warehouse_id == warehouse.external_warehouse_id
     assert len(command.assignments) == 1
+    assert command.assignments[0].service_warehouse_id == warehouse.external_warehouse_id
     assert command.assignments[0].driver_audience_mode == "WAREHOUSE_DRIVERS"
     assert command.assignments[0].driver_worker_id is None
     assert command.driver_shift_plans == []
@@ -859,37 +931,38 @@ async def test_workspace_default_refresh_failure_has_explicit_recovery_read(
     warehouse = await make_warehouse(db_session)
     calls = 0
 
-    async def refresh(*args: object, **kwargs: object) -> RwmsWarehouseRefreshResult:
+    async def refresh_directory(*args: object, **kwargs: object) -> list[Warehouse]:
+        """Keep the already persisted warehouse as the reconciled directory result."""
+
+        return [warehouse]
+
+    async def refresh(*args: object, **kwargs: object) -> RwmsSyncResult:
         nonlocal calls
         calls += 1
-        return RwmsWarehouseRefreshResult(
-            date_from=date(2026, 8, 28),
-            date_to=date(2026, 9, 27),
-            warehouses=[
-                RwmsWarehouseSyncResult(
-                    warehouse_id=warehouse.external_warehouse_id,
-                    imported=1,
-                    updated=0,
-                    skipped=0,
-                    failures=[
-                        RwmsSyncFailure(
-                            order_id=uuid4(),
-                            code="COORDINATES_REQUIRED",
-                            message="Coordinates are required",
-                        )
-                    ],
+        return RwmsSyncResult(
+            imported=1,
+            updated=0,
+            skipped=0,
+            failures=[
+                RwmsSyncFailure(
+                    order_id=uuid4(),
+                    code="COORDINATES_REQUIRED",
+                    message="Coordinates are required",
                 )
             ],
         )
 
-    monkeypatch.setattr(catalog_api, "refresh_warehouse_requests", refresh)
+    monkeypatch.setattr(catalog_api, "refresh_warehouse_directory", refresh_directory)
+    monkeypatch.setattr(catalog_api, "sync_warehouse_requests", refresh)
+    directory = AsyncMock()
+    directory.list_support_network.return_value = []
     with pytest.raises(ApiError) as error:
         await catalog_api.get_warehouse_workspace(
             warehouse.id,
             db_session,
             object(),
             _enabled_settings(),
-            object(),
+            directory,
             True,
         )
     assert error.value.code == "RWMS_WORKSPACE_SYNC_INCOMPLETE"
@@ -902,7 +975,7 @@ async def test_workspace_default_refresh_failure_has_explicit_recovery_read(
         db_session,
         object(),
         _enabled_settings(),
-        object(),
+        directory,
         False,
     )
     assert recovered.warehouse.id == warehouse.id

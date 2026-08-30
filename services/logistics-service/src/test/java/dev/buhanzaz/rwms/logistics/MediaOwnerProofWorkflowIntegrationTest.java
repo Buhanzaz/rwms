@@ -97,11 +97,27 @@ class MediaOwnerProofWorkflowIntegrationTest {
         .thenReturn(
             new LogisticsDependencyGateway.WarehouseDriverQueue(
                 ORIGIN, DRIVER_QUEUE_DEFINITION, DRIVER_QUEUE_CATEGORY));
+    when(dependencies.readWarehouseIdentity(ORIGIN))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseIdentity(
+                ORIGIN, 0, true, "Склад отправления", "", "UTC"));
+    when(dependencies.readWarehouseIdentity(DESTINATION))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseIdentity(
+                DESTINATION, 0, true, "Склад назначения", "", "UTC"));
     when(dependencies.readRentalItemSnapshot(any()))
         .thenAnswer(
-            invocation ->
-                new LogisticsDependencyGateway.RentalItemSnapshot(
-                    invocation.getArgument(0), 7, ORIGIN, "БТ-QA", "FREE", List.of()));
+            invocation -> {
+              UUID assetId = invocation.getArgument(0);
+              long version = TRANSFER_ASSET.equals(assetId) ? 8 : 7;
+              return new LogisticsDependencyGateway.RentalItemSnapshot(
+                  assetId, version, ORIGIN, "БТ-QA", "FREE", List.of());
+            });
+    when(dependencies.readCabinMediaSnapshots(ORIGIN, List.of(TRANSFER_ASSET)))
+        .thenReturn(
+            List.of(
+                new LogisticsDependencyGateway.CabinMediaSnapshot(
+                    TRANSFER_ASSET, 0, List.of())));
   }
 
   @Test

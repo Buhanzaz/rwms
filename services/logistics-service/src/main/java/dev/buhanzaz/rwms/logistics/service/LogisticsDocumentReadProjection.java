@@ -28,6 +28,11 @@ class LogisticsDocumentReadProjection {
   private final TransferPlanService transferPlanning;
 
   LogisticsDocumentView view(LogisticsDocument document) {
+    return view(document, null);
+  }
+
+  /** Materializes a document and an optional server-created reverse transfer association. */
+  LogisticsDocumentView view(LogisticsDocument document, UUID linkedReturnTransferId) {
     LogisticsDocumentSummary summary = responseMapper.toSummary(document);
     return new LogisticsDocumentView(
         summary.id(),
@@ -36,6 +41,7 @@ class LogisticsDocumentReadProjection {
         summary.state(),
         summary.warehouseId(),
         summary.destinationWarehouseId(),
+        linkedReturnTransferId,
         summary.partySnapshot(),
         summary.driverSnapshot(),
         summary.driverWorkerId(),

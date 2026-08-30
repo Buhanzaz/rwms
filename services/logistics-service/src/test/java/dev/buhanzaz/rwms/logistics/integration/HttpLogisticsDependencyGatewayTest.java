@@ -400,6 +400,58 @@ class HttpLogisticsDependencyGatewayTest {
   }
 
   @Test
+  void readsTheUnfilteredAdjacentWarehouseSupportNetworkWithTheSameServiceCredential() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID servedWarehouseId = UUID.randomUUID();
+    UUID supportLinkId = UUID.randomUUID();
+    server
+        .expect(
+            requestTo(
+                "http://warehouse.test/api/internal/warehouse/v1/warehouses/logistics/"
+                    + warehouseId
+                    + "/support-network"))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header("Authorization", "Bearer test-warehouse.logistics"))
+        .andRespond(
+            withSuccess(
+                """
+                [{
+                  "id":"%s","version":2,
+                  "supportWarehouse":{
+                    "id":"%s","version":4,"active":true,"name":"Опорный",
+                    "city":"Город A","address":null,"latitude":59.900000,
+                    "longitude":30.300000,"timeZone":"Europe/Moscow",
+                    "representative":false
+                  },
+                  "servedWarehouse":{
+                    "id":"%s","version":6,"active":true,"name":"Региональный",
+                    "city":"Город B","address":null,"latitude":58.500000,
+                    "longitude":31.200000,"timeZone":"Europe/Moscow",
+                    "representative":true
+                  },
+                  "priority":1,"allowDrivers":true,"allowVehicles":true,
+                  "allowInventory":true,"allowDirectFulfillment":true,
+                  "allowInterwarehouseTransfer":true,"allowContractorFallback":true,
+                  "allowedWeekdays":["TUESDAY"],"allowedDates":[],"excludedDates":[],
+                  "serviceStart":null,"serviceEnd":null
+                }]
+                """
+                    .formatted(supportLinkId, warehouseId, servedWarehouseId),
+                MediaType.APPLICATION_JSON));
+
+    assertThat(gateway.listWarehouseSupportNetwork(warehouseId))
+        .singleElement()
+        .satisfies(
+            link -> {
+              assertThat(link.id()).isEqualTo(supportLinkId);
+              assertThat(link.supportWarehouse().id()).isEqualTo(warehouseId);
+              assertThat(link.servedWarehouse().id()).isEqualTo(servedWarehouseId);
+              assertThat(link.allowedWeekdays()).containsExactly(java.time.DayOfWeek.TUESDAY);
+            });
+    server.verify();
+  }
+
+  @Test
   void readsOnlyTheQualifiedTaskBoardDriverDirectory() {
     UUID warehouseId = UUID.randomUUID();
     UUID anna = UUID.randomUUID();
@@ -1937,20 +1989,31 @@ class HttpLogisticsDependencyGatewayTest {
     UUID workId = UUID.randomUUID();
     UUID materialId = UUID.randomUUID();
     UUID commentId = UUID.randomUUID();
+    UUID mediaId = UUID.randomUUID();
     LocalDate scheduledDate = LocalDate.parse("2026-08-03");
     OffsetDateTime commentAt = OffsetDateTime.parse("2026-08-03T06:00:00Z");
+    OffsetDateTime mediaRecordedAt = OffsetDateTime.parse("2026-08-03T05:55:00Z");
     DriverTaskWorkerContent workerContent =
         new DriverTaskWorkerContent(
             "Склад A → Склад B\nБытовки: №172",
             List.of(
                 new DriverTaskWorkerContent.Work(
-                    workId, "Загрузить бытовку №172", 1, "шт.", 20, "Проверить мебель")),
+                    workId,
+                    "Загрузить бытовку №172",
+                    1,
+                    "шт.",
+                    20,
+                    "Проверить мебель",
+                    List.of(mediaId))),
             List.of(
                 new DriverTaskWorkerContent.Material(
                     materialId, "Бытовка №172 · BK2", 1, "шт.")),
             List.of(
                 new DriverTaskWorkerContent.Comment(
-                    commentId, "Комментарий логиста", "Логист", commentAt)));
+                    commentId, "Комментарий логиста", "Логист", commentAt)),
+            List.of(
+                new DriverTaskWorkerContent.SourceMedia(
+                    mediaId, 4, "image/jpeg", null, mediaRecordedAt)));
     server
         .expect(requestTo("http://task-board.test/api/internal/task-board/v1/tasks"))
         .andExpect(method(HttpMethod.POST))
@@ -1964,11 +2027,17 @@ class HttpLogisticsDependencyGatewayTest {
         .andExpect(jsonPath("$.route[0].taskText").value(workerContent.taskText()))
         .andExpect(jsonPath("$.route[0].works[0].id").value(workId.toString()))
         .andExpect(jsonPath("$.route[0].works[0].name").value("Загрузить бытовку №172"))
-        .andExpect(jsonPath("$.route[0].works[0].sourceMediaIds").isArray())
+        .andExpect(
+            jsonPath("$.route[0].works[0].sourceMediaIds[0]").value(mediaId.toString()))
         .andExpect(jsonPath("$.route[0].materials[0].id").value(materialId.toString()))
         .andExpect(jsonPath("$.route[0].comments[0].id").value(commentId.toString()))
         .andExpect(jsonPath("$.route[0].comments[0].createdAt").value("2026-08-03T06:00:00Z"))
-        .andExpect(jsonPath("$.route[0].sourceMedia").isArray())
+        .andExpect(jsonPath("$.route[0].sourceMedia[0].mediaId").value(mediaId.toString()))
+        .andExpect(jsonPath("$.route[0].sourceMedia[0].generation").value(4))
+        .andExpect(jsonPath("$.route[0].sourceMedia[0].contentType").value("image/jpeg"))
+        .andExpect(
+            jsonPath("$.route[0].sourceMedia[0].recordedAt")
+                .value("2026-08-03T05:55:00Z"))
         .andExpect(jsonPath("$.source.type").value("LOGISTICS_DRIVER_TASK"))
         .andExpect(jsonPath("$.source.sourceId").value(sourceId.toString()))
         .andExpect(jsonPath("$.lane").value("SCHEDULED"))

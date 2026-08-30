@@ -66,7 +66,7 @@ class DeliveryFlowScreensTest {
             .fetchSemanticsNode().boundsInRoot
         assertThat(priceBounds.bottom).isAtMost(firstDateBounds.top)
         composeRule.onNodeWithTag("delivery-date-expand-2026-09-01").performClick()
-        composeRule.onNodeWithText("В течение дня").assertExists()
+        composeRule.onNodeWithText("В течение дня. Точное время подтвердит логист").assertExists()
         composeRule.onNodeWithTag("delivery-date-2026-09-01").performScrollTo().performClick()
 
         composeRule.runOnIdle {
@@ -122,7 +122,7 @@ class DeliveryFlowScreensTest {
         }
 
         composeRule.onNodeWithTag("delivery-slot-chosen").assertExists()
-        composeRule.onNodeWithText("В течение дня").assertExists()
+        composeRule.onNodeWithText("В течение дня. Точное время подтвердит логист").assertExists()
         composeRule.onNodeWithTag("delivery-slot-other-date").assertDoesNotExist()
         composeRule.onNodeWithTag("private-site-access-confirmation").assertDoesNotExist()
         composeRule.onNodeWithTag("failed-trip-charge-acknowledgement").assertDoesNotExist()
@@ -265,7 +265,7 @@ class DeliveryFlowScreensTest {
         }
 
         composeRule.onNodeWithText("Невский проспект, 1").assertExists()
-        composeRule.onNodeWithText("В течение дня").assertExists()
+        composeRule.onNodeWithText("В течение дня. Точное время подтвердит логист").assertExists()
         composeRule.onNodeWithTag("delivery-confirmation-screen")
             .performScrollToNode(hasText("Бытовка cabin-1 — 3 мес."))
         composeRule.onNodeWithText("Бытовка cabin-1 — 3 мес.").assertExists()
@@ -298,6 +298,7 @@ class DeliveryFlowScreensTest {
 
         composeRule.onNodeWithTag("delivery-confirmation-screen")
             .performScrollToNode(hasText("Бытовка cabin-1 — 1 мес."))
+        composeRule.onNodeWithText("09:00–18:00").assertExists()
         composeRule.onNodeWithText("Бытовка cabin-1 — 1 мес.").assertExists()
         composeRule.onNodeWithTag("checkout-button").assertIsEnabled()
     }

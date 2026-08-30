@@ -220,6 +220,10 @@ export function NotificationCenter() {
     setOpen(next);
     if (next) markRead();
   };
+  const activate = (notification: NotificationMessage) => {
+    notification.action?.onActivate();
+    setOpen(false);
+  };
   useEffect(() => {
     if (!open) return undefined;
     const close = (event: KeyboardEvent) => {
@@ -243,6 +247,15 @@ export function NotificationCenter() {
                 <strong>{notification.title}</strong>
                 {notification.detail ? <p>{notification.detail}</p> : null}
                 <time>{new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(notification.createdAt))}</time>
+                {notification.action ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    aria-label={`${notification.action.label}: ${notification.title}`}
+                    onClick={() => activate(notification)}
+                  >{notification.action.label}</Button>
+                ) : null}
               </article>
             ))}
             {!notifications.length ? <p className="notification-center__empty">История пуста</p> : null}
