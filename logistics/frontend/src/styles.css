@@ -340,6 +340,50 @@ textarea.input { resize: vertical; min-height: 74px; }
 .modal__header p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
 .modal__body { overflow: auto; padding: 18px; }
 
+.transfer-form { display: grid; gap: 14px; }
+.transfer-section { display: grid; gap: 12px; padding: 13px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel-soft); }
+.transfer-section__header { display: flex; align-items: flex-start; gap: 9px; }
+.transfer-section__header > span { width: 30px; height: 30px; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel-raised); color: var(--accent); }
+.transfer-section__header h3 { margin: 1px 0 0; font-size: 13px; }
+.transfer-section__header p { margin: 3px 0 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.transfer-arrival { min-height: var(--control-height); display: grid; align-content: center; gap: 2px; padding: 7px 9px; border: 1px solid var(--line); border-radius: var(--control-radius); background: var(--input-bg); }
+.transfer-arrival small { color: var(--muted); font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; }
+.transfer-arrival strong { color: var(--text); font-size: 12px; }
+.transfer-arrival span { color: var(--muted); font-size: 10px; line-height: 1.35; }
+.transfer-arrival .transfer-arrival__error { color: var(--danger-text); }
+.transfer-cargo-toggle { min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 10px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--panel-raised); }
+.transfer-cargo-toggle .checkbox-field { color: var(--text); font-size: 12px; font-weight: 800; }
+.transfer-cargo-toggle > span { color: var(--muted); font-size: 10px; }
+.transfer-cabin-groups { display: grid; gap: 10px; }
+.transfer-cabin-card { overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.transfer-cabin-card > header { min-height: 43px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--panel-raised); }
+.transfer-cabin-card > header > div, .transfer-furniture > header > div { display: grid; gap: 2px; }
+.transfer-cabin-card > header strong, .transfer-furniture > header strong { font-size: 11px; }
+.transfer-cabin-card > header span, .transfer-furniture > header span { color: var(--muted); font-size: 9px; }
+.transfer-cabin-card__fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; padding: 11px; }
+.transfer-characteristics { display: flex; flex-wrap: wrap; gap: 8px 14px; padding: 0 11px 11px; }
+.transfer-characteristics .checkbox-field { color: var(--text); }
+.transfer-furniture { display: grid; gap: 8px; margin: 0 11px 11px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-soft); }
+.transfer-furniture > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.transfer-furniture > p, .transfer-summary > p { margin: 0; color: var(--muted); font-size: 10px; }
+.transfer-furniture__row { display: grid; grid-template-columns: minmax(0, 1fr) 132px auto; align-items: end; gap: 8px; }
+.transfer-furniture__row > .button { margin-bottom: 1px; }
+.transfer-add-cabin { width: 100%; border-style: dashed; }
+.transfer-summary__facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.transfer-summary__facts > span { display: grid; gap: 3px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-raised); }
+.transfer-summary__facts small { color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .04em; }
+.transfer-summary__facts strong { font-size: 15px; }
+.transfer-summary ul { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.transfer-summary li { padding: 5px 7px; border-radius: 6px; background: var(--accent-soft); color: var(--accent-soft-text); font-size: 10px; }
+
+@media (max-width: 760px) {
+  .modal-backdrop { padding: 8px; }
+  .modal { max-height: 98vh; }
+  .form-grid, .transfer-cabin-card__fields, .transfer-summary__facts { grid-template-columns: 1fr; }
+  .form-grid .span-2 { grid-column: auto; }
+  .transfer-furniture__row { grid-template-columns: 1fr 112px auto; }
+}
+
 .empty-state { min-height: 180px; display: grid; place-items: center; align-content: center; gap: 7px; padding: 22px; text-align: center; border: 1px dashed var(--line-strong); border-radius: 10px; color: var(--muted); }
 .empty-state strong { color: var(--text); }
 .empty-state p { margin: 0 0 6px; max-width: 260px; font-size: 11px; line-height: 1.5; }

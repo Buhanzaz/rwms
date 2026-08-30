@@ -526,6 +526,29 @@ dialog and submits one authoritative draft to the existing public
 second transfer aggregate. If the shared session is absent, the panel OIDC
 callback returns the operator to the standalone logistics URL after sign-in.
 
+The dialog can persist an empty resource-only trip or, behind **Carry cabins**,
+one or more independent cabin requirement groups. Type, size, finishing,
+characteristics and furniture come from the canonical asset-service catalogs;
+the browser never invents BK/finishing/furniture values. Furniture is entered
+per cabin and the dialog shows the multiplied total. A draft intentionally has
+no physical cabin allocation, reservation or stock movement. In the primary
+panel the **Prepare cabins and contents** action opens that same canonical plan;
+confirmation atomically reserves the selected stock and uses the existing
+furniture-difference task workflow.
+
+The dispatcher selects a local source date and departure time. When the source
+has an active physical vehicle projection, the dialog calls the read-only
+`POST /api/routing/transfer-arrival-estimate` endpoint. That endpoint uses the
+shared vehicle/trailer snapshot, per-leg load state and configured exact truck
+routing provider to derive travel time and arrival; it neither reserves a
+resource nor mutates a transfer. If no exact calculation is currently possible,
+the draft remains explicit with no fabricated arrival and can be completed at
+the existing confirmation stage.
+
+Planner settings submit only fields accepted by the strict backend
+`PlanningSettings` schema. The obsolete browser-only `trace_enabled` switch was
+removed; trace event bounds and sampling remain supported settings.
+
 For a representative warehouse the same planner evaluates local resources,
 active operational assignments, every calendar-eligible support warehouse and
 confirmed contractor shifts. A support candidate retains its origin, exact

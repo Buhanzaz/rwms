@@ -66,7 +66,6 @@ export interface PlanningSettings {
   soft_overtime_limit_minutes: number;
   max_trace_events: number;
   trace_sample_rate: number;
-  trace_enabled?: boolean;
 }
 
 /** One inclusive hourly travel-time boundary and its delivery price. */

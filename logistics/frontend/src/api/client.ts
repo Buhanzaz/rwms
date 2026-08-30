@@ -34,6 +34,12 @@ import {
 const configuredApiPrefix = import.meta.env.VITE_API_BASE_URL?.trim();
 const API_PREFIX = configuredApiPrefix?.replace(/\/+$/, '') || '/api';
 
+/** Resolve a standalone-simulator endpoint against its configured deployment prefix. */
+export function simulatorApiUrl(path: string): string {
+  if (!path.startsWith('/')) throw new Error('Simulator API path must start with /');
+  return `${API_PREFIX}${path}`;
+}
+
 export interface ProblemDetails {
   type?: unknown;
   title?: unknown;
@@ -95,7 +101,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   headers.set('Accept', 'application/json, application/problem+json');
   try {
-    const response = await fetch(`${API_PREFIX}${path}`, { ...init, headers });
+    const response = await fetch(simulatorApiUrl(path), { ...init, headers });
     return await parseResponse<T>(response);
   } catch (error: unknown) {
     if (error instanceof ApiError) throw error;

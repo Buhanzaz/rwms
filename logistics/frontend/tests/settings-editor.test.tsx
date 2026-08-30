@@ -7,6 +7,24 @@ import { useUiStore } from '../src/stores/ui-store';
 import { warehouseFixture } from './fixtures';
 
 describe('planner resource settings', () => {
+  it('saves only backend-supported planning settings after a single-field change', async () => {
+    const user = userEvent.setup();
+    const warehouse = warehouseFixture();
+    const onSave = vi.fn<(input: WarehouseUpdateInput) => Promise<void>>().mockResolvedValue(undefined);
+    render(<SettingsEditor warehouse={warehouse} busy={false} onSave={onSave} />);
+
+    expect(screen.queryByLabelText('Показывать процесс поиска маршрута')).not.toBeInTheDocument();
+    const citySpeed = screen.getByLabelText('Скорость в городе, км/ч');
+    await user.clear(citySpeed);
+    await user.type(citySpeed, '42');
+    await user.click(screen.getByRole('button', { name: 'Сохранить настройки' }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+    const savedSettings = onSave.mock.calls[0]?.[0].settings;
+    expect(savedSettings).toEqual({ ...warehouse.settings, city_speed_kmh: 42 });
+    expect(savedSettings).not.toHaveProperty('trace_enabled');
+  });
+
   it('shows and saves fleet activation and driver workload controls', async () => {
     useUiStore.setState({ notificationDurationSeconds: 8 });
     const user = userEvent.setup();

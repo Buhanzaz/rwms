@@ -713,7 +713,11 @@ describe("WarehouseTransfersPage", () => {
     renderPage()
 
     await user.click(
-      (await screen.findAllByRole("button", { name: "Редактировать план" }))[0]!
+      (
+        await screen.findAllByRole("button", {
+          name: "Подготовить бытовки и наполнение",
+        })
+      )[0]!
     )
     expect(
       screen.getByRole("heading", {

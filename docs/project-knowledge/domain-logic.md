@@ -972,6 +972,18 @@ departure/arrival remain the only physical custody commands. Evidence:
 [`DriverLogisticsTask.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/domain/DriverLogisticsTask.java), and
 [`TransferPlanWorkflowStore.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/service/TransferPlanWorkflowStore.java).
 
+The standalone dispatcher is a presentation client of that same transfer
+aggregate. Its optional cabin checkbox captures catalog IDs and per-cabin
+furniture quantities as a requirement while leaving `allocatedCabins` empty;
+only the logistics-service confirmation transition may allocate and reserve
+physical stock. Its planned-arrival preview is also side-effect free: the
+simulator routes one source-local vehicle snapshot with the current zero-to-two
+cabin `VehicleLegState`, returns exact road time, and never writes the selected
+local vehicle ID into the canonical trip assignment. Evidence:
+[`TransferDraftDialog.tsx`](../../logistics/frontend/src/features/transfers/TransferDraftDialog.tsx),
+[`transfer-client.ts`](../../logistics/frontend/src/features/transfers/transfer-client.ts), and
+[`routing.py`](../../logistics/backend/app/api/routing.py).
+
 Opening a warehouse workspace refreshes its current 31-day RWMS horizon before
 returning requests. A confirmed fixed CustomerApp date carries its exact hard
 window; a confirmed `DURING_DAY` date carries null planner bounds and remains a

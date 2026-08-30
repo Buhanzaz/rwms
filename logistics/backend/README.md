@@ -57,6 +57,13 @@ warehouse UUID. The implementation sources are
 Dynamic slot availability performs complete multi-driver/multi-trip day
 resimulation and exact directed route checks. Tariff classification returns
 `price_isochrone_minutes`; visual contours are not planning input.
+A read-only `POST /api/routing/transfer-arrival-estimate` applies the same
+physical vehicle/trailer snapshot and per-leg load profile to one planned
+warehouse-to-warehouse departure. It accepts canonical external warehouse IDs,
+an aware departure, one source-local vehicle and zero to two cabins, and returns
+the exact road duration, distance and arrival without reserving resources or
+changing inventory. Two cabins require the source vehicle's usable active
+default trailer; routing failure is explicit and has no passenger-car fallback.
 A ten-minute hold is version-fenced, confirmation re-simulates without the
 hold itself, creates a mandatory request/tasks and is idempotent by confirmation
 key. See [`app/slot_planning`](app/slot_planning) and

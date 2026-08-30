@@ -450,7 +450,7 @@ describe("TransferPlanDialog", () => {
     expect(
       (
         screen.getByRole("button", {
-          name: "Подтвердить перемещение",
+          name: "Подтвердить и создать задания",
         }) as HTMLButtonElement
       ).disabled
     ).toBe(true)
@@ -487,7 +487,7 @@ describe("TransferPlanDialog", () => {
       expect(
         (
           screen.getByRole("button", {
-            name: "Подтвердить перемещение",
+            name: "Подтвердить и создать задания",
           }) as HTMLButtonElement
         ).disabled
       ).toBe(false)
@@ -505,7 +505,7 @@ describe("TransferPlanDialog", () => {
       vehicleReposition: null,
     })
     await user.click(
-      screen.getByRole("button", { name: "Подтвердить перемещение" })
+      screen.getByRole("button", { name: "Подтвердить и создать задания" })
     )
     await waitFor(() =>
       expect(transferApi.confirmWarehouseTransferPlan).toHaveBeenCalledWith(
@@ -515,6 +515,12 @@ describe("TransferPlanDialog", () => {
         })
       )
     )
+    expect(
+      await screen.findByText("Перемещение подтверждено")
+    ).toBeTruthy()
+    expect(
+      screen.getByText(/Конкретные бытовки и мебель зарезервированы/)
+    ).toBeTruthy()
   })
 
   it("creates and immediately selects a bounded contractor driver", async () => {

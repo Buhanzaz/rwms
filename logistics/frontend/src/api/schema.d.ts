@@ -620,6 +620,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/routing/transfer-arrival-estimate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Estimate Transfer Arrival
+         * @description Route one planned warehouse-to-warehouse leg without reserving any resource.
+         */
+        post: operations["estimate_transfer_arrival_api_routing_transfer_arrival_estimate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/routing/travel-time-contours": {
         parameters: {
             query?: never;
@@ -3220,6 +3240,67 @@ export interface components {
             width_mm?: number | null;
         };
         /**
+         * TransferArrivalEstimateRead
+         * @description Exact truck-road estimate and physical configuration used for the calculation.
+         */
+        TransferArrivalEstimateRead: {
+            /** Cabin Count */
+            cabin_count: number;
+            /**
+             * Departure At
+             * Format: date-time
+             */
+            departure_at: string;
+            /** Distance Meters */
+            distance_meters: number;
+            /**
+             * Estimated Arrival At
+             * Format: date-time
+             */
+            estimated_arrival_at: string;
+            /** Osm Data Version */
+            osm_data_version?: string | null;
+            /** Routing Provider */
+            routing_provider: string;
+            /** Trailer Attached */
+            trailer_attached: boolean;
+            /** Travel Seconds */
+            travel_seconds: number;
+            /**
+             * Vehicle Id
+             * Format: uuid
+             */
+            vehicle_id: string;
+        };
+        /**
+         * TransferArrivalEstimateRequest
+         * @description Side-effect-free facts needed to route one planned warehouse transfer leg.
+         */
+        TransferArrivalEstimateRequest: {
+            /** Cabin Count */
+            cabin_count: number;
+            /**
+             * Destination Warehouse Id
+             * Format: uuid
+             */
+            destination_warehouse_id: string;
+            /**
+             * Planned Departure At
+             * Format: date-time
+             */
+            planned_departure_at: string;
+            /**
+             * Source Warehouse Id
+             * Format: uuid
+             */
+            source_warehouse_id: string;
+            /**
+             * Vehicle Id
+             * Format: uuid
+             */
+            vehicle_id: string;
+        };
+        /**
          * TravelTimeContourFeature
          * @description One truck travel-time area centered on the requested origin.
          */
@@ -5136,6 +5217,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LogisticsRequestRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    estimate_transfer_arrival_api_routing_transfer_arrival_estimate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransferArrivalEstimateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransferArrivalEstimateRead"];
                 };
             };
             /** @description Validation Error */

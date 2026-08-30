@@ -4909,6 +4909,115 @@
         "title": "TrailerUpdate",
         "type": "object"
       },
+      "TransferArrivalEstimateRead": {
+        "additionalProperties": false,
+        "description": "Exact truck-road estimate and physical configuration used for the calculation.",
+        "properties": {
+          "cabin_count": {
+            "maximum": 2.0,
+            "minimum": 0.0,
+            "title": "Cabin Count",
+            "type": "integer"
+          },
+          "departure_at": {
+            "format": "date-time",
+            "title": "Departure At",
+            "type": "string"
+          },
+          "distance_meters": {
+            "minimum": 0.0,
+            "title": "Distance Meters",
+            "type": "integer"
+          },
+          "estimated_arrival_at": {
+            "format": "date-time",
+            "title": "Estimated Arrival At",
+            "type": "string"
+          },
+          "osm_data_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Osm Data Version"
+          },
+          "routing_provider": {
+            "title": "Routing Provider",
+            "type": "string"
+          },
+          "trailer_attached": {
+            "title": "Trailer Attached",
+            "type": "boolean"
+          },
+          "travel_seconds": {
+            "minimum": 0.0,
+            "title": "Travel Seconds",
+            "type": "integer"
+          },
+          "vehicle_id": {
+            "format": "uuid",
+            "title": "Vehicle Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "departure_at",
+          "estimated_arrival_at",
+          "travel_seconds",
+          "distance_meters",
+          "vehicle_id",
+          "cabin_count",
+          "trailer_attached",
+          "routing_provider"
+        ],
+        "title": "TransferArrivalEstimateRead",
+        "type": "object"
+      },
+      "TransferArrivalEstimateRequest": {
+        "additionalProperties": false,
+        "description": "Side-effect-free facts needed to route one planned warehouse transfer leg.",
+        "properties": {
+          "cabin_count": {
+            "maximum": 2.0,
+            "minimum": 0.0,
+            "title": "Cabin Count",
+            "type": "integer"
+          },
+          "destination_warehouse_id": {
+            "format": "uuid",
+            "title": "Destination Warehouse Id",
+            "type": "string"
+          },
+          "planned_departure_at": {
+            "format": "date-time",
+            "title": "Planned Departure At",
+            "type": "string"
+          },
+          "source_warehouse_id": {
+            "format": "uuid",
+            "title": "Source Warehouse Id",
+            "type": "string"
+          },
+          "vehicle_id": {
+            "format": "uuid",
+            "title": "Vehicle Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_warehouse_id",
+          "destination_warehouse_id",
+          "planned_departure_at",
+          "vehicle_id",
+          "cabin_count"
+        ],
+        "title": "TransferArrivalEstimateRequest",
+        "type": "object"
+      },
       "TravelTimeContourFeature": {
         "additionalProperties": false,
         "description": "One truck travel-time area centered on the requested origin.",
@@ -8903,6 +9012,48 @@
         "summary": "Split Request",
         "tags": [
           "catalog"
+        ]
+      }
+    },
+    "/api/routing/transfer-arrival-estimate": {
+      "post": {
+        "description": "Route one planned warehouse-to-warehouse leg without reserving any resource.",
+        "operationId": "estimate_transfer_arrival_api_routing_transfer_arrival_estimate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransferArrivalEstimateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferArrivalEstimateRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Estimate Transfer Arrival",
+        "tags": [
+          "routing"
         ]
       }
     },

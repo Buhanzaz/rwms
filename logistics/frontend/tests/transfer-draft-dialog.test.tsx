@@ -3,7 +3,13 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AvailableWarehouse } from '../src/domain/types';
 import { TransferDraftDialog } from '../src/features/transfers/TransferDraftDialog';
-import type { CreateTransferDraftInput, CreatedTransferDraft } from '../src/features/transfers/transfer-client';
+import type {
+  CreateTransferDraftInput,
+  CreatedTransferDraft,
+  TransferArrivalEstimate,
+  TransferCargoCatalog,
+  TransferRouteVehicle,
+} from '../src/features/transfers/transfer-client';
 
 const auth = vi.hoisted(() => ({
   restorePanelUser: vi.fn(),
@@ -11,16 +17,31 @@ const auth = vi.hoisted(() => ({
 }));
 const transfers = vi.hoisted(() => ({
   createTransferDraft: vi.fn<(input: CreateTransferDraftInput) => Promise<CreatedTransferDraft>>(),
+  loadTransferCargoCatalog: vi.fn<(accessToken: string, warehouseId: string) => Promise<TransferCargoCatalog>>(),
+  loadTransferRouteVehicles: vi.fn<(warehouseId: string) => Promise<TransferRouteVehicle[]>>(),
+  estimateTransferArrival: vi.fn<(input: {
+    sourceWarehouseId: string;
+    destinationWarehouseId: string;
+    plannedDepartureAt: string;
+    vehicleId: string;
+    cabinCount: number;
+  }) => Promise<TransferArrivalEstimate>>(),
 }));
 
 vi.mock('../src/auth/panel-oidc', () => auth);
-vi.mock('../src/features/transfers/transfer-client', () => ({
-  createTransferDraft: transfers.createTransferDraft,
-}));
+vi.mock('../src/features/transfers/transfer-client', () => transfers);
 
 const SPB_ID = '11111111-1111-4111-8111-111111111111';
 const NOVGOROD_ID = '22222222-2222-4222-8222-222222222222';
 const MOSCOW_ID = '33333333-3333-4333-8333-333333333333';
+const LOCAL_SPB_ID = '44444444-4444-4444-8444-444444444444';
+const VEHICLE_ID = '55555555-5555-4555-8555-555555555555';
+const TYPE_ID = '66666666-6666-4666-8666-666666666666';
+const DIMENSION_ID = '77777777-7777-4777-8777-777777777777';
+const FINISHING_ID = '88888888-8888-4888-8888-888888888888';
+const CHARACTERISTIC_ID = '99999999-9999-4999-8999-999999999999';
+const BED_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const TABLE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
 const warehouses: AvailableWarehouse[] = [
   {
@@ -34,6 +55,7 @@ const warehouses: AvailableWarehouse[] = [
     timezone: 'Europe/Moscow',
     representative: false,
     routing_ready: true,
+    local_warehouse_id: LOCAL_SPB_ID,
   },
   {
     warehouse_id: NOVGOROD_ID,
@@ -62,16 +84,48 @@ const warehouses: AvailableWarehouse[] = [
   },
 ];
 
-function renderDialog() {
+const catalog: TransferCargoCatalog = {
+  rentalTypes: [{ id: TYPE_ID, name: 'BK2' }],
+  dimensions: [{ id: DIMENSION_ID, name: '6 × 2,4 м' }],
+  finishings: [{ id: FINISHING_ID, name: 'ЛДСП' }],
+  characteristics: [{ id: CHARACTERISTIC_ID, name: 'ИТР' }],
+  typeDimensions: [{ typeId: TYPE_ID, dimensionId: DIMENSION_ID, sortOrder: 0 }],
+  furniture: [
+    { id: BED_ID, name: 'Кровать', availableStock: 20, reservedQuantity: 3 },
+    { id: TABLE_ID, name: 'Стол', availableStock: 10, reservedQuantity: 1 },
+  ],
+};
+
+const estimate: TransferArrivalEstimate = {
+  departure_at: '2026-08-30T05:30:00.000Z',
+  estimated_arrival_at: '2026-08-30T09:20:00.000Z',
+  travel_seconds: 13_800,
+  distance_meters: 194_600,
+  vehicle_id: VEHICLE_ID,
+  cabin_count: 0,
+  trailer_attached: false,
+  routing_provider: 'valhalla',
+  osm_data_version: '2026-08-29',
+};
+
+function renderDialog(onCreated = () => undefined) {
   return render(
     <TransferDraftDialog
       warehouses={warehouses}
+      sourceWarehouseId={SPB_ID}
       destinationWarehouseId={NOVGOROD_ID}
       scheduledDate="2026-08-30"
       onClose={() => undefined}
-      onCreated={() => undefined}
+      onCreated={onCreated}
     />,
   );
+}
+
+async function setDeparture(dialog: HTMLElement, user: ReturnType<typeof userEvent.setup>) {
+  await waitFor(() => expect(within(dialog).getByLabelText('Автомобиль для расчёта маршрута')).toHaveValue(VEHICLE_ID));
+  fireEvent.change(within(dialog).getByLabelText('Плановое отправление'), { target: { value: '08:30' } });
+  await user.click(within(dialog).getByText('Груз'));
+  await within(dialog).findByText(/3 ч 50 мин/);
 }
 
 describe('standalone transfer draft dialog', () => {
@@ -79,6 +133,22 @@ describe('standalone transfer draft dialog', () => {
     auth.restorePanelUser.mockReset();
     auth.beginPanelLogin.mockReset();
     transfers.createTransferDraft.mockReset();
+    transfers.loadTransferCargoCatalog.mockReset();
+    transfers.loadTransferRouteVehicles.mockReset();
+    transfers.estimateTransferArrival.mockReset();
+    transfers.loadTransferCargoCatalog.mockResolvedValue(catalog);
+    transfers.loadTransferRouteVehicles.mockResolvedValue([{
+      id: VEHICLE_ID,
+      name: 'SPB-04',
+      registrationNumber: 'А123АА 178',
+      capacity: 2,
+    }]);
+    transfers.estimateTransferArrival.mockImplementation((input) => Promise.resolve({
+      ...estimate,
+      departure_at: input.plannedDepartureAt,
+      cabin_count: input.cabinCount,
+      trailer_attached: input.cabinCount === 2,
+    }));
   });
 
   it('stays inside logistics and offers the shared RWMS login when no USER session exists', async () => {
@@ -96,26 +166,17 @@ describe('standalone transfer draft dialog', () => {
     expect(auth.beginPanelLogin).toHaveBeenCalledWith('/logistics-simulator/?day=2026-08-30');
   });
 
-  it('creates the canonical zero-cargo draft and keeps unavailable warehouses visible', async () => {
+  it('creates an empty transfer with exact calculated arrival and keeps unavailable warehouses visible', async () => {
     auth.restorePanelUser.mockResolvedValue({ access_token: 'panel-token' });
     transfers.createTransferDraft.mockResolvedValue({ id: 'transfer-1', state: 'DRAFT' });
     const onCreated = vi.fn();
     const user = userEvent.setup();
-    render(
-      <TransferDraftDialog
-        warehouses={warehouses}
-        sourceWarehouseId={SPB_ID}
-        destinationWarehouseId={NOVGOROD_ID}
-        scheduledDate="2026-08-30"
-        onClose={() => undefined}
-        onCreated={onCreated}
-      />,
-    );
+    renderDialog(onCreated);
 
     const dialog = await screen.findByRole('dialog', { name: 'Создать перемещение' });
     const source = within(dialog).getByLabelText('Склад отправления');
-    const unavailable = within(source).getByRole('option', { name: 'Склад Москва · Нет координат в RWMS' });
-    expect(unavailable).toBeDisabled();
+    expect(within(source).getByRole('option', { name: 'Склад Москва · Нет координат в RWMS' })).toBeDisabled();
+    await setDeparture(dialog, user);
     await user.type(within(dialog).getByLabelText('Комментарий логиста'), 'Попутный рейс');
     await user.click(within(dialog).getByRole('button', { name: 'Создать черновик' }));
 
@@ -129,8 +190,8 @@ describe('standalone transfer draft dialog', () => {
       destinationWarehouseId: NOVGOROD_ID,
       scheduledDate: '2026-08-30',
       plan: {
-        plannedDepartureAt: null,
-        plannedArrivalAt: null,
+        plannedDepartureAt: '2026-08-30T05:30:00.000Z',
+        plannedArrivalAt: '2026-08-30T09:20:00.000Z',
         logisticsComment: 'Попутный рейс',
         tripDriverId: null,
         tripVehicleId: null,
@@ -140,7 +201,66 @@ describe('standalone transfer draft dialog', () => {
         looseFurniture: [],
       },
     });
+    expect(transfers.estimateTransferArrival).toHaveBeenLastCalledWith(expect.objectContaining({ cabinCount: 0 }));
     expect(onCreated).toHaveBeenCalledWith({ id: 'transfer-1', state: 'DRAFT' });
+  });
+
+  it('reveals RWMS cabin fields behind the checkbox, recalculates furniture and submits the requirement', async () => {
+    auth.restorePanelUser.mockResolvedValue({ access_token: 'panel-token' });
+    transfers.createTransferDraft.mockResolvedValue({ id: 'transfer-cargo', state: 'DRAFT' });
+    const user = userEvent.setup();
+    renderDialog();
+    const dialog = await screen.findByRole('dialog', { name: 'Создать перемещение' });
+
+    expect(within(dialog).queryByLabelText('Бытовка 1')).not.toBeInTheDocument();
+    await user.click(within(dialog).getByLabelText('Перевозить бытовки'));
+    const cabin = await within(dialog).findByLabelText('Бытовка 1');
+    expect(transfers.loadTransferCargoCatalog).toHaveBeenCalledWith('panel-token', SPB_ID);
+    await user.selectOptions(within(cabin).getByLabelText('Тип бытовки 1'), TYPE_ID);
+    await user.selectOptions(within(cabin).getByLabelText('Исполнение бытовки 1'), DIMENSION_ID);
+    await user.selectOptions(within(cabin).getByLabelText('Отделка бытовки 1'), FINISHING_ID);
+    fireEvent.change(within(cabin).getByLabelText('Количество бытовок 1'), { target: { value: '2' } });
+    await user.click(within(cabin).getByLabelText('Линолеум'));
+    await user.click(within(cabin).getByLabelText('ИТР'));
+    await user.click(within(cabin).getByRole('button', { name: 'Добавить мебель' }));
+    await user.selectOptions(within(cabin).getByLabelText('Мебель 1'), BED_ID);
+    fireEvent.change(within(cabin).getByLabelText('Количество мебели 1 для бытовки 1'), { target: { value: '4' } });
+    await user.click(within(cabin).getByRole('button', { name: 'Добавить мебель' }));
+    await user.selectOptions(within(cabin).getByLabelText('Мебель 2'), TABLE_ID);
+
+    expect(within(dialog).getByText('Кровать — 8')).toBeVisible();
+    expect(within(dialog).getByText('Стол — 2')).toBeVisible();
+    await setDeparture(dialog, user);
+    await user.click(within(dialog).getByRole('button', { name: 'Создать черновик' }));
+
+    await waitFor(() => expect(transfers.createTransferDraft).toHaveBeenCalledOnce());
+    expect(transfers.createTransferDraft.mock.calls[0]![0].plan.cabinGroups).toEqual([{
+      rentalTypeId: TYPE_ID,
+      dimensionId: DIMENSION_ID,
+      finishingId: FINISHING_ID,
+      characteristicIds: [CHARACTERISTIC_ID],
+      linoleum: true,
+      quantity: 2,
+      furniturePerCabin: [
+        { furnitureCatalogItemId: BED_ID, quantityPerCabin: 4 },
+        { furnitureCatalogItemId: TABLE_ID, quantityPerCabin: 1 },
+      ],
+      allocatedCabins: [],
+    }]);
+    expect(transfers.estimateTransferArrival).toHaveBeenLastCalledWith(expect.objectContaining({ cabinCount: 2 }));
+  });
+
+  it('adds another independent cabin configuration from the bottom action', async () => {
+    auth.restorePanelUser.mockResolvedValue({ access_token: 'panel-token' });
+    const user = userEvent.setup();
+    renderDialog();
+    const dialog = await screen.findByRole('dialog', { name: 'Создать перемещение' });
+    await user.click(within(dialog).getByLabelText('Перевозить бытовки'));
+    await within(dialog).findByLabelText('Бытовка 1');
+    await user.click(within(dialog).getByRole('button', { name: 'Добавить ещё бытовку' }));
+
+    expect(within(dialog).getByLabelText('Бытовка 1')).toBeVisible();
+    expect(within(dialog).getByLabelText('Бытовка 2')).toBeVisible();
   });
 
   it('blocks a same-warehouse transfer before calling logistics-service', async () => {
@@ -163,6 +283,7 @@ describe('standalone transfer draft dialog', () => {
     const user = userEvent.setup();
     renderDialog();
     const dialog = await screen.findByRole('dialog', { name: 'Создать перемещение' });
+    await setDeparture(dialog, user);
 
     await user.click(within(dialog).getByRole('button', { name: 'Создать черновик' }));
     expect(await within(dialog).findByText('Ответ потерян')).toBeVisible();
@@ -185,6 +306,7 @@ describe('standalone transfer draft dialog', () => {
     const user = userEvent.setup();
     renderDialog();
     const dialog = await screen.findByRole('dialog', { name: 'Создать перемещение' });
+    await setDeparture(dialog, user);
 
     await user.click(within(dialog).getByRole('button', { name: 'Создать черновик' }));
     expect(await within(dialog).findByText('Ответ потерян')).toBeVisible();

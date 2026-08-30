@@ -1351,7 +1351,20 @@ and
    submits the existing public `POST /api/logistics/v1/transfers` command and
    stays on the map; if login is required, the shared callback returns through a
    full page load to `/logistics-simulator/**`. FastAPI owns no duplicate
-   transfer command or state.
+   transfer command or state. The dialog may submit a resource-only draft or
+   canonical cabin requirement groups loaded from asset-service: type, size,
+   finishing, characteristics, quantity and furniture per cabin. These are
+   planning requirements with empty physical allocations, so evaluation neither
+   reserves stock nor moves a cabin. The source-local departure is converted in
+   the warehouse timezone, and the read-only
+   `POST /api/routing/transfer-arrival-estimate` reuses the planner's physical
+   vehicle/trailer snapshot and exact truck provider to derive road arrival for
+   the current zero-to-two-cabin leg. The selected local vehicle is calculation
+   input only; the canonical transfer's trip resource remains unassigned until
+   its owning confirmation workflow receives a compatible canonical resource.
+   In the primary panel, confirmation already creates preparation tasks from the
+   actual-versus-required furniture difference and blocks departure until they
+   are complete.
    The standalone slot checker obtains navigator-style suggestions, suggestion
    resolution and reverse-geocoded map addresses through three same-origin
    FastAPI reads backed by separate server-only Yandex Geosuggest/Geocoder keys.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import AwareDatetime, Field, model_validator
 
@@ -139,3 +140,27 @@ class TravelTimeContourFeatureCollection(ApiModel):
     type: Literal["FeatureCollection"] = "FeatureCollection"
     features: list[TravelTimeContourFeature]
     metadata: TravelTimeContourMetadata
+
+
+class TransferArrivalEstimateRequest(ApiModel):
+    """Side-effect-free facts needed to route one planned warehouse transfer leg."""
+
+    source_warehouse_id: UUID
+    destination_warehouse_id: UUID
+    planned_departure_at: AwareDatetime
+    vehicle_id: UUID
+    cabin_count: int = Field(ge=0, le=2)
+
+
+class TransferArrivalEstimateRead(ApiModel):
+    """Exact truck-road estimate and physical configuration used for the calculation."""
+
+    departure_at: AwareDatetime
+    estimated_arrival_at: AwareDatetime
+    travel_seconds: int = Field(ge=0)
+    distance_meters: int = Field(ge=0)
+    vehicle_id: UUID
+    cabin_count: int = Field(ge=0, le=2)
+    trailer_attached: bool
+    routing_provider: str
+    osm_data_version: str | None = None

@@ -40,7 +40,6 @@ export const DEFAULT_PLANNING_SETTINGS: PlanningSettings = {
   soft_overtime_limit_minutes: 0,
   max_trace_events: 2000,
   trace_sample_rate: 1,
-  trace_enabled: true,
 };
 
 export const EMPTY_METRICS = {

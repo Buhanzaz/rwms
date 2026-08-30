@@ -6,7 +6,7 @@ import { Button, CheckboxField, Field, Modal, SwitchField } from '../../componen
 import { useUiStore } from '../../stores/ui-store';
 
 interface NumericSetting {
-  key: Exclude<keyof PlanningSettings, 'deliveries_before_pickups' | 'allow_soft_overtime' | 'trace_enabled'>;
+  key: Exclude<keyof PlanningSettings, 'deliveries_before_pickups' | 'allow_soft_overtime'>;
   label: string;
   step?: string;
   min?: number;
@@ -177,7 +177,6 @@ export function SettingsEditor({ warehouse, busy, onSave }: {
       <SettingGroup title="Целевая функция" fields={optimizationFields} settings={draft} onNumber={onNumber} />
       <div className="entity-list">
         <CheckboxField label="В каждом цикле доставки раньше вывозов" checked disabled onChange={() => undefined} />
-        <CheckboxField label="Показывать процесс поиска маршрута" checked={draft.trace_enabled ?? false} onChange={(value) => setDraft((current) => ({ ...current, trace_enabled: value }))} />
       </div>
       <div className="divider" />
       <Button variant="primary" disabled={busy} onClick={() => void onSave({ settings: draft })}>{busy ? 'Сохраняем…' : 'Сохранить настройки'}</Button>

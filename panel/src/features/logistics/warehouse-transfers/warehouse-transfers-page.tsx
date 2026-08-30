@@ -758,7 +758,7 @@ export function WarehouseTransfersPage() {
                   setCreateMode("PLAN")
                 }}
               >
-                Редактировать план
+                Подготовить бытовки и наполнение
               </Button>
             ) : null}
             <Button

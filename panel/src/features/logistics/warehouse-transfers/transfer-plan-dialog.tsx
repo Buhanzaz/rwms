@@ -601,8 +601,9 @@ export function TransferPlanDialog({
               : "Создать межскладское перемещение"}
           </DialogTitle>
           <DialogDescription>
-            Черновик не резервирует имущество. Конкретные бытовки и остатки
-            проверяются повторно сервером при подтверждении.
+            Черновик не резервирует имущество. Выберите конкретные бытовки и
+            требуемое наполнение: при подтверждении сервер атомарно проверит и
+            зарезервирует их, а для разницы состава создаст задания подготовки.
           </DialogDescription>
         </DialogHeader>
 
@@ -1002,7 +1003,16 @@ export function TransferPlanDialog({
             ) : (
               <FieldDescription>Мебель не добавлена.</FieldDescription>
             )}
-            {confirmProblems.length > 0 ? (
+            {createdPlan?.state === "CONFIRMED" ? (
+              <Alert>
+                <AlertTitle>Перемещение подтверждено</AlertTitle>
+                <AlertDescription>
+                  Конкретные бытовки и мебель зарезервированы. Если фактическое
+                  наполнение отличается от требуемого, созданы задания на эту
+                  разницу. Выезд станет доступен после готовности наполнения.
+                </AlertDescription>
+              </Alert>
+            ) : confirmProblems.length > 0 ? (
               <Alert variant="destructive">
                 <AlertTitle>Подтверждение пока недоступно</AlertTitle>
                 <AlertDescription>
@@ -1015,10 +1025,14 @@ export function TransferPlanDialog({
               </Alert>
             ) : (
               <Alert>
-                <AlertTitle>План готов к серверной проверке</AlertTitle>
+                <AlertTitle>
+                  Готово к резервированию и созданию заданий
+                </AlertTitle>
                 <AlertDescription>
-                  Logistics-service повторно проверит резервы, пересечения и
-                  вместимость назначенного автомобиля.
+                  Logistics-service атомарно повторно проверит и зарезервирует
+                  выбранные бытовки и мебель. Для разницы между фактическим и
+                  требуемым наполнением будут созданы задания подготовки; выезд
+                  станет доступен после их завершения.
                 </AlertDescription>
               </Alert>
             )}
@@ -1116,7 +1130,7 @@ export function TransferPlanDialog({
                 confirmMutation.mutate(idempotencyKey)
               }}
             >
-              Подтвердить перемещение
+              Подтвердить и создать задания
             </Button>
           ) : null}
         </DialogFooter>
