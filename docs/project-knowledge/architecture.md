@@ -100,6 +100,12 @@ driver/work date. Logistics validates and relays those snapshots with stable key
 before applying individual RWMS shipment assignments; task-board, not the planner or logistics,
 owns the resulting daily shift. The snapshot retains vehicle/trailer, start odometer, trip count
 and unrounded `routeDistanceMeters`. Generated and manual simulator jobs are not transferred.
+An explicit contractor handoff is the separate exception: task-board owns the
+reusable on-demand contractor profile, the simulator never includes it in staff
+route optimization, and logistics applies concrete assignments for the planning
+date selected in the header without requiring an internal vehicle, shift or cycle
+snapshot. Profile dates are not planning state; the dispatcher chooses either
+automatic assignment of eligible unassigned work or an explicit manual request set.
 
 A separate opt-in publishes one active anonymous workload, period-shift and
 warehouse-scoped isochrone-tariff snapshot per warehouse. The URL path owns
@@ -199,9 +205,11 @@ Evidence:
 
 - `panel/`, `app/`, `client-app/`, `worker-app/` and `driver-app/` use the public gateway.
 - The standalone logistics planner uses its same-origin FastAPI for planning.
-  Its in-map transfer-draft dialog is one explicit interactive-gateway client:
+  Its transfer-draft and contractor-catalog dialogs are explicit
+  interactive-gateway clients:
   it reuses the renewable `rwms-panel` `USER` session and calls the canonical
-  public logistics transfer create operation. The panel OIDC callback performs
+  public logistics transfer-create or task-board contractor-catalog operation.
+  The panel OIDC callback performs
   a full-page return to `/logistics-simulator/**`; no transfer aggregate or
   command is duplicated in FastAPI.
 - Browser requests are same-origin `/auth/**` and `/api/**` only.

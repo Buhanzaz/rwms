@@ -23,10 +23,12 @@ final class PlanningRequestRevision {
       RentalOrder order,
       List<UUID> availableUnitIds,
       List<PlanningDateOption> dateOptions,
-      Boolean trailerAccessAllowed) {
+      Boolean trailerAccessAllowed,
+      Long deliveryPriceRubles,
+      Integer priceIsochroneMinutes) {
     try {
       MessageDigest digest = MessageDigest.getInstance("SHA-256");
-      append(digest, "RWMS_PLANNING_REQUEST_V1");
+      append(digest, "RWMS_PLANNING_REQUEST_V2");
       appendNullable(digest, order.getId());
       appendNullable(digest, order.getVersion());
       appendNullable(digest, order.getOrderNumber());
@@ -47,6 +49,8 @@ final class PlanningRequestRevision {
         appendNullable(digest, option.travelZoneHours());
       }
       appendNullable(digest, trailerAccessAllowed);
+      appendNullable(digest, deliveryPriceRubles);
+      appendNullable(digest, priceIsochroneMinutes);
       appendNullable(digest, instant(order.getCreatedAt()));
       return HexFormat.of().formatHex(digest.digest());
     } catch (NoSuchAlgorithmException exception) {

@@ -2,11 +2,12 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MapCanvas } from '../src/map/MapCanvas';
 import { useUiStore } from '../src/stores/ui-store';
-import { warehouseFixture, workspaceFixture } from './fixtures';
+import { requestFixture, warehouseFixture, workspaceFixture } from './fixtures';
 
 const mapState = vi.hoisted(() => ({
   markers: [] as HTMLElement[],
   easeTo: vi.fn(),
+  fitBounds: vi.fn(),
 }));
 
 vi.mock('maplibre-gl', () => {
@@ -51,7 +52,7 @@ vi.mock('maplibre-gl', () => {
     getZoom() { return 10; }
     getBounds() { return { getWest: () => 29, getSouth: () => 58, getEast: () => 32, getNorth: () => 60 }; }
     easeTo(options: unknown) { mapState.easeTo(options); }
-    fitBounds() { return this; }
+    fitBounds(...args: unknown[]) { mapState.fitBounds(...args); return this; }
     isStyleLoaded() { return true; }
     setStyle() { queueMicrotask(() => this.emit('style.load')); }
     remove() { return undefined; }
@@ -102,6 +103,7 @@ describe('warehouse selection on the shared map', () => {
   beforeEach(() => {
     mapState.markers.length = 0;
     mapState.easeTo.mockReset();
+    mapState.fitBounds.mockReset();
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
       fillStyle: '',
       strokeStyle: '',
@@ -169,5 +171,43 @@ describe('warehouse selection on the shared map', () => {
     view.rerender(<MapCanvas {...commonProps} selected={{ kind: 'warehouse', id: targetWarehouse.id }} />);
     fireEvent.click(screen.getByRole('button', { name: `Перейти к складу ${targetWarehouse.name}` }));
     expect(onWarehouseActivate).toHaveBeenCalledWith(targetWarehouse.id);
+  });
+
+  it('centers a selected unassigned delivery while preserving the current zoom', async () => {
+    const warehouse = warehouseFixture();
+    const request = requestFixture({ id: 'request-unassigned', latitude: 58.5234, longitude: 31.2812, status: 'UNASSIGNED' });
+    const workspace = workspaceFixture({ warehouse, warehouses: [warehouse], requests: [request] });
+    const commonProps = {
+      workspace,
+      plan: null,
+      simulation: null,
+      traceEvents: [],
+      onSelect: vi.fn(),
+      onPlacePoint: vi.fn(),
+      onWarehouseActivate: vi.fn(),
+      onMapError: vi.fn(),
+      optimizationRun: null,
+      onRequestMoveDraft: vi.fn(),
+      planningDate: '2026-08-30',
+      busy: false,
+      onScheduleRequestDate: vi.fn(),
+      onUnscheduleRequest: vi.fn(),
+      onMoveTask: vi.fn(),
+      planningCheck: null,
+      onPlanningCheckPoint: vi.fn(),
+      pendingWarehousePoint: null,
+    };
+    const view = render(<MapCanvas {...commonProps} selected={null} />);
+    await waitFor(() => expect(mapState.easeTo).toHaveBeenCalled());
+    const fitCallsBefore = mapState.fitBounds.mock.calls.length;
+
+    view.rerender(<MapCanvas {...commonProps} selected={{ kind: 'request', id: request.id }} />);
+
+    await waitFor(() => expect(mapState.easeTo).toHaveBeenLastCalledWith({
+      center: [request.longitude, request.latitude],
+      zoom: 10,
+      duration: 450,
+    }));
+    expect(mapState.fitBounds).toHaveBeenCalledTimes(fitCallsBefore);
   });
 });

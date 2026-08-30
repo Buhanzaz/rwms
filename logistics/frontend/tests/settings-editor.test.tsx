@@ -60,6 +60,8 @@ describe('planner resource settings', () => {
     expect(screen.getByRole('switch', { name: 'Разрешить переработку' })).toHaveAttribute('aria-checked', 'false');
     expect(screen.getByLabelText('Максимальная переработка, ч')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Настройки изохронов' })).toBeVisible();
+    expect(screen.getByText('Текущая конфигурация: 2 бытовки')).toBeVisible();
+    expect(screen.queryByText(/backend/iu)).not.toBeInTheDocument();
 
     await user.clear(input);
     await user.type(input, '240');

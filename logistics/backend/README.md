@@ -38,6 +38,11 @@ warehouse UUID. The implementation sources are
   over an inclusive, single-month range of at most 31 days.
 - Requests and their vehicle-sized tasks carry `mandatory`. Unassigned
   mandatory work blocks both plan confirmation and planning-day closing.
+- An RWMS request retains the nullable confirmed amount in
+  `delivery_price_rubles` and the optional explanatory tier in
+  `price_isochrone_minutes`. Both fields are refreshed from the authoritative
+  feed. Older or specially priced slots may have an amount without a tier;
+  only an absent amount is rendered as “not calculated”, never as zero.
 - Request preparation accepts either an explicit positive interval or a soft
   full-day option whose nullable bounds are not replaced with invented times.
 - Automatic plan creation uses
@@ -89,6 +94,23 @@ requires `RWMS_CAPACITY_PUBLISH_ENABLED`. Capacity PUT uses the RWMS external
 warehouse UUID in the path. Shared-driver assignments explicitly send
 `WAREHOUSE_DRIVERS` with a null worker UUID.
 
+Task-board remains the contractor-profile owner. The simulator lists and
+maintains warehouse-owned contractor profiles through the public task-board
+API, but uses the private planning driver directory to recheck active employment
+type and warehouse ownership before a handoff. Contractor profiles have no
+availability range: the dispatcher selects a date in the logistics header and
+submits it to `POST /api/warehouses/{warehouseId}/contractor-dispatches`.
+`AUTO` selects all eligible requests still unassigned by the latest plan for
+that warehouse day; `MANUAL` requires explicit request IDs and validates the
+same warehouse, date, readiness and unassigned state on the server. A handoff
+locks the requests, invalidates affected mutable plans and records
+`CONTRACTOR_HANDOFF`; it creates no local vehicle, shift or cycle and therefore
+never enters automatic route optimization. For real RWMS deliveries the backend
+submits one explicit vehicle-free assignment command with a stable idempotency
+identity. Generated delivery and pickup demand remains local and never mutates
+RWMS. The current RWMS assignment contract does not expose direct pickup
+handoff, so a real RWMS pickup is rejected with a Russian domain error.
+
 Operator address search uses backend-only `YANDEX_GEOSUGGEST_API_KEY` and
 `YANDEX_GEOCODER_API_KEY`. `DEFAULT_WAREHOUSE_TIMEZONE` supplies the local
 fallback. Keys are never returned by the API. Configuration validation lives
@@ -112,6 +134,10 @@ local create/delete command commits first and reports the later projection as
 warning and does not turn the completed local command into an error. See
 [`app/api/catalog.py`](app/api/catalog.py) and
 [`app/services/capacity_projection.py`](app/services/capacity_projection.py).
+The canonical capacity contract requires every `DELIVERY` job to be mandatory;
+the projection normalizes legacy generator rows accordingly while retaining
+optional `PICKUP` semantics. This prevents a locally valid generated delivery
+from being rejected upstream with HTTP 400.
 
 ## Schema, contract and checks
 
@@ -131,6 +157,11 @@ assigns each legacy zone to its unique nearest warehouse, validates all
 existing zone references and warehouse coverage, then makes ownership
 non-null with a foreign key. It aborts on missing warehouses, a nearest-distance
 tie or inconsistent existing data instead of inventing ownership.
+Migration
+[`20260830_0021_request_price_and_contractor_handoff.py`](migrations/versions/20260830_0021_request_price_and_contractor_handoff.py)
+adds the atomic confirmed-price pair and direct-contractor assignment snapshot,
+including consistency constraints and a safe enrichment of stored RWMS feed
+JSON with nullable price members required by the strict transport model.
 
 Run the project gates from this directory:
 

@@ -67,10 +67,10 @@ class TaskBoardEventStoreMigrationIntegrationTest {
   }
 
   @Test
-  void cleanInstallAppliesV4ThroughV39AndRepeatIsNoOp() {
+  void cleanInstallAppliesV4ThroughV40AndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(36);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(37);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -254,6 +254,26 @@ class TaskBoardEventStoreMigrationIntegrationTest {
         .containsEntry("description", "remove shared driver identity")
         .containsEntry("script", "V29__remove_shared_driver_identity.sql")
         .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='40'"))
+        .containsEntry("version", "40")
+        .containsEntry("description", "contractor profiles without availability range")
+        .containsEntry(
+            "script", "V40__contractor_profiles_without_availability_range.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForList(
+                """
+                select column_name
+                  from information_schema.columns
+                 where table_schema='public'
+                   and table_name='worker'
+                   and column_name in ('contract_available_from', 'contract_available_until')
+                """,
+                String.class))
+        .isEmpty();
     assertThat(
             jdbc.queryForList(
                 """
@@ -698,7 +718,7 @@ class TaskBoardEventStoreMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(35);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(36);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
     assertThat(retainedContentDigests()).containsExactlyInAnyOrderEntriesOf(before);

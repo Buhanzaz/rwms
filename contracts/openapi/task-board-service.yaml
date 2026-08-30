@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Task Board Service API
-  version: 1.12.0
+  version: 1.13.0
   description: >-
     Canonical F2 inventory of the active task-board, workforce and queue
     registry HTTP API. All warehouse-scoped operations validate the warehouse
@@ -640,7 +640,7 @@ paths:
     post:
       operationId: createInternalContractorDriver
       description: >-
-        Creates a time-bounded contractor Worker profile at the selected home
+        Creates an on-demand contractor Worker profile at the selected home
         warehouse. contractorId is the stable idempotency identity. An identical
         replay returns the existing profile; a different payload conflicts. No
         credential or app access is provisioned by this command.
@@ -1901,7 +1901,7 @@ paths:
       description: >-
         Public least-privilege resource directory for an authenticated panel operator. The caller
         needs rwms.read and VIEW access to the warehouse. Availability is derived from the same
-        home, contractor and transfer-backed operational assignment history as the private
+        home and transfer-backed operational assignment history as the private
         logistics-service directory; credentials and ordinary worker groups are never returned.
       parameters:
         - name: at
@@ -1924,10 +1924,23 @@ paths:
   /warehouses/{warehouseId}/logistics-drivers/contractors:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: listWarehouseContractorDrivers
+      description: >-
+        Lists all contractor profiles owned by the warehouse, including inactive profiles. An
+        exact planning day belongs to a downstream assignment and is not stored on the profile.
+      responses:
+        '200':
+          description: Warehouse-owned contractor profiles in canonical display-name order.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContractorDriverList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     post:
       operationId: createWarehouseContractorDriver
       description: >-
-        Creates or exactly replays a time-bounded contractor profile for a panel operator with
+        Creates or exactly replays an on-demand contractor profile for a panel operator with
         rwms.write and EDIT warehouse access. The command provisions no credentials or DriverApp
         access; contractorId is the stable business idempotency identity.
       requestBody:
@@ -1944,6 +1957,51 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/logistics-drivers/contractors/{workerId}:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - name: workerId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      operationId: updateWarehouseContractorDriver
+      description: >-
+        Fully replaces editable contractor profile fields under an expected worker version. The
+        boundary cannot move a contractor to another warehouse or reclassify a staff worker.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateContractorDriverRequest' }
+      responses:
+        '200':
+          description: Updated contractor profile.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContractorDriver' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      operationId: deleteWarehouseContractorDriver
+      description: >-
+        Deletes an unused contractor profile under its observed version. A profile referenced by
+        transfer-backed operational history must be made inactive instead.
+      parameters:
+        - name: expectedVersion
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 0 }
+      responses:
+        '204': { description: Contractor profile deleted. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
   /warehouses/{warehouseId}/worker-groups:
     parameters:
@@ -4271,29 +4329,38 @@ components:
       enum: [PLANNED, IN_TRANSIT, ACTIVE, COMPLETED, CANCELLED]
     CreateContractorDriverRequest:
       type: object
-      required: [contractorId, displayName, phone, availableFrom, availableUntil]
+      required: [contractorId, displayName, phone]
       properties:
         contractorId: { type: string, format: uuid }
         displayName: { type: string, minLength: 1, maxLength: 256 }
         phone: { type: string, minLength: 1, maxLength: 64 }
-        availableFrom: { type: string, format: date-time }
-        availableUntil: { type: string, format: date-time }
         comment:
           oneOf:
             - { type: string, maxLength: 1000 }
             - { type: 'null' }
       additionalProperties: false
+    UpdateContractorDriverRequest:
+      type: object
+      required: [expectedVersion, displayName, phone, comment, active]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        displayName: { type: string, minLength: 1, maxLength: 256 }
+        phone: { type: string, minLength: 1, maxLength: 64 }
+        comment:
+          oneOf:
+            - { type: string, maxLength: 1000 }
+            - { type: 'null' }
+        active: { type: boolean }
+      additionalProperties: false
     ContractorDriver:
       type: object
-      required: [workerId, version, homeWarehouseId, displayName, phone, availableFrom, availableUntil, comment, active, employmentType]
+      required: [workerId, version, homeWarehouseId, displayName, phone, comment, active, employmentType]
       properties:
         workerId: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         homeWarehouseId: { type: string, format: uuid }
         displayName: { type: string, minLength: 1, maxLength: 256 }
         phone: { type: string, minLength: 1, maxLength: 64 }
-        availableFrom: { type: string, format: date-time }
-        availableUntil: { type: string, format: date-time }
         comment:
           oneOf:
             - { type: string, maxLength: 1000 }
@@ -4301,6 +4368,9 @@ components:
         active: { type: boolean }
         employmentType: { type: string, const: CONTRACTOR }
       additionalProperties: false
+    ContractorDriverList:
+      type: array
+      items: { $ref: '#/components/schemas/ContractorDriver' }
     CreateWorkerOperationalAssignmentRequest:
       type: object
       required: [transferId, workerId, sourceWarehouseId, destinationWarehouseId, mode, travelStartsAt, effectiveFrom]

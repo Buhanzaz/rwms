@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.logistics.order.service;
 
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.ApplyPlanningAssignmentsRequest;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningAssignmentRequest;
+import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningAssignmentType;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverAudienceMode;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftPlanRequest;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftTrailerRequest;
@@ -160,11 +161,57 @@ class RentalOrderPlanningIntegrationServiceTest {
       assertThat(request.dateOptions()).extracting(option -> option.priority())
           .containsExactly(0, 1);
       assertThat(request.dateOptions()).allMatch(option -> !option.isHard());
+      assertThat(request.deliveryPriceRubles()).isNull();
+      assertThat(request.priceIsochroneMinutes()).isNull();
     });
 
     var replay = service.feed(WAREHOUSE_ID, first, second);
     assertThat(replay.requests().getFirst().sourceRevision())
         .isEqualTo(response.requests().getFirst().sourceRevision());
+  }
+
+  @Test
+  void feedExportsConfirmedDeliveryPriceAndChangesRevisionWhenPricingChanges() {
+    LocalDate date = LocalDate.now(MOSCOW).plusDays(2);
+    OrderClient client = mock(OrderClient.class);
+    CustomerDeliverySlot slot = mock(CustomerDeliverySlot.class);
+    when(client.getDisplayName()).thenReturn("ООО Ромашка");
+    when(order.getOrderNumber()).thenReturn("А-142");
+    when(order.getClient()).thenReturn(client);
+    when(order.getDeliveryAddress()).thenReturn("Москва, Тестовая улица, 1");
+    when(order.getLatitude()).thenReturn(new BigDecimal("55.751244"));
+    when(order.getLongitude()).thenReturn(new BigDecimal("37.618423"));
+    when(order.getCreatedAt()).thenReturn(OffsetDateTime.parse("2026-08-20T08:00:00Z"));
+    when(order.getDesiredDeliveryWindows())
+        .thenReturn(List.of(DesiredDeliveryWindow.create(date, date)));
+    when(orders.findAllPlanningCandidates(WAREHOUSE_ID, RentalOrderStatus.SAVED))
+        .thenReturn(List.of(order));
+    var unitReservation = reservation(UNIT_ONE);
+    when(reads.readUnits(order)).thenReturn(List.of(unitReservation));
+    when(slot.getDeliveryDate()).thenReturn(date);
+    when(slot.getKind()).thenReturn(CustomerDeliverySlotKind.FIXED_WINDOW);
+    when(slot.getWindowStart()).thenReturn(LocalTime.of(9, 0));
+    when(slot.getWindowEnd()).thenReturn(LocalTime.of(12, 0));
+    when(slot.getTravelZoneHours()).thenReturn(1);
+    when(slot.getSiteCabinCapacity()).thenReturn(2);
+    when(slot.getDeliveryPriceRubles()).thenReturn(10_000L, 15_000L, 15_000L);
+    when(slot.getPriceIsochroneMinutes()).thenReturn(60, 60, 120);
+    when(customerDeliverySlots.confirmedForOrders(List.of(ORDER_ID)))
+        .thenReturn(Map.of(ORDER_ID, slot));
+
+    var oneHourPrice = service.feed(WAREHOUSE_ID, date, date).requests().getFirst();
+    var repricedOneHour = service.feed(WAREHOUSE_ID, date, date).requests().getFirst();
+    var repricedTwoHours = service.feed(WAREHOUSE_ID, date, date).requests().getFirst();
+
+    assertThat(oneHourPrice.orderVersion()).isEqualTo(repricedTwoHours.orderVersion());
+    assertThat(oneHourPrice.deliveryPriceRubles()).isEqualTo(10_000L);
+    assertThat(oneHourPrice.priceIsochroneMinutes()).isEqualTo(60);
+    assertThat(repricedOneHour.deliveryPriceRubles()).isEqualTo(15_000L);
+    assertThat(repricedOneHour.priceIsochroneMinutes()).isEqualTo(60);
+    assertThat(repricedTwoHours.deliveryPriceRubles()).isEqualTo(15_000L);
+    assertThat(repricedTwoHours.priceIsochroneMinutes()).isEqualTo(120);
+    assertThat(oneHourPrice.sourceRevision()).isNotEqualTo(repricedOneHour.sourceRevision());
+    assertThat(repricedOneHour.sourceRevision()).isNotEqualTo(repricedTwoHours.sourceRevision());
   }
 
   @Test
@@ -329,6 +376,72 @@ class RentalOrderPlanningIntegrationServiceTest {
     assertThat(response.rejected()).singleElement().satisfies(rejected ->
         assertThat(rejected.code()).isEqualTo("PLANNING_DATE_LOCKED"));
     verify(lifecycle, never()).prepareDocument(any(), any(), any(), any());
+    verify(rentalOrders, never()).createRentalShipment(any(), any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void explicitContractorHandoffPublishesTomorrowWithoutInternalShiftPlan() {
+    LocalDate tomorrow = LocalDate.now(MOSCOW).plusDays(1);
+    when(order.getDesiredDeliveryWindows())
+        .thenReturn(List.of(DesiredDeliveryWindow.create(tomorrow, tomorrow)));
+    var unitReservation = reservation(UNIT_ONE);
+    when(reads.readUnits(order)).thenReturn(List.of(unitReservation));
+    when(lifecycle.prepareDocument(any(), any(), any(), any())).thenReturn(mockAdmission());
+    when(rentalOrders.createRentalShipment(any(), any(), any(), any(), any(), any()))
+        .thenReturn(documentResult(UUID.randomUUID()));
+
+    var response =
+        service.apply(
+            UUID.randomUUID(),
+            request(
+                List.of(
+                    new PlanningAssignmentRequest(
+                        ORDER_ID,
+                        null,
+                        7L,
+                        tomorrow,
+                        PlanningAssignmentType.CONTRACTOR_HANDOFF,
+                        PlanningDriverAudienceMode.ASSIGNED_DRIVER,
+                        DRIVER_ID,
+                        "Наёмный водитель",
+                        List.of(UNIT_ONE)))));
+
+    assertThat(response.rejected()).isEmpty();
+    assertThat(response.applied()).hasSize(1);
+    ArgumentCaptor<CreateOrderRentalShipmentRequest> shipment =
+        ArgumentCaptor.forClass(CreateOrderRentalShipmentRequest.class);
+    verify(rentalOrders)
+        .createRentalShipment(any(), eq(ORDER_ID), any(), any(), shipment.capture(), any());
+    assertThat(shipment.getValue().warehouseDriverPool()).isFalse();
+    assertThat(shipment.getValue().driverWorkerId()).isEqualTo(DRIVER_ID);
+    verify(dependencies, never()).registerDriverShiftPlan(any(), any(), any());
+  }
+
+  @Test
+  void contractorHandoffRejectsWarehouseDriverPool() {
+    LocalDate future = LocalDate.now(MOSCOW).plusDays(2);
+    when(order.getDesiredDeliveryWindows())
+        .thenReturn(List.of(DesiredDeliveryWindow.create(future, future)));
+
+    var response =
+        service.apply(
+            UUID.randomUUID(),
+            request(
+                List.of(
+                    new PlanningAssignmentRequest(
+                        ORDER_ID,
+                        null,
+                        7L,
+                        future,
+                        PlanningAssignmentType.CONTRACTOR_HANDOFF,
+                        PlanningDriverAudienceMode.WAREHOUSE_DRIVERS,
+                        null,
+                        "Наёмный водитель",
+                        List.of(UNIT_ONE)))));
+
+    assertThat(response.applied()).isEmpty();
+    assertThat(response.rejected()).singleElement().satisfies(rejected ->
+        assertThat(rejected.code()).isEqualTo("CONTRACTOR_HANDOFF_REQUIRES_DRIVER"));
     verify(rentalOrders, never()).createRentalShipment(any(), any(), any(), any(), any(), any());
   }
 

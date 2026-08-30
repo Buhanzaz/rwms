@@ -38,7 +38,7 @@ const routingFields: NumericSetting[] = [
 ];
 
 const operationFields: NumericSetting[] = [
-  { key: 'vehicle_capacity', label: 'Вместимость машины', min: 2, max: 2, disabled: true, hint: 'Правило MVP зафиксировано backend: 2 бытовки' },
+  { key: 'vehicle_capacity', label: 'Вместимость машины', min: 2, max: 2, disabled: true, hint: 'Текущая конфигурация: 2 бытовки' },
   { key: 'max_delivery_stops', label: 'Доставок в цикле', min: 1, max: 2 },
   { key: 'max_pickup_stops', label: 'Вывозов в цикле', min: 1, max: 2 },
   { key: 'default_load_minutes', label: 'Загрузка, мин', min: 0 },

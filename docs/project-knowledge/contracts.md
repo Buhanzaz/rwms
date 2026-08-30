@@ -256,7 +256,11 @@ warehouse/date feed of SAVED order remainders. It carries order/version,
 minimal address/coordinate facts, unshipped cabin IDs and accepted dates. A
 confirmed fixed CustomerApp option carries its exact hard window; a confirmed
 `DURING_DAY` option is exported as a soft date-only choice with null planning
-bounds. Both carry `travelZoneHours` and site-derived `trailerAccessAllowed`. Coordinates are
+bounds. Both carry `travelZoneHours` and site-derived `trailerAccessAllowed`.
+Every request also carries required-but-nullable `deliveryPriceRubles` and
+`priceIsochroneMinutes` fields from its confirmed logistics slot. The amount is
+authoritative; the tier remains optional for older or specially priced slots.
+A null amount means that no authoritative price has been calculated. Coordinates are
 authoritative over address. `orderVersion` fences rental-order assignment;
 `sourceRevision` fingerprints the complete exported planning snapshot, so a
 changed payload under the same revision is a conflict.
@@ -265,8 +269,12 @@ changed payload under the same revision is a conflict.
 external plan/version with `Idempotency-Key`; the matching `GET` returns only
 planner-created assignment audience, worker and task state. Applying rechecks
 warehouse, order version, date, cabin membership and uniqueness, qualified
-driver identity and the automatic-date fence. Only `RWMS` deliveries may enter
-the command. `ASSIGNED_DRIVER` requires an exact worker UUID;
+driver identity and the assignment-specific date fence. Only `RWMS` deliveries may enter
+the command. The additive `assignmentType` defaults to `ROUTE_PLAN`, which keeps
+the automatic today/tomorrow protection and reviewed shift-plan semantics.
+`CONTRACTOR_HANDOFF` is an explicit dispatcher decision, requires one concrete
+`ASSIGNED_DRIVER`, permits tomorrow and carries no required internal vehicle,
+shift or cycle snapshot. `ASSIGNED_DRIVER` requires an exact worker UUID;
 `WAREHOUSE_DRIVERS` deliberately has no worker UUID and exposes a future job to
 the qualified pool. Manual/generated work and pickups stay local.
 
@@ -289,6 +297,10 @@ last item is the delivery boundary. It carries no
 order, customer, cabin or driver personal identity. Monotonic
 `sourceGeneration` rejects an older unaccepted command, while an immutable
 receipt replays the original result for an exact retry.
+Every capacity `DELIVERY` job is mandatory by contract; optional capacity work
+is represented only by `PICKUP`. A producer must normalize legacy local
+delivery flags before publication instead of sending a structurally valid but
+domain-invalid snapshot.
 
 All private operations require subject/client `logistics-planner`, audience
 `rwms-services` and sole scope `logistics.planning`; interactive and mixed-scope
@@ -300,6 +312,24 @@ operations remain diagnostic recovery tools, not routine browser controls.
 Warehouse update owns the complete one-to-twelve-entry hourly isochrone tariff
 list. The standalone API has no active zone CRUD or zone-owned request fields;
 calculated prices remain stored on their slot/request history.
+
+[`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml)
+owns the public warehouse-scoped contractor catalog at
+`/warehouses/{warehouseId}/logistics-drivers/contractors`. GET returns the
+complete catalog, including inactive profiles; POST creates a reusable on-demand
+contractor, PATCH replaces editable fields under `expectedVersion`, and DELETE
+removes only an unused version-matched profile. The profile has no availability
+dates and never claims a shift, moves warehouse ownership, reclassifies staff or
+requires a vehicle/cycle model. The simulator uses this human-authorized public
+boundary for profile management and its own server-side dispatch command to bind
+an active profile to eligible work on the date selected in the header.
+
+The generated standalone contract at [`logistics/backend/openapi.json`](../../logistics/backend/openapi.json)
+owns `POST /api/warehouses/{warehouseId}/contractor-dispatches`. `AUTO` accepts no
+request IDs and selects eligible unassigned work for that exact warehouse/date;
+`MANUAL` requires a unique explicit request set and revalidates the same facts.
+Candidate selection and generated demand stay local. Only real RWMS deliveries
+cross the canonical logistics assignment boundary.
 
 The same standalone OpenAPI exposes server-keyed Yandex
 suggestion/resolve/reverse operations for operator input and automatic

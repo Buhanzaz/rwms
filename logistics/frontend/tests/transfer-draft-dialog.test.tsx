@@ -301,7 +301,7 @@ describe('standalone transfer draft dialog', () => {
     });
   });
 
-  it('creates a time-bounded contractor explicitly and selects that driver for the trip', async () => {
+  it('creates a reusable contractor explicitly and selects that driver for the trip', async () => {
     auth.restorePanelUser.mockResolvedValue({ access_token: 'panel-token' });
     transfers.createTransferContractor.mockResolvedValue({ workerId: '34343434-3434-4343-8343-343434343434', displayName: 'Иванов Илья' });
     const user = userEvent.setup();
@@ -311,7 +311,8 @@ describe('standalone transfer draft dialog', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Добавить наёмного водителя' }));
     await user.type(within(dialog).getByLabelText('Имя наёмного водителя'), 'Иванов Илья');
     await user.type(within(dialog).getByLabelText('Телефон наёмного водителя'), '+79990001122');
-    await user.click(within(dialog).getByRole('button', { name: 'Подтвердить доступность' }));
+    expect(within(dialog).queryByLabelText(/Доступен с|Доступен до/u)).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Добавить водителя' }));
 
     await waitFor(() => expect(transfers.createTransferContractor).toHaveBeenCalledOnce());
     expect(transfers.createTransferContractor.mock.calls[0]![0]).toEqual(expect.objectContaining({
@@ -319,8 +320,6 @@ describe('standalone transfer draft dialog', () => {
       warehouseId: SPB_ID,
       displayName: 'Иванов Илья',
       phone: '+79990001122',
-      availableFrom: '2026-08-30T05:00:00.000Z',
-      availableUntil: '2026-08-30T17:00:00.000Z',
     }));
     expect(within(dialog).getByLabelText('Водитель рейса')).toHaveValue('34343434-3434-4343-8343-343434343434');
   });

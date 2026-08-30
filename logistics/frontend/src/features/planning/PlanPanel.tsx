@@ -10,11 +10,12 @@ import {
 } from '@dnd-kit/core';
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, Lock, LockOpen, TriangleAlert } from 'lucide-react';
+import { Banknote, GripVertical, Lock, LockOpen, TriangleAlert, UserRoundCheck } from 'lucide-react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { RouteCycle, RoutePlan, RouteStop, UnassignedTask, UUID } from '../../domain/types';
 import { Badge, Button, EmptyState } from '../../components/ui';
-import { formatDistance, formatDuration, formatTime, shortId } from '../../utils/format';
+import { formatDeliveryPrice, formatDistance, formatDuration, formatTime, shortId } from '../../utils/format';
+import { validationMessageRu } from '../../utils/user-facing-error';
 
 interface DragData {
   taskId: UUID;
@@ -105,33 +106,80 @@ function CycleCard({ cycle, timeZone, readOnly, onSelect, onToggleLock }: {
         <span><Badge tone="accent">score {cycle.score.toFixed(1)}</Badge>{cycle.manually_changed ? <Badge tone="warning">ручной</Badge> : null}</span>
       </div>
       {cycle.explanation.length ? <div className="explanation"><strong>Почему так:</strong>{cycle.explanation.map((line, index) => <div key={`${line}-${index}`}>• {line}</div>)}</div> : null}
-      {cycle.warnings.map((warning) => <div className="explanation" key={`${warning.code}-${warning.message}`} style={{ borderColor: '#fbbf24' }}>⚠ {warning.message}</div>)}
+      {cycle.warnings.map((warning) => <div className="explanation" key={`${warning.code}-${warning.message}`} style={{ borderColor: '#fbbf24' }}>⚠ {validationMessageRu(warning.code, warning.message)}</div>)}
     </article>
   );
 }
 
-function DraggableUnassigned({ item, readOnly, onReschedule }: { item: UnassignedTask; readOnly: boolean; onReschedule: (requestId: UUID) => void }) {
+const DRIVER_UNAVAILABLE_REASONS = new Set([
+  'NO_ACTIVE_DRIVER',
+  'NO_SHIFT_CAPACITY',
+  'SHIFT_LIMIT_EXCEEDED',
+]);
+
+function DraggableUnassigned({
+  item,
+  readOnly,
+  selected,
+  onSelect,
+  onReschedule,
+  onAssignContractor,
+}: {
+  item: UnassignedTask;
+  readOnly: boolean;
+  selected: boolean;
+  onSelect: (requestId: UUID) => void;
+  onReschedule: (requestId: UUID) => void;
+  onAssignContractor: (requestId: UUID) => void;
+}) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useSortable({
     id: `unassigned-${item.task.id}`,
     disabled: readOnly,
     data: { taskId: item.task.id, sourceCycleId: null, sourceSequence: 0 } satisfies DragData,
   });
   const requestId = item.request?.id ?? item.task.request_id;
+  const staffUnavailable = item.reason_codes.some((code) => DRIVER_UNAVAILABLE_REASONS.has(code));
+  const contractorRecommended = staffUnavailable
+    || item.reason_codes.includes('NO_ACTIVE_VEHICLE')
+    || item.reason_codes.includes('CONTRACTOR_REQUIRED');
+  const handedToContractor = item.request?.assignment_type === 'CONTRACTOR_HANDOFF';
   const canChangeWindow = item.reason_codes.includes('TIME_WINDOW_CONFLICT') && Boolean(item.closest_option);
   const openRequestEditor = (event: ReactMouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
     onReschedule(requestId);
   };
   return (
-    <article ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), opacity: isDragging ? .5 : 1 }} className="unassigned-card" {...attributes} {...listeners}>
+    <article
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), opacity: isDragging ? .5 : 1 }}
+      className={`unassigned-card${selected ? ' unassigned-card--selected' : ''}`}
+      onClick={() => onSelect(requestId)}
+      {...attributes}
+      {...listeners}
+    >
       <div className="entity-card__row"><strong>№{shortId(item.request?.id ?? item.task.request_id)}</strong><span>{item.task.mandatory ? <Badge tone="danger">обязательно</Badge> : null}{!readOnly ? <GripVertical size={15} /> : null}</span></div>
       <p>{item.request?.type === 'PICKUP' ? 'Вывоз' : 'Доставка'}, {item.task.quantity} бытов.</p>
-      <ul>{item.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
+      <p className="unassigned-card__price"><Banknote size={13} aria-hidden="true" />Стоимость: <strong>{formatDeliveryPrice(item.request?.delivery_price_rubles)}</strong></p>
+      {handedToContractor ? (
+        <div className="unassigned-card__contractor"><UserRoundCheck size={14} aria-hidden="true" /><span>Передано наёмному водителю: <strong>{item.request?.assigned_contractor_name}</strong></span></div>
+      ) : staffUnavailable ? (
+        <div className="unassigned-card__driver-warning">
+          <strong>Нет доступных водителей</strong>
+          <span>Все штатные водители уже заняты в графике на выбранную дату. Измените план, время или дату либо передайте доставку наёмному водителю.</span>
+        </div>
+      ) : contractorRecommended ? (
+        <div className="unassigned-card__driver-warning">
+          <strong>Нет подходящего штатного ресурса</strong>
+          <span>Свободная машина или штатный экипаж не найдены. Измените план либо передайте доставку наёмному водителю.</span>
+        </div>
+      ) : null}
+      <ul>{item.reason_codes.map((code) => <li key={code}>{validationMessageRu(code, item.reasons[item.reason_codes.indexOf(code)])}</li>)}</ul>
       {item.closest_option ? <p>Ближайший вариант: {item.closest_option}</p> : null}
       {item.recommendations.length ? <div className="recommendation">{item.recommendations.join(' · ')}</div> : null}
       <div className="toolbar-row">
         {canChangeWindow ? <Button type="button" size="sm" variant="primary" disabled={readOnly} onClick={openRequestEditor}>Сменить временное окно</Button> : null}
         <Button type="button" size="sm" disabled={readOnly} onClick={openRequestEditor}>Перенести на другой день</Button>
+        {contractorRecommended && !handedToContractor ? <Button type="button" size="sm" variant="primary" disabled={readOnly} onClick={(event) => { event.stopPropagation(); onAssignContractor(requestId); }}>Передать наёмному водителю</Button> : null}
       </div>
     </article>
   );
@@ -145,17 +193,20 @@ export interface PlanMove {
   kind: 'MOVE_TASK' | 'REORDER_TASK';
 }
 
-export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, readOnly = false, onSelectCycle, onSelectDriverRoute, onMove, onToggleLock, onCreateTransfer = () => undefined, onRescheduleUnassigned = () => undefined }: {
+export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, readOnly = false, selectedRequestId = null, onSelectCycle, onSelectDriverRoute, onSelectRequest = () => undefined, onMove, onToggleLock, onCreateTransfer = () => undefined, onRescheduleUnassigned = () => undefined, onAssignContractor = () => undefined }: {
   plan: RoutePlan | null;
   timeZone: string;
   showUnassignedOnly?: boolean;
   readOnly?: boolean;
+  selectedRequestId?: UUID | null;
   onSelectCycle: (id: UUID) => void;
   onSelectDriverRoute: (driverShiftId: UUID) => void;
+  onSelectRequest?: (requestId: UUID) => void;
   onMove: (move: PlanMove) => void;
   onToggleLock: (cycle: RouteCycle) => void;
   onCreateTransfer?: (sourceWarehouseId: UUID, destinationWarehouseId: UUID) => void;
   onRescheduleUnassigned?: (requestId: UUID) => void;
+  onAssignContractor?: (requestId: UUID) => void;
 }) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -194,7 +245,18 @@ export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, readOnly
           <p className="section-subtitle">Причины сформированы планировщиком. Измените условия или перенесите задачу на подходящий день.</p>
           <SortableContext items={plan.unassigned.map((item) => `unassigned-${item.task.id}`)} strategy={verticalListSortingStrategy}>
             <div className="entity-list">
-              {plan.unassigned.map((item) => <DraggableUnassigned item={item} readOnly={readOnly} onReschedule={onRescheduleUnassigned} key={item.task.id} />)}
+              {plan.unassigned.map((item) => {
+                const requestId = item.request?.id ?? item.task.request_id;
+                return <DraggableUnassigned
+                  item={item}
+                  readOnly={readOnly}
+                  selected={selectedRequestId === requestId}
+                  onSelect={onSelectRequest}
+                  onReschedule={onRescheduleUnassigned}
+                  onAssignContractor={onAssignContractor}
+                  key={item.task.id}
+                />;
+              })}
               {!plan.unassigned.length ? <EmptyState title="Все задачи распределены" description="Для выбранной даты необработанных задач нет." /> : null}
             </div>
           </SortableContext>

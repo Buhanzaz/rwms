@@ -29,6 +29,7 @@ import { Button, CheckboxField } from '../components/ui';
 import { isRequestVisibleOnDate } from '../domain/request-dates';
 import { useUiStore, type LayerVisibility, type MapTool } from '../stores/ui-store';
 import { formatTime } from '../utils/format';
+import { userFacingErrorDetail } from '../utils/user-facing-error';
 import { deriveSimulationRouteLayers } from '../simulation/route-layers';
 import { RequestMapPopup } from './RequestMapCard';
 import type { PlanMove } from '../features/planning/PlanPanel';
@@ -424,6 +425,7 @@ export function MapCanvas({
   const fittedWarehouseIdRef = useRef<UUID | null>(null);
   const fittedPendingWarehouseIdRef = useRef<UUID | null>(null);
   const fittedPlanIdRef = useRef<UUID | null>(null);
+  const pannedRequestIdRef = useRef<UUID | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const [layersOpen, setLayersOpen] = useState(false);
   const [truckRestrictionState, setTruckRestrictionState] = useState<TruckRestrictionLayerState>(EMPTY_TRUCK_RESTRICTION_STATE);
@@ -483,7 +485,7 @@ export function MapCanvas({
     map.on('style.load', prepare);
     map.on('error', (event: unknown) => {
       const errorValue = event && typeof event === 'object' && 'error' in event ? event.error : null;
-      const message = errorValue instanceof Error ? errorValue.message : 'неизвестная ошибка рендеринга';
+      const message = userFacingErrorDetail(errorValue, 'Не удалось отобразить карту.');
       if (styleUrl && !map.isStyleLoaded() && !fellBack) {
         fellBack = true;
         setMapReady(false);
@@ -552,7 +554,7 @@ export function MapCanvas({
         status: 'error',
         count: 0,
         truncated: false,
-        error: error instanceof Error ? error.message : 'Неизвестная ошибка',
+        error: userFacingErrorDetail(error, 'Не удалось загрузить ограничения грузового транспорта.'),
       });
     } finally {
       if (truckRestrictionAbortRef.current === controller) truckRestrictionAbortRef.current = null;
@@ -621,7 +623,7 @@ export function MapCanvas({
       setSource(map, TRAVEL_TIME_CONTOUR_SOURCE_ID, EMPTY_COLLECTION);
       setTravelTimeContourState({
         status: 'unavailable',
-        error: error instanceof Error ? error.message : 'неизвестная ошибка провайдера',
+        error: userFacingErrorDetail(error, 'Не удалось загрузить изохроны.'),
       });
       controller.abort();
     }).finally(() => {
@@ -705,6 +707,20 @@ export function MapCanvas({
     () => selected?.kind === 'request' ? requestsForPlanningDate.find((request) => request.id === selected.id) ?? null : null,
     [requestsForPlanningDate, selected],
   );
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!selectedRequest) {
+      pannedRequestIdRef.current = null;
+      return;
+    }
+    if (!map || !mapReady || pannedRequestIdRef.current === selectedRequest.id) return;
+    pannedRequestIdRef.current = selectedRequest.id;
+    map.easeTo({
+      center: [selectedRequest.longitude, selectedRequest.latitude],
+      zoom: map.getZoom(),
+      duration: 450,
+    });
+  }, [mapReady, selectedRequest]);
   const allRoutes = useMemo(
     () => routeFeatures(plan, selectedCycleId, selectedDriverShiftId),
     [plan, selectedCycleId, selectedDriverShiftId],

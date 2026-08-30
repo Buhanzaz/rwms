@@ -982,9 +982,8 @@ warehouse/date-bounded feed of SAVED, not-yet-shipped cabin units with only the
 planning facts it needs. It has no RWMS database access and never fabricates a
 local warehouse or worker when a directory dependency fails.
 
-For a representative warehouse the planner evaluates local shifts, active
-operational assignments, every calendar-eligible support link and confirmed
-contractor shifts. A support candidate uses directed truck-road time from its
+For a representative warehouse the planner evaluates local staff shifts, active
+operational assignments and every calendar-eligible support link. A support candidate uses directed truck-road time from its
 real origin, vehicle/trailer capacity and the complete served-day route; the
 resource cannot open a slot before arrival, warehouse operations and the
 configured buffer. `CROSS_WAREHOUSE_SERVICE` keeps the driver's base and
@@ -993,6 +992,17 @@ An explicit transfer `RESOURCE_REPOSITION` instead activates the destination
 assignment only after physical arrival. Candidate evaluation is side-effect
 free and exposes structured reason codes; inventory, driver and vehicle holds
 remain confirmation effects.
+
+A contractor is a reusable task-board-owned on-demand workforce profile and not
+a staff route candidate. It requires no known vehicle, capacity profile, shift,
+cycle or profile-level availability dates. The standalone UI uses the planning
+date selected in the header and may assign all eligible unassigned work
+automatically or an explicit set of deliveries/pickups manually. Each direct
+`CONTRACTOR_HANDOFF` is row-locked and idempotent, invalidates mutable plans for
+every affected request date and uses the canonical logistics assignment owner for RWMS demand;
+it never fabricates optimizer resources or converts generated demand into RWMS.
+The same request projection retains the nullable confirmed delivery amount and
+hourly tariff tier as one complete pair, with absence meaning not calculated.
 
 The standalone planning workspace resolves one main warehouse plus its directly
 served representative warehouses as a non-transitive dated group. Selecting
@@ -1138,9 +1148,10 @@ slot feasibility. Slot responses therefore omit contour/intersection polygons;
 missing visual contours never produce a fabricated circle.
 The private graph is one source-manifested union of the Central and Northwestern
 Federal District extracts; the derived restriction overlay deduplicates any OSM
-object shared by their boundaries under the same `OSM_DATA_VERSION`. Switching
-the selected warehouse does not move the common map. The explicit “go to
-warehouse” control recentres it when requested, so several depot markers can be
+object shared by their boundaries under the same `OSM_DATA_VERSION`. Selecting
+a warehouse marker does not move the common map or change the active workspace.
+The explicit “go to warehouse” control activates that exact warehouse UUID and
+recentres it when requested, so several depot markers can be
 compared without forced zoom. Other warehouse markers remain available for
 navigation. Capacity, hard windows, truck-road availability, load
 state, warehouse operations, later trips and shift end remain decisive. This

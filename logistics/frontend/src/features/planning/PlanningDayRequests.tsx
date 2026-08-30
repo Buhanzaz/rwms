@@ -1,11 +1,11 @@
-import { CalendarCheck2, ChevronLeft, ChevronRight, Clock3, Scissors, ShieldCheck, Truck } from 'lucide-react';
+import { Banknote, CalendarCheck2, ChevronLeft, ChevronRight, Clock3, Scissors, ShieldCheck, Truck, UserRoundCheck } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import type { RequestPlanningDetailsInput } from '../../api/client';
 import { Badge, Button, CheckboxField, EmptyState, Field, SelectField } from '../../components/ui';
 import { requestPlanningMissingFields } from '../../domain/planning-readiness';
 import { isRequestVisibleOnDate } from '../../domain/request-dates';
 import type { LogisticsRequest, WarehouseWorkspace, UUID } from '../../domain/types';
-import { formatDate } from '../../utils/format';
+import { formatDate, formatDeliveryPrice } from '../../utils/format';
 import { formatIsoDate, parseIsoDate } from '../../components/date-value';
 
 /** Tri-state operator answer before trailer access has been explicitly confirmed. */
@@ -109,7 +109,9 @@ function RequestPlanningCard({ request, planningDate, busy, onSave, onSplit, onS
         <span><Truck size={13} /> <strong>{request.quantity}</strong> БК</span>
         <span><CalendarCheck2 size={13} /> {formatDate(planningDate)}</span>
         <span><ShieldCheck size={13} /> {request.status}</span>
+        <span><Banknote size={13} /> Стоимость: <strong>{formatDeliveryPrice(request.delivery_price_rubles)}</strong></span>
       </div>
+      {request.assignment_type === 'CONTRACTOR_HANDOFF' ? <p className="planning-request-card__assignment"><UserRoundCheck size={13} aria-hidden="true" />Передано наёмному водителю: <strong>{request.assigned_contractor_name}</strong></p> : null}
       {missing.length ? <p className="planning-request-card__missing">{missing.join(' · ')}</p> : null}
       <form className="planning-request-form" onSubmit={submit} onClick={(event) => event.stopPropagation()}>
         {flexibleDay ? (
@@ -141,7 +143,7 @@ function RequestPlanningCard({ request, planningDate, busy, onSave, onSplit, onS
           <CheckboxField label="Оповещение с паспортными данными водителя" checked={includePassport} onChange={setIncludePassport} disabled={busy} />
         </div>
         <div className="span-2 planning-request-form__actions">
-          <span className="planning-request-card__parts">Подзадачи: {taskParts.length ? taskParts.join(' + ') : 'будут созданы backend'}</span>
+          <span className="planning-request-card__parts">Подзадачи: {taskParts.length ? taskParts.join(' + ') : 'будут созданы при сохранении'}</span>
           {request.quantity > 1 ? (
             <Button type="button" size="sm" disabled={busy || alreadyUnitSplit} onClick={() => void onSplit(request.id, Array.from({ length: request.quantity }, () => 1))}>
               <Scissors size={13} />{alreadyUnitSplit ? 'Разбито по 1 БК' : 'Создать части по 1 БК'}

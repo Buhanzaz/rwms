@@ -322,8 +322,8 @@ async def test_return_route_and_shift_limit_reject_cross_warehouse_candidate() -
 
 
 @pytest.mark.asyncio
-async def test_contractor_and_incoming_resource_use_only_their_exact_interval() -> None:
-    """Confirmed bounded external resources never open capacity before availableFrom."""
+async def test_contractor_is_recommended_but_never_routed_as_internal_capacity() -> None:
+    """A contractor's unknown vehicle and workload cannot become a fabricated route shift."""
 
     contractor = _identity(
         employment_type="CONTRACTOR",
@@ -337,16 +337,13 @@ async def test_contractor_and_incoming_resource_use_only_their_exact_interval() 
         DirectedRoadProvider(inbound_minutes=30, return_minutes=30),
     )
 
-    assert len(resolution.candidates) == 1
-    routed = resolution.candidates[0]
-    assert routed.available_at_served == datetime(2026, 9, 14, 12, 45, tzinfo=UTC)
-    assert routed.latest_served_finish == datetime(2026, 9, 14, 16, 45, tzinfo=UTC)
-    assert PlanningReason.CONTRACTOR_CONFIRMED in routed.reason_codes
+    assert resolution.candidates == ()
+    assert PlanningReason.CONTRACTOR_REQUIRED in resolution.reasons
 
 
 @pytest.mark.asyncio
-async def test_local_incoming_contractor_is_not_available_before_operations_finish() -> None:
-    """A served-depot shift intersects the bounded incoming assignment and depot buffer."""
+async def test_local_contractor_is_excluded_from_internal_slot_routing() -> None:
+    """Even a bounded local contractor remains a direct-handoff resource, not a cycle."""
 
     worker_id = uuid4()
     identity = RwmsDriverIdentity.model_validate(
@@ -396,15 +393,9 @@ async def test_local_incoming_contractor_is_not_available_before_operations_fini
         cast(CachedTruckTravelTimeProvider, DirectedRoadProvider(10, 10)),
     )
 
-    assert len(activated.day_plan.drivers) == 1
-    constrained = activated.day_plan.drivers[0]
-    assert constrained.shift_start == datetime(2026, 9, 14, 12, 35, tzinfo=UTC)
-    assert constrained.shift_end == datetime(2026, 9, 14, 18, tzinfo=UTC)
-    assert constrained.employment_type == "CONTRACTOR"
-    assert constrained.reason_codes == (
-        PlanningReason.SLOT_AFTER_RESOURCE_ARRIVAL,
-        PlanningReason.CONTRACTOR_CONFIRMED,
-    )
+    assert activated.day_plan.drivers == ()
+    assert PlanningReason.CONTRACTOR_REQUIRED in activated.day_plan.availability_reasons
+    assert PlanningReason.NO_LOCAL_DRIVER in activated.day_plan.availability_reasons
 
 
 @pytest.mark.asyncio

@@ -12,9 +12,9 @@ import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.Wareho
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseSupportLink;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverAvailabilityKind;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverEmploymentType;
-import java.time.OffsetDateTime;
-import java.time.LocalTime;
 import java.math.BigDecimal;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -63,12 +63,13 @@ class PlanningResourceDirectoryServiceTest {
   }
 
   @Test
-  void exposesBoundedIncomingContractorAvailabilityForTheRequestedPlanningInstant() {
+  void exposesOnDemandContractorWithoutDatesAndPreservesIncomingStaffInterval() {
     LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
     WarehouseIdentity warehouse =
         new WarehouseIdentity(
             WAREHOUSE, 4, true, "ВН", "Великий Новгород", null, "Europe/Moscow");
-    UUID worker = UUID.randomUUID();
+    UUID contractor = UUID.randomUUID();
+    UUID transferredStaff = UUID.randomUUID();
     OffsetDateTime at = OffsetDateTime.parse("2026-09-14T12:00:00Z");
     OffsetDateTime until = at.plusHours(6);
     when(dependencies.readWarehouseIdentity(WAREHOUSE)).thenReturn(warehouse);
@@ -76,10 +77,19 @@ class PlanningResourceDirectoryServiceTest {
         .thenReturn(
             List.of(
                 new WarehouseDriverIdentity(
-                    worker,
+                    contractor,
                     " Подрядчик ",
                     "CONTRACTOR",
                     " +79990000000 ",
+                    WAREHOUSE,
+                    null,
+                    null,
+                    "HOME"),
+                new WarehouseDriverIdentity(
+                    transferredStaff,
+                    " Штатный водитель ",
+                    "STAFF",
+                    null,
                     WAREHOUSE,
                     at,
                     until,
@@ -89,17 +99,55 @@ class PlanningResourceDirectoryServiceTest {
         new PlanningResourceDirectoryService(dependencies);
 
     assertThat(service.drivers(WAREHOUSE, at, true))
-        .singleElement()
-        .satisfies(
+        .hasSize(2)
+        .anySatisfy(
             value -> {
+              assertThat(value.workerId()).isEqualTo(contractor);
               assertThat(value.employmentType())
                   .isEqualTo(PlanningDriverEmploymentType.CONTRACTOR);
+              assertThat(value.availabilityKind()).isEqualTo(PlanningDriverAvailabilityKind.HOME);
+              assertThat(value.phone()).isEqualTo("+79990000000");
+              assertThat(value.availableFrom()).isNull();
+              assertThat(value.availableUntil()).isNull();
+            })
+        .anySatisfy(
+            value -> {
+              assertThat(value.workerId()).isEqualTo(transferredStaff);
+              assertThat(value.employmentType()).isEqualTo(PlanningDriverEmploymentType.STAFF);
               assertThat(value.availabilityKind())
                   .isEqualTo(PlanningDriverAvailabilityKind.INCOMING);
-              assertThat(value.phone()).isEqualTo("+79990000000");
               assertThat(value.availableFrom()).isEqualTo(at);
               assertThat(value.availableUntil()).isEqualTo(until);
             });
+  }
+
+  @Test
+  void rejectsAvailabilityEndWithoutAStart() {
+    LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
+    WarehouseIdentity warehouse =
+        new WarehouseIdentity(
+            WAREHOUSE, 4, true, "ВН", "Великий Новгород", null, "Europe/Moscow");
+    OffsetDateTime until = OffsetDateTime.parse("2026-09-14T18:00:00Z");
+    when(dependencies.readWarehouseIdentity(WAREHOUSE)).thenReturn(warehouse);
+    when(dependencies.listWarehouseDrivers(WAREHOUSE))
+        .thenReturn(
+            List.of(
+                new WarehouseDriverIdentity(
+                    UUID.randomUUID(),
+                    "Некорректный водитель",
+                    "STAFF",
+                    null,
+                    WAREHOUSE,
+                    null,
+                    until,
+                    "ACTIVE_ASSIGNMENT")));
+
+    PlanningResourceDirectoryService service =
+        new PlanningResourceDirectoryService(dependencies);
+
+    assertThatThrownBy(() -> service.drivers(WAREHOUSE))
+        .isInstanceOf(LogisticsDependencyException.class)
+        .hasMessageContaining("invalid warehouse driver directory");
   }
 
   @Test

@@ -36,7 +36,6 @@ const warehouseSchema = z.object({
   turnaround_minutes: z.number().int().min(0),
   working_day_start: z.string().min(4),
   working_day_end: z.string().min(4),
-  default_planning_date: z.string().date().optional(),
 }).refine((value) => value.working_day_end > value.working_day_start, {
   path: ['working_day_end'],
   message: 'Конец рабочего дня должен быть позже начала',
@@ -58,7 +57,6 @@ export function WarehouseDialog({ warehouse, busy, onClose, onSubmit }: {
       turnaround_minutes: warehouse.turnaround_minutes,
       working_day_start: warehouse.working_day_start,
       working_day_end: warehouse.working_day_end,
-      default_planning_date: warehouse.default_planning_date ?? undefined,
     },
   });
   return (
@@ -69,7 +67,6 @@ export function WarehouseDialog({ warehouse, busy, onClose, onSubmit }: {
         turnaround_minutes: values.turnaround_minutes,
         working_day_start: values.working_day_start,
         working_day_end: values.working_day_end,
-        ...(values.default_planning_date ? { default_planning_date: values.default_planning_date } : {}),
       }))}>
         <div className="span-2 detail-item"><small>Связь с RWMS</small><strong>{warehouse.name}</strong><span>{warehouse.address}</span></div>
         <Field label="Загрузка, мин" type="number" {...register('loading_minutes', { valueAsNumber: true })} />
@@ -77,8 +74,6 @@ export function WarehouseDialog({ warehouse, busy, onClose, onSubmit }: {
         <Field label="Оборот на складе, мин" type="number" {...register('turnaround_minutes', { valueAsNumber: true })} />
         <Field label="Начало дня" type="time" {...register('working_day_start')} />
         <Field label="Конец дня" type="time" {...register('working_day_end')} error={errors.working_day_end?.message} />
-        <div className="span-2 detail-item"><small>Изохроны и цены</small><span>Настраиваются отдельно в разделе «Настройки», чтобы всегда сохранять полную тарифную лестницу.</span></div>
-        <Field className="span-2" label="Дата планирования по умолчанию" type="date" {...register('default_planning_date')} />
         <div className="span-2 toolbar-row" style={{ justifyContent: 'flex-end', margin: '8px 0 0' }}><Button type="button" onClick={onClose}>Отмена</Button><Button type="submit" variant="primary" disabled={busy}>{busy ? 'Сохраняем…' : 'Сохранить'}</Button></div>
       </form>
     </Modal>
@@ -457,7 +452,7 @@ export function RequestDialog({ request, point, initialAddress, type, defaultDat
   const requestType = watch('type');
   const includePassport = watch('include_driver_passport_in_notification');
   return (
-    <Modal wide title={request ? requestType === 'DELIVERY' ? 'Изменить доставку' : 'Изменить вывоз' : type === 'DELIVERY' ? 'Новая доставка' : 'Новый вывоз'} description="Стоимость доставки backend рассчитает по изохроне склада" onClose={onClose}>
+    <Modal wide title={request ? requestType === 'DELIVERY' ? 'Изменить доставку' : 'Изменить вывоз' : type === 'DELIVERY' ? 'Новая доставка' : 'Новый вывоз'} description="Стоимость доставки рассчитывается по изохроне склада" onClose={onClose}>
       <form className="form-grid" onSubmit={handleSubmit(onSubmit)}>
         <input type="hidden" {...register('latitude', { valueAsNumber: true })} />
         <input type="hidden" {...register('longitude', { valueAsNumber: true })} />

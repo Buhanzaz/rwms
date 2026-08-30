@@ -42,7 +42,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Verifies contractor time bounds, transfer assignment lifecycle, home-warehouse immutability and
+ * Verifies on-demand contractors, transfer assignment lifecycle, home-warehouse immutability and
  * overlap fencing through the exact internal logistics API.
  */
 @SpringBootTest
@@ -73,7 +73,7 @@ class WorkerOperationalAssignmentIntegrationTest extends PostgresIntegrationTest
   }
 
   @Test
-  void contractorAndTemporaryAssignmentRespectTimeLocationAndIdempotentLifecycle()
+  void contractorAndTemporaryAssignmentRespectLocationAndIdempotentLifecycle()
       throws Exception {
     UUID contractorId = UUID.randomUUID();
     UUID transferId = UUID.randomUUID();
@@ -82,8 +82,6 @@ class WorkerOperationalAssignmentIntegrationTest extends PostgresIntegrationTest
             contractorId,
             "Петров",
             "+7 900 000-00-00",
-            now.minusHours(4),
-            now.plusHours(8),
             "Смена по договору");
 
     postJson("/api/internal/task-board/v1/logistics/warehouses/" + SOURCE + "/contractors", contractor)
@@ -102,14 +100,14 @@ class WorkerOperationalAssignmentIntegrationTest extends PostgresIntegrationTest
 
     directory(SOURCE, now.minusHours(5), false)
         .andExpect(status().isOk())
-        .andExpect(jsonPath("$[0]").doesNotExist());
+        .andExpect(jsonPath("$[0].workerId").value(contractorId.toString()));
     directory(SOURCE, now.minusHours(2), false)
         .andExpect(status().isOk())
         .andExpect(jsonPath("$[0].workerId").value(contractorId.toString()))
         .andExpect(jsonPath("$[0].availabilityKind").value("HOME"));
     directory(SOURCE, now.plusHours(9), false)
         .andExpect(status().isOk())
-        .andExpect(jsonPath("$[0]").doesNotExist());
+        .andExpect(jsonPath("$[0].workerId").value(contractorId.toString()));
 
     var create =
         new CreateWorkerOperationalAssignmentRequest(
@@ -201,8 +199,6 @@ class WorkerOperationalAssignmentIntegrationTest extends PostgresIntegrationTest
             contractorId,
             "Сидоров",
             "+7 901 000-00-00",
-            now.minusHours(1),
-            now.plusHours(12),
             null);
     postJson("/api/internal/task-board/v1/logistics/warehouses/" + SOURCE + "/contractors", contractor)
         .andExpect(status().isCreated());
@@ -212,8 +208,6 @@ class WorkerOperationalAssignmentIntegrationTest extends PostgresIntegrationTest
                 contractorId,
                 "Сидоров",
                 "+7 999 999-99-99",
-                contractor.availableFrom(),
-                contractor.availableUntil(),
                 null))
         .andExpect(status().isConflict());
 
@@ -317,8 +311,6 @@ class WorkerOperationalAssignmentIntegrationTest extends PostgresIntegrationTest
                 contractorId,
                 "Кузнецов",
                 "+7 902 000-00-00",
-                now.minusHours(2),
-                now.plusHours(6),
                 null))
         .andExpect(status().isCreated());
     JsonNode planned =
@@ -466,7 +458,7 @@ class WorkerOperationalAssignmentIntegrationTest extends PostgresIntegrationTest
   }
 
   @Test
-  void contractorTripOnlyMustHaveOneEndInstantInsideTheContract() throws Exception {
+  void contractorTripOnlyMustHaveOneEndInstantWithoutProfileDateLimits() throws Exception {
     UUID contractorId = UUID.randomUUID();
     postJson(
             "/api/internal/task-board/v1/logistics/warehouses/" + SOURCE + "/contractors",
@@ -474,8 +466,6 @@ class WorkerOperationalAssignmentIntegrationTest extends PostgresIntegrationTest
                 contractorId,
                 "Волков",
                 "+7 903 000-00-00",
-                now.minusHours(1),
-                now.plusHours(3),
                 null))
         .andExpect(status().isCreated());
 
@@ -516,8 +506,7 @@ class WorkerOperationalAssignmentIntegrationTest extends PostgresIntegrationTest
                 now.plusMinutes(150),
                 now.plusHours(4),
                 now.plusHours(4)))
-        .andExpect(status().isConflict())
-        .andExpect(jsonPath("$.code").value("TASK_BOARD_CONFLICT"));
+        .andExpect(status().isCreated());
   }
 
   private WorkerDto createStaffDriver(String displayName) {

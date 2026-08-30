@@ -674,7 +674,9 @@ class SlotPlanningApplication:
                 day_plan=replace(context.day_plan, availability_reasons=base_reasons),
             )
         local_identities = {
-            str(identity.worker_id): identity for identity in facts.local_identities
+            str(identity.worker_id): identity
+            for identity in facts.local_identities
+            if identity.employment_type == "STAFF"
         }
         eligible_local_drivers: list[DriverPlan] = []
         orphaned_deliveries: list[SlotTask] = []
@@ -717,8 +719,6 @@ class SlotPlanningApplication:
             reason_codes: tuple[PlanningReason, ...] = ()
             if identity.availability_kind == "INCOMING":
                 reason_codes = (PlanningReason.SLOT_AFTER_RESOURCE_ARRIVAL,)
-            if identity.employment_type == "CONTRACTOR":
-                reason_codes = (*reason_codes, PlanningReason.CONTRACTOR_CONFIRMED)
             eligible_local_drivers.append(
                 replace(
                     driver,
@@ -1174,6 +1174,8 @@ class SlotPlanningApplication:
             ),
             priority=10_000,
             mandatory=True,
+            delivery_price_rubles=hold.delivery_price_rubles,
+            price_isochrone_minutes=hold.price_isochrone_minutes,
             status=RequestStatus.READY,
             scheduled_date=command.date,
             split_allowed=len(task_quantities) > 1,

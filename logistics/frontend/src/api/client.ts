@@ -47,7 +47,7 @@ export interface ProblemDetails {
   detail?: unknown;
   instance?: unknown;
   code?: unknown;
-  errors?: Record<string, string[]>;
+  errors?: unknown;
   failures?: unknown;
 }
 
@@ -106,7 +106,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   } catch (error: unknown) {
     if (error instanceof ApiError) throw error;
     if (init.signal?.aborted) throw error;
-    throw new ApiError(0, null, 'Backend недоступен. Проверьте контейнер и соединение.');
+    throw new ApiError(0, null, 'Сервис логистики недоступен. Проверьте соединение.');
   }
 }
 
@@ -389,6 +389,19 @@ export interface LogisticsRequestInput {
 export interface RequestScheduleInput {
   date: string | null;
   add_if_missing?: boolean;
+}
+
+/** Assignment mode for a contractor route on the planning date selected in the header. */
+export type ContractorDispatchMode = 'AUTO' | 'MANUAL';
+
+/** Server-owned contractor dispatch result; no internal vehicle or cycle is created. */
+export interface ContractorDispatchResult {
+  contractor_worker_id: UUID;
+  contractor_name: string;
+  planning_date: string;
+  mode: ContractorDispatchMode;
+  assigned_request_ids: UUID[];
+  assigned_count: number;
 }
 
 /** Atomic dispatcher preparation required before a request can enter planning. */
@@ -697,6 +710,26 @@ export const api = {
   }),
   saveRequestPlanningDetails: (id: UUID, input: RequestPlanningDetailsInput) =>
     request<LogisticsRequest>(`/requests/${id}/planning-details`, { method: 'POST', body: jsonBody(input) }),
+  assignRequestToContractor: (id: UUID, contractorWorkerId: UUID) =>
+    request<LogisticsRequest>(`/requests/${id}/contractor-assignment`, {
+      method: 'POST',
+      body: jsonBody({ contractor_worker_id: contractorWorkerId }),
+    }),
+  dispatchContractor: (
+    warehouseId: UUID,
+    contractorWorkerId: UUID,
+    planningDate: string,
+    mode: ContractorDispatchMode,
+    requestIds: UUID[] = [],
+  ) => request<ContractorDispatchResult>(`/warehouses/${warehouseId}/contractor-dispatches`, {
+    method: 'POST',
+    body: jsonBody({
+      contractor_worker_id: contractorWorkerId,
+      planning_date: planningDate,
+      mode,
+      request_ids: requestIds,
+    }),
+  }),
 
   getOptimizationRun: async (id: UUID, fallbackSettings: PlanningSettings) =>
     normalizeOptimizationRun(await request<RawOptimizationRun>(`/optimization-runs/${id}`), fallbackSettings),

@@ -232,6 +232,7 @@ unavailable DTO. `WeatherHazardRules` создаёт только настраи
 | `TaskBoardRoutePayloadCodec` | Единственный canonical route JSON и fingerprint codec |
 | `DriverTaskAudienceService` | Shape аудитории logistics-driver, qualification, visibility и execution authorization |
 | `LogisticsDriverDirectoryService` | Least-privilege directory активных primary logistics-drivers для exact caller logistics-service |
+| `ContractorDriverService` / `WorkerOperationalAssignmentService` | Принадлежащий складу каталог вызываемых по необходимости подрядчиков и датированные оперативные назначения; профиль подрядчика не требует автомобиля или модели внутреннего route cycle |
 | `DriverShiftService` | Регистрация plan, вычисление work date, переходы shift/inspection/defect, receipts и startup projection |
 | `HttpWarehouseIdentityGateway` | Точное private-чтение identity/timezone/coordinates склада для владельца смены |
 | `MetNoWeatherProvider` / `WeatherHazardRules` | Fail-open нормализованный weather cache и настраиваемые рекомендации |
@@ -288,6 +289,7 @@ Public gateway преобразует `/api/task-board/**` в downstream `/api/*
 | `/api/queue-definitions/**` | Authenticated manager/admin policy | Global queue catalog, ordering и reference-safe deletion |
 | `/api/worker-classes/**` | Authenticated manager/admin policy | Каталог квалификаций работников |
 | `/api/warehouses/{warehouseId}/workers/**` | Warehouse-authorized manager | Workers, groups, credential operations и reconciliation |
+| `/api/warehouses/{warehouseId}/logistics-drivers/contractors` и `.../{workerId}` | Warehouse-authorized manager | Полный каталог вызываемых по необходимости подрядчиков, создание, version-fenced замена профиля и удаление неиспользованных профилей; список содержит неактивные профили |
 | `/api/warehouses/{warehouseId}/work-queues` | Warehouse-authorized user | Physical queue projections и capabilities |
 | `/api/warehouses/{warehouseId}/task-board/**` | Warehouse-authorized user | Чтение агрегированной ordinary board и поддерживаемые task-команды |
 | `/api/warehouses/{warehouseId}/task-board/daily-brigade-activity` | Warehouse-authorized user | Фактические интервалы assignments, пересекающие текущий warehouse-local день |
@@ -305,6 +307,11 @@ Public gateway преобразует `/api/task-board/**` в downstream `/api/*
 Private paths — service-to-service boundaries, а не client shortcuts. Их exact
 `principal_type`, `client_id`, scope, source ownership и warehouse checks входят
 в контракт.
+Подрядчики остаются записями `WorkerEmploymentType.CONTRACTOR` с контактом,
+примечанием и флагом active. Каталог не хранит даты доступности: выбранный день
+планирования относится к последующему назначению. Каталог не создаёт учётные
+данные, не требует автомобиль и не делает работника кандидатом обычного
+primary-driver оптимизатора.
 
 Чтение дневной активности бригад использует сохранённый `startedAt` assignment
 из TAKE и `finishedAt` из completion. Границы смены только выбирают и размещают
@@ -451,6 +458,11 @@ completion никогда не ждёт стропальщика. Миграци
 media inbox. Она seed-ит редактируемую template-конфигурацию без checklist в
 boolean columns, расширяет allow-list event store и не переписывает
 существующие tasks, facts или данные водителей.
+
+[`V40__contractor_profiles_without_availability_range.sql`](src/main/resources/db/migration/V40__contractor_profiles_without_availability_range.sql)
+удаляет колонки периода доступности подрядчика и индекс диапазона. Профиль подрядчика становится
+складским справочником для вызова по необходимости; точная дата хранится только в логистическом
+назначении, которое использует подрядчика.
 
 ## Безопасность и изоляция
 

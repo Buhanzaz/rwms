@@ -254,6 +254,14 @@ export interface LogisticsRequest {
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
   scheduled_date: IsoDate | null;
+  delivery_price_rubles?: number | null;
+  price_isochrone_minutes?: number | null;
+  assignment_type?: 'CONTRACTOR_HANDOFF' | null;
+  assigned_contractor_worker_id?: UUID | null;
+  assigned_contractor_name?: string | null;
+  assigned_contractor_phone?: string | null;
+  assigned_at?: IsoDateTime | null;
+  assigned_by?: string | null;
   cargo_length_mm?: number | null;
   cargo_width_mm?: number | null;
   cargo_height_mm?: number | null;
@@ -431,6 +439,7 @@ export interface PlanMetrics {
   score: number;
 }
 
+/** Stable planner and cross-warehouse resource reasons returned for an unassigned task. */
 export type UnassignedReasonCode =
   | 'NO_ACTIVE_DRIVER'
   | 'NO_ACTIVE_VEHICLE'
@@ -438,6 +447,7 @@ export type UnassignedReasonCode =
   | 'TIME_WINDOW_CONFLICT'
   | 'SHIFT_LIMIT_EXCEEDED'
   | 'DETOUR_TOO_LARGE'
+  | 'OUTSIDE_ZONES'
   | 'REQUEST_NOT_READY'
   | 'NO_ALLOWED_DATE'
   | 'DUPLICATE_ASSIGNMENT_CONFLICT'
@@ -454,6 +464,8 @@ export type UnassignedReasonCode =
   | 'NO_SAFE_ROUTE'
   | 'ROUTING_PROVIDER_UNAVAILABLE'
   | 'ROUTING_PROFILE_INCOMPLETE'
+  | 'CONTRACTOR_REQUIRED'
+  | 'NO_SUPPORT_RESOURCE'
   | 'UNKNOWN';
 
 export interface UnassignedTask {

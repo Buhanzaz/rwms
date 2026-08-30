@@ -959,9 +959,13 @@ class LogisticsContractFoundationTest {
         .containsEntry("default", List.of())
         .containsEntry("maxItems", 500);
     Map<String, Object> assignment = child(schemas, "PlanningAssignment");
-    assertThat(child(assignment, "properties")).containsKey("serviceWarehouseId");
+    assertThat(child(assignment, "properties"))
+        .containsKeys("serviceWarehouseId", "assignmentType");
+    assertThat(child(child(assignment, "properties"), "assignmentType"))
+        .containsEntry("default", "ROUTE_PLAN")
+        .containsEntry("enum", List.of("ROUTE_PLAN", "CONTRACTOR_HANDOFF"));
     assertThat((List<?>) assignment.get("required"))
-        .noneMatch("serviceWarehouseId"::equals);
+        .noneMatch(value -> Set.of("serviceWarehouseId", "assignmentType").contains(value));
 
     Map<String, Object> plan = child(schemas, "PlanningDriverShiftPlan");
     assertThat(child(plan, "properties"))
@@ -1122,13 +1126,28 @@ class LogisticsContractFoundationTest {
     Map<String, Object> planningRequest = child(schemas, "PlanningRequest");
     List<String> required =
         ((List<?>) planningRequest.get("required")).stream().map(String.class::cast).toList();
-    assertThat(required).contains("orderVersion", "sourceRevision");
+    assertThat(required)
+        .contains(
+            "orderVersion",
+            "sourceRevision",
+            "deliveryPriceRubles",
+            "priceIsochroneMinutes");
     Map<String, Object> revision = child(child(planningRequest, "properties"), "sourceRevision");
     assertThat(revision)
         .containsEntry("type", "string")
         .containsEntry("pattern", "^[0-9a-f]{64}$");
     assertThat(revision.get("description").toString())
         .contains("planning fact", "orderVersion", "command fence");
+    Map<String, Object> properties = child(planningRequest, "properties");
+    assertThat(child(properties, "deliveryPriceRubles"))
+        .containsEntry("type", List.of("integer", "null"))
+        .containsEntry("format", "int64")
+        .containsEntry("minimum", 0);
+    assertThat(child(properties, "priceIsochroneMinutes"))
+        .containsEntry("type", List.of("integer", "null"))
+        .containsEntry("minimum", 60)
+        .containsEntry("maximum", 720)
+        .containsEntry("multipleOf", 60);
   }
 
   @Test

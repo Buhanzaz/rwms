@@ -71,7 +71,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
   void cumulativeVersionFourEventSourcingAndTaskSyncMigrateCleanDatabaseAndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(36);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(37);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -149,7 +149,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
                 Map.entry("queue_definition_class_binding", 8),
                 Map.entry("work_queue", 15),
                 Map.entry("work_queue_class_binding", 8),
-                Map.entry("worker", 21),
+                Map.entry("worker", 19),
                 Map.entry("worker_operational_assignment", 16),
                 Map.entry("worker_class", 8),
                 Map.entry("worker_class_assignment", 6),
@@ -2149,7 +2149,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(35);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(36);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
 

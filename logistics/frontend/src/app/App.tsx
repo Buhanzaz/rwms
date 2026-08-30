@@ -51,15 +51,20 @@ import type { PlanMove } from '../features/planning/PlanPanel';
 import { SimulationBar } from '../features/simulation/SimulationBar';
 import { WorkloadGeneratorDialog } from '../features/workload/WorkloadGeneratorDialog';
 import { actionErrorFeedback } from './action-error';
+import { WarehouseLocalTime } from './WarehouseLocalTime';
+import { initialWarehouseSelection } from './warehouse-selection';
 import { TrailerDialog } from '../features/trailers/TrailerDialog';
 import { SlotAvailabilityPanel } from '../features/slot-availability/SlotAvailabilityPanel';
 import type { SlotPlanningMapPresentation } from '../features/slot-availability/types';
 import { TransferDraftDialog } from '../features/transfers/TransferDraftDialog';
+import { ContractorAssignmentDialog } from '../features/contractors/ContractorAssignmentDialog';
+import { userFacingErrorDetail } from '../utils/user-facing-error';
 
 type DialogState =
   | { kind: 'workload-generator' }
   | { kind: 'warehouse'; value: Warehouse }
   | { kind: 'transfer'; sourceWarehouseId?: UUID; destinationWarehouseId?: UUID }
+  | { kind: 'contractor-assignment'; requestId: UUID }
   | { kind: 'driver'; value?: Driver }
   | { kind: 'vehicle'; value?: Vehicle }
   | { kind: 'trailer'; value?: Trailer }
@@ -130,7 +135,7 @@ function parseTraceEvent(value: string, runId: UUID): OptimizationTraceEvent | n
 export function App() {
   const queryClient = useQueryClient();
   const [warehouseId, setWarehouseId] = useState<UUID | null>(null);
-  const [planningDate, setPlanningDate] = useState(dateInTimeZone(new Date(), 'Europe/Moscow'));
+  const [planningDate, setPlanningDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [planId, setPlanId] = useState<UUID | null>(null);
   const [plan, setPlan] = useState<RoutePlan | null>(null);
   const [runId, setRunId] = useState<UUID | null>(null);
@@ -147,7 +152,6 @@ export function App() {
   const surfacedRepresentativeRequestIdsRef = useRef(new Set<UUID>());
   const warehouseSelectorRef = useRef<HTMLDivElement>(null);
   const mode = useUiStore((state) => state.mode);
-  const sidebarsCollapsed = useUiStore((state) => state.sidebarsCollapsed);
   const setMode = useUiStore((state) => state.setMode);
   const setSection = useUiStore((state) => state.setSection);
   const mapTool = useUiStore((state) => state.mapTool);
@@ -234,10 +238,8 @@ export function App() {
   const warehousesQuery = useQuery({ queryKey: ['warehouses'], queryFn: api.listWarehouses, refetchInterval: 15_000 });
   const availableWarehousesQuery = useQuery({ queryKey: ['available-warehouses'], queryFn: api.listAvailableWarehouses, refetchInterval: 15_000 });
   useEffect(() => {
-    if (!warehouseId && warehousesQuery.data?.[0]) setWarehouseId(warehousesQuery.data[0].id);
-    if (warehouseId && warehousesQuery.data && !warehousesQuery.data.some((warehouse) => warehouse.id === warehouseId)) {
-      setWarehouseId(warehousesQuery.data[0]?.id ?? null);
-    }
+    const initial = initialWarehouseSelection(warehouseId, warehousesQuery.data);
+    if (warehouseId === null && initial !== null) setWarehouseId(initial);
   }, [warehouseId, warehousesQuery.data]);
 
   const workspaceQuery = useQuery({
@@ -248,15 +250,12 @@ export function App() {
   });
   const baseWorkspace = workspaceQuery.data ?? null;
   const workspaceWarehouseId = baseWorkspace?.warehouse.id;
-  const workspaceDefaultPlanningDate = baseWorkspace?.warehouse.default_planning_date;
   const workspaceTimeZone = baseWorkspace?.warehouse.timezone;
   useEffect(() => {
     if (!workspaceWarehouseId || !workspaceTimeZone) return;
-    setPlanningDate(
-      workspaceDefaultPlanningDate ?? dateInTimeZone(new Date(), workspaceTimeZone),
-    );
+    setPlanningDate(dateInTimeZone(new Date(), workspaceTimeZone));
     clearLocalPlanningState();
-  }, [clearLocalPlanningState, workspaceDefaultPlanningDate, workspaceWarehouseId, workspaceTimeZone]);
+  }, [clearLocalPlanningState, workspaceWarehouseId, workspaceTimeZone]);
 
   const workspace = baseWorkspace;
   const planningWarehouseId = workspace?.planning_root_warehouse_id ?? workspaceWarehouseId;
@@ -444,15 +443,15 @@ export function App() {
       setMode('PLAN_DAY');
       setSection(run.status === 'FAILED' ? 'UNASSIGNED' : 'PLAN_DAY');
       if (run.status !== 'COMPLETED') {
-        const detail = run.status === 'TIMED_OUT' ? 'Показан лучший найденный план.' : run.error_message;
-        toast({ tone: run.status === 'TIMED_OUT' ? 'warning' : 'error', title: run.status === 'TIMED_OUT' ? 'Лимит времени достигнут' : `Оптимизация: ${run.status}`, ...(detail ? { detail } : {}) });
+        const detail = run.status === 'TIMED_OUT' ? 'Показан лучший найденный план.' : userFacingErrorDetail(run.error_message ? new Error(run.error_message) : null, 'Планировщик не смог построить допустимый план.');
+        toast({ tone: run.status === 'TIMED_OUT' ? 'warning' : 'error', title: run.status === 'TIMED_OUT' ? 'Лимит времени достигнут' : 'Оптимизация не завершена', ...(detail ? { detail } : {}) });
       }
     } else if (run.status === 'FAILED') {
-      toast({ tone: 'error', title: 'Оптимизация завершилась с ошибкой', detail: run.error_message ?? 'План не создан' });
+      toast({ tone: 'error', title: 'Оптимизация завершилась с ошибкой', detail: userFacingErrorDetail(run.error_message ? new Error(run.error_message) : null, 'План не создан. Проверьте условия доставок и смены водителей.') });
     } else if (run.status === 'CANCELLED') {
       toast({ tone: 'info', title: 'Оптимизация отменена', detail: 'Существующие сохранённые планы не изменены.' });
     } else if (run.status === 'TIMED_OUT') {
-      toast({ tone: 'warning', title: 'Лимит времени достигнут', detail: 'Backend не успел сохранить допустимый план.' });
+      toast({ tone: 'warning', title: 'Лимит времени достигнут', detail: 'Сервис планирования не успел сохранить допустимый план.' });
     }
   }, [runQuery.data, setMode, setSection, toast]);
 
@@ -519,9 +518,7 @@ export function App() {
 
   const reportActionError = useCallback(async (error: unknown): Promise<void> => {
     const { refreshPlan, ...message } = actionErrorFeedback(error);
-    toast(error instanceof ApiError && error.code
-      ? { ...message, detail: `${error.code}: ${message.detail}` }
-      : message);
+    toast(message);
     if (refreshPlan && planId) await queryClient.invalidateQueries({ queryKey: ['plan', planId] });
   }, [planId, queryClient, toast]);
 
@@ -618,7 +615,7 @@ export function App() {
       return;
     }
     setDialog({ kind: 'request', value: request, point: { longitude, latitude }, requestType: request.type });
-    toast({ tone: 'info', title: 'Новые координаты не сохранены', detail: 'Проверьте форму и сохраните; backend заново проверит маршрут и доступность по изохронам.' });
+    toast({ tone: 'info', title: 'Новые координаты не сохранены', detail: 'Проверьте форму и сохраните: маршрут и доступность по изохронам будут проверены заново.' });
   }, [toast, workspace]);
   const cancelOptimization = async () => {
     if (!runId || !workspace) return;
@@ -795,7 +792,7 @@ export function App() {
           title: result.replaced_requests > 0 || result.deleted_plans > 0
             ? `Нагрузка заменена: ${result.created_requests} позиций`
             : `Нагрузка создана: ${result.created_requests} позиций`,
-          detail: `Тестовая нагрузка: ${result.created_deliveries} доставок · ${result.created_pickups} вывозов · ${formatDate(result.start_date)}–${formatDate(result.end_date)} · заменено прежних позиций: ${result.replaced_requests} · удалено планов: ${result.deleted_plans}${result.capacity_projection_status === 'FAILED' && result.capacity_projection_warning ? ` · Внимание: ${result.capacity_projection_warning}` : ''}`,
+          detail: `Тестовая нагрузка: ${result.created_deliveries} доставок · ${result.created_pickups} вывозов · ${formatDate(result.start_date)}–${formatDate(result.end_date)} · заменено прежних позиций: ${result.replaced_requests} · удалено планов: ${result.deleted_plans}${result.capacity_projection_status === 'FAILED' && result.capacity_projection_warning ? ` · Внимание: ${userFacingErrorDetail(new Error(result.capacity_projection_warning), 'Не удалось обновить доступную мощность RWMS.')}` : ''}`,
         });
       });
     } catch (error: unknown) {
@@ -811,7 +808,7 @@ export function App() {
         toast({
           tone: 'warning',
           title: 'Тестовая нагрузка сохранена; ёмкость не опубликована',
-          detail: `${error.code}: ${feedback.detail ?? feedback.title}`,
+          detail: feedback.detail ?? feedback.title,
         });
         return;
       }
@@ -837,7 +834,7 @@ export function App() {
   };
 
   if (warehousesQuery.isLoading || availableWarehousesQuery.isLoading) return <div className="app-shell" style={{ placeItems: 'center' }}><Spinner label="Загружаем склады…" /><Toasts /></div>;
-  if (warehousesQuery.isError || availableWarehousesQuery.isError) return <div className="app-shell" style={{ placeItems: 'center' }}><ErrorPanel title="Backend недоступен" error={warehousesQuery.error ?? availableWarehousesQuery.error} onRetry={() => { void warehousesQuery.refetch(); void availableWarehousesQuery.refetch(); }} /><Toasts /></div>;
+  if (warehousesQuery.isError || availableWarehousesQuery.isError) return <div className="app-shell" style={{ placeItems: 'center' }}><ErrorPanel title="Сервис недоступен" error={warehousesQuery.error ?? availableWarehousesQuery.error} onRetry={() => { void warehousesQuery.refetch(); void availableWarehousesQuery.refetch(); }} /><Toasts /></div>;
   if (!warehousesQuery.data?.length) {
     return (
       <div className="app-shell app-shell--bootstrap">
@@ -867,6 +864,12 @@ export function App() {
   if (workspaceQuery.isLoading || !workspace) return <div className="app-shell" style={{ placeItems: 'center' }}><Spinner label="Загружаем рабочую область…" /><Toasts /></div>;
 
   const selectedOverrideRoute = dialog?.kind === 'simulation' ? plan?.driver_routes.find((route) => route.driver_shift_id === dialog.driverShiftId) : undefined;
+  const contractorAssignmentRequest = dialog?.kind === 'contractor-assignment'
+    ? workspace.requests.find((request) => request.id === dialog.requestId) ?? null
+    : null;
+  const contractorAssignmentWarehouse = contractorAssignmentRequest
+    ? workspace.warehouses.find((warehouse) => warehouse.id === contractorAssignmentRequest.warehouse_id) ?? workspace.warehouse
+    : null;
 
   return (
     <div className={`app-shell ${mode === 'SIMULATION' ? 'app-shell--simulation' : 'app-shell--plan'} ${workspace.rwms_refresh_warning ? 'app-shell--refresh-warning' : ''}`}>
@@ -883,7 +886,10 @@ export function App() {
               aria-controls="warehouse-group-options"
               onClick={() => setWarehouseSelectorOpen((current) => !current)}
             >
-              <span>{warehouseOptionLabel(workspace.warehouse)}</span>
+              <span className="topbar__warehouse-selector-copy">
+                <strong>{warehouseOptionLabel(workspace.warehouse)}</strong>
+                <WarehouseLocalTime timeZone={workspace.warehouse.timezone} />
+              </span>
               <ChevronDown size={14} aria-hidden="true" />
             </button>
             {warehouseSelectorOpen ? (
@@ -931,11 +937,11 @@ export function App() {
       {workspace.rwms_refresh_warning ? (
         <div className="workspace-refresh-warning" role="alert">
           <strong>RWMS обновлён частично</strong>
-          <span>{workspace.rwms_refresh_warning}</span>
+          <span>{userFacingErrorDetail(new Error(workspace.rwms_refresh_warning), 'Не все заявки удалось обновить. Повторите загрузку позже.')}</span>
         </div>
       ) : null}
       <div
-        className={`workspace ${sidebarsCollapsed ? 'workspace--collapsed' : ''}`}
+        className="workspace"
         style={{ '--inspector-width': `${inspectorWidth}px` } as CSSProperties}
       >
         <Sidebar workspace={workspace} plan={plan} />
@@ -973,6 +979,34 @@ export function App() {
             ...(sourceWarehouseId ? { sourceWarehouseId } : {}),
             ...(destinationWarehouseId ? { destinationWarehouseId } : {}),
           })}
+          onAssignContractor={(requestId) => setDialog({ kind: 'contractor-assignment', requestId })}
+          onDispatchContractor={async (contractorWorkerId, dispatchMode, requestIds) => {
+            const result = await execute(async () => {
+              const assigned = await api.dispatchContractor(
+                workspace.warehouse.id,
+                contractorWorkerId,
+                planningDate,
+                dispatchMode,
+                requestIds,
+              );
+              queryClient.removeQueries({ queryKey: ['plan'] });
+              setPlanId(null);
+              setPlan(null);
+              setValidation(null);
+              await refresh();
+              await queryClient.invalidateQueries({ queryKey: ['automatic-plan', planningWarehouseId, planningDate] });
+              return assigned;
+            });
+            toast({
+              tone: result.assigned_count > 0 ? 'success' : 'info',
+              title: result.assigned_count > 0
+                ? `Рейс сформирован: ${result.contractor_name}`
+                : 'Подходящих заданий не найдено',
+              detail: result.assigned_count > 0
+                ? `Передано заданий: ${result.assigned_count}. Дата: ${planningDate}.`
+                : 'На выбранную в хедере дату нет нераспределённых доставок или вывозов.',
+            });
+          }}
           onConfirmPlan={() => void confirmPlan()}
           onResetManualChanges={() => void resetManualChanges()}
           onSimulationOverride={(overrideKind, driverShiftId) => setDialog({ kind: 'simulation', overrideKind, driverShiftId })}
@@ -1013,6 +1047,31 @@ export function App() {
         />
       ) : null}
       {dialog?.kind === 'transfer' ? <TransferDraftDialog warehouses={availableWarehousesQuery.data ?? []} sourceWarehouseId={dialog.sourceWarehouseId} destinationWarehouseId={dialog.destinationWarehouseId ?? workspace.warehouse.external_warehouse_id} scheduledDate={planningDate} onClose={() => setDialog(null)} onCreated={(draft) => { setDialog(null); toast({ tone: 'success', title: 'Черновик перемещения создан', detail: `Документ ${draft.id}` }); }} /> : null}
+      {dialog?.kind === 'contractor-assignment' && contractorAssignmentRequest && contractorAssignmentWarehouse ? <ContractorAssignmentDialog
+        request={contractorAssignmentRequest}
+        warehouseId={contractorAssignmentWarehouse.external_warehouse_id}
+        busy={busy}
+        onClose={() => setDialog(null)}
+        onAssign={async (contractorWorkerId) => {
+          try {
+            const assigned = await execute(async () => {
+              const updated = await api.assignRequestToContractor(contractorAssignmentRequest.id, contractorWorkerId);
+              queryClient.removeQueries({ queryKey: ['plan'] });
+              setPlanId(null);
+              setPlan(null);
+              setValidation(null);
+              await refresh();
+              await queryClient.invalidateQueries({ queryKey: ['automatic-plan', planningWarehouseId, planningDate] });
+              return updated;
+            });
+            setDialog(null);
+            setSelected({ kind: 'request', id: assigned.id });
+            toast({ tone: 'success', title: `Передано наёмному водителю: ${assigned.assigned_contractor_name ?? 'подрядчик'}` });
+          } catch {
+            // execute already showed the safe operator-facing explanation.
+          }
+        }}
+      /> : null}
       {dialog?.kind === 'warehouse' ? <WarehouseDialog warehouse={dialog.value} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => {
         await api.updateWarehouse(dialog.value.id, input);
         await refresh();
@@ -1048,15 +1107,15 @@ export function App() {
         setDialog(null);
       }, 'Прицеп сохранён'); }} /> : null}
       {dialog?.kind === 'shift' ? <ShiftDialog shift={dialog.value} warehouse={workspace.warehouse} drivers={workspace.drivers} vehicles={workspace.vehicles} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => { if (dialog.value) await api.updateShift(dialog.value.id, input); else await api.createShift(workspace.warehouse.id, input); await refresh(); flagCurrentRoutesForRefresh(); setDialog(null); }, 'Смена сохранена'); }} /> : null}
-      {dialog?.kind === 'request' ? <RequestDialog request={dialog.value} point={dialog.point} initialAddress={dialog.address} type={dialog.requestType} defaultDate={planningDate} busy={busy} onClose={() => { setDialog(null); setMapTool('SELECT'); }} onSubmit={async (input) => { await execute(async () => { if (dialog.value) await api.updateRequest(dialog.value.id, input); else await api.createRequest(workspace.warehouse.id, input); await refresh(); flagCurrentRoutesForRefresh(); setDialog(null); setMapTool('SELECT'); }, input.type === 'DELIVERY' ? 'Доставка сохранена; ограничения проверены backend' : 'Вывоз сохранён; ограничения проверены backend'); }} /> : null}
-      {dialog?.kind === 'delete-entity' ? <ConfirmDialog title={`Удалить «${dialog.label}»?`} description="Изменение относится к выбранному складу. Backend проверит ссылки и вернёт ошибку, если объект используется." confirmLabel="Удалить" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => { if (dialog.entityKind === 'driver') await api.deleteDriver(dialog.id); else if (dialog.entityKind === 'vehicle') await api.deleteVehicle(dialog.id); else if (dialog.entityKind === 'trailer') await api.deleteTrailer(dialog.id); else if (dialog.entityKind === 'shift') await api.deleteShift(dialog.id); else await api.deleteRequest(dialog.id); await refresh(); flagCurrentRoutesForRefresh(); setDialog(null); }, 'Объект удалён'); }} /> : null}
+      {dialog?.kind === 'request' ? <RequestDialog request={dialog.value} point={dialog.point} initialAddress={dialog.address} type={dialog.requestType} defaultDate={planningDate} busy={busy} onClose={() => { setDialog(null); setMapTool('SELECT'); }} onSubmit={async (input) => { await execute(async () => { if (dialog.value) await api.updateRequest(dialog.value.id, input); else await api.createRequest(workspace.warehouse.id, input); await refresh(); flagCurrentRoutesForRefresh(); setDialog(null); setMapTool('SELECT'); }, input.type === 'DELIVERY' ? 'Доставка сохранена; ограничения проверены' : 'Вывоз сохранён; ограничения проверены'); }} /> : null}
+      {dialog?.kind === 'delete-entity' ? <ConfirmDialog title={`Удалить «${dialog.label}»?`} description="Изменение относится к выбранному складу. Система проверит связи и не удалит используемый объект." confirmLabel="Удалить" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => { if (dialog.entityKind === 'driver') await api.deleteDriver(dialog.id); else if (dialog.entityKind === 'vehicle') await api.deleteVehicle(dialog.id); else if (dialog.entityKind === 'trailer') await api.deleteTrailer(dialog.id); else if (dialog.entityKind === 'shift') await api.deleteShift(dialog.id); else await api.deleteRequest(dialog.id); await refresh(); flagCurrentRoutesForRefresh(); setDialog(null); }, 'Объект удалён'); }} /> : null}
       {dialog?.kind === 'delete-generated-workload' ? <ConfirmDialog title={`Удалить нагрузку за ${formatDate(dialog.date)}?`} description="Будут удалены доставки и вывозы, созданные генератором на эту дату, и все сохранённые планы этой даты. Ручные и RWMS-операции, а также нагрузка и планы других дат останутся без изменений." confirmLabel="Удалить нагрузку" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => {
         const result = await api.deleteGeneratedWorkload(workspace.warehouse.id, dialog.date);
         await refresh();
         if (dialog.date === planningDate) clearLocalPlanningState();
         setDialog(null);
         toast(result.deleted_requests > 0 || result.deleted_plans > 0
-          ? { tone: 'success', title: `Тестовая нагрузка удалена: ${result.deleted_requests} позиций · ${result.deleted_plans} планов`, detail: `${formatDate(result.date)}${result.capacity_projection_status === 'FAILED' && result.capacity_projection_warning ? ` · Внимание: ${result.capacity_projection_warning}` : ''}` }
+          ? { tone: 'success', title: `Тестовая нагрузка удалена: ${result.deleted_requests} позиций · ${result.deleted_plans} планов`, detail: `${formatDate(result.date)}${result.capacity_projection_status === 'FAILED' && result.capacity_projection_warning ? ` · Внимание: ${userFacingErrorDetail(new Error(result.capacity_projection_warning), 'Не удалось обновить доступную мощность RWMS.')}` : ''}` }
           : { tone: 'info', title: 'На выбранную дату нагрузки генератора нет', detail: formatDate(result.date) });
       }, undefined).catch(() => undefined); }} /> : null}
       {dialog?.kind === 'close-planning-day' ? <ConfirmDialog
@@ -1093,9 +1152,7 @@ export function App() {
               toast({
                 tone: 'warning',
                 title: 'Приём закрыт; внешний обмен требует повтора',
-                detail: error instanceof ApiError && error.code
-                  ? `${error.code}: ${feedback.detail ?? feedback.title}`
-                  : feedback.detail ?? feedback.title,
+                detail: feedback.detail ?? feedback.title,
               });
               return;
             }

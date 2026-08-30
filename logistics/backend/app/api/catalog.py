@@ -36,6 +36,9 @@ from app.repositories import get_required
 from app.schemas.domain import (
     AvailableDriverRead,
     AvailableWarehouseRead,
+    ContractorAssignmentCreate,
+    ContractorDispatchCreate,
+    ContractorDispatchRead,
     DriverCreate,
     DriverRead,
     DriverUpdate,
@@ -76,6 +79,10 @@ from app.services.auto_planning import (
 )
 from app.services.capacity_mutations import publish_capacity_after_mutation
 from app.services.capacity_projection import publish_warehouse_capacity
+from app.services.contractor_assignment import (
+    assign_request_to_contractor,
+    dispatch_requests_to_contractor,
+)
 from app.services.planning_group import resolve_planning_warehouse_group
 from app.services.workload_generator import (
     GENERATOR_SOURCE_SYSTEM,
@@ -767,6 +774,37 @@ async def get_request(request_id: UUID, session: SessionDep) -> LogisticsRequest
     """Read one logistics request."""
 
     return await request_read(session, await service.get_request(session, request_id))
+
+
+@router.post(
+    "/requests/{request_id}/contractor-assignment",
+    response_model=LogisticsRequestRead,
+)
+async def assign_contractor(
+    request_id: UUID,
+    payload: ContractorAssignmentCreate,
+    session: SessionDep,
+    client: CapacityRwmsClientDep,
+) -> LogisticsRequestRead:
+    """Hand one complete delivery to a contractor without an internal route cycle."""
+
+    entity = await assign_request_to_contractor(session, request_id, payload, client)
+    return await request_read(session, entity)
+
+
+@router.post(
+    "/warehouses/{warehouse_id}/contractor-dispatches",
+    response_model=ContractorDispatchRead,
+)
+async def dispatch_contractor_requests(
+    warehouse_id: UUID,
+    payload: ContractorDispatchCreate,
+    session: SessionDep,
+    client: CapacityRwmsClientDep,
+) -> ContractorDispatchRead:
+    """Assign selected-day unplanned requests without contractor route optimization."""
+
+    return await dispatch_requests_to_contractor(session, warehouse_id, payload, client)
 
 
 @router.patch("/requests/{request_id}", response_model=LogisticsRequestRead)

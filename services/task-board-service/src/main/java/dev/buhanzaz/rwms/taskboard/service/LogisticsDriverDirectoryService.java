@@ -86,16 +86,15 @@ public class LogisticsDriverDirectoryService {
       boolean includeIncoming) {
     var current = availability.resolve(worker, history, at);
     if (current.available()
-        && current.warehouseId().equals(warehouseId)
-        && worker.contractCovers(at)) {
+        && current.warehouseId().equals(warehouseId)) {
       return response(
           worker,
           warehouseId,
-          later(current.availableFrom(), worker.getContractAvailableFrom()),
-          earlier(current.availableUntil(), worker.getContractAvailableUntil()),
+          current.availableFrom(),
+          current.availableUntil(),
           current.kind());
     }
-    if (!includeIncoming || !worker.contractCovers(at)) {
+    if (!includeIncoming) {
       return null;
     }
     return history.stream()
@@ -107,8 +106,8 @@ public class LogisticsDriverDirectoryService {
                 response(
                     worker,
                     warehouseId,
-                    later(assignment.getEffectiveFrom(), worker.getContractAvailableFrom()),
-                    earlier(assignment.getEffectiveUntil(), worker.getContractAvailableUntil()),
+                    assignment.getEffectiveFrom(),
+                    assignment.getEffectiveUntil(),
                     LogisticsDriverAvailabilityKind.INCOMING))
         .orElse(null);
   }
@@ -146,15 +145,4 @@ public class LogisticsDriverDirectoryService {
         kind);
   }
 
-  private OffsetDateTime later(OffsetDateTime first, OffsetDateTime second) {
-    if (first == null) return second;
-    if (second == null) return first;
-    return first.isAfter(second) ? first : second;
-  }
-
-  private OffsetDateTime earlier(OffsetDateTime first, OffsetDateTime second) {
-    if (first == null) return second;
-    if (second == null) return first;
-    return first.isBefore(second) ? first : second;
-  }
 }

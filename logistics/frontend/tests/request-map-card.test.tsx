@@ -159,6 +159,7 @@ describe('request map card', () => {
     expect(screen.getByText('Доставка №142')).toBeVisible();
     expect(screen.getByText('Москва, Тестовая улица, 25')).toBeVisible();
     expect(screen.getByText('2 бытов. · обслуживание 35 мин')).toBeVisible();
+    expect(screen.getByText('Не рассчитана')).toBeVisible();
     expect(screen.getByText(/рассчитывается по времени пути в изохроне склада/)).toBeVisible();
     expect(screen.getByText(/25 августа 2026.*09:00–11:00.*жёстко/)).toBeVisible();
 
@@ -179,6 +180,28 @@ describe('request map card', () => {
     );
 
     expect(screen.getByText(/рассчитывается по времени пути в изохроне склада/)).toBeVisible();
+  });
+
+  it('shows the persisted delivery price and contractor handoff', () => {
+    render(
+      <RequestMapCard
+        request={{
+          ...request,
+          delivery_price_rubles: 28_500,
+          price_isochrone_minutes: 180,
+          assignment_type: 'CONTRACTOR_HANDOFF',
+          assigned_contractor_name: 'Иван Петров',
+        }}
+        planningDate="2026-08-25"
+        busy={false}
+        onSchedule={() => undefined}
+        onUnschedule={() => undefined}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText(/28\s500 ₽ · изохрона до 3 ч/)).toBeVisible();
+    expect(screen.getByText(/Передано наёмному водителю:/)).toHaveTextContent('Иван Петров');
   });
 
   it('marks a manually chosen date as an explicit agreement', async () => {

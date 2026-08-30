@@ -209,6 +209,112 @@
         "title": "ConfirmPlanRequest",
         "type": "object"
       },
+      "ContractorAssignmentCreate": {
+        "additionalProperties": false,
+        "description": "Dispatcher command that hands one complete request to a canonical contractor.",
+        "properties": {
+          "contractor_worker_id": {
+            "format": "uuid",
+            "title": "Contractor Worker Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "contractor_worker_id"
+        ],
+        "title": "ContractorAssignmentCreate",
+        "type": "object"
+      },
+      "ContractorDispatchCreate": {
+        "additionalProperties": false,
+        "description": "Warehouse-day command for automatic or explicit contractor task handoff.",
+        "properties": {
+          "contractor_worker_id": {
+            "format": "uuid",
+            "title": "Contractor Worker Id",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "AUTO",
+              "MANUAL"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "planning_date": {
+            "format": "date",
+            "title": "Planning Date",
+            "type": "string"
+          },
+          "request_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 500,
+            "title": "Request Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "contractor_worker_id",
+          "planning_date",
+          "mode"
+        ],
+        "title": "ContractorDispatchCreate",
+        "type": "object"
+      },
+      "ContractorDispatchRead": {
+        "additionalProperties": false,
+        "description": "Applied warehouse-day contractor handoff summary returned to the dispatcher.",
+        "properties": {
+          "assigned_count": {
+            "minimum": 1.0,
+            "title": "Assigned Count",
+            "type": "integer"
+          },
+          "assigned_request_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Assigned Request Ids",
+            "type": "array"
+          },
+          "contractor_name": {
+            "$ref": "#/components/schemas/NonBlank"
+          },
+          "contractor_worker_id": {
+            "format": "uuid",
+            "title": "Contractor Worker Id",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "AUTO",
+              "MANUAL"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "planning_date": {
+            "format": "date",
+            "title": "Planning Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "contractor_worker_id",
+          "contractor_name",
+          "planning_date",
+          "mode",
+          "assigned_request_ids",
+          "assigned_count"
+        ],
+        "title": "ContractorDispatchRead",
+        "type": "object"
+      },
       "CustomerSlotRead": {
         "additionalProperties": false,
         "description": "One standard customer slot with feasibility and structured explanations.",
@@ -789,6 +895,75 @@
             "title": "Address Label",
             "type": "string"
           },
+          "assigned_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned At"
+          },
+          "assigned_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned By"
+          },
+          "assigned_contractor_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned Contractor Name"
+          },
+          "assigned_contractor_phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned Contractor Phone"
+          },
+          "assigned_contractor_worker_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned Contractor Worker Id"
+          },
+          "assignment_type": {
+            "anyOf": [
+              {
+                "const": "CONTRACTOR_HANDOFF",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignment Type"
+          },
           "cargo_height_mm": {
             "anyOf": [
               {
@@ -853,6 +1028,18 @@
             "title": "Date Options",
             "type": "array"
           },
+          "delivery_price_rubles": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Price Rubles"
+          },
           "external_id": {
             "anyOf": [
               {
@@ -893,6 +1080,19 @@
           "notes": {
             "title": "Notes",
             "type": "string"
+          },
+          "price_isochrone_minutes": {
+            "anyOf": [
+              {
+                "maximum": 720.0,
+                "minimum": 60.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Isochrone Minutes"
           },
           "priority": {
             "title": "Priority",
@@ -985,6 +1185,14 @@
           "scheduled_date",
           "split_allowed",
           "mandatory",
+          "delivery_price_rubles",
+          "price_isochrone_minutes",
+          "assignment_type",
+          "assigned_contractor_worker_id",
+          "assigned_contractor_name",
+          "assigned_contractor_phone",
+          "assigned_at",
+          "assigned_by",
           "trailer_access_allowed",
           "include_driver_passport_in_notification",
           "contact_name",
@@ -8849,6 +9057,60 @@
         ]
       }
     },
+    "/api/requests/{request_id}/contractor-assignment": {
+      "post": {
+        "description": "Hand one complete delivery to a contractor without an internal route cycle.",
+        "operationId": "assign_contractor_api_requests__request_id__contractor_assignment_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContractorAssignmentCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogisticsRequestRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assign Contractor",
+        "tags": [
+          "catalog"
+        ]
+      }
+    },
     "/api/requests/{request_id}/date-options": {
       "post": {
         "description": "Add one acceptable date option.",
@@ -9826,6 +10088,60 @@
           }
         },
         "summary": "List Available Drivers",
+        "tags": [
+          "catalog"
+        ]
+      }
+    },
+    "/api/warehouses/{warehouse_id}/contractor-dispatches": {
+      "post": {
+        "description": "Assign selected-day unplanned requests without contractor route optimization.",
+        "operationId": "dispatch_contractor_requests_api_warehouses__warehouse_id__contractor_dispatches_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContractorDispatchCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContractorDispatchRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dispatch Contractor Requests",
         "tags": [
           "catalog"
         ]

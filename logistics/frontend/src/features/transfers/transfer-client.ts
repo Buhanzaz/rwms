@@ -1,4 +1,5 @@
 import { simulatorApiUrl } from '../../api/client';
+import { createContractorDriver } from '../contractors/contractor-client';
 
 /** One selectable value from the canonical RWMS cabin catalog. */
 export interface TransferCatalogValue {
@@ -61,15 +62,13 @@ export interface TransferDriver {
   displayName: string;
 }
 
-/** Time-bounded contractor command owned by task-board. */
+/** Reusable contractor profile command owned by task-board. */
 export interface CreateTransferContractorInput {
   accessToken: string;
   warehouseId: string;
   contractorId: string;
   displayName: string;
   phone: string;
-  availableFrom: string;
-  availableUntil: string;
   comment: string | null;
 }
 
@@ -281,29 +280,20 @@ export async function loadTransferDrivers(localWarehouseId: string): Promise<Tra
   });
 }
 
-/** Creates an explicit time-bounded contractor without provisioning a permanent employee login. */
+/** Creates an explicit contractor profile without provisioning an employee login or schedule. */
 export async function createTransferContractor(input: CreateTransferContractorInput): Promise<TransferDriver> {
-  const response = await fetch(`/api/task-board/warehouses/${encodeURIComponent(input.warehouseId)}/logistics-drivers/contractors`, {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json, application/problem+json',
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${input.accessToken}`,
-    },
-    body: JSON.stringify({
-      contractorId: input.contractorId,
+  const contractor = await createContractorDriver(
+    input.accessToken,
+    input.warehouseId,
+    {
       displayName: input.displayName,
       phone: input.phone,
-      availableFrom: input.availableFrom,
-      availableUntil: input.availableUntil,
-      comment: input.comment,
-    }),
-  });
-  const value = await readJson(response, 'Не удалось создать наёмного водителя');
-  if (!isRecord(value) || typeof value.workerId !== 'string' || typeof value.displayName !== 'string') {
-    throw new Error('RWMS вернул некорректного наёмного водителя');
-  }
-  return { workerId: value.workerId, displayName: value.displayName };
+      comment: input.comment ?? '',
+      active: true,
+    },
+    input.contractorId,
+  );
+  return { workerId: contractor.workerId, displayName: contractor.displayName };
 }
 
 /** Loads destination cabins currently awaiting capital repair for a return leg. */

@@ -563,6 +563,8 @@ async def test_root_plan_assignment_retains_representative_service_warehouse(
             )
         ],
         trailerAccessAllowed=True,
+        deliveryPriceRubles=None,
+        priceIsochroneMinutes=None,
         createdAt=datetime(2026, 8, 29, 8, tzinfo=UTC),
     )
     request.source_system = "RWMS"

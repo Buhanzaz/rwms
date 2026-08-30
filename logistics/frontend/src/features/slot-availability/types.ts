@@ -214,7 +214,7 @@ function normalizeCandidate(value: unknown): SlotAvailabilityCandidate | undefin
 export function normalizeSlotAvailabilityResponse(value: unknown): SlotAvailabilityResponse {
   const raw = record(value);
   if (!raw || typeof raw.date !== 'string' || typeof raw.plan_version !== 'number' || !Array.isArray(raw.slots)) {
-    throw new Error('Backend вернул некорректный расчёт слотов');
+    throw new Error('Сервис вернул некорректный расчёт слотов');
   }
   const slots = raw.slots.flatMap((value): SlotAvailabilityOption[] => {
     const slot = record(value);

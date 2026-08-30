@@ -3594,7 +3594,7 @@ components:
       type: object
       additionalProperties: false
       required:
-        [orderId, orderVersion, sourceRevision, orderNumber, clientName, address, latitude, longitude, quantity, unitIds, dateOptions, trailerAccessAllowed, createdAt]
+        [orderId, orderVersion, sourceRevision, orderNumber, clientName, address, latitude, longitude, quantity, unitIds, dateOptions, trailerAccessAllowed, deliveryPriceRubles, priceIsochroneMinutes, createdAt]
       properties:
         orderId: { type: string, format: uuid }
         orderVersion: { type: integer, format: int64, minimum: 0 }
@@ -3624,6 +3624,17 @@ components:
         trailerAccessAllowed:
           type: [boolean, "null"]
           description: Customer or manager-confirmed private-site access fact; null means that no authoritative confirmation exists yet. Public-road feasibility remains routing-engine owned.
+        deliveryPriceRubles:
+          type: [integer, "null"]
+          format: int64
+          minimum: 0
+          description: Final logistics-owned delivery amount from the confirmed customer slot; null means that the delivery price has not been calculated.
+        priceIsochroneMinutes:
+          type: [integer, "null"]
+          minimum: 60
+          maximum: 720
+          multipleOf: 60
+          description: Hourly isochrone tariff tier used for the confirmed delivery price; null is also valid when an older or specially priced slot retains the authoritative amount without its tier.
         createdAt: { type: string, format: date-time }
     PlanningRequestFeed:
       type: object
@@ -3830,6 +3841,14 @@ components:
             driver shift plan.
         expectedOrderVersion: { type: integer, format: int64, minimum: 0 }
         scheduledDate: { type: string, format: date }
+        assignmentType:
+          type: string
+          enum: [ROUTE_PLAN, CONTRACTOR_HANDOFF]
+          default: ROUTE_PLAN
+          description: >-
+            ROUTE_PLAN is an automatic planner result and keeps the near-date protection.
+            CONTRACTOR_HANDOFF is an explicit dispatcher decision for one concrete contractor;
+            it does not require an internal vehicle, shift or route-cycle snapshot.
         driverAudienceMode:
           type: string
           enum: [ASSIGNED_DRIVER, WAREHOUSE_DRIVERS]

@@ -23,13 +23,15 @@ import type {
   Vehicle,
   Warehouse,
 } from '../domain/types';
-import type { RequestPlanningDetailsInput, WarehouseUpdateInput } from '../api/client';
+import type { ContractorDispatchMode, RequestPlanningDetailsInput, WarehouseUpdateInput } from '../api/client';
 import { Badge, Button, EmptyState, ErrorPanel } from '../components/ui';
 import { useUiStore, type MapTool } from '../stores/ui-store';
 import { formatDate, formatDistance, formatDuration, formatTime } from '../utils/format';
 import { PlanPanel, type PlanMove } from '../features/planning/PlanPanel';
 import { PlanningDayRequests } from '../features/planning/PlanningDayRequests';
 import { SettingsEditor } from '../features/settings/SettingsEditor';
+import { ContractorDriversPanel } from '../features/contractors/ContractorDriversPanel';
+import { validationMessageRu } from '../utils/user-facing-error';
 
 export type EntityKind = 'warehouse' | 'driver' | 'vehicle' | 'trailer' | 'shift' | 'request';
 export type EditableEntity = Warehouse | Driver | Vehicle | Trailer | DriverShift | LogisticsRequest;
@@ -51,6 +53,8 @@ interface InspectorProps {
   onToggleCycleLock: (cycle: RouteCycle) => void;
   onSaveSettings: (input: WarehouseUpdateInput) => Promise<void>;
   onCreateTransfer: (sourceWarehouseId?: UUID, destinationWarehouseId?: UUID) => void;
+  onAssignContractor: (requestId: UUID) => void;
+  onDispatchContractor: (contractorWorkerId: UUID, mode: ContractorDispatchMode, requestIds: UUID[]) => Promise<void>;
   onConfirmPlan: () => void;
   onResetManualChanges: () => void;
   onSimulationOverride: (kind: 'delay' | 'unavailable', driverShiftId: UUID) => void;
@@ -189,12 +193,21 @@ function DeliveriesSection({ props }: { props: InspectorProps }) {
 
 function SimulationDrivers({ props }: { props: InspectorProps }) {
   if (!props.simulation) return null;
-  return <section className="simulation-route-statuses" aria-label="Текущее состояние маршрутов"><h2 className="section-title">Машины сейчас</h2><p className="section-subtitle">План остаётся ниже целиком. Здесь показаны текущий этап, адрес назначения и расчётное время прибытия.</p><div className="entity-list">{props.simulation.vehicles.map((vehicle) => <article className="entity-card simulation-route-status" key={vehicle.driver_shift_id} data-testid={`simulation-route-${vehicle.driver_shift_id}`}><div className="entity-card__row"><button type="button" className="simulation-route-status__driver" onClick={() => props.onSelect('driver', vehicle.driver_shift_id)}><strong>{vehicle.driver_name}</strong><small>{vehicle.vehicle_name} · {vehicle.registration_number}</small></button><Badge tone={vehicle.status === 'DELAYED' ? 'danger' : vehicle.status === 'FINISHED' ? 'neutral' : 'success'}>{vehicle.status}</Badge></div><div className="simulation-route-status__destination"><small>Адрес назначения</small><strong>{vehicle.next_stop_label ?? (vehicle.status === 'FINISHED' ? 'Маршрут завершён' : 'Не определён')}</strong><span>ETA: {vehicle.eta ? formatTime(vehicle.eta, props.workspace.warehouse.timezone) : '—'} · загрузка {vehicle.load}</span></div><div className="toolbar-row" style={{ margin: '8px 0 0' }}><Button size="sm" onClick={() => props.onSimulationOverride('delay', vehicle.driver_shift_id)}>+ Задержка</Button><Button size="sm" variant="danger" onClick={() => props.onSimulationOverride('unavailable', vehicle.driver_shift_id)}>Недоступен</Button></div></article>)}</div>{props.simulation.warnings.map((warning) => <div className="error-panel" key={`${warning.code}-${warning.message}`}><strong>{warning.code}</strong><p>{warning.message}</p></div>)}</section>;
+  return <section className="simulation-route-statuses" aria-label="Текущее состояние маршрутов"><h2 className="section-title">Машины сейчас</h2><p className="section-subtitle">План остаётся ниже целиком. Здесь показаны текущий этап, адрес назначения и расчётное время прибытия.</p><div className="entity-list">{props.simulation.vehicles.map((vehicle) => <article className="entity-card simulation-route-status" key={vehicle.driver_shift_id} data-testid={`simulation-route-${vehicle.driver_shift_id}`}><div className="entity-card__row"><button type="button" className="simulation-route-status__driver" onClick={() => props.onSelect('driver', vehicle.driver_shift_id)}><strong>{vehicle.driver_name}</strong><small>{vehicle.vehicle_name} · {vehicle.registration_number}</small></button><Badge tone={vehicle.status === 'DELAYED' ? 'danger' : vehicle.status === 'FINISHED' ? 'neutral' : 'success'}>{vehicle.status}</Badge></div><div className="simulation-route-status__destination"><small>Адрес назначения</small><strong>{vehicle.next_stop_label ?? (vehicle.status === 'FINISHED' ? 'Маршрут завершён' : 'Не определён')}</strong><span>ETA: {vehicle.eta ? formatTime(vehicle.eta, props.workspace.warehouse.timezone) : '—'} · загрузка {vehicle.load}</span></div><div className="toolbar-row" style={{ margin: '8px 0 0' }}><Button size="sm" onClick={() => props.onSimulationOverride('delay', vehicle.driver_shift_id)}>+ Задержка</Button><Button size="sm" variant="danger" onClick={() => props.onSimulationOverride('unavailable', vehicle.driver_shift_id)}>Недоступен</Button></div></article>)}</div>{props.simulation.warnings.map((warning) => <div className="error-panel" key={`${warning.code}-${warning.message}`}><strong>План требует внимания</strong><p>{validationMessageRu(warning.code, warning.message)}</p></div>)}</section>;
 }
 
 export function Inspector(props: InspectorProps) {
   const section = useUiStore((state) => state.section);
   const mode = useUiStore((state) => state.mode);
+  const selected = useUiStore((state) => state.selected);
+  const selectedRequestId = selected?.kind === 'request' ? selected.id : null;
+  const unassignedRequestIds = new Set(props.plan?.unassigned.map((item) => item.task.request_id) ?? []);
+  const manualContractorRequests = props.workspace.requests.filter((request) => (
+    request.warehouse_id === props.workspace.warehouse.id
+    && request.scheduled_date === props.planningDate
+    && request.assigned_contractor_worker_id == null
+    && (props.plan ? unassignedRequestIds.has(request.id) : request.status === 'READY' || request.status === 'UNASSIGNED')
+  ));
   const beginResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
     event.preventDefault();
     const resize = (pointerEvent: PointerEvent) => props.onInspectorWidthChange(window.innerWidth - pointerEvent.clientX);
@@ -219,18 +232,19 @@ export function Inspector(props: InspectorProps) {
   switch (section) {
     case 'WAREHOUSE': content = <WarehouseSection props={props} />; break;
     case 'DRIVERS': content = <CatalogSection props={props} kind="driver" />; break;
+    case 'CONTRACTORS': content = <ContractorDriversPanel warehouseId={props.workspace.warehouse.external_warehouse_id} planningDate={props.planningDate} manualRequests={manualContractorRequests} busy={props.busy} onDispatch={props.onDispatchContractor} />; break;
     case 'VEHICLES': content = <CatalogSection props={props} kind="vehicle" />; break;
     case 'SHIFTS': content = <ShiftsSection props={props} />; break;
     case 'REQUESTS': content = <DeliveriesSection props={props} />; break;
     case 'PLAN_DAY': content = <>
       <div className="entity-card__row"><h2 className="section-title">План на {formatDate(props.planningDate)}</h2><span className="toolbar-row">{props.plan?.manually_changed && props.plan.status !== 'CONFIRMED' ? <Button size="sm" onClick={props.onResetManualChanges} disabled={props.busy}>Отменить изменения</Button> : null}{props.plan && props.plan.status !== 'CONFIRMED' ? <Button size="sm" variant="primary" onClick={props.onConfirmPlan} disabled={props.busy}>Утвердить</Button> : null}</span></div>
       {mode === 'SIMULATION' && props.simulation ? <><SimulationDrivers props={props} /><div className="divider" /></> : null}
-      {props.plan ? <><Metrics metrics={props.plan.metrics} /><div className="divider" /><PlanPanel plan={props.plan} timeZone={props.workspace.warehouse.timezone} readOnly={props.plan.status === 'CONFIRMED'} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} onCreateTransfer={props.onCreateTransfer} onRescheduleUnassigned={(id) => { const request = props.workspace.requests.find((item) => item.id === id); if (request) props.onEdit('request', request); }} /></> : <EmptyState title="План дня не составлен" description="Заполните условия доставок и вывозов — план пересчитается автоматически." />}
+      {props.plan ? <><Metrics metrics={props.plan.metrics} /><div className="divider" /><PlanPanel plan={props.plan} timeZone={props.workspace.warehouse.timezone} readOnly={props.plan.status === 'CONFIRMED'} selectedRequestId={selectedRequestId} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onSelectRequest={(id) => props.onSelect('request', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} onCreateTransfer={props.onCreateTransfer} onAssignContractor={props.onAssignContractor} onRescheduleUnassigned={(id) => { const request = props.workspace.requests.find((item) => item.id === id); if (request) props.onEdit('request', request); }} /></> : <EmptyState title="План дня не составлен" description="Заполните условия доставок и вывозов — план пересчитается автоматически." />}
     </>; break;
-    case 'UNASSIGNED': content = props.plan?.unassigned.length ? <PlanPanel plan={props.plan} timeZone={props.workspace.warehouse.timezone} showUnassignedOnly readOnly={props.plan.status === 'CONFIRMED'} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} onCreateTransfer={props.onCreateTransfer} onRescheduleUnassigned={(id) => { const request = props.workspace.requests.find((item) => item.id === id); if (request) props.onEdit('request', request); }} /> : <EmptyState title="Нераспределённых заданий нет" description={props.plan ? 'Все задачи выбранного дня распределены.' : 'После расчёта плана здесь появятся задачи без назначенного маршрута.'} />; break;
+    case 'UNASSIGNED': content = props.plan?.unassigned.length ? <PlanPanel plan={props.plan} timeZone={props.workspace.warehouse.timezone} showUnassignedOnly readOnly={props.plan.status === 'CONFIRMED'} selectedRequestId={selectedRequestId} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onSelectRequest={(id) => props.onSelect('request', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} onCreateTransfer={props.onCreateTransfer} onAssignContractor={props.onAssignContractor} onRescheduleUnassigned={(id) => { const request = props.workspace.requests.find((item) => item.id === id); if (request) props.onEdit('request', request); }} /> : <EmptyState title="Нераспределённых заданий нет" description={props.plan ? 'Все задачи выбранного дня распределены.' : 'После расчёта плана здесь появятся задачи без назначенного маршрута.'} />; break;
     case 'SETTINGS': content = <SettingsEditor warehouse={props.workspace.warehouse} busy={props.busy} onSave={props.onSaveSettings} />; break;
   }
-  return <aside className="inspector" aria-label="Инспектор">
+  return <aside className="inspector" aria-label="Панель логистики">
     <button
       type="button"
       className="inspector__resize-handle"
@@ -244,6 +258,6 @@ export function Inspector(props: InspectorProps) {
       onKeyDown={resizeWithKeyboard}
       onDoubleClick={() => props.onInspectorWidthChange(420)}
     />
-    <header className="inspector__head"><strong>Инспектор</strong><Badge tone="accent">{props.workspace.warehouse.timezone}</Badge></header><div className="inspector__body">{props.validation && !props.validation.valid ? <><ErrorPanel title="План содержит ошибки" error={new Error(props.validation.errors.map((error) => `${error.code}: ${error.message}`).join('\n'))} /><div className="divider" /></> : null}{props.validation?.warnings.map((warning) => <div className="explanation" key={`${warning.code}-${warning.message}`}><CircleAlert size={12} /> {warning.message}</div>)}{content}</div>
+    <div className="inspector__body">{props.validation && !props.validation.valid ? <><ErrorPanel title="План содержит ошибки" error={new Error(props.validation.errors.map((error) => validationMessageRu(error.code, error.message)).join('\n'))} /><div className="divider" /></> : null}{props.validation?.warnings.map((warning) => <div className="explanation" key={`${warning.code}-${warning.message}`}><CircleAlert size={12} /> {validationMessageRu(warning.code, warning.message)}</div>)}{content}</div>
   </aside>;
 }

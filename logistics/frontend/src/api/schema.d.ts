@@ -540,6 +540,26 @@ export interface paths {
         patch: operations["update_request_api_requests__request_id__patch"];
         trace?: never;
     };
+    "/api/requests/{request_id}/contractor-assignment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Assign Contractor
+         * @description Hand one complete delivery to a contractor without an internal route cycle.
+         */
+        post: operations["assign_contractor_api_requests__request_id__contractor_assignment_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/requests/{request_id}/date-options": {
         parameters: {
             query?: never;
@@ -854,6 +874,26 @@ export interface paths {
         get: operations["list_available_drivers_api_warehouses__warehouse_id__available_drivers_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/{warehouse_id}/contractor-dispatches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispatch Contractor Requests
+         * @description Assign selected-day unplanned requests without contractor route optimization.
+         */
+        post: operations["dispatch_contractor_requests_api_warehouses__warehouse_id__contractor_dispatches_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1223,6 +1263,66 @@ export interface components {
             expected_version: number;
         };
         /**
+         * ContractorAssignmentCreate
+         * @description Dispatcher command that hands one complete request to a canonical contractor.
+         */
+        ContractorAssignmentCreate: {
+            /**
+             * Contractor Worker Id
+             * Format: uuid
+             */
+            contractor_worker_id: string;
+        };
+        /**
+         * ContractorDispatchCreate
+         * @description Warehouse-day command for automatic or explicit contractor task handoff.
+         */
+        ContractorDispatchCreate: {
+            /**
+             * Contractor Worker Id
+             * Format: uuid
+             */
+            contractor_worker_id: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "AUTO" | "MANUAL";
+            /**
+             * Planning Date
+             * Format: date
+             */
+            planning_date: string;
+            /** Request Ids */
+            request_ids?: string[];
+        };
+        /**
+         * ContractorDispatchRead
+         * @description Applied warehouse-day contractor handoff summary returned to the dispatcher.
+         */
+        ContractorDispatchRead: {
+            /** Assigned Count */
+            assigned_count: number;
+            /** Assigned Request Ids */
+            assigned_request_ids: string[];
+            contractor_name: components["schemas"]["NonBlank"];
+            /**
+             * Contractor Worker Id
+             * Format: uuid
+             */
+            contractor_worker_id: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "AUTO" | "MANUAL";
+            /**
+             * Planning Date
+             * Format: date
+             */
+            planning_date: string;
+        };
+        /**
          * CustomerSlotRead
          * @description One standard customer slot with feasibility and structured explanations.
          */
@@ -1497,6 +1597,18 @@ export interface components {
         LogisticsRequestRead: {
             /** Address Label */
             address_label: string;
+            /** Assigned At */
+            assigned_at: string | null;
+            /** Assigned By */
+            assigned_by: string | null;
+            /** Assigned Contractor Name */
+            assigned_contractor_name: string | null;
+            /** Assigned Contractor Phone */
+            assigned_contractor_phone: string | null;
+            /** Assigned Contractor Worker Id */
+            assigned_contractor_worker_id: string | null;
+            /** Assignment Type */
+            assignment_type: "CONTRACTOR_HANDOFF" | null;
             /** Cargo Height Mm */
             cargo_height_mm?: number | null;
             /** Cargo Length Mm */
@@ -1516,6 +1628,8 @@ export interface components {
             created_at: string;
             /** Date Options */
             date_options?: components["schemas"]["RequestDateOptionRead"][];
+            /** Delivery Price Rubles */
+            delivery_price_rubles: number | null;
             /** External Id */
             external_id: string | null;
             /**
@@ -1535,6 +1649,8 @@ export interface components {
             name: string;
             /** Notes */
             notes: string;
+            /** Price Isochrone Minutes */
+            price_isochrone_minutes: number | null;
             /** Priority */
             priority: number;
             /** Quantity */
@@ -3950,11 +4066,18 @@ export interface components {
         };
         /**
          * WarehouseWorkspaceRead
-         * @description Selected warehouse resources plus connected warehouse markers in one read.
+         * @description Selected warehouse, its direct planning group, and root-owned resources.
          */
         WarehouseWorkspaceRead: {
             /** Drivers */
             drivers: components["schemas"]["DriverRead"][];
+            /** Planning Group Warehouse Ids */
+            planning_group_warehouse_ids: string[];
+            /**
+             * Planning Root Warehouse Id
+             * Format: uuid
+             */
+            planning_root_warehouse_id: string;
             /** Requests */
             requests: components["schemas"]["LogisticsRequestRead"][];
             /** Shifts */
@@ -3969,9 +4092,17 @@ export interface components {
         };
         /**
          * WorkloadDeletionResult
-         * @description Summary of idempotently deleting dated generated workload and its plans.
+         * @description Local deletion summary plus anonymous test-capacity publication state.
          */
         WorkloadDeletionResult: {
+            /**
+             * Capacity Projection Status
+             * @default NOT_REQUESTED
+             * @enum {string}
+             */
+            capacity_projection_status: "NOT_REQUESTED" | "PUBLISHED" | "FAILED";
+            /** Capacity Projection Warning */
+            capacity_projection_warning?: string | null;
             /**
              * Date
              * Format: date
@@ -4007,13 +4138,21 @@ export interface components {
         };
         /**
          * WorkloadGenerationResult
-         * @description Auditable summary of one workload generation command.
+         * @description Auditable local generation summary plus anonymous test-capacity publication state.
          */
         WorkloadGenerationResult: {
             /** Auto Plan Ids */
             auto_plan_ids?: string[];
             /** Auto Plan Run Ids */
             auto_plan_run_ids?: string[];
+            /**
+             * Capacity Projection Status
+             * @default NOT_REQUESTED
+             * @enum {string}
+             */
+            capacity_projection_status: "NOT_REQUESTED" | "PUBLISHED" | "FAILED";
+            /** Capacity Projection Warning */
+            capacity_projection_warning?: string | null;
             /** Created Deliveries */
             created_deliveries: number;
             /** Created Pickups */
@@ -5090,6 +5229,41 @@ export interface operations {
             };
         };
     };
+    assign_contractor_api_requests__request_id__contractor_assignment_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContractorAssignmentCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogisticsRequestRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_date_option_api_requests__request_id__date_options_post: {
         parameters: {
             query?: never;
@@ -5715,6 +5889,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AvailableDriverRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    dispatch_contractor_requests_api_warehouses__warehouse_id__contractor_dispatches_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContractorDispatchCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContractorDispatchRead"];
                 };
             };
             /** @description Validation Error */

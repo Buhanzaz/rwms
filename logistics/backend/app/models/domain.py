@@ -621,6 +621,26 @@ class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
             "external_version IS NULL OR external_version >= 0",
             name="nonnegative_external_version",
         ),
+        CheckConstraint(
+            "delivery_price_rubles IS NULL OR delivery_price_rubles >= 0",
+            name="nonnegative_delivery_price",
+        ),
+        CheckConstraint(
+            "price_isochrone_minutes IS NULL OR ("
+            "price_isochrone_minutes BETWEEN 60 AND 720 AND "
+            "price_isochrone_minutes % 60 = 0)",
+            name="supported_price_isochrone",
+        ),
+        CheckConstraint(
+            "(assignment_type IS NULL AND assigned_contractor_worker_id IS NULL AND "
+            "assigned_contractor_name IS NULL AND assigned_contractor_phone IS NULL AND "
+            "assigned_at IS NULL AND assigned_by IS NULL) OR "
+            "(assignment_type = 'CONTRACTOR_HANDOFF' AND "
+            "assigned_contractor_worker_id IS NOT NULL AND "
+            "assigned_contractor_name IS NOT NULL AND assigned_at IS NOT NULL AND "
+            "assigned_by IS NOT NULL)",
+            name="valid_contractor_assignment",
+        ),
         Index("ix_logistics_requests_warehouse_status", "warehouse_id", "status"),
         Index(
             "ix_logistics_requests_warehouse_scheduled_date",
@@ -652,6 +672,14 @@ class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
     scheduled_date: Mapped[date | None] = mapped_column(Date)
     split_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     mandatory: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    delivery_price_rubles: Mapped[int | None] = mapped_column(BigInteger)
+    price_isochrone_minutes: Mapped[int | None] = mapped_column(Integer)
+    assignment_type: Mapped[str | None] = mapped_column(String(32))
+    assigned_contractor_worker_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    assigned_contractor_name: Mapped[str | None] = mapped_column(String(200))
+    assigned_contractor_phone: Mapped[str | None] = mapped_column(String(64))
+    assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    assigned_by: Mapped[str | None] = mapped_column(String(200))
     trailer_access_allowed: Mapped[bool | None] = mapped_column(Boolean)
     include_driver_passport_in_notification: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False

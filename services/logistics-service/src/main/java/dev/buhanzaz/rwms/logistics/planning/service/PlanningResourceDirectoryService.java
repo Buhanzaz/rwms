@@ -182,14 +182,10 @@ public class PlanningResourceDirectoryService {
                   || driver.employmentType() == null
                   || driver.availabilityKind() == null
                   || (!includeIncoming && "INCOMING".equals(driver.availabilityKind()))
-                  || (driver.availableFrom() != null
-                      && driver.availableUntil() != null
-                      && !driver.availableFrom().isBefore(driver.availableUntil()))
+                  || invalidAvailabilityRange(driver.availableFrom(), driver.availableUntil())
                   || ("CONTRACTOR".equals(driver.employmentType())
                       && (driver.phone() == null
-                          || driver.phone().isBlank()
-                          || driver.availableFrom() == null
-                          || driver.availableUntil() == null))) {
+                          || driver.phone().isBlank()))) {
                 throw malformed("Task-board returned an invalid warehouse driver directory");
               }
               try {
@@ -207,6 +203,13 @@ public class PlanningResourceDirectoryService {
               }
             })
         .toList();
+  }
+
+  /** Rejects an end without a start while allowing a date-free profile or open-ended assignment. */
+  private static boolean invalidAvailabilityRange(
+      OffsetDateTime availableFrom, OffsetDateTime availableUntil) {
+    return availableUntil != null
+        && (availableFrom == null || !availableFrom.isBefore(availableUntil));
   }
 
   private static void requireUniqueWarehouses(List<WarehouseIdentity> identities) {

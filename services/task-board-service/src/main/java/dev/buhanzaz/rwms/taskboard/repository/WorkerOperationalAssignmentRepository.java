@@ -24,6 +24,8 @@ public interface WorkerOperationalAssignmentRepository
 
   List<WorkerOperationalAssignment> findAllByWorkerIdIn(Collection<UUID> workerIds);
 
+  boolean existsByWorkerId(UUID workerId);
+
   /** Locks one assignment for an expected-version lifecycle transition. */
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select assignment from WorkerOperationalAssignment assignment where assignment.id = :id")

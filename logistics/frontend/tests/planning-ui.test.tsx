@@ -62,6 +62,8 @@ function inspectorProps(plan: RoutePlan, simulation: SimulationDerivedState): Co
     onToggleCycleLock: () => undefined,
     onSaveSettings: () => Promise.resolve(),
     onCreateTransfer: () => undefined,
+    onAssignContractor: () => undefined,
+    onDispatchContractor: () => Promise.resolve(),
     onConfirmPlan: () => undefined,
     onResetManualChanges: () => undefined,
     onSimulationOverride: () => undefined,
@@ -86,6 +88,8 @@ describe('application shell', () => {
     expect(screen.queryByText(/OSRM/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Зоны/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Маршруты/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Свернуть|Развернуть/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('Рабочая область')).not.toBeInTheDocument();
   });
 
   it('keeps only the supported warehouse actions in one equal row', () => {
@@ -95,6 +99,7 @@ describe('application shell', () => {
     props.onCreateTransfer = vi.fn();
     render(<Inspector {...props} />);
 
+    expect(screen.queryByText('Инспектор')).not.toBeInTheDocument();
     const actions = screen.getByLabelText('Действия со складом');
     const rows = Array.from(actions.querySelectorAll(':scope > .warehouse-actions__row'));
     expect(rows).toHaveLength(1);
@@ -185,7 +190,7 @@ describe('built plan UI', () => {
     expect(screen.getByText(/окна доставок совместимы/)).toBeVisible();
     const onReschedule = vi.fn();
     rerender(<PlanPanel plan={plan} timeZone="Europe/Moscow" showUnassignedOnly onSelectCycle={() => undefined} onSelectDriverRoute={() => undefined} onMove={() => undefined} onToggleLock={() => undefined} onRescheduleUnassigned={onReschedule} />);
-    expect(screen.getByText(/временное окно 09:00–11:00/)).toBeVisible();
+    expect(screen.getByText('Водитель не успеет приехать в заданный интервал. Согласуйте другое время или дату.')).toBeVisible();
     expect(screen.getByText('обязательно')).toBeVisible();
     expect(screen.getByText(/Можно назначить.*18:19/)).toBeVisible();
     expect(screen.getByText('увеличить временное окно')).toBeVisible();
@@ -207,6 +212,46 @@ describe('built plan UI', () => {
 
     expect(screen.queryByRole('button', { name: 'Сменить временное окно' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Перенести на другой день' })).toBeVisible();
+  });
+
+  it('explains a full staff schedule and offers a direct contractor handoff', async () => {
+    const user = userEvent.setup();
+    const plan = planFixture();
+    const request = requestFixture({
+      id: 'request-5',
+      delivery_price_rubles: 28_500,
+    });
+    plan.unassigned[0] = {
+      ...plan.unassigned[0]!,
+      request,
+      reason_codes: ['NO_SHIFT_CAPACITY'],
+      reasons: ['internal capacity details'],
+      recommendations: [],
+      closest_option: null,
+    };
+    const onAssignContractor = vi.fn();
+    const onSelectRequest = vi.fn();
+
+    render(<PlanPanel
+      plan={plan}
+      timeZone="Europe/Moscow"
+      showUnassignedOnly
+      onSelectCycle={() => undefined}
+      onSelectDriverRoute={() => undefined}
+      onSelectRequest={onSelectRequest}
+      onMove={() => undefined}
+      onToggleLock={() => undefined}
+      onAssignContractor={onAssignContractor}
+    />);
+
+    expect(screen.getByText('Нет доступных водителей')).toBeVisible();
+    expect(screen.getAllByText(/Все штатные водители уже заняты/)).toHaveLength(2);
+    expect(screen.getByText(/28\s500 ₽/)).toBeVisible();
+    expect(screen.queryByText('internal capacity details')).not.toBeInTheDocument();
+    await user.click(screen.getByText('№REQUEST-'));
+    expect(onSelectRequest).toHaveBeenCalledWith('request-5');
+    await user.click(screen.getByRole('button', { name: 'Передать наёмному водителю' }));
+    expect(onAssignContractor).toHaveBeenCalledWith('request-5');
   });
 
   it('shows one-off support warehouse service without presenting it as a reposition', () => {

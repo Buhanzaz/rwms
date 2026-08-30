@@ -48,7 +48,7 @@ describe('warehouse workspace transport', () => {
   it('loads and normalizes the workspace through the automatically refreshing endpoint', async () => {
     const workspace = workspaceFixture({
       requests: [{
-        ...requestFixture(),
+        ...requestFixture({ delivery_price_rubles: 28_500, price_isochrone_minutes: 180 }),
         mandatory: undefined as never,
         tasks: [{ ...requestFixture().tasks![0]!, mandatory: undefined as never }],
       }],
@@ -63,6 +63,7 @@ describe('warehouse workspace transport', () => {
     ]);
     expect(result.warehouse.address).toContain('Шоссе Революции');
     expect(result.requests[0]).toMatchObject({ mandatory: false });
+    expect(result.requests[0]).toMatchObject({ delivery_price_rubles: 28_500, price_isochrone_minutes: 180 });
     expect(result.requests[0]?.tasks?.[0]).toMatchObject({ mandatory: false });
   });
 
@@ -153,6 +154,51 @@ describe('warehouse-owned catalogs', () => {
 });
 
 describe('planning lifecycle', () => {
+  it('hands a request to a contractor without internal route or vehicle fields', async () => {
+    const assigned = requestFixture({
+      assignment_type: 'CONTRACTOR_HANDOFF',
+      assigned_contractor_worker_id: 'contractor-1',
+      assigned_contractor_name: 'Иван Петров',
+    });
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(assigned));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await api.assignRequestToContractor(assigned.id, 'contractor-1');
+
+    expect(result.assignment_type).toBe('CONTRACTOR_HANDOFF');
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`/api/requests/${assigned.id}/contractor-assignment`);
+    expect(bodyAt(fetchMock, 0)).toEqual({ contractor_worker_id: 'contractor-1' });
+  });
+
+  it('dispatches a contractor on the date selected in the header', async () => {
+    const response = {
+      contractor_worker_id: 'contractor-1',
+      contractor_name: 'Иван Петров',
+      planning_date: '2026-08-31',
+      mode: 'MANUAL',
+      assigned_request_ids: ['request-1', 'request-2'],
+      assigned_count: 2,
+    };
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(response));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.dispatchContractor(
+      'warehouse-1',
+      'contractor-1',
+      '2026-08-31',
+      'MANUAL',
+      ['request-1', 'request-2'],
+    )).resolves.toEqual(response);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/warehouses/warehouse-1/contractor-dispatches');
+    expect(bodyAt(fetchMock, 0)).toEqual({
+      contractor_worker_id: 'contractor-1',
+      planning_date: '2026-08-31',
+      mode: 'MANUAL',
+      request_ids: ['request-1', 'request-2'],
+    });
+  });
+
   it('uses warehouse endpoints for generated load and day closing', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ warehouse_id: 'warehouse-1', created_requests: 8 }))

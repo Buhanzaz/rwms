@@ -1477,8 +1477,8 @@ and
 1. Warehouse-service returns every active directed support link that is valid at the served
    warehouse's local instant. The link has independent driver, vehicle, inventory, direct-delivery,
    transfer and contractor capabilities plus priority and its recurring/date-exception calendar.
-2. The planner evaluates local shifts first, then every eligible support warehouse and every
-   confirmed contractor shift. Each candidate retains its real resource-origin warehouse and
+2. The planner evaluates local staff shifts first, then every eligible support warehouse. Each
+   candidate retains its real resource-origin warehouse and
    support-link identity. Exact directed truck legs, both warehouse calendars, shift bounds,
    existing assignments, vehicle/trailer capacity and all customer windows decide feasibility;
    straight-line distance and isochrone containment do not.
@@ -1494,9 +1494,14 @@ and
    departure marks them in transit and actual unload completes the destination receipt.
 5. `RESOURCE_REPOSITION` is an explicit transfer intent. Task-board keeps the home warehouse and a
    dated operational-assignment history; the destination assignment activates after arrival and is
-   cancelled/released through the same transfer lifecycle. A contractor is a time-bounded worker
-   profile without an automatically provisioned login and participates only inside the confirmed
-   availability interval.
+   cancelled/released through the same transfer lifecycle. A contractor is instead a reusable,
+   task-board-owned on-demand worker profile without a required vehicle, availability range,
+   internal cycle or automatically provisioned login. It never enters the staff optimizer. The
+   dispatcher chooses the date in the workspace header and then either asks the server to assign
+   all eligible unassigned work or submits an explicit request set. The simulator validates the
+   active warehouse-owned profile, locks each request, invalidates mutable plans for the affected
+   date and records `CONTRACTOR_HANDOFF`. Real RWMS deliveries use the canonical assignment command
+   with a concrete worker and stable idempotency identity; generated/manual demand remains local.
 6. The simulator resolves a non-transitive dated planning group from the warehouse-service
    adjacent support network. A main warehouse and every directly served, routing-ready
    representative share one root plan and root resources; each imported order keeps its own
@@ -1514,7 +1519,12 @@ and
    whose capabilities admit a driver plus vehicle or contractor fallback. Hold recomputes the same
    rule immediately before persistence; no support candidate fabricates a fixed slot or external
    resource reservation.
-9. A transfer draft may include outbound cabin requirement groups and independent top-level
+9. The request feed carries the nullable confirmed delivery-price and hourly-tariff pair. The
+   standalone request projection replaces that pair atomically, and delivery, unassigned and map
+   cards render the formatted amount or an explicit not-calculated state. A list-card selection
+   highlights the same marker and pans at the current zoom; selecting a warehouse marker alone
+   does not change workspace, while the explicit go-to action activates that exact warehouse UUID.
+10. A transfer draft may include outbound cabin requirement groups and independent top-level
    capital-repair return lines. Creation locks the selected repair/assets in stable order and
    atomically creates a linked concrete-line reverse transfer. Confirmation/departure/arrival retain
    the ordinary reservation and in-transit rules for each direction. Driver content freezes exact
@@ -1526,6 +1536,8 @@ Evidence:
 [`adjacent support boundary`](../../services/warehouse-service/src/main/java/dev/buhanzaz/rwms/warehouse/api/LogisticsWarehouseController.java),
 [`planning group`](../../logistics/backend/app/services/planning_group.py),
 [`support candidates`](../../logistics/backend/app/services/support_resource_candidates.py),
+[`contractor handoff`](../../logistics/backend/app/services/contractor_assignment.py),
+[`contractor UI`](../../logistics/frontend/src/features/contractors/ContractorAssignmentDialog.tsx),
 [`planner runtime`](../../logistics/backend/app/services/planner_runtime.py),
 [`representative slot policy`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/service/RepresentativeDeliverySlotPolicy.java),
 [`transfer workflow`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/service/TransferPlanWorkflowStore.java), and

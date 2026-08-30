@@ -4,6 +4,7 @@ import type { AddressSuggestion, GeocodedAddress } from '../../api/client';
 import type { Warehouse } from '../../domain/types';
 import { Button, CheckboxField, Spinner } from '../../components/ui';
 import { useUiStore } from '../../stores/ui-store';
+import { userFacingErrorDetail } from '../../utils/user-facing-error';
 import type {
   SlotAvailabilityInput,
   SlotAvailabilityOption,
@@ -170,7 +171,7 @@ export function SlotAvailabilityPanel({
         if (controller.signal.aborted) return;
         setSuggestions([]);
         setAddressLookupStatus('error');
-        setAddressLookupError(caught instanceof Error ? caught.message : 'Не удалось найти адрес');
+        setAddressLookupError(userFacingErrorDetail(caught, 'Не удалось найти адрес'));
       });
     }, 250);
     return () => {
@@ -199,7 +200,7 @@ export function SlotAvailabilityPanel({
       }).catch((caught: unknown) => {
         if (controller.signal.aborted) return;
         setAddressLookupStatus('error');
-        setAddressLookupError(caught instanceof Error ? caught.message : 'Адрес для точки не найден');
+        setAddressLookupError(userFacingErrorDetail(caught, 'Адрес для точки не найден'));
       });
     }, 250);
     return () => {
@@ -244,7 +245,7 @@ export function SlotAvailabilityPanel({
         if (controller.signal.aborted) return;
         setResponse(null);
         setStatus('error');
-        setError(caught instanceof Error ? caught.message : 'Не удалось рассчитать слоты');
+        setError(userFacingErrorDetail(caught, 'Не удалось рассчитать слоты'));
       });
     }, debounceMilliseconds);
     return () => {
@@ -291,7 +292,7 @@ export function SlotAvailabilityPanel({
       onPointChange({ latitude: value.latitude, longitude: value.longitude });
     } catch (caught: unknown) {
       setAddressLookupStatus('error');
-      setAddressLookupError(caught instanceof Error ? caught.message : 'Не удалось определить координаты адреса');
+      setAddressLookupError(userFacingErrorDetail(caught, 'Не удалось определить координаты адреса'));
     }
   };
 
@@ -383,7 +384,7 @@ export function SlotAvailabilityPanel({
               <div><strong>{STOP_LABELS[stop.type] ?? stop.type}</strong><small>{stop.label}</small></div>
               <b>Груз {stop.load_before ?? '—'} → {stop.load_after ?? '—'}</b>
               {stop.waiting_minutes ? <em>ожидание {stop.waiting_minutes} мин</em> : null}
-            </article>) : <p>Backend не вернул временную шкалу для этого варианта.</p>}
+            </article>) : <p>Сервис не вернул временную шкалу для этого варианта.</p>}
           </div>
         </section> : null}
       </div>

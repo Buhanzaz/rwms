@@ -121,6 +121,7 @@ async def load_support_resource_facts(
             if (
                 identity.operational_warehouse_id
                 != served_warehouse.external_warehouse_id
+                or identity.employment_type != "STAFF"
                 or not _confirmed_identity(identity)
             ):
                 continue
@@ -216,9 +217,9 @@ async def load_support_resource_facts(
                 continue
             matched = identities_by_worker.get(shift.driver.external_worker_id, ())
             for _, identity in matched:
-                if not _confirmed_identity(identity):
+                if identity.employment_type != "STAFF" or not _confirmed_identity(identity):
                     continue
-                had_local_staff_fact |= identity.employment_type == "STAFF"
+                had_local_staff_fact = True
                 fact = SupportResourceFact(
                     link=link,
                     support_warehouse=support,
@@ -327,6 +328,10 @@ async def route_support_resource_facts(
     routed: list[RoutedSupportResource] = []
     shift_limited = False
     for fact in facts.candidates:
+        if fact.identity.employment_type != "STAFF":
+            # Contractors receive a direct task handoff. Their unknown vehicle and
+            # workload must never be fabricated as an internal routed shift.
+            continue
         shift = fact.shift
         zone = ZoneInfo(fact.support_warehouse.timezone)
         shift_start = datetime.combine(
@@ -422,8 +427,6 @@ async def route_support_resource_facts(
             PlanningReason.SUPPORT_DRIVER_AVAILABLE,
             PlanningReason.SLOT_AFTER_RESOURCE_ARRIVAL,
         ]
-        if fact.identity.employment_type == "CONTRACTOR":
-            candidate_reasons.append(PlanningReason.CONTRACTOR_CONFIRMED)
         routed.append(
             RoutedSupportResource(
                 fact=fact,
@@ -463,12 +466,8 @@ async def route_support_resource_facts(
 
 
 def _confirmed_identity(identity: RwmsDriverIdentity) -> bool:
-    """Accept only bounded contractor/incoming facts explicitly returned by task-board."""
+    """Accept only incoming staff facts with an explicit bounded availability interval."""
 
-    if identity.employment_type == "CONTRACTOR" and (
-        identity.available_from is None or identity.available_until is None
-    ):
-        return False
     if identity.availability_kind == "INCOMING" and (
         identity.available_from is None or identity.available_until is None
     ):

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 from collections.abc import Mapping
 from datetime import datetime
 from functools import lru_cache
@@ -27,6 +29,8 @@ from app.schemas.domain import (
 )
 
 RWMS_PLANNING_SCOPE = "logistics.planning"
+_UPSTREAM_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,95}$")
+logger = logging.getLogger(__name__)
 
 
 class _TokenResponse(BaseModel):
@@ -331,12 +335,43 @@ class RwmsPlanningClient:
                 "RWMS logistics-service could not be reached",
             ) from exc
         if response.is_error:
+            upstream_code = self._safe_problem_code(response)
+            logger.warning(
+                "RWMS logistics-service rejected %s %s with status=%s code=%s",
+                method,
+                path,
+                response.status_code,
+                upstream_code or "UNKNOWN",
+            )
             raise ApiError(
                 502,
-                "RWMS_REQUEST_FAILED",
-                f"RWMS logistics-service returned HTTP {response.status_code}",
+                f"RWMS_{upstream_code}" if upstream_code is not None else "RWMS_REQUEST_FAILED",
+                "RWMS logistics-service rejected the request",
+                extra={
+                    "upstream_status": response.status_code,
+                    **(
+                        {"upstream_code": upstream_code}
+                        if upstream_code is not None
+                        else {}
+                    ),
+                },
             )
         return response
+
+    @staticmethod
+    def _safe_problem_code(response: httpx.Response) -> str | None:
+        """Extract only a bounded machine code from upstream Problem Details."""
+
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        candidate = payload.get("code") or payload.get("title")
+        if not isinstance(candidate, str) or _UPSTREAM_CODE.fullmatch(candidate) is None:
+            return None
+        return candidate
 
     async def _get_access_token(self) -> str:
         """Return a cached token, refreshing it before its expiry margin."""
@@ -384,7 +419,8 @@ class RwmsPlanningClient:
             raise ApiError(
                 502,
                 "RWMS_TOKEN_REQUEST_FAILED",
-                f"RWMS OAuth token endpoint returned HTTP {response.status_code}",
+                "RWMS OAuth token endpoint rejected the request",
+                extra={"upstream_status": response.status_code},
             )
         try:
             return _TokenResponse.model_validate(response.json())

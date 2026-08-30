@@ -175,9 +175,7 @@ describe('canonical transfer client', () => {
       contractorId: 'contractor-1',
       displayName: 'Иванов Илья',
       phone: '+79990001122',
-      availableFrom: '2026-08-30T05:00:00Z',
-      availableUntil: '2026-08-30T17:00:00Z',
-      comment: 'На один день',
+      comment: 'Подрядчик',
     })).resolves.toEqual({ workerId: 'worker-2', displayName: 'Иванов Илья' });
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -187,9 +185,7 @@ describe('canonical transfer client', () => {
       contractorId: 'contractor-1',
       displayName: 'Иванов Илья',
       phone: '+79990001122',
-      availableFrom: '2026-08-30T05:00:00Z',
-      availableUntil: '2026-08-30T17:00:00Z',
-      comment: 'На один день',
+      comment: 'Подрядчик',
     });
   });
 

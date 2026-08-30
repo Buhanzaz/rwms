@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from app.config import Settings
 from app.main import create_app, openapi_document
 from app.schemas.domain import (
+    ContractorDispatchCreate,
     DriverCreate,
     LogisticsRequestCreate,
     PlanningSettings,
@@ -42,6 +43,8 @@ def test_openapi_exposes_only_warehouse_rooted_product_operations() -> None:
     assert "/api/plans/{plan_id}/confirm" in paths
     assert "/api/plans/{plan_id}/manual-changes/reset" in paths
     assert "/api/warehouses/{warehouse_id}/planning-days/{planning_date}/close" in paths
+    assert "/api/requests/{request_id}/contractor-assignment" in paths
+    assert "/api/warehouses/{warehouse_id}/contractor-dispatches" in paths
     assert "/api/planning/slot-availability" in paths
     assert "/api/warehouses/{warehouse_id}/plans/generate" not in paths
     assert "get" not in paths["/api/warehouses/{warehouse_id}/drivers"]
@@ -79,10 +82,66 @@ def test_openapi_exposes_only_warehouse_rooted_product_operations() -> None:
         "date",
         "accepting_requests",
     }
+    request = document["components"]["schemas"]["LogisticsRequestRead"]
+    assert "delivery_price_rubles" in request["properties"]
+    assert "price_isochrone_minutes" in request["properties"]
+    assert "assignment_type" in request["properties"]
+    assert {
+        "delivery_price_rubles",
+        "price_isochrone_minutes",
+        "assignment_type",
+        "assigned_contractor_worker_id",
+        "assigned_contractor_name",
+        "assigned_contractor_phone",
+        "assigned_at",
+        "assigned_by",
+    }.issubset(request["required"])
+    contractor = document["components"]["schemas"]["ContractorAssignmentCreate"]
+    assert set(contractor["required"]) == {"contractor_worker_id"}
+    dispatch = document["components"]["schemas"]["ContractorDispatchCreate"]
+    assert set(dispatch["required"]) == {
+        "contractor_worker_id",
+        "planning_date",
+        "mode",
+    }
+    assert "request_ids" in dispatch["properties"]
     with TestClient(create_app()) as client:
         response = client.get("/api/openapi.json")
     assert response.status_code == 200
     assert response.json()["info"]["title"] == "RWMS Logistics Planning"
+
+
+def test_contractor_dispatch_contract_uses_header_date_and_server_owned_selection() -> None:
+    """AUTO rejects browser-selected rows while MANUAL requires unique request ids."""
+
+    contractor_id = uuid4()
+    request_id = uuid4()
+    automatic = ContractorDispatchCreate(
+        contractor_worker_id=contractor_id,
+        planning_date=date(2026, 8, 31),
+        mode="AUTO",
+    )
+    assert automatic.request_ids == []
+    with pytest.raises(ValidationError, match="must not contain"):
+        ContractorDispatchCreate(
+            contractor_worker_id=contractor_id,
+            planning_date=date(2026, 8, 31),
+            mode="AUTO",
+            request_ids=[request_id],
+        )
+    with pytest.raises(ValidationError, match="requires request_ids"):
+        ContractorDispatchCreate(
+            contractor_worker_id=contractor_id,
+            planning_date=date(2026, 8, 31),
+            mode="MANUAL",
+        )
+    with pytest.raises(ValidationError, match="must be unique"):
+        ContractorDispatchCreate(
+            contractor_worker_id=contractor_id,
+            planning_date=date(2026, 8, 31),
+            mode="MANUAL",
+            request_ids=[request_id, request_id],
+        )
 
 
 def test_slot_planning_openapi_exposes_dynamic_isochrone_tariff() -> None:

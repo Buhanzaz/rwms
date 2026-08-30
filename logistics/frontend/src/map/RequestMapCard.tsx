@@ -1,10 +1,10 @@
-import { CalendarCheck2, CalendarX2, Clock3, MapPin, PackageOpen, Route, UserRound, X } from 'lucide-react';
+import { Banknote, CalendarCheck2, CalendarX2, Clock3, MapPin, PackageOpen, Route, UserRound, UserRoundCheck, X } from 'lucide-react';
 import maplibregl, { type Map as MapLibreMap } from 'maplibre-gl';
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { LogisticsRequest, PlanningTask, RouteCycle, RoutePlan, UUID, Warehouse } from '../domain/types';
 import type { PlanMove } from '../features/planning/PlanPanel';
-import { formatDate, formatTime } from '../utils/format';
+import { formatDate, formatDeliveryPrice, formatTime } from '../utils/format';
 import { DatePicker } from '../components/DatePicker';
 
 interface RequestMapCardProps {
@@ -123,8 +123,10 @@ export function RequestMapCard({
       <dl className="request-map-menu__details">
         <div><dt><MapPin size={12} aria-hidden="true" />Адрес</dt><dd>{request.address_label}</dd></div>
         <div><dt><PackageOpen size={12} aria-hidden="true" />Объём</dt><dd>{request.quantity} бытов. · обслуживание {request.service_minutes} мин</dd></div>
+        <div><dt><Banknote size={12} aria-hidden="true" />Стоимость доставки</dt><dd>{formatDeliveryPrice(request.delivery_price_rubles)}{request.price_isochrone_minutes ? ` · изохрона до ${request.price_isochrone_minutes / 60} ч` : ''}</dd></div>
         <div><dt><Clock3 size={12} aria-hidden="true" />Тариф</dt><dd>рассчитывается по времени пути в изохроне склада</dd></div>
       </dl>
+      {request.assignment_type === 'CONTRACTOR_HANDOFF' ? <div className="request-map-menu__contractor"><UserRoundCheck size={13} aria-hidden="true" />Передано наёмному водителю: <strong>{request.assigned_contractor_name}</strong></div> : null}
       {request.notes ? <p className="request-map-menu__notes">{request.notes}</p> : null}
 
       {assignments.length ? (

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../src/api/client';
 import { actionErrorFeedback } from '../src/app/action-error';
+import { userFacingErrorDetail, validationMessageRu } from '../src/utils/user-facing-error';
 
 describe('action error feedback', () => {
   it('refreshes the loaded plan only for an actual plan-version conflict', () => {
@@ -26,6 +27,41 @@ describe('action error feedback', () => {
       detail: 'Включите «Перегенерировать выбранный период».',
       refreshPlan: false,
     });
+  });
+
+  it('turns manual-plan diagnostics into actionable Russian guidance', () => {
+    const feedback = actionErrorFeedback(new ApiError(422, {
+      code: 'MANUAL_CHANGE_INVALID',
+      detail: 'The edited cycle violates capacity, detour, window, or shift limits',
+      errors: [{ code: 'NO_FEASIBLE_CYCLE' }],
+    }, 'HTTP 422'));
+
+    expect(feedback.title).toBe('Рейс нельзя добавить');
+    expect(feedback.detail).toContain('График водителя');
+    expect(`${feedback.title} ${feedback.detail}`).not.toMatch(/manual|cycle|capacity|HTTP|shift/iu);
+  });
+
+  it('never exposes an upstream HTTP 400 from logistics settings', () => {
+    const feedback = actionErrorFeedback(new ApiError(400, {
+      code: 'RWMS_REQUEST_FAILED',
+      detail: 'RMS Logistics Service returned HTTP 400',
+    }, 'HTTP 400'));
+
+    expect(feedback.title).toBe('Не удалось обновить логистику');
+    expect(feedback.detail).toContain('Проверьте введённые данные');
+    expect(`${feedback.title} ${feedback.detail}`).not.toMatch(/RMS|HTTP 400/iu);
+  });
+
+  it('explains the contractor fallback from a stable planner reason code', () => {
+    expect(validationMessageRu('CONTRACTOR_REQUIRED')).toBe(
+      'Подходящий штатный ресурс не найден. Добавьте наёмного водителя на этот день и передайте ему доставку.',
+    );
+  });
+
+  it('filters mixed Russian and backend implementation details', () => {
+    expect(userFacingErrorDetail(new Error('Backend вернул HTTP 400: validation error'))).toBe(
+      'Повторите действие. Если ошибка сохранится, свяжитесь с администратором.',
+    );
   });
 
 });

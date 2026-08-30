@@ -7,6 +7,7 @@ import static dev.buhanzaz.rwms.taskboard.api.LogisticsDriverAssignmentApiModels
 import static dev.buhanzaz.rwms.taskboard.api.LogisticsDriverAssignmentApiModels.WorkerOperationalAssignmentResponse;
 
 import dev.buhanzaz.rwms.taskboard.security.TaskSyncAuthorizer;
+import dev.buhanzaz.rwms.taskboard.service.ContractorDriverService;
 import dev.buhanzaz.rwms.taskboard.service.WorkerOperationalAssignmentService;
 import jakarta.validation.Valid;
 import java.util.List;
@@ -32,10 +33,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 @RequestMapping("/api/internal/task-board/v1/logistics")
 public class InternalLogisticsDriverAssignmentController {
+  private final ContractorDriverService contractors;
   private final WorkerOperationalAssignmentService assignments;
   private final TaskSyncAuthorizer access;
 
-  /** Creates a time-bounded contractor profile without provisioning authentication credentials. */
+  /** Creates an on-demand contractor profile without provisioning authentication credentials. */
   @PostMapping("/warehouses/{warehouseId}/contractors")
   @ResponseStatus(HttpStatus.CREATED)
   public ContractorDriverResponse createContractor(
@@ -43,7 +45,7 @@ public class InternalLogisticsDriverAssignmentController {
       @PathVariable UUID warehouseId,
       @Valid @RequestBody CreateContractorDriverRequest request) {
     access.requireLogisticsTaskAccess(jwt);
-    return assignments.createContractor(warehouseId, request);
+    return contractors.create(warehouseId, request);
   }
 
   /** Creates a planned assignment or returns its identical transfer-and-worker replay. */

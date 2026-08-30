@@ -2,6 +2,7 @@ import { Bell, Moon, Sun, Trash2, X } from 'lucide-react';
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react';
 import { useEffect, useState } from 'react';
 import { useUiStore } from '../stores/ui-store';
+import { userFacingErrorDetail } from '../utils/user-facing-error';
 import type { NotificationMessage } from '../stores/ui-store';
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -169,7 +170,7 @@ export function ErrorPanel({ title = 'Не удалось загрузить д�
   error: unknown;
   onRetry?: () => void;
 }) {
-  const detail = error instanceof Error ? error.message : 'Неизвестная ошибка';
+  const detail = userFacingErrorDetail(error);
   return (
     <div className="error-panel" role="alert" data-testid="error-panel">
       <strong>{title}</strong>

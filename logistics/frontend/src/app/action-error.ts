@@ -1,4 +1,5 @@
 import { ApiError } from '../api/client';
+import { userFacingError } from '../utils/user-facing-error';
 
 export interface ActionErrorFeedback {
   tone: 'warning' | 'error';
@@ -29,15 +30,16 @@ export function actionErrorFeedback(error: unknown): ActionErrorFeedback {
     return {
       tone: 'warning',
       title: (error.code ? conflictTitles[error.code] : undefined) ?? 'Изменение конфликтует с текущими данными',
-      detail: error.message,
+      detail: userFacingError(error).detail,
       refreshPlan: false,
     };
   }
 
+  const feedback = userFacingError(error);
   return {
     tone: 'error',
-    title: error instanceof ApiError && error.status === 0 ? 'Backend недоступен' : 'Операция не выполнена',
-    detail: error instanceof Error ? error.message : 'Неизвестная ошибка',
+    title: feedback.title,
+    detail: feedback.detail,
     refreshPlan: false,
   };
 }

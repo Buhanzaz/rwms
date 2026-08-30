@@ -71,12 +71,6 @@ public class Worker extends AbstractVersionedEntity {
   @Column(name = "phone", length = 64)
   private String phone;
 
-  @Column(name = "contract_available_from")
-  private OffsetDateTime contractAvailableFrom;
-
-  @Column(name = "contract_available_until")
-  private OffsetDateTime contractAvailableUntil;
-
   @Column(name = "app_login", length = 128)
   private String appLogin;
 
@@ -181,33 +175,14 @@ public class Worker extends AbstractVersionedEntity {
     this.comment = comment;
   }
 
-  /** Configures this profile as a contractor available only inside the supplied time range. */
-  public void configureContractor(
-      String phone, OffsetDateTime availableFrom, OffsetDateTime availableUntil) {
+  /** Configures this profile as an on-demand contractor without creating a staff shift. */
+  public void configureContractor(String phone) {
     String normalizedPhone = trim(phone);
     if (normalizedPhone == null) {
       throw new IllegalArgumentException("Укажите телефон наёмного водителя");
     }
-    if (availableFrom == null
-        || availableUntil == null
-        || !availableUntil.isAfter(availableFrom)) {
-      throw new IllegalArgumentException(
-          "Период доступности наёмного водителя задан некорректно");
-    }
     employmentType = WorkerEmploymentType.CONTRACTOR;
     this.phone = normalizedPhone;
-    contractAvailableFrom = availableFrom;
-    contractAvailableUntil = availableUntil;
-  }
-
-  /** Returns whether a contractor contract covers the supplied instant; staff are always covered. */
-  public boolean contractCovers(OffsetDateTime at) {
-    if (employmentType == WorkerEmploymentType.STAFF) {
-      return true;
-    }
-    return at != null
-        && !at.isBefore(contractAvailableFrom)
-        && at.isBefore(contractAvailableUntil);
   }
 
   public WorkerEmploymentType getEmploymentType() {
@@ -216,14 +191,6 @@ public class Worker extends AbstractVersionedEntity {
 
   public String getPhone() {
     return phone;
-  }
-
-  public OffsetDateTime getContractAvailableFrom() {
-    return contractAvailableFrom;
-  }
-
-  public OffsetDateTime getContractAvailableUntil() {
-    return contractAvailableUntil;
   }
 
   public String getAppLogin() {
@@ -292,17 +259,13 @@ public class Worker extends AbstractVersionedEntity {
 
   private void validateEmployment() {
     if (employmentType == WorkerEmploymentType.STAFF) {
-      if (phone != null || contractAvailableFrom != null || contractAvailableUntil != null) {
+      if (phone != null) {
         throw new IllegalArgumentException(
-            "Период подрядчика допустим только для наёмного водителя");
+            "Телефон подрядчика допустим только для наёмного водителя");
       }
       return;
     }
-    if (employmentType != WorkerEmploymentType.CONTRACTOR
-        || phone == null
-        || contractAvailableFrom == null
-        || contractAvailableUntil == null
-        || !contractAvailableUntil.isAfter(contractAvailableFrom)) {
+    if (employmentType != WorkerEmploymentType.CONTRACTOR || phone == null) {
       throw new IllegalArgumentException("Профиль наёмного водителя заполнен не полностью");
     }
   }

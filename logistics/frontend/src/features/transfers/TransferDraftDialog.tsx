@@ -4,6 +4,7 @@ import { beginPanelLogin, restorePanelUser } from '../../auth/panel-oidc';
 import { Button, CheckboxField, EmptyState, Field, Modal, SelectField, Spinner } from '../../components/ui';
 import type { AvailableWarehouse } from '../../domain/types';
 import { formatDistance, formatDuration, localDateTimeToIso } from '../../utils/format';
+import { userFacingErrorDetail } from '../../utils/user-facing-error';
 import {
   createTransferContractor,
   createTransferDraft,
@@ -74,7 +75,7 @@ function currentReturnTo() {
 }
 
 function errorMessage(value: unknown, fallback: string) {
-  return value instanceof Error ? value.message : fallback;
+  return userFacingErrorDetail(value, fallback);
 }
 
 function arrivalLabel(value: string, timeZone: string) {
@@ -128,8 +129,6 @@ export function TransferDraftDialog({
   const [contractorOpen, setContractorOpen] = useState(false);
   const [contractorName, setContractorName] = useState('');
   const [contractorPhone, setContractorPhone] = useState('');
-  const [contractorFrom, setContractorFrom] = useState(`${scheduledDate}T08:00`);
-  const [contractorUntil, setContractorUntil] = useState(`${scheduledDate}T20:00`);
   const [contractorComment, setContractorComment] = useState('');
   const [contractorBusy, setContractorBusy] = useState(false);
   const [estimateState, setEstimateState] = useState<EstimateState>({ status: 'idle' });
@@ -311,23 +310,11 @@ export function TransferDraftDialog({
 
   const addContractor = async () => {
     setError(null);
-    if (session.status !== 'authenticated' || !sourceWarehouse || !contractorName.trim() || !contractorPhone.trim() || !contractorFrom || !contractorUntil) {
-      setError('Заполните имя, телефон и период доступности наёмного водителя');
+    if (session.status !== 'authenticated' || !sourceWarehouse || !contractorName.trim() || !contractorPhone.trim()) {
+      setError('Заполните имя и телефон наёмного водителя');
       return;
     }
-    const [fromDate, fromTime] = contractorFrom.split('T');
-    const [untilDate, untilTime] = contractorUntil.split('T');
-    if (!fromDate || !fromTime || !untilDate || !untilTime) {
-      setError('Период доступности наёмного водителя задан некорректно');
-      return;
-    }
-    const availableFrom = localDateTimeToIso(fromDate, fromTime, sourceWarehouse.timezone);
-    const availableUntil = localDateTimeToIso(untilDate, untilTime, sourceWarehouse.timezone);
-    if (new Date(availableUntil) <= new Date(availableFrom)) {
-      setError('Окончание смены наёмного водителя должно быть позже начала');
-      return;
-    }
-    const fingerprint = JSON.stringify({ sourceWarehouseId, contractorName: contractorName.trim(), contractorPhone: contractorPhone.trim(), availableFrom, availableUntil, contractorComment: contractorComment.trim() });
+    const fingerprint = JSON.stringify({ sourceWarehouseId, contractorName: contractorName.trim(), contractorPhone: contractorPhone.trim(), contractorComment: contractorComment.trim() });
     if (contractorIntentRef.current?.fingerprint !== fingerprint) contractorIntentRef.current = { fingerprint, id: crypto.randomUUID() };
     setContractorBusy(true);
     try {
@@ -337,8 +324,6 @@ export function TransferDraftDialog({
         contractorId: contractorIntentRef.current.id,
         displayName: contractorName.trim(),
         phone: contractorPhone.trim(),
-        availableFrom,
-        availableUntil,
         comment: contractorComment.trim() || null,
       });
       setDriverState((current) => ({ status: 'ready', value: current.status === 'ready' && current.value.some((item) => item.workerId === driver.workerId) ? current.value : [...(current.status === 'ready' ? current.value : []), driver] }));
@@ -541,10 +526,8 @@ export function TransferDraftDialog({
             {contractorOpen ? <div className="form-grid transfer-contractor-form" aria-label="Наёмный водитель">
               <Field label="Имя наёмного водителя" value={contractorName} onChange={(event) => setContractorName(event.target.value)} />
               <Field label="Телефон наёмного водителя" type="tel" value={contractorPhone} onChange={(event) => setContractorPhone(event.target.value)} />
-              <Field label="Доступен с" type="datetime-local" value={contractorFrom} onChange={(event) => setContractorFrom(event.target.value)} />
-              <Field label="Доступен до" type="datetime-local" value={contractorUntil} onChange={(event) => setContractorUntil(event.target.value)} />
               <Field className="span-2" label="Комментарий по наёмному водителю" value={contractorComment} onChange={(event) => setContractorComment(event.target.value)} />
-              <Button type="button" variant="primary" disabled={contractorBusy} onClick={() => void addContractor()}>{contractorBusy ? 'Сохраняем…' : 'Подтвердить доступность'}</Button>
+              <Button type="button" variant="primary" disabled={contractorBusy} onClick={() => void addContractor()}>{contractorBusy ? 'Сохраняем…' : 'Добавить водителя'}</Button>
             </div> : null}
           </section>
 

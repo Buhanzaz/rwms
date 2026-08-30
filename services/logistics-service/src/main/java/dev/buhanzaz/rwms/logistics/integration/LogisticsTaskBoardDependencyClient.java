@@ -171,14 +171,17 @@ final class LogisticsTaskBoardDependencyClient {
             || "ACTIVE_ASSIGNMENT".equals(value.availabilityKind())
             || "INCOMING".equals(value.availabilityKind()))
         || (!includeIncoming && "INCOMING".equals(value.availabilityKind()))
-        || (value.availableFrom() != null
-            && value.availableUntil() != null
-            && !value.availableFrom().isBefore(value.availableUntil()))
+        || invalidAvailabilityRange(value.availableFrom(), value.availableUntil())
         || ("CONTRACTOR".equals(value.employmentType())
             && (value.phone() == null
-                || value.phone().isBlank()
-                || value.availableFrom() == null
-                || value.availableUntil() == null));
+                || value.phone().isBlank()));
+  }
+
+  /** Rejects an end without a start while allowing a date-free profile or open-ended assignment. */
+  private static boolean invalidAvailabilityRange(
+      OffsetDateTime availableFrom, OffsetDateTime availableUntil) {
+    return availableUntil != null
+        && (availableFrom == null || !availableFrom.isBefore(availableUntil));
   }
 
   private static String normalize(String value) {

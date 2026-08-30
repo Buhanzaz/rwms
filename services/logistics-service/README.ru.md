@@ -327,7 +327,10 @@ scope `logistics.planning`. Ограниченный feed передаёт ident
 адрес/координаты, ещё не включённые в отгрузки ID бытовок и все подтверждённые клиентом даты; у
 подтверждённого CustomerApp-бронирования дополнительно передаются точные `windowStart`, `windowEnd`
 и информационный положительный `travelZoneHours`, а также выведенный из вместимости объекта факт
-доступа с прицепом. Симулятор сохраняет полосу для пояснения, но никогда не использует её или
+доступа с прицепом. Также передаются nullable-поля подтверждённой цены
+`deliveryPriceRubles` и `priceIsochroneMinutes`. Сумма авторитетна, а ступень
+может отсутствовать у старого или специального тарифа; отсутствие суммы
+означает, что авторитетной logistics-цены ещё нет. Симулятор сохраняет полосу для пояснения, но никогда не использует её или
 тарифную зону для допустимости/ранжирования кандидатов. `FIXED_WINDOW` передаётся как прежний
 жёсткий интервал; `DURING_DAY` — как мягкая date-only опция с null в полях окна планировщика,
 чтобы оптимизатор выбрал допустимый час. Решающими остаются точные сегменты маршрута и каждое
@@ -341,6 +344,15 @@ scope `logistics.planning`. Ограниченный feed передаёт ident
 может перечитать только статусы созданных планировщиком назначений за один склад/день, поэтому после
 claim общая доставка показывается с авторитетным водителем; обычные ручные документы и контакты
 клиента исключены. Симулятор никогда не читает и не пишет базу RWMS напрямую.
+
+У каждого назначения есть additive `assignmentType`, по умолчанию `ROUTE_PLAN`
+для существующих клиентов. Маршрутное назначение сохраняет warehouse-local
+запрет автоматического применения сегодня/завтра и может содержать описанные
+ниже проверенные `driverShiftPlans`. `CONTRACTOR_HANDOFF` — отдельное явное
+решение диспетчера для одного конкретного `ASSIGNED_DRIVER`: завтра разрешено,
+а внутренний snapshot автомобиля, смены или route cycle не требуется и не
+выдумывается. Оба пути повторно используют владельца rental shipment, fence
+версии заказа и идемпотентную семантику команды.
 
 Та же apply-команда может передавать `driverShiftPlans` для конкретного назначенного симулятором
 водителя и рабочей даты. Logistics проверяет уникальность source shift и пары водитель/рабочая
@@ -356,8 +368,13 @@ daily shift является task-board; logistics не хранит второ�
 `GET /api/internal/logistics/v1/planning/warehouses` публикует только факты активных складов от
 warehouse-service: `{warehouseId,name,city,address,timeZone}`; принадлежащий owner-у адрес nullable.
 После проверки identity склада
-`GET /api/internal/logistics/v1/planning/drivers?warehouseId=...` публикует только directory
-task-board `{workerId,displayName}` для активных primary-qualified водителей. Связный
+`GET /api/internal/logistics/v1/planning/drivers?warehouseId=...` публикует directory task-board для
+активных primary-qualified штатных и наёмных водителей. Профиль наёмного водителя является ресурсом
+по требованию, поэтому содержит телефон, но не профильные даты доступности; для оперативно
+перемещённого штатного водителя сохраняется фактический интервал
+`availableFrom`/`availableUntil`. Обычный автопланировщик по-прежнему рассматривает только
+`employmentType=STAFF`, а наёмный водитель используется лишь явным сценарием
+`CONTRACTOR_HANDOFF`. Связный
 [`PlanningResourceDirectoryService`](src/main/java/dev/buhanzaz/rwms/logistics/planning/service/PlanningResourceDirectoryService.java)
 закрывает доступ при malformed, duplicate или недоступных owner data и не хранит дублирующий
 directory. Каждое чтение planning feed заново читает `SAVED` orders и их подтверждённые слоты
@@ -535,7 +552,7 @@ port. Его неизменённый constructor собирает шесть ow
 | Политики document admission, idempotency, attempts, reads и binding | Узкие leaves warehouse, replay, external-attempt, projection и active-order |
 | `RentalOrderService` | Стабильный order facade над reads, creation, lifecycle, reservations, terms и shipment hand-off |
 | `RentalOrderUnitReplacementService` | Direct и presentation replacement через ordered batch checkpoints, pre-start отмену driver task и сходимость order/document members |
-| `RentalOrderPlanningIntegrationService` | Минимальный versioned feed планировщика и idempotent применение через существующего владельца rental shipment без общего состояния БД |
+| `RentalOrderPlanningIntegrationService` | Versioned feed с подтверждённой ценой и idempotent применение route plan либо явной передачи подрядчику через существующего владельца rental shipment без общего состояния БД |
 | `PlanningResourceDirectoryService` | Проверенные least-privilege warehouse и active primary-driver resources от их exact domain owners без local projection |
 | `WarehouseCapacitySnapshotService` | Per-warehouse idempotent замена capacity, monotonic generation fencing и canonical persistence упорядоченных часовых тарифов изохрон |
 | `FutureDriverTaskClaimService` | Future-only preview/claim общего задания с проверкой квалификации и versions в task-board; выполнение не запускается |

@@ -6,6 +6,7 @@ export type ThemeMode = 'light' | 'dark';
 export type LeftSection =
   | 'WAREHOUSE'
   | 'DRIVERS'
+  | 'CONTRACTORS'
   | 'VEHICLES'
   | 'SHIFTS'
   | 'REQUESTS'
@@ -56,7 +57,6 @@ interface UiState {
   selected: MapSelection;
   mapClickDraft: MapClickDraft | null;
   layers: LayerVisibility;
-  sidebarsCollapsed: boolean;
   notifications: NotificationMessage[];
   notificationDurationSeconds: number;
   simulationTimestamp: number | null;
@@ -71,7 +71,6 @@ interface UiState {
   setSelected: (selected: MapSelection) => void;
   setMapClickDraft: (draft: MapClickDraft | null) => void;
   toggleLayer: (layer: keyof LayerVisibility) => void;
-  toggleSidebars: () => void;
   toast: (toast: Omit<NotificationMessage, 'id' | 'createdAt' | 'visible' | 'read'>) => void;
   dismissToast: (id: string) => void;
   clearNotifications: () => void;
@@ -164,7 +163,6 @@ export const useUiStore = create<UiState>((set) => ({
   selected: null,
   mapClickDraft: null,
   layers: initialLayers,
-  sidebarsCollapsed: false,
   notifications: [],
   notificationDurationSeconds: readNotificationDuration(),
   simulationTimestamp: null,
@@ -182,7 +180,6 @@ export const useUiStore = create<UiState>((set) => ({
   setSelected: (selected) => set({ selected }),
   setMapClickDraft: (mapClickDraft) => set({ mapClickDraft }),
   toggleLayer: (layer) => set((state) => ({ layers: { ...state.layers, [layer]: !state.layers[layer] } })),
-  toggleSidebars: () => set((state) => ({ sidebarsCollapsed: !state.sidebarsCollapsed })),
   toast: (toast) =>
     set((state) => {
       const createdAt = new Date().toISOString();

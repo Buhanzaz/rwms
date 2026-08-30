@@ -79,6 +79,8 @@ def _source_request(
     latitude: float | None = 59.94,
     longitude: float | None = 30.33,
     planning_date: date = date(2026, 8, 30),
+    delivery_price_rubles: int | None = None,
+    price_isochrone_minutes: int | None = None,
 ) -> RwmsPlanningRequest:
     """Build one strict upstream request for synchronization and assignment tests."""
 
@@ -104,6 +106,8 @@ def _source_request(
             )
         ],
         trailer_access_allowed=True,
+        delivery_price_rubles=delivery_price_rubles,
+        price_isochrone_minutes=price_isochrone_minutes,
         created_at=datetime(2026, 8, 28, 8, tzinfo=UTC),
     )
 
@@ -114,6 +118,15 @@ def test_capacity_publication_requires_rwms_sync_configuration() -> None:
     assert Settings().rwms_capacity_publish_enabled is False
     with pytest.raises(ValueError, match="requires RWMS_SYNC_ENABLED"):
         Settings(rwms_sync_enabled=False, rwms_capacity_publish_enabled=True)
+
+
+def test_planning_request_accepts_confirmed_price_without_historical_tier() -> None:
+    """Keep an authoritative amount usable when an older slot has no tier snapshot."""
+
+    request = _source_request(delivery_price_rubles=20_000)
+
+    assert request.delivery_price_rubles == 20_000
+    assert request.price_isochrone_minutes is None
 
 
 @pytest.mark.parametrize(
@@ -361,6 +374,43 @@ async def test_directory_client_reads_frozen_adjacent_support_network() -> None:
     assert links[0].served_warehouse.warehouse_id == served_id
 
 
+@pytest.mark.asyncio
+async def test_rwms_client_retains_safe_problem_code_without_raw_http_detail() -> None:
+    """Upstream Problem Details remains classifiable without exposing HTTP-only diagnostics."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "auth.internal":
+            return httpx.Response(
+                200,
+                json={"access_token": "opaque-token", "expires_in": 300},
+                request=request,
+            )
+        return httpx.Response(
+            400,
+            json={
+                "code": "LOGISTICS_INVALID_REQUEST",
+                "detail": "internal implementation detail",
+            },
+            request=request,
+        )
+
+    client = RwmsPlanningClient(
+        _enabled_settings(),
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(ApiError) as failure:
+        await client.list_warehouses()
+
+    assert failure.value.code == "RWMS_LOGISTICS_INVALID_REQUEST"
+    assert failure.value.detail == "RWMS logistics-service rejected the request"
+    assert failure.value.extra == {
+        "upstream_status": 400,
+        "upstream_code": "LOGISTICS_INVALID_REQUEST",
+    }
+    assert "HTTP 400" not in failure.value.detail
+
+
 def test_warehouse_directory_schema_rejects_partial_or_inconsistent_coordinates() -> None:
     """Treat every frozen directory field and a complete routing pair as mandatory."""
 
@@ -534,6 +584,67 @@ async def test_sync_imports_valid_rows_and_reports_missing_coordinates(
     assert (result.imported, result.updated, result.skipped) == (1, 0, 0)
     assert [failure.code for failure in result.failures] == ["COORDINATES_REQUIRED"]
     assert [request.external_id for request in stored] == [valid.order_id]
+
+
+@pytest.mark.asyncio
+async def test_sync_persists_and_refreshes_calculated_delivery_price(
+    db_session: AsyncSession,
+) -> None:
+    """Required nullable feed pricing survives import, refresh, and a fresh ORM read."""
+
+    warehouse = await make_warehouse(db_session)
+    source = _source_request(
+        delivery_price_rubles=28_500,
+        price_isochrone_minutes=180,
+    )
+    client = RwmsPlanningClient(_enabled_settings())
+    client.get_planning_requests = AsyncMock(
+        return_value=RwmsPlanningFeed(
+            warehouse_id=warehouse.external_warehouse_id,
+            time_zone=warehouse.timezone,
+            generated_at=datetime(2026, 8, 28, 8, tzinfo=UTC),
+            requests=[source],
+        )
+    )
+    command = RwmsSyncRequest(
+        warehouse_id=warehouse.external_warehouse_id,
+        date_from=date(2026, 8, 30),
+        date_to=date(2026, 8, 30),
+    )
+
+    imported = await sync_warehouse_requests(db_session, warehouse.id, command, client)
+    assert imported.imported == 1
+    stored = await db_session.scalar(
+        select(LogisticsRequest).where(LogisticsRequest.external_id == source.order_id)
+    )
+    assert stored is not None
+    assert stored.delivery_price_rubles == 28_500
+    assert stored.price_isochrone_minutes == 180
+
+    updated_source = source.model_copy(
+        update={
+            "source_revision": "b" * 64,
+            "delivery_price_rubles": 31_000,
+            "price_isochrone_minutes": 240,
+        }
+    )
+    client.get_planning_requests = AsyncMock(
+        return_value=RwmsPlanningFeed(
+            warehouse_id=warehouse.external_warehouse_id,
+            time_zone=warehouse.timezone,
+            generated_at=datetime(2026, 8, 28, 9, tzinfo=UTC),
+            requests=[updated_source],
+        )
+    )
+    refreshed = await sync_warehouse_requests(db_session, warehouse.id, command, client)
+    assert refreshed.updated == 1
+    db_session.expire_all()
+    reloaded = await db_session.scalar(
+        select(LogisticsRequest).where(LogisticsRequest.external_id == source.order_id)
+    )
+    assert reloaded is not None
+    assert reloaded.delivery_price_rubles == 31_000
+    assert reloaded.price_isochrone_minutes == 240
 
 
 def test_shared_driver_builds_explicit_warehouse_audience_assignment() -> None:

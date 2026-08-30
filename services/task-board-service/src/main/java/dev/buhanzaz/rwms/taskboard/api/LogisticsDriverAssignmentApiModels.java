@@ -20,28 +20,38 @@ public final class LogisticsDriverAssignmentApiModels {
    * @param contractorId caller-stable worker identity used for idempotent replay
    * @param displayName operator-facing name
    * @param phone contractor contact number
-   * @param availableFrom inclusive contract availability start
-   * @param availableUntil exclusive contract availability end
    * @param comment optional logistics note
    */
   public record CreateContractorDriverRequest(
       @NotNull UUID contractorId,
       @NotBlank @Size(max = 256) String displayName,
       @NotBlank @Size(max = 64) String phone,
-      @NotNull OffsetDateTime availableFrom,
-      @NotNull OffsetDateTime availableUntil,
       @Size(max = 1000) String comment) {}
+
+  /**
+   * Full version-fenced contractor profile replacement.
+   *
+   * @param expectedVersion observed worker version
+   * @param displayName operator-facing name
+   * @param phone contractor contact number
+   * @param comment optional logistics note
+   * @param active whether the contractor may receive new work
+   */
+  public record UpdateContractorDriverRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      @NotBlank @Size(max = 256) String displayName,
+      @NotBlank @Size(max = 64) String phone,
+      @Size(max = 1000) String comment,
+      @NotNull Boolean active) {}
 
   /**
    * Persisted contractor-driver profile without authentication data.
    *
    * @param workerId task-board worker identity
    * @param version optimistic worker version
-   * @param homeWarehouseId immutable home/availability warehouse
+   * @param homeWarehouseId immutable home/ownership warehouse
    * @param displayName operator-facing name
    * @param phone contractor contact number
-   * @param availableFrom inclusive contract availability start
-   * @param availableUntil exclusive contract availability end
    * @param comment optional logistics note
    * @param active whether the contractor may receive work
    * @param employmentType always CONTRACTOR for this response
@@ -52,8 +62,6 @@ public final class LogisticsDriverAssignmentApiModels {
       UUID homeWarehouseId,
       String displayName,
       String phone,
-      OffsetDateTime availableFrom,
-      OffsetDateTime availableUntil,
       String comment,
       boolean active,
       WorkerEmploymentType employmentType) {}

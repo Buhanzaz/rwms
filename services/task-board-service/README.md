@@ -228,6 +228,7 @@ components own the decisions:
 | `TaskBoardRoutePayloadCodec` | The single canonical route JSON and fingerprint codec |
 | `DriverTaskAudienceService` | Logistics-driver audience shape, qualification, visibility and execution authorization |
 | `LogisticsDriverDirectoryService` | Least-privilege active primary logistics-driver directory for the exact logistics-service caller |
+| `ContractorDriverService` / `WorkerOperationalAssignmentService` | Warehouse-owned on-demand contractor catalog and dated operational assignments; contractor profiles never require a vehicle or internal route-cycle model |
 | `DriverShiftService` | Driver plan registration, work-date resolution, shift/inspection/defect transitions, receipts and startup projection |
 | `HttpWarehouseIdentityGateway` | Exact private warehouse identity/timezone/coordinates read for the shift owner |
 | `MetNoWeatherProvider` / `WeatherHazardRules` | Fail-open normalized weather cache and configurable advisory derivation |
@@ -284,6 +285,7 @@ The public gateway maps `/api/task-board/**` to this service's downstream
 | `/api/queue-definitions/**` | Authenticated manager/admin policy | Global queue catalog, ordering, and reference-safe deletion |
 | `/api/worker-classes/**` | Authenticated manager/admin policy | Worker qualification catalog |
 | `/api/warehouses/{warehouseId}/workers/**` | Warehouse-authorized manager | Workers, groups, credential operations, and reconciliation |
+| `/api/warehouses/{warehouseId}/logistics-drivers/contractors` and `.../{workerId}` | Warehouse-authorized manager | Complete on-demand contractor catalog, creation, version-fenced profile replacement and deletion of unused profiles; list includes inactive profiles |
 | `/api/warehouses/{warehouseId}/work-queues` | Warehouse-authorized user | Physical queue projections and capabilities |
 | `/api/warehouses/{warehouseId}/task-board/**` | Warehouse-authorized user | Aggregate ordinary-board read and supported task commands |
 | `/api/warehouses/{warehouseId}/task-board/daily-brigade-activity` | Warehouse-authorized user | Actual task-assignment intervals overlapping the current warehouse-local day |
@@ -301,6 +303,11 @@ The public gateway maps `/api/task-board/**` to this service's downstream
 Private paths are service-to-service boundaries and are never exposed as client
 shortcuts. Their exact `principal_type`, `client_id`, scope, source ownership,
 and warehouse checks are part of the contract.
+Contractors remain `WorkerEmploymentType.CONTRACTOR` records with a contact,
+note and active flag. The catalog stores no availability dates: the selected
+planning day belongs to the downstream assignment. It does not provision
+credentials, require a vehicle or make the worker eligible for the ordinary
+primary-driver optimizer.
 
 The daily-brigade activity read uses persisted assignment `startedAt` from TAKE
 and `finishedAt` from completion. Shift bounds select and position the display
@@ -448,6 +455,11 @@ shared vehicle defects, shift photos, immutable command receipts and media
 inbox. It seeds editable template configuration without encoding checklist
 items as boolean columns, extends the event-store aggregate allow-list, and
 does not rewrite existing tasks, facts or driver data.
+
+[`V40__contractor_profiles_without_availability_range.sql`](src/main/resources/db/migration/V40__contractor_profiles_without_availability_range.sql)
+removes contractor availability columns and their range index. Contractor profiles become an
+on-demand warehouse address book; an exact date is stored only by the logistics assignment that
+uses the contractor.
 
 ## Security and isolation
 

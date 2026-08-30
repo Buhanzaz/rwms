@@ -782,6 +782,14 @@ class LogisticsRequestRead(ApiModel):
     scheduled_date: date | None
     split_allowed: bool
     mandatory: bool
+    delivery_price_rubles: int | None = Field(ge=0)
+    price_isochrone_minutes: int | None = Field(ge=60, le=720)
+    assignment_type: Literal["CONTRACTOR_HANDOFF"] | None
+    assigned_contractor_worker_id: UUID | None
+    assigned_contractor_name: str | None
+    assigned_contractor_phone: str | None
+    assigned_at: AwareDatetime | None
+    assigned_by: str | None
     trailer_access_allowed: bool | None
     include_driver_passport_in_notification: bool
     contact_name: str
@@ -854,6 +862,15 @@ class RwmsPlanningRequest(RwmsApiModel):
     unit_ids: list[UUID] = Field(alias="unitIds")
     date_options: list[RwmsPlanningDateOption] = Field(alias="dateOptions")
     trailer_access_allowed: bool | None = Field(alias="trailerAccessAllowed")
+    delivery_price_rubles: int | None = Field(
+        alias="deliveryPriceRubles",
+        ge=0,
+    )
+    price_isochrone_minutes: int | None = Field(
+        alias="priceIsochroneMinutes",
+        ge=60,
+        le=720,
+    )
     created_at: AwareDatetime = Field(alias="createdAt")
 
     @model_validator(mode="after")
@@ -866,6 +883,11 @@ class RwmsPlanningRequest(RwmsApiModel):
             raise ValueError("unitIds count must equal quantity")
         if len(set(self.unit_ids)) != len(self.unit_ids):
             raise ValueError("unitIds must be unique")
+        if (
+            self.price_isochrone_minutes is not None
+            and self.price_isochrone_minutes % 60 != 0
+        ):
+            raise ValueError("priceIsochroneMinutes must be an hourly tier")
         dates = [option.date for option in self.date_options]
         if len(set(dates)) != len(dates):
             raise ValueError("dateOptions dates must be unique")
@@ -1198,6 +1220,9 @@ class RwmsPlanningAssignment(RwmsApiModel):
     service_warehouse_id: UUID | None = Field(default=None, alias="serviceWarehouseId")
     expected_order_version: int = Field(alias="expectedOrderVersion", ge=0)
     scheduled_date: date = Field(alias="scheduledDate")
+    assignment_type: Literal["ROUTE_PLAN", "CONTRACTOR_HANDOFF"] = Field(
+        default="ROUTE_PLAN", alias="assignmentType"
+    )
     driver_audience_mode: Literal["ASSIGNED_DRIVER", "WAREHOUSE_DRIVERS"] = Field(
         default="ASSIGNED_DRIVER", alias="driverAudienceMode"
     )
@@ -1214,6 +1239,8 @@ class RwmsPlanningAssignment(RwmsApiModel):
             raise ValueError(
                 "ASSIGNED_DRIVER requires driverWorkerId and WAREHOUSE_DRIVERS forbids it"
             )
+        if self.assignment_type == "CONTRACTOR_HANDOFF" and not assigned:
+            raise ValueError("CONTRACTOR_HANDOFF requires ASSIGNED_DRIVER")
         return self
 
 
@@ -1268,6 +1295,51 @@ class RwmsAssignmentsCommand(RwmsApiModel):
     driver_shift_plans: list[RwmsDriverShiftPlan] = Field(
         default_factory=list, alias="driverShiftPlans"
     )
+
+
+class ContractorAssignmentCreate(ApiModel):
+    """Dispatcher command that hands one complete request to a canonical contractor."""
+
+    contractor_worker_id: UUID
+
+
+class ContractorDispatchCreate(ApiModel):
+    """Warehouse-day command for automatic or explicit contractor task handoff."""
+
+    contractor_worker_id: UUID
+    planning_date: date
+    mode: Literal["AUTO", "MANUAL"]
+    request_ids: list[UUID] = Field(default_factory=list, max_length=500)
+
+    @field_validator("request_ids")
+    @classmethod
+    def validate_unique_request_ids(cls, value: list[UUID]) -> list[UUID]:
+        """Reject repeated request identifiers before any domain side effect is attempted."""
+
+        if len(value) != len(set(value)):
+            raise ValueError("request_ids must be unique")
+        return value
+
+    @model_validator(mode="after")
+    def validate_dispatch_selection(self) -> ContractorDispatchCreate:
+        """Keep automatic selection server-owned and require an explicit manual selection."""
+
+        if self.mode == "AUTO" and self.request_ids:
+            raise ValueError("AUTO dispatch must not contain request_ids")
+        if self.mode == "MANUAL" and not self.request_ids:
+            raise ValueError("MANUAL dispatch requires request_ids")
+        return self
+
+
+class ContractorDispatchRead(ApiModel):
+    """Applied warehouse-day contractor handoff summary returned to the dispatcher."""
+
+    contractor_worker_id: UUID
+    contractor_name: NonBlank
+    planning_date: date
+    mode: Literal["AUTO", "MANUAL"]
+    assigned_request_ids: list[UUID]
+    assigned_count: int = Field(ge=1)
 
 
 class RwmsAppliedAssignment(RwmsApiModel):

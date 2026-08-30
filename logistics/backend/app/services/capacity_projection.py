@@ -207,7 +207,10 @@ async def build_capacity_projection(
                 task_type=request.type,
                 trailer_access_allowed=request.trailer_access_allowed is not False,
                 priority=max(0, request.priority),
-                mandatory=request.mandatory,
+                # The canonical capacity aggregate requires every DELIVERY job to be
+                # obligatory. Legacy generated rows may still carry false because that
+                # flag only controlled local planning; optional PICKUP semantics remain.
+                mandatory=(request.type == "DELIVERY" or request.mandatory),
             )
         )
     jobs.sort(

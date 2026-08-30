@@ -4,11 +4,14 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
 import { useUiStore } from '../src/stores/ui-store';
-import { warehouseFixture, workspaceFixture } from './fixtures';
+import { dateInTimeZone } from '../src/utils/format';
+import { requestFixture, warehouseFixture, workspaceFixture } from './fixtures';
 
 vi.mock('../src/map/MapCanvas', () => ({
   MapCanvas: () => <div data-testid="common-map">common map</div>,
 }));
+
+const TEST_PLANNING_DATE = dateInTimeZone(new Date(), 'Europe/Moscow');
 
 function response(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
@@ -26,7 +29,7 @@ function rawPlan(overrides: Record<string, unknown> = {}) {
   return {
     id: 'plan-1',
     warehouse_id: 'warehouse-1',
-    date: '2026-08-30',
+    date: TEST_PLANNING_DATE,
     version: 1,
     status: 'GENERATED',
     score: 0,
@@ -45,7 +48,18 @@ function installRouter(options: { partialWorkspaceOnce?: boolean; acceptingReque
   let accepting = options.acceptingRequests ?? true;
   let ensureCalls = 0;
   const warehouse = warehouseFixture();
-  const workspace = workspaceFixture();
+  const workspace = workspaceFixture({
+    requests: [requestFixture({
+      scheduled_date: TEST_PLANNING_DATE,
+      date_options: [{
+        date: TEST_PLANNING_DATE,
+        priority: 1,
+        window_start: '12:00',
+        window_end: '15:00',
+        is_hard: true,
+      }],
+    })],
+  });
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = requestUrl(input);
     const method = init?.method ?? 'GET';
@@ -56,7 +70,7 @@ function installRouter(options: { partialWorkspaceOnce?: boolean; acceptingReque
       return response({ code: 'RWMS_WORKSPACE_SYNC_INCOMPLETE', detail: 'Одна заявка не обновлена', failures: [{ id: 'request-2' }] }, 422);
     }
     if (url === '/api/warehouses/warehouse-1/workspace' || url === '/api/warehouses/warehouse-1/workspace?refresh_rwms=false') return response(workspace);
-    if (url === '/api/warehouses/warehouse-1/plans/ensure?date=2026-08-30' && method === 'POST') {
+    if (url === `/api/warehouses/warehouse-1/plans/ensure?date=${TEST_PLANNING_DATE}` && method === 'POST') {
       ensureCalls += 1;
       return response(rawPlan({ version: ensureCalls }));
     }
@@ -66,12 +80,12 @@ function installRouter(options: { partialWorkspaceOnce?: boolean; acceptingReque
       workspace.requests[0] = { ...workspace.requests[0]!, mandatory: payload.mandatory };
       return response(workspace.requests[0]);
     }
-    if (url === '/api/warehouses/warehouse-1/planning-days/2026-08-30' && method === 'GET') {
-      return response({ warehouse_id: 'warehouse-1', date: '2026-08-30', accepting_requests: accepting, closed_at: null, closed_by: null, plan_id: 'plan-1' });
+    if (url === `/api/warehouses/warehouse-1/planning-days/${TEST_PLANNING_DATE}` && method === 'GET') {
+      return response({ warehouse_id: 'warehouse-1', date: TEST_PLANNING_DATE, accepting_requests: accepting, closed_at: null, closed_by: null, plan_id: 'plan-1' });
     }
-    if (url === '/api/warehouses/warehouse-1/planning-days/2026-08-30/close' && method === 'POST') {
+    if (url === `/api/warehouses/warehouse-1/planning-days/${TEST_PLANNING_DATE}/close` && method === 'POST') {
       accepting = false;
-      return response({ warehouse_id: 'warehouse-1', date: '2026-08-30', accepting_requests: false, closed_at: '2026-08-28T10:00:00Z', closed_by: 'manager', plan_id: 'plan-1' });
+      return response({ warehouse_id: 'warehouse-1', date: TEST_PLANNING_DATE, accepting_requests: false, closed_at: '2026-08-28T10:00:00Z', closed_by: 'manager', plan_id: 'plan-1' });
     }
     throw new Error(`Unexpected request ${method} ${url}`);
   });
@@ -94,11 +108,11 @@ describe('warehouse automatic planning', () => {
     renderApp();
 
     expect(
-      await screen.findByRole('combobox', { name: 'Главный склад группы' }),
-    ).toHaveDisplayValue('Склад СПб · Санкт-Петербург');
+      await screen.findByRole('button', { name: 'Склад логистической группы' }),
+    ).toHaveTextContent('Склад СПб — Санкт-Петербург');
     expect(screen.getByTestId('common-map')).toBeVisible();
     await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) =>
-      url === '/api/warehouses/warehouse-1/plans/ensure?date=2026-08-30'
+      url === `/api/warehouses/warehouse-1/plans/ensure?date=${TEST_PLANNING_DATE}`
       && init?.method === 'POST')).toBe(true));
     expect(screen.queryByRole('button', { name: 'Сегодня' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Завтра' })).not.toBeInTheDocument();
@@ -120,19 +134,19 @@ describe('warehouse automatic planning', () => {
     const fetchMock = installRouter();
     renderApp();
 
-    await screen.findByRole('combobox', { name: 'Главный склад группы' });
+    await screen.findByRole('button', { name: 'Склад логистической группы' });
     await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) =>
-      url === '/api/warehouses/warehouse-1/plans/ensure?date=2026-08-30').length).toBe(1));
+      url === `/api/warehouses/warehouse-1/plans/ensure?date=${TEST_PLANNING_DATE}`).length).toBe(1));
     await user.click(screen.getByRole('button', { name: /^Доставки/ }));
     await user.click(await screen.findByLabelText('Обязательная доставка'));
     await user.click(screen.getByRole('button', { name: 'Сохранить условия' }));
 
     const refreshButton = await screen.findByRole('button', { name: 'Обновить маршруты' });
     expect(fetchMock.mock.calls.filter(([url]) =>
-      url === '/api/warehouses/warehouse-1/plans/ensure?date=2026-08-30').length).toBe(1);
+      url === `/api/warehouses/warehouse-1/plans/ensure?date=${TEST_PLANNING_DATE}`).length).toBe(1);
     await user.click(refreshButton);
     await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) =>
-      url === '/api/warehouses/warehouse-1/plans/ensure?date=2026-08-30').length).toBe(2));
+      url === `/api/warehouses/warehouse-1/plans/ensure?date=${TEST_PLANNING_DATE}`).length).toBe(2));
     expect(screen.queryByRole('button', { name: 'Обновить маршруты' })).not.toBeInTheDocument();
   });
 });

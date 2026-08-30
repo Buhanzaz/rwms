@@ -29,7 +29,7 @@ describe('application states', () => {
   it('shows an actionable backend-unavailable state', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new TypeError('network down'))));
     renderApp();
-    expect(await screen.findByRole('alert')).toHaveTextContent('Backend недоступен');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Сервис недоступен');
     expect(screen.getByRole('button', { name: 'Повторить' })).toBeEnabled();
   });
 
@@ -94,6 +94,7 @@ describe('application states', () => {
 
     const warehouseSelector = await screen.findByRole('button', { name: 'Склад логистической группы' });
     expect(warehouseSelector).toHaveTextContent('Склад СПб — Санкт-Петербург');
+    expect(warehouseSelector).toHaveTextContent('Europe/Moscow');
     expect(warehouseSelector).toHaveAttribute('aria-expanded', 'false');
     const warehouseHome = screen.getByRole('button', { name: 'Открыть склад' });
     expect(screen.queryByText('RWMS · Логистика')).not.toBeInTheDocument();
@@ -111,6 +112,7 @@ describe('application states', () => {
       external_warehouse_id: '22222222-2222-4222-8222-222222222222',
       name: 'Представительский склад',
       city: 'Региональный город',
+      timezone: 'Asia/Novosibirsk',
       representative: true,
     });
     const otherRoot = warehouseFixture({
@@ -171,6 +173,7 @@ describe('application states', () => {
     await user.click(within(screen.getByRole('listbox', { name: 'Склад логистической группы' })).getByRole('option', { name: /Представительский склад/ }));
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Склад логистической группы' })).toHaveTextContent('Представительский склад — Региональный город'));
+    expect(screen.getByRole('button', { name: 'Склад логистической группы' })).toHaveTextContent('Asia/Novosibirsk');
     expect(fetchMock.mock.calls.map(([input]) => requestUrl(input))).toContainEqual(expect.stringContaining(`/warehouses/${representativeWarehouse.id}/workspace`));
     await user.click(screen.getByRole('button', { name: 'Склад логистической группы' }));
     expect(within(screen.getByRole('listbox', { name: 'Склад логистической группы' })).getByRole('option', { name: /Представительский склад/ })).toHaveAttribute('aria-selected', 'true');

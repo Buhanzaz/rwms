@@ -973,6 +973,8 @@ async def upsert_rwms_request(
         created.external_id = source.order_id
         created.external_version = source.order_version
         created.external_payload = source_payload
+        created.delivery_price_rubles = source.delivery_price_rubles
+        created.price_isochrone_minutes = source.price_isochrone_minutes
         await session.flush()
         return "imported"
 
@@ -1025,6 +1027,8 @@ async def upsert_rwms_request(
     updated.external_id = source.order_id
     updated.external_version = source.order_version
     updated.external_payload = source_payload
+    updated.delivery_price_rubles = source.delivery_price_rubles
+    updated.price_isochrone_minutes = source.price_isochrone_minutes
     await session.flush()
     return "updated"
 

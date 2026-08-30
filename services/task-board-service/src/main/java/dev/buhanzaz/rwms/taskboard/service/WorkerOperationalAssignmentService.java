@@ -1,7 +1,5 @@
 package dev.buhanzaz.rwms.taskboard.service;
 
-import static dev.buhanzaz.rwms.taskboard.api.LogisticsDriverAssignmentApiModels.ContractorDriverResponse;
-import static dev.buhanzaz.rwms.taskboard.api.LogisticsDriverAssignmentApiModels.CreateContractorDriverRequest;
 import static dev.buhanzaz.rwms.taskboard.api.LogisticsDriverAssignmentApiModels.CreateWorkerOperationalAssignmentRequest;
 import static dev.buhanzaz.rwms.taskboard.api.LogisticsDriverAssignmentApiModels.WorkerOperationalAssignmentResponse;
 
@@ -12,21 +10,18 @@ import dev.buhanzaz.rwms.taskboard.domain.WorkerEmploymentType;
 import dev.buhanzaz.rwms.taskboard.domain.WorkerOperationalAssignment;
 import dev.buhanzaz.rwms.taskboard.domain.WorkerOperationalAssignmentMode;
 import dev.buhanzaz.rwms.taskboard.domain.WorkerOperationalAssignmentStatus;
-import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventSourcing;
-import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardProjectionWriter;
 import dev.buhanzaz.rwms.taskboard.repository.WorkerOperationalAssignmentRepository;
 import dev.buhanzaz.rwms.taskboard.repository.WorkerRepository;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
-import java.util.Objects;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Owns contractor-driver profiles and transfer-backed operational warehouse assignment commands.
+ * Owns transfer-backed operational warehouse assignment commands.
  *
  * <p>Every assignment command locks the worker row before checking assignment history, so two
  * transfers cannot reserve overlapping operational intervals for the same driver.
@@ -36,37 +31,8 @@ import org.springframework.transaction.annotation.Transactional;
 public class WorkerOperationalAssignmentService {
   private final WorkerRepository workers;
   private final WorkerOperationalAssignmentRepository assignments;
-  private final TaskBoardEventSourcing eventSourcing;
-  private final TaskBoardProjectionWriter projectionWriter;
   private final WorkerOperationalAvailabilityPolicy availability =
       new WorkerOperationalAvailabilityPolicy();
-
-  /** Creates an active contractor profile or returns an identical stable-ID replay. */
-  @Transactional
-  public ContractorDriverResponse createContractor(
-      UUID warehouseId, CreateContractorDriverRequest request) {
-    validateContractorRange(request.availableFrom(), request.availableUntil());
-    Worker existing = workers.findByIdForUpdate(request.contractorId()).orElse(null);
-    if (existing != null) {
-      if (!sameContractor(existing, warehouseId, request)) {
-        throw new ConflictException(
-            "Идентификатор наёмного водителя уже использован с другими данными");
-      }
-      return contractorResponse(existing);
-    }
-
-    var worker = new Worker();
-    worker.assignReviewedId(request.contractorId());
-    worker.setWarehouseId(warehouseId);
-    worker.setDisplayName(request.displayName());
-    worker.setActive(true);
-    worker.setComment(request.comment());
-    worker.configureContractor(
-        request.phone(), request.availableFrom(), request.availableUntil());
-    worker = projectionWriter.saveAndFlush(workers, worker);
-    eventSourcing.created(worker);
-    return contractorResponse(worker);
-  }
 
   /**
    * Creates a planned transfer assignment idempotently by transfer and worker identity.
@@ -98,7 +64,6 @@ public class WorkerOperationalAssignmentService {
     }
 
     ensureEligibleDriver(worker);
-    validateContractorAssignment(worker, request);
     List<WorkerOperationalAssignment> history =
         assignments.findAllByWorkerIdOrderByEffectiveFromAscCreatedAtAscIdAsc(worker.getId());
     boolean overlaps =
@@ -208,49 +173,10 @@ public class WorkerOperationalAssignmentService {
     }
   }
 
-  private void validateContractorAssignment(
-      Worker worker, CreateWorkerOperationalAssignmentRequest request) {
-    if (worker.getEmploymentType() != WorkerEmploymentType.CONTRACTOR) {
-      return;
-    }
-    OffsetDateTime commitmentEndsAt =
-        request.mode() == WorkerOperationalAssignmentMode.TRIP_ONLY
-            ? request.effectiveFrom()
-            : request.effectiveUntil();
-    if (request.mode() == WorkerOperationalAssignmentMode.PERMANENT
-        || commitmentEndsAt == null
-        || !worker.contractCovers(request.travelStartsAt())
-        || commitmentEndsAt.isAfter(worker.getContractAvailableUntil())) {
-      throw new ConflictException(
-          "Назначение наёмного водителя должно целиком входить в период его договора");
-    }
-  }
-
-  private boolean sameContractor(
-      Worker worker, UUID warehouseId, CreateContractorDriverRequest request) {
-    return worker.getEmploymentType() == WorkerEmploymentType.CONTRACTOR
-        && worker.getWarehouseId().equals(warehouseId)
-        && Objects.equals(worker.getDisplayName(), request.displayName().trim())
-        && Objects.equals(worker.getPhone(), request.phone().trim())
-        && sameInstant(worker.getContractAvailableFrom(), request.availableFrom())
-        && sameInstant(worker.getContractAvailableUntil(), request.availableUntil())
-        && Objects.equals(worker.getComment(), request.comment());
-  }
-
   private WorkerOperationalAssignment requireAssignment(UUID assignmentId) {
     return assignments
         .findById(assignmentId)
         .orElseThrow(() -> new NotFoundException("Оперативное назначение не найдено"));
-  }
-
-  private static void validateContractorRange(
-      OffsetDateTime availableFrom, OffsetDateTime availableUntil) {
-    if (availableUntil == null
-        || availableFrom == null
-        || !availableUntil.isAfter(availableFrom)) {
-      throw new IllegalArgumentException(
-          "Период доступности наёмного водителя задан некорректно");
-    }
   }
 
   private static void validateAssignmentDefinition(
@@ -278,24 +204,6 @@ public class WorkerOperationalAssignmentService {
       throw new IllegalArgumentException(
           "Разовый рейс должен завершаться в момент окончания поездки");
     }
-  }
-
-  private static boolean sameInstant(OffsetDateTime left, OffsetDateTime right) {
-    return left == null ? right == null : right != null && left.isEqual(right);
-  }
-
-  private static ContractorDriverResponse contractorResponse(Worker worker) {
-    return new ContractorDriverResponse(
-        worker.getId(),
-        worker.getVersion(),
-        worker.getWarehouseId(),
-        worker.getDisplayName(),
-        worker.getPhone(),
-        worker.getContractAvailableFrom(),
-        worker.getContractAvailableUntil(),
-        worker.getComment(),
-        worker.isActive(),
-        worker.getEmploymentType());
   }
 
   private static WorkerOperationalAssignmentResponse response(

@@ -316,7 +316,10 @@ The standalone route simulator integrates only through the private
 whose sole scope is `logistics.planning`. The bounded request feed exports saved order identity,
 version, address/coordinates, still-unplanned cabin IDs and every client-approved date; a confirmed
 CustomerApp booking additionally carries its exact `windowStart`, `windowEnd` and
-informational positive `travelZoneHours`, plus the site-derived trailer-access fact. The simulator
+informational positive `travelZoneHours`, plus the site-derived trailer-access fact. It also carries
+nullable `deliveryPriceRubles` and `priceIsochroneMinutes` fields. The amount is authoritative; the
+tier is optional for older or specially priced slots, and an absent amount means that no
+authoritative logistics price exists yet. The simulator
 persists the band for explanation but never uses it or a tariff zone for candidate feasibility or
 ranking. `FIXED_WINDOW` is exported as the existing hard interval; `DURING_DAY` is exported as a
 soft date-only option with null planner-window fields so the optimizer chooses the feasible hour.
@@ -332,6 +335,14 @@ can read back only planner-created assignment status for one warehouse/date, so 
 shown with the authoritative driver after claim; ordinary manually created documents and customer
 contacts are excluded. It never reads or writes the RWMS database directly.
 
+Each assignment has an additive `assignmentType`, defaulting to `ROUTE_PLAN` for
+existing clients. A route-plan assignment keeps the warehouse-local today/tomorrow
+automatic-application fence and may carry the reviewed `driverShiftPlans` below.
+`CONTRACTOR_HANDOFF` is instead an explicit dispatcher decision for one concrete
+`ASSIGNED_DRIVER`: tomorrow is allowed, and no internal vehicle, shift or route-cycle
+snapshot is required or fabricated. Both paths reuse the rental-shipment owner,
+order-version fence and idempotent command semantics.
+
 The same apply command may carry `driverShiftPlans` for the concrete
 simulator-assigned driver and work date. Logistics validates unique source-shift and
 driver/work-date identities, then publishes every plan before applying individual shipment
@@ -346,8 +357,12 @@ least-privilege scope `task-board.driver-shifts.plan`.
 
 `GET /api/internal/logistics/v1/planning/warehouses` exposes only active warehouse-service facts
 `{warehouseId,name,city,address,timeZone}`; the owner-held address is nullable. After validating that
-warehouse identity, `GET /api/internal/logistics/v1/planning/drivers?warehouseId=...` exposes only
-task-board's active primary-qualified `{workerId,displayName}` directory. The cohesive
+warehouse identity, `GET /api/internal/logistics/v1/planning/drivers?warehouseId=...` exposes
+task-board's active primary-qualified staff and contractor directory. Contractor profiles are
+on-demand resources and therefore carry a phone but no profile-level availability dates;
+operational staff transfers retain their actual `availableFrom`/`availableUntil` interval. Ordinary
+automatic route candidates remain restricted to `employmentType=STAFF`; contractors are consumed
+only by the explicit `CONTRACTOR_HANDOFF` workflow. The cohesive
 [`PlanningResourceDirectoryService`](src/main/java/dev/buhanzaz/rwms/logistics/planning/service/PlanningResourceDirectoryService.java)
 fails closed on malformed, duplicate or unavailable owner data and stores no duplicate directory.
 Every planning-feed read reloads `SAVED` orders and their confirmed CustomerApp slots from the
@@ -519,7 +534,7 @@ services and leaf clients.
 | Document admission, idempotency, attempts, reads and binding policies | Narrow warehouse, replay, external-attempt, projection and active-order leaves |
 | `RentalOrderService` | Stable order facade over reads, creation, lifecycle, reservations, terms and shipment hand-off |
 | `RentalOrderUnitReplacementService` | Direct and presentation replacement over ordered batch checkpoints, pre-start driver-task cancellation and same-order document/member convergence |
-| `RentalOrderPlanningIntegrationService` | Minimal versioned planner feed plus idempotent application through the existing rental-shipment owner; no cross-database state |
+| `RentalOrderPlanningIntegrationService` | Versioned planner feed with confirmed price facts plus idempotent route-plan or explicit contractor-handoff application through the existing rental-shipment owner; no cross-database state |
 | `PlanningResourceDirectoryService` | Validated least-privilege warehouse and active primary-driver resources composed from their exact domain owners without a local projection |
 | `WarehouseCapacitySnapshotService` | Per-warehouse idempotent capacity replacement, monotonic generation fencing and canonical ordered hourly isochrone-tariff persistence |
 | `FutureDriverTaskClaimService` | Future-only shared-task preview/claim with task-board qualification and version fencing; it never starts work |

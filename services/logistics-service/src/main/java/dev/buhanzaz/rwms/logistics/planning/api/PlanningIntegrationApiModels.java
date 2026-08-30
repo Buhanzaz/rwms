@@ -29,6 +29,12 @@ public final class PlanningIntegrationApiModels {
     WAREHOUSE_DRIVERS
   }
 
+  /** Distinguishes automatic route output from an explicit dispatcher contractor hand-off. */
+  public enum PlanningAssignmentType {
+    ROUTE_PLAN,
+    CONTRACTOR_HANDOFF
+  }
+
   /** Task-board-owned employment category relevant to route-resource selection. */
   public enum PlanningDriverEmploymentType {
     STAFF,
@@ -67,7 +73,11 @@ public final class PlanningIntegrationApiModels {
     }
   }
 
-  /** One unscheduled rental-order remainder exported without contact or furniture details. */
+  /**
+   * One unscheduled rental-order remainder exported without contact or furniture details.
+   * Confirmed CustomerApp delivery pricing is included as nullable planning metadata; the
+   * logistics owner remains authoritative for both the amount and its isochrone tier.
+   */
   public record PlanningRequestResponse(
       UUID orderId,
       long orderVersion,
@@ -81,6 +91,8 @@ public final class PlanningIntegrationApiModels {
       List<UUID> unitIds,
       List<PlanningDateOption> dateOptions,
       Boolean trailerAccessAllowed,
+      Long deliveryPriceRubles,
+      Integer priceIsochroneMinutes,
       OffsetDateTime createdAt) {}
 
   /** Warehouse-scoped deterministic planning feed and its authoritative timezone. */
@@ -274,14 +286,40 @@ public final class PlanningIntegrationApiModels {
       UUID serviceWarehouseId,
       @NotNull @Min(0) Long expectedOrderVersion,
       @NotNull LocalDate scheduledDate,
+      PlanningAssignmentType assignmentType,
       PlanningDriverAudienceMode driverAudienceMode,
       UUID driverWorkerId,
       @NotBlank @Size(max = 512) String driverName,
       @NotNull @Size(min = 1, max = 2) List<@NotNull UUID> unitIds) {
     public PlanningAssignmentRequest {
+      if (assignmentType == null) {
+        assignmentType = PlanningAssignmentType.ROUTE_PLAN;
+      }
       if (driverAudienceMode == null) {
         driverAudienceMode = PlanningDriverAudienceMode.ASSIGNED_DRIVER;
       }
+    }
+
+    /** Preserves the original complete constructor for route-planner callers. */
+    public PlanningAssignmentRequest(
+        UUID orderId,
+        UUID serviceWarehouseId,
+        Long expectedOrderVersion,
+        LocalDate scheduledDate,
+        PlanningDriverAudienceMode driverAudienceMode,
+        UUID driverWorkerId,
+        String driverName,
+        List<UUID> unitIds) {
+      this(
+          orderId,
+          serviceWarehouseId,
+          expectedOrderVersion,
+          scheduledDate,
+          PlanningAssignmentType.ROUTE_PLAN,
+          driverAudienceMode,
+          driverWorkerId,
+          driverName,
+          unitIds);
     }
 
     public PlanningAssignmentRequest(
@@ -297,6 +335,7 @@ public final class PlanningIntegrationApiModels {
           null,
           expectedOrderVersion,
           scheduledDate,
+          PlanningAssignmentType.ROUTE_PLAN,
           driverAudienceMode,
           driverWorkerId,
           driverName,
@@ -315,6 +354,7 @@ public final class PlanningIntegrationApiModels {
           null,
           expectedOrderVersion,
           scheduledDate,
+          PlanningAssignmentType.ROUTE_PLAN,
           PlanningDriverAudienceMode.ASSIGNED_DRIVER,
           driverWorkerId,
           driverName,
@@ -335,6 +375,7 @@ public final class PlanningIntegrationApiModels {
           serviceWarehouseId,
           expectedOrderVersion,
           scheduledDate,
+          PlanningAssignmentType.ROUTE_PLAN,
           PlanningDriverAudienceMode.ASSIGNED_DRIVER,
           driverWorkerId,
           driverName,

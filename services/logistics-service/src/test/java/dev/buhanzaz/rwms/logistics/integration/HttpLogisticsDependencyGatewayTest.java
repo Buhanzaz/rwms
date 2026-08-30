@@ -452,10 +452,11 @@ class HttpLogisticsDependencyGatewayTest {
   }
 
   @Test
-  void readsOnlyTheQualifiedTaskBoardDriverDirectory() {
+  void readsQualifiedStaffAndDateFreeContractorProfiles() {
     UUID warehouseId = UUID.randomUUID();
     UUID anna = UUID.randomUUID();
     UUID zoya = UUID.randomUUID();
+    UUID contractor = UUID.randomUUID();
     server
         .expect(
             requestTo(
@@ -487,10 +488,20 @@ class HttpLogisticsDependencyGatewayTest {
                     "availableFrom":null,
                     "availableUntil":null,
                     "availabilityKind":"HOME"
+                  },
+                  {
+                    "workerId":"%s",
+                    "displayName":"Иван Петров",
+                    "employmentType":"CONTRACTOR",
+                    "phone":"+79990000000",
+                    "operationalWarehouseId":"%s",
+                    "availableFrom":null,
+                    "availableUntil":null,
+                    "availabilityKind":"HOME"
                   }
                 ]
                 """
-                    .formatted(anna, warehouseId, zoya, warehouseId),
+                    .formatted(anna, warehouseId, zoya, warehouseId, contractor, warehouseId),
                 MediaType.APPLICATION_JSON));
 
     assertThat(gateway.listWarehouseDrivers(warehouseId))
@@ -498,7 +509,49 @@ class HttpLogisticsDependencyGatewayTest {
             new LogisticsDependencyGateway.WarehouseDriverIdentity(
                 anna, "Анна", "STAFF", null, warehouseId, null, null, "HOME"),
             new LogisticsDependencyGateway.WarehouseDriverIdentity(
-                zoya, "Зоя", "STAFF", null, warehouseId, null, null, "HOME"));
+                zoya, "Зоя", "STAFF", null, warehouseId, null, null, "HOME"),
+            new LogisticsDependencyGateway.WarehouseDriverIdentity(
+                contractor,
+                "Иван Петров",
+                "CONTRACTOR",
+                "+79990000000",
+                warehouseId,
+                null,
+                null,
+                "HOME"));
+    server.verify();
+  }
+
+  @Test
+  void rejectsDriverAvailabilityEndWithoutAStart() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID workerId = UUID.randomUUID();
+    server
+        .expect(
+            requestTo(
+                "http://task-board.test/api/internal/task-board/v1/logistics/warehouses/"
+                    + warehouseId
+                    + "/drivers?includeIncoming=false"))
+        .andRespond(
+            withSuccess(
+                """
+                [{
+                  "workerId":"%s",
+                  "displayName":"Анна",
+                  "employmentType":"STAFF",
+                  "phone":null,
+                  "operationalWarehouseId":"%s",
+                  "availableFrom":null,
+                  "availableUntil":"2026-09-14T18:00:00Z",
+                  "availabilityKind":"ACTIVE_ASSIGNMENT"
+                }]
+                """
+                    .formatted(workerId, warehouseId),
+                MediaType.APPLICATION_JSON));
+
+    assertThatThrownBy(() -> gateway.listWarehouseDrivers(warehouseId))
+        .isInstanceOf(LogisticsDependencyException.class)
+        .hasMessageContaining("invalid warehouse driver directory");
     server.verify();
   }
 

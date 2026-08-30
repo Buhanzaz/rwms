@@ -6,6 +6,15 @@ export function formatTime(value: string | number | Date, timeZone?: string): st
   }).format(new Date(value));
 }
 
+/** Formats the current wall-clock time for one warehouse-owned IANA timezone. */
+export function formatWarehouseLocalTime(now: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat('ru-RU', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(now);
+}
+
 export function formatDate(value: string): string {
   return new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: 'long', year: 'numeric' }).format(
     new Date(`${value}T12:00:00`),
@@ -23,6 +32,12 @@ export function formatDuration(seconds: number): string {
 
 export function formatDistance(meters: number): string {
   return meters < 1000 ? `${Math.round(meters)} м` : `${(meters / 1000).toFixed(1)} км`;
+}
+
+/** Formats a persisted integer-ruble delivery total without inventing a zero price. */
+export function formatDeliveryPrice(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return 'Не рассчитана';
+  return `${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(value)} ₽`;
 }
 
 export function dateInputValue(date: Date): string {

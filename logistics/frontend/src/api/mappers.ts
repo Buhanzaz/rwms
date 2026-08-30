@@ -19,7 +19,7 @@ import type {
   ValidationMessage,
   ValidationResult,
 } from '../domain/types';
-import { dateInTimeZone, localDateTimeToIso } from '../utils/format';
+import { localDateTimeToIso } from '../utils/format';
 import type { components } from './schema';
 
 /** Generated warehouse payload with the canonical dynamic tariff collection. */
@@ -43,15 +43,15 @@ export function normalizePlanningSettings(source: Record<string, unknown>): Plan
   return normalized as unknown as PlanningSettings;
 }
 
-export function normalizeWarehouse(raw: RawWarehouse | Warehouse, now = new Date()): Warehouse {
-  const timeZone = raw.timezone || 'Europe/Moscow';
+export function normalizeWarehouse(raw: RawWarehouse | Warehouse): Warehouse {
+  const timeZone = raw.timezone;
   return {
     ...raw,
     timezone: timeZone,
     isochrone_tariffs: raw.isochrone_tariffs?.length
       ? raw.isochrone_tariffs.map((tariff) => ({ ...tariff }))
       : DEFAULT_ISOCHRONE_TARIFFS.map((tariff) => ({ ...tariff })),
-    default_planning_date: raw.default_planning_date ?? dateInTimeZone(now, timeZone),
+    default_planning_date: raw.default_planning_date ?? null,
     settings: normalizePlanningSettings(raw.settings as unknown as Record<string, unknown>),
   };
 }
@@ -459,7 +459,7 @@ export function normalizeValidationResult(
   currentPlan: RoutePlan,
 ): ValidationResult {
   if (typeof value !== 'object' || value === null) {
-    return { valid: false, version: currentPlan.version, errors: [{ code: 'INVALID_RESPONSE', message: 'Backend вернул некорректный результат проверки' }], warnings: [] };
+    return { valid: false, version: currentPlan.version, errors: [{ code: 'INVALID_RESPONSE', message: 'Сервис вернул некорректный результат проверки' }], warnings: [] };
   }
   const record = value as Record<string, unknown>;
   if (Array.isArray(record.cycles) && typeof record.id === 'string') {
@@ -504,6 +504,14 @@ export function normalizeWorkspace(workspace: WarehouseWorkspace): WarehouseWork
       include_driver_passport_in_notification: request.include_driver_passport_in_notification ?? false,
       contact_name: request.contact_name ?? '',
       contact_phone: request.contact_phone ?? '',
+      delivery_price_rubles: request.delivery_price_rubles ?? null,
+      price_isochrone_minutes: request.price_isochrone_minutes ?? null,
+      assignment_type: request.assignment_type ?? null,
+      assigned_contractor_worker_id: request.assigned_contractor_worker_id ?? null,
+      assigned_contractor_name: request.assigned_contractor_name ?? null,
+      assigned_contractor_phone: request.assigned_contractor_phone ?? null,
+      assigned_at: request.assigned_at ?? null,
+      assigned_by: request.assigned_by ?? null,
       date_options: request.date_options ?? [],
       tasks: (request.tasks ?? []).map((task) => ({ ...task, mandatory: task.mandatory ?? request.mandatory ?? false })),
     })),

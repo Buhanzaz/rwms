@@ -9,7 +9,7 @@ import java.util.UUID;
  *
  * @param workerId stable task-board worker identity
  * @param displayName current operator-facing worker name
- * @param employmentType staff or time-bounded contractor profile
+ * @param employmentType staff or on-demand contractor profile
  * @param phone contractor contact number; absent for staff
  * @param operationalWarehouseId warehouse where this resource is available
  * @param availableFrom earliest availability represented by this projection

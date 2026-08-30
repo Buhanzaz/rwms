@@ -6,6 +6,7 @@ import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiMod
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningAssignmentStatus;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningAssignmentStatusResponse;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningAssignmentRequest;
+import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningAssignmentType;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDateOption;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverAudienceMode;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftPlanRequest;
@@ -136,12 +137,21 @@ public class RentalOrderPlanningIntegrationService {
       if (available.isEmpty()) continue;
       Boolean trailerAccessAllowed =
           customerSlot == null ? null : customerSlot.getSiteCabinCapacity() >= 2;
+      Long deliveryPriceRubles =
+          customerSlot == null ? null : customerSlot.getDeliveryPriceRubles();
+      Integer priceIsochroneMinutes =
+          customerSlot == null ? null : customerSlot.getPriceIsochroneMinutes();
       result.add(
           new PlanningRequestResponse(
               order.getId(),
               order.getVersion(),
               PlanningRequestRevision.sha256(
-                  order, available, options, trailerAccessAllowed),
+                  order,
+                  available,
+                  options,
+                  trailerAccessAllowed,
+                  deliveryPriceRubles,
+                  priceIsochroneMinutes),
               order.getOrderNumber(),
               order.getClient().getDisplayName(),
               order.getDeliveryAddress(),
@@ -151,6 +161,8 @@ public class RentalOrderPlanningIntegrationService {
               available,
               options,
               trailerAccessAllowed,
+              deliveryPriceRubles,
+              priceIsochroneMinutes,
               order.getCreatedAt()));
     }
     return new PlanningRequestFeedResponse(
@@ -330,8 +342,10 @@ public class RentalOrderPlanningIntegrationService {
           "ORDER_VERSION_CONFLICT",
           "Заказ изменился после синхронизации с планировщиком");
     }
+    requireAssignmentType(assignment);
     requireDriverAudience(today, assignment);
-    if (assignment.driverAudienceMode() == PlanningDriverAudienceMode.ASSIGNED_DRIVER
+    if (assignment.assignmentType() == PlanningAssignmentType.ROUTE_PLAN
+        && assignment.driverAudienceMode() == PlanningDriverAudienceMode.ASSIGNED_DRIVER
         && assignment.scheduledDate().isBefore(today.plusDays(2))) {
       throw new OrderProblemException(
           HttpStatus.CONFLICT,
@@ -371,6 +385,16 @@ public class RentalOrderPlanningIntegrationService {
           "Одна из бытовок уже включена в другую отгрузку");
     }
     return order;
+  }
+
+  private static void requireAssignmentType(PlanningAssignmentRequest assignment) {
+    if (assignment.assignmentType() == PlanningAssignmentType.CONTRACTOR_HANDOFF
+        && assignment.driverAudienceMode() != PlanningDriverAudienceMode.ASSIGNED_DRIVER) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "CONTRACTOR_HANDOFF_REQUIRES_DRIVER",
+          "Передача наёмному водителю требует конкретного исполнителя");
+    }
   }
 
   private static void requireDriverAudience(

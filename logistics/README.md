@@ -24,9 +24,10 @@ while warehouse selection and saved-route simulation remain available.
 The map is one common canvas for every active canonical RWMS warehouse with an
 owner-held coordinate pair. Directory reconciliation creates or updates its
 planner projection under the same UUID; there is no second connect action or
-required delivery polygon. Selecting a warehouse marker switches its
-resources, work and plans without changing the
-viewport. The explicit header action recentres the map when requested, so
+required delivery polygon. Selecting a warehouse marker only selects that
+point and leaves both the active workspace and viewport unchanged. The
+contextual **Go to warehouse** action activates that exact warehouse UUID and
+recentres the map without replacing a valid selection with a default depot, so
 several warehouse markers can be compared without forced zoom. A warehouse
 without coordinates remains visible in RWMS but is explicitly not routable.
 The **Warehouse isochrones** and **Task isochrones** map layers are off by
@@ -59,6 +60,7 @@ and never produces synthetic circles or changes persisted demand.
 │ deliveries    │ contours · delivery/pickup · routes │ route metrics  │
 │ slot check    │                                     │ explanation     │
 │ drivers       │                                     │                 │
+│ contractors   │                                     │                 │
 │ vehicles      │                                     │                 │
 │ shifts        │                                     │                 │
 │ deliveries    │                                     │                 │
@@ -76,6 +78,11 @@ between sun and moon together with the RWMS light/dark theme. The workspace has
 no provider/map-mode footer and no manual **Save plan** or **RWMS exchange**
 button. **Close delivery acceptance** is the explicit finalization boundary;
 normal refresh and pre-planning are automatic.
+The left navigation is permanently visible and has no collapse control or
+decorative **Workspace** heading. The selected warehouse label carries its
+live local time and canonical IANA timezone; switching warehouses immediately
+recalculates that clock from the selected warehouse, not from a browser-global
+timezone.
 
 The supported flow selects an automatically reconciled canonical RWMS warehouse,
 creates warehouse-scoped resources and delivery/pickup work, checks dynamic slots,
@@ -85,7 +92,7 @@ replays vehicles at any timestamp. City-specific fixture workspaces, workspace
 cloning and JSON workspace import/export do not exist.
 
 The deterministic workload generator remains a test/development API, but the
-warehouse inspector does not expose **Test for 3 days**, **Connect warehouse**
+warehouse details view does not expose **Test for 3 days**, **Connect warehouse**
 or **Refresh from WMS** controls. Normal warehouse and RWMS order refresh is
 automatic.
 The shared planning date filters both the request list and map markers. Until
@@ -102,7 +109,7 @@ warehouse.
 
 The **Deliveries** section is the dispatcher preparation board. Switching its
 date shows only deliveries and pickups eligible for that day and keeps the
-dispatcher in the same inspector section instead of opening **Day plan**. Every READY item
+dispatcher in the same section instead of opening **Day plan**. Every READY item
 must receive either a positive service interval or the soft **During the day**
 choice, plus an explicit answer whether the address accepts the truck with its
 trailer; plan generation fails with `PLANNING_INPUT_INCOMPLETE` while either
@@ -119,7 +126,21 @@ order that has become physically or temporally invalid instead of silently
 reordering it. **Plan day** contains only the resulting plan, metrics,
 approval and a pre-approval **Undo changes** action. Dragging tasks between
 driver cycles remains version-fenced and fully revalidated by the backend.
-The right inspector has an accessible drag separator, is resizable up to half
+Each delivery card shows the logistics-owned confirmed price formatted in
+rubles, or **Not calculated** when no authoritative quote exists. The same fact
+is visible on unassigned and map cards and refreshes with the request feed.
+When every staff route is infeasible, the board distinguishes **No available
+drivers** from a merely unassigned request and offers an explicit contractor
+handoff. Contractor profiles are reusable and have no availability dates. The
+dispatcher selects the planning date in the header and can either form a trip
+automatically from eligible unassigned work or select requests manually. Each
+handoff records the concrete active worker but deliberately creates no simulator
+vehicle, shift or route cycle and removes those requests from automatic planning.
+Selecting an unassigned list card highlights its marker and pans the map while
+preserving the current zoom. Backend/domain failures pass through one
+user-facing Russian error mapper; raw HTTP status text, exception bodies and
+planner constraint dumps remain diagnostic-only.
+The right details pane has an accessible drag separator, is resizable up to half
 the viewport and reflows its forms and metrics as its width changes. The former
 per-leg truck diagnostic block is not part of the operator interface.
 Header buttons, the date control and both equal-width mode segments share one
@@ -389,6 +410,9 @@ On the current VPS, Nginx publishes the workspace at
 <https://77-90-158-90.sslip.io/logistics-simulator/>. This path-based reverse
 proxy build uses `VITE_APP_BASE_PATH=/logistics-simulator/` and
 `VITE_API_BASE_URL=/logistics-simulator/api`; the backend remains loopback-only.
+The frontend container serves the same prefixed SPA and API paths directly, and
+returns `404` for a missing hashed asset instead of falling back to HTML. This
+keeps direct runtime smoke tests equivalent to the URLs embedded in the bundle.
 The `/logistics/**` namespace remains owned by the primary RWMS panel and must
 not redirect to or be shadowed by the standalone simulator. The public Nginx
 locations are recorded in `deploy/nginx-public-path.conf`.
@@ -573,14 +597,20 @@ Planner settings submit only fields accepted by the strict backend
 `PlanningSettings` schema. The obsolete browser-only `trace_enabled` switch was
 removed; trace event bounds and sampling remain supported settings.
 
-For a representative warehouse the same planner evaluates local resources,
-active operational assignments, every calendar-eligible support warehouse and
-confirmed contractor shifts. A support candidate retains its origin, exact
+For a representative warehouse the same planner evaluates local staff resources,
+active operational assignments and every calendar-eligible support warehouse.
+A support candidate retains its origin, exact
 road arrival and availability-after-buffer. It may perform a one-day
 cross-warehouse service route without changing its base, or an explicit
 resource-reposition transfer may activate a destination assignment after
 arrival. Potential resources produce confirmation-required slots; a guaranteed
 fixed window still requires a feasible, reservable plan.
+Contractors are a separate dispatcher fallback: the optimizer never fabricates
+their vehicle, capacity, shift or internal route. The **Contractors** section
+uses task-board's warehouse-owned catalog to create, edit, deactivate or delete
+unused reusable profiles. Profile dialogs contain no dates. **Form trip** assigns
+eligible work for the date currently selected in the header; **Distribute
+manually** submits an explicit set of that day's unassigned deliveries/pickups.
 
 `GET /api/warehouses/{warehouse_id}/workspace` refreshes the authoritative
 31-day demand horizon before returning the workspace whenever synchronization

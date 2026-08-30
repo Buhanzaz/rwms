@@ -145,10 +145,10 @@ async def test_projection_expands_monthly_shifts_and_carries_mandatory_jobs(
 
 
 @pytest.mark.asyncio
-async def test_projection_revision_is_deterministic_and_changes_with_obligation(
+async def test_projection_revision_uses_canonical_delivery_and_pickup_obligation(
     db_session: AsyncSession,
 ) -> None:
-    """Identical facts replay the same revision while a mandatory change advances it."""
+    """Delivery is always mandatory while pickup retains its explicit local obligation."""
 
     warehouse = await make_warehouse(db_session)
     warehouse.capacity_generation = 3
@@ -162,12 +162,25 @@ async def test_projection_revision_is_deterministic_and_changes_with_obligation(
     replay = await build_capacity_projection(db_session, warehouse.id)
     assert replay.command.source_revision == first.command.source_revision
     assert replay.idempotency_key == first.idempotency_key
+    assert first.command.jobs[0].mandatory is True
+
+    request.mandatory = True
+    await db_session.flush()
+    same_delivery = await build_capacity_projection(db_session, warehouse.id)
+    assert same_delivery.command.source_revision == first.command.source_revision
+    assert same_delivery.idempotency_key == first.idempotency_key
+
+    request.type = "PICKUP"
+    request.mandatory = False
+    await db_session.flush()
+    pickup = await build_capacity_projection(db_session, warehouse.id)
+    assert pickup.command.jobs[0].mandatory is False
 
     request.mandatory = True
     await db_session.flush()
     changed = await build_capacity_projection(db_session, warehouse.id)
-    assert changed.command.source_revision != first.command.source_revision
-    assert changed.idempotency_key != first.idempotency_key
+    assert changed.command.source_revision != pickup.command.source_revision
+    assert changed.idempotency_key != pickup.idempotency_key
 
     warehouse.isochrone_tariffs[0].price_rubles += 1
     await db_session.flush()

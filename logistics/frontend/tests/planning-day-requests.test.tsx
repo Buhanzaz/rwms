@@ -106,7 +106,7 @@ describe('planning-day request preparation', () => {
 
   it('shows one colored operation label and only the delivery number from a generated name', () => {
     render(<PlanningDayRequests
-      workspace={workspaceFixture({ requests: [requestFixture({ name: 'Доставка 2026-08-29 №7' })] })}
+      workspace={workspaceFixture({ requests: [requestFixture({ name: 'Доставка 2026-08-29 №7', tasks: [] })] })}
       planningDate="2026-08-30"
       busy={false}
       onPlanningDateChange={() => undefined}
@@ -118,6 +118,8 @@ describe('planning-day request preparation', () => {
     expect(screen.getByText('Доставка')).toHaveClass('badge--accent');
     expect(screen.getByText('· №7')).toBeVisible();
     expect(screen.getByText('Готово')).toBeVisible();
+    expect(screen.getByText('Подзадачи: будут созданы при сохранении')).toBeVisible();
+    expect(screen.queryByText(/backend/iu)).not.toBeInTheDocument();
     expect(screen.queryByText('Доставка 2026-08-29 №7')).not.toBeInTheDocument();
   });
 
@@ -134,6 +136,18 @@ describe('planning-day request preparation', () => {
 
     expect(screen.getByText('· №76E5AF71')).toBeVisible();
     expect(screen.queryByText('Заказ 76E5AF71')).not.toBeInTheDocument();
+  });
+
+  it('shows the persisted calculated price and does not invent a zero price', () => {
+    const workspace = workspaceFixture({ requests: [
+      requestFixture({ id: 'priced', name: 'Заказ PRICED', delivery_price_rubles: 28_500 }),
+      requestFixture({ id: 'pending', name: 'Заказ PENDING', delivery_price_rubles: null }),
+    ] });
+    render(<PlanningDayRequests workspace={workspace} planningDate="2026-08-30" busy={false} onPlanningDateChange={() => undefined} onSave={() => Promise.resolve()} onSplit={() => Promise.resolve()} onSelect={() => undefined} />);
+
+    expect(screen.getByText(/28\s500 ₽/)).toBeVisible();
+    expect(screen.getByText('Не рассчитана')).toBeVisible();
+    expect(screen.queryByText('0 ₽')).not.toBeInTheDocument();
   });
 
   it('resets unsaved fields when the operator switches to another planning date', async () => {

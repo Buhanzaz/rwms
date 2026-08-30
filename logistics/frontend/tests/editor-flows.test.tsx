@@ -41,6 +41,8 @@ describe('warehouse editor', () => {
     expect(screen.getByText('Склад СПб')).toBeVisible();
     expect(screen.queryByLabelText('Название')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Адрес')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Дата.*по умолчанию/iu)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Изохроны и цены/iu)).not.toBeInTheDocument();
     await user.clear(screen.getByLabelText('Загрузка, мин'));
     await user.type(screen.getByLabelText('Загрузка, мин'), '45');
     await user.click(screen.getByRole('button', { name: 'Сохранить' }));
@@ -105,6 +107,8 @@ describe('request editor', () => {
     const request = workspaceFixture().requests[0]!;
     render(<RequestDialog request={request} type={request.type} defaultDate="2026-08-30" busy={false} onClose={() => undefined} onSubmit={() => Promise.resolve()} />);
 
+    expect(screen.getByText('Стоимость доставки рассчитывается по изохроне склада')).toBeVisible();
+    expect(screen.queryByText(/backend/iu)).not.toBeInTheDocument();
     expect(screen.getByLabelText('Дата')).toHaveValue('2026-08-30');
     expect(screen.getByLabelText('Жёсткое окно')).toBeChecked();
     expect(screen.getByLabelText('Машина с прицепом проедет к адресу')).toHaveValue('true');
