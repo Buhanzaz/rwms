@@ -44,7 +44,7 @@ class DriverGatewayApiContractBoundaryTest {
             .filterNot(Method::isSynthetic)
             .associateBy(Method::getName)
 
-        assertThat(expected).hasSize(13)
+        assertThat(expected).hasSize(24)
         assertWithMessage(
             "DriverGatewayApi method inventory must stay synchronized with canonical public OpenAPI",
         ).that(methods.keys)
@@ -395,6 +395,17 @@ private fun expectedDriverRoutes(): Map<String, DriverContractRoute> {
         DriverContractRoute(verb, gatewayPath, source)
 
     return linkedMapOf(
+        "todayDriverShift" to route("GET", "/api/task-board/driver/v1/shift/today", "$taskBoard /driver/v1/shift/today"),
+        "markShiftBriefingSeen" to route("POST", "/api/task-board/driver/v1/shifts/{shiftId}/briefing/seen", "$taskBoard /driver/v1/shifts/{shiftId}/briefing/seen"),
+        "confirmShiftMedicalCheck" to route("POST", "/api/task-board/driver/v1/shifts/{shiftId}/medical-check", "$taskBoard /driver/v1/shifts/{shiftId}/medical-check"),
+        "updateShiftInspectionItem" to route("PUT", "/api/task-board/driver/v1/shifts/{shiftId}/vehicle-inspection/items/{itemId}", "$taskBoard /driver/v1/shifts/{shiftId}/vehicle-inspection/items/{itemId}"),
+        "completeShiftInspection" to route("POST", "/api/task-board/driver/v1/shifts/{shiftId}/vehicle-inspection/complete", "$taskBoard /driver/v1/shifts/{shiftId}/vehicle-inspection/complete"),
+        "startShift" to route("POST", "/api/task-board/driver/v1/shifts/{shiftId}/start", "$taskBoard /driver/v1/shifts/{shiftId}/start"),
+        "startShiftClosing" to route("POST", "/api/task-board/driver/v1/shifts/{shiftId}/closing/start", "$taskBoard /driver/v1/shifts/{shiftId}/closing/start"),
+        "confirmShiftWarehouseReturn" to route("POST", "/api/task-board/driver/v1/shifts/{shiftId}/return-to-warehouse", "$taskBoard /driver/v1/shifts/{shiftId}/return-to-warehouse"),
+        "submitShiftClosingReport" to route("POST", "/api/task-board/driver/v1/shifts/{shiftId}/closing-report", "$taskBoard /driver/v1/shifts/{shiftId}/closing-report"),
+        "reserveShiftPhoto" to route("POST", "/api/task-board/driver/v1/shifts/{shiftId}/photos/reservations", "$taskBoard /driver/v1/shifts/{shiftId}/photos/reservations"),
+        "closeShift" to route("POST", "/api/task-board/driver/v1/shifts/{shiftId}/close", "$taskBoard /driver/v1/shifts/{shiftId}/close"),
         "driverContext" to route("GET", "/api/task-board/driver/v1/context", "$taskBoard /driver/v1/context"),
         "driverFeed" to route("GET", "/api/task-board/driver/v1/feed", "$taskBoard /driver/v1/feed"),
         "driverTaskDetail" to route("GET", "/api/task-board/driver/v1/entries/{entryId}", "$taskBoard /driver/v1/entries/{entryId}"),

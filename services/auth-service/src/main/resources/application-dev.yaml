@@ -123,10 +123,10 @@ rwms:
         - client-id: task-board-service
           client-name: Task Board Service
           enabled: true
-          revision: 3
+          revision: 4
           authentication-methods: [client_secret_basic]
           grant-types: [client_credentials]
-          scopes: [worker-credentials.manage, warehouse.timezone.read, warehouse.lifecycle.read, warehouse.lifecycle.confirm]
+          scopes: [worker-credentials.manage, warehouse.identity.read, warehouse.timezone.read, warehouse.lifecycle.read, warehouse.lifecycle.confirm]
           development-secret: task-board-dev-secret
           audiences: [rwms-services]
           access-token-ttl: 5m
@@ -174,10 +174,10 @@ rwms:
         - client-id: logistics-service
           client-name: Logistics Service Downstream Client
           enabled: ${LOGISTICS_CLIENT_ENABLED:false}
-          revision: ${LOGISTICS_CLIENT_REVISION:6}
+          revision: ${LOGISTICS_CLIENT_REVISION:7}
           authentication-methods: [client_secret_basic]
           grant-types: [client_credentials]
-          scopes: [warehouse.logistics, warehouse.timezone.read, warehouse.operation.mark, warehouse.lifecycle.read, warehouse.lifecycle.confirm, asset.logistics, task-board.logistics, maintenance.logistics, media.logistics]
+          scopes: [warehouse.logistics, warehouse.timezone.read, warehouse.operation.mark, warehouse.lifecycle.read, warehouse.lifecycle.confirm, asset.logistics, task-board.logistics, task-board.driver-shifts.plan, maintenance.logistics, media.logistics]
           secret-environment: LOGISTICS_CLIENT_SECRET
           audiences: [rwms-services]
           access-token-ttl: 5m

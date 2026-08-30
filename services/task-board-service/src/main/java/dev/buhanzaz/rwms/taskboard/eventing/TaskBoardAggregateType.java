@@ -13,6 +13,7 @@ public enum TaskBoardAggregateType {
   QUEUE_ENTRY("rwms.task-board.queue-entry.v1"),
   TASK_BOARD_ENTRY_OWNER_PROOF("rwms.task-board.entry-owner-proof.v1"),
   TASK_EVIDENCE("rwms.task-board.task-evidence.v1"),
+  DRIVER_SHIFT_OWNER_PROOF("rwms.task-board.driver-shift-owner-proof.v1"),
   GROUP_KPI_DAY("rwms.task-board.group-kpi-day.v1");
 
   public static final String CONSUMER_GROUP = "task-board-shadow-v1";

@@ -71,7 +71,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
   void cumulativeVersionFourEventSourcingAndTaskSyncMigrateCleanDatabaseAndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(35);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(36);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -85,6 +85,13 @@ class TaskBoardFlywayMigrationIntegrationTest {
             "board_task",
             "consumer_aggregate_checkpoint",
             "domain_event",
+            "driver_shift",
+            "driver_shift_plan",
+            "driver_shift_photo",
+            "driver_shift_command_receipt",
+            "vehicle_inspection",
+            "vehicle_inspection_item_result",
+            "vehicle_defect",
             "event_stream_head",
             "flyway_schema_history",
             "inbox_message",
@@ -2142,7 +2149,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(34);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(35);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
 

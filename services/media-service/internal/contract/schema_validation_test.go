@@ -27,6 +27,9 @@ func TestMediaFactSchemaValidatesStrictFixtures(t *testing.T) {
 	workerEvidence["payload"].(map[string]any)["clientReferenceId"] = "33a0f9d1-0ad2-42d1-bb94-36284833f622"
 	workerEvidence["actorRef"].(map[string]any)["principalType"] = "WORKER"
 	assertSchemaAccepts(t, schema, workerEvidence)
+	shiftEvidence := cloneFixture(t, workerEvidence)
+	shiftEvidence["payload"].(map[string]any)["ownerType"] = "DRIVER_SHIFT"
+	assertSchemaAccepts(t, schema, shiftEvidence)
 	logistics := cloneFixture(t, valid)
 	logistics["payload"].(map[string]any)["ownerType"] = "LOGISTICS_TRANSFER"
 	logistics["payload"].(map[string]any)["ownerId"] =
@@ -66,6 +69,9 @@ func TestMediaFactSchemaValidatesStrictFixtures(t *testing.T) {
 		},
 		"task evidence missing stable reference": func(value map[string]any) {
 			value["payload"].(map[string]any)["ownerType"] = "TASK_BOARD_ENTRY"
+		},
+		"shift evidence missing stable reference": func(value map[string]any) {
+			value["payload"].(map[string]any)["ownerType"] = "DRIVER_SHIFT"
 		},
 		"non task evidence has stable reference": func(value map[string]any) {
 			value["payload"].(map[string]any)["clientReferenceId"] = "33a0f9d1-0ad2-42d1-bb94-36284833f622"

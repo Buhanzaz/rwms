@@ -21,6 +21,7 @@ android {
 dependencies {
     implementation(platform(libs.compose.bom))
     implementation(project(":core-media"))
+    implementation(project(":core-network"))
     implementation(project(":core-database"))
     implementation(project(":core-sync"))
     implementation(project(":core-ui"))

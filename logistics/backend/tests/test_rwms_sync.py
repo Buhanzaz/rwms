@@ -18,7 +18,12 @@ import app.api.rwms as rwms_api
 from app.config import Settings
 from app.errors import ApiError
 from app.integrations.rwms import RWMS_PLANNING_SCOPE, RwmsPlanningClient
-from app.integrations.rwms_sync import build_assignments_command, sync_warehouse_requests
+from app.integrations.rwms_sync import (
+    _build_driver_shift_plans,
+    _vehicle_configuration_type,
+    build_assignments_command,
+    sync_warehouse_requests,
+)
 from app.main import create_app
 from app.models import (
     Driver,
@@ -28,11 +33,14 @@ from app.models import (
     RouteCycle,
     RoutePlan,
     RouteStop,
+    Trailer,
+    Vehicle,
     Warehouse,
 )
 from app.schemas.domain import (
     RequestDateOptionInput,
     RequestDateOptionUpdate,
+    RwmsAssignmentsCommand,
     RwmsCapacitySnapshotCommand,
     RwmsCapacitySnapshotResult,
     RwmsIsochroneTariff,
@@ -561,6 +569,284 @@ def test_shared_driver_builds_explicit_warehouse_audience_assignment() -> None:
     assert len(command.assignments) == 1
     assert command.assignments[0].driver_audience_mode == "WAREHOUSE_DRIVERS"
     assert command.assignments[0].driver_worker_id is None
+    assert command.driver_shift_plans == []
+
+
+def test_assigned_driver_command_contains_one_exact_vehicle_shift_snapshot() -> None:
+    """Aggregate route cycles without leaking credentials or duplicating fleet ownership."""
+
+    planning_date = date(2026, 8, 30)
+    warehouse = Warehouse(
+        id=uuid4(),
+        external_warehouse_id=uuid4(),
+        name="Склад СПб",
+        city="Санкт-Петербург",
+        address="Тестовый адрес",
+        timezone="Europe/Moscow",
+        latitude=59.93,
+        longitude=30.32,
+    )
+    source = _source_request(planning_date=planning_date)
+    request = LogisticsRequest(
+        id=uuid4(),
+        warehouse_id=warehouse.id,
+        source_system="RWMS",
+        external_id=source.order_id,
+        external_version=source.order_version,
+        external_payload=source.model_dump(mode="json", by_alias=True),
+        type="DELIVERY",
+        name="Заказ R-142",
+        address_label=source.address,
+        latitude=source.latitude,
+        longitude=source.longitude,
+        quantity=1,
+        service_minutes=30,
+        priority=0,
+        mandatory=False,
+        status="READY",
+        split_allowed=True,
+    )
+    task = PlanningTask(
+        id=uuid4(),
+        request=request,
+        part_number=1,
+        quantity=1,
+        type="DELIVERY",
+        latitude=59.94,
+        longitude=30.33,
+        service_minutes=30,
+        priority=0,
+        mandatory=False,
+        status="READY",
+    )
+    worker_id = uuid4()
+    driver = Driver(
+        id=uuid4(),
+        warehouse_id=warehouse.id,
+        external_worker_id=worker_id,
+        rwms_assignment_mode="ASSIGNED_DRIVER",
+        name="Александр Водитель",
+    )
+    trailer = Trailer(
+        id=uuid4(),
+        warehouse_id=warehouse.id,
+        name="Прицеп Schmitz",
+        registration_number="B456BB78",
+    )
+    vehicle = Vehicle(
+        id=uuid4(),
+        warehouse_id=warehouse.id,
+        name="MAN TGS",
+        registration_number="A123AA78",
+        vehicle_type="FLATBED_CRANE",
+        manufacturer="MAN",
+        model="TGS",
+        default_trailer=trailer,
+        default_trailer_id=trailer.id,
+    )
+    shift = DriverShift(
+        id=uuid4(),
+        warehouse_id=warehouse.id,
+        driver=driver,
+        driver_id=driver.id,
+        vehicle=vehicle,
+        vehicle_id=vehicle.id,
+        date_from=date(2026, 8, 1),
+        date_to=date(2026, 8, 31),
+        start_time=time(8),
+        end_time=time(20),
+    )
+    plan = RoutePlan(
+        id=uuid4(),
+        warehouse=warehouse,
+        warehouse_id=warehouse.id,
+        date=planning_date,
+        version=3,
+    )
+    first_cycle = RouteCycle(
+        id=uuid4(),
+        route_plan=plan,
+        driver_shift=shift,
+        driver_shift_id=shift.id,
+        sequence=1,
+        planned_start=datetime(2026, 8, 30, 9, tzinfo=UTC),
+        planned_finish=datetime(2026, 8, 30, 11, tzinfo=UTC),
+        total_distance_meters=123_456,
+    )
+    RouteStop(
+        id=uuid4(),
+        route_cycle=first_cycle,
+        sequence=1,
+        task=task,
+        task_id=task.id,
+        stop_type="DELIVERY",
+        planned_arrival=first_cycle.planned_start,
+        planned_departure=first_cycle.planned_finish,
+        service_seconds=30 * 60,
+        quantity_delta=-1,
+        load_before=1,
+        load_after=0,
+        latitude=task.latitude,
+        longitude=task.longitude,
+    )
+    RouteCycle(
+        id=uuid4(),
+        route_plan=plan,
+        driver_shift=shift,
+        driver_shift_id=shift.id,
+        sequence=2,
+        planned_start=datetime(2026, 8, 30, 12, tzinfo=UTC),
+        planned_finish=datetime(2026, 8, 30, 14, tzinfo=UTC),
+        total_distance_meters=76_600,
+    )
+
+    command = build_assignments_command(plan)
+    payload = command.model_dump(mode="json", by_alias=True)
+
+    assert len(command.driver_shift_plans) == 1
+    shift_plan = command.driver_shift_plans[0]
+    assert shift_plan.source_shift_id == shift.id
+    assert shift_plan.source_plan_id == plan.id
+    assert shift_plan.source_plan_version == plan.version
+    assert shift_plan.warehouse_id == warehouse.external_warehouse_id
+    assert shift_plan.driver_id == worker_id
+    assert shift_plan.driver_name == "Александр Водитель"
+    assert shift_plan.work_date == planning_date
+    assert shift_plan.trip_count == 2
+    assert shift_plan.route_distance_meters == 200_056
+    assert shift_plan.vehicle.id == vehicle.id
+    assert shift_plan.vehicle.registration_number == "A123AA78"
+    assert shift_plan.vehicle.configuration_type == "TRUCK_WITH_TRAILER"
+    assert shift_plan.vehicle.start_odometer is None
+    assert shift_plan.trailer is not None
+    assert shift_plan.trailer.id == trailer.id
+    assert shift_plan.trailer.registration_number == "B456BB78"
+    assert set(payload) == {
+        "warehouseId",
+        "planId",
+        "planVersion",
+        "assignments",
+        "driverShiftPlans",
+    }
+    serialized_shift = payload["driverShiftPlans"][0]
+    assert serialized_shift["routeDistanceMeters"] == 200_056
+    assert "routeDistanceKm" not in serialized_shift
+    serialized = json.dumps(payload)
+    assert "apiKey" not in serialized
+    assert "clientSecret" not in serialized
+
+
+def test_assignments_command_accepts_legacy_payload_without_shift_plans() -> None:
+    """Keep old simulator callers valid while defaulting the new snapshot collection to empty."""
+
+    command = RwmsAssignmentsCommand.model_validate(
+        {
+            "warehouseId": str(uuid4()),
+            "planId": str(uuid4()),
+            "planVersion": 1,
+            "assignments": [],
+        }
+    )
+
+    assert command.driver_shift_plans == []
+
+
+def test_driver_shift_snapshot_rejects_conflicting_duplicate_source_identity() -> None:
+    """Fail closed if one source shift resolves to different vehicle snapshots."""
+
+    warehouse = Warehouse(
+        id=uuid4(),
+        external_warehouse_id=uuid4(),
+        name="Склад СПб",
+        city="Санкт-Петербург",
+        address="Тестовый адрес",
+        timezone="Europe/Moscow",
+        latitude=59.93,
+        longitude=30.32,
+    )
+    worker_id = uuid4()
+    driver = Driver(
+        id=uuid4(),
+        warehouse_id=warehouse.id,
+        external_worker_id=worker_id,
+        rwms_assignment_mode="ASSIGNED_DRIVER",
+        name="Александр Водитель",
+    )
+    shared_shift_id = uuid4()
+    first_vehicle = Vehicle(
+        id=uuid4(),
+        warehouse_id=warehouse.id,
+        name="MAN TGS",
+        registration_number="A123AA78",
+    )
+    second_vehicle = Vehicle(
+        id=uuid4(),
+        warehouse_id=warehouse.id,
+        name="KAMAZ",
+        registration_number="C789CC78",
+    )
+
+    def shift(vehicle: Vehicle) -> DriverShift:
+        """Build one deliberately conflicting in-memory source identity."""
+
+        return DriverShift(
+            id=shared_shift_id,
+            warehouse_id=warehouse.id,
+            driver=driver,
+            driver_id=driver.id,
+            vehicle=vehicle,
+            vehicle_id=vehicle.id,
+            date_from=date(2026, 8, 1),
+            date_to=date(2026, 8, 31),
+            start_time=time(8),
+            end_time=time(20),
+        )
+
+    plan = RoutePlan(
+        id=uuid4(),
+        warehouse=warehouse,
+        warehouse_id=warehouse.id,
+        date=date(2026, 8, 30),
+        version=1,
+    )
+    for sequence, vehicle in enumerate((first_vehicle, second_vehicle), start=1):
+        RouteCycle(
+            id=uuid4(),
+            route_plan=plan,
+            driver_shift=shift(vehicle),
+            driver_shift_id=shared_shift_id,
+            sequence=sequence,
+            planned_start=datetime(2026, 8, 30, 8 + sequence, tzinfo=UTC),
+            planned_finish=datetime(2026, 8, 30, 9 + sequence, tzinfo=UTC),
+            total_distance_meters=10_000,
+        )
+
+    with pytest.raises(ApiError) as error:
+        _build_driver_shift_plans(plan, warehouse.external_warehouse_id)
+
+    assert error.value.code == "DUPLICATE_DRIVER_SHIFT_CONFLICT"
+
+
+def test_crane_configuration_requires_the_known_explicit_vehicle_type() -> None:
+    """Do not infer a crane inspection template from ambiguous free-form catalog text."""
+
+    explicit = Vehicle(
+        id=uuid4(),
+        warehouse_id=uuid4(),
+        name="Кран-манипулятор",
+        registration_number="A123AA78",
+        vehicle_type="FLATBED_CRANE",
+    )
+    ambiguous = Vehicle(
+        id=uuid4(),
+        warehouse_id=uuid4(),
+        name="Грузовик",
+        registration_number="B456BB78",
+        vehicle_type="CRANE_READY",
+    )
+
+    assert _vehicle_configuration_type(explicit) == "TRUCK_WITH_CRANE"
+    assert _vehicle_configuration_type(ambiguous) == "TRUCK"
 
 
 @pytest.mark.asyncio

@@ -358,8 +358,8 @@ func (repository *Repository) CreateUpload(ctx context.Context, command CreateUp
 	if err := lockActorCommand(ctx, tx, command.PrincipalType, command.SubjectID, "CREATE_UPLOAD", command.IdempotencyKey); err != nil {
 		return AssetRecord{}, false, err
 	}
-	if command.OwnerType == OwnerTypeTaskBoardEntry {
-		asset, replayed, err := repository.createTaskBoardEvidenceUpload(ctx, tx, command)
+	if IsWorkerEvidenceOwnerType(command.OwnerType) {
+		asset, replayed, err := repository.createWorkerEvidenceUpload(ctx, tx, command)
 		if err != nil {
 			return AssetRecord{}, false, err
 		}
@@ -633,7 +633,7 @@ func (repository *Repository) findCreateReplay(
 }
 
 func validateCreateActor(command CreateUploadCommand) error {
-	if command.OwnerType == OwnerTypeTaskBoardEntry {
+	if IsWorkerEvidenceOwnerType(command.OwnerType) {
 		if command.ClientReferenceID == nil || *command.ClientReferenceID == uuid.Nil || command.Kind != media.KindImage {
 			return ErrConflict
 		}
@@ -655,7 +655,7 @@ func validateCreateActor(command CreateUploadCommand) error {
 	return nil
 }
 
-func (repository *Repository) createTaskBoardEvidenceUpload(
+func (repository *Repository) createWorkerEvidenceUpload(
 	ctx context.Context,
 	tx pgx.Tx,
 	command CreateUploadCommand,
@@ -664,11 +664,12 @@ func (repository *Repository) createTaskBoardEvidenceUpload(
 		return AssetRecord{}, false, err
 	}
 	if command.WorkerID != nil {
-		entryID, err := uuid.Parse(command.OwnerID)
-		if err != nil || entryID == uuid.Nil {
+		ownerID, err := uuid.Parse(command.OwnerID)
+		if err != nil || ownerID == uuid.Nil {
 			return AssetRecord{}, false, ErrConflict
 		}
-		if err := RequireTaskBoardEntryWorkerAccess(ctx, tx, entryID, command.WarehouseID, *command.WorkerID); err != nil {
+		if err := requireWorkerEvidenceUploadAccess(ctx, tx, command.OwnerType, ownerID,
+			command.WarehouseID, *command.WorkerID); err != nil {
 			return AssetRecord{}, false, err
 		}
 	}
@@ -676,7 +677,7 @@ func (repository *Repository) createTaskBoardEvidenceUpload(
 		return AssetRecord{}, false, ErrConflict
 	}
 	if _, err := tx.Exec(ctx, `select pg_advisory_xact_lock(hashtextextended($1,0))`,
-		"task-board-evidence:"+command.OwnerID+":"+command.ClientReferenceID.String()); err != nil {
+		"worker-evidence:"+command.OwnerType+":"+command.OwnerID+":"+command.ClientReferenceID.String()); err != nil {
 		return AssetRecord{}, false, err
 	}
 
@@ -693,7 +694,7 @@ func (repository *Repository) createTaskBoardEvidenceUpload(
 		return AssetRecord{}, false, ErrIdempotencyMismatch
 	}
 
-	asset, existing, err := taskBoardEvidenceAssetForUpdate(ctx, tx, command)
+	asset, existing, err := workerEvidenceAssetForUpdate(ctx, tx, command)
 	if err != nil {
 		return AssetRecord{}, false, err
 	}
@@ -703,7 +704,7 @@ func (repository *Repository) createTaskBoardEvidenceUpload(
 			return AssetRecord{}, false, ErrIdempotencyMismatch
 		}
 		if asset.CreatedBy == nil || asset.CreatedBy.PrincipalType != command.Actor.PrincipalType ||
-			asset.CreatedBy.SubjectID != command.Actor.SubjectID || !sameTaskBoardEvidenceRequest(asset, command) {
+			asset.CreatedBy.SubjectID != command.Actor.SubjectID || !sameWorkerEvidenceRequest(asset, command) {
 			return AssetRecord{}, false, ErrIdempotencyMismatch
 		}
 		if asset.Status == media.StatusUploading && asset.UploadCompletedAt == nil && !now.Before(asset.UploadExpiresAt) {
@@ -756,9 +757,9 @@ func (repository *Repository) createTaskBoardEvidenceUpload(
 		media_id,folder_id,client_reference_id,created_by_principal_type,created_by_actor_id,
 		owner_type,owner_id,warehouse_id,media_kind,original_file_name,original_content_type,
 		source_object_key,processing_status,sort_order,version,next_generation,created_at,updated_at)
-	values ($1,$2,$3,$4,$5,'TASK_BOARD_ENTRY',$6,$7,$8,$9,$10,$11,'UPLOADING',$12,1,1,$13,$13)`,
+	values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'UPLOADING',$13,1,1,$14,$14)`,
 		assetID, folderID, *command.ClientReferenceID, command.Actor.PrincipalType, command.Actor.SubjectID,
-		command.OwnerID, command.WarehouseID, command.Kind, command.FileName, command.ContentType,
+		command.OwnerType, command.OwnerID, command.WarehouseID, command.Kind, command.FileName, command.ContentType,
 		command.SourceObjectKey, command.SortOrder, now)
 	if err != nil {
 		return AssetRecord{}, false, translateConstraint(err)
@@ -799,12 +800,12 @@ func (repository *Repository) createTaskBoardEvidenceUpload(
 	}, false, nil
 }
 
-func taskBoardEvidenceAssetForUpdate(ctx context.Context, tx pgx.Tx, command CreateUploadCommand) (AssetRecord, bool, error) {
+func workerEvidenceAssetForUpdate(ctx context.Context, tx pgx.Tx, command CreateUploadCommand) (AssetRecord, bool, error) {
 	var mediaID uuid.UUID
 	var deletedAt *time.Time
 	err := tx.QueryRow(ctx, `select media_id,deleted_at from media_asset
-		where owner_type='TASK_BOARD_ENTRY' and owner_id=$1 and client_reference_id=$2 for update`,
-		command.OwnerID, *command.ClientReferenceID).Scan(&mediaID, &deletedAt)
+		where owner_type=$1 and owner_id=$2 and client_reference_id=$3 for update`,
+		command.OwnerType, command.OwnerID, *command.ClientReferenceID).Scan(&mediaID, &deletedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AssetRecord{}, false, nil
 	}
@@ -828,14 +829,25 @@ func taskBoardEvidenceAssetForUpdate(ctx context.Context, tx pgx.Tx, command Cre
 	return asset, true, nil
 }
 
-func sameTaskBoardEvidenceRequest(asset AssetRecord, command CreateUploadCommand) bool {
-	return asset.OwnerType == OwnerTypeTaskBoardEntry && asset.OwnerID == command.OwnerID &&
+func sameWorkerEvidenceRequest(asset AssetRecord, command CreateUploadCommand) bool {
+	return asset.OwnerType == command.OwnerType && IsWorkerEvidenceOwnerType(asset.OwnerType) && asset.OwnerID == command.OwnerID &&
 		asset.WarehouseID == command.WarehouseID && asset.Kind == command.Kind &&
 		asset.FileName == command.FileName && asset.ContentType == command.ContentType &&
 		asset.SortOrder == command.SortOrder && asset.ExpectedLength == command.ContentLength &&
 		asset.ExpectedChecksum == command.ChecksumSHA256 && asset.UploadMode == command.UploadMode &&
 		asset.ClientReferenceID != nil &&
 		command.ClientReferenceID != nil && *asset.ClientReferenceID == *command.ClientReferenceID
+}
+
+func requireWorkerEvidenceUploadAccess(ctx context.Context, tx pgx.Tx, ownerType string, ownerID, warehouseID, workerID uuid.UUID) error {
+	switch ownerType {
+	case OwnerTypeTaskBoardEntry:
+		return RequireTaskBoardEntryWorkerAccess(ctx, tx, ownerID, warehouseID, workerID)
+	case OwnerTypeDriverShift:
+		return RequireDriverShiftWorkerAccess(ctx, tx, ownerID, warehouseID, workerID)
+	default:
+		return ErrOwnerProofMissing
+	}
 }
 
 // UploadSessionForSubject returns an upload session only when the USER subject
@@ -1383,15 +1395,15 @@ func requireFinalizeWorkerAccess(ctx context.Context, tx pgx.Tx, asset AssetReco
 	if command.PrincipalType != PrincipalTypeWorker {
 		return nil
 	}
-	if asset.OwnerType != OwnerTypeTaskBoardEntry || command.WorkerID == nil || asset.CreatedBy == nil ||
+	if !IsWorkerEvidenceOwnerType(asset.OwnerType) || command.WorkerID == nil || asset.CreatedBy == nil ||
 		asset.CreatedBy.PrincipalType != PrincipalTypeWorker || asset.CreatedBy.SubjectID != command.Actor.SubjectID {
 		return ErrOwnerProofMissing
 	}
-	entryID, err := uuid.Parse(asset.OwnerID)
-	if err != nil || entryID == uuid.Nil {
+	ownerID, err := uuid.Parse(asset.OwnerID)
+	if err != nil || ownerID == uuid.Nil {
 		return ErrOwnerProofMissing
 	}
-	return RequireTaskBoardEntryWorkerAccess(ctx, tx, entryID, asset.WarehouseID, *command.WorkerID)
+	return requireWorkerEvidenceUploadAccess(ctx, tx, asset.OwnerType, ownerID, asset.WarehouseID, *command.WorkerID)
 }
 
 // ListOwner returns a bounded page of owner-scoped assets in presentation order.
@@ -1527,6 +1539,37 @@ func (repository *Repository) ReadTaskBoardEntryAssetsForWorker(
 		return err
 	}
 	records, err := readOwnerAssets(ctx, tx, OwnerTypeTaskBoardEntry, entryID.String(), warehouseID,
+		limit, after, repository.now, false)
+	if err != nil {
+		return err
+	}
+	if err := consume(records); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// ReadDriverShiftAssetsForWorker keeps the current shift proof and reader
+// audience locked through the complete metadata callback.
+func (repository *Repository) ReadDriverShiftAssetsForWorker(
+	ctx context.Context,
+	shiftID, warehouseID, workerID uuid.UUID,
+	limit int,
+	after *uuid.UUID,
+	consume func([]AssetWithVariants) error,
+) error {
+	if shiftID == uuid.Nil || warehouseID == uuid.Nil || workerID == uuid.Nil || consume == nil {
+		return ErrConflict
+	}
+	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := RequireDriverShiftWorkerReadAccess(ctx, tx, shiftID, warehouseID, workerID); err != nil {
+		return err
+	}
+	records, err := readOwnerAssets(ctx, tx, OwnerTypeDriverShift, shiftID.String(), warehouseID,
 		limit, after, repository.now, false)
 	if err != nil {
 		return err
@@ -2400,6 +2443,39 @@ func (repository *Repository) ReadTaskBoardEntryOriginalForWorker(
 	return tx.Commit(ctx)
 }
 
+// ReadDriverShiftOriginalForWorker provides a direct shift-owned original only
+// while the active proof names the authenticated driver as a reader.
+func (repository *Repository) ReadDriverShiftOriginalForWorker(
+	ctx context.Context,
+	shiftID, warehouseID, workerID, mediaID uuid.UUID,
+	generation *int,
+	consume func(AssetRecord, *VariantRecord) error,
+) error {
+	if consume == nil || (generation != nil && *generation <= 0) {
+		return ErrConflict
+	}
+	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := RequireDriverShiftWorkerReadAccess(ctx, tx, shiftID, warehouseID, workerID); err != nil {
+		return err
+	}
+	asset, original, found, err := readWorkerEvidenceOriginal(ctx, tx, OwnerTypeDriverShift,
+		shiftID, warehouseID, mediaID, generation)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return ErrNotFound
+	}
+	if err := consume(asset, original); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // ReadTaskBoardEntryVariantForWorker provides a task-board derivative only
 // when the current proof explicitly authorizes the worker and generation.
 func (repository *Repository) ReadTaskBoardEntryVariantForWorker(
@@ -2442,6 +2518,93 @@ func (repository *Repository) ReadTaskBoardEntryVariantForWorker(
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// ReadDriverShiftVariantForWorker provides a current shift-owned derivative
+// only while the active proof names the authenticated driver as a reader.
+func (repository *Repository) ReadDriverShiftVariantForWorker(
+	ctx context.Context,
+	shiftID, warehouseID, workerID, mediaID uuid.UUID,
+	generation int,
+	requestedVariant media.Variant,
+	consume func(AssetRecord, *VariantRecord) error,
+) error {
+	if consume == nil || generation <= 0 {
+		return ErrConflict
+	}
+	switch requestedVariant {
+	case media.VariantSmall, media.VariantMedium, media.VariantLarge:
+	default:
+		return ErrConflict
+	}
+	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := RequireDriverShiftWorkerReadAccess(ctx, tx, shiftID, warehouseID, workerID); err != nil {
+		return err
+	}
+	asset, variant, found, err := readWorkerEvidenceVariant(ctx, tx, OwnerTypeDriverShift,
+		shiftID, warehouseID, mediaID, generation, requestedVariant)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return ErrNotFound
+	}
+	if err := consume(asset, variant); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func readWorkerEvidenceOriginal(ctx context.Context, tx pgx.Tx, ownerType string, ownerID, warehouseID, mediaID uuid.UUID, generation *int) (AssetRecord, *VariantRecord, bool, error) {
+	var asset AssetRecord
+	var hasVariant bool
+	var variant VariantRecord
+	var variantName string
+	query := `select a.media_id,a.folder_id,a.owner_type,a.owner_id,a.warehouse_id,a.media_kind,
+		a.original_file_name,a.original_content_type,a.source_object_key,
+		coalesce(a.source_version_id,''),coalesce(a.source_etag,''),coalesce(a.source_checksum_sha256,''),
+		a.processing_status,a.version,a.current_generation,a.rotation_degrees,a.sort_order,a.size_bytes,a.created_at,
+		(variant.media_id is not null),coalesce(variant.variant,''),coalesce(variant.object_key,''),
+		coalesce(variant.object_version_id,''),coalesce(variant.content_type,''),coalesce(variant.size_bytes,0),
+		variant.width,variant.height,coalesce(variant.checksum_sha256,'')
+		from media_asset a left join media_variant variant on variant.media_id=a.media_id
+		and variant.generation=a.current_generation and variant.variant='ORIGINAL'
+		where a.media_id=$1 and a.owner_type=$2 and a.owner_id=$3 and a.warehouse_id=$4
+		and a.deleted_at is null and media_asset_is_available(a.media_id)`
+	args := []any{mediaID, ownerType, ownerID.String(), warehouseID}
+	if generation != nil {
+		query += ` and a.current_generation=$5`
+		args = append(args, *generation)
+	}
+	err := tx.QueryRow(ctx, query, args...).Scan(&asset.ID, &asset.FolderID, &asset.OwnerType, &asset.OwnerID,
+		&asset.WarehouseID, &asset.Kind, &asset.FileName, &asset.ContentType, &asset.SourceObjectKey,
+		&asset.SourceVersionID, &asset.SourceETag, &asset.SourceChecksum, &asset.Status, &asset.Version,
+		&asset.Generation, &asset.Rotation, &asset.SortOrder, &asset.SizeBytes, &asset.CreatedAt, &hasVariant,
+		&variantName, &variant.ObjectKey, &variant.ObjectVersionID, &variant.ContentType, &variant.SizeBytes,
+		&variant.Width, &variant.Height, &variant.Checksum)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AssetRecord{}, nil, false, nil
+	}
+	if err != nil {
+		return AssetRecord{}, nil, false, err
+	}
+	if hasVariant {
+		variant.Variant = media.Variant(variantName)
+		return asset, &variant, true, nil
+	}
+	return asset, nil, true, nil
+}
+
+func readWorkerEvidenceVariant(ctx context.Context, tx pgx.Tx, ownerType string, ownerID, warehouseID, mediaID uuid.UUID, generation int, requestedVariant media.Variant) (AssetRecord, *VariantRecord, bool, error) {
+	return readTaskBoardWorkerVariant(ctx, tx, `from media_asset a
+		left join media_variant variant on variant.media_id=a.media_id and variant.generation=$4 and variant.variant=$5
+		where a.media_id=$1 and a.owner_type=$6 and a.owner_id=$2 and a.warehouse_id=$3
+		and a.current_generation=$4 and a.deleted_at is null and media_asset_is_available(a.media_id)`,
+		mediaID, ownerID.String(), warehouseID, generation, requestedVariant, ownerType)
 }
 
 func readTaskBoardResultOriginal(ctx context.Context, tx pgx.Tx, entryID, warehouseID, mediaID uuid.UUID, generation *int) (AssetRecord, *VariantRecord, bool, error) {
@@ -2518,7 +2681,7 @@ func readTaskBoardSourceVariant(ctx context.Context, tx pgx.Tx, entryID, warehou
 	return asset, variant, found, err
 }
 
-func readTaskBoardWorkerVariant(ctx context.Context, tx pgx.Tx, fromAndWhere string, first, second, warehouseID any, generation int, requestedVariant media.Variant) (AssetRecord, *VariantRecord, bool, error) {
+func readTaskBoardWorkerVariant(ctx context.Context, tx pgx.Tx, fromAndWhere string, arguments ...any) (AssetRecord, *VariantRecord, bool, error) {
 	var asset AssetRecord
 	var hasVariant bool
 	var variant VariantRecord
@@ -2530,7 +2693,7 @@ func readTaskBoardWorkerVariant(ctx context.Context, tx pgx.Tx, fromAndWhere str
 		(variant.media_id is not null),coalesce(variant.variant,''),coalesce(variant.object_key,''),
 		coalesce(variant.object_version_id,''),coalesce(variant.content_type,''),coalesce(variant.size_bytes,0),
 		variant.width,variant.height,coalesce(variant.checksum_sha256,'') ` + fromAndWhere
-	err := tx.QueryRow(ctx, query, first, second, warehouseID, generation, requestedVariant).Scan(
+	err := tx.QueryRow(ctx, query, arguments...).Scan(
 		&asset.ID, &asset.FolderID, &asset.OwnerType, &asset.OwnerID, &asset.WarehouseID, &asset.Kind,
 		&asset.FileName, &asset.ContentType, &asset.SourceObjectKey, &asset.SourceVersionID, &asset.SourceETag,
 		&asset.SourceChecksum, &asset.Status, &asset.Version, &asset.Generation, &asset.Rotation, &asset.SortOrder,
@@ -2927,8 +3090,8 @@ func factPayload(asset AssetRecord, status media.Status, generation int, rotatio
 	}
 	// The v1 media fact is consumed by services with an exact legacy payload
 	// allowlist. Preserve its byte shape for all existing owners; the stable
-	// evidence reference belongs only to the new task-board owner scope.
-	if asset.OwnerType == OwnerTypeTaskBoardEntry && asset.ClientReferenceID != nil {
+	// evidence reference belongs only to worker-evidence owner scopes.
+	if IsWorkerEvidenceOwnerType(asset.OwnerType) && asset.ClientReferenceID != nil {
 		payload["clientReferenceId"] = *asset.ClientReferenceID
 	}
 	return payload

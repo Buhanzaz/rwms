@@ -6,8 +6,11 @@ import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiMod
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningAssignmentStatus;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningAssignmentStatusResponse;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningAssignmentRequest;
-import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverAudienceMode;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDateOption;
+import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverAudienceMode;
+import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftPlanRequest;
+import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftTrailerRequest;
+import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftVehicleRequest;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningRequestFeedResponse;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningRequestResponse;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.RejectedPlanningAssignment;
@@ -225,14 +228,21 @@ public class RentalOrderPlanningIntegrationService {
    */
   public ApplyPlanningAssignmentsResponse apply(
       UUID batchIdempotencyKey, ApplyPlanningAssignmentsRequest request) {
-    if (batchIdempotencyKey == null || request == null) {
+    if (batchIdempotencyKey == null
+        || request == null
+        || request.warehouseId() == null
+        || request.planId() == null
+        || request.planVersion() == null
+        || request.assignments() == null) {
       throw new IllegalArgumentException("Planner command identity is required");
     }
     requireUniqueAssignments(request.assignments());
+    requireValidShiftPlans(request);
     OffsetDateTime generatedAt = now();
     String timeZone =
         dependencies.warehouseTimeZoneAt(request.warehouseId(), generatedAt).timeZone();
     LocalDate today = generatedAt.toInstant().atZone(ZoneId.of(timeZone)).toLocalDate();
+    registerShiftPlans(request);
     List<AppliedPlanningAssignment> applied = new ArrayList<>();
     List<RejectedPlanningAssignment> rejected = new ArrayList<>();
     for (PlanningAssignmentRequest assignment : request.assignments()) {
@@ -413,6 +423,85 @@ public class RentalOrderPlanningIntegrationService {
         throw new IllegalArgumentException("A cabin can be assigned only once in one plan batch");
       }
     }
+  }
+
+  private static void requireValidShiftPlans(ApplyPlanningAssignmentsRequest request) {
+    Set<UUID> sourceShiftIds = new HashSet<>();
+    Set<String> driverWorkdays = new HashSet<>();
+    for (PlanningDriverShiftPlanRequest plan : request.driverShiftPlans()) {
+      if (plan == null
+          || plan.sourceShiftId() == null
+          || plan.sourcePlanId() == null
+          || plan.sourcePlanVersion() == null
+          || plan.warehouseId() == null
+          || plan.driverId() == null
+          || plan.workDate() == null
+          || plan.vehicle() == null) {
+        throw new IllegalArgumentException("Driver shift plan identity is required");
+      }
+      if (!sourceShiftIds.add(plan.sourceShiftId())) {
+        throw new IllegalArgumentException("A source driver shift can occur only once in a batch");
+      }
+      if (!driverWorkdays.add(plan.driverId() + ":" + plan.workDate())) {
+        throw new IllegalArgumentException(
+            "A driver can have only one shift plan for one work date");
+      }
+      if (!request.warehouseId().equals(plan.warehouseId())
+          || !request.planId().equals(plan.sourcePlanId())
+          || !request.planVersion().equals(plan.sourcePlanVersion())) {
+        throw new IllegalArgumentException(
+            "Driver shift plans must belong to the exact planner command");
+      }
+    }
+  }
+
+  private void registerShiftPlans(ApplyPlanningAssignmentsRequest request) {
+    for (PlanningDriverShiftPlanRequest plan : request.driverShiftPlans()) {
+      dependencies.registerDriverShiftPlan(
+          driverShiftPlanKey(plan),
+          plan.sourceShiftId(),
+          new LogisticsDependencyGateway.DriverShiftPlanSnapshot(
+              plan.sourcePlanId(),
+              plan.sourcePlanVersion(),
+              plan.warehouseId(),
+              plan.driverId(),
+              plan.driverName(),
+              plan.workDate(),
+              vehicleSnapshot(plan.vehicle()),
+              trailerSnapshot(plan.trailer()),
+              plan.tripCount(),
+              plan.routeDistanceMeters()));
+    }
+  }
+
+  private static LogisticsDependencyGateway.DriverShiftPlanVehicle vehicleSnapshot(
+      PlanningDriverShiftVehicleRequest vehicle) {
+    return new LogisticsDependencyGateway.DriverShiftPlanVehicle(
+        vehicle.id(),
+        vehicle.name(),
+        vehicle.registrationNumber(),
+        vehicle.vehicleType(),
+        vehicle.manufacturer(),
+        vehicle.model(),
+        vehicle.configurationType().name(),
+        vehicle.startOdometer());
+  }
+
+  private static LogisticsDependencyGateway.DriverShiftPlanTrailer trailerSnapshot(
+      PlanningDriverShiftTrailerRequest trailer) {
+    if (trailer == null) return null;
+    return new LogisticsDependencyGateway.DriverShiftPlanTrailer(
+        trailer.id(), trailer.name(), trailer.registrationNumber());
+  }
+
+  private static UUID driverShiftPlanKey(PlanningDriverShiftPlanRequest plan) {
+    return deterministic(
+        "planning-driver-shift:"
+            + plan.sourceShiftId()
+            + ":"
+            + plan.sourcePlanId()
+            + ":"
+            + plan.sourcePlanVersion());
   }
 
   private static OrderActor plannerActor() {

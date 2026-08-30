@@ -26,8 +26,10 @@ import javax.inject.Singleton
         DriverSyncProgressEntity::class,
         DriverConflictEntity::class,
         DriverInvalidationEntity::class,
+        DriverShiftSnapshotEntity::class,
+        DriverShiftDraftEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 /**
@@ -45,6 +47,8 @@ abstract class DriverDatabase : RoomDatabase() {
     abstract fun syncProgressDao(): DriverSyncProgressDao
     abstract fun conflictDao(): DriverConflictDao
     abstract fun invalidationDao(): DriverInvalidationDao
+    abstract fun shiftSnapshotDao(): DriverShiftSnapshotDao
+    abstract fun shiftDraftDao(): DriverShiftDraftDao
 
     companion object {
         const val DATABASE_NAME = "rwms-driver.db"
@@ -327,6 +331,62 @@ abstract class DriverDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `driver_task` ADD COLUMN `driverAudienceMode` TEXT")
             }
         }
+
+        /** Adds resumable Driver Up shift state while retaining every existing task and upload row. */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `task_evidence` ADD COLUMN `ownerType` TEXT NOT NULL DEFAULT 'TASK_BOARD_ENTRY'",
+                )
+                db.execSQL(
+                    "ALTER TABLE `task_evidence` ADD COLUMN `mediaContext` TEXT NOT NULL DEFAULT 'WORK_RESULT'",
+                )
+                db.execSQL("ALTER TABLE `task_evidence` ADD COLUMN `photoRole` TEXT")
+                db.execSQL("ALTER TABLE `task_evidence` ADD COLUMN `defectId` TEXT")
+                db.execSQL("ALTER TABLE `task_evidence` ADD COLUMN `inspectionItemId` TEXT")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_task_evidence_userId_ownerType_entryId` " +
+                        "ON `task_evidence` (`userId`, `ownerType`, `entryId`)",
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `driver_shift_snapshot` (
+                        `userId` TEXT NOT NULL,
+                        `shiftId` TEXT,
+                        `workDate` TEXT,
+                        `enabled` INTEGER NOT NULL,
+                        `nextRequiredAction` TEXT NOT NULL,
+                        `serializedTodayShift` TEXT NOT NULL,
+                        `serverTime` TEXT NOT NULL,
+                        `updatedAtEpochMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`userId`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `driver_shift_draft` (
+                        `localId` TEXT NOT NULL,
+                        `userId` TEXT NOT NULL,
+                        `shiftId` TEXT NOT NULL,
+                        `step` TEXT NOT NULL,
+                        `vehicleCondition` TEXT,
+                        `endOdometerText` TEXT NOT NULL,
+                        `fuelLevelPercent` INTEGER,
+                        `defectId` TEXT,
+                        `defectDescription` TEXT NOT NULL,
+                        `confirmSuspiciousOdometer` INTEGER NOT NULL,
+                        `updatedAtEpochMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`localId`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_driver_shift_draft_userId_shiftId` " +
+                        "ON `driver_shift_draft` (`userId`, `shiftId`)",
+                )
+            }
+        }
     }
 }
 
@@ -351,6 +411,7 @@ object DriverDatabaseModule {
                 DriverDatabase.MIGRATION_4_5,
                 DriverDatabase.MIGRATION_5_6,
                 DriverDatabase.MIGRATION_6_7,
+                DriverDatabase.MIGRATION_7_8,
             )
             .build()
 }

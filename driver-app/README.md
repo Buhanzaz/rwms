@@ -60,6 +60,38 @@ The navigation and menu are owned by
 The dated projection is owned by
 [`LogisticsScreen.kt`](feature-tasks/src/main/java/dev/buhanzaz/rwms/driver/feature/tasks/LogisticsScreen.kt).
 
+## Daily driver shift
+
+After authentication DriverApp loads one server-owned shift for the driver's
+warehouse work date. The warehouse timezone and the 06:00 day boundary are
+resolved by task-board through warehouse-service; Android never derives the
+authoritative work date or advances the workflow with local booleans. The
+`nextRequiredAction` projection routes the driver through the one-time daily
+briefing, self-confirmed test medical check, template-backed vehicle
+inspection, existing task screens, warehouse return, end-of-shift vehicle
+report, odometer, fuel, optional or defect-required evidence, and final close.
+A closed shift remains closed until the next warehouse work date.
+
+The daily briefing uses the driver's existing profile and the assigned
+warehouse snapshot. Weather is normalized by task-board from MET Norway and
+cached by rounded warehouse coordinates; provider timeouts or failures render
+an unavailable message and never block work. Traffic is a replaceable
+`TrafficBriefingProvider` implemented with Yandex MapKit's documented traffic
+layer and `TrafficLevel`; failure is equally non-blocking. Driver Up pins the
+lite `4.7.0` line and renders its real noninteractive traffic `MapView`, so the
+existing Android 6.0/API 23 floor is preserved instead of silently moving to
+the API 26 floor required by newer MapKit releases. The existing client MapKit
+key is read at build time from the protected
+`/var/lib/rwms-secrets/customer-app/mapkit.properties` file (or an explicitly
+supplied `-PmapkitPropertiesFile`) and is not stored in Git. Routing and route
+delay are deliberately outside this release.
+
+Inspection item results use `NOT_CHECKED`, `OK` or `DEFECT`. A defect is saved
+before its photo reservation, blocking defects prevent shift start, and the
+closing screen waits for required media to reach authoritative `READY` before
+enabling close. The implementation and presentation are in `feature-shift/`;
+the reusable camera/upload path remains in `feature-camera/` and `core-media/`.
+
 ## Authentication and public APIs
 
 The public PKCE client is `rwms-driver-android` with scopes
@@ -79,6 +111,12 @@ gateway. See
 and
 [`DriverGatewayApi.kt`](core-network/src/main/java/dev/buhanzaz/rwms/driver/core/network/DriverGatewayApi.kt).
 
+The shift startup call is `GET /api/task-board/driver/v1/shift/today`; all
+briefing, medical, inspection, start, closing and close commands are under
+`/api/task-board/driver/v1/shifts/{shiftId}/**`. Mutations carry a stable
+`Idempotency-Key` and an expected aggregate version. The public gateway only
+forwards these routes; task-board remains the workflow owner.
+
 ## Offline work, camera and uploads
 
 Room stores the authorized projection and a transactional local outbox.
@@ -88,6 +126,13 @@ reservation, upload and finalize have completed; process or device restart
 does not discard them. CameraX capture normalizes EXIF orientation and applies
 the existing size/resolution limits. Server state remains authoritative after
 every reconnect or conflict.
+
+Shift snapshots, the current inspection progress and closing drafts are also
+stored in Room, so process death resumes the exact server-required screen and
+the entered closing data. Critical commands are durably queued with their
+stable operation ID, but transitions that require server authorization are not
+presented as completed until task-board confirms them. A queued close therefore
+never fabricates `SHIFT_CLOSED`; required media is rechecked before retry.
 
 If an older client captured a photo before `TAKE` and the server therefore
 rejected its reservation, a later `TAKE` or `RESUME` atomically requeues that
@@ -124,7 +169,9 @@ cd driver-app
 JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew \
   :core-auth:testDebugUnitTest \
   :core-network:testDebugUnitTest \
+  :core-database:testDebugUnitTest \
   :feature-task-detail:testDebugUnitTest \
+  :feature-shift:testDebugUnitTest \
   :core-sync:testDebugUnitTest \
   :app:testDebugUnitTest
 JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew :app:assembleDebug

@@ -279,6 +279,25 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /api/internal/warehouse/v1/warehouses/{id}/identity:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: getInternalWarehouseIdentity
+      description: >-
+        Generic least-privilege identity for task-board's daily driver shift.
+        Requires principal_type SERVICE, matching task-board-service sub and
+        client_id, and exactly warehouse.identity.read. This route is never
+        exposed by the public gateway.
+      responses:
+        '200':
+          description: Current owner-held metadata and canonical IANA timezone.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InternalWarehouseIdentity' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/internal/warehouse/v1/warehouses/asset/{id}/existence:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
@@ -759,6 +778,20 @@ components:
         id: { type: string, format: uuid }
         version: { type: integer, minimum: 0 }
         active: { type: boolean }
+    InternalWarehouseIdentity:
+      type: object
+      additionalProperties: false
+      required: [id, version, active, name, city, address, latitude, longitude, timeZone]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, minimum: 0 }
+        active: { type: boolean }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        city: { type: string, minLength: 1, maxLength: 255 }
+        address: { type: [string, 'null'], minLength: 1, maxLength: 1000 }
+        latitude: { type: [number, 'null'], minimum: -90, maximum: 90, multipleOf: 0.000001 }
+        longitude: { type: [number, 'null'], minimum: -180, maximum: 180, multipleOf: 0.000001 }
+        timeZone: { type: string, minLength: 1, maxLength: 64 }
     InventoryWarehouseMetadata:
       type: object
       additionalProperties: false

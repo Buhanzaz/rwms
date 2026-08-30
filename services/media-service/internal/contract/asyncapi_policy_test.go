@@ -89,6 +89,48 @@ func TestAsyncAPITopicSchemaAndConditionalRecordKeyPolicy(t *testing.T) {
 	assertOperationChannelRef(t, document, "consumeInventoryOwnerFact", "inventoryOwnerFacts")
 	assertOperationChannelRef(t, document, "publishInventoryOwnerDeadLetter", "inventoryOwnerDeadLetters")
 	assertOperationChannelRef(t, document, "publishCabinCoverChangedFact", "cabinPhotoFacts")
+	assertOperationChannelRef(t, document, "consumeDriverShiftOwnerProofFact", "driverShiftOwnerProofFacts")
+	driverShiftChannel := objectAt(t, channels, "driverShiftOwnerProofFacts")
+	if got := stringAt(t, driverShiftChannel, "address"); got != "rwms.task-board.driver-shift-owner-proof.v1" {
+		t.Fatalf("driver-shift proof address = %q", got)
+	}
+	driverShiftMessage := objectAt(t, messages, "DriverShiftOwnerProofV1")
+	driverShiftAllOf, ok := objectAt(t, driverShiftMessage, "payload")["allOf"].([]any)
+	if !ok || len(driverShiftAllOf) != 2 {
+		t.Fatalf("driver-shift proof allOf = %#v", objectAt(t, driverShiftMessage, "payload"))
+	}
+	base, ok := driverShiftAllOf[0].(map[string]any)
+	if !ok || stringAt(t, base, "$ref") != "./task-board/task-board-events-v1.schema.json" {
+		t.Fatalf("driver-shift proof base = %#v", driverShiftAllOf[0])
+	}
+	narrowing, ok := driverShiftAllOf[1].(map[string]any)
+	if !ok {
+		t.Fatalf("driver-shift proof narrowing = %#v", driverShiftAllOf[1])
+	}
+	properties := objectAt(t, narrowing, "properties")
+	if stringAt(t, objectAt(t, properties, "aggregateType"), "const") != "DRIVER_SHIFT_OWNER_PROOF" ||
+		stringAt(t, objectAt(t, properties, "eventType"), "const") != "task-board.driver-shift-owner-proof.changed.v1" {
+		t.Fatalf("driver-shift proof narrowing properties = %#v", properties)
+	}
+	taskBoardSchema := decodeJSONContract(t, readContract(t,
+		filepath.Join(events, "task-board", "task-board-events-v1.schema.json")))
+	proofSchema := objectAt(t, objectAt(t, taskBoardSchema, "$defs"), "driverShiftOwnerProofFact")
+	assertFalse(t, proofSchema, "additionalProperties")
+	if required := stringSliceAt(t, proofSchema, "required"); !equalStrings(required, []string{
+		"ownerType", "ownerId", "warehouseId", "active", "allowedWorkerIds", "readerWorkerIds",
+	}) {
+		t.Fatalf("driver-shift proof required fields = %#v", required)
+	}
+	proofProperties := objectAt(t, proofSchema, "properties")
+	if len(proofProperties) != 6 || stringAt(t, objectAt(t, proofProperties, "ownerType"), "const") != "DRIVER_SHIFT" {
+		t.Fatalf("driver-shift proof payload properties = %#v", proofProperties)
+	}
+	for _, audience := range []string{"allowedWorkerIds", "readerWorkerIds"} {
+		array := objectAt(t, proofProperties, audience)
+		if array["uniqueItems"] != true || array["maxItems"] != float64(1) {
+			t.Fatalf("driver-shift %s bounds = %#v", audience, array)
+		}
+	}
 
 	factSchema := decodeJSONContract(t, readContract(t, filepath.Join(events, "media", "media-facts-v1.schema.json")))
 	requestSchema := decodeJSONContract(t, readContract(t, filepath.Join(events, "media", "media-processing-requests-v1.schema.json")))

@@ -148,6 +148,17 @@ func run(logger *slog.Logger) error {
 		producer.Close()
 		return err
 	}
+	driverShiftOwnerProofConsumerClient, err := worker.NewDriverShiftOwnerProofKafkaConsumer(
+		configuration.KafkaBrokers, configuration.DriverShiftOwnerProofGroup,
+		configuration.DriverShiftOwnerProofTopic)
+	if err != nil {
+		taskBoardOwnerProofConsumerClient.Close()
+		cabinOwnerConsumerClient.Close()
+		ownerConsumerClient.Close()
+		consumerClient.Close()
+		producer.Close()
+		return err
+	}
 	limits := media.ProcessingLimits{
 		MaxVideoBytes: configuration.MaxUploadBytes,
 		Timeout:       configuration.ProcessingTimeout,
@@ -163,11 +174,14 @@ func run(logger *slog.Logger) error {
 	cabinOwnerConsumer := worker.NewCabinOwnerConsumer(repository, cabinOwnerConsumerClient, logger)
 	taskBoardOwnerProofConsumer := worker.NewTaskBoardEntryOwnerProofConsumer(
 		repository, taskBoardOwnerProofConsumerClient, logger)
+	driverShiftOwnerProofConsumer := worker.NewDriverShiftOwnerProofConsumer(
+		repository, driverShiftOwnerProofConsumerClient, logger)
 	apiServer, err := api.NewServer(repository, database, validator, objectStore, api.Configuration{
 		MaxUploadBytes: configuration.MaxUploadBytes, AllowedMIMETypes: configuration.AllowedMIMETypes,
 		UploadExpiry: configuration.UploadExpiry, AssetImports: assetImportService,
 	}, logger)
 	if err != nil {
+		driverShiftOwnerProofConsumerClient.Close()
 		taskBoardOwnerProofConsumerClient.Close()
 		cabinOwnerConsumerClient.Close()
 		ownerConsumerClient.Close()
@@ -178,6 +192,7 @@ func run(logger *slog.Logger) error {
 	processingMetrics := observability.NewProcessingMetrics()
 	managementMetrics, err := newManagementMetricsRuntime(configuration.ManagementAddress, processingMetrics.Handler())
 	if err != nil {
+		driverShiftOwnerProofConsumerClient.Close()
 		taskBoardOwnerProofConsumerClient.Close()
 		cabinOwnerConsumerClient.Close()
 		ownerConsumerClient.Close()
@@ -203,6 +218,7 @@ func run(logger *slog.Logger) error {
 		{name: "inventory-owner-consumer", run: ownerConsumer.Run},
 		{name: "cabin-owner-consumer", run: cabinOwnerConsumer.Run},
 		{name: "task-board-entry-owner-proof-consumer", run: taskBoardOwnerProofConsumer.Run},
+		{name: "driver-shift-owner-proof-consumer", run: driverShiftOwnerProofConsumer.Run},
 		{name: "asset-import-worker", run: assetImportWorker.Run},
 		{name: "http-server", run: func(context.Context) error {
 			err := httpServer.ListenAndServe()
@@ -228,6 +244,7 @@ func run(logger *slog.Logger) error {
 			ownerConsumer.Close()
 			cabinOwnerConsumer.Close()
 			taskBoardOwnerProofConsumer.Close()
+			driverShiftOwnerProofConsumer.Close()
 			if closeErr := relay.Close(shutdownContext); closeErr != nil && shutdownError == nil {
 				shutdownError = closeErr
 			}
@@ -257,6 +274,7 @@ func superviseMediaRuntime(
 		"outbox-relay": false, "processing-consumer": false,
 		"inventory-owner-consumer": false, "cabin-owner-consumer": false,
 		"task-board-entry-owner-proof-consumer": false,
+		"driver-shift-owner-proof-consumer":     false,
 		"asset-import-worker":                   false,
 		"http-server":                           false,
 		"metrics-server":                        false,

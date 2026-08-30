@@ -21,6 +21,7 @@ Maintenance, logistics, inventory и менеджерам нужна опера�
 | Workforce | Worker classes, workers, groups, current membership и credentials workflow | Auth-service владеет credential material и token issuance |
 | Operational work | Tasks, route entries, assignment, pinning, pause/resume/complete и history | Source domain владеет причиной работы и состоянием своего агрегата |
 | Native execution | Раздельные driver/worker feeds, offline action leases, evidence reservation, SSE и transactional FCM invalidation | DriverApp и WorkerApp обновляют authoritative REST state и загружают media через media-service |
+| Ежедневная смена водителя | Рабочая дата склада, state machine подготовки/закрытия, snapshot осмотра, дефекты, audit timestamps и media proof | Logistics передаёт проверенный план водитель/машина/дата; warehouse владеет identity/timezone; media владеет байтами |
 | KPI | Warehouse palette/schedule revisions и emitted daily evidence | Analytics владеет KPI read projection |
 | Warehouse lifecycle | Local operation marks, admission fence, draining blockers и exact-version readiness | Warehouse-service владеет lifecycle state и admission decisions |
 
@@ -161,6 +162,53 @@ Private directory водителей для exact logistics-service разреш
 queues, definitions и qualifications исключаются; login, group, contact, credential и остальные
 персональные поля через эту границу не проходят.
 
+## Ежедневный жизненный цикл смены водителя
+
+Task-board является авторитетным владельцем одной смены Driver Up на
+`driverId + workDate`. Сначала logistics регистрирует проверенный план
+водителя/автомобиля по стабильной source-shift identity; только после этого
+startup-read водителя может заморозить plan в shift. Startup-транзакция получает
+текущие identity и IANA timezone склада из warehouse-service, применяет
+настраиваемую локальную границу 06:00, блокирует соответствующий plan и создаёт
+не более одной shift. Повторные и конкурентные чтения возвращают тот же
+aggregate.
+
+Явная последовательная state machine:
+`DAILY_BRIEFING_REQUIRED -> MEDICAL_CHECK_REQUIRED ->
+VEHICLE_INSPECTION_REQUIRED -> READY_TO_START -> SHIFT_ACTIVE ->
+SHIFT_CLOSING -> RETURN_TO_WAREHOUSE_REQUIRED ->
+END_VEHICLE_CHECK_REQUIRED -> SHIFT_READY_TO_CLOSE -> SHIFT_CLOSED`.
+Каждый публичный ответ содержит `nextRequiredAction`; после перезапуска Android
+продолжает с этой серверной проекции и не двигает workflow локальными boolean.
+Бизнес-подтверждения используют серверное время. Текущий medical-шаг явно
+помечен `SELF_CONFIRMATION_TEST`, а nullable-поля внешней проверки и
+`EXTERNAL_MEDICAL_SYSTEM` сохранены для будущего провайдера.
+
+При создании смены копируется активный DB-backed шаблон осмотра для `TRUCK`,
+`TRUCK_WITH_TRAILER` или `TRUCK_WITH_CRANE`. У каждого обязательного пункта есть
+собственная версия и результат `NOT_CHECKED`, `OK` либо `DEFECT`. Сообщённый
+дефект нельзя стереть переключением пункта в OK; новые дефекты предрейсового
+осмотра консервативно считаются `BLOCKING` и запрещают обычный старт. Для работы
+используется существующий экран logistics-задач. Task-board переводит активную
+смену к закрытию только когда для точного водителя на складе/дате существует
+хотя бы одна задача и все такие задачи имеют статус `DONE`.
+
+Closing отдельно сохраняет ручное возвращение на склад, состояние автомобиля,
+пробег и топливо. Пробег не может уменьшиться; настраиваемый подозрительный
+скачок требует явного подтверждения. End-of-shift дефект связан с общей моделью
+vehicle defect и до закрытия требует коррелированное media
+`END_SHIFT_DEFECT` в авторитетном состоянии `READY`. Необязательные обзорные
+фото используют тот же media owner, upload и event path. Переходы и
+резервирования фото version-fenced и receipt-backed: точный retry идемпотентен,
+а изменённый replay конфликтует.
+
+Погода является информационной. `MetNoWeatherProvider` нормализует бесплатные
+данные MET Norway Locationforecast, делит bounded ETag-aware cache по
+округлённым координатам склада и после ограниченных timeout/retry возвращает
+unavailable DTO. `WeatherHazardRules` создаёт только настраиваемые рекомендации
+и никогда не выдаёт их за официальное экстренное предупреждение. Доступность
+погоды не влияет ни на один переход смены.
+
 ## Внутренняя структура приложения
 
 `TaskBoardService` — стабильный transactional facade над связными collaborators.
@@ -184,6 +232,9 @@ queues, definitions и qualifications исключаются; login, group, cont
 | `TaskBoardRoutePayloadCodec` | Единственный canonical route JSON и fingerprint codec |
 | `DriverTaskAudienceService` | Shape аудитории logistics-driver, qualification, visibility и execution authorization |
 | `LogisticsDriverDirectoryService` | Least-privilege directory активных primary logistics-drivers для exact caller logistics-service |
+| `DriverShiftService` | Регистрация plan, вычисление work date, переходы shift/inspection/defect, receipts и startup projection |
+| `HttpWarehouseIdentityGateway` | Точное private-чтение identity/timezone/coordinates склада для владельца смены |
+| `MetNoWeatherProvider` / `WeatherHazardRules` | Fail-open нормализованный weather cache и настраиваемые рекомендации |
 | `MobileTaskSurfacePolicy` | Непересекающиеся DriverApp primary и WorkerApp secondary capabilities |
 | `WorkerTaskAccessService` | Общая worker/group/qualification аудитория очередей для native task reads и media proofs |
 | `WorkerFeedCountProjection` | Однозапросные route cardinality и READY-evidence counts для bounded native feed page |
@@ -243,10 +294,12 @@ Public gateway преобразует `/api/task-board/**` в downstream `/api/*
 | `/api/warehouses/{warehouseId}/task-board/kpi-settings/**` | Warehouse manager/admin | Palette и effective schedule revisions |
 | `/api/worker/v1/**` | Worker credential и `worker.tasks` scope | Context, feed, detail, actions, evidence reservations, devices и events |
 | `/api/driver/v1/**` | Worker credential и `driver.tasks` scope | Driver-only context, primary feed, actions, evidence reservations, devices и events |
+| `/api/driver/v1/shift/today` и `/api/driver/v1/shifts/{shiftId}/**` | Точная identity водителя и `driver.tasks` | Startup aggregate и version-fenced переходы ежедневной смены |
 | `/api/internal/task-board/v1/maintenance/**` | Exact maintenance-service identity | Routing и catalog preflight |
 | `/api/internal/task-board/v1/tasks/**` | Exact source service identity | Idempotent task synchronization и evidence reads |
 | `/api/internal/task-board/v1/logistics/**` | Exact logistics-service identity | Driver/equipment task integration |
 | `/api/internal/task-board/v1/logistics/warehouses/{warehouseId}/drivers` | Exact identity и scope logistics-service | Только identities активных primary-qualified водителей |
+| `/api/internal/task-board/v1/driver-shift-plans/{sourceShiftId}` | Точная identity logistics-service и `task-board.driver-shifts.plan` | Идемпотентная регистрация проверенного плана водитель/машина/дата |
 | `/api/internal/queue-definitions/**` | Allow-listed service identity | Durable queue usage references |
 
 Private paths — service-to-service boundaries, а не client shortcuts. Их exact
@@ -392,6 +445,13 @@ result photo до одного. Текущая mobile surface policy намер�
 binding как необязательный: notification и прерывание группы при JOIN сохраняются, но driver
 completion никогда не ждёт стропальщика. Миграция не придумывает отсутствующий класс стропальщиков.
 
+[`V39__driver_daily_shift.sql`](src/main/resources/db/migration/V39__driver_daily_shift.sql)
+добавляет проверенный plan, ежедневную shift, versioned snapshot/results
+осмотра, общие vehicle defects, shift photos, неизменяемые command receipts и
+media inbox. Она seed-ит редактируемую template-конфигурацию без checklist в
+boolean columns, расширяет allow-list event store и не переписывает
+существующие tasks, facts или данные водителей.
+
 ## Безопасность и изоляция
 
 - Все API chains валидируют JWT issuer/audience; worker и driver routes требуют
@@ -400,6 +460,9 @@ completion никогда не ждёт стропальщика. Миграци
   write permission в `WarehouseAccessAuthorizer` и services.
 - Internal task, queue-reference, maintenance и logistics operations требуют
   exact service identity/scope и проверяют source ownership.
+- Driver-shift планы принимает только точный credential logistics-service со
+  scope `task-board.driver-shifts.plan`; mobile shift routes — только совпавшие
+  `WORKER` identity, warehouse и scope `driver.tasks`.
 - Auth-service остаётся владельцем credentials. Task-board хранит только
   operational workflow state, нужный для reconciliation.
 - CORS использует explicit panel/worker/driver origins. Browser/mobile clients идут
@@ -417,6 +480,9 @@ completion никогда не ждёт стропальщика. Миграци
   contract-defined fence и возвращают `409` при stale state.
 - Retry source task creation/synchronization использует stable external task ID
   и source identity.
+- Driver plans уникальны по source shift и по driver/work date. Создание
+  сериализуется блокировкой plan row, а каждая изменяющая shift-команда
+  использует root/child versions и неизменяемый operation receipt.
 - Retry native action использует один durable operation receipt: точный request
   возвращает frozen первый response, а divergent или невосстановимый legacy
   replay отвечает `409` без повторного effect.
@@ -473,6 +539,13 @@ private warehouse lifecycle URL, explicit CORS origins, Kafka brokers и
 `TASK_BOARD_KAFKA_ENABLED=true`, `TASK_BOARD_FCM_ENABLED=true`,
 `TASK_BOARD_FCM_PROJECT_ID` и Google Application Default Credentials.
 
+Новый flow включается `DRIVER_DAILY_SHIFT_ENABLED=true`. Нужно настроить
+`DRIVER_SHIFT_DAY_START`, `DRIVER_SHIFT_SUSPICIOUS_ODOMETER_JUMP_KM`,
+идентифицирующий несекретный `MET_NO_USER_AGENT`, ограниченные transport/cache
+параметры `MET_NO_*` и thresholds `WEATHER_HAZARD_*`. OAuth-клиент task-board
+также должен иметь `warehouse.identity.read` и существующий private base URL
+warehouse-service; weather API key не используется и не возвращается Android.
+
 `TaskBoardProductionSafetyValidator` запрещает missing/insecure endpoints,
 disabled Kafka, topic drift, unsafe binder retry/DLT, topic auto-creation,
 non-acknowledged publishing и publish timeouts, способные превысить outbox lease,
@@ -514,6 +587,9 @@ coverage.
 - [Task-board controller](src/main/java/dev/buhanzaz/rwms/taskboard/api/TaskBoardController.java)
 - [Worker API](src/main/java/dev/buhanzaz/rwms/taskboard/api/WorkerTaskBoardController.java)
 - [Driver API](src/main/java/dev/buhanzaz/rwms/taskboard/api/DriverTaskBoardController.java)
+- [Driver shift API](src/main/java/dev/buhanzaz/rwms/taskboard/api/DriverShiftController.java)
+- [Владелец driver shift](src/main/java/dev/buhanzaz/rwms/taskboard/service/DriverShiftService.java)
+- [MET weather adapter](src/main/java/dev/buhanzaz/rwms/taskboard/service/MetNoWeatherProvider.java)
 - [Task-board application service](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardService.java)
 - [Task-board read projection](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardReadProjectionService.java)
 - [External task registration](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardExternalRegistrationService.java)

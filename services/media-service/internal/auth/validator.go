@@ -173,8 +173,8 @@ func (principal Principal) IsCustomerIdentity() bool {
 }
 
 // ValidateWorker verifies a bearer token and returns the deliberately limited
-// WORKER principal accepted only by task-board media routes. Exactly one of
-// worker.tasks and driver.tasks must be present.
+// WORKER principal accepted only by task-board entry or driver-shift media
+// routes. Exactly one of worker.tasks and driver.tasks must be present.
 func (validator *Validator) ValidateWorker(ctx context.Context, authorization string) (WorkerPrincipal, error) {
 	claims, err := validator.validateClaims(ctx, authorization)
 	if err != nil {
@@ -218,6 +218,19 @@ func (principal WorkerPrincipal) RequireTaskAccess(warehouseID uuid.UUID) error 
 		return ErrForbidden
 	}
 	if !hasExactlyOneTaskScope(principal.Scopes) {
+		return ErrForbidden
+	}
+	return nil
+}
+
+// RequireDriverTaskAccess confirms the warehouse and the dedicated DriverApp
+// scope. WorkerApp tokens are intentionally excluded from driver-shift media.
+func (principal WorkerPrincipal) RequireDriverTaskAccess(warehouseID uuid.UUID) error {
+	if warehouseID == uuid.Nil || warehouseID != principal.WarehouseID ||
+		!hasExactlyOneTaskScope(principal.Scopes) {
+		return ErrForbidden
+	}
+	if _, driver := principal.Scopes["driver.tasks"]; !driver {
 		return ErrForbidden
 	}
 	return nil

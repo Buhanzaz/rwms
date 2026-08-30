@@ -159,6 +159,7 @@ func TestV1UpgradeQuarantinedAssetsAreRuntimeInvisibleAndDoNotConsumeQuota(t *te
 		{"V17", mediamigration.V17},
 		{"V18", mediamigration.V18},
 		{"V19", mediamigration.V19},
+		{"V20", mediamigration.V20},
 	}
 	for _, migration := range remainingMigrations {
 		if _, err := runtimePool.Exec(ctx, string(migration.body)); err != nil {

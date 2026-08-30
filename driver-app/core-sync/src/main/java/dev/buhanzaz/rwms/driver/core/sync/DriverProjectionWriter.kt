@@ -8,6 +8,7 @@ import dev.buhanzaz.rwms.driver.core.database.DriverDatabase
 import dev.buhanzaz.rwms.driver.core.database.DriverGroupEntity
 import dev.buhanzaz.rwms.driver.core.database.DriverLocalStore
 import dev.buhanzaz.rwms.driver.core.database.DriverSessionEntity
+import dev.buhanzaz.rwms.driver.core.database.DriverShiftSnapshotEntity
 import dev.buhanzaz.rwms.driver.core.database.DriverTaskDetailEntity
 import dev.buhanzaz.rwms.driver.core.database.DriverTaskEntity
 import dev.buhanzaz.rwms.driver.core.network.DriverAssignmentDto
@@ -16,6 +17,7 @@ import dev.buhanzaz.rwms.driver.core.network.DriverContextDto
 import dev.buhanzaz.rwms.driver.core.network.DriverFeedCategoryDto
 import dev.buhanzaz.rwms.driver.core.network.DriverFeedEntryDto
 import dev.buhanzaz.rwms.driver.core.network.DriverTaskDetailDto
+import dev.buhanzaz.rwms.driver.core.network.TodayDriverShiftDto
 import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -33,6 +35,161 @@ class DriverProjectionWriter @Inject constructor(
     private val database: DriverDatabase,
     private val json: Json,
 ) {
+    /** Stores a complete server-owned shift aggregate without touching its durable command queue. */
+    suspend fun applyTodayShift(userId: String, today: TodayDriverShiftDto) {
+        database.withTransaction {
+            applyTodayShiftInTransaction(userId, today)
+        }
+    }
+
+    /**
+     * Atomically accepts a shift command response and removes only that replay-safe operation.
+     * A successful partial replay retains newer inspection results and photos that still have a
+     * durable outbox command, so process restart cannot visually roll back unfinished offline work.
+     */
+    suspend fun commitShiftCommandResult(
+        userId: String,
+        operationId: String,
+        today: TodayDriverShiftDto,
+        preservePendingOverlay: Boolean = true,
+    ) {
+        database.withTransaction {
+            val committedToday = if (preservePendingOverlay) {
+                mergePendingShiftOverlay(userId, operationId, today)
+            } else {
+                today
+            }
+            applyTodayShiftInTransaction(userId, committedToday)
+            database.outboxDao().delete(operationId)
+        }
+    }
+
+    /**
+     * Reapplies only optimistic facts proven by a still-pending command for the same shift.
+     * Authoritative status and timestamps are never overlaid; terminal-rejection commits bypass
+     * this recovery path explicitly.
+     */
+    private suspend fun mergePendingShiftOverlay(
+        userId: String,
+        committedOperationId: String,
+        authoritative: TodayDriverShiftDto,
+    ): TodayDriverShiftDto {
+        val authoritativeShift = authoritative.shift ?: return authoritative
+        val localSnapshot = database.shiftSnapshotDao().snapshot(userId) ?: return authoritative
+        if (localSnapshot.shiftId != authoritativeShift.id) return authoritative
+        val local = runCatching {
+            json.decodeFromString<TodayDriverShiftDto>(localSnapshot.serializedTodayShift)
+        }.getOrNull() ?: return authoritative
+        val localShift = local.shift?.takeIf { it.id == authoritativeShift.id } ?: return authoritative
+        val pendingOperationIds = database.outboxDao().pending(userId)
+            .asSequence()
+            .filter {
+                it.kind == DriverLocalStore.OUTBOX_SHIFT_COMMAND &&
+                    it.entryId == authoritativeShift.id &&
+                    it.operationId != committedOperationId
+            }
+            .mapTo(linkedSetOf()) { it.operationId }
+        if (pendingOperationIds.isEmpty()) return authoritative
+
+        val authoritativePhotoIds = authoritative.photos.mapTo(hashSetOf()) { it.evidenceId }
+        val pendingPhotos = local.photos.filter {
+            it.evidenceId in pendingOperationIds && it.evidenceId !in authoritativePhotoIds
+        }
+        val mergedPhotos = authoritative.photos + pendingPhotos
+
+        val authoritativeInspection = authoritative.inspection
+        val localInspection = local.inspection
+        val canOverlayInspection = authoritative.nextRequiredAction == "COMPLETE_VEHICLE_INSPECTION" &&
+            local.nextRequiredAction == "COMPLETE_VEHICLE_INSPECTION" &&
+            authoritativeShift.status == "VEHICLE_INSPECTION_REQUIRED" &&
+            localShift.status == "VEHICLE_INSPECTION_REQUIRED" &&
+            authoritativeInspection != null &&
+            localInspection != null &&
+            authoritativeInspection.id == localInspection.id
+        val mergedInspection = if (canOverlayInspection) {
+            val confirmedAuthoritativeInspection = requireNotNull(authoritativeInspection)
+            val confirmedLocalInspection = requireNotNull(localInspection)
+            val localItems = confirmedLocalInspection.items.associateBy { it.id }
+            val mergedItems = confirmedAuthoritativeInspection.items.map { authoritativeItem ->
+                val localItem = localItems[authoritativeItem.id] ?: return@map authoritativeItem
+                if (localItem.version > authoritativeItem.version) {
+                    localItem
+                } else {
+                    val authoritativeDefect = authoritativeItem.defect
+                    val localDefect = localItem.defect
+                    if (authoritativeDefect != null && localDefect?.id == authoritativeDefect.id) {
+                        val pendingPhotoIds = localDefect.photoIds.filter { it in pendingOperationIds }
+                        authoritativeItem.copy(
+                            defect = authoritativeDefect.copy(
+                                photoIds = (authoritativeDefect.photoIds + pendingPhotoIds).distinct(),
+                            ),
+                        )
+                    } else {
+                        authoritativeItem
+                    }
+                }
+            }
+            if (mergedItems != confirmedAuthoritativeInspection.items) {
+                confirmedAuthoritativeInspection.copy(
+                    version = maxOf(confirmedAuthoritativeInspection.version, confirmedLocalInspection.version),
+                    checkedRequired = mergedItems.count { it.required && it.state != "NOT_CHECKED" },
+                    blockingDefectCount = mergedItems.count { item ->
+                        item.defect?.let { defect ->
+                            defect.severity == "BLOCKING" && defect.status == "OPEN"
+                        } == true
+                    },
+                    items = mergedItems,
+                )
+            } else {
+                confirmedAuthoritativeInspection
+            }
+        } else {
+            authoritativeInspection
+        }
+        val hasOverlay = pendingPhotos.isNotEmpty() || mergedInspection != authoritativeInspection
+        if (!hasOverlay) return authoritative
+        return authoritative.copy(
+            shift = authoritativeShift.copy(version = maxOf(authoritativeShift.version, localShift.version)),
+            inspection = mergedInspection,
+            photos = mergedPhotos,
+        )
+    }
+
+    private suspend fun applyTodayShiftInTransaction(userId: String, today: TodayDriverShiftDto) {
+        val now = System.currentTimeMillis()
+        database.shiftSnapshotDao().upsert(
+            DriverShiftSnapshotEntity(
+                userId = userId,
+                shiftId = today.shift?.id,
+                workDate = today.shift?.workDate,
+                enabled = today.enabled,
+                nextRequiredAction = today.nextRequiredAction,
+                serializedTodayShift = json.encodeToString(today),
+                serverTime = today.serverTime,
+                updatedAtEpochMillis = now,
+            ),
+        )
+        today.photos.forEach { photo ->
+            val local = database.evidenceDao().evidence(userId, photo.evidenceId) ?: return@forEach
+            database.evidenceDao().updateState(
+                evidenceId = local.evidenceId,
+                state = photo.state,
+                mediaId = photo.mediaId,
+                generation = photo.mediaGeneration,
+                reviewReason = if (photo.state == "REVIEW_REQUIRED") {
+                    "Фотография требует проверки"
+                } else {
+                    null
+                },
+                now = now,
+            )
+        }
+        val shiftId = today.shift?.id
+        if (shiftId != null && (today.closingReport != null || today.nextRequiredAction == "SHIFT_CLOSED")) {
+            database.shiftDraftDao().delete(userId, shiftId)
+        }
+    }
+
     /**
      * Stores only identity/warehouse information needed by an online sync.
      * Crucially it retains the previous lease anchor: a response from

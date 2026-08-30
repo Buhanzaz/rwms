@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.warehouse.service;
 
 import dev.buhanzaz.rwms.warehouse.api.CreateWarehouseRequest;
 import dev.buhanzaz.rwms.warehouse.api.InternalWarehouseExistenceResponse;
+import dev.buhanzaz.rwms.warehouse.api.InternalWarehouseIdentityResponse;
 import dev.buhanzaz.rwms.warehouse.api.InventoryWarehouseMetadataResponse;
 import dev.buhanzaz.rwms.warehouse.api.LogisticsWarehouseIdentityResponse;
 import dev.buhanzaz.rwms.warehouse.api.ReplaceWarehouseRequest;
@@ -446,6 +447,22 @@ public class WarehouseService {
     Warehouse warehouse = require(id);
     return new InternalWarehouseExistenceResponse(
         warehouse.getId(), warehouse.getVersion(), warehouse.isActive());
+  }
+
+  /** Returns current owner-held metadata for the internal driver-shift workflow. */
+  @Transactional(readOnly = true)
+  public InternalWarehouseIdentityResponse internalIdentity(UUID id) {
+    Warehouse warehouse = require(id);
+    return new InternalWarehouseIdentityResponse(
+        warehouse.getId(),
+        warehouse.getVersion(),
+        warehouse.isActive(),
+        warehouse.getName(),
+        warehouse.getCity(),
+        warehouse.getAddress(),
+        warehouse.getLatitude(),
+        warehouse.getLongitude(),
+        timeZones.currentTimeZone(warehouse.getId(), timeZones.databaseNow()));
   }
 
   /**

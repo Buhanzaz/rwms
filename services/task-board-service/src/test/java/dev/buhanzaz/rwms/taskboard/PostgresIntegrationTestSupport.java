@@ -29,6 +29,9 @@ abstract class PostgresIntegrationTestSupport {
       jdbc.execute(
           """
           truncate table
+            driver_shift_media_event_inbox, driver_shift_command_receipt, driver_shift_photo,
+            vehicle_defect, vehicle_inspection_item_result, vehicle_inspection,
+            driver_shift, driver_shift_plan,
             task_board_kafka_cutover_map, replay_operation_audit,
             group_kpi_segment_day, group_kpi_responsibility_segment, group_kpi_day_state,
             worker_current_group_interval, worker_group_availability_interval,

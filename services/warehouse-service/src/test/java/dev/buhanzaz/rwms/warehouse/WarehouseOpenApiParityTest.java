@@ -47,6 +47,7 @@ class WarehouseOpenApiParityTest {
             "/api/warehouse/v1/warehouses/{id}/time-zone-changes",
             "/api/warehouse/v1/admin/outbox-events/{eventId}/recovery",
             "/api/internal/warehouse/v1/warehouses/{id}/existence",
+            "/api/internal/warehouse/v1/warehouses/{id}/identity",
             "/api/internal/warehouse/v1/warehouses/asset/{id}/existence",
             "/api/internal/warehouse/v1/warehouses/inventory/{id}/metadata",
             "/api/internal/warehouse/v1/warehouses/logistics/{id}/identity",

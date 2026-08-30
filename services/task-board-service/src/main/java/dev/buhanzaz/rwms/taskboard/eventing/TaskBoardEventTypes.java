@@ -44,30 +44,47 @@ public final class TaskBoardEventTypes {
       "task-board.task-evidence.review-required.v1";
   public static final String GROUP_KPI_DAY_CHANGED =
       "task-board.group-kpi-day.changed.v1";
+  public static final String DRIVER_SHIFT_OWNER_PROOF_CHANGED =
+      "task-board.driver-shift-owner-proof.changed.v1";
 
-  public static final Map<TaskBoardAggregateType, Set<String>> BY_AGGREGATE = Map.of(
-      TaskBoardAggregateType.WORKER_CLASS,
-      Set.of(WORKER_CLASS_CREATED, WORKER_CLASS_CHANGED, WORKER_CLASS_DELETED),
-      TaskBoardAggregateType.WORKER,
-      Set.of(WORKER_CREATED, WORKER_CHANGED, WORKER_QUALIFICATIONS_CHANGED, WORKER_CREDENTIAL_AUDIT, WORKER_DELETED),
-      TaskBoardAggregateType.WORKER_GROUP,
-      Set.of(WORKER_GROUP_CREATED, WORKER_GROUP_CHANGED, WORKER_GROUP_MEMBERS_CHANGED, WORKER_GROUP_DELETED),
-      TaskBoardAggregateType.WORK_QUEUE,
-      Set.of(WORK_QUEUE_CREATED, WORK_QUEUE_CHANGED, WORK_QUEUE_REORDERED, WORK_QUEUE_DELETED),
-      TaskBoardAggregateType.QUEUE_USAGE_REFERENCE,
-      Set.of(QUEUE_REFERENCE_CREATED, QUEUE_REFERENCE_DELETED),
-      TaskBoardAggregateType.BOARD_TASK,
-      Set.of(BOARD_TASK_CREATED, BOARD_TASK_CHANGED, BOARD_TASK_COMPLETED, BOARD_TASK_CANCELLED),
-      TaskBoardAggregateType.QUEUE_ENTRY,
-      Set.of(QUEUE_ENTRY_CREATED, QUEUE_ENTRY_CHANGED, QUEUE_ENTRY_TAKEN, QUEUE_ENTRY_PAUSED,
-          QUEUE_ENTRY_RESUMED, QUEUE_ENTRY_COMPLETED, QUEUE_ENTRY_MOVED, QUEUE_ENTRY_CANCELLED,
-          QUEUE_ENTRY_INTERRUPTED, QUEUE_ENTRY_RETURNING),
-      TaskBoardAggregateType.TASK_BOARD_ENTRY_OWNER_PROOF,
-      Set.of(ENTRY_OWNER_PROOF_CHANGED),
-      TaskBoardAggregateType.TASK_EVIDENCE,
-      Set.of(TASK_EVIDENCE_READY, TASK_EVIDENCE_REVIEW_REQUIRED),
-      TaskBoardAggregateType.GROUP_KPI_DAY,
-      Set.of(GROUP_KPI_DAY_CHANGED));
+  public static final Map<TaskBoardAggregateType, Set<String>> BY_AGGREGATE = Map.ofEntries(
+      Map.entry(
+          TaskBoardAggregateType.WORKER_CLASS,
+          Set.of(WORKER_CLASS_CREATED, WORKER_CLASS_CHANGED, WORKER_CLASS_DELETED)),
+      Map.entry(
+          TaskBoardAggregateType.WORKER,
+          Set.of(WORKER_CREATED, WORKER_CHANGED, WORKER_QUALIFICATIONS_CHANGED,
+              WORKER_CREDENTIAL_AUDIT, WORKER_DELETED)),
+      Map.entry(
+          TaskBoardAggregateType.WORKER_GROUP,
+          Set.of(WORKER_GROUP_CREATED, WORKER_GROUP_CHANGED, WORKER_GROUP_MEMBERS_CHANGED,
+              WORKER_GROUP_DELETED)),
+      Map.entry(
+          TaskBoardAggregateType.WORK_QUEUE,
+          Set.of(WORK_QUEUE_CREATED, WORK_QUEUE_CHANGED, WORK_QUEUE_REORDERED,
+              WORK_QUEUE_DELETED)),
+      Map.entry(
+          TaskBoardAggregateType.QUEUE_USAGE_REFERENCE,
+          Set.of(QUEUE_REFERENCE_CREATED, QUEUE_REFERENCE_DELETED)),
+      Map.entry(
+          TaskBoardAggregateType.BOARD_TASK,
+          Set.of(BOARD_TASK_CREATED, BOARD_TASK_CHANGED, BOARD_TASK_COMPLETED,
+              BOARD_TASK_CANCELLED)),
+      Map.entry(
+          TaskBoardAggregateType.QUEUE_ENTRY,
+          Set.of(QUEUE_ENTRY_CREATED, QUEUE_ENTRY_CHANGED, QUEUE_ENTRY_TAKEN, QUEUE_ENTRY_PAUSED,
+              QUEUE_ENTRY_RESUMED, QUEUE_ENTRY_COMPLETED, QUEUE_ENTRY_MOVED,
+              QUEUE_ENTRY_CANCELLED, QUEUE_ENTRY_INTERRUPTED, QUEUE_ENTRY_RETURNING)),
+      Map.entry(
+          TaskBoardAggregateType.TASK_BOARD_ENTRY_OWNER_PROOF,
+          Set.of(ENTRY_OWNER_PROOF_CHANGED)),
+      Map.entry(
+          TaskBoardAggregateType.TASK_EVIDENCE,
+          Set.of(TASK_EVIDENCE_READY, TASK_EVIDENCE_REVIEW_REQUIRED)),
+      Map.entry(TaskBoardAggregateType.GROUP_KPI_DAY, Set.of(GROUP_KPI_DAY_CHANGED)),
+      Map.entry(
+          TaskBoardAggregateType.DRIVER_SHIFT_OWNER_PROOF,
+          Set.of(DRIVER_SHIFT_OWNER_PROOF_CHANGED)));
 
   public static final Set<String> ALL = BY_AGGREGATE.values().stream()
       .flatMap(Set::stream)

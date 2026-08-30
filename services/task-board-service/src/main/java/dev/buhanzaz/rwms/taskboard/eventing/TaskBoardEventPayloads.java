@@ -256,6 +256,20 @@ public final class TaskBoardEventPayloads {
       String sourceType,
       UUID sourceId) {}
 
+  /** Minimal media authorization proof for one active retained driver shift. */
+  public record DriverShiftOwnerProofFact(
+      String ownerType,
+      UUID ownerId,
+      UUID warehouseId,
+      boolean active,
+      List<UUID> allowedWorkerIds,
+      List<UUID> readerWorkerIds) {
+    public DriverShiftOwnerProofFact {
+      allowedWorkerIds = List.copyOf(allowedWorkerIds);
+      readerWorkerIds = List.copyOf(readerWorkerIds);
+    }
+  }
+
   public record GroupKpiDayFact(
       UUID evidenceId,
       UUID warehouseId,

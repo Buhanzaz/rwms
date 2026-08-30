@@ -99,6 +99,11 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
     return taskBoard.listWarehouseDrivers(warehouseId, at, includeIncoming);
   }
 
+  public void registerDriverShiftPlan(
+      UUID idempotencyKey, UUID sourceShiftId, DriverShiftPlanSnapshot plan) {
+    taskBoard.registerDriverShiftPlan(idempotencyKey, sourceShiftId, plan);
+  }
+
   public WorkerOperationalAssignment createWorkerOperationalAssignment(
       UUID transferId,
       UUID workerId,

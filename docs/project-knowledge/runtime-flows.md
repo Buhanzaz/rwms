@@ -1412,7 +1412,14 @@ and
    mapping failure therefore rolls the request back before capacity changes.
    It then commits and publishes the closed capacity generation before sending
    the assignment with a stable plan/version idempotency key and expected RWMS
-   order versions. Logistics rechecks warehouse, units, dates and drivers and
+   order versions. That apply payload also contains one concrete
+   `driverShiftPlans` snapshot per assigned driver/work date, including vehicle,
+   optional trailer, start odometer, trip count and exact unrounded
+   `routeDistanceMeters`. Logistics validates unique source-shift and driver/date
+   identities and idempotently registers every shift plan in task-board before
+   processing individual assignment outcomes. A failed plan registration fails
+   the apply instead of leaving assignments detached from their daily shift;
+   exact retry reuses the source plan/version-derived keys. Logistics rechecks warehouse, units, dates and drivers and
    uses its existing shipment-owner transition. Automatic today/tomorrow
    assignment is rejected; valid and rejected parts are returned explicitly.
    Only tasks sourced from `RWMS` may enter the command; generated/manual tasks,
@@ -1966,6 +1973,69 @@ Evidence:
 [`Worker photo viewer`](../../worker-app/app/src/main/java/dev/buhanzaz/rwms/worker/PhotoPagerScreen.kt),
 and
 [`Driver TasksScreen.kt`](../../driver-app/feature-tasks/src/main/java/dev/buhanzaz/rwms/driver/feature/tasks/TasksScreen.kt).
+
+### Driver Up daily shift lifecycle
+
+1. A closed planner day publishes concrete driver-shift snapshots through
+   logistics' private, exact-scope adapter. Task-board stores the source plan
+   idempotently and fences a worker to one plan/shift for one work date. Generated or manual
+   simulator jobs never enter this boundary; only the concrete assigned resource snapshot and
+   RWMS task summary do.
+2. After DriverApp authentication, `GET /driver/v1/shift/today` resolves the authenticated
+   `worker_id`, its plan, and current owner-held warehouse identity through warehouse-service.
+   The work date is the warehouse-local calendar date after 06:00 and the previous date before
+   06:00. A lock on the source plan plus `UNIQUE(driver_id, work_date)` makes simultaneous first
+   opens converge on one shift. Missing/disabled/inactive prerequisites return
+   `SHIFT_NOT_AVAILABLE`; Android does not manufacture a local day.
+3. The combined response carries the shift/version, `nextRequiredAction`, warehouse/vehicle,
+   briefing, inspection progress, exact-driver task summary, configured suspicious-odometer
+   threshold and server timestamps. DriverApp stores that projection in Room and routes only from
+   `nextRequiredAction`. Daily briefing acknowledgement is one idempotent command per work date;
+   a later launch therefore does not repeat it.
+4. Task-board loads forecast data from MET Norway by the warehouse coordinate pair, normalizes it
+   into the Driver Up DTO, evaluates configurable wind/precipitation/visibility hazards and caches
+   by rounded coordinates with a bounded TTL/entry count and conditional ETag refresh. Timeout,
+   invalid data or missing coordinates returns an unavailable briefing without blocking the
+   state machine. DriverApp separately asks its replaceable Yandex MapKit traffic provider for the
+   current 0–10 `TrafficLevel`; traffic failure is equally informational and fail-open.
+5. Medical self-confirmation stores confirmation type `SELF_CONFIRMATION_TEST`, actor and server
+   completion time. Vehicle inspection is a snapshot of the selected `TRUCK`,
+   `TRUCK_WITH_TRAILER` or `TRUCK_WITH_CRANE` template. Each required item advances from
+   `NOT_CHECKED` to `OK` or `DEFECT`; description/severity and its stable defect identity are
+   persisted separately. Completion requires every mandatory result, and any blocking defect
+   prevents ordinary shift start. All mutations use expected shift version, stable
+   `Idempotency-Key`, an immutable response receipt and server audit time.
+6. `READY_TO_START` permits one explicit start command. Only its accepted server response makes
+   the state `SHIFT_ACTIVE` and opens the pre-existing DriverApp task/feed/detail flow; no second
+   task screen or task aggregate is created. The client may persist commands and inspection drafts
+   before reconnect, but it never displays an authorization-gated transition as server-complete.
+7. After task completion, task-board counts only required tasks planned/assigned to that exact
+   driver for the shift work date. Closing remains forbidden while one is non-terminal. When all
+   are done, the combined shift projection exposes the closing summary and the explicit idempotent
+   start-closing transition; Android never infers “last trip” from array position.
+8. Closing then requires, in server order, manual warehouse return, end-of-shift vehicle condition,
+   non-decreasing end odometer, 0–100 fuel level, and final confirmation. A suspicious odometer
+   jump uses the threshold supplied by the server and requires explicit client confirmation rather
+   than silent rejection. Route distance and odometer distance remain distinct facts.
+9. Shift evidence reuses DriverApp's encrypted CameraX/upload outbox. Task-board publishes a
+   dedicated `DRIVER_SHIFT_OWNER_PROOF`; media-service admits only the exact `driver.tasks` worker
+   and warehouse, retains the stable reservation reference and reports processing state back via
+   media facts. A required `END_SHIFT_DEFECT` photo must be `READY`; reserved/processing/unrelated
+   evidence cannot close the shift. Only the accepted close command records server `closedAt` and
+   `SHIFT_CLOSED`. Room snapshots and closing drafts restore the same step after process/device
+   restart, while an unsent close remains honestly pending rather than a false terminal state.
+
+Evidence:
+[`DriverShiftService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/DriverShiftService.java),
+[`V39`](../../services/task-board-service/src/main/resources/db/migration/V39__driver_daily_shift.sql),
+[`task-board OpenAPI`](../../contracts/openapi/task-board-service.yaml),
+[`warehouse identity boundary`](../../contracts/openapi/warehouse-service.yaml),
+[`media owner contract`](../../contracts/openapi/media-service.yaml),
+[`media V20`](../../services/media-service/db/migration/V20__driver_shift_media_owner.sql),
+[`DriverShiftViewModel.kt`](../../driver-app/feature-shift/src/main/java/dev/buhanzaz/rwms/driver/feature/shift/DriverShiftViewModel.kt),
+[`DriverLocalStore.kt`](../../driver-app/core-database/src/main/java/dev/buhanzaz/rwms/driver/core/database/DriverLocalStore.kt),
+and
+[`DriverSyncCoordinator.kt`](../../driver-app/core-sync/src/main/java/dev/buhanzaz/rwms/driver/core/sync/DriverSyncCoordinator.kt).
 
 ### Assistant booking-fact inbox and recovery
 

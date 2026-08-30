@@ -36,6 +36,7 @@ public record OAuthClientProperties(List<Client> clients) {
     static final Set<String> TASK_BOARD_SCOPES =
             Set.of(
                     "worker-credentials.manage",
+                    "warehouse.identity.read",
                     "warehouse.timezone.read",
                     "warehouse.lifecycle.read",
                     "warehouse.lifecycle.confirm");
@@ -75,6 +76,7 @@ public record OAuthClientProperties(List<Client> clients) {
             "warehouse.lifecycle.confirm",
             "asset.logistics",
             "task-board.logistics",
+            "task-board.driver-shifts.plan",
             "maintenance.logistics",
             "media.logistics");
     static final String LOGISTICS_PLANNER_CLIENT_ID = "logistics-planner";

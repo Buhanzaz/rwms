@@ -64,6 +64,8 @@ type repository interface {
 		func([]persistence.AssetWithVariants) error) error
 	ReadTaskBoardEntryAssetsForWorker(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, int, *uuid.UUID,
 		func([]persistence.AssetWithVariants) error) error
+	ReadDriverShiftAssetsForWorker(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, int, *uuid.UUID,
+		func([]persistence.AssetWithVariants) error) error
 	ReadCabinCovers(context.Context, uuid.UUID, []uuid.UUID,
 		func([]persistence.CabinCoverRecord) error) error
 	ReadCabinPresentationSnapshots(context.Context, uuid.UUID, []uuid.UUID,
@@ -80,7 +82,12 @@ type repository interface {
 		func(persistence.AssetRecord, *persistence.VariantRecord) error) error
 	ReadTaskBoardEntryVariantForWorker(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, int, media.Variant,
 		func(persistence.AssetRecord, *persistence.VariantRecord) error) error
+	ReadDriverShiftOriginalForWorker(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, *int,
+		func(persistence.AssetRecord, *persistence.VariantRecord) error) error
+	ReadDriverShiftVariantForWorker(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, int, media.Variant,
+		func(persistence.AssetRecord, *persistence.VariantRecord) error) error
 	AuthorizeTaskBoardEntryWorker(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
+	AuthorizeDriverShiftWorker(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
 	GetAssetScoped(context.Context, uuid.UUID, string, string, uuid.UUID) (persistence.AssetRecord, error)
 	UpsertServiceOwnerProof(context.Context, persistence.ServiceOwnerProofCommand) (persistence.ServiceOwnerProofRecord, bool, error)
 	ValidateLogisticsReferences(context.Context, persistence.ValidateLogisticsReferencesCommand) error
@@ -122,18 +129,27 @@ func authorizedSubjectFor(principal mediaRequestPrincipal) *uuid.UUID {
 	return &subjectID
 }
 
-func (principal mediaRequestPrincipal) requireTaskBoardWorker(ownerType, ownerID string, warehouseID uuid.UUID) (uuid.UUID, error) {
-	if principal.worker == nil || ownerType != persistence.OwnerTypeTaskBoardEntry {
+func (principal mediaRequestPrincipal) requireWorkerOwner(ownerType, ownerID string, warehouseID uuid.UUID) (uuid.UUID, error) {
+	if principal.worker == nil {
 		return uuid.Nil, auth.ErrForbidden
 	}
-	if err := principal.worker.RequireTaskAccess(warehouseID); err != nil {
-		return uuid.Nil, err
-	}
-	entryID, err := uuid.Parse(ownerID)
-	if err != nil || entryID == uuid.Nil {
+	switch ownerType {
+	case persistence.OwnerTypeTaskBoardEntry:
+		if err := principal.worker.RequireTaskAccess(warehouseID); err != nil {
+			return uuid.Nil, err
+		}
+	case persistence.OwnerTypeDriverShift:
+		if err := principal.worker.RequireDriverTaskAccess(warehouseID); err != nil {
+			return uuid.Nil, err
+		}
+	default:
 		return uuid.Nil, auth.ErrForbidden
 	}
-	return entryID, nil
+	ownerUUID, err := uuid.Parse(ownerID)
+	if err != nil || ownerUUID == uuid.Nil || ownerUUID.String() != ownerID {
+		return uuid.Nil, auth.ErrForbidden
+	}
+	return ownerUUID, nil
 }
 
 func workerIDFor(principal mediaRequestPrincipal) *uuid.UUID {
@@ -937,7 +953,7 @@ func (server *Server) createUpload(response http.ResponseWriter, request *http.R
 		body.OwnerID = ownerID
 	}
 	var clientReferenceID *uuid.UUID
-	if body.OwnerType == persistence.OwnerTypeTaskBoardEntry {
+	if persistence.IsWorkerEvidenceOwnerType(body.OwnerType) {
 		parsed, parseErr := uuid.Parse(body.ClientReferenceID)
 		if parseErr != nil || parsed == uuid.Nil || parsed.String() != body.ClientReferenceID {
 			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid upload request")
@@ -960,8 +976,7 @@ func (server *Server) createUpload(response http.ResponseWriter, request *http.R
 		}
 		authorizedSubjectID = authorizedSubjectFor(principal)
 	} else if principal.isWorker() {
-		if _, err := principal.requireTaskBoardWorker(body.OwnerType, ownerID, warehouseID); err != nil ||
-			body.Context != persistence.ViewerContextWorkResult {
+		if _, err := principal.requireWorkerOwner(body.OwnerType, ownerID, warehouseID); err != nil {
 			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
 			return
 		}
@@ -1013,7 +1028,7 @@ func (server *Server) createUpload(response http.ResponseWriter, request *http.R
 		server.problem(response, request, http.StatusUnsupportedMediaType, "MEDIA_UNSUPPORTED_TYPE", "Unsupported media type")
 		return
 	}
-	if body.OwnerType == persistence.OwnerTypeTaskBoardEntry && kind != media.KindImage {
+	if persistence.IsWorkerEvidenceOwnerType(body.OwnerType) && kind != media.KindImage {
 		server.problem(response, request, http.StatusUnsupportedMediaType, "MEDIA_UNSUPPORTED_TYPE", "Unsupported media type")
 		return
 	}
@@ -1394,12 +1409,17 @@ func (server *Server) authorizeUploadAsset(response http.ResponseWriter, request
 		return false
 	}
 	if principal.isWorker() {
-		entryID, err := principal.requireTaskBoardWorker(asset.OwnerType, asset.OwnerID, asset.WarehouseID)
+		ownerID, err := principal.requireWorkerOwner(asset.OwnerType, asset.OwnerID, asset.WarehouseID)
 		if err != nil {
 			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
 			return false
 		}
-		if err := server.repository.AuthorizeTaskBoardEntryWorker(request.Context(), entryID, asset.WarehouseID, principal.worker.WorkerID); err != nil {
+		if asset.OwnerType == persistence.OwnerTypeTaskBoardEntry {
+			err = server.repository.AuthorizeTaskBoardEntryWorker(request.Context(), ownerID, asset.WarehouseID, principal.worker.WorkerID)
+		} else {
+			err = server.repository.AuthorizeDriverShiftWorker(request.Context(), ownerID, asset.WarehouseID, principal.worker.WorkerID)
+		}
+		if err != nil {
 			server.repositoryProblem(response, request, err)
 			return false
 		}
@@ -1697,19 +1717,19 @@ func (server *Server) listOwner(response http.ResponseWriter, request *http.Requ
 	if !ok {
 		return
 	}
-	var workerEntryID uuid.UUID
+	var workerOwnerID uuid.UUID
 	if principal.isCustomerRental() {
 		if !persistence.IsCustomerSubjectBoundOwnerType(ownerType) {
 			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
 			return
 		}
 	} else if principal.isWorker() {
-		entryID, err := principal.requireTaskBoardWorker(ownerType, ownerID, warehouseID)
+		ownerUUID, err := principal.requireWorkerOwner(ownerType, ownerID, warehouseID)
 		if err != nil {
 			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
 			return
 		}
-		workerEntryID = entryID
+		workerOwnerID = ownerUUID
 	} else if principal.user == nil || ownerType == persistence.OwnerTypeLogisticsCustomerProfile ||
 		principal.user.Require("rwms.read", warehouseID, auth.View) != nil {
 		server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
@@ -1748,8 +1768,13 @@ func (server *Server) listOwner(response http.ResponseWriter, request *http.Requ
 		err = server.repository.ReadOwnerAssetsForCustomer(request.Context(), ownerType, ownerID,
 			warehouseID, principal.subjectID, limit, after, consume)
 	} else if principal.isWorker() {
-		err = server.repository.ReadTaskBoardEntryAssetsForWorker(request.Context(), workerEntryID,
-			warehouseID, principal.worker.WorkerID, limit, after, consume)
+		if ownerType == persistence.OwnerTypeTaskBoardEntry {
+			err = server.repository.ReadTaskBoardEntryAssetsForWorker(request.Context(), workerOwnerID,
+				warehouseID, principal.worker.WorkerID, limit, after, consume)
+		} else {
+			err = server.repository.ReadDriverShiftAssetsForWorker(request.Context(), workerOwnerID,
+				warehouseID, principal.worker.WorkerID, limit, after, consume)
+		}
 	} else {
 		err = server.repository.ReadOwnerAssets(request.Context(), ownerType, ownerID, warehouseID,
 			limit, after, consume)
@@ -1881,13 +1906,18 @@ func (server *Server) getOriginal(response http.ResponseWriter, request *http.Re
 		err = server.repository.ReadOriginalForCustomer(request.Context(), mediaID, ownerType, ownerID,
 			warehouseID, principal.subjectID, generation, consume)
 	} else if principal.isWorker() {
-		entryID, workerErr := principal.requireTaskBoardWorker(ownerType, ownerID, warehouseID)
+		workerOwnerID, workerErr := principal.requireWorkerOwner(ownerType, ownerID, warehouseID)
 		if workerErr != nil {
 			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
 			return
 		}
-		err = server.repository.ReadTaskBoardEntryOriginalForWorker(request.Context(), entryID, warehouseID,
-			principal.worker.WorkerID, mediaID, generation, consume)
+		if ownerType == persistence.OwnerTypeTaskBoardEntry {
+			err = server.repository.ReadTaskBoardEntryOriginalForWorker(request.Context(), workerOwnerID, warehouseID,
+				principal.worker.WorkerID, mediaID, generation, consume)
+		} else {
+			err = server.repository.ReadDriverShiftOriginalForWorker(request.Context(), workerOwnerID, warehouseID,
+				principal.worker.WorkerID, mediaID, generation, consume)
+		}
 	} else {
 		if principal.user == nil || ownerType == persistence.OwnerTypeLogisticsCustomerProfile ||
 			principal.user.Require("rwms.read", warehouseID, auth.View) != nil {
@@ -1956,13 +1986,18 @@ func (server *Server) getVariantContent(response http.ResponseWriter, request *h
 		err = server.repository.ReadCurrentVariantForCustomer(request.Context(), mediaID, ownerType, ownerID,
 			warehouseID, principal.subjectID, generation, variant, consume)
 	} else if principal.isWorker() {
-		entryID, workerErr := principal.requireTaskBoardWorker(ownerType, ownerID, warehouseID)
+		workerOwnerID, workerErr := principal.requireWorkerOwner(ownerType, ownerID, warehouseID)
 		if workerErr != nil {
 			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
 			return
 		}
-		err = server.repository.ReadTaskBoardEntryVariantForWorker(request.Context(), entryID, warehouseID,
-			principal.worker.WorkerID, mediaID, generation, variant, consume)
+		if ownerType == persistence.OwnerTypeTaskBoardEntry {
+			err = server.repository.ReadTaskBoardEntryVariantForWorker(request.Context(), workerOwnerID, warehouseID,
+				principal.worker.WorkerID, mediaID, generation, variant, consume)
+		} else {
+			err = server.repository.ReadDriverShiftVariantForWorker(request.Context(), workerOwnerID, warehouseID,
+				principal.worker.WorkerID, mediaID, generation, variant, consume)
+		}
 	} else {
 		if principal.user == nil || ownerType == persistence.OwnerTypeLogisticsCustomerProfile ||
 			principal.user.Require("rwms.read", warehouseID, auth.View) != nil {

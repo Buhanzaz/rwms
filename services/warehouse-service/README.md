@@ -97,6 +97,7 @@ The public gateway exposes `/api/warehouse/**` unchanged.
 | `/api/warehouse/v1/warehouses/{id}/support-links` | Authenticated warehouse manager with grants for every endpoint | Read or atomically replace one representative warehouse's complete support graph |
 | `/api/warehouse/v1/admin/outbox-events/**` | Reviewed administrator recovery | Requeue one immutable terminal/quarantined outbox fact under a review fence |
 | `/api/internal/warehouse/v1/warehouses/{id}/existence` | Exact auth-service credential/scope | Narrow existence validation for warehouse grants |
+| `/api/internal/warehouse/v1/warehouses/{id}/identity` | Exact task-board-service credential with only `warehouse.identity.read` | Current metadata, coordinates and timezone for the warehouse-local Driver Up shift |
 | `/api/internal/warehouse/v1/warehouses/asset/**` | Exact asset-service credential/scope | Asset-specific existence boundary |
 | `/api/internal/warehouse/v1/warehouses/inventory/**` | Exact inventory-service credential/scope | Inventory metadata snapshot |
 | `/api/internal/warehouse/v1/warehouses/logistics/**` | Exact logistics-service credential/scope | Logistics identity/directory view |
@@ -115,6 +116,12 @@ owner's `address` field; it is nullable for warehouses whose address has not
 yet been recorded. The directory contains only active warehouses in canonical
 warehouse-service order and remains accessible solely to the exact
 logistics-service credential and scope.
+
+The task-board identity response is a separate least-privilege projection of
+`id`, version, active flag, name, city, nullable address/coordinate pair and canonical IANA
+timezone. Task-board uses it to derive the 06:00 warehouse work date and weather coordinates; it
+does not copy or mutate the warehouse registry. The route is private, requires SERVICE subject and
+client ID `task-board-service` with exactly `warehouse.identity.read`, and is never gateway-routable.
 
 ## Identity, concurrency, and time
 

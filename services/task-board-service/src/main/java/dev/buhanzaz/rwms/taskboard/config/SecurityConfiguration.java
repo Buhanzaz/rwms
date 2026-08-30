@@ -38,6 +38,9 @@ public class SecurityConfiguration {
         authorize -> {
           authorize.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll();
           authorize
+              .requestMatchers("/api/internal/task-board/v1/driver-shift-plans/**")
+              .hasAuthority("SCOPE_task-board.driver-shifts.plan");
+          authorize
               .requestMatchers("/api/internal/task-board/v1/logistics/**")
               .hasAuthority("SCOPE_task-board.logistics");
           authorize.requestMatchers("/api/internal/**").authenticated();

@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.driver
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
@@ -11,6 +12,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -29,10 +32,13 @@ import androidx.navigation3.ui.NavDisplay
 import dev.buhanzaz.rwms.driver.core.ui.RwmsDriverTheme
 import dev.buhanzaz.rwms.driver.core.ui.DriverScreenScaffold
 import dev.buhanzaz.rwms.driver.feature.camera.CameraScreen
+import dev.buhanzaz.rwms.driver.feature.camera.DriverCameraTarget
 import dev.buhanzaz.rwms.driver.feature.login.LoginScreen
 import dev.buhanzaz.rwms.driver.feature.taskdetail.TaskDetailScreen
 import dev.buhanzaz.rwms.driver.feature.tasks.LogisticsScreen
 import dev.buhanzaz.rwms.driver.feature.tasks.TasksScreen
+import dev.buhanzaz.rwms.driver.feature.shift.DriverShiftHost
+import dev.buhanzaz.rwms.driver.feature.shift.ShiftPhotoCaptureRequest
 import java.util.UUID
 import kotlinx.serialization.Serializable
 
@@ -105,7 +111,45 @@ private data class PhotoRoute(val title: String, val readPaths: List<String>) : 
 
 @Composable
 private fun DriverNavigation(userId: String, displayName: String, onLogout: () -> Unit) {
+    var shiftCameraTarget by remember { mutableStateOf<DriverCameraTarget.Shift?>(null) }
+    Box(modifier = Modifier.fillMaxSize()) {
+        DriverShiftHost(
+            userId = userId,
+            displayName = displayName,
+            onCapturePhoto = { request -> shiftCameraTarget = request.toCameraTarget() },
+            activeTasks = { shiftLifecycleEnabled ->
+                DriverTaskNavigation(
+                    userId = userId,
+                    displayName = displayName,
+                    onLogout = onLogout,
+                    initiallyOpenLogistics = shiftLifecycleEnabled,
+                )
+            },
+        )
+        shiftCameraTarget?.let { target ->
+            CameraScreen(
+                userId = userId,
+                target = target,
+                onBack = { shiftCameraTarget = null },
+                onSaved = { shiftCameraTarget = null },
+            )
+        }
+    }
+}
+
+@Composable
+private fun DriverTaskNavigation(
+    userId: String,
+    displayName: String,
+    onLogout: () -> Unit,
+    initiallyOpenLogistics: Boolean,
+) {
     val backStack = rememberNavBackStack(MenuRoute)
+    LaunchedEffect(initiallyOpenLogistics) {
+        if (initiallyOpenLogistics && backStack.size == 1 && backStack.firstOrNull() == MenuRoute) {
+            backStack.add(LogisticsRoute)
+        }
+    }
     val listDetailStrategy = rememberDriverListDetailSceneStrategy<NavKey>()
     NavDisplay(
         backStack = backStack,
@@ -189,6 +233,14 @@ private fun DriverNavigation(userId: String, displayName: String, onLogout: () -
         },
     )
 }
+
+private fun ShiftPhotoCaptureRequest.toCameraTarget() = DriverCameraTarget.Shift(
+    shiftId = shiftId,
+    expectedVersion = expectedVersion,
+    role = role,
+    defectId = defectId,
+    inspectionItemId = inspectionItemId,
+)
 
 /** Same lifecycle guard as dropUnlessResumed, for callbacks with a route argument. */
 @Composable

@@ -17,7 +17,7 @@ ManagerApp или WorkerApp.
 ## Проверка
 
 ```bash
-sha256sum /path/to/rwms-driver-0.1.19-debug.apk
+sha256sum /path/to/rwms-driver-0.1.20-debug.apk
 node downloads-site/scripts/build-site.mjs
 node downloads-site/scripts/verify-site.mjs
 ```

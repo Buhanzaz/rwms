@@ -109,3 +109,8 @@ var V18 []byte
 //
 //go:embed V19__customer_profile_avatar_owner.sql
 var V19 []byte
+
+// V20 contains the immutable driver-shift media-owner migration bytes.
+//
+//go:embed V20__driver_shift_media_owner.sql
+var V20 []byte

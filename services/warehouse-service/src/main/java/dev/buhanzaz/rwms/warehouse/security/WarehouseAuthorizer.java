@@ -157,6 +157,19 @@ public class WarehouseAuthorizer {
     requireInternalWarehouseReader(jwt, "asset-service");
   }
 
+  /** Requires task-board-service and its single-purpose warehouse identity scope. */
+  public void requireInternalTaskBoardIdentityReader(Jwt jwt) {
+    String clientId = "task-board-service";
+    if (jwt == null
+        || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))
+        || !clientId.equals(jwt.getClaimAsString("client_id"))
+        || !clientId.equals(jwt.getSubject())
+        || !exactlyScope(jwt, "warehouse.identity.read")) {
+      throw new AccessDeniedException(
+          "Only task-board-service with exactly warehouse.identity.read may use this endpoint");
+    }
+  }
+
   /**
    * Inventory receives only active warehouse identity, version, and canonical timezone.
    *

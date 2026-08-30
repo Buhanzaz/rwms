@@ -28,5 +28,6 @@ include(
     ":feature-tasks",
     ":feature-task-detail",
     ":feature-camera",
+    ":feature-shift",
     ":baselineprofile",
 )

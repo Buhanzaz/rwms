@@ -58,6 +58,13 @@ source и result; неподтверждённые размеры видео о�
   сначала блокирует local proof, а затем binding и audience rows, совпадая с
   порядком proof replacement; поэтому параллельное обновление projection не
   создаёт deadlock с media access.
+- **Evidence смены водителя.** DriverApp использует отдельную каноническую пару
+  `DRIVER_SHIFT/SHIFT_EVIDENCE` только со scope `driver.tasks`, точным
+  `worker_id`, складом и актуальным non-quarantined proof от task-board.
+  Reservation `evidenceId` служит стабильным media client reference, поэтому
+  replay возвращает один asset, а финальный `READY` fact завершает именно эту
+  reservation task-board. WorkerApp и manager identities такой owner применять
+  не могут.
 - **Привязанные к клиенту logistics media.** Точная identity
   `USER/CUSTOMER`, `rwms-customer-android` с единственным
   `customer.rental` может работать только с `LOGISTICS_SHIPMENT/SHIPMENT` или
@@ -140,13 +147,14 @@ Flyway выполняется вне процесса. До запуска пр�
 `db/migration/V16__client_image_variants.sql`, затем
 `db/migration/V17__consolidate_legacy_cabin_photo_folders.sql`, затем
 `db/migration/V18__customer_shipment_subject_binding.sql`, затем
-`db/migration/V19__customer_profile_avatar_owner.sql`.
+`db/migration/V19__customer_profile_avatar_owner.sql`, затем
+`db/migration/V20__driver_shift_media_owner.sql`.
 
 Go-приложение не выполняет миграции, baseline, repair и не принимает молча
 чужую непустую базу.
 
-- Новая local/test база мигрируется от V1 до V19.
-- База на V18 применяет V19. V14 добавляет и backfill-ит
+- Новая local/test база мигрируется от V1 до V20.
+- База на V19 применяет V20. V14 добавляет и backfill-ит
   task-entry read audience без удаления owner proofs, media rows или объектов.
   V15 заменяет только `media_inventory_finding_inbox_check2`: канонические
   departed, refreshed и restored membership markers принимаются с null
@@ -162,6 +170,10 @@ Go-приложение не выполняет миграции, baseline, repa
   оставляет все существующие owner unbound. V19 разрешает non-structured proof
   `LOGISTICS_CUSTOMER_PROFILE`/`CUSTOMER_PROFILE`, требует его точную subject
   binding и сохраняет все существующие media, proof и shipment rows.
+  V20 additively разрешает `DRIVER_SHIFT/SHIFT_EVIDENCE`, его стабильный
+  уникальный reservation reference, изолированные owner-proof
+  inbox/projection/audiences и conflict quarantine; существующие assets,
+  proofs и версии объектов не переписываются и не удаляются.
 - `baselineOnMigrate` должен оставаться `false`; непустая база без истории
   миграций отклоняется.
 - На старте и readiness проверяются успешные строки Flyway, их версии,
@@ -201,6 +213,8 @@ V1 и legacy union event schema — только compatibility evidence; их н
 | `MEDIA_KAFKA_INVENTORY_OWNER_DLT_TOPIC` | Media-owned DLT inventory owner consumer |
 | `MEDIA_KAFKA_ASSET_RENTAL_ITEM_TOPIC` | Канонический topic asset rental-item facts |
 | `MEDIA_KAFKA_CABIN_OWNER_GROUP` | Выделенная consumer group dynamic CABIN owner |
+| `MEDIA_KAFKA_DRIVER_SHIFT_OWNER_PROOF_TOPIC` | Канонический task-board topic proof смены водителя |
+| `MEDIA_KAFKA_DRIVER_SHIFT_OWNER_PROOF_GROUP` | Выделенная consumer group proof смены водителя |
 | `MEDIA_INSTANCE_ID` | Уникальный безопасный ASCII идентификатор lease/fence owner |
 
 Если разрешён video MIME type, обязательны также `MEDIA_MAX_VIDEO_DURATION`,
@@ -231,6 +245,9 @@ hash-only запись в
 `rwms.inventory.session.v1.media-service-inventory-owner-v1.dlt`.
 Для CABIN owner consumer зафиксированы `rwms.asset.rental-item.v1` и
 `media-service-cabin-owner-v1`.
+Для owner proof смены водителя зафиксированы
+`rwms.task-board.driver-shift-owner-proof.v1` и
+`media-service-driver-shift-owner-proof-v1`.
 
 В `production` требуются HTTPS issuer/JWKS и TLS для MinIO. Plain HTTP и
 `MEDIA_MINIO_USE_SSL=false` допустимы только при явном `local-test` profile.

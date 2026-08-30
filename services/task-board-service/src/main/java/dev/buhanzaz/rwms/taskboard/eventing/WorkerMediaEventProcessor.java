@@ -4,6 +4,7 @@ import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.TaskEvidenceF
 import dev.buhanzaz.rwms.taskboard.service.TaskBoardEntryOwnerProofService;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -14,15 +15,16 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Links terminal media facts to reserved worker evidence under exact worker, warehouse, and entry checks.
+ * Links media facts to reserved worker-task evidence and Driver Shift photo correlations.
  *
- * <p>Missing evidence remains pending for reconciliation; an owner mismatch is rejected rather than
- * attaching another worker's media.
+ * <p>Missing evidence remains pending for reconciliation; owner, warehouse, worker and correlation
+ * mismatches are rejected rather than attaching another driver's media.
  */
 @Service
 @RequiredArgsConstructor
 public class WorkerMediaEventProcessor {
   private static final String TASK_BOARD_OWNER = "TASK_BOARD_ENTRY";
+  private static final String DRIVER_SHIFT_OWNER = "DRIVER_SHIFT";
 
   private final JdbcTemplate jdbc;
   private final ObjectMapper objectMapper;
@@ -33,7 +35,12 @@ public class WorkerMediaEventProcessor {
   public void process(byte[] body) {
     JsonNode envelope = read(body);
     JsonNode payload = requiredObject(envelope, "payload");
-    if (!TASK_BOARD_OWNER.equals(requiredText(payload, "ownerType"))) {
+    String ownerType = requiredText(payload, "ownerType");
+    if (DRIVER_SHIFT_OWNER.equals(ownerType)) {
+      processDriverShift(envelope, payload, body);
+      return;
+    }
+    if (!TASK_BOARD_OWNER.equals(ownerType)) {
       return;
     }
 
@@ -127,6 +134,188 @@ public class WorkerMediaEventProcessor {
             """,
             UUID.class);
     pending.forEach(this::apply);
+
+    List<UUID> shiftPending =
+        jdbc.queryForList(
+            """
+            select event_id
+              from driver_shift_media_event_inbox
+             where status='PENDING'
+             order by received_at,event_id
+             limit 100
+             for update skip locked
+            """,
+            UUID.class);
+    shiftPending.forEach(this::applyDriverShift);
+  }
+
+  private void processDriverShift(JsonNode envelope, JsonNode payload, byte[] body) {
+    String eventType = requiredText(envelope, "eventType");
+    if (!List.of(
+            "media.media.uploaded.v1",
+            "media.media.ready.v1",
+            "media.media.failed.v1")
+        .contains(eventType)) {
+      return;
+    }
+    if (envelope.required("envelopeVersion").intValue() != 2
+        || envelope.required("eventVersion").intValue() != 1
+        || !"media-service".equals(requiredText(envelope, "producer"))
+        || !"MEDIA".equals(requiredText(envelope, "aggregateType"))) {
+      throw new IllegalArgumentException("Некорректный media event envelope");
+    }
+
+    UUID eventId = requiredUuid(envelope, "eventId");
+    UUID mediaId = requiredUuid(envelope, "aggregateId");
+    if (!mediaId.equals(requiredUuid(payload, "mediaId"))
+        || !"IMAGE".equals(requiredText(payload, "kind"))) {
+      throw new IllegalArgumentException("Некорректная фотография смены");
+    }
+    UUID shiftId = requiredUuid(payload, "ownerId");
+    UUID evidenceId = requiredUuid(payload, "clientReferenceId");
+    UUID warehouseId = requiredUuid(payload, "warehouseId");
+    JsonNode actor = requiredObject(envelope, "actorRef");
+    if (!"WORKER".equals(requiredText(actor, "principalType"))) {
+      throw new IllegalArgumentException("Media event не принадлежит водителю");
+    }
+    UUID driverId = requiredUuid(actor, "subjectId");
+    long aggregateVersion = envelope.required("aggregateVersion").longValue();
+    if (aggregateVersion < 1) {
+      throw new IllegalArgumentException("Некорректная версия media event");
+    }
+    Long generation = mediaGeneration(eventType, payload);
+    String expectedStatus =
+        switch (eventType) {
+          case "media.media.uploaded.v1" -> "PROCESSING";
+          case "media.media.ready.v1" -> "READY";
+          case "media.media.failed.v1" -> "FAILED";
+          default -> throw new IllegalArgumentException("Unsupported media event");
+        };
+    if (!expectedStatus.equals(requiredText(payload, "status"))) {
+      throw new IllegalArgumentException("Media event status не соответствует типу события");
+    }
+
+    int inserted =
+        jdbc.update(
+            """
+            insert into driver_shift_media_event_inbox(
+                event_id,media_id,aggregate_version,event_type,shift_id,evidence_id,
+                warehouse_id,actor_worker_id,media_generation,body_sha256,status,received_at)
+            values (?,?,?,?,?,?,?,?,?,?,'PENDING',clock_timestamp())
+            on conflict do nothing
+            """,
+            eventId,
+            mediaId,
+            aggregateVersion,
+            eventType,
+            shiftId,
+            evidenceId,
+            warehouseId,
+            driverId,
+            generation,
+            TaskBoardEventStore.sha256(body));
+    if (inserted == 1) {
+      applyDriverShift(eventId);
+    }
+  }
+
+  private void applyDriverShift(UUID eventId) {
+    List<DriverShiftInboxRow> rows =
+        jdbc.query(
+            """
+            select *
+              from driver_shift_media_event_inbox
+             where event_id=? and status='PENDING'
+             for update
+            """,
+            (result, row) ->
+                new DriverShiftInboxRow(
+                    result.getObject("event_id", UUID.class),
+                    result.getObject("media_id", UUID.class),
+                    result.getString("event_type"),
+                    result.getObject("shift_id", UUID.class),
+                    result.getObject("evidence_id", UUID.class),
+                    result.getObject("warehouse_id", UUID.class),
+                    result.getObject("actor_worker_id", UUID.class),
+                    result.getObject("media_generation") == null
+                        ? null
+                        : result.getLong("media_generation")),
+            eventId);
+    if (rows.isEmpty()) {
+      return;
+    }
+    DriverShiftInboxRow event = rows.getFirst();
+    List<Map<String, Object>> reservations =
+        jdbc.queryForList(
+            """
+            select shift_id,driver_id,warehouse_id
+              from driver_shift_photo
+             where evidence_id=?
+             for update
+            """,
+            event.evidenceId());
+    if (reservations.isEmpty()) {
+      return;
+    }
+    Map<String, Object> reservation = reservations.getFirst();
+    if (!event.shiftId().equals(reservation.get("shift_id"))
+        || !event.warehouseId().equals(reservation.get("warehouse_id"))
+        || !event.driverId().equals(reservation.get("driver_id"))) {
+      finishShiftInbox(event.eventId(), "REJECTED", "EVIDENCE_OWNER_MISMATCH");
+      return;
+    }
+    if ("media.media.uploaded.v1".equals(event.eventType())) {
+      jdbc.update(
+          """
+          update driver_shift_photo
+             set version=version+1,state='PROCESSING',media_id=?
+           where evidence_id=?
+          """,
+          event.mediaId(),
+          event.evidenceId());
+      finishShiftInbox(event.eventId(), "APPLIED", null);
+      return;
+    }
+    if ("media.media.failed.v1".equals(event.eventType())) {
+      jdbc.update(
+          """
+          update driver_shift_photo
+             set version=version+1,state='REVIEW_REQUIRED',media_id=?,
+                 media_generation=null,review_reason=?
+           where evidence_id=?
+          """,
+          event.mediaId(),
+          "Сервер не смог обработать фотографию. Повторите съёмку.",
+          event.evidenceId());
+      finishShiftInbox(event.eventId(), "APPLIED", null);
+      return;
+    }
+    if (event.mediaGeneration() == null) {
+      finishShiftInbox(event.eventId(), "REJECTED", "MEDIA_GENERATION_MISSING");
+      return;
+    }
+    jdbc.update(
+        """
+        update driver_shift_photo
+           set version=version+1,state='READY',media_id=?,media_generation=?,review_reason=null
+         where evidence_id=?
+        """,
+        event.mediaId(),
+        event.mediaGeneration(),
+        event.evidenceId());
+    finishShiftInbox(event.eventId(), "APPLIED", null);
+  }
+
+  private void finishShiftInbox(UUID eventId, String status, String failureCode) {
+    jdbc.update(
+        """
+        update driver_shift_media_event_inbox
+           set status=?,failure_code=?,processed_at=clock_timestamp()
+         where event_id=? and status='PENDING'
+        """,
+        status,
+        failureCode,
+        eventId);
   }
 
   private void apply(UUID eventId) {
@@ -357,4 +546,15 @@ public class WorkerMediaEventProcessor {
       OffsetDateTime capturedAt,
       String sourceType,
       UUID sourceId) {}
+
+  /** Safe fields retained from one driver-shift media event awaiting correlation. */
+  private record DriverShiftInboxRow(
+      UUID eventId,
+      UUID mediaId,
+      String eventType,
+      UUID shiftId,
+      UUID evidenceId,
+      UUID warehouseId,
+      UUID driverId,
+      Long mediaGeneration) {}
 }

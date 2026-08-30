@@ -29,6 +29,10 @@ class TaskBoardKafkaOutputChannelsConfiguration {
   MessageChannel groupKpiDay() {
     return channel();
   }
+  @Bean(name = "rwms.task-board.driver-shift-owner-proof.v1")
+  MessageChannel driverShiftOwnerProof() {
+    return channel();
+  }
   @Bean(name = "rwms.task-board.worker-class.v1.task-board-shadow-v1.dlt") MessageChannel workerClassDlt() { return channel(); }
   @Bean(name = "rwms.task-board.worker.v1.task-board-shadow-v1.dlt") MessageChannel workerDlt() { return channel(); }
   @Bean(name = "rwms.task-board.worker-group.v1.task-board-shadow-v1.dlt") MessageChannel workerGroupDlt() { return channel(); }
@@ -46,6 +50,10 @@ class TaskBoardKafkaOutputChannelsConfiguration {
   }
   @Bean(name = "rwms.task-board.group-kpi-day.v1.task-board-shadow-v1.dlt")
   MessageChannel groupKpiDayDlt() {
+    return channel();
+  }
+  @Bean(name = "rwms.task-board.driver-shift-owner-proof.v1.task-board-shadow-v1.dlt")
+  MessageChannel driverShiftOwnerProofDlt() {
     return channel();
   }
 

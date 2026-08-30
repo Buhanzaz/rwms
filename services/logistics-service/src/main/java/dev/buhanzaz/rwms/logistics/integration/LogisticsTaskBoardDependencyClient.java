@@ -20,6 +20,9 @@ import org.springframework.core.ParameterizedTypeReference;
 final class LogisticsTaskBoardDependencyClient {
   private static final String TASK_BOARD_CLIENT = "logistics-task-board";
   private static final String TASK_BOARD_SCOPE = "task-board.logistics";
+  static final String DRIVER_SHIFT_PLAN_CLIENT =
+      "logistics-task-board-driver-shift-plan";
+  static final String DRIVER_SHIFT_PLAN_SCOPE = "task-board.driver-shifts.plan";
 
   private final LogisticsOAuthHttpTransport transport;
   private final String taskBoardBase;
@@ -28,6 +31,7 @@ final class LogisticsTaskBoardDependencyClient {
   private final String taskBoardDriverBase;
   private final String taskBoardDriverTaskBase;
   private final String taskBoardOperationalAssignmentBase;
+  private final String taskBoardDriverShiftPlanBase;
 
   LogisticsTaskBoardDependencyClient(LogisticsOAuthHttpTransport transport, String taskBoardBase) {
     this.transport = transport;
@@ -39,6 +43,8 @@ final class LogisticsTaskBoardDependencyClient {
     taskBoardDriverTaskBase = taskBoardBase + "/api/internal/task-board/v1/logistics/tasks";
     taskBoardOperationalAssignmentBase =
         taskBoardBase + "/api/internal/task-board/v1/logistics/operational-assignments";
+    taskBoardDriverShiftPlanBase =
+        taskBoardBase + "/api/internal/task-board/v1/driver-shift-plans";
   }
 
   List<WarehouseDriverIdentity> listWarehouseDrivers(UUID warehouseId) {
@@ -84,6 +90,21 @@ final class LogisticsTaskBoardDependencyClient {
                     value.availableUntil(),
                     value.availabilityKind()))
         .toList();
+  }
+
+  /** Publishes one exact planner snapshot with a dedicated least-privilege service token. */
+  void registerDriverShiftPlan(
+      UUID idempotencyKey, UUID sourceShiftId, DriverShiftPlanSnapshot plan) {
+    if (idempotencyKey == null || sourceShiftId == null || plan == null) {
+      throw new IllegalArgumentException("Driver shift plan command identity is required");
+    }
+    transport.putBodiless(
+        taskBoardDriverShiftPlanBase + "/" + sourceShiftId,
+        idempotencyKey,
+        plan,
+        DRIVER_SHIFT_PLAN_CLIENT,
+        DRIVER_SHIFT_PLAN_SCOPE,
+        DEFAULT);
   }
 
   WorkerOperationalAssignment createWorkerOperationalAssignment(

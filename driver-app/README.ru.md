@@ -62,6 +62,40 @@ WorkerApp. Для задания `LOGISTICS_DRIVER` завершение тре�
 Проекцией по датам владеет
 [`LogisticsScreen.kt`](feature-tasks/src/main/java/dev/buhanzaz/rwms/driver/feature/tasks/LogisticsScreen.kt).
 
+## Ежедневная смена водителя
+
+После аутентификации DriverApp загружает одну серверную смену для рабочей даты
+склада водителя. Часовой пояс склада и границу рабочего дня 06:00 task-board
+получает через warehouse-service; Android не вычисляет авторитетную рабочую
+дату и не двигает workflow локальными boolean. Проекция
+`nextRequiredAction` последовательно ведёт водителя через одноразовый daily
+briefing, тестовое самостоятельное подтверждение медосмотра, осмотр автомобиля
+по серверному шаблону, существующие экраны заданий, возврат на склад, финальный
+отчёт о машине, пробег, топливо, необязательные либо обязательные для дефекта
+фото и окончательное закрытие. Закрытая смена остаётся закрытой до следующей
+рабочей даты склада.
+
+Daily briefing использует существующий профиль водителя и snapshot назначенного
+склада. Task-board нормализует погоду из MET Norway и кэширует её по округлённым
+координатам склада; timeout или ошибка провайдера показывают недоступность
+данных и никогда не блокируют работу. Пробки предоставляет заменяемый
+`TrafficBriefingProvider` на документированных traffic layer и `TrafficLevel`
+Yandex MapKit; его ошибка также не блокирует смену. Driver Up фиксирует lite-ветку
+`4.7.0` и показывает её настоящий неинтерактивный traffic `MapView`, поэтому
+сохраняется прежний минимум Android 6.0/API 23 вместо незаметного перехода на
+API 26, который требуют более новые выпуски MapKit. Существующий клиентский
+ключ MapKit при сборке читается из защищённого файла
+`/var/lib/rwms-secrets/customer-app/mapkit.properties` либо из явно переданного
+`-PmapkitPropertiesFile` и не хранится в Git. Маршрутизация и задержка маршрута
+намеренно не входят в этот релиз.
+
+Результат каждого пункта осмотра имеет состояние `NOT_CHECKED`, `OK` или
+`DEFECT`. Дефект сохраняется до резервирования его фото, блокирующий дефект не
+даёт начать смену, а closing screen ждёт авторитетного состояния media `READY`
+для обязательных фото перед включением закрытия. Реализация и UI находятся в
+`feature-shift/`, а переиспользуемая камера/загрузка остаётся в
+`feature-camera/` и `core-media/`.
+
 ## Аутентификация и публичные API
 
 Публичный PKCE-клиент — `rwms-driver-android` со scopes
@@ -81,6 +115,12 @@ WorkerApp. Для задания `LOGISTICS_DRIVER` завершение тре�
 и
 [`DriverGatewayApi.kt`](core-network/src/main/java/dev/buhanzaz/rwms/driver/core/network/DriverGatewayApi.kt).
 
+Стартовый запрос смены — `GET /api/task-board/driver/v1/shift/today`; все
+команды briefing, медосмотра, инспекции, старта, closing и закрытия находятся
+под `/api/task-board/driver/v1/shifts/{shiftId}/**`. Мутации передают стабильный
+`Idempotency-Key` и ожидаемую версию aggregate. Публичный gateway только
+маршрутизирует эти вызовы; владельцем workflow остаётся task-board.
+
 ## Офлайн-работа, камера и загрузки
 
 Room хранит авторизованную проекцию и транзакционный локальный outbox.
@@ -90,6 +130,14 @@ WorkManager повторяет допустимые временные ошиб�
 их не теряет. CameraX нормализует EXIF-ориентацию и применяет существующие
 ограничения размера/разрешения. После reconnect или конфликта серверное
 состояние остаётся авторитетным.
+
+Room также хранит snapshot смены, текущий прогресс осмотра и closing draft,
+поэтому после process death открывается точный требуемый сервером экран и
+восстанавливаются введённые данные закрытия. Критические команды долговечно
+ставятся в очередь со стабильным operation ID, но переходы, требующие
+серверного разрешения, не показываются завершёнными до подтверждения
+task-board. Поэтому queued close не создаёт ложный `SHIFT_CLOSED`, а перед
+повтором обязательные media ещё раз проверяются.
 
 Если старая версия приложения сняла фото до `TAKE` и сервер поэтому отклонил
 его резервирование, последующий `TAKE` или `RESUME` атомарно ставит тот же
@@ -128,7 +176,9 @@ cd driver-app
 JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew \
   :core-auth:testDebugUnitTest \
   :core-network:testDebugUnitTest \
+  :core-database:testDebugUnitTest \
   :feature-task-detail:testDebugUnitTest \
+  :feature-shift:testDebugUnitTest \
   :core-sync:testDebugUnitTest \
   :app:testDebugUnitTest
 JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew :app:assembleDebug

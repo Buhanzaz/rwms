@@ -1206,6 +1206,47 @@ class RwmsPlanningAssignment(RwmsApiModel):
         return self
 
 
+class RwmsDriverShiftPlanVehicle(RwmsApiModel):
+    """Immutable planner vehicle identity attached to one Driver Up workday."""
+
+    id: UUID
+    name: NonBlank = Field(max_length=200)
+    registration_number: NonBlank = Field(alias="registrationNumber", max_length=64)
+    vehicle_type: str | None = Field(default=None, alias="vehicleType", max_length=64)
+    manufacturer: str | None = Field(default=None, max_length=100)
+    model: str | None = Field(default=None, max_length=100)
+    configuration_type: Literal[
+        "TRUCK", "TRUCK_WITH_TRAILER", "TRUCK_WITH_CRANE"
+    ] = Field(alias="configurationType")
+    start_odometer: int | None = Field(default=None, alias="startOdometer", ge=0)
+
+
+class RwmsDriverShiftPlanTrailer(RwmsApiModel):
+    """Optional immutable trailer identity attached to a planned driver workday."""
+
+    id: UUID
+    name: NonBlank = Field(max_length=200)
+    registration_number: NonBlank = Field(alias="registrationNumber", max_length=64)
+
+
+class RwmsDriverShiftPlan(RwmsApiModel):
+    """One driver/vehicle snapshot with an exact int64 meter total from a plan version."""
+
+    source_shift_id: UUID = Field(alias="sourceShiftId")
+    source_plan_id: UUID = Field(alias="sourcePlanId")
+    source_plan_version: int = Field(alias="sourcePlanVersion", ge=1)
+    warehouse_id: UUID = Field(alias="warehouseId")
+    driver_id: UUID = Field(alias="driverId")
+    driver_name: NonBlank = Field(alias="driverName", max_length=256)
+    work_date: date = Field(alias="workDate")
+    vehicle: RwmsDriverShiftPlanVehicle
+    trailer: RwmsDriverShiftPlanTrailer | None = None
+    trip_count: int = Field(alias="tripCount", ge=0)
+    route_distance_meters: int = Field(
+        alias="routeDistanceMeters", ge=0, le=9_223_372_036_854_775_807
+    )
+
+
 class RwmsAssignmentsCommand(RwmsApiModel):
     """Idempotent plan-version assignment command sent to RWMS."""
 
@@ -1213,6 +1254,9 @@ class RwmsAssignmentsCommand(RwmsApiModel):
     plan_id: UUID = Field(alias="planId")
     plan_version: int = Field(alias="planVersion", ge=1)
     assignments: list[RwmsPlanningAssignment]
+    driver_shift_plans: list[RwmsDriverShiftPlan] = Field(
+        default_factory=list, alias="driverShiftPlans"
+    )
 
 
 class RwmsAppliedAssignment(RwmsApiModel):

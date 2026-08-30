@@ -226,7 +226,7 @@ func TestInventoryCabinPhotosContractIsClosedAndExactlyServiceScoped(t *testing.
 	}
 }
 
-func TestTaskEvidenceContractRequiresOneWorkerOrDriverScope(t *testing.T) {
+func TestWorkerEvidenceContractRequiresCanonicalTaskOrDriverScope(t *testing.T) {
 	root := repositoryRoot(t)
 	var document map[string]any
 	if err := yaml.Unmarshal(readContract(t, filepath.Join(root, "contracts", "openapi", "media-service.yaml")), &document); err != nil {
@@ -234,9 +234,35 @@ func TestTaskEvidenceContractRequiresOneWorkerOrDriverScope(t *testing.T) {
 	}
 	upload := objectAt(t, objectAt(t, objectAt(t, document, "paths"), "/api/media/v1/upload-sessions"), "post")
 	description := stringAt(t, upload, "description")
-	for _, required := range []string{"WORKER", "exactly one", "worker.tasks", "driver.tasks", "worker_id"} {
+	for _, required := range []string{
+		"WORKER", "exactly one", "worker.tasks", "driver.tasks", "worker_id",
+		"DRIVER_SHIFT/SHIFT_EVIDENCE", "specifically driver.tasks",
+	} {
 		if !strings.Contains(description, required) {
 			t.Fatalf("upload authorization description %q does not contain %q", description, required)
+		}
+	}
+	clientReference := objectAt(t, objectAt(t,
+		objectAt(t, objectAt(t, document, "components"), "schemas"), "CreateUploadSessionRequest"), "properties")
+	clientReferenceDescription := stringAt(t, objectAt(t, clientReference, "clientReferenceId"), "description")
+	for _, required := range []string{"driver-shift reservation evidenceId", "same UUID as Idempotency-Key"} {
+		if !strings.Contains(clientReferenceDescription, required) {
+			t.Fatalf("clientReferenceId description %q does not contain %q", clientReferenceDescription, required)
+		}
+	}
+	paths := objectAt(t, document, "paths")
+	for _, path := range []string{
+		"/api/media/v1/assets",
+		"/api/media/v1/assets/{mediaId}/original",
+		"/api/media/v1/assets/{mediaId}/variants/{variant}/content",
+	} {
+		readDescription := stringAt(t, objectAt(t, objectAt(t, paths, path), "get"), "description")
+		for _, required := range []string{
+			"DRIVER_SHIFT/SHIFT_EVIDENCE", "driver.tasks", "worker_id", "readerWorkerIds", "fails closed",
+		} {
+			if !strings.Contains(readDescription, required) {
+				t.Fatalf("%s read authorization description %q does not contain %q", path, readDescription, required)
+			}
 		}
 	}
 }
@@ -339,12 +365,13 @@ func TestPublicMediaContractExposesAllCanonicalOwnerScopes(t *testing.T) {
 		"INVENTORY_FINDING", "CABIN", "MAINTENANCE_ESTIMATE", "MAINTENANCE_REPAIR",
 		"MAINTENANCE_ACCEPTANCE", "MAINTENANCE_CATALOG_NODE", "LOGISTICS_RETURN",
 		"LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER", "LOGISTICS_CUSTOMER_PROFILE", "TASK_BOARD_ENTRY",
+		"DRIVER_SHIFT",
 	}) {
 		t.Fatalf("media owner types = %#v", got)
 	}
 	if got := stringSliceAt(t, ownerContext, "enum"); !equalStrings(got, []string{
 		"INSPECTION", "WAREHOUSE", "ESTIMATE", "REPAIR", "ACCEPTANCE", "CATALOG",
-		"RETURN_INSPECTION", "SHIPMENT", "TRANSFER", "PROFILE_AVATAR", "WORK_RESULT",
+		"RETURN_INSPECTION", "SHIPMENT", "TRANSFER", "PROFILE_AVATAR", "WORK_RESULT", "SHIFT_EVIDENCE",
 	}) {
 		t.Fatalf("media owner contexts = %#v", got)
 	}
@@ -365,7 +392,7 @@ func TestPublicMediaContractExposesAllCanonicalOwnerScopes(t *testing.T) {
 		t.Fatal("media asset folderId must be required")
 	}
 	pairs, ok := upload["oneOf"].([]any)
-	if !ok || len(pairs) != 11 {
+	if !ok || len(pairs) != 12 {
 		t.Fatalf("upload owner scope pairs = %#v", upload["oneOf"])
 	}
 	wire, err := json.Marshal(pairs)
@@ -384,6 +411,7 @@ func TestPublicMediaContractExposesAllCanonicalOwnerScopes(t *testing.T) {
 		`"ownerType":{"const":"LOGISTICS_TRANSFER"}`, `"context":{"const":"TRANSFER"}`,
 		`"ownerType":{"const":"LOGISTICS_CUSTOMER_PROFILE"}`, `"context":{"const":"PROFILE_AVATAR"}`,
 		`"ownerType":{"const":"TASK_BOARD_ENTRY"}`, `"context":{"const":"WORK_RESULT"}`,
+		`"ownerType":{"const":"DRIVER_SHIFT"}`, `"context":{"const":"SHIFT_EVIDENCE"}`,
 	} {
 		if !strings.Contains(string(wire), required) {
 			t.Errorf("upload owner scope pairs do not contain %s: %s", required, wire)
@@ -588,6 +616,7 @@ func TestLegacyUnionSchemaCarriesTheExpandedOwnerEnum(t *testing.T) {
 		"INVENTORY_FINDING", "CABIN", "MAINTENANCE_ESTIMATE", "MAINTENANCE_REPAIR",
 		"MAINTENANCE_ACCEPTANCE", "MAINTENANCE_CATALOG_NODE", "LOGISTICS_RETURN",
 		"LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER", "LOGISTICS_CUSTOMER_PROFILE", "TASK_BOARD_ENTRY",
+		"DRIVER_SHIFT",
 	}) {
 		t.Fatalf("legacy union media owner types = %#v", got)
 	}

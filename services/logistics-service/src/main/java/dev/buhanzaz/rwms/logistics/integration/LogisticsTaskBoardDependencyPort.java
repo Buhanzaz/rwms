@@ -7,6 +7,7 @@ import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskWorkerContent;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.DriverBoardSnapshot;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.DriverBoardTask;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.DriverCompletionEvidence;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.DriverShiftPlanSnapshot;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.DriverTaskAudience;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.DriverTaskPreStartCancellation;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.EquipmentMovementBoardTask;
@@ -33,6 +34,12 @@ interface LogisticsTaskBoardDependencyPort {
   default List<WarehouseDriverIdentity> listWarehouseDrivers(
       UUID warehouseId, OffsetDateTime at, boolean includeIncoming) {
     return listWarehouseDrivers(warehouseId);
+  }
+
+  /** Creates, updates, or exactly replays one planner-owned driver workday snapshot. */
+  default void registerDriverShiftPlan(
+      UUID idempotencyKey, UUID sourceShiftId, DriverShiftPlanSnapshot plan) {
+    throw unavailable("Driver shift plan registration is not configured");
   }
 
   /** Creates or exactly replays one transfer-backed operational driver assignment. */

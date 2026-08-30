@@ -102,6 +102,49 @@ class WarehouseAuthorizerTest {
   }
 
   @Test
+  void taskBoardIdentityContractRequiresMatchingServiceAndItsSinglePurposeScope() {
+    WarehouseAuthorizer authorizer = new WarehouseAuthorizer(new MockEnvironment(), false);
+
+    authorizer.requireInternalTaskBoardIdentityReader(
+        jwt(
+            "SERVICE",
+            "warehouse.identity.read",
+            null,
+            "task-board-service",
+            "task-board-service"));
+    for (Jwt invalid :
+        new Jwt[] {
+          jwt(
+              "SERVICE",
+              "warehouse.identity.read warehouse.read",
+              null,
+              "task-board-service",
+              "task-board-service"),
+          jwt(
+              "SERVICE",
+              "warehouse.read",
+              null,
+              "task-board-service",
+              "task-board-service"),
+          jwt(
+              "SERVICE",
+              "warehouse.identity.read",
+              null,
+              "logistics-service",
+              "task-board-service"),
+          jwt(
+              "USER",
+              "warehouse.identity.read",
+              null,
+              "task-board-service",
+              "task-board-service")
+        }) {
+      assertThatThrownBy(() -> authorizer.requireInternalTaskBoardIdentityReader(invalid))
+          .isInstanceOf(AccessDeniedException.class);
+    }
+  }
+
+  @Test
   void timezoneHistoryAllowsEveryCalendarOwnerButOperationMarksStayNarrow() {
     WarehouseAuthorizer authorizer = new WarehouseAuthorizer(new MockEnvironment(), false);
 
@@ -226,6 +269,8 @@ class WarehouseAuthorizerTest {
     assertThatThrownBy(() -> authorizer.requireInternalInventoryService(null))
         .isInstanceOf(AccessDeniedException.class);
     assertThatThrownBy(() -> authorizer.requireInternalLogisticsService(null))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> authorizer.requireInternalTaskBoardIdentityReader(null))
         .isInstanceOf(AccessDeniedException.class);
     assertThatThrownBy(() -> authorizer.requireInternalTimeZoneReader(null))
         .isInstanceOf(AccessDeniedException.class);

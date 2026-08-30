@@ -49,6 +49,7 @@ class AuthLogisticsServiceClientIntegrationTest {
         assertExactToken("warehouse.lifecycle.confirm");
         assertExactToken("asset.logistics");
         assertExactToken("task-board.logistics");
+        assertExactToken("task-board.driver-shifts.plan");
         assertExactToken("maintenance.logistics");
         assertExactToken("media.logistics");
     }

@@ -49,6 +49,8 @@ type Config struct {
 	CabinOwnerGroup               string
 	TaskBoardEntryOwnerProofTopic string
 	TaskBoardEntryOwnerProofGroup string
+	DriverShiftOwnerProofTopic    string
+	DriverShiftOwnerProofGroup    string
 	InstanceID                    string
 }
 
@@ -85,6 +87,10 @@ func Load() (Config, error) {
 			"MEDIA_KAFKA_TASK_BOARD_ENTRY_OWNER_PROOF_TOPIC", "rwms.task-board.entry-owner-proof.v1"),
 		TaskBoardEntryOwnerProofGroup: value(
 			"MEDIA_KAFKA_TASK_BOARD_ENTRY_OWNER_PROOF_GROUP", "media-service-task-board-entry-owner-proof-v1"),
+		DriverShiftOwnerProofTopic: value(
+			"MEDIA_KAFKA_DRIVER_SHIFT_OWNER_PROOF_TOPIC", "rwms.task-board.driver-shift-owner-proof.v1"),
+		DriverShiftOwnerProofGroup: value(
+			"MEDIA_KAFKA_DRIVER_SHIFT_OWNER_PROOF_GROUP", "media-service-driver-shift-owner-proof-v1"),
 		InstanceID:        os.Getenv("MEDIA_INSTANCE_ID"),
 		FFmpegExecutable:  value("MEDIA_FFMPEG_EXECUTABLE", "ffmpeg"),
 		FFprobeExecutable: value("MEDIA_FFPROBE_EXECUTABLE", "ffprobe"),
@@ -178,6 +184,10 @@ func Load() (Config, error) {
 	if configuration.TaskBoardEntryOwnerProofTopic != "rwms.task-board.entry-owner-proof.v1" ||
 		configuration.TaskBoardEntryOwnerProofGroup != "media-service-task-board-entry-owner-proof-v1" {
 		return Config{}, fmt.Errorf("task-board entry owner proof Kafka topic and group must match the canonical contracts")
+	}
+	if configuration.DriverShiftOwnerProofTopic != "rwms.task-board.driver-shift-owner-proof.v1" ||
+		configuration.DriverShiftOwnerProofGroup != "media-service-driver-shift-owner-proof-v1" {
+		return Config{}, fmt.Errorf("driver-shift owner proof Kafka topic and group must match the canonical contracts")
 	}
 	if !validInstanceID(configuration.InstanceID) {
 		return Config{}, fmt.Errorf("MEDIA_INSTANCE_ID must be 1-64 safe ASCII characters")

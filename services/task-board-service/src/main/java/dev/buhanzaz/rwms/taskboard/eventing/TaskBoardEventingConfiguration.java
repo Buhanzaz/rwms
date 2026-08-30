@@ -64,6 +64,7 @@ final class TaskBoardPayloadSafetyValidator implements RwmsKafkaPayloadSafetyVal
       case TASK_BOARD_ENTRY_OWNER_PROOF -> "ownerId";
       case TASK_EVIDENCE -> "evidenceId";
       case GROUP_KPI_DAY -> "evidenceId";
+      case DRIVER_SHIFT_OWNER_PROOF -> "ownerId";
     };
     JsonNode identity = payload.get(idField);
     if (identity == null || !identity.isTextual())

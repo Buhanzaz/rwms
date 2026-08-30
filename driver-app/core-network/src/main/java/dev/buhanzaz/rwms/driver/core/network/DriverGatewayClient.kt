@@ -26,6 +26,50 @@ class DriverGatewayClient @Inject constructor(
     private val api: DriverGatewayApi,
     private val json: Json,
 ) {
+    suspend fun todayDriverShift(): TodayDriverShiftDto = api.todayDriverShift().bodyOrProblem(json)
+
+    suspend fun markShiftBriefingSeen(shiftId: String, request: ShiftTransitionRequestDto): TodayDriverShiftDto =
+        api.markShiftBriefingSeen(shiftId, request.operationId, request).bodyOrProblem(json)
+
+    suspend fun confirmShiftMedicalCheck(
+        shiftId: String,
+        request: ConfirmMedicalCheckRequestDto,
+    ): TodayDriverShiftDto = api.confirmShiftMedicalCheck(shiftId, request.operationId, request).bodyOrProblem(json)
+
+    suspend fun updateShiftInspectionItem(
+        shiftId: String,
+        itemId: String,
+        request: UpdateInspectionItemRequestDto,
+    ): TodayDriverShiftDto =
+        api.updateShiftInspectionItem(shiftId, itemId, request.operationId, request).bodyOrProblem(json)
+
+    suspend fun completeShiftInspection(shiftId: String, request: ShiftTransitionRequestDto): TodayDriverShiftDto =
+        api.completeShiftInspection(shiftId, request.operationId, request).bodyOrProblem(json)
+
+    suspend fun startShift(shiftId: String, request: ShiftTransitionRequestDto): TodayDriverShiftDto =
+        api.startShift(shiftId, request.operationId, request).bodyOrProblem(json)
+
+    suspend fun startShiftClosing(shiftId: String, request: ShiftTransitionRequestDto): TodayDriverShiftDto =
+        api.startShiftClosing(shiftId, request.operationId, request).bodyOrProblem(json)
+
+    suspend fun confirmShiftWarehouseReturn(
+        shiftId: String,
+        request: ReturnToWarehouseRequestDto,
+    ): TodayDriverShiftDto =
+        api.confirmShiftWarehouseReturn(shiftId, request.operationId, request).bodyOrProblem(json)
+
+    suspend fun submitShiftClosingReport(
+        shiftId: String,
+        request: SubmitClosingReportRequestDto,
+    ): TodayDriverShiftDto =
+        api.submitShiftClosingReport(shiftId, request.operationId, request).bodyOrProblem(json)
+
+    suspend fun reserveShiftPhoto(shiftId: String, request: ReserveShiftPhotoRequestDto): TodayDriverShiftDto =
+        api.reserveShiftPhoto(shiftId, request.operationId, request).bodyOrProblem(json)
+
+    suspend fun closeShift(shiftId: String, request: ShiftTransitionRequestDto): TodayDriverShiftDto =
+        api.closeShift(shiftId, request.operationId, request).bodyOrProblem(json)
+
     suspend fun context(): DriverContextDto = api.driverContext().bodyOrProblem(json)
 
     suspend fun feed(cursor: String? = null, etag: String? = null): DriverFeedResponse {

@@ -60,4 +60,12 @@ public class InternalWarehouseController {
     access.requireInternalAssetService(jwt);
     return service.existence(id);
   }
+
+  /** Returns the metadata and timezone needed by task-board's warehouse-local driver shift. */
+  @GetMapping("/{id}/identity")
+  public InternalWarehouseIdentityResponse identity(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID id) {
+    access.requireInternalTaskBoardIdentityReader(jwt);
+    return service.internalIdentity(id);
+  }
 }

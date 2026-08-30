@@ -10,6 +10,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.activity.result.contract.ActivityResultContracts
+import com.yandex.mapkit.MapKitFactory
 import dagger.hilt.android.AndroidEntryPoint
 import dev.buhanzaz.rwms.driver.feature.camera.VolumeShutterHost
 
@@ -27,10 +28,21 @@ class MainActivity : ComponentActivity(), VolumeShutterHost {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        MapKitFactory.initialize(this)
         requestNotificationsIfNeeded()
         setContent {
             DriverApp(appViewModel = appViewModel)
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        MapKitFactory.getInstance().onStart()
+    }
+
+    override fun onStop() {
+        MapKitFactory.getInstance().onStop()
+        super.onStop()
     }
 
     private fun requestNotificationsIfNeeded() {

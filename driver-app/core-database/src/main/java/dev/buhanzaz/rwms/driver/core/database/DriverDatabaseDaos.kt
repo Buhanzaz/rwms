@@ -184,6 +184,7 @@ interface TaskEvidenceDao {
         SELECT * FROM task_evidence
         WHERE userId = :userId
           AND entryId = :entryId
+          AND ownerType = 'TASK_BOARD_ENTRY'
           AND state = 'REVIEW_REQUIRED'
           AND mediaId IS NULL
         ORDER BY createdAtEpochMillis, evidenceId
@@ -191,8 +192,11 @@ interface TaskEvidenceDao {
     )
     suspend fun recoverableReviewEvidence(userId: String, entryId: String): List<TaskEvidenceEntity>
 
-    @Query("SELECT COUNT(*) FROM task_evidence WHERE userId = :userId AND entryId = :entryId AND state = 'READY'")
+    @Query("SELECT COUNT(*) FROM task_evidence WHERE userId = :userId AND entryId = :entryId AND ownerType = 'TASK_BOARD_ENTRY' AND state = 'READY'")
     suspend fun readyCount(userId: String, entryId: String): Int
+
+    @Query("SELECT * FROM task_evidence WHERE userId = :userId AND entryId = :shiftId AND ownerType = 'DRIVER_SHIFT' ORDER BY createdAtEpochMillis")
+    fun observeShiftEvidence(userId: String, shiftId: String): Flow<List<TaskEvidenceEntity>>
 
     @Query("SELECT * FROM task_evidence WHERE userId = :userId ORDER BY createdAtEpochMillis DESC")
     fun observeAll(userId: String): Flow<List<TaskEvidenceEntity>>
@@ -229,6 +233,41 @@ interface TaskEvidenceDao {
         entryId: String,
         now: Long,
     ): Int
+}
+
+/** Reads and replaces the last server-driven daily-shift startup aggregate. */
+@Dao
+interface DriverShiftSnapshotDao {
+    @Upsert
+    suspend fun upsert(snapshot: DriverShiftSnapshotEntity)
+
+    @Query("SELECT * FROM driver_shift_snapshot WHERE userId = :userId")
+    suspend fun snapshot(userId: String): DriverShiftSnapshotEntity?
+
+    @Query("SELECT * FROM driver_shift_snapshot WHERE userId = :userId")
+    fun observe(userId: String): Flow<DriverShiftSnapshotEntity?>
+
+    @Query("DELETE FROM driver_shift_snapshot WHERE userId = :userId")
+    suspend fun deleteForUser(userId: String)
+}
+
+/** Persists the unfinished closing wizard independently from the server projection. */
+@Dao
+interface DriverShiftDraftDao {
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIfAbsent(draft: DriverShiftDraftEntity): Long
+
+    @Upsert
+    suspend fun upsert(draft: DriverShiftDraftEntity)
+
+    @Query("SELECT * FROM driver_shift_draft WHERE userId = :userId AND shiftId = :shiftId LIMIT 1")
+    suspend fun draft(userId: String, shiftId: String): DriverShiftDraftEntity?
+
+    @Query("SELECT * FROM driver_shift_draft WHERE userId = :userId AND shiftId = :shiftId LIMIT 1")
+    fun observe(userId: String, shiftId: String): Flow<DriverShiftDraftEntity?>
+
+    @Query("DELETE FROM driver_shift_draft WHERE userId = :userId AND shiftId = :shiftId")
+    suspend fun delete(userId: String, shiftId: String)
 }
 
 @Dao

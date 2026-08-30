@@ -1,15 +1,15 @@
 {
   "applicationName": "RWMS Driver",
   "packageName": "dev.buhanzaz.rwms.driver.debug",
-  "versionCode": 20,
-  "versionName": "0.1.19-debug",
+  "versionCode": 21,
+  "versionName": "0.1.20-debug",
   "status": "published",
   "minimumAndroidVersion": "Android 6.0",
   "publicGateway": "https://77-90-158-90.sslip.io",
-  "artifactPath": "/downloads/rwms-driver-0.1.19-debug.apk",
-  "downloadUrl": "https://77-90-158-90.sslip.io/downloads/rwms-driver-0.1.19-debug.apk",
-  "sha256": "fe1d94195a61deaddaa474376b8ea23ba3dc022e21a506bd607b6f1155cd0bca",
-  "publishedAt": "2026-08-29",
-  "sourceRevision": "c2e3b7c74412e65cad18c7f2699aa6cf5e46cb7f",
-  "applicationDiffSha256": "ab76cd3f141aec018de4ec871b97c39ed7e7b08468dcca57ffee072a53df2e04"
+  "artifactPath": "/downloads/rwms-driver-0.1.20-debug.apk",
+  "downloadUrl": "https://77-90-158-90.sslip.io/downloads/rwms-driver-0.1.20-debug.apk",
+  "sha256": "99dbdb7d0093e48e88c6fd0a73505b58b00205c22a6faa7394e1d8e3fb11c1c5",
+  "publishedAt": "2026-08-30",
+  "sourceRevision": "d85031347d9c90ae3d304167aeafa012acd7d530",
+  "applicationDiffSha256": "0a20d2e1a8f4895d9a35113ad5451ff75fac2242d85194e3f6cbb1f305cab9ff"
 }

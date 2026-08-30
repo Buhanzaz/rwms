@@ -193,6 +193,13 @@ scope на токен. Revision 5 добавила `media.inventory` для пе
 `inventory-service`, audience — `rwms-services`. Asset, maintenance, media,
 logistics и warehouse scopes по-прежнему запрашиваются отдельными токенами.
 
+Revision 4 managed machine client `task-board-service` добавляет только
+`warehouse.identity.read`, чтобы владелец смены Driver Up получал актуальные название, город,
+timezone и координаты склада через private boundary warehouse. Revision 7 client
+`logistics-service` добавляет только `task-board.driver-shifts.plan` для idempotent публикации
+snapshot плана в смену. Logistics по-прежнему запрашивает существующие downstream scopes
+раздельно; ни одно из этих прав не выдаётся mobile или browser clients.
+
 Выключенный по умолчанию machine client `logistics-planner` предназначен только для отдельного
 симулятора маршрутов. При явном включении он использует только `client_credentials`, audience
 `rwms-services`, `client_secret_basic` и единственный scope `logistics.planning`. Runtime-секрет читается из

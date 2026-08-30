@@ -106,11 +106,45 @@ import kotlinx.coroutines.delay
 private val DriverCameraBlue = Color(0xFF3B82F6)
 private val DriverCameraPanel = Color(0xE6191919)
 
+/** Supported owner targets for the shared encrypted Driver Up camera pipeline. */
+sealed interface DriverCameraTarget {
+    /** Existing task-board result-evidence target. */
+    data class Task(
+        val entryId: String,
+        val routeIndex: Int,
+    ) : DriverCameraTarget
+
+    /** Driver Shift evidence target using the same encrypted file store and uploader. */
+    data class Shift(
+        val shiftId: String,
+        val expectedVersion: Long,
+        val role: String,
+        val defectId: String? = null,
+        val inspectionItemId: String? = null,
+    ) : DriverCameraTarget
+}
+
 @Composable
 fun CameraScreen(
     userId: String,
     entryId: String,
     routeIndex: Int,
+    onBack: () -> Unit,
+    onSaved: () -> Unit,
+    viewModel: CameraViewModel = hiltViewModel(),
+) = CameraScreen(
+    userId = userId,
+    target = DriverCameraTarget.Task(entryId, routeIndex),
+    onBack = onBack,
+    onSaved = onSaved,
+    viewModel = viewModel,
+)
+
+/** Captures either task evidence or Driver Shift evidence through one camera experience. */
+@Composable
+fun CameraScreen(
+    userId: String,
+    target: DriverCameraTarget,
     onBack: () -> Unit,
     onSaved: () -> Unit,
     viewModel: CameraViewModel = hiltViewModel(),
@@ -171,11 +205,21 @@ fun CameraScreen(
             onBack = onBack,
         )
         else -> DriverCameraExperience(
-            title = "Фото результата",
+            title = if (target is DriverCameraTarget.Task) "Фото результата" else "Фото автомобиля",
             saving = state.saving,
             saveError = state.error,
             onBack = onBack,
-            onConfirm = { file -> viewModel.confirmCapture(userId, entryId, routeIndex, file) },
+            onConfirm = { file ->
+                when (target) {
+                    is DriverCameraTarget.Task -> viewModel.confirmCapture(
+                        userId,
+                        target.entryId,
+                        target.routeIndex,
+                        file,
+                    )
+                    is DriverCameraTarget.Shift -> viewModel.confirmShiftCapture(userId, target, file)
+                }
+            },
         )
     }
 }

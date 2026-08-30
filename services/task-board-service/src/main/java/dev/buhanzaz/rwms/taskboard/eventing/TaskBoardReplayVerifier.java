@@ -343,13 +343,15 @@ public class TaskBoardReplayVerifier {
           queueEntries.findById(id).map(value -> (Object) facts.queueEntry(value, false));
       case GROUP_KPI_DAY ->
           groupKpiDays.findById(id).map(value -> (Object) facts.groupKpiDay(value));
-      case TASK_BOARD_ENTRY_OWNER_PROOF, TASK_EVIDENCE -> Optional.empty();
+      case TASK_BOARD_ENTRY_OWNER_PROOF, TASK_EVIDENCE, DRIVER_SHIFT_OWNER_PROOF ->
+          Optional.empty();
     };
   }
 
   private boolean isJdbcProjection(TaskBoardAggregateType type) {
     return type == TaskBoardAggregateType.TASK_BOARD_ENTRY_OWNER_PROOF
-        || type == TaskBoardAggregateType.TASK_EVIDENCE;
+        || type == TaskBoardAggregateType.TASK_EVIDENCE
+        || type == TaskBoardAggregateType.DRIVER_SHIFT_OWNER_PROOF;
   }
 
   private TaskBoardReplayAuditStore.Summary summary(List<StreamIdentity> streams) {
@@ -501,6 +503,7 @@ public class TaskBoardReplayVerifier {
       case TASK_BOARD_ENTRY_OWNER_PROOF -> TaskBoardEventTypes.ENTRY_OWNER_PROOF_CHANGED;
       case TASK_EVIDENCE -> TaskBoardEventTypes.TASK_EVIDENCE_READY;
       case GROUP_KPI_DAY -> TaskBoardEventTypes.GROUP_KPI_DAY_CHANGED;
+      case DRIVER_SHIFT_OWNER_PROOF -> TaskBoardEventTypes.DRIVER_SHIFT_OWNER_PROOF_CHANGED;
     };
   }
 

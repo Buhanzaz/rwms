@@ -96,6 +96,7 @@ owner сохраняет pending, ambiguous, quarantined и non-terminal work к
 | `/api/warehouse/v1/warehouses/{id}/support-links` | Authenticated warehouse manager с grants для всех endpoints | Чтение или атомарная замена полного графа обслуживания представительского склада |
 | `/api/warehouse/v1/admin/outbox-events/**` | Reviewed administrator recovery | Повтор одного immutable terminal/quarantined outbox fact под review fence |
 | `/api/internal/warehouse/v1/warehouses/{id}/existence` | Exact auth-service credential/scope | Узкая existence-проверка warehouse grants |
+| `/api/internal/warehouse/v1/warehouses/{id}/identity` | Exact credential task-board-service только с `warehouse.identity.read` | Актуальные metadata, координаты и timezone для warehouse-local смены Driver Up |
 | `/api/internal/warehouse/v1/warehouses/asset/**` | Exact asset-service credential/scope | Asset-specific existence boundary |
 | `/api/internal/warehouse/v1/warehouses/inventory/**` | Exact inventory-service credential/scope | Inventory metadata snapshot |
 | `/api/internal/warehouse/v1/warehouses/logistics/**` | Exact logistics-service credential/scope | Logistics identity/directory view |
@@ -114,6 +115,13 @@ warehouse-service поле `address`; оно nullable для складов, а�
 не записан. Directory включает только активные склады в canonical порядке
 warehouse-service и доступна исключительно точным credential и scope
 logistics-service.
+
+Identity response для task-board — отдельная least-privilege projection из
+`id`, версии, active flag, имени, города, nullable address/coordinate pair и canonical IANA
+timezone. Task-board использует её для вычисления рабочей даты с границей 06:00 и координат
+погоды, но не копирует и не изменяет registry складов. Private route требует SERVICE subject и
+client ID `task-board-service` ровно со scope `warehouse.identity.read` и никогда не публикуется
+через gateway.
 
 ## Identity, concurrency и время
 

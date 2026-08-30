@@ -301,12 +301,69 @@ public final class PlanningIntegrationApiModels {
     }
   }
 
+  /** Vehicle configuration that selects the server-owned inspection template in Driver Up. */
+  public enum PlanningDriverShiftVehicleConfiguration {
+    TRUCK,
+    TRUCK_WITH_TRAILER,
+    TRUCK_WITH_CRANE
+  }
+
+  /** Immutable vehicle identity transported from the standalone planner without fleet ownership. */
+  public record PlanningDriverShiftVehicleRequest(
+      @NotNull UUID id,
+      @NotBlank @Size(max = 200) String name,
+      @NotBlank @Size(max = 64) String registrationNumber,
+      @Size(max = 64) String vehicleType,
+      @Size(max = 100) String manufacturer,
+      @Size(max = 100) String model,
+      @NotNull PlanningDriverShiftVehicleConfiguration configurationType,
+      @Min(0) Long startOdometer) {}
+
+  /** Optional immutable trailer identity transported with one assigned vehicle snapshot. */
+  public record PlanningDriverShiftTrailerRequest(
+      @NotNull UUID id,
+      @NotBlank @Size(max = 200) String name,
+      @NotBlank @Size(max = 64) String registrationNumber) {}
+
+  /**
+   * One exact planner shift, assigned vehicle, and unrounded int64 route-meter summary for a Driver
+   * Up workday.
+   */
+  public record PlanningDriverShiftPlanRequest(
+      @NotNull UUID sourceShiftId,
+      @NotNull UUID sourcePlanId,
+      @NotNull @Min(1) Long sourcePlanVersion,
+      @NotNull UUID warehouseId,
+      @NotNull UUID driverId,
+      @NotBlank @Size(max = 256) String driverName,
+      @NotNull LocalDate workDate,
+      @NotNull @Valid PlanningDriverShiftVehicleRequest vehicle,
+      @Valid PlanningDriverShiftTrailerRequest trailer,
+      @Min(0) int tripCount,
+      @Min(0) long routeDistanceMeters) {}
+
   /** Idempotent plan application command; plan identity participates in stable command keys. */
   public record ApplyPlanningAssignmentsRequest(
       @NotNull UUID warehouseId,
       @NotNull UUID planId,
       @NotNull @Min(1) Long planVersion,
-      @NotNull @Size(max = 500) List<@NotNull @Valid PlanningAssignmentRequest> assignments) {}
+      @NotNull @Size(max = 500) List<@NotNull @Valid PlanningAssignmentRequest> assignments,
+      @NotNull @Size(max = 500)
+          List<@NotNull @Valid PlanningDriverShiftPlanRequest> driverShiftPlans) {
+    public ApplyPlanningAssignmentsRequest {
+      if (driverShiftPlans == null) driverShiftPlans = List.of();
+      driverShiftPlans = List.copyOf(driverShiftPlans);
+    }
+
+    /** Preserves source and JSON compatibility for callers created before shift publication. */
+    public ApplyPlanningAssignmentsRequest(
+        UUID warehouseId,
+        UUID planId,
+        Long planVersion,
+        List<PlanningAssignmentRequest> assignments) {
+      this(warehouseId, planId, planVersion, assignments, List.of());
+    }
+  }
 
   /** Successfully created or replayed logistics document for one planned order part. */
   public record AppliedPlanningAssignment(UUID orderId, UUID documentId, boolean replayed) {}

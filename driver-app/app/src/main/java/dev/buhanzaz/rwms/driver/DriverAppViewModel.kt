@@ -101,11 +101,16 @@ class DriverAppViewModel @Inject constructor(
             } else if (activeUserId == null) {
                 mutableState.value = DriverAppUiState.Connecting("Подключаемся к RWMS…")
             }
-            runCatching { gateway.context() }
+            runCatching {
+                val context = gateway.context()
+                val todayShift = gateway.todayDriverShift()
+                projections.stageContextIdentity(context)
+                projections.applyTodayShift(context.driver.id, todayShift)
+                auth.bindDriverIdentity(context.driver.id)
+                push.registerAfterAuthenticatedContext(context.driver.id)
+                context
+            }
                 .onSuccess { context ->
-                    projections.stageContextIdentity(context)
-                    auth.bindDriverIdentity(context.driver.id)
-                    push.registerAfterAuthenticatedContext(context.driver.id)
                     activeUserId = context.driver.id
                     scheduler.request(context.driver.id)
                     startRealtime(context.driver.id)

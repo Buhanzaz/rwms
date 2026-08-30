@@ -19,6 +19,80 @@ import retrofit2.http.Streaming
  * origin can be placed in a Retrofit call site.
  */
 interface DriverGatewayApi {
+    @GET("/api/task-board/driver/v1/shift/today")
+    suspend fun todayDriverShift(): Response<TodayDriverShiftDto>
+
+    @POST("/api/task-board/driver/v1/shifts/{shiftId}/briefing/seen")
+    suspend fun markShiftBriefingSeen(
+        @Path("shiftId") shiftId: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @Body request: ShiftTransitionRequestDto,
+    ): Response<TodayDriverShiftDto>
+
+    @POST("/api/task-board/driver/v1/shifts/{shiftId}/medical-check")
+    suspend fun confirmShiftMedicalCheck(
+        @Path("shiftId") shiftId: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @Body request: ConfirmMedicalCheckRequestDto,
+    ): Response<TodayDriverShiftDto>
+
+    @PUT("/api/task-board/driver/v1/shifts/{shiftId}/vehicle-inspection/items/{itemId}")
+    suspend fun updateShiftInspectionItem(
+        @Path("shiftId") shiftId: String,
+        @Path("itemId") itemId: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @Body request: UpdateInspectionItemRequestDto,
+    ): Response<TodayDriverShiftDto>
+
+    @POST("/api/task-board/driver/v1/shifts/{shiftId}/vehicle-inspection/complete")
+    suspend fun completeShiftInspection(
+        @Path("shiftId") shiftId: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @Body request: ShiftTransitionRequestDto,
+    ): Response<TodayDriverShiftDto>
+
+    @POST("/api/task-board/driver/v1/shifts/{shiftId}/start")
+    suspend fun startShift(
+        @Path("shiftId") shiftId: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @Body request: ShiftTransitionRequestDto,
+    ): Response<TodayDriverShiftDto>
+
+    @POST("/api/task-board/driver/v1/shifts/{shiftId}/closing/start")
+    suspend fun startShiftClosing(
+        @Path("shiftId") shiftId: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @Body request: ShiftTransitionRequestDto,
+    ): Response<TodayDriverShiftDto>
+
+    @POST("/api/task-board/driver/v1/shifts/{shiftId}/return-to-warehouse")
+    suspend fun confirmShiftWarehouseReturn(
+        @Path("shiftId") shiftId: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @Body request: ReturnToWarehouseRequestDto,
+    ): Response<TodayDriverShiftDto>
+
+    @POST("/api/task-board/driver/v1/shifts/{shiftId}/closing-report")
+    suspend fun submitShiftClosingReport(
+        @Path("shiftId") shiftId: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @Body request: SubmitClosingReportRequestDto,
+    ): Response<TodayDriverShiftDto>
+
+    @POST("/api/task-board/driver/v1/shifts/{shiftId}/photos/reservations")
+    suspend fun reserveShiftPhoto(
+        @Path("shiftId") shiftId: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @Body request: ReserveShiftPhotoRequestDto,
+    ): Response<TodayDriverShiftDto>
+
+    @POST("/api/task-board/driver/v1/shifts/{shiftId}/close")
+    suspend fun closeShift(
+        @Path("shiftId") shiftId: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @Body request: ShiftTransitionRequestDto,
+    ): Response<TodayDriverShiftDto>
+
     @GET("/api/task-board/driver/v1/context")
     suspend fun driverContext(): Response<DriverContextDto>
 

@@ -1,7 +1,7 @@
 asyncapi: 3.1.0
 info:
   title: RWMS Task Board Kafka Facts
-  version: 1.3.0
+  version: 1.4.0
   description: >-
     Canonical version-one facts published by task-board-service in
     DomainEventEnvelopeV2 through its PostgreSQL transactional outbox. The V2
@@ -51,6 +51,13 @@ channels:
       contains the authenticated worker ID.
     messages:
       entryOwnerProofChangedV1: { $ref: '#/components/messages/EntryOwnerProofChangedV1' }
+  driverShiftOwnerProofFacts:
+    address: rwms.task-board.driver-shift-owner-proof.v1
+    description: >-
+      Monotonic media authorization proof keyed by Driver Shift ID. An active
+      retained shift grants both upload and read access only to its owning driver.
+    messages:
+      driverShiftOwnerProofChangedV1: { $ref: '#/components/messages/DriverShiftOwnerProofChangedV1' }
   taskEvidenceFacts:
     address: rwms.task-board.task-evidence.v1
     description: >-
@@ -76,6 +83,9 @@ operations:
   publishEntryOwnerProofFacts:
     action: send
     channel: { $ref: '#/channels/entryOwnerProofFacts' }
+  publishDriverShiftOwnerProofFacts:
+    action: send
+    channel: { $ref: '#/channels/driverShiftOwnerProofFacts' }
   publishTaskEvidenceFacts:
     action: send
     channel: { $ref: '#/channels/taskEvidenceFacts' }
@@ -184,6 +194,14 @@ components:
         allOf:
           - { $ref: './task-board/task-board-events-v1.schema.json' }
           - { $ref: '#/components/schemas/EntryOwnerProofChangedDiscriminator' }
+    DriverShiftOwnerProofChangedV1:
+      name: task-board.driver-shift-owner-proof.changed.v1
+      title: Driver Shift media owner proof changed
+      correlationId: { location: $message.payload#/correlation/correlationId }
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/DriverShiftOwnerProofChangedDiscriminator' }
     TaskEvidenceReadyV1:
       name: task-board.task-evidence.ready.v1
       title: Worker result evidence became ready
@@ -282,6 +300,11 @@ components:
       properties:
         eventType: { const: task-board.entry-owner-proof.changed.v1 }
         aggregateType: { const: TASK_BOARD_ENTRY_OWNER_PROOF }
+    DriverShiftOwnerProofChangedDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.driver-shift-owner-proof.changed.v1 }
+        aggregateType: { const: DRIVER_SHIFT_OWNER_PROOF }
     TaskEvidenceReadyDiscriminator:
       type: object
       properties:

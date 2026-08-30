@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from datetime import date, timedelta
+from math import isfinite
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import ValidationError
@@ -22,12 +23,16 @@ from app.models import (
     RoutePlan,
     RouteStop,
     UnassignedTask,
+    Vehicle,
     Warehouse,
 )
 from app.models.domain import StopType
 from app.schemas.domain import (
     RwmsApplyResult,
     RwmsAssignmentsCommand,
+    RwmsDriverShiftPlan,
+    RwmsDriverShiftPlanTrailer,
+    RwmsDriverShiftPlanVehicle,
     RwmsPlanApplyRequest,
     RwmsPlanningAssignment,
     RwmsPlanningRequest,
@@ -44,6 +49,8 @@ from app.schemas.geocoding import ResolvedAddress
 from app.services import catalog
 from app.services.auto_planning import generate_missing_draft_plans
 from app.services.plans import PlannerFacade
+
+INT64_MAX = 9_223_372_036_854_775_807
 
 
 async def refresh_warehouse_directory(
@@ -374,7 +381,142 @@ def build_assignments_command(
         plan_id=plan.id,
         plan_version=plan.version,
         assignments=assignments,
+        driver_shift_plans=_build_driver_shift_plans(plan, warehouse_id),
     )
+
+
+def _build_driver_shift_plans(
+    plan: RoutePlan, warehouse_id: UUID
+) -> list[RwmsDriverShiftPlan]:
+    """Aggregate assigned-driver cycles into deterministic workday snapshots."""
+
+    snapshots: dict[UUID, tuple[RwmsDriverShiftPlan, int, int]] = {}
+    for cycle in plan.cycles:
+        shift = cycle.driver_shift
+        driver = shift.driver
+        if driver.rwms_assignment_mode != "ASSIGNED_DRIVER":
+            continue
+        if driver.external_worker_id is None:
+            raise ApiError(
+                422,
+                "RWMS_DRIVER_NOT_LINKED",
+                f"Driver {driver.name} has no RWMS worker identity",
+            )
+        base = _driver_shift_plan_snapshot(plan, warehouse_id, shift)
+        cycle_distance_meters = _exact_route_distance_meters(cycle)
+        existing = snapshots.get(shift.id)
+        if existing is None:
+            snapshots[shift.id] = (base, 1, cycle_distance_meters)
+            continue
+        if existing[0] != base:
+            raise ApiError(
+                422,
+                "DUPLICATE_DRIVER_SHIFT_CONFLICT",
+                "One source shift resolves to conflicting driver or vehicle snapshots",
+            )
+        route_distance_meters = existing[2] + cycle_distance_meters
+        if route_distance_meters > INT64_MAX:
+            raise ApiError(
+                422,
+                "RWMS_ROUTE_DISTANCE_INVALID",
+                "A driver shift route distance exceeds the int64 transport contract",
+            )
+        snapshots[shift.id] = (
+            base,
+            existing[1] + 1,
+            route_distance_meters,
+        )
+    return [
+        snapshot.model_copy(
+            update={
+                "trip_count": trip_count,
+                "route_distance_meters": distance_meters,
+            }
+        )
+        for snapshot, trip_count, distance_meters in (
+            snapshots[shift_id] for shift_id in sorted(snapshots, key=str)
+        )
+    ]
+
+
+def _exact_route_distance_meters(cycle: RouteCycle) -> int:
+    """Keep the planner's integer meters exact and reject lossy transport coercion."""
+
+    distance_meters = cycle.total_distance_meters
+    if (
+        not isfinite(distance_meters)
+        or distance_meters < 0
+        or distance_meters % 1 != 0
+        or distance_meters > INT64_MAX
+    ):
+        raise ApiError(
+            422,
+            "RWMS_ROUTE_DISTANCE_INVALID",
+            "A route cycle distance must be a non-negative int64 meter value",
+        )
+    return int(distance_meters)
+
+
+def _driver_shift_plan_snapshot(
+    plan: RoutePlan, warehouse_id: UUID, shift: DriverShift
+) -> RwmsDriverShiftPlan:
+    """Freeze source identities and fleet presentation without creating a second catalog."""
+
+    if shift.warehouse_id != plan.warehouse_id:
+        raise ApiError(
+            422,
+            "DRIVER_SHIFT_WAREHOUSE_CONFLICT",
+            "A route cycle driver shift belongs to a different warehouse",
+        )
+    driver_id = shift.driver.external_worker_id
+    if driver_id is None:
+        raise ApiError(
+            422,
+            "RWMS_DRIVER_NOT_LINKED",
+            f"Driver {shift.driver.name} has no RWMS worker identity",
+        )
+    vehicle = shift.vehicle
+    trailer = vehicle.default_trailer
+    return RwmsDriverShiftPlan(
+        source_shift_id=shift.id,
+        source_plan_id=plan.id,
+        source_plan_version=plan.version,
+        warehouse_id=warehouse_id,
+        driver_id=driver_id,
+        driver_name=shift.driver.name,
+        work_date=plan.date,
+        vehicle=RwmsDriverShiftPlanVehicle(
+            id=vehicle.id,
+            name=vehicle.name,
+            registration_number=vehicle.registration_number,
+            vehicle_type=vehicle.vehicle_type,
+            manufacturer=vehicle.manufacturer,
+            model=vehicle.model,
+            configuration_type=_vehicle_configuration_type(vehicle),
+            start_odometer=None,
+        ),
+        trailer=(
+            RwmsDriverShiftPlanTrailer(
+                id=trailer.id,
+                name=trailer.name,
+                registration_number=trailer.registration_number,
+            )
+            if trailer is not None
+            else None
+        ),
+        trip_count=0,
+        route_distance_meters=0,
+    )
+
+
+def _vehicle_configuration_type(vehicle: Vehicle) -> str:
+    """Classify only explicit trailer and crane facts available in the planner catalog."""
+
+    if vehicle.default_trailer is not None:
+        return "TRUCK_WITH_TRAILER"
+    if vehicle.vehicle_type is not None and vehicle.vehicle_type.upper() == "FLATBED_CRANE":
+        return "TRUCK_WITH_CRANE"
+    return "TRUCK"
 
 
 async def _load_plan_for_rwms_apply(session: AsyncSession, plan_id: UUID) -> RoutePlan:
@@ -387,6 +529,9 @@ async def _load_plan_for_rwms_apply(session: AsyncSession, plan_id: UUID) -> Rou
         .options(
             selectinload(RoutePlan.warehouse),
             cycles.selectinload(RouteCycle.driver_shift).selectinload(DriverShift.driver),
+            cycles.selectinload(RouteCycle.driver_shift)
+            .selectinload(DriverShift.vehicle)
+            .selectinload(Vehicle.default_trailer),
             cycles.selectinload(RouteCycle.stops)
             .selectinload(RouteStop.task)
             .selectinload(PlanningTask.request)

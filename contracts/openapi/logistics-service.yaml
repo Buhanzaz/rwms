@@ -807,6 +807,8 @@ paths:
         The batch may contain several non-overlapping cabin parts of one order; every part has a
         stable idempotent shipment command. Automatic application rejects today and tomorrow,
         dates not approved by the client, stale order versions, and cabins already planned.
+        Assigned-driver vehicle/workday snapshots are registered with task-board before any
+        shipment part is created or replayed; a failed registration fails the whole request.
         Valid parts are retained even when another part is rejected, and every rejection is
         returned with a stable code.
       parameters:
@@ -3826,6 +3828,61 @@ components:
           type: array
           maxItems: 500
           items: { $ref: "#/components/schemas/PlanningAssignment" }
+        driverShiftPlans:
+          type: array
+          maxItems: 500
+          default: []
+          description: >-
+            Immutable assigned-driver vehicle/workday snapshots from this exact plan version.
+            Omission is accepted as an empty list for callers predating Driver Up shift planning.
+          items: { $ref: "#/components/schemas/PlanningDriverShiftPlan" }
+    PlanningDriverShiftVehicle:
+      type: object
+      additionalProperties: false
+      required: [id, name, registrationNumber, configurationType]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 200 }
+        registrationNumber: { type: string, minLength: 1, maxLength: 64 }
+        vehicleType: { type: [string, "null"], maxLength: 64 }
+        manufacturer: { type: [string, "null"], maxLength: 100 }
+        model: { type: [string, "null"], maxLength: 100 }
+        configurationType:
+          type: string
+          enum: [TRUCK, TRUCK_WITH_TRAILER, TRUCK_WITH_CRANE]
+        startOdometer: { type: [integer, "null"], format: int64, minimum: 0 }
+    PlanningDriverShiftTrailer:
+      type: object
+      additionalProperties: false
+      required: [id, name, registrationNumber]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 200 }
+        registrationNumber: { type: string, minLength: 1, maxLength: 64 }
+    PlanningDriverShiftPlan:
+      type: object
+      additionalProperties: false
+      required:
+        [sourceShiftId, sourcePlanId, sourcePlanVersion, warehouseId, driverId, driverName, workDate, vehicle, tripCount, routeDistanceMeters]
+      properties:
+        sourceShiftId: { type: string, format: uuid }
+        sourcePlanId: { type: string, format: uuid }
+        sourcePlanVersion: { type: integer, format: int64, minimum: 1 }
+        warehouseId: { type: string, format: uuid }
+        driverId: { type: string, format: uuid }
+        driverName: { type: string, minLength: 1, maxLength: 256 }
+        workDate: { type: string, format: date }
+        vehicle: { $ref: "#/components/schemas/PlanningDriverShiftVehicle" }
+        trailer:
+          oneOf:
+            - $ref: "#/components/schemas/PlanningDriverShiftTrailer"
+            - type: "null"
+        tripCount: { type: integer, minimum: 0 }
+        routeDistanceMeters:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Exact sum of planner route-cycle meters; UI rounding to kilometers is downstream.
     AppliedPlanningAssignment:
       type: object
       additionalProperties: false

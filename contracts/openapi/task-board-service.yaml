@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Task Board Service API
-  version: 1.11.0
+  version: 1.12.0
   description: >-
     Canonical F2 inventory of the active task-board, workforce and queue
     registry HTTP API. All warehouse-scoped operations validate the warehouse
@@ -1353,6 +1353,192 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /internal/task-board/v1/driver-shift-plans/{sourceShiftId}:
+    parameters:
+      - name: sourceShiftId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - $ref: '#/components/parameters/DriverShiftIdempotencyKey'
+    put:
+      operationId: putDriverShiftPlan
+      description: >-
+        Applies the logistics-service-owned driver plan projection. Requires a
+        SERVICE token whose sub and client_id are logistics-service and whose
+        only scope is task-board.driver-shifts.plan. Exact replays are safe;
+        changed or stale plans conflict after a driver shift is frozen.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PutDriverShiftPlanRequest' }
+      responses:
+        '200':
+          description: Plan replayed or replaced.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DriverShiftPlanResponse' }
+        '201':
+          description: Plan projection created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DriverShiftPlanResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /driver/v1/shift/today:
+    get:
+      operationId: getTodayDriverShift
+      description: >-
+        Returns one server-driven startup aggregate. When the feature is
+        disabled, nextRequiredAction is SHOW_TASKS and the legacy task flow
+        remains available. Work date is resolved in the warehouse timezone at
+        the server-owned 06:00 boundary.
+      responses:
+        '200': { $ref: '#/components/responses/TodayDriverShiftOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+  /driver/v1/shifts/{shiftId}/briefing/seen:
+    parameters:
+      - $ref: '#/components/parameters/ShiftId'
+      - $ref: '#/components/parameters/DriverShiftIdempotencyKey'
+    post:
+      operationId: markDriverShiftBriefingSeen
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ShiftTransitionRequest' }
+      responses: { '200': { $ref: '#/components/responses/TodayDriverShiftOk' }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' }, '409': { $ref: '#/components/responses/Conflict' } }
+  /driver/v1/shifts/{shiftId}/medical-check:
+    parameters:
+      - $ref: '#/components/parameters/ShiftId'
+      - $ref: '#/components/parameters/DriverShiftIdempotencyKey'
+    post:
+      operationId: confirmDriverShiftMedicalCheck
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConfirmMedicalCheckRequest' }
+      responses: { '200': { $ref: '#/components/responses/TodayDriverShiftOk' }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' }, '409': { $ref: '#/components/responses/Conflict' } }
+  /driver/v1/shifts/{shiftId}/vehicle-inspection/items/{itemId}:
+    parameters:
+      - $ref: '#/components/parameters/ShiftId'
+      - name: itemId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - $ref: '#/components/parameters/DriverShiftIdempotencyKey'
+    put:
+      operationId: updateDriverShiftInspectionItem
+      description: >-
+        Stores one independently fenced item result. A newly accepted child
+        result advances both the item version and root shift version; an exact
+        idempotent replay or content-identical no-op advances neither.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateInspectionItemRequest' }
+      responses: { '200': { $ref: '#/components/responses/TodayDriverShiftOk' }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' }, '409': { $ref: '#/components/responses/Conflict' } }
+  /driver/v1/shifts/{shiftId}/vehicle-inspection/complete:
+    parameters:
+      - $ref: '#/components/parameters/ShiftId'
+      - $ref: '#/components/parameters/DriverShiftIdempotencyKey'
+    post:
+      operationId: completeDriverShiftInspection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ShiftTransitionRequest' }
+      responses: { '200': { $ref: '#/components/responses/TodayDriverShiftOk' }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' }, '409': { $ref: '#/components/responses/Conflict' } }
+  /driver/v1/shifts/{shiftId}/start:
+    parameters:
+      - $ref: '#/components/parameters/ShiftId'
+      - $ref: '#/components/parameters/DriverShiftIdempotencyKey'
+    post:
+      operationId: startDriverShift
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ShiftTransitionRequest' }
+      responses: { '200': { $ref: '#/components/responses/TodayDriverShiftOk' }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' }, '409': { $ref: '#/components/responses/Conflict' } }
+  /driver/v1/shifts/{shiftId}/closing/start:
+    parameters:
+      - $ref: '#/components/parameters/ShiftId'
+      - $ref: '#/components/parameters/DriverShiftIdempotencyKey'
+    post:
+      operationId: startDriverShiftClosing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ShiftTransitionRequest' }
+      responses: { '200': { $ref: '#/components/responses/TodayDriverShiftOk' }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' }, '409': { $ref: '#/components/responses/Conflict' } }
+  /driver/v1/shifts/{shiftId}/return-to-warehouse:
+    parameters:
+      - $ref: '#/components/parameters/ShiftId'
+      - $ref: '#/components/parameters/DriverShiftIdempotencyKey'
+    post:
+      operationId: confirmDriverShiftWarehouseReturn
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReturnToWarehouseRequest' }
+      responses: { '200': { $ref: '#/components/responses/TodayDriverShiftOk' }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' }, '409': { $ref: '#/components/responses/Conflict' } }
+  /driver/v1/shifts/{shiftId}/closing-report:
+    parameters:
+      - $ref: '#/components/parameters/ShiftId'
+      - $ref: '#/components/parameters/DriverShiftIdempotencyKey'
+    post:
+      operationId: submitDriverShiftClosingReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubmitClosingReportRequest' }
+      responses: { '200': { $ref: '#/components/responses/TodayDriverShiftOk' }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' }, '409': { $ref: '#/components/responses/Conflict' } }
+  /driver/v1/shifts/{shiftId}/photos/reservations:
+    parameters:
+      - $ref: '#/components/parameters/ShiftId'
+      - $ref: '#/components/parameters/DriverShiftIdempotencyKey'
+    post:
+      operationId: reserveDriverShiftPhoto
+      description: >-
+        Reserves one durable media correlation and advances the root shift
+        version only for a new reservation. INSPECTION_DEFECT is accepted in
+        VEHICLE_INSPECTION_REQUIRED, VEHICLE_OVERVIEW in
+        END_VEHICLE_CHECK_REQUIRED, and END_SHIFT_DEFECT in
+        SHIFT_READY_TO_CLOSE. Exact replay or content-identical no-op does not
+        advance the version.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReserveShiftPhotoRequest' }
+      responses: { '200': { $ref: '#/components/responses/TodayDriverShiftOk' }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' }, '409': { $ref: '#/components/responses/Conflict' } }
+  /driver/v1/shifts/{shiftId}/close:
+    parameters:
+      - $ref: '#/components/parameters/ShiftId'
+      - $ref: '#/components/parameters/DriverShiftIdempotencyKey'
+    post:
+      operationId: closeDriverShift
+      description: >-
+        Closes the shift irreversibly. When the closing report contains a new
+        defect, at least one correlated END_SHIFT_DEFECT photo must have
+        reached READY; RESERVED, PROCESSING and unrelated photos conflict.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ShiftTransitionRequest' }
+      responses: { '200': { $ref: '#/components/responses/TodayDriverShiftOk' }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' }, '409': { $ref: '#/components/responses/Conflict' } }
   /driver/v1/context:
     get:
       operationId: getDriverContext
@@ -1903,6 +2089,17 @@ components:
         Stable UUID for the logical worker command. It must exactly equal the
         operationId in the request body.
       schema: { type: string, format: uuid }
+    DriverShiftIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Stable UUID equal to operationId in the command body.
+      schema: { type: string, format: uuid }
+    ShiftId:
+      name: shiftId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
   requestBodies:
     WorkerClass:
       required: true
@@ -1925,6 +2122,372 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/VersionCommand' }
   schemas:
+    DriverShiftStatus:
+      type: string
+      enum: [DAILY_BRIEFING_REQUIRED, MEDICAL_CHECK_REQUIRED, VEHICLE_INSPECTION_REQUIRED, READY_TO_START, SHIFT_ACTIVE, SHIFT_CLOSING, RETURN_TO_WAREHOUSE_REQUIRED, END_VEHICLE_CHECK_REQUIRED, SHIFT_READY_TO_CLOSE, SHIFT_CLOSED]
+    DriverShiftNextRequiredAction:
+      type: string
+      enum: [SHIFT_NOT_AVAILABLE, SHOW_DAILY_BRIEFING, COMPLETE_MEDICAL_CHECK, COMPLETE_VEHICLE_INSPECTION, START_SHIFT, SHOW_TASKS, START_SHIFT_CLOSING, CONFIRM_WAREHOUSE_RETURN, COMPLETE_END_OF_SHIFT_REPORT, CLOSE_SHIFT, SHIFT_CLOSED]
+    VehicleConfigurationType:
+      type: string
+      enum: [TRUCK, TRUCK_WITH_TRAILER, TRUCK_WITH_CRANE]
+    InspectionItemState:
+      type: string
+      enum: [NOT_CHECKED, OK, DEFECT]
+    ShiftTransitionRequest:
+      type: object
+      required: [operationId, expectedVersion]
+      properties:
+        operationId: { type: string, format: uuid }
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+      additionalProperties: false
+    ConfirmMedicalCheckRequest:
+      type: object
+      required: [operationId, expectedVersion]
+      properties:
+        operationId: { type: string, format: uuid }
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        clientCompletedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+      additionalProperties: false
+    UpdateInspectionItemRequest:
+      type: object
+      required: [operationId, expectedVersion, expectedItemVersion, result]
+      properties:
+        operationId: { type: string, format: uuid }
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        expectedItemVersion: { type: integer, format: int64, minimum: 0 }
+        result: { type: string, enum: [OK, DEFECT] }
+        defectId:
+          oneOf: [{ type: string, format: uuid }, { type: 'null' }]
+          description: >-
+            Stable client-generated defect identity. Required with DEFECT and
+            forbidden with OK so offline photo reservations can reference the
+            same defect before synchronization finishes.
+        defectDescription: { oneOf: [{ type: string, maxLength: 2000 }, { type: 'null' }] }
+      additionalProperties: false
+    ReturnToWarehouseRequest:
+      type: object
+      required: [operationId, expectedVersion, confirmationType]
+      properties:
+        operationId: { type: string, format: uuid }
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        confirmationType: { type: string, enum: [MANUAL, GEOFENCE] }
+      additionalProperties: false
+    SubmitClosingReportRequest:
+      type: object
+      required: [operationId, expectedVersion, vehicleCondition, endOdometer, fuelLevelPercent, confirmSuspiciousOdometer]
+      properties:
+        operationId: { type: string, format: uuid }
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        vehicleCondition: { type: string, enum: [NO_NEW_DEFECTS, DEFECT_REPORTED] }
+        endOdometer: { type: integer, format: int64, minimum: 0 }
+        fuelLevelPercent: { type: integer, minimum: 0, maximum: 100 }
+        confirmSuspiciousOdometer: { type: boolean }
+        defectId:
+          oneOf: [{ type: string, format: uuid }, { type: 'null' }]
+          description: Stable client-generated identity required for DEFECT_REPORTED.
+        defectDescription: { oneOf: [{ type: string, maxLength: 2000 }, { type: 'null' }] }
+      additionalProperties: false
+    ReserveShiftPhotoRequest:
+      type: object
+      required: [operationId, expectedVersion, clientReferenceId, evidenceId, role, capturedAt, contentType, sizeBytes, sha256]
+      properties:
+        operationId: { type: string, format: uuid }
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        clientReferenceId: { type: string, format: uuid }
+        evidenceId: { type: string, format: uuid }
+        role: { type: string, enum: [INSPECTION_DEFECT, END_SHIFT_DEFECT, VEHICLE_OVERVIEW] }
+        defectId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        inspectionItemId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        capturedAt: { type: string, format: date-time }
+        contentType: { type: string, enum: [image/jpeg] }
+        sizeBytes: { type: integer, format: int64, minimum: 1, maximum: 15728640 }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+      additionalProperties: false
+    PutDriverShiftPlanRequest:
+      type: object
+      required: [sourcePlanId, sourcePlanVersion, warehouseId, driverId, driverName, workDate, vehicle, tripCount, routeDistanceMeters]
+      properties:
+        sourcePlanId: { type: string, format: uuid }
+        sourcePlanVersion: { type: integer, format: int64, minimum: 1 }
+        warehouseId: { type: string, format: uuid }
+        driverId: { type: string, format: uuid }
+        driverName: { type: string, minLength: 1, maxLength: 256 }
+        workDate: { type: string, format: date }
+        vehicle: { $ref: '#/components/schemas/PlannedDriverVehicle' }
+        trailer:
+          oneOf: [{ $ref: '#/components/schemas/PlannedDriverTrailer' }, { type: 'null' }]
+        tripCount: { type: integer, minimum: 0 }
+        routeDistanceMeters: { type: integer, format: int64, minimum: 0 }
+      additionalProperties: false
+    PlannedDriverVehicle:
+      type: object
+      required: [id, name, registrationNumber, configurationType]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 256 }
+        registrationNumber: { type: string, minLength: 1, maxLength: 64 }
+        vehicleType: { oneOf: [{ type: string, maxLength: 64 }, { type: 'null' }] }
+        manufacturer: { oneOf: [{ type: string, maxLength: 128 }, { type: 'null' }] }
+        model: { oneOf: [{ type: string, maxLength: 128 }, { type: 'null' }] }
+        configurationType: { $ref: '#/components/schemas/VehicleConfigurationType' }
+        startOdometer:
+          oneOf: [{ type: integer, format: int64, minimum: 0 }, { type: 'null' }]
+      additionalProperties: false
+    PlannedDriverTrailer:
+      type: object
+      required: [id, name, registrationNumber]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 256 }
+        registrationNumber: { type: string, minLength: 1, maxLength: 64 }
+      additionalProperties: false
+    DriverShiftPlanResponse:
+      type: object
+      required: [sourceShiftId, sourcePlanId, sourcePlanVersion, result]
+      properties:
+        sourceShiftId: { type: string, format: uuid }
+        sourcePlanId: { type: string, format: uuid }
+        sourcePlanVersion: { type: integer, format: int64, minimum: 1 }
+        result: { type: string, enum: [CREATED, REPLAYED, REPLACED] }
+      additionalProperties: false
+    TodayDriverShift:
+      type: object
+      required: [enabled, serverTime, suspiciousOdometerJumpKm, nextRequiredAction, photos]
+      properties:
+        enabled: { type: boolean }
+        serverTime: { type: string, format: date-time }
+        suspiciousOdometerJumpKm:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Server-configured odometer delta that requires explicit driver
+            confirmation instead of silent acceptance.
+        nextAvailableAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        nextRequiredAction: { $ref: '#/components/schemas/DriverShiftNextRequiredAction' }
+        shift: { oneOf: [{ $ref: '#/components/schemas/DriverShiftView' }, { type: 'null' }] }
+        warehouse: { oneOf: [{ $ref: '#/components/schemas/DriverShiftWarehouse' }, { type: 'null' }] }
+        briefing: { oneOf: [{ $ref: '#/components/schemas/DailyBriefing' }, { type: 'null' }] }
+        vehicle: { oneOf: [{ $ref: '#/components/schemas/DriverShiftVehicle' }, { type: 'null' }] }
+        inspection: { oneOf: [{ $ref: '#/components/schemas/DriverVehicleInspection' }, { type: 'null' }] }
+        taskSummary: { oneOf: [{ $ref: '#/components/schemas/DriverShiftTaskSummary' }, { type: 'null' }] }
+        closingReport: { oneOf: [{ $ref: '#/components/schemas/DriverShiftClosingReport' }, { type: 'null' }] }
+        photos:
+          type: array
+          items: { $ref: '#/components/schemas/DriverShiftPhoto' }
+      additionalProperties: false
+    DriverShiftView:
+      type: object
+      required: [id, version, driverId, driverName, warehouseId, workDate, timeZone, status]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        driverId: { type: string, format: uuid }
+        driverName: { type: string }
+        warehouseId: { type: string, format: uuid }
+        workDate: { type: string, format: date }
+        timeZone: { type: string }
+        status: { $ref: '#/components/schemas/DriverShiftStatus' }
+        briefingSeenAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        medicalCheck: { oneOf: [{ $ref: '#/components/schemas/DriverMedicalCheck' }, { type: 'null' }] }
+        vehicleInspectionCompletedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        startedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        closingStartedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        returnedToWarehouseAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        returnConfirmationType:
+          oneOf: [{ type: string, enum: [MANUAL, GEOFENCE] }, { type: 'null' }]
+        closedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+      additionalProperties: false
+    DriverMedicalCheck:
+      type: object
+      required: [driverId, shiftId, workDate, confirmationType, completedAt]
+      properties:
+        driverId: { type: string, format: uuid }
+        shiftId: { type: string, format: uuid }
+        workDate: { type: string, format: date }
+        confirmationType: { type: string, enum: [SELF_CONFIRMATION_TEST, EXTERNAL_MEDICAL_SYSTEM] }
+        completedAt: { type: string, format: date-time }
+        externalCheckId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        doctorId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        provider: { oneOf: [{ type: string }, { type: 'null' }] }
+        checkedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+      additionalProperties: false
+    DriverShiftWarehouse:
+      type: object
+      required: [id, name, city, timeZone]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        city: { type: string }
+        address: { oneOf: [{ type: string }, { type: 'null' }] }
+        latitude: { oneOf: [{ type: number }, { type: 'null' }] }
+        longitude: { oneOf: [{ type: number }, { type: 'null' }] }
+        timeZone: { type: string }
+      additionalProperties: false
+    DailyBriefing:
+      type: object
+      required: [locationName, weather]
+      properties:
+        locationName: { type: string }
+        weather: { $ref: '#/components/schemas/DailyWeatherBriefing' }
+      additionalProperties: false
+    DailyWeatherBriefing:
+      type: object
+      required: [available, attribution, hazards]
+      properties:
+        available: { type: boolean }
+        attribution: { type: string, const: 'Данные MET Norway' }
+        currentTempC: { oneOf: [{ type: number }, { type: 'null' }] }
+        feelsLikeC:
+          oneOf: [{ type: number }, { type: 'null' }]
+          description: >-
+            Derived wind-chill temperature when the documented formula's
+            temperature and wind domain applies; otherwise null.
+        minTempC: { oneOf: [{ type: number }, { type: 'null' }] }
+        maxTempC: { oneOf: [{ type: number }, { type: 'null' }] }
+        condition:
+          oneOf: [{ type: string }, { type: 'null' }]
+          description: Driver-readable Russian description of the current MET symbol.
+        icon:
+          oneOf: [{ type: string }, { type: 'null' }]
+          description: Original MET Norway symbol_code for icon selection.
+        precipitationProbabilityPercent:
+          oneOf:
+            - { type: integer, minimum: 0, maximum: 100 }
+            - { type: 'null' }
+          description: Maximum one-hour precipitation probability in the next 24 hours.
+        precipitationType:
+          oneOf: [{ type: string }, { type: 'null' }]
+          description: Dominant supported precipitation type in the next 24 hours.
+        windSpeedMetersPerSecond:
+          oneOf: [{ type: number, minimum: 0 }, { type: 'null' }]
+        windGustMetersPerSecond:
+          oneOf: [{ type: number, minimum: 0 }, { type: 'null' }]
+          description: Maximum forecast wind gust in the next 24 hours.
+        hazards:
+          type: array
+          items: { $ref: '#/components/schemas/WeatherHazard' }
+      additionalProperties: false
+    WeatherHazard:
+      type: object
+      required: [type, severity, title, description]
+      properties:
+        type: { type: string, enum: [HIGH_WIND, HEAVY_RAIN, FREEZING_RAIN, SNOW, LOW_VISIBILITY, THUNDERSTORM, HAIL] }
+        severity: { type: string, enum: [WARNING, DANGER] }
+        title: { type: string }
+        description: { type: string }
+      additionalProperties: false
+    DriverShiftVehicle:
+      type: object
+      required: [id, name, registrationNumber, configurationType]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        registrationNumber: { type: string }
+        vehicleType: { oneOf: [{ type: string }, { type: 'null' }] }
+        manufacturer: { oneOf: [{ type: string }, { type: 'null' }] }
+        model: { oneOf: [{ type: string }, { type: 'null' }] }
+        configurationType: { $ref: '#/components/schemas/VehicleConfigurationType' }
+        startOdometer:
+          oneOf: [{ type: integer, format: int64, minimum: 0 }, { type: 'null' }]
+        trailer: { oneOf: [{ $ref: '#/components/schemas/DriverShiftTrailer' }, { type: 'null' }] }
+      additionalProperties: false
+    DriverShiftTrailer:
+      type: object
+      required: [id, name, registrationNumber]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        registrationNumber: { type: string }
+      additionalProperties: false
+    DriverVehicleInspection:
+      type: object
+      required: [id, version, totalRequired, checkedRequired, blockingDefectCount, items]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        completedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        totalRequired: { type: integer, minimum: 0 }
+        checkedRequired: { type: integer, minimum: 0 }
+        blockingDefectCount: { type: integer, minimum: 0 }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/DriverVehicleInspectionItem' }
+      additionalProperties: false
+    DriverVehicleInspectionItem:
+      type: object
+      required: [id, version, templateItemCode, section, label, required, sortOrder, state]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        templateItemCode: { type: string }
+        section: { type: string }
+        label: { type: string }
+        required: { type: boolean }
+        sortOrder: { type: integer, minimum: 0 }
+        state: { $ref: '#/components/schemas/InspectionItemState' }
+        defect: { oneOf: [{ $ref: '#/components/schemas/DriverVehicleDefect' }, { type: 'null' }] }
+      additionalProperties: false
+    DriverVehicleDefect:
+      type: object
+      required: [id, shiftId, vehicleId, description, severity, status, photoIds, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        shiftId: { type: string, format: uuid }
+        vehicleId: { type: string, format: uuid }
+        inspectionItemId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        description: { type: string }
+        severity: { type: string, enum: [INFO, BLOCKING] }
+        status: { type: string, enum: [OPEN, RESOLVED] }
+        photoIds:
+          type: array
+          items: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+      additionalProperties: false
+    DriverShiftTaskSummary:
+      type: object
+      required: [totalCount, activeCount, completedCount, tripCount, routeDistanceMeters, canStartClosing]
+      properties:
+        totalCount: { type: integer, minimum: 0 }
+        activeCount: { type: integer, minimum: 0 }
+        completedCount: { type: integer, minimum: 0 }
+        tripCount: { type: integer, minimum: 0 }
+        routeDistanceMeters: { type: integer, format: int64, minimum: 0 }
+        canStartClosing: { type: boolean }
+      additionalProperties: false
+    DriverShiftClosingReport:
+      type: object
+      required: [vehicleCondition, endOdometer, fuelLevelPercent, photoCount, completedAt]
+      properties:
+        vehicleCondition: { type: string, enum: [NO_NEW_DEFECTS, DEFECT_REPORTED] }
+        endOdometer: { type: integer, format: int64, minimum: 0 }
+        odometerDistance:
+          oneOf: [{ type: integer, format: int64, minimum: 0 }, { type: 'null' }]
+        fuelLevelPercent: { type: integer, minimum: 0, maximum: 100 }
+        defectId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        photoCount: { type: integer, minimum: 0 }
+        completedAt: { type: string, format: date-time }
+      additionalProperties: false
+    DriverShiftPhoto:
+      type: object
+      required: [id, clientReferenceId, evidenceId, role, state, capturedAt, contentType, sizeBytes, sha256]
+      properties:
+        id: { type: string, format: uuid }
+        clientReferenceId: { type: string, format: uuid }
+        evidenceId: { type: string, format: uuid }
+        role: { type: string, enum: [INSPECTION_DEFECT, END_SHIFT_DEFECT, VEHICLE_OVERVIEW] }
+        defectId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        inspectionItemId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        state: { type: string, enum: [RESERVED, PROCESSING, READY, REVIEW_REQUIRED] }
+        mediaId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        mediaGeneration:
+          oneOf: [{ type: integer, format: int64, minimum: 1 }, { type: 'null' }]
+        capturedAt: { type: string, format: date-time }
+        contentType: { type: string }
+        sizeBytes: { type: integer, format: int64, minimum: 1 }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+      additionalProperties: false
     KpiPaletteRange:
       type: object
       required: [fromPercent, toPercent, color]
@@ -3819,6 +4382,11 @@ components:
         correlation: { $ref: '#/components/schemas/CorrelationContext' }
       additionalProperties: false
   responses:
+    TodayDriverShiftOk:
+      description: Current server-driven Driver Shift startup aggregate.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/TodayDriverShift' }
     KpiSettingsOk:
       description: KPI settings scoped to the selected warehouse
       content:

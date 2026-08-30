@@ -406,10 +406,12 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
             "rwms.task-board.board-task.v1",
             "rwms.task-board.queue-entry.v1",
             "rwms.task-board.entry-owner-proof.v1",
+            "rwms.task-board.driver-shift-owner-proof.v1",
             "rwms.task-board.task-evidence.v1",
             TaskBoardEventTypes.BOARD_TASK_COMPLETED,
             TaskBoardEventTypes.QUEUE_ENTRY_COMPLETED,
             "task-board.entry-owner-proof.changed.v1",
+            "task-board.driver-shift-owner-proof.changed.v1",
             "task-board.task-evidence.ready.v1",
             "task-board-events-v1.schema.json")
         .doesNotContain("rwms.domain.v1", "protocol=amqp", "displayName");
@@ -430,6 +432,17 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
             "/worker/v1/entries/{entryId}/evidence-reservations",
             "/worker/v1/devices/{installationId}",
             "/driver/v1/context",
+            "/driver/v1/shift/today",
+            "/driver/v1/shifts/{shiftId}/briefing/seen",
+            "/driver/v1/shifts/{shiftId}/medical-check",
+            "/driver/v1/shifts/{shiftId}/vehicle-inspection/items/{itemId}",
+            "/driver/v1/shifts/{shiftId}/vehicle-inspection/complete",
+            "/driver/v1/shifts/{shiftId}/start",
+            "/driver/v1/shifts/{shiftId}/closing/start",
+            "/driver/v1/shifts/{shiftId}/return-to-warehouse",
+            "/driver/v1/shifts/{shiftId}/closing-report",
+            "/driver/v1/shifts/{shiftId}/photos/reservations",
+            "/driver/v1/shifts/{shiftId}/close",
             "/driver/v1/feed",
             "/driver/v1/entries/{entryId}",
             "/driver/v1/events",
@@ -454,7 +467,41 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
             "EvidenceReservationRequest",
             "TaskEvidence",
             "WorkerInvalidationEvent",
-            "WorkerDeviceRegistrationRequest");
+            "WorkerDeviceRegistrationRequest",
+            "TodayDriverShift",
+            "PutDriverShiftPlanRequest",
+            "DriverShiftTaskSummary");
+    Map<String, Object> todayDriverShift = child(schemas, "TodayDriverShift");
+    assertThat(todayDriverShift.get("required"))
+        .asList()
+        .contains("suspiciousOdometerJumpKm");
+    assertThat(child(child(todayDriverShift, "properties"), "suspiciousOdometerJumpKm"))
+        .containsEntry("format", "int64")
+        .containsEntry("minimum", 1);
+    assertThat(child(child(todayDriverShift, "properties"), "shift").get("oneOf").toString())
+        .contains("#/components/schemas/DriverShiftView", "type=null");
+    assertThat(
+            child(
+                    child(child(schemas, "DailyWeatherBriefing"), "properties"),
+                    "feelsLikeC")
+                .get("oneOf")
+                .toString())
+        .contains("type=number", "type=null");
+    assertThat(
+            child(
+                    child(child(schemas, "ReserveShiftPhotoRequest"), "properties"),
+                    "defectId")
+                .get("oneOf")
+                .toString())
+        .contains("format=uuid", "type=null");
+    assertThat(child(child(schemas, "PutDriverShiftPlanRequest"), "properties"))
+        .containsKey("routeDistanceMeters")
+        .doesNotContainKey("routeDistanceKm");
+    assertThat(
+            child(
+                child(child(schemas, "DriverShiftTaskSummary"), "properties"),
+                "routeDistanceMeters"))
+        .containsEntry("format", "int64");
     assertThat(child(schemas, "WorkerCategory").get("required"))
         .isEqualTo(
             List.of(

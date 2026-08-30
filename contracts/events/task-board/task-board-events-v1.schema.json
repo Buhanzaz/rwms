@@ -49,7 +49,8 @@
       "task-board.entry-owner-proof.changed.v1",
       "task-board.task-evidence.ready.v1",
       "task-board.task-evidence.review-required.v1",
-      "task-board.group-kpi-day.changed.v1"
+      "task-board.group-kpi-day.changed.v1",
+      "task-board.driver-shift-owner-proof.changed.v1"
     ]},
     "eventVersion": {"const": 1},
     "occurredAt": {"$ref": "#/$defs/nullableDateTime"},
@@ -58,7 +59,8 @@
     "aggregateType": {"enum": [
       "WORKER_CLASS", "WORKER", "WORKER_GROUP", "WORK_QUEUE",
       "QUEUE_USAGE_REFERENCE", "BOARD_TASK", "QUEUE_ENTRY",
-      "TASK_BOARD_ENTRY_OWNER_PROOF", "TASK_EVIDENCE", "GROUP_KPI_DAY"
+      "TASK_BOARD_ENTRY_OWNER_PROOF", "TASK_EVIDENCE", "GROUP_KPI_DAY",
+      "DRIVER_SHIFT_OWNER_PROOF"
     ]},
     "aggregateId": {"type": "string", "format": "uuid"},
     "aggregateVersion": {"type": "integer", "minimum": 0},
@@ -74,7 +76,8 @@
       {"$ref": "#/$defs/queueEntryFact"},
       {"$ref": "#/$defs/entryOwnerProofFact"},
       {"$ref": "#/$defs/taskEvidenceFact"},
-      {"$ref": "#/$defs/groupKpiDayFact"}
+      {"$ref": "#/$defs/groupKpiDayFact"},
+      {"$ref": "#/$defs/driverShiftOwnerProofFact"}
     ]}
   },
   "oneOf": [
@@ -87,7 +90,8 @@
     {"$ref": "#/$defs/queueEntryEnvelope"},
     {"$ref": "#/$defs/entryOwnerProofEnvelope"},
     {"$ref": "#/$defs/taskEvidenceEnvelope"},
-    {"$ref": "#/$defs/groupKpiDayEnvelope"}
+    {"$ref": "#/$defs/groupKpiDayEnvelope"},
+    {"$ref": "#/$defs/driverShiftOwnerProofEnvelope"}
   ],
   "x-rwms-topics": [
     "rwms.task-board.worker-class.v1",
@@ -99,7 +103,8 @@
     "rwms.task-board.queue-entry.v1",
     "rwms.task-board.entry-owner-proof.v1",
     "rwms.task-board.task-evidence.v1",
-    "rwms.task-board.group-kpi-day.v1"
+    "rwms.task-board.group-kpi-day.v1",
+    "rwms.task-board.driver-shift-owner-proof.v1"
   ],
   "x-rwms-cutover": {
     "baselinePublished": false,
@@ -227,6 +232,13 @@
         "aggregateType": {"const": "TASK_BOARD_ENTRY_OWNER_PROOF"},
         "eventType": {"const": "task-board.entry-owner-proof.changed.v1"},
         "payload": {"$ref": "#/$defs/entryOwnerProofFact"}
+      }
+    },
+    "driverShiftOwnerProofEnvelope": {
+      "properties": {
+        "aggregateType": {"const": "DRIVER_SHIFT_OWNER_PROOF"},
+        "eventType": {"const": "task-board.driver-shift-owner-proof.changed.v1"},
+        "payload": {"$ref": "#/$defs/driverShiftOwnerProofFact"}
       }
     },
     "taskEvidenceEnvelope": {
@@ -555,6 +567,25 @@
           "type": "array",
           "uniqueItems": true,
           "items": {"$ref": "#/$defs/ownerMediaReferenceFact"}
+        }
+      }
+    },
+    "driverShiftOwnerProofFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ownerType", "ownerId", "warehouseId", "active", "allowedWorkerIds", "readerWorkerIds"],
+      "properties": {
+        "ownerType": {"const": "DRIVER_SHIFT"},
+        "ownerId": {"type": "string", "format": "uuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "active": {"type": "boolean"},
+        "allowedWorkerIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 1,
+          "items": {"type": "string", "format": "uuid"}
+        },
+        "readerWorkerIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 1,
+          "items": {"type": "string", "format": "uuid"}
         }
       }
     },

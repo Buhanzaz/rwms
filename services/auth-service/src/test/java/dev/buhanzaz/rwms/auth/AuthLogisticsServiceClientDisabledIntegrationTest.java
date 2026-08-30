@@ -58,6 +58,7 @@ class AuthLogisticsServiceClientDisabledIntegrationTest {
                 "warehouse.lifecycle.confirm",
                 "asset.logistics",
                 "task-board.logistics",
+                "task-board.driver-shifts.plan",
                 "maintenance.logistics",
                 "media.logistics");
         assertThat(configuredClients.findByClientId("logistics-service")).isNull();

@@ -77,6 +77,10 @@ func TestLoadAcceptsCompleteFailClosedConfiguration(t *testing.T) {
 		configuration.TaskBoardEntryOwnerProofGroup != "media-service-task-board-entry-owner-proof-v1" {
 		t.Fatalf("task-board owner proof Kafka configuration = %#v", configuration)
 	}
+	if configuration.DriverShiftOwnerProofTopic != "rwms.task-board.driver-shift-owner-proof.v1" ||
+		configuration.DriverShiftOwnerProofGroup != "media-service-driver-shift-owner-proof-v1" {
+		t.Fatalf("driver-shift owner proof Kafka configuration = %#v", configuration)
+	}
 }
 
 func TestLoadRejectsNonPositiveHTTPTransferTimeouts(t *testing.T) {
@@ -167,6 +171,14 @@ func TestLoadRejectsNonCanonicalTaskBoardOwnerProofKafkaConfiguration(t *testing
 	t.Setenv("MEDIA_KAFKA_TASK_BOARD_ENTRY_OWNER_PROOF_GROUP", "shared-consumer")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want non-canonical task-board owner proof group rejection")
+	}
+}
+
+func TestLoadRejectsNonCanonicalDriverShiftOwnerProofKafkaConfiguration(t *testing.T) {
+	setCompleteConfiguration(t)
+	t.Setenv("MEDIA_KAFKA_DRIVER_SHIFT_OWNER_PROOF_TOPIC", "rwms.task-board.entry-owner-proof.v1")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want non-canonical driver-shift owner proof topic rejection")
 	}
 }
 

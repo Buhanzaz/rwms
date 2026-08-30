@@ -504,6 +504,185 @@ func TestTaskScopedWorkerCreatesTaskBoardEvidenceWithServerDerivedWorkerActor(t 
 	}
 }
 
+func TestDriverCreatesOnlyImageShiftEvidenceWithDriverScope(t *testing.T) {
+	warehouseID, shiftID, workerID, subjectID, photoID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	for scope, expectedStatus := range map[string]int{
+		"driver.tasks": http.StatusCreated,
+		"worker.tasks": http.StatusForbidden,
+	} {
+		t.Run(scope, func(t *testing.T) {
+			repository := &repositoryStub{createAsset: persistence.AssetRecord{
+				ID: uuid.New(), UploadSessionID: uuid.New(), UploadExpiresAt: time.Now().Add(time.Minute),
+			}}
+			worker := auth.WorkerPrincipal{
+				SubjectID: subjectID, WorkerID: workerID, WarehouseID: warehouseID,
+				Scopes: map[string]struct{}{scope: {}},
+			}
+			server := newTestServer(t, repository, validatorStub{err: auth.ErrForbidden, workerPrincipal: worker}, &storeStub{})
+			body := fmt.Sprintf(`{"ownerType":"DRIVER_SHIFT","ownerId":"%s","clientReferenceId":"%s","warehouseId":"%s","context":"SHIFT_EVIDENCE","fileName":"shift.jpg","contentType":"image/jpeg","contentLength":128,"checksumSha256":"%s"}`,
+				shiftID, photoID, warehouseID, strings.Repeat("a", 64))
+			request := httptest.NewRequest(http.MethodPost, "/api/media/v1/upload-sessions", strings.NewReader(body))
+			request.Header.Set("Authorization", "Bearer driver")
+			request.Header.Set("Idempotency-Key", photoID.String())
+			response := httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, request)
+			if response.Code != expectedStatus {
+				t.Fatalf("response = %d %s, want %d", response.Code, response.Body.String(), expectedStatus)
+			}
+			if expectedStatus == http.StatusCreated {
+				command := repository.createCommand
+				if command.OwnerType != persistence.OwnerTypeDriverShift || command.OwnerID != shiftID.String() ||
+					command.WorkerID == nil || *command.WorkerID != workerID || command.Actor.SubjectID != workerID ||
+					command.ClientReferenceID == nil || *command.ClientReferenceID != photoID || command.Kind != media.KindImage {
+					t.Fatalf("driver-shift evidence command = %#v", command)
+				}
+			}
+		})
+	}
+
+	worker := auth.WorkerPrincipal{
+		SubjectID: subjectID, WorkerID: workerID, WarehouseID: warehouseID,
+		Scopes: map[string]struct{}{"driver.tasks": {}},
+	}
+	server := newTestServer(t, &repositoryStub{}, validatorStub{err: auth.ErrForbidden, workerPrincipal: worker}, &storeStub{})
+	body := fmt.Sprintf(`{"ownerType":"DRIVER_SHIFT","ownerId":"%s","clientReferenceId":"%s","warehouseId":"%s","context":"SHIFT_EVIDENCE","fileName":"shift.mp4","contentType":"video/mp4","contentLength":128,"checksumSha256":"%s"}`,
+		shiftID, photoID, warehouseID, strings.Repeat("a", 64))
+	request := httptest.NewRequest(http.MethodPost, "/api/media/v1/upload-sessions", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer driver")
+	request.Header.Set("Idempotency-Key", photoID.String())
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("video shift evidence response = %d %s", response.Code, response.Body.String())
+	}
+
+	for name, extraField := range map[string]string{
+		"structured logistics identity": `,"documentId":"` + uuid.NewString() + `"`,
+		"authorized customer subject":   `,"authorizedSubjectId":"` + subjectID.String() + `"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			expectedCode := "MEDIA_INVALID_OWNER"
+			if name == "authorized customer subject" {
+				expectedCode = "MEDIA_INVALID_JSON"
+			}
+			server := newTestServer(t, &repositoryStub{}, validatorStub{err: auth.ErrForbidden, workerPrincipal: worker}, &storeStub{})
+			body := fmt.Sprintf(`{"ownerType":"DRIVER_SHIFT","ownerId":"%s","clientReferenceId":"%s","warehouseId":"%s","context":"SHIFT_EVIDENCE","fileName":"shift.jpg","contentType":"image/jpeg","contentLength":128,"checksumSha256":"%s"%s}`,
+				shiftID, photoID, warehouseID, strings.Repeat("a", 64), extraField)
+			request := httptest.NewRequest(http.MethodPost, "/api/media/v1/upload-sessions", strings.NewReader(body))
+			request.Header.Set("Authorization", "Bearer driver")
+			request.Header.Set("Idempotency-Key", photoID.String())
+			response := httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"`+expectedCode+`"`) {
+				t.Fatalf("invalid shift owner claims response = %d %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestDriverShiftListAndOriginalUseReaderProofAndRejectWorkerScope(t *testing.T) {
+	warehouseID, shiftID, driverID, subjectID, mediaID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	asset := persistence.AssetRecord{
+		ID: mediaID, OwnerType: persistence.OwnerTypeDriverShift, OwnerID: shiftID.String(),
+		WarehouseID: warehouseID, Kind: media.KindImage, FileName: "shift.jpg",
+		Status: media.StatusReady, Generation: 1,
+	}
+	driver := auth.WorkerPrincipal{
+		SubjectID: subjectID, WorkerID: driverID, WarehouseID: warehouseID,
+		Scopes: map[string]struct{}{"driver.tasks": {}},
+	}
+	query := "ownerType=DRIVER_SHIFT&ownerId=" + shiftID.String() +
+		"&warehouseId=" + warehouseID.String() + "&context=SHIFT_EVIDENCE"
+
+	t.Run("list", func(t *testing.T) {
+		repository := &repositoryStub{workerListRecords: []persistence.AssetWithVariants{{Asset: asset}}}
+		server := newTestServer(t, repository, validatorStub{err: auth.ErrForbidden, workerPrincipal: driver}, &storeStub{})
+		request := httptest.NewRequest(http.MethodGet, "/api/media/v1/assets?"+query, nil)
+		request.Header.Set("Authorization", "Bearer driver")
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK || repository.workerListCalls != 1 ||
+			repository.workerListEntryID != shiftID || repository.workerListWarehouseID != warehouseID ||
+			repository.workerListWorkerID != driverID {
+			t.Fatalf("driver-shift list response=%d body=%s repository=%#v", response.Code, response.Body.String(), repository)
+		}
+	})
+
+	t.Run("original", func(t *testing.T) {
+		body := []byte("shift-original")
+		original := &persistence.VariantRecord{
+			Variant: media.VariantOriginal, ObjectKey: "private/shift-original", ObjectVersionID: "shift-v1",
+			ContentType: "image/jpeg", SizeBytes: int64(len(body)),
+		}
+		repository := &repositoryStub{workerOriginalAsset: asset, workerOriginalVariant: original}
+		store := &storeStub{objectBody: body, statMetadata: media.ObjectMetadata{
+			VersionID: original.ObjectVersionID, SizeBytes: int64(len(body)), ContentType: original.ContentType,
+		}}
+		server := newTestServer(t, repository, validatorStub{err: auth.ErrForbidden, workerPrincipal: driver}, store)
+		request := httptest.NewRequest(http.MethodGet,
+			"/api/media/v1/assets/"+mediaID.String()+"/original?"+query+"&generation=1", nil)
+		request.Header.Set("Authorization", "Bearer driver")
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), body) ||
+			repository.workerReadEntryID != shiftID || repository.workerReadWarehouseID != warehouseID ||
+			repository.workerReadWorkerID != driverID || repository.workerReadGeneration == nil ||
+			*repository.workerReadGeneration != 1 {
+			t.Fatalf("driver-shift original response=%d body=%q repository=%#v", response.Code, response.Body.Bytes(), repository)
+		}
+	})
+
+	t.Run("variant", func(t *testing.T) {
+		body := []byte("shift-small")
+		variant := &persistence.VariantRecord{
+			Variant: media.VariantSmall, ObjectKey: "private/shift-small", ObjectVersionID: "shift-small-v1",
+			ContentType: "image/webp", SizeBytes: int64(len(body)),
+		}
+		repository := &repositoryStub{workerCurrentAsset: asset, workerCurrentVariant: variant}
+		store := &storeStub{objectBody: body, statMetadata: media.ObjectMetadata{
+			VersionID: variant.ObjectVersionID, SizeBytes: int64(len(body)), ContentType: variant.ContentType,
+		}}
+		server := newTestServer(t, repository, validatorStub{err: auth.ErrForbidden, workerPrincipal: driver}, store)
+		request := httptest.NewRequest(http.MethodGet,
+			"/api/media/v1/assets/"+mediaID.String()+"/variants/SMALL/content?"+query+"&generation=1", nil)
+		request.Header.Set("Authorization", "Bearer driver")
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), body) ||
+			repository.workerReadEntryID != shiftID || repository.workerReadWarehouseID != warehouseID ||
+			repository.workerReadWorkerID != driverID || repository.workerReadGeneration == nil ||
+			*repository.workerReadGeneration != 1 {
+			t.Fatalf("driver-shift variant response=%d body=%q repository=%#v", response.Code, response.Body.Bytes(), repository)
+		}
+	})
+
+	t.Run("worker app scope", func(t *testing.T) {
+		worker := driver
+		worker.Scopes = map[string]struct{}{"worker.tasks": {}}
+		repository := &repositoryStub{workerListRecords: []persistence.AssetWithVariants{{Asset: asset}}}
+		server := newTestServer(t, repository, validatorStub{err: auth.ErrForbidden, workerPrincipal: worker}, &storeStub{})
+		request := httptest.NewRequest(http.MethodGet, "/api/media/v1/assets?"+query, nil)
+		request.Header.Set("Authorization", "Bearer worker")
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusForbidden || repository.workerListCalls != 0 {
+			t.Fatalf("worker-app shift list response=%d body=%s calls=%d", response.Code, response.Body.String(), repository.workerListCalls)
+		}
+	})
+
+	t.Run("missing proof", func(t *testing.T) {
+		repository := &repositoryStub{workerListErr: persistence.ErrOwnerProofMissing}
+		server := newTestServer(t, repository, validatorStub{err: auth.ErrForbidden, workerPrincipal: driver}, &storeStub{})
+		request := httptest.NewRequest(http.MethodGet, "/api/media/v1/assets?"+query, nil)
+		request.Header.Set("Authorization", "Bearer driver")
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), `"code":"MEDIA_OWNER_PROOF_REQUIRED"`) {
+			t.Fatalf("missing shift proof response=%d body=%s", response.Code, response.Body.String())
+		}
+	})
+}
+
 func TestWorkerSourceMediaReadIsProofScopedAndRevocationFailsClosed(t *testing.T) {
 	warehouseID, entryID, workerID, subjectID, sourceMediaID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	body := []byte("source-original")
@@ -864,6 +1043,7 @@ func TestPublicOwnerScopeRequiresCanonicalOwnerContextPair(t *testing.T) {
 		{ownerType: persistence.OwnerTypeLogisticsReturn, context: persistence.ViewerContextReturnInspection, valid: true},
 		{ownerType: persistence.OwnerTypeLogisticsShipment, context: persistence.ViewerContextShipment, valid: true},
 		{ownerType: persistence.OwnerTypeLogisticsTransfer, context: persistence.ViewerContextTransfer, valid: true},
+		{ownerType: persistence.OwnerTypeDriverShift, context: persistence.ViewerContextShiftEvidence, valid: true},
 		{ownerType: persistence.OwnerTypeInventoryFinding, context: persistence.ViewerContextWarehouse},
 		{ownerType: persistence.OwnerTypeCabin, context: persistence.ViewerContextInspection},
 		{ownerType: persistence.OwnerTypeMaintenanceEstimate, context: persistence.ViewerContextRepair},
@@ -2804,6 +2984,12 @@ func (stub *repositoryStub) ReadTaskBoardEntryAssetsForWorker(_ context.Context,
 	return consume(stub.workerListRecords)
 }
 
+func (stub *repositoryStub) ReadDriverShiftAssetsForWorker(ctx context.Context, shiftID, warehouseID, workerID uuid.UUID,
+	limit int, after *uuid.UUID, consume func([]persistence.AssetWithVariants) error,
+) error {
+	return stub.ReadTaskBoardEntryAssetsForWorker(ctx, shiftID, warehouseID, workerID, limit, after, consume)
+}
+
 func (stub *repositoryStub) ReadCabinCovers(_ context.Context, warehouseID uuid.UUID, cabinIDs []uuid.UUID,
 	consume func([]persistence.CabinCoverRecord) error,
 ) error {
@@ -2918,6 +3104,12 @@ func (stub *repositoryStub) ReadTaskBoardEntryOriginalForWorker(_ context.Contex
 	return consume(stub.workerOriginalAsset, stub.workerOriginalVariant)
 }
 
+func (stub *repositoryStub) ReadDriverShiftOriginalForWorker(ctx context.Context, shiftID, warehouseID, workerID, mediaID uuid.UUID, generation *int,
+	consume func(persistence.AssetRecord, *persistence.VariantRecord) error,
+) error {
+	return stub.ReadTaskBoardEntryOriginalForWorker(ctx, shiftID, warehouseID, workerID, mediaID, generation, consume)
+}
+
 func (stub *repositoryStub) ReadTaskBoardEntryVariantForWorker(_ context.Context, entryID, warehouseID, workerID, _ uuid.UUID, generation int,
 	_ media.Variant, consume func(persistence.AssetRecord, *persistence.VariantRecord) error,
 ) error {
@@ -2932,10 +3124,20 @@ func (stub *repositoryStub) ReadTaskBoardEntryVariantForWorker(_ context.Context
 	return consume(stub.workerCurrentAsset, stub.workerCurrentVariant)
 }
 
+func (stub *repositoryStub) ReadDriverShiftVariantForWorker(ctx context.Context, shiftID, warehouseID, workerID, mediaID uuid.UUID, generation int,
+	variant media.Variant, consume func(persistence.AssetRecord, *persistence.VariantRecord) error,
+) error {
+	return stub.ReadTaskBoardEntryVariantForWorker(ctx, shiftID, warehouseID, workerID, mediaID, generation, variant, consume)
+}
+
 func (stub *repositoryStub) AuthorizeTaskBoardEntryWorker(_ context.Context, entryID, warehouseID, workerID uuid.UUID) error {
 	stub.workerAuthorizeCalls++
 	stub.workerEntryID, stub.workerWarehouseID, stub.workerID = entryID, warehouseID, workerID
 	return stub.workerAuthorizeErr
+}
+
+func (stub *repositoryStub) AuthorizeDriverShiftWorker(ctx context.Context, shiftID, warehouseID, workerID uuid.UUID) error {
+	return stub.AuthorizeTaskBoardEntryWorker(ctx, shiftID, warehouseID, workerID)
 }
 
 func (stub *repositoryStub) GetAssetScoped(_ context.Context, _ uuid.UUID, ownerType, ownerID string, warehouseID uuid.UUID) (persistence.AssetRecord, error) {

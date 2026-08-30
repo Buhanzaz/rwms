@@ -195,6 +195,13 @@ plan-wide supersession of logistics work. Every token keeps subject and `client_
 equal to `inventory-service` and the `rwms-services` audience. Asset, maintenance,
 media, logistics and warehouse scopes remain separate token requests.
 
+The managed `task-board-service` machine client revision 4 adds only
+`warehouse.identity.read` so the Driver Up shift owner can resolve the current warehouse name,
+city, timezone and coordinates through the private warehouse boundary. The managed
+`logistics-service` client revision 7 adds only `task-board.driver-shifts.plan` for idempotent
+planner-to-shift snapshot publication. Logistics continues to request its existing downstream
+scopes separately; neither addition is granted to mobile or browser clients.
+
 The disabled-by-default `logistics-planner` machine client is reserved for the standalone route
 simulator. When explicitly enabled, it uses only `client_credentials`, the `rwms-services`
 audience, `client_secret_basic`, and the sole `logistics.planning` scope. Its runtime secret is read from

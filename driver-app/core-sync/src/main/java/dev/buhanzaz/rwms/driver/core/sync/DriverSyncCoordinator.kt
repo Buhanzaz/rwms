@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.driver.core.sync
 
 import dev.buhanzaz.rwms.driver.core.database.PendingEvidenceReservation
 import dev.buhanzaz.rwms.driver.core.database.PendingDriverAction
+import dev.buhanzaz.rwms.driver.core.database.PendingShiftCommand
 import dev.buhanzaz.rwms.driver.core.database.TaskEvidenceEntity
 import dev.buhanzaz.rwms.driver.core.database.DriverCategoryEntity
 import dev.buhanzaz.rwms.driver.core.database.DriverDatabase
@@ -20,6 +21,13 @@ import dev.buhanzaz.rwms.driver.core.network.DriverContextDto
 import dev.buhanzaz.rwms.driver.core.network.DriverFeedCategoryDto
 import dev.buhanzaz.rwms.driver.core.network.DriverFeedResponse
 import dev.buhanzaz.rwms.driver.core.network.DriverGatewayClient
+import dev.buhanzaz.rwms.driver.core.network.ConfirmMedicalCheckRequestDto
+import dev.buhanzaz.rwms.driver.core.network.ReserveShiftPhotoRequestDto
+import dev.buhanzaz.rwms.driver.core.network.ReturnToWarehouseRequestDto
+import dev.buhanzaz.rwms.driver.core.network.ShiftTransitionRequestDto
+import dev.buhanzaz.rwms.driver.core.network.SubmitClosingReportRequestDto
+import dev.buhanzaz.rwms.driver.core.network.TodayDriverShiftDto
+import dev.buhanzaz.rwms.driver.core.network.UpdateInspectionItemRequestDto
 import dev.buhanzaz.rwms.driver.core.network.gatewayFailureDisposition
 import dev.buhanzaz.rwms.driver.core.network.isProvenGatewayTransportFailure
 import javax.inject.Inject
@@ -126,6 +134,16 @@ class DriverSyncCoordinator @Inject constructor(
             projections.stageContextIdentity(context)
 
             val outbox = localStore.pendingOutbox(userId)
+            val shiftCommands = outbox
+                .filter { it.kind == DriverLocalStore.OUTBOX_SHIFT_COMMAND }
+                .sortedWith(
+                    compareBy<DriverOutboxEntity> { shiftCommandPayload(it).expectedVersion }
+                        .thenBy { it.createdAtEpochMillis }
+                        .thenBy { it.operationId },
+                )
+            if (shiftCommands.isEmpty()) {
+                projections.applyTodayShift(userId, gateway.todayDriverShift())
+            }
             val actions = outbox.filter { it.kind == DriverLocalStore.OUTBOX_ACTION }
             val prerequisites = actions.filter { actionPayload(it).action != "COMPLETE" }
             val completions = actions.filter { actionPayload(it).action == "COMPLETE" }
@@ -133,8 +151,20 @@ class DriverSyncCoordinator @Inject constructor(
             // Captured rows already exist before their reservation outbox row is
             // applied, so count media once up front for a stable progress total.
             val mediaCount = database.evidenceDao().pending(userId).size
-            val total = prerequisites.size + reservations.size + mediaCount + completions.size + 2
+            val earlyShiftCommands = shiftCommands.filterNot { operation ->
+                shiftCommandPayload(operation).action in LATE_SHIFT_ACTIONS
+            }
+            val lateShiftCommands = shiftCommands.filter { operation ->
+                shiftCommandPayload(operation).action in LATE_SHIFT_ACTIONS
+            }
+            val total = shiftCommands.size + prerequisites.size + reservations.size + mediaCount + completions.size + 3
             var completed = 1
+
+            earlyShiftCommands.forEach { operation ->
+                applyShiftCommand(userId, operation)
+                completed += 1
+                updateProgress(userId, "SHIFT", completed, total, null, null, "Синхронизируем смену")
+            }
 
             prerequisites.forEach { operation ->
                 applyAction(userId, operation)
@@ -234,6 +264,31 @@ class DriverSyncCoordinator @Inject constructor(
                 completed += 1
                 updateProgress(userId, "COMMANDS", completed, total, null, null, "Завершаем задания")
             }
+
+            lateShiftCommands.forEach { operation ->
+                val pending = shiftCommandPayload(operation)
+                if (pending.action == SHIFT_CLOSE) {
+                    val authoritative = gateway.todayDriverShift()
+                    projections.applyTodayShift(userId, authoritative)
+                    if (!authoritative.closeEvidenceReady(pending.shiftId)) {
+                        updateProgress(
+                            userId,
+                            "WAITING_FOR_EVIDENCE",
+                            completed,
+                            total,
+                            null,
+                            null,
+                            "Закрытие смены ждёт готовую фотографию неисправности",
+                        )
+                        return DriverSyncOutcome.Deferred(
+                            "Закрытие смены ждёт готовую фотографию неисправности",
+                        )
+                    }
+                }
+                applyShiftCommand(userId, operation)
+                completed += 1
+                updateProgress(userId, "SHIFT", completed, total, null, null, "Завершаем смену")
+            }
             when (val feed = fetchFeed(userId, context)) {
                 is FetchedFeed.Changed -> {
                     projections.commitContextAndFeed(
@@ -249,6 +304,8 @@ class DriverSyncCoordinator @Inject constructor(
                     projections.applyContext(context)
                 }
             }
+            completed += 1
+            projections.applyTodayShift(userId, gateway.todayDriverShift())
             completed += 1
             updateProgress(userId, "IDLE", completed, total, null, null, "Синхронизировано")
             DriverSyncOutcome.Complete
@@ -268,6 +325,144 @@ class DriverSyncCoordinator @Inject constructor(
             } else {
                 DriverSyncOutcome.Failed(error.message ?: "Не удалось синхронизировать данные")
             }
+        }
+    }
+
+    private suspend fun applyShiftCommand(userId: String, operation: DriverOutboxEntity) {
+        val pending = shiftCommandPayload(operation)
+        try {
+            val today = executeShiftCommand(pending)
+            projections.commitShiftCommandResult(userId, operation.operationId, today)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: GatewayProblemException) {
+            when (error.disposition) {
+                GatewayFailureDisposition.AUTHENTICATION_REQUIRED -> throw error
+                GatewayFailureDisposition.RETRYABLE -> {
+                    localStore.markOutboxRetry(operation, error.problem.detail ?: error.problem.title)
+                    throw RetryableSyncException(error.problem.detail ?: error.problem.title, error)
+                }
+                GatewayFailureDisposition.USER_ACTION_REQUIRED,
+                GatewayFailureDisposition.CONFLICT,
+                GatewayFailureDisposition.TERMINAL,
+                -> {
+                    resolveTerminalShiftProblem(userId, operation, error)
+                    if (error.disposition == GatewayFailureDisposition.USER_ACTION_REQUIRED) {
+                        throw UserActionRequiredSyncException(
+                            error.problem.detail ?: "Нужно обновить доступ водителя",
+                        )
+                    }
+                    throw TerminalSyncException(error.problem.detail ?: error.problem.title, error)
+                }
+            }
+        } catch (error: Throwable) {
+            if (error.isProvenGatewayTransportFailure()) {
+                localStore.markOutboxRetry(operation, error.message ?: "network")
+                throw RetryableSyncException("Не удалось передать состояние смены", error)
+            }
+            localStore.markOutboxRetry(operation, error.message ?: "protocol")
+            throw TerminalSyncException("Не удалось передать состояние смены", error)
+        }
+    }
+
+    private suspend fun executeShiftCommand(pending: PendingShiftCommand): TodayDriverShiftDto =
+        when (pending.action) {
+            SHIFT_BRIEFING_SEEN -> gateway.markShiftBriefingSeen(
+                pending.shiftId,
+                ShiftTransitionRequestDto(pending.operationId, pending.expectedVersion),
+            )
+            SHIFT_MEDICAL_CHECK -> gateway.confirmShiftMedicalCheck(
+                pending.shiftId,
+                ConfirmMedicalCheckRequestDto(
+                    operationId = pending.operationId,
+                    expectedVersion = pending.expectedVersion,
+                    clientCompletedAt = pending.clientCompletedAt,
+                ),
+            )
+            SHIFT_INSPECTION_ITEM -> gateway.updateShiftInspectionItem(
+                shiftId = pending.shiftId,
+                itemId = requireNotNull(pending.itemId),
+                request = UpdateInspectionItemRequestDto(
+                    operationId = pending.operationId,
+                    expectedVersion = pending.expectedVersion,
+                    expectedItemVersion = requireNotNull(pending.expectedItemVersion),
+                    result = requireNotNull(pending.result),
+                    defectId = pending.defectId,
+                    defectDescription = pending.defectDescription,
+                ),
+            )
+            SHIFT_INSPECTION_COMPLETE -> gateway.completeShiftInspection(
+                pending.shiftId,
+                ShiftTransitionRequestDto(pending.operationId, pending.expectedVersion),
+            )
+            SHIFT_START -> gateway.startShift(
+                pending.shiftId,
+                ShiftTransitionRequestDto(pending.operationId, pending.expectedVersion),
+            )
+            SHIFT_CLOSING_START -> gateway.startShiftClosing(
+                pending.shiftId,
+                ShiftTransitionRequestDto(pending.operationId, pending.expectedVersion),
+            )
+            SHIFT_WAREHOUSE_RETURN -> gateway.confirmShiftWarehouseReturn(
+                pending.shiftId,
+                ReturnToWarehouseRequestDto(
+                    operationId = pending.operationId,
+                    expectedVersion = pending.expectedVersion,
+                    confirmationType = requireNotNull(pending.confirmationType),
+                ),
+            )
+            SHIFT_CLOSING_REPORT -> gateway.submitShiftClosingReport(
+                pending.shiftId,
+                SubmitClosingReportRequestDto(
+                    operationId = pending.operationId,
+                    expectedVersion = pending.expectedVersion,
+                    vehicleCondition = requireNotNull(pending.vehicleCondition),
+                    endOdometer = requireNotNull(pending.endOdometer),
+                    fuelLevelPercent = requireNotNull(pending.fuelLevelPercent),
+                    confirmSuspiciousOdometer = pending.confirmSuspiciousOdometer,
+                    defectId = pending.defectId,
+                    defectDescription = pending.defectDescription,
+                ),
+            )
+            SHIFT_PHOTO_RESERVATION -> gateway.reserveShiftPhoto(
+                pending.shiftId,
+                ReserveShiftPhotoRequestDto(
+                    operationId = pending.operationId,
+                    expectedVersion = pending.expectedVersion,
+                    clientReferenceId = requireNotNull(pending.clientReferenceId),
+                    evidenceId = requireNotNull(pending.evidenceId),
+                    role = requireNotNull(pending.photoRole),
+                    defectId = pending.defectId,
+                    inspectionItemId = pending.inspectionItemId,
+                    capturedAt = requireNotNull(pending.capturedAt),
+                    contentType = requireNotNull(pending.contentType),
+                    sizeBytes = requireNotNull(pending.sizeBytes),
+                    sha256 = requireNotNull(pending.sha256),
+                ),
+            )
+            SHIFT_CLOSE -> gateway.closeShift(
+                pending.shiftId,
+                ShiftTransitionRequestDto(pending.operationId, pending.expectedVersion),
+            )
+            else -> throw TerminalSyncException("Неизвестная локальная команда смены")
+        }
+
+    private suspend fun resolveTerminalShiftProblem(
+        userId: String,
+        operation: DriverOutboxEntity,
+        error: GatewayProblemException,
+    ) {
+        recordConflict(userId, operation, error)
+        val authoritative = runCatching { gateway.todayDriverShift() }.getOrNull()
+        if (authoritative != null) {
+            projections.commitShiftCommandResult(
+                userId = userId,
+                operationId = operation.operationId,
+                today = authoritative,
+                preservePendingOverlay = false,
+            )
+        } else {
+            localStore.markOutboxComplete(operation.operationId)
         }
     }
 
@@ -561,6 +756,10 @@ class DriverSyncCoordinator @Inject constructor(
         runCatching { json.decodeFromString<PendingDriverAction>(localStore.decryptOutboxPayload(operation)) }
             .getOrElse { throw TerminalSyncException("Локальная команда повреждена", it) }
 
+    private fun shiftCommandPayload(operation: DriverOutboxEntity): PendingShiftCommand =
+        runCatching { json.decodeFromString<PendingShiftCommand>(localStore.decryptOutboxPayload(operation)) }
+            .getOrElse { throw TerminalSyncException("Локальная команда смены повреждена", it) }
+
     private suspend fun recordConflict(
         userId: String,
         operation: DriverOutboxEntity,
@@ -645,6 +844,20 @@ internal fun validateFeedPage(
 internal fun completionGateAllows(requiredReadyEvidence: Int, actualReadyEvidence: Int): Boolean =
     actualReadyEvidence >= requiredReadyEvidence
 
+/**
+ * Allows final replay only after task-board has projected a ready photo for the exact closing
+ * defect. A shift without a closing defect has no mandatory end-of-shift evidence.
+ */
+internal fun TodayDriverShiftDto.closeEvidenceReady(expectedShiftId: String): Boolean {
+    if (shift?.id != expectedShiftId) return false
+    val closingDefectId = closingReport?.defectId ?: return true
+    return photos.any { photo ->
+        photo.role == "END_SHIFT_DEFECT" &&
+            photo.defectId == closingDefectId &&
+            photo.state == "READY"
+    }
+}
+
 /** A purged/hidden projection must be fetched again instead of revalidated. */
 internal fun DriverSessionEntity?.feedEtagForValidatedProjection(): String? =
     this?.takeIf { !it.cacheHidden }?.feedEtag
@@ -676,3 +889,14 @@ internal fun cachedFeedMatchesContext(
 }
 
 private const val MAX_FEED_PAGES = 100
+private const val SHIFT_BRIEFING_SEEN = "BRIEFING_SEEN"
+private const val SHIFT_MEDICAL_CHECK = "MEDICAL_CHECK"
+private const val SHIFT_INSPECTION_ITEM = "INSPECTION_ITEM"
+private const val SHIFT_INSPECTION_COMPLETE = "INSPECTION_COMPLETE"
+private const val SHIFT_START = "START"
+private const val SHIFT_CLOSING_START = "CLOSING_START"
+private const val SHIFT_WAREHOUSE_RETURN = "WAREHOUSE_RETURN"
+private const val SHIFT_CLOSING_REPORT = "CLOSING_REPORT"
+private const val SHIFT_PHOTO_RESERVATION = "PHOTO_RESERVATION"
+private const val SHIFT_CLOSE = "CLOSE"
+private val LATE_SHIFT_ACTIONS = setOf(SHIFT_CLOSING_REPORT, SHIFT_CLOSE)

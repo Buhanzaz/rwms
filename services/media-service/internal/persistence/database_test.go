@@ -10,6 +10,7 @@ import (
 
 	mediamigration "dev.buhanzaz.rwms/media-service/db/migration"
 	"dev.buhanzaz.rwms/media-service/internal/testsupport"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -35,6 +36,7 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 	v17 := flywayChecksum(mediamigration.V17)
 	v18 := flywayChecksum(mediamigration.V18)
 	v19 := flywayChecksum(mediamigration.V19)
+	v20 := flywayChecksum(mediamigration.V20)
 	const (
 		flyway124V1      int32 = -1307356325
 		flyway124V2      int32 = -573926044
@@ -57,6 +59,7 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 		flyway124V17     int32 = -621987001
 		flyway124V18     int32 = -227466898
 		flyway124V19     int32 = 1811753772
+		flyway124V20     int32 = 336643391
 	)
 	if v1 != flyway124V1 || v2 != flyway124V2 || v3 != flyway124V3 || v4 != flyway124V4 ||
 		v4Guard != flyway124V4Guard || v5 != flyway124V5 || v5Guard != flyway124V5Guard ||
@@ -112,6 +115,9 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 	if v19 != flyway124V19 {
 		t.Fatalf("Flyway 12.4 checksum drift: V19=%d (want %d)", v19, flyway124V19)
 	}
+	if v20 != flyway124V20 {
+		t.Fatalf("Flyway 12.4 checksum drift: V20=%d (want %d)", v20, flyway124V20)
+	}
 }
 
 func TestVerifyMigrationHistoryAcceptsCanonicalAndOutOfOrderFlywayRanks(t *testing.T) {
@@ -128,7 +134,7 @@ func TestVerifyMigrationHistoryAcceptsCanonicalAndOutOfOrderFlywayRanks(t *testi
 		canonical[4], canonical[6], canonical[7], canonical[8], canonical[9], canonical[10],
 		canonical[11], canonical[12],
 		canonical[13], canonical[14], canonical[15], canonical[16], canonical[17], canonical[18], canonical[19],
-		canonical[20],
+		canonical[20], canonical[21],
 	}
 	if err := verifyMigrationHistory(outOfOrder); err != nil {
 		t.Fatalf("real out-of-order Flyway upgrade history rejected: %v", err)
@@ -252,6 +258,7 @@ func approvedMigrationHistory() []migrationHistoryRow {
 		{"17", "consolidate legacy cabin photo folders", "V17__consolidate_legacy_cabin_photo_folders.sql", mediamigration.V17},
 		{"18", "customer shipment subject binding", "V18__customer_shipment_subject_binding.sql", mediamigration.V18},
 		{"19", "customer profile avatar owner", "V19__customer_profile_avatar_owner.sql", mediamigration.V19},
+		{"20", "driver shift media owner", "V20__driver_shift_media_owner.sql", mediamigration.V20},
 	}
 	history := make([]migrationHistoryRow, 0, len(migrations))
 	for _, migration := range migrations {
@@ -547,7 +554,26 @@ func TestCustomerProfileAvatarMigrationExtendsProofsWithoutRewritingMedia(t *tes
 	}
 }
 
-func TestV18ToV19CustomerProfileAvatarUpgradeIntegration(t *testing.T) {
+func TestDriverShiftMediaMigrationAddsDedicatedProofsWithoutRewritingAssets(t *testing.T) {
+	sql := strings.ToLower(string(mediamigration.V20))
+	for _, required := range []string{
+		"driver_shift", "driver_shift_owner_proof",
+		"media_driver_shift_allowed_worker", "media_driver_shift_reader_worker",
+		"rwms.task-board.driver-shift-owner-proof.v1",
+		"media-service-driver-shift-owner-proof-v1",
+	} {
+		if !strings.Contains(sql, required) {
+			t.Errorf("V20 does not contain %q", required)
+		}
+	}
+	for _, forbidden := range []string{"drop table", "truncate table", "delete from", "update media_asset"} {
+		if strings.Contains(sql, forbidden) {
+			t.Errorf("V20 contains destructive statement %q", forbidden)
+		}
+	}
+}
+
+func TestV18ToV20CustomerProfileAndDriverShiftUpgradeIntegration(t *testing.T) {
 	baseURL := os.Getenv("MEDIA_TEST_DATABASE_URL")
 	if baseURL == "" {
 		t.Skip("MEDIA_TEST_DATABASE_URL is not configured")
@@ -558,6 +584,16 @@ func TestV18ToV19CustomerProfileAvatarUpgradeIntegration(t *testing.T) {
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
 		t.Fatalf("open V18 media database: %v", err)
+	}
+	legacyMediaID, legacyEntryID, legacyEvidenceID, legacyWarehouseID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `insert into media_asset (
+		media_id,folder_id,client_reference_id,owner_type,owner_id,warehouse_id,media_kind,
+		original_file_name,original_content_type,source_object_key,processing_status,version)
+	values ($1,$1,$2,'TASK_BOARD_ENTRY',$3,$4,'IMAGE','legacy-task.jpg','image/jpeg',$5,'UPLOADING',1)`,
+		legacyMediaID, legacyEvidenceID, legacyEntryID.String(), legacyWarehouseID,
+		"media/"+legacyMediaID.String()+"/source/legacy-task.jpg"); err != nil {
+		pool.Close()
+		t.Fatalf("seed pre-V20 task evidence: %v", err)
 	}
 	var assetsBefore int64
 	if err := pool.QueryRow(ctx, `select count(*) from media_asset`).Scan(&assetsBefore); err != nil {
@@ -576,18 +612,45 @@ func TestV18ToV19CustomerProfileAvatarUpgradeIntegration(t *testing.T) {
 		pool.Close()
 		t.Fatalf("record V19 profile avatar migration: %v", err)
 	}
+	if _, err := pool.Exec(ctx, string(mediamigration.V20)); err != nil {
+		pool.Close()
+		t.Fatalf("apply V20 driver-shift migration: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
+		installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
+	values ((select coalesce(max(installed_rank),0)+1 from flyway_schema_history),
+		'20','driver shift media owner','SQL','V20__driver_shift_media_owner.sql',$1,
+		current_user,0,true)`, flywayChecksum(mediamigration.V20)); err != nil {
+		pool.Close()
+		t.Fatalf("record V20 driver-shift migration: %v", err)
+	}
 	var assetsAfter int64
 	if err := pool.QueryRow(ctx, `select count(*) from media_asset`).Scan(&assetsAfter); err != nil {
 		pool.Close()
-		t.Fatalf("count V19 media assets: %v", err)
+		t.Fatalf("count V20 media assets: %v", err)
+	}
+	if assetsAfter != assetsBefore {
+		pool.Close()
+		t.Fatalf("V19/V20 changed media asset count: before=%d after=%d", assetsBefore, assetsAfter)
+	}
+	var retainedOwnerType, retainedOwnerID string
+	var retainedEvidenceID uuid.UUID
+	if err := pool.QueryRow(ctx, `select owner_type,owner_id,client_reference_id
+		from media_asset where media_id=$1`, legacyMediaID).
+		Scan(&retainedOwnerType, &retainedOwnerID, &retainedEvidenceID); err != nil {
+		pool.Close()
+		t.Fatalf("read pre-V20 task evidence after upgrade: %v", err)
+	}
+	if retainedOwnerType != OwnerTypeTaskBoardEntry || retainedOwnerID != legacyEntryID.String() ||
+		retainedEvidenceID != legacyEvidenceID {
+		pool.Close()
+		t.Fatalf("pre-V20 task evidence changed: ownerType=%s ownerId=%s reference=%s",
+			retainedOwnerType, retainedOwnerID, retainedEvidenceID)
 	}
 	pool.Close()
-	if assetsAfter != assetsBefore {
-		t.Fatalf("V19 changed media asset count: before=%d after=%d", assetsBefore, assetsAfter)
-	}
 	database, err := Open(ctx, databaseURL)
 	if err != nil {
-		t.Fatalf("open upgraded V19 media database: %v", err)
+		t.Fatalf("open upgraded V20 media database: %v", err)
 	}
 	database.Close()
 }

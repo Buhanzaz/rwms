@@ -270,6 +270,14 @@ the command. `ASSIGNED_DRIVER` requires an exact worker UUID;
 `WAREHOUSE_DRIVERS` deliberately has no worker UUID and exposes a future job to
 the qualified pool. Manual/generated work and pickups stay local.
 
+The same apply request may add `driverShiftPlans`. Each item is unique by source-shift and
+driver/work-date and carries source plan/version, warehouse, driver snapshot, vehicle, optional
+trailer, trip count and exact `routeDistanceMeters` int64. Logistics registers every item first
+through idempotent
+`PUT /api/internal/task-board/v1/driver-shift-plans/{sourceShiftId}` using only
+`task-board.driver-shifts.plan`; task-board creates no planner API and logistics creates no shift
+table. The path owns `sourceShiftId`, and a changed replay under the same plan/fence is a conflict.
+
 `PUT /api/internal/logistics/v1/planning/capacity-snapshots/{warehouseId}`
 idempotently replaces one warehouse's active anonymous capacity projection.
 Warehouse identity exists only in the URL. The body carries generated delivery
@@ -454,6 +462,47 @@ Evidence:
 [`FutureDriverTaskClaimService.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/FutureDriverTaskClaimService.java),
 and
 [`media validator`](../../services/media-service/internal/auth/validator.go).
+
+### Driver Up Daily Shift Boundary
+
+[`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml) adds the daily shift
+family below downstream `/driver/v1/**`, exposed unchanged by the existing gateway prefix as
+`/api/task-board/driver/v1/**`. `GET /shift/today` is one startup projection: it returns feature
+availability, shift/version/status, required `nextRequiredAction`, warehouse/vehicle snapshots,
+briefing/weather, inspection progress and items, task summary, photos/defects and required positive
+`suspiciousOdometerJumpKm`. It is the server navigation contract; clients must tolerate unavailable
+weather/traffic without treating those projections as business gates.
+
+The command family under `/shifts/{shiftId}/**` covers briefing seen, medical check, inspection
+item result, inspection completion, shift start, closing start, warehouse return, closing report,
+photo reservation and close. Every command requires a UUID `Idempotency-Key` and expected aggregate
+version; exact replay returns the frozen result, stale/different intent conflicts, and authoritative
+audit timestamps are server values. The explicit statuses and actions prevent a client from opening
+two incompatible workflow steps. Task completion still uses the existing entry API; task-board
+derives closing eligibility from exact-driver required task state instead of a mobile array.
+
+[`warehouse-service.yaml`](../../contracts/openapi/warehouse-service.yaml) adds private
+`GET /api/internal/warehouse/v1/warehouses/{id}/identity`, available only to exact
+`task-board-service` with sole `warehouse.identity.read`. It returns owner-held metadata,
+coordinate pair and canonical timezone; it is not gateway-routable.
+
+[`media-service.yaml`](../../contracts/openapi/media-service.yaml) additively admits only the
+canonical `DRIVER_SHIFT/SHIFT_EVIDENCE` pair. Upload/finalize/read require exact `driver.tasks`,
+matching worker and warehouse, and a current task-board owner proof; the shift reservation
+`evidenceId` is the required stable `clientReferenceId`. The task-board event contract publishes
+`task-board.driver-shift-owner-proof.changed.v1` on
+`rwms.task-board.driver-shift-owner-proof.v1`; media facts retain the reference so task-board can
+advance the exact reservation to READY. Invalid, gapped or conflicting proof streams fail closed.
+
+Evidence:
+[`task-board OpenAPI`](../../contracts/openapi/task-board-service.yaml),
+[`warehouse OpenAPI`](../../contracts/openapi/warehouse-service.yaml),
+[`media OpenAPI`](../../contracts/openapi/media-service.yaml),
+[`task-board events`](../../contracts/events/task-board-events.yaml),
+[`media events`](../../contracts/events/media-events.yaml),
+[`DriverShiftController.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/api/DriverShiftController.java),
+and
+[`media driver-shift consumer`](../../services/media-service/internal/worker/driver_shift_owner_consumer.go).
 
 ### Media Upload Session Recovery
 

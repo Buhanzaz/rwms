@@ -34,6 +34,19 @@ val signingPropertiesPath = providers.gradleProperty("signingPropertiesFile").or
 val releaseSigningProperties = signingPropertiesPath?.let { path ->
     Properties().also { properties -> file(path).inputStream().use(properties::load) }
 }
+val mapkitPropertiesPath = providers.gradleProperty("mapkitPropertiesFile")
+    .orElse("/var/lib/rwms-secrets/customer-app/mapkit.properties")
+    .get()
+val mapkitPropertiesFile = file(mapkitPropertiesPath)
+require(mapkitPropertiesFile.isFile) {
+    "Yandex MapKit configuration is missing; pass -PmapkitPropertiesFile=<protected-properties-file>"
+}
+val mapkitApiKey = Properties().also { properties ->
+    mapkitPropertiesFile.inputStream().use(properties::load)
+}.getProperty("mapkitApiKey")?.trim().orEmpty()
+require(mapkitApiKey.isNotEmpty()) {
+    "The protected MapKit properties file must define a non-empty mapkitApiKey"
+}
 
 android {
     namespace = "dev.buhanzaz.rwms.driver"
@@ -44,10 +57,14 @@ android {
         applicationId = "dev.buhanzaz.rwms.driver"
         minSdk = 23
         targetSdk = 36
-        versionCode = 20
-        versionName = "0.1.19"
+        versionCode = 21
+        versionName = "0.1.20"
         testInstrumentationRunner = "dev.buhanzaz.rwms.driver.HiltDriverTestRunner"
         manifestPlaceholders["appAuthRedirectScheme"] = "rwms-driver-auth"
+        buildConfigField("String", "MAPKIT_API_KEY", "\"$mapkitApiKey\"")
+        ndk {
+            abiFilters += setOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     buildFeatures {
@@ -60,6 +77,9 @@ android {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
             buildConfigField("String", "PUBLIC_BASE_URL", "\"$publicBaseUrl\"")
+            ndk {
+                abiFilters += setOf("x86_64")
+            }
         }
         release {
             isMinifyEnabled = false
@@ -100,6 +120,7 @@ dependencies {
     implementation(project(":feature-tasks"))
     implementation(project(":feature-task-detail"))
     implementation(project(":feature-camera"))
+    implementation(project(":feature-shift"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
@@ -125,6 +146,7 @@ dependencies {
     implementation(libs.firebase.messaging)
     implementation(libs.firebase.installations)
     implementation(libs.coroutines.android)
+    implementation(libs.yandex.mapkit)
     ksp(libs.hilt.compiler)
     coreLibraryDesugaring(libs.desugar.jdk.libs)
 

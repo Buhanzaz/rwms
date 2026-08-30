@@ -21,6 +21,7 @@ keeping source-domain facts and decisions with their original owners.
 | Workforce | Worker classes, workers, groups, current membership, and credentials workflow | Auth-service owns credential material and token issuance |
 | Operational work | Tasks, route entries, assignment, pinning, pause/resume/complete, and history | Source domain owns why the work exists and its aggregate state |
 | Native execution | Separate driver/worker feeds, offline action leases, evidence reservation, SSE and transactional FCM invalidation | DriverApp and WorkerApp refresh authoritative REST state and upload media through media-service |
+| Driver daily shift | Warehouse-local work date, preparation/closing state machine, inspection snapshot, defects, audit timestamps and media proof | Logistics supplies the reviewed driver/vehicle/day plan; warehouse owns identity/timezone; media owns bytes |
 | KPI | Warehouse palette/schedule revisions and emitted daily evidence | Analytics owns the KPI read projection |
 | Warehouse lifecycle | Local operation marks, admission fence, draining blockers, exact-version readiness | Warehouse-service owns lifecycle state and admission decisions |
 
@@ -158,6 +159,52 @@ normalized display name and then UUID. Secondary bindings, inactive workers, que
 qualifications are excluded; login, group, contact, credential and other personal fields never
 cross this boundary.
 
+## Driver daily shift lifecycle
+
+Task-board is the authoritative owner of one Driver Up shift per
+`driverId + workDate`. Logistics first registers its reviewed driver/vehicle
+plan through a stable source-shift identity; only then may the driver's startup
+read freeze that plan into a shift. The startup transaction loads the current
+warehouse identity and IANA timezone from warehouse-service, applies the
+configured 06:00 warehouse-local boundary, locks the matching plan, and creates
+at most one shift. Repeated or concurrent reads return the same aggregate.
+
+The explicit adjacent state machine is
+`DAILY_BRIEFING_REQUIRED -> MEDICAL_CHECK_REQUIRED ->
+VEHICLE_INSPECTION_REQUIRED -> READY_TO_START -> SHIFT_ACTIVE ->
+SHIFT_CLOSING -> RETURN_TO_WAREHOUSE_REQUIRED ->
+END_VEHICLE_CHECK_REQUIRED -> SHIFT_READY_TO_CLOSE -> SHIFT_CLOSED`.
+Every public response includes `nextRequiredAction`; Android resumes from that
+server projection after restart and never advances the workflow with local
+booleans. Business confirmations use server time. The current medical step is
+explicitly `SELF_CONFIRMATION_TEST`, while nullable external-check fields and
+`EXTERNAL_MEDICAL_SYSTEM` are retained for a later provider integration.
+
+Starting a shift snapshots the active database-backed inspection template for
+`TRUCK`, `TRUCK_WITH_TRAILER`, or `TRUCK_WITH_CRANE`. Each required item keeps
+its own version and `NOT_CHECKED`, `OK`, or `DEFECT` result. A reported defect
+cannot be erased by switching the item to OK; new inspection defects are
+conservatively `BLOCKING` and prevent the ordinary start transition. The
+existing logistics task screen remains the execution surface. Task-board moves
+an active shift toward closing only when at least one exact-driver task exists
+for that warehouse/date and all such tasks are `DONE`.
+
+Closing separately records manual warehouse return, vehicle condition,
+odometer and fuel. Odometer may not decrease; a configured suspicious jump
+requires explicit confirmation. An end-of-shift defect is linked to the common
+vehicle-defect model and requires a correlated `END_SHIFT_DEFECT` media item in
+authoritative `READY` state before close. Optional overview photos use the same
+media owner, upload and event path. Shift transitions and photo reservations
+are version-fenced and receipt-backed, so exact retries are idempotent while a
+changed replay conflicts.
+
+Daily weather is informational. `MetNoWeatherProvider` normalizes free MET
+Norway Locationforecast data, shares a bounded ETag-aware cache by rounded
+warehouse coordinates, and returns an unavailable DTO after bounded
+timeout/retry failure. `WeatherHazardRules` derives only configurable advisory
+wording; it never claims an official emergency warning. Weather availability
+does not affect any shift transition.
+
 ## Internal application structure
 
 `TaskBoardService` is a stable transactional facade over cohesive collaborators. It keeps
@@ -181,6 +228,9 @@ components own the decisions:
 | `TaskBoardRoutePayloadCodec` | The single canonical route JSON and fingerprint codec |
 | `DriverTaskAudienceService` | Logistics-driver audience shape, qualification, visibility and execution authorization |
 | `LogisticsDriverDirectoryService` | Least-privilege active primary logistics-driver directory for the exact logistics-service caller |
+| `DriverShiftService` | Driver plan registration, work-date resolution, shift/inspection/defect transitions, receipts and startup projection |
+| `HttpWarehouseIdentityGateway` | Exact private warehouse identity/timezone/coordinates read for the shift owner |
+| `MetNoWeatherProvider` / `WeatherHazardRules` | Fail-open normalized weather cache and configurable advisory derivation |
 | `MobileTaskSurfacePolicy` | Non-overlapping DriverApp primary and WorkerApp secondary capabilities |
 | `WorkerTaskAccessService` | Shared worker/group/qualification queue audience for native task reads and media proofs |
 | `WorkerFeedCountProjection` | One-query route cardinality and READY-evidence counts for a bounded native feed page |
@@ -240,10 +290,12 @@ The public gateway maps `/api/task-board/**` to this service's downstream
 | `/api/warehouses/{warehouseId}/task-board/kpi-settings/**` | Warehouse manager/admin | Palette and effective schedule revisions |
 | `/api/worker/v1/**` | Worker credential and `worker.tasks` scope | Context, feed, detail, actions, evidence reservations, devices, and events |
 | `/api/driver/v1/**` | Worker credential and `driver.tasks` scope | Driver-only context, primary feed, actions, evidence reservations, devices, and events |
+| `/api/driver/v1/shift/today` and `/api/driver/v1/shifts/{shiftId}/**` | Exact driver identity and `driver.tasks` | Startup aggregate and version-fenced daily-shift transitions |
 | `/api/internal/task-board/v1/maintenance/**` | Exact maintenance-service identity | Routing and catalog preflight |
 | `/api/internal/task-board/v1/tasks/**` | Exact source service identity | Idempotent task synchronization and evidence reads |
 | `/api/internal/task-board/v1/logistics/**` | Exact logistics-service identity | Driver/equipment task integration |
 | `/api/internal/task-board/v1/logistics/warehouses/{warehouseId}/drivers` | Exact logistics-service identity and scope | Active primary-qualified driver identities only |
+| `/api/internal/task-board/v1/driver-shift-plans/{sourceShiftId}` | Exact logistics-service identity and `task-board.driver-shifts.plan` | Idempotent reviewed driver/vehicle/day plan registration |
 | `/api/internal/queue-definitions/**` | Allow-listed service identity | Durable queue usage references |
 
 Private paths are service-to-service boundaries and are never exposed as client
@@ -390,6 +442,13 @@ to one. The current mobile surface policy deliberately exposes configured second
 it retains notification and group interruption when a slinger joins, but never blocks driver
 completion waiting for one. The migration does not invent a missing slinger class.
 
+[`V39__driver_daily_shift.sql`](src/main/resources/db/migration/V39__driver_daily_shift.sql)
+adds the reviewed plan, daily shift, versioned inspection snapshot/results,
+shared vehicle defects, shift photos, immutable command receipts and media
+inbox. It seeds editable template configuration without encoding checklist
+items as boolean columns, extends the event-store aggregate allow-list, and
+does not rewrite existing tasks, facts or driver data.
+
 ## Security and isolation
 
 - All API chains validate JWT issuer/audience; worker and driver routes require
@@ -398,6 +457,9 @@ completion waiting for one. The migration does not invent a missing slinger clas
   write permission in `WarehouseAccessAuthorizer` and services.
 - Internal task, queue-reference, maintenance, and logistics operations require
   exact service identity/scope and validate source ownership.
+- Driver-shift plans accept only the exact logistics-service credential and
+  `task-board.driver-shifts.plan`; mobile shift routes accept only the matching
+  `WORKER` identity, warehouse and `driver.tasks` scope.
 - Auth-service remains the credential owner. Task-board persists only the
   operational credential workflow state needed for reconciliation.
 - CORS uses explicit panel, worker, and driver origins. Browser/mobile clients use the
@@ -415,6 +477,9 @@ completion waiting for one. The migration does not invent a missing slinger clas
   contract-defined fence and return `409` when stale.
 - Retried source task creation/synchronization uses a stable external task ID
   and source identity.
+- Driver plans are unique by source shift and by driver/work date. Creation is
+  serialized on the plan row, and every mutable shift command uses root/child
+  versions plus an immutable operation receipt.
 - Native action retries use one durable operation receipt; exact requests return
   the frozen first response, while divergent or unreconstructable legacy
   replays return `409` without applying another effect.
@@ -474,6 +539,13 @@ credential URL, private warehouse lifecycle URL, explicit CORS origins, Kafka
 brokers, `TASK_BOARD_KAFKA_ENABLED=true`, `TASK_BOARD_FCM_ENABLED=true`,
 `TASK_BOARD_FCM_PROJECT_ID`, and Google Application Default Credentials.
 
+Enable the new flow with `DRIVER_DAILY_SHIFT_ENABLED=true`. Configure
+`DRIVER_SHIFT_DAY_START`, `DRIVER_SHIFT_SUSPICIOUS_ODOMETER_JUMP_KM`, an
+identifying nonsecret `MET_NO_USER_AGENT`, bounded `MET_NO_*` transport/cache
+settings, and the `WEATHER_HAZARD_*` thresholds. The task-board OAuth client
+also needs `warehouse.identity.read` and its existing private warehouse base
+URL; no weather API key is used or returned to Android.
+
 `TaskBoardProductionSafetyValidator` rejects missing/insecure endpoints,
 disabled Kafka, topic drift, unsafe binder retry/DLT settings, topic
 auto-creation, non-acknowledged publishing, and publish timeouts that can exceed
@@ -515,6 +587,9 @@ dependency-outage, and recovery coverage.
 - [Task-board controller](src/main/java/dev/buhanzaz/rwms/taskboard/api/TaskBoardController.java)
 - [Worker API](src/main/java/dev/buhanzaz/rwms/taskboard/api/WorkerTaskBoardController.java)
 - [Driver API](src/main/java/dev/buhanzaz/rwms/taskboard/api/DriverTaskBoardController.java)
+- [Driver shift API](src/main/java/dev/buhanzaz/rwms/taskboard/api/DriverShiftController.java)
+- [Driver shift owner](src/main/java/dev/buhanzaz/rwms/taskboard/service/DriverShiftService.java)
+- [MET weather adapter](src/main/java/dev/buhanzaz/rwms/taskboard/service/MetNoWeatherProvider.java)
 - [Task-board application service](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardService.java)
 - [Task-board read projection](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardReadProjectionService.java)
 - [External task registration](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardExternalRegistrationService.java)

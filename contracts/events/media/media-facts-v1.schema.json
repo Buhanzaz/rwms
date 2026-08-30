@@ -46,7 +46,7 @@
       "properties": {
         "mediaId": {"type": "string", "format": "uuid"},
         "folderId": {"type": "string", "format": "uuid"},
-        "ownerType": {"enum": ["INVENTORY_FINDING", "CABIN", "MAINTENANCE_ESTIMATE", "MAINTENANCE_REPAIR", "MAINTENANCE_ACCEPTANCE", "MAINTENANCE_CATALOG_NODE", "LOGISTICS_RETURN", "LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER", "LOGISTICS_CUSTOMER_PROFILE", "TASK_BOARD_ENTRY"]},
+        "ownerType": {"enum": ["INVENTORY_FINDING", "CABIN", "MAINTENANCE_ESTIMATE", "MAINTENANCE_REPAIR", "MAINTENANCE_ACCEPTANCE", "MAINTENANCE_CATALOG_NODE", "LOGISTICS_RETURN", "LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER", "LOGISTICS_CUSTOMER_PROFILE", "TASK_BOARD_ENTRY", "DRIVER_SHIFT"]},
         "ownerId": {"type": "string", "maxLength": 128},
         "warehouseId": {"type": "string", "format": "uuid"},
         "clientReferenceId": {"oneOf": [{"type": "string", "format": "uuid"}, {"type": "null"}]},
@@ -62,7 +62,7 @@
           "else": {"properties": {"ownerId": {"format": "uuid"}}}
         },
         {
-          "if": {"properties": {"ownerType": {"const": "TASK_BOARD_ENTRY"}}, "required": ["ownerType"]},
+          "if": {"properties": {"ownerType": {"enum": ["TASK_BOARD_ENTRY", "DRIVER_SHIFT"]}}, "required": ["ownerType"]},
           "then": {
             "required": ["clientReferenceId"],
             "properties": {

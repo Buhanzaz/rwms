@@ -52,6 +52,34 @@ data class PendingEvidenceReservation(
     val sha256: String,
 )
 
+/** Encrypted, replay-safe Driver Shift command independent from Retrofit transport classes. */
+@Serializable
+data class PendingShiftCommand(
+    val operationId: String,
+    val shiftId: String,
+    val action: String,
+    val expectedVersion: Long,
+    val clientCompletedAt: String? = null,
+    val itemId: String? = null,
+    val expectedItemVersion: Long? = null,
+    val result: String? = null,
+    val defectId: String? = null,
+    val defectDescription: String? = null,
+    val confirmationType: String? = null,
+    val vehicleCondition: String? = null,
+    val endOdometer: Long? = null,
+    val fuelLevelPercent: Int? = null,
+    val confirmSuspiciousOdometer: Boolean = false,
+    val clientReferenceId: String? = null,
+    val evidenceId: String? = null,
+    val photoRole: String? = null,
+    val inspectionItemId: String? = null,
+    val capturedAt: String? = null,
+    val contentType: String? = null,
+    val sizeBytes: Long? = null,
+    val sha256: String? = null,
+)
+
 /**
  * Defines account-scoped driver local recovery state. Room is a client projection, never the backend source of truth.
  */
@@ -101,6 +129,15 @@ class DriverLocalStore @Inject constructor(
     fun observeProgress(userId: String): Flow<DriverSyncProgressEntity?> = database.syncProgressDao().observe(userId)
 
     fun observeEvidence(userId: String): Flow<List<TaskEvidenceEntity>> = database.evidenceDao().observeAll(userId)
+
+    fun observeShiftSnapshot(userId: String): Flow<DriverShiftSnapshotEntity?> =
+        database.shiftSnapshotDao().observe(userId)
+
+    fun observeShiftDraft(userId: String, shiftId: String): Flow<DriverShiftDraftEntity?> =
+        database.shiftDraftDao().observe(userId, shiftId)
+
+    fun observeShiftEvidence(userId: String, shiftId: String): Flow<List<TaskEvidenceEntity>> =
+        database.evidenceDao().observeShiftEvidence(userId, shiftId)
 
     fun observePendingOutbox(userId: String): Flow<List<DriverOutboxEntity>> =
         database.outboxDao().observePending(userId)
@@ -279,6 +316,122 @@ class DriverLocalStore @Inject constructor(
 
     suspend fun pendingOutbox(userId: String): List<DriverOutboxEntity> = database.outboxDao().pending(userId)
 
+    suspend fun cachedShiftSnapshot(userId: String): DriverShiftSnapshotEntity? =
+        database.shiftSnapshotDao().snapshot(userId)
+
+    /** Replaces only the cached server projection; pending commands remain durable and visible. */
+    suspend fun saveShiftSnapshot(snapshot: DriverShiftSnapshotEntity) =
+        database.shiftSnapshotDao().upsert(snapshot)
+
+    /** Atomically saves an optimistic resume projection and its encrypted state-machine command. */
+    suspend fun enqueueShiftCommand(
+        userId: String,
+        command: PendingShiftCommand,
+        optimisticSnapshot: DriverShiftSnapshotEntity,
+    ) {
+        require(command.shiftId == optimisticSnapshot.shiftId) { "Shift command and snapshot must match" }
+        val now = System.currentTimeMillis()
+        database.withTransaction {
+            database.outboxDao().insert(
+                DriverOutboxEntity(
+                    operationId = command.operationId,
+                    userId = userId,
+                    entryId = command.shiftId,
+                    kind = OUTBOX_SHIFT_COMMAND,
+                    encryptedPayload = pendingPayloadCipher.encrypt(json.encodeToString(command)),
+                    expectedVersion = command.expectedVersion,
+                    state = OUTBOX_PENDING,
+                    retryCount = 0,
+                    createdAtEpochMillis = now,
+                    updatedAtEpochMillis = now,
+                    lastError = null,
+                ),
+            )
+            database.shiftSnapshotDao().upsert(optimisticSnapshot.copy(updatedAtEpochMillis = now))
+        }
+    }
+
+    /**
+     * Persists an encrypted JPEG, its shift reservation and the optimistic photo projection in one
+     * Room transaction. The caller deletes the encrypted file if this transaction fails.
+     */
+    suspend fun enqueueShiftPhotoReservation(
+        userId: String,
+        command: PendingShiftCommand,
+        optimisticSnapshot: DriverShiftSnapshotEntity,
+        encryptedFilePath: String,
+        fileName: String,
+    ) {
+        requireActiveLease(userId)
+        val evidenceId = requireNotNull(command.evidenceId)
+        require(evidenceId == command.clientReferenceId) { "Shift media identity must be stable" }
+        require(evidenceId == command.operationId) { "Shift reservation idempotency must equal evidence identity" }
+        val capturedAt = requireNotNull(command.capturedAt)
+        val contentType = requireNotNull(command.contentType)
+        val sizeBytes = requireNotNull(command.sizeBytes)
+        val sha256 = requireNotNull(command.sha256)
+        val now = System.currentTimeMillis()
+        database.withTransaction {
+            database.evidenceDao().upsert(
+                TaskEvidenceEntity(
+                    evidenceId = evidenceId,
+                    userId = userId,
+                    entryId = command.shiftId,
+                    routeIndex = 0,
+                    capturedAt = capturedAt,
+                    encryptedFilePath = encryptedFilePath,
+                    fileName = fileName,
+                    contentType = contentType,
+                    sizeBytes = sizeBytes,
+                    sha256 = sha256,
+                    reservationOperationId = evidenceId,
+                    uploadOperationId = stableMediaUploadOperationId(evidenceId),
+                    state = EVIDENCE_CAPTURED,
+                    mediaId = null,
+                    mediaGeneration = null,
+                    reviewReason = null,
+                    uploadPercent = 0,
+                    lastError = null,
+                    createdAtEpochMillis = now,
+                    updatedAtEpochMillis = now,
+                    ownerType = EVIDENCE_OWNER_DRIVER_SHIFT,
+                    mediaContext = EVIDENCE_CONTEXT_SHIFT,
+                    photoRole = command.photoRole,
+                    defectId = command.defectId,
+                    inspectionItemId = command.inspectionItemId,
+                ),
+            )
+            database.outboxDao().insert(
+                DriverOutboxEntity(
+                    operationId = command.operationId,
+                    userId = userId,
+                    entryId = command.shiftId,
+                    kind = OUTBOX_SHIFT_COMMAND,
+                    encryptedPayload = pendingPayloadCipher.encrypt(json.encodeToString(command)),
+                    expectedVersion = command.expectedVersion,
+                    state = OUTBOX_PENDING,
+                    retryCount = 0,
+                    createdAtEpochMillis = now,
+                    updatedAtEpochMillis = now,
+                    lastError = null,
+                ),
+            )
+            database.shiftSnapshotDao().upsert(optimisticSnapshot.copy(updatedAtEpochMillis = now))
+        }
+    }
+
+    suspend fun saveShiftDraft(draft: DriverShiftDraftEntity) = database.shiftDraftDao().upsert(draft)
+
+    /** Creates the closing draft once without overwriting input entered by a concurrent UI event. */
+    suspend fun ensureShiftDraft(draft: DriverShiftDraftEntity) =
+        database.shiftDraftDao().insertIfAbsent(draft)
+
+    suspend fun shiftDraft(userId: String, shiftId: String): DriverShiftDraftEntity? =
+        database.shiftDraftDao().draft(userId, shiftId)
+
+    suspend fun clearShiftDraft(userId: String, shiftId: String) =
+        database.shiftDraftDao().delete(userId, shiftId)
+
     fun decryptOutboxPayload(operation: DriverOutboxEntity): String =
         pendingPayloadCipher.decrypt(operation.encryptedPayload)
 
@@ -367,9 +520,12 @@ class DriverLocalStore @Inject constructor(
     companion object {
         const val OUTBOX_ACTION = "ACTION"
         const val OUTBOX_EVIDENCE_RESERVATION = "EVIDENCE_RESERVATION"
+        const val OUTBOX_SHIFT_COMMAND = "SHIFT_COMMAND"
         const val OUTBOX_PENDING = "PENDING"
         const val OUTBOX_RETRY = "RETRY"
         const val EVIDENCE_CAPTURED = "CAPTURED"
+        const val EVIDENCE_OWNER_DRIVER_SHIFT = "DRIVER_SHIFT"
+        const val EVIDENCE_CONTEXT_SHIFT = "SHIFT_EVIDENCE"
 
         private const val STATUS_IN_PROGRESS = "IN_PROGRESS"
         private const val OFFLINE_LEASE_DURATION_MILLIS = 24L * 60L * 60L * 1_000L

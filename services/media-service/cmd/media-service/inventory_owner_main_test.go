@@ -64,6 +64,7 @@ func TestInventoryOwnerRuntimeIsRequiredAndTerminalExitStopsAllProcesses(t *test
 			}},
 			{name: "cabin-owner-consumer", run: peer},
 			{name: "task-board-entry-owner-proof-consumer", run: peer},
+			{name: "driver-shift-owner-proof-consumer", run: peer},
 			{name: "asset-import-worker", run: peer},
 			{name: "http-server", run: peer},
 			{name: "metrics-server", run: peer},
@@ -91,8 +92,8 @@ func TestInventoryOwnerRuntimeIsRequiredAndTerminalExitStopsAllProcesses(t *test
 		case <-time.After(5 * time.Second):
 			t.Fatal("supervisor did not stop after owner terminal error")
 		}
-		if peersCancelled.Load() != 7 {
-			t.Fatalf("cancelled peers = %d, want 7", peersCancelled.Load())
+		if peersCancelled.Load() != 8 {
+			t.Fatalf("cancelled peers = %d, want 8", peersCancelled.Load())
 		}
 		select {
 		case <-shutdownCalled:
@@ -214,8 +215,9 @@ func installMainResidualMigrations(t testing.TB, ctx context.Context, pool *pgxp
 		{"consolidate legacy cabin photo folders", "V17__consolidate_legacy_cabin_photo_folders.sql", mediamigration.V17},
 		{"customer shipment subject binding", "V18__customer_shipment_subject_binding.sql", mediamigration.V18},
 		{"customer profile avatar owner", "V19__customer_profile_avatar_owner.sql", mediamigration.V19},
+		{"driver shift media owner", "V20__driver_shift_media_owner.sql", mediamigration.V20},
 	}
-	versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19"}
+	versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20"}
 	for index, migration := range migrations {
 		if _, err := pool.Exec(ctx, string(migration.body)); err != nil {
 			t.Fatalf("apply command %s: %v", migration.script, err)

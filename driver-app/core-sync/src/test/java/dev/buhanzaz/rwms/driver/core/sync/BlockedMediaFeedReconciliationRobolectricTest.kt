@@ -10,6 +10,7 @@ import dev.buhanzaz.rwms.driver.core.database.DriverTaskEntity
 import dev.buhanzaz.rwms.driver.core.media.EvidenceUploadResult
 import dev.buhanzaz.rwms.driver.core.media.DriverEvidenceUploader
 import dev.buhanzaz.rwms.driver.core.network.CreateUploadSessionRequestDto
+import dev.buhanzaz.rwms.driver.core.network.ConfirmMedicalCheckRequestDto
 import dev.buhanzaz.rwms.driver.core.network.DriverTaskTripDetailsResponseDto
 import dev.buhanzaz.rwms.driver.core.network.EvidenceReservationRequestDto
 import dev.buhanzaz.rwms.driver.core.network.FinalizeUploadRequestDto
@@ -28,6 +29,12 @@ import dev.buhanzaz.rwms.driver.core.network.DriverGatewayClient
 import dev.buhanzaz.rwms.driver.core.network.DriverIdentityDto
 import dev.buhanzaz.rwms.driver.core.network.DriverOfflineLeaseDto
 import dev.buhanzaz.rwms.driver.core.network.DriverTaskDetailDto
+import dev.buhanzaz.rwms.driver.core.network.ReserveShiftPhotoRequestDto
+import dev.buhanzaz.rwms.driver.core.network.ReturnToWarehouseRequestDto
+import dev.buhanzaz.rwms.driver.core.network.ShiftTransitionRequestDto
+import dev.buhanzaz.rwms.driver.core.network.SubmitClosingReportRequestDto
+import dev.buhanzaz.rwms.driver.core.network.TodayDriverShiftDto
+import dev.buhanzaz.rwms.driver.core.network.UpdateInspectionItemRequestDto
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
@@ -240,6 +247,69 @@ class BlockedMediaFeedReconciliationRobolectricTest {
     private class FreshEmptyFeedApi : DriverGatewayApi {
         val feedCalls = AtomicInteger()
 
+        override suspend fun todayDriverShift(): Response<TodayDriverShiftDto> = shiftResponse()
+
+        override suspend fun markShiftBriefingSeen(
+            shiftId: String,
+            idempotencyKey: String,
+            request: ShiftTransitionRequestDto,
+        ): Response<TodayDriverShiftDto> = shiftResponse()
+
+        override suspend fun confirmShiftMedicalCheck(
+            shiftId: String,
+            idempotencyKey: String,
+            request: ConfirmMedicalCheckRequestDto,
+        ): Response<TodayDriverShiftDto> = shiftResponse()
+
+        override suspend fun updateShiftInspectionItem(
+            shiftId: String,
+            itemId: String,
+            idempotencyKey: String,
+            request: UpdateInspectionItemRequestDto,
+        ): Response<TodayDriverShiftDto> = shiftResponse()
+
+        override suspend fun completeShiftInspection(
+            shiftId: String,
+            idempotencyKey: String,
+            request: ShiftTransitionRequestDto,
+        ): Response<TodayDriverShiftDto> = shiftResponse()
+
+        override suspend fun startShift(
+            shiftId: String,
+            idempotencyKey: String,
+            request: ShiftTransitionRequestDto,
+        ): Response<TodayDriverShiftDto> = shiftResponse()
+
+        override suspend fun startShiftClosing(
+            shiftId: String,
+            idempotencyKey: String,
+            request: ShiftTransitionRequestDto,
+        ): Response<TodayDriverShiftDto> = shiftResponse()
+
+        override suspend fun confirmShiftWarehouseReturn(
+            shiftId: String,
+            idempotencyKey: String,
+            request: ReturnToWarehouseRequestDto,
+        ): Response<TodayDriverShiftDto> = shiftResponse()
+
+        override suspend fun submitShiftClosingReport(
+            shiftId: String,
+            idempotencyKey: String,
+            request: SubmitClosingReportRequestDto,
+        ): Response<TodayDriverShiftDto> = shiftResponse()
+
+        override suspend fun reserveShiftPhoto(
+            shiftId: String,
+            idempotencyKey: String,
+            request: ReserveShiftPhotoRequestDto,
+        ): Response<TodayDriverShiftDto> = shiftResponse()
+
+        override suspend fun closeShift(
+            shiftId: String,
+            idempotencyKey: String,
+            request: ShiftTransitionRequestDto,
+        ): Response<TodayDriverShiftDto> = shiftResponse()
+
         override suspend fun driverContext(): Response<DriverContextDto> = Response.success(
             DriverContextDto(
                 driver = DriverIdentityDto(
@@ -322,6 +392,14 @@ class BlockedMediaFeedReconciliationRobolectricTest {
         ): Response<MediaAssetDto> = unused()
 
         override suspend fun mediaContent(sameOriginMediaPath: String): Response<ResponseBody> = unused()
+
+        private fun shiftResponse(): Response<TodayDriverShiftDto> = Response.success(
+            TodayDriverShiftDto(
+                enabled = false,
+                serverTime = "2026-07-26T16:53:14Z",
+                nextRequiredAction = "SHOW_TASKS",
+            ),
+        )
 
         private fun <T> unused(): Response<T> = error("This gateway call is not expected in this regression")
     }

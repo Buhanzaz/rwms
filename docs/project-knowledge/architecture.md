@@ -1,6 +1,6 @@
 # Current Architecture
 
-Status: Confirmed repository structure as of 2026-08-12.
+Status: Confirmed repository structure as of 2026-08-30.
 
 Primary evidence:
 
@@ -95,6 +95,12 @@ An authoritative request revision invalidates and rebuilds only affected
 dates. RWMS remains the owner of warehouses, orders, shipments, worker identity
 and assignment validation.
 
+Plan apply also carries one exact driver-shift snapshot per assigned
+driver/work date. Logistics validates and relays those snapshots with stable keys to task-board
+before applying individual RWMS shipment assignments; task-board, not the planner or logistics,
+owns the resulting daily shift. The snapshot retains vehicle/trailer, start odometer, trip count
+and unrounded `routeDistanceMeters`. Generated and manual simulator jobs are not transferred.
+
 A separate opt-in publishes one active anonymous workload, period-shift and
 warehouse-scoped isochrone-tariff snapshot per warehouse. The URL path owns
 warehouse
@@ -153,7 +159,7 @@ Evidence:
 | `api-gateway-service` | Stateless Spring           | Public routing and edge transport policy                                   | Downstream contracts                                                           |
 | `warehouse-service`   | Stateful Spring            | Warehouse identity, metadata and timezone                                  | [`warehouse-service.yaml`](../../contracts/openapi/warehouse-service.yaml)     |
 | `asset-service`       | Stateful Spring            | Cabins, status, equipment, balances, holds and leases                      | [`asset-service.yaml`](../../contracts/openapi/asset-service.yaml)             |
-| `task-board-service`  | Stateful Spring            | Queues, workforce, assignments and task board                              | [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml)   |
+| `task-board-service`  | Stateful Spring            | Queues, workforce, task execution and the Driver Up daily-shift state machine | [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml) |
 | `maintenance-service` | Stateful Spring            | Catalog, estimates, repairs, acceptance and write-off decisions            | [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml) |
 | `inventory-service`   | Stateful Spring            | Sessions, findings, completion and publication                             | [`inventory-service.yaml`](../../contracts/openapi/inventory-service.yaml)     |
 | `logistics-service`   | Stateful Spring            | Rental counterparties, inquiries, orders, returns, shipments and transfers | [`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml)     |
@@ -381,6 +387,18 @@ header projects only the task-board timer snapshot, and its existing
 Manager-derived CameraX surface routes either volume key to one foreground
 capture without moving evidence ownership into the client.
 
+Before those existing task destinations become executable, DriverApp follows task-board's
+server-owned `nextRequiredAction`. The additive daily flow covers the one-time briefing,
+test-mode medical confirmation, template-snapshot vehicle inspection and defects, explicit shift
+start, last-required-task closing transition, warehouse return, end vehicle condition, odometer,
+fuel, evidence and final close. Warehouse-service remains the timezone/coordinates owner; task-board
+derives the 06:00 work date and owns one shift per driver/date. Android persists only a resumable
+projection, drafts and ordered outbox, and never presents a server-authorized transition as
+completed before confirmation. Weather from task-board's cached MET Norway adapter and traffic
+from the replaceable Yandex MapKit provider fail open without changing shift business state.
+Driver-shift photos reuse the existing encrypted CameraX/media pipeline under the dedicated
+`DRIVER_SHIFT/SHIFT_EVIDENCE` media proof.
+
 The same stateful task-board owner keeps local plan changes and same-queue card
 reordering in narrow collaborators rather than in the panel or gateway:
 [`WorkerQueuePlanService`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/WorkerQueuePlanService.java),
@@ -396,6 +414,7 @@ Evidence:
 [`Worker CameraX`](../../worker-app/feature-camera/src/main/java/dev/buhanzaz/rwms/worker/feature/camera/CameraScreen.kt),
 [`DriverGatewayApi.kt`](../../driver-app/core-network/src/main/java/dev/buhanzaz/rwms/driver/core/network/DriverGatewayApi.kt),
 [`DriverApp.kt`](../../driver-app/app/src/main/java/dev/buhanzaz/rwms/driver/DriverApp.kt),
+[`DriverShiftScreen.kt`](../../driver-app/feature-shift/src/main/java/dev/buhanzaz/rwms/driver/feature/shift/DriverShiftScreen.kt),
 and
 [`LogisticsScreen.kt`](../../driver-app/feature-tasks/src/main/java/dev/buhanzaz/rwms/driver/feature/tasks/LogisticsScreen.kt).
 

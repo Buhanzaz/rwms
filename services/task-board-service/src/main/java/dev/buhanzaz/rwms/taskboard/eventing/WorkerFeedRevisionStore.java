@@ -49,6 +49,7 @@ public class WorkerFeedRevisionStore {
           WORK_QUEUE,
           BOARD_TASK,
           TASK_BOARD_ENTRY_OWNER_PROOF,
+          DRIVER_SHIFT_OWNER_PROOF,
           TASK_EVIDENCE,
           GROUP_KPI_DAY -> advanceWarehouse(requiredWarehouse(payload));
     }

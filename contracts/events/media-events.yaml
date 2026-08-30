@@ -1,7 +1,7 @@
 asyncapi: 3.1.0
 info:
   title: RWMS Media Events
-  version: 1.5.0
+  version: 1.6.0
   description: >-
     PostgreSQL is the replay authority. Facts and processing requests use
     separate schemas and aggregate families. Delivery is at-least-once.
@@ -17,8 +17,9 @@ channels:
       Keyed by mediaId; aggregate versions preserve per-media order. Owner types
       cover inventory, cabin, maintenance and logistics scopes. Logistics facts
       retain the server-derived documentId:lineId identity; browsers never
-      construct or submit that composite value. TASK_BOARD_ENTRY facts carry
-      the stable evidenceId as clientReferenceId and a WORKER actor reference.
+      construct or submit that composite value. TASK_BOARD_ENTRY and
+      DRIVER_SHIFT facts carry their stable reservation evidenceId as
+      clientReferenceId and a WORKER actor reference.
     messages:
       mediaFactV1: { $ref: '#/components/messages/MediaFactV1' }
   processingRequests:
@@ -59,6 +60,15 @@ channels:
       an active current proof explicitly contains the authenticated worker ID.
     messages:
       taskBoardEntryOwnerProofV1: { $ref: '#/components/messages/TaskBoardEntryOwnerProofV1' }
+  driverShiftOwnerProofFacts:
+    address: rwms.task-board.driver-shift-owner-proof.v1
+    description: >-
+      Driver-shift owner proofs are keyed by shift UUID and applied by a
+      dedicated aggregate checkpoint. Shift media access fails closed until an
+      active current proof names the authenticated driver in the appropriate
+      allowed or reader audience.
+    messages:
+      driverShiftOwnerProofV1: { $ref: '#/components/messages/DriverShiftOwnerProofV1' }
   cabinPhotoFacts:
     address: rwms.media.cabin-photo.v1
     description: >-
@@ -88,6 +98,9 @@ operations:
   consumeTaskBoardOwnerProofFact:
     action: receive
     channel: { $ref: '#/channels/taskBoardOwnerProofFacts' }
+  consumeDriverShiftOwnerProofFact:
+    action: receive
+    channel: { $ref: '#/channels/driverShiftOwnerProofFacts' }
   publishCabinCoverChangedFact:
     action: send
     channel: { $ref: '#/channels/cabinPhotoFacts' }
@@ -137,6 +150,17 @@ components:
             properties:
               aggregateType: { const: TASK_BOARD_ENTRY_OWNER_PROOF }
               eventType: { const: task-board.entry-owner-proof.changed.v1 }
+      x-rwms-record-key: aggregateId
+    DriverShiftOwnerProofV1:
+      name: task-board.driver-shift-owner-proof.changed.v1
+      payload:
+        allOf:
+          - $ref: './task-board/task-board-events-v1.schema.json'
+          - type: object
+            required: [aggregateType, eventType]
+            properties:
+              aggregateType: { const: DRIVER_SHIFT_OWNER_PROOF }
+              eventType: { const: task-board.driver-shift-owner-proof.changed.v1 }
       x-rwms-record-key: aggregateId
     CabinCoverChangedV1:
       name: media.cabin.cover-changed.v1

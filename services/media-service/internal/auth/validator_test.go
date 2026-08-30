@@ -152,6 +152,23 @@ func TestWorkerPrincipalRejectsAmbiguousTaskScopes(t *testing.T) {
 	}
 }
 
+func TestWorkerPrincipalAllowsDriverShiftOnlyForDriverScope(t *testing.T) {
+	warehouseID := uuid.New()
+	for scope, allowed := range map[string]bool{"driver.tasks": true, "worker.tasks": false} {
+		principal := WorkerPrincipal{
+			WarehouseID: warehouseID,
+			Scopes:      map[string]struct{}{scope: {}},
+		}
+		err := principal.RequireDriverTaskAccess(warehouseID)
+		if allowed && err != nil {
+			t.Fatalf("%s RequireDriverTaskAccess() error = %v", scope, err)
+		}
+		if !allowed && !errors.Is(err, ErrForbidden) {
+			t.Fatalf("%s RequireDriverTaskAccess() error = %v, want forbidden", scope, err)
+		}
+	}
+}
+
 func TestValidatorAcceptsExactLogisticsServiceToken(t *testing.T) {
 	fixture := newJWTFixture(t)
 	claims := fixture.validServiceClaims("media.logistics")

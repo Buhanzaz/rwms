@@ -180,6 +180,12 @@ spring:
             client-secret: ${TASK_BOARD_CLIENT_SECRET}
             authorization-grant-type: client_credentials
             scope: warehouse.timezone.read
+          warehouse-identity-read:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: ${TASK_BOARD_CLIENT_SECRET}
+            authorization-grant-type: client_credentials
+            scope: warehouse.identity.read
         provider:
           auth-service:
             token-uri: ${AUTH_TOKEN_URI}
@@ -199,6 +205,7 @@ rwms:
         - rwms.task-board.entry-owner-proof.v1
         - rwms.task-board.task-evidence.v1
         - rwms.task-board.group-kpi-day.v1
+        - rwms.task-board.driver-shift-owner-proof.v1
   task-board:
     eventing:
       outbox:
@@ -213,6 +220,21 @@ rwms:
         lease-duration: ${TASK_BOARD_FCM_LEASE_DURATION:30s}
         batch-size: ${TASK_BOARD_FCM_BATCH_SIZE:50}
         max-attempts: ${TASK_BOARD_FCM_MAX_ATTEMPTS:8}
+  driver-shift:
+    enabled: ${DRIVER_DAILY_SHIFT_ENABLED:false}
+    day-start: ${DRIVER_SHIFT_DAY_START:06:00}
+    suspicious-odometer-jump-km: ${DRIVER_SHIFT_SUSPICIOUS_ODOMETER_JUMP_KM:1500}
+    weather:
+      base-url: ${MET_NO_BASE_URL:https://api.met.no/weatherapi/locationforecast/2.0/complete}
+      user-agent: ${MET_NO_USER_AGENT:}
+      connect-timeout: ${MET_NO_CONNECT_TIMEOUT:2s}
+      read-timeout: ${MET_NO_READ_TIMEOUT:5s}
+      cache-ttl: ${MET_NO_CACHE_TTL:15m}
+      max-attempts: ${MET_NO_MAX_ATTEMPTS:2}
+    hazards:
+      wind-gust-warning: ${WEATHER_HAZARD_WIND_GUST_WARNING:13.0}
+      heavy-rain-mm-per-hour: ${WEATHER_HAZARD_HEAVY_RAIN_MM_PER_HOUR:10.0}
+      fog-area-fraction-warning-percent: ${WEATHER_HAZARD_FOG_AREA_FRACTION_WARNING_PERCENT:30.0}
   security:
     queue-registry-client-ids: ${TASK_BOARD_QUEUE_REGISTRY_CLIENT_IDS:maintenance-service}
   worker:

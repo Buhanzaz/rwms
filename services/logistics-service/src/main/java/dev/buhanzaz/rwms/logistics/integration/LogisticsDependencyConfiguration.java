@@ -45,6 +45,11 @@ class LogisticsDependencyConfiguration {
     ClientRegistration media = registration(validated, "logistics-media", "media.logistics");
     ClientRegistration taskBoard =
         registration(validated, "logistics-task-board", "task-board.logistics");
+    ClientRegistration taskBoardDriverShiftPlan =
+        registration(
+            validated,
+            LogisticsTaskBoardDependencyClient.DRIVER_SHIFT_PLAN_CLIENT,
+            LogisticsTaskBoardDependencyClient.DRIVER_SHIFT_PLAN_SCOPE);
     var registrations =
         new InMemoryClientRegistrationRepository(
             asset,
@@ -55,7 +60,8 @@ class LogisticsDependencyConfiguration {
             warehouseLifecycleConfirm,
             maintenance,
             media,
-            taskBoard);
+            taskBoard,
+            taskBoardDriverShiftPlan);
     var manager =
         new AuthorizedClientServiceOAuth2AuthorizedClientManager(
             registrations, new InMemoryOAuth2AuthorizedClientService(registrations));

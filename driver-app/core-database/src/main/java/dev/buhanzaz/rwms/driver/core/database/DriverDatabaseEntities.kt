@@ -166,7 +166,14 @@ data class DriverOutboxEntity(
     val lastError: String?,
 )
 
-@Entity(tableName = "task_evidence", indices = [Index(value = ["userId", "entryId"]), Index(value = ["userId", "state"])])
+@Entity(
+    tableName = "task_evidence",
+    indices = [
+        Index(value = ["userId", "entryId"]),
+        Index(value = ["userId", "state"]),
+        Index(value = ["userId", "ownerType", "entryId"]),
+    ],
+)
 /**
  * Defines account-scoped driver local recovery state. Room is a client projection, never the backend source of truth.
  */
@@ -191,6 +198,45 @@ data class TaskEvidenceEntity(
     val uploadPercent: Int,
     val lastError: String?,
     val createdAtEpochMillis: Long,
+    val updatedAtEpochMillis: Long,
+    @ColumnInfo(defaultValue = "'TASK_BOARD_ENTRY'")
+    val ownerType: String = "TASK_BOARD_ENTRY",
+    @ColumnInfo(defaultValue = "'WORK_RESULT'")
+    val mediaContext: String = "WORK_RESULT",
+    val photoRole: String? = null,
+    val defectId: String? = null,
+    val inspectionItemId: String? = null,
+)
+
+/** Cached server startup aggregate plus explicit pending overlay for one authenticated driver. */
+@Entity(tableName = "driver_shift_snapshot")
+data class DriverShiftSnapshotEntity(
+    @PrimaryKey val userId: String,
+    val shiftId: String?,
+    val workDate: String?,
+    val enabled: Boolean,
+    val nextRequiredAction: String,
+    val serializedTodayShift: String,
+    val serverTime: String,
+    val updatedAtEpochMillis: Long,
+)
+
+/** Process-death-safe closing input that remains a draft until the server accepts the report. */
+@Entity(
+    tableName = "driver_shift_draft",
+    indices = [Index(value = ["userId", "shiftId"], unique = true)],
+)
+data class DriverShiftDraftEntity(
+    @PrimaryKey val localId: String,
+    val userId: String,
+    val shiftId: String,
+    val step: String,
+    val vehicleCondition: String?,
+    val endOdometerText: String,
+    val fuelLevelPercent: Int?,
+    val defectId: String?,
+    val defectDescription: String,
+    val confirmSuspiciousOdometer: Boolean,
     val updatedAtEpochMillis: Long,
 )
 

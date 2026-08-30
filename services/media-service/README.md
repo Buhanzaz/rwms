@@ -56,6 +56,12 @@ This design solves four concrete problems:
   historical assigned/evidence readers. Every task-entry authorization locks
   its local proof before binding and audience rows, matching proof replacement
   order so a concurrent projection refresh cannot deadlock media access.
+- **Driver-shift evidence:** DriverApp uses the separate canonical
+  `DRIVER_SHIFT/SHIFT_EVIDENCE` owner only with `driver.tasks`, its exact
+  `worker_id`, warehouse and a current non-quarantined task-board proof.
+  Reservation `evidenceId` is the stable media client reference, so replay
+  returns one asset and finalized `READY` facts complete that exact task-board
+  reservation. WorkerApp and manager identities cannot use this owner.
 - **Customer-bound logistics media:** the exact `USER/CUSTOMER`,
   `rwms-customer-android`, sole-`customer.rental` identity may use only
   `LOGISTICS_SHIPMENT/SHIPMENT` or
@@ -137,12 +143,13 @@ Flyway is external to this process. Apply
 `db/migration/V16__client_image_variants.sql`, then
 `db/migration/V17__consolidate_legacy_cabin_photo_folders.sql`, then
 `db/migration/V18__customer_shipment_subject_binding.sql`, then
-`db/migration/V19__customer_profile_avatar_owner.sql` before starting the
+`db/migration/V19__customer_profile_avatar_owner.sql`, then
+`db/migration/V20__driver_shift_media_owner.sql` before starting the
 service. The Go application never migrates, baselines, repairs or silently
 adopts a database.
 
-- New local/test databases migrate through V1 to V19.
-- A database already at V18 applies V19. V14 adds
+- New local/test databases migrate through V1 to V20.
+- A database already at V19 applies V20. V14 adds
   and backfills the task-entry read audience without deleting owner proofs,
   media rows or objects. V15 replaces only
   `media_inventory_finding_inbox_check2`: canonical departed, refreshed and
@@ -159,6 +166,10 @@ adopts a database.
   existing owner unbound. V19 admits the non-structured
   `LOGISTICS_CUSTOMER_PROFILE`/`CUSTOMER_PROFILE` proof, requires its exact
   subject binding, and preserves every existing media, proof and shipment row.
+  V20 additively admits `DRIVER_SHIFT/SHIFT_EVIDENCE`, its stable unique
+  reservation reference, isolated owner-proof inbox/projection/audiences and
+  conflict quarantine; existing assets, proofs and object versions are not
+  rewritten or removed.
 - `baselineOnMigrate` must remain `false`; a non-empty unversioned database is
   rejected.
 - Startup verifies both successful Flyway history rows, their versions,
@@ -198,6 +209,8 @@ absent.
 | `MEDIA_KAFKA_INVENTORY_OWNER_DLT_TOPIC` | Media-owned inventory owner consumer DLT |
 | `MEDIA_KAFKA_ASSET_RENTAL_ITEM_TOPIC` | Canonical asset rental-item fact topic |
 | `MEDIA_KAFKA_CABIN_OWNER_GROUP` | Dedicated dynamic CABIN owner consumer group |
+| `MEDIA_KAFKA_DRIVER_SHIFT_OWNER_PROOF_TOPIC` | Canonical task-board driver-shift proof topic |
+| `MEDIA_KAFKA_DRIVER_SHIFT_OWNER_PROOF_GROUP` | Dedicated driver-shift proof consumer group |
 | `MEDIA_INSTANCE_ID` | Unique safe ASCII lease/fence owner ID |
 
 When a video MIME type is allowed, `MEDIA_MAX_VIDEO_DURATION`,
@@ -228,6 +241,9 @@ The inventory owner consumer settings are likewise fixed to
 `rwms.inventory.session.v1.media-service-inventory-owner-v1.dlt`.
 The CABIN owner consumer settings are fixed to
 `rwms.asset.rental-item.v1` and `media-service-cabin-owner-v1`.
+The driver-shift owner settings are fixed to
+`rwms.task-board.driver-shift-owner-proof.v1` and
+`media-service-driver-shift-owner-proof-v1`.
 
 `production` requires HTTPS issuer/JWKS URLs and TLS MinIO. Plain HTTP and
 `MEDIA_MINIO_USE_SSL=false` are accepted only under the explicit `local-test`

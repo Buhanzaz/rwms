@@ -5,6 +5,7 @@ import com.google.common.truth.Truth.assertThat
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
+import kotlinx.coroutines.runBlocking
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -486,12 +487,110 @@ class DriverDatabaseCreateOpenRobolectricTest {
         context.deleteDatabase(name)
     }
 
+    @Test
+    fun migrationSevenToEightPreservesEvidenceAndAddsResumableShiftTables() {
+        val context = RuntimeEnvironment.getApplication()
+        val name = "driver-room-shift-migration.db"
+        context.deleteDatabase(name)
+        val versionSeven = openHelper(
+            context = context,
+            name = name,
+            version = 7,
+            onCreate = { database ->
+                database.execSQL(
+                    """
+                    CREATE TABLE `task_evidence` (
+                        `evidenceId` TEXT NOT NULL,
+                        `userId` TEXT NOT NULL,
+                        `entryId` TEXT NOT NULL,
+                        PRIMARY KEY(`evidenceId`)
+                    )
+                    """.trimIndent(),
+                )
+            },
+        )
+        versionSeven.writableDatabase.execSQL(
+            "INSERT INTO `task_evidence` VALUES ('evidence', 'driver', 'entry')",
+        )
+        versionSeven.close()
+
+        val versionEight = openHelper(
+            context = context,
+            name = name,
+            version = 8,
+            onCreate = { error("Expected the version 7 database to exist") },
+            onUpgrade = { database -> DriverDatabase.MIGRATION_7_8.migrate(database) },
+        )
+        val database = versionEight.writableDatabase
+
+        assertThat(columns(database, "task_evidence")).containsAtLeast(
+            "ownerType",
+            "mediaContext",
+            "photoRole",
+            "defectId",
+            "inspectionItemId",
+        )
+        database.query(
+            "SELECT `ownerType`, `mediaContext`, `photoRole` FROM `task_evidence` WHERE `evidenceId`='evidence'",
+        ).use { cursor ->
+            assertThat(cursor.moveToFirst()).isTrue()
+            assertThat(cursor.getString(0)).isEqualTo("TASK_BOARD_ENTRY")
+            assertThat(cursor.getString(1)).isEqualTo("WORK_RESULT")
+            assertThat(cursor.isNull(2)).isTrue()
+        }
+        assertThat(tableExists(database, "driver_shift_snapshot")).isTrue()
+        assertThat(tableExists(database, "driver_shift_draft")).isTrue()
+        versionEight.close()
+        context.deleteDatabase(name)
+    }
+
+    @Test
+    fun closingDraftSurvivesDatabaseReopen() {
+        runBlocking {
+            val context = RuntimeEnvironment.getApplication()
+            val name = "driver-room-shift-resume.db"
+            context.deleteDatabase(name)
+            val first = Room.databaseBuilder(context, DriverDatabase::class.java, name).build()
+            first.shiftDraftDao().upsert(
+                DriverShiftDraftEntity(
+                    localId = "driver:shift",
+                    userId = "driver",
+                    shiftId = "shift",
+                    step = "ODOMETER",
+                    vehicleCondition = "NO_NEW_DEFECTS",
+                    endOdometerText = "128642",
+                    fuelLevelPercent = null,
+                    defectId = null,
+                    defectDescription = "",
+                    confirmSuspiciousOdometer = false,
+                    updatedAtEpochMillis = 42,
+                ),
+            )
+            first.close()
+
+            val reopened = Room.databaseBuilder(context, DriverDatabase::class.java, name).build()
+            val restored = reopened.shiftDraftDao().draft("driver", "shift")
+
+            assertThat(restored?.step).isEqualTo("ODOMETER")
+            assertThat(restored?.endOdometerText).isEqualTo("128642")
+            assertThat(restored?.vehicleCondition).isEqualTo("NO_NEW_DEFECTS")
+            reopened.close()
+            context.deleteDatabase(name)
+        }
+    }
+
     private fun columns(database: SupportSQLiteDatabase, table: String): List<String> =
         database.query("PRAGMA table_info(`$table`)").use { cursor ->
             buildList {
                 while (cursor.moveToNext()) add(cursor.getString(cursor.getColumnIndexOrThrow("name")))
             }
         }
+
+    private fun tableExists(database: SupportSQLiteDatabase, table: String): Boolean =
+        database.query(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            arrayOf(table),
+        ).use { cursor -> cursor.moveToFirst() }
 
     private fun openHelper(
         context: android.content.Context,

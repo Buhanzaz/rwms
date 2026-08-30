@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.taskboard.eventing;
 
 import dev.buhanzaz.rwms.platform.contracts.DomainEventEnvelopeV2;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.BoardTaskFact;
+import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.DriverShiftOwnerProofFact;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.EntryOwnerProofFact;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.GroupKpiDayFact;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.QueueEntryFact;
@@ -32,28 +33,30 @@ public class TaskBoardEventPayloadPolicy {
       "token", "secret", "email", "phone", "name", "description", "comment", "title",
       "unitnumber", "tasktext", "roleingroup", "requestfingerprint", "reason",
       "externalreferenceid");
-  private static final Map<TaskBoardAggregateType, Class<?>> PAYLOAD_TYPES = Map.of(
-      TaskBoardAggregateType.WORKER_CLASS, WorkerClassFact.class,
-      TaskBoardAggregateType.WORKER, WorkerFact.class,
-      TaskBoardAggregateType.WORKER_GROUP, WorkerGroupFact.class,
-      TaskBoardAggregateType.WORK_QUEUE, WorkQueueFact.class,
-      TaskBoardAggregateType.QUEUE_USAGE_REFERENCE, QueueUsageReferenceFact.class,
-      TaskBoardAggregateType.BOARD_TASK, BoardTaskFact.class,
-      TaskBoardAggregateType.QUEUE_ENTRY, QueueEntryFact.class,
-      TaskBoardAggregateType.TASK_BOARD_ENTRY_OWNER_PROOF, EntryOwnerProofFact.class,
-      TaskBoardAggregateType.TASK_EVIDENCE, TaskEvidenceFact.class,
-      TaskBoardAggregateType.GROUP_KPI_DAY, GroupKpiDayFact.class);
-  private static final Map<TaskBoardAggregateType, String> ID_FIELDS = Map.of(
-      TaskBoardAggregateType.WORKER_CLASS, "workerClassId",
-      TaskBoardAggregateType.WORKER, "workerId",
-      TaskBoardAggregateType.WORKER_GROUP, "workerGroupId",
-      TaskBoardAggregateType.WORK_QUEUE, "workQueueId",
-      TaskBoardAggregateType.QUEUE_USAGE_REFERENCE, "queueUsageReferenceId",
-      TaskBoardAggregateType.BOARD_TASK, "boardTaskId",
-      TaskBoardAggregateType.QUEUE_ENTRY, "queueEntryId",
-      TaskBoardAggregateType.TASK_BOARD_ENTRY_OWNER_PROOF, "ownerId",
-      TaskBoardAggregateType.TASK_EVIDENCE, "evidenceId",
-      TaskBoardAggregateType.GROUP_KPI_DAY, "evidenceId");
+  private static final Map<TaskBoardAggregateType, Class<?>> PAYLOAD_TYPES = Map.ofEntries(
+      Map.entry(TaskBoardAggregateType.WORKER_CLASS, WorkerClassFact.class),
+      Map.entry(TaskBoardAggregateType.WORKER, WorkerFact.class),
+      Map.entry(TaskBoardAggregateType.WORKER_GROUP, WorkerGroupFact.class),
+      Map.entry(TaskBoardAggregateType.WORK_QUEUE, WorkQueueFact.class),
+      Map.entry(TaskBoardAggregateType.QUEUE_USAGE_REFERENCE, QueueUsageReferenceFact.class),
+      Map.entry(TaskBoardAggregateType.BOARD_TASK, BoardTaskFact.class),
+      Map.entry(TaskBoardAggregateType.QUEUE_ENTRY, QueueEntryFact.class),
+      Map.entry(TaskBoardAggregateType.TASK_BOARD_ENTRY_OWNER_PROOF, EntryOwnerProofFact.class),
+      Map.entry(TaskBoardAggregateType.TASK_EVIDENCE, TaskEvidenceFact.class),
+      Map.entry(TaskBoardAggregateType.GROUP_KPI_DAY, GroupKpiDayFact.class),
+      Map.entry(TaskBoardAggregateType.DRIVER_SHIFT_OWNER_PROOF, DriverShiftOwnerProofFact.class));
+  private static final Map<TaskBoardAggregateType, String> ID_FIELDS = Map.ofEntries(
+      Map.entry(TaskBoardAggregateType.WORKER_CLASS, "workerClassId"),
+      Map.entry(TaskBoardAggregateType.WORKER, "workerId"),
+      Map.entry(TaskBoardAggregateType.WORKER_GROUP, "workerGroupId"),
+      Map.entry(TaskBoardAggregateType.WORK_QUEUE, "workQueueId"),
+      Map.entry(TaskBoardAggregateType.QUEUE_USAGE_REFERENCE, "queueUsageReferenceId"),
+      Map.entry(TaskBoardAggregateType.BOARD_TASK, "boardTaskId"),
+      Map.entry(TaskBoardAggregateType.QUEUE_ENTRY, "queueEntryId"),
+      Map.entry(TaskBoardAggregateType.TASK_BOARD_ENTRY_OWNER_PROOF, "ownerId"),
+      Map.entry(TaskBoardAggregateType.TASK_EVIDENCE, "evidenceId"),
+      Map.entry(TaskBoardAggregateType.GROUP_KPI_DAY, "evidenceId"),
+      Map.entry(TaskBoardAggregateType.DRIVER_SHIFT_OWNER_PROOF, "ownerId"));
   private static final Map<Class<?>, Set<String>> OPTIONAL_COMPATIBILITY_FIELDS =
       Map.of(
           BoardTaskFact.class,

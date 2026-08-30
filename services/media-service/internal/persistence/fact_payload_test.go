@@ -30,13 +30,15 @@ func TestFactPayloadPreservesLegacyWireShapeAndAddsTaskEvidenceReference(t *test
 	}
 
 	evidenceID := uuid.New()
-	taskPayload := decodeFactPayload(t, AssetRecord{
-		ID: mediaID, FolderID: folderID, OwnerType: OwnerTypeTaskBoardEntry, OwnerID: ownerID.String(),
-		WarehouseID: warehouseID, Kind: media.KindImage, ClientReferenceID: &evidenceID,
-	})
-	assertExactPayloadFields(t, taskPayload, append(append([]string(nil), legacyFields...), "clientReferenceId"))
-	if taskPayload["clientReferenceId"] != evidenceID.String() {
-		t.Fatalf("task fact clientReferenceId = %#v, want %s", taskPayload["clientReferenceId"], evidenceID)
+	for _, ownerType := range []string{OwnerTypeTaskBoardEntry, OwnerTypeDriverShift} {
+		workerPayload := decodeFactPayload(t, AssetRecord{
+			ID: mediaID, FolderID: folderID, OwnerType: ownerType, OwnerID: ownerID.String(),
+			WarehouseID: warehouseID, Kind: media.KindImage, ClientReferenceID: &evidenceID,
+		})
+		assertExactPayloadFields(t, workerPayload, append(append([]string(nil), legacyFields...), "clientReferenceId"))
+		if workerPayload["clientReferenceId"] != evidenceID.String() {
+			t.Fatalf("%s fact clientReferenceId = %#v, want %s", ownerType, workerPayload["clientReferenceId"], evidenceID)
+		}
 	}
 }
 

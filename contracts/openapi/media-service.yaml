@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Media Service API
-  version: 1.17.0
+  version: 1.18.0
   license: { name: UNLICENSED }
   description: >-
     Stateful Go media API. PostgreSQL owns metadata and replay state; MinIO
@@ -449,8 +449,9 @@ paths:
         Requires USER with rwms.write and warehouse EDIT, CustomerApp USER with
         exactly customer.rental for its subject-bound LOGISTICS_SHIPMENT or
         LOGISTICS_CUSTOMER_PROFILE owner, or WORKER with exactly
-        one of worker.tasks or driver.tasks only for TASK_BOARD_ENTRY/WORK_RESULT
-        and a current owner proof containing its worker_id. Only proven canonical owner/context
+        one of worker.tasks or driver.tasks only for TASK_BOARD_ENTRY/WORK_RESULT,
+        or specifically driver.tasks for DRIVER_SHIFT/SHIFT_EVIDENCE, and a
+        current owner proof containing its worker_id. Only proven canonical owner/context
         pairs declared by MediaOwnerType are accepted.
         At most 100 live media assets may belong to one owner. The
         returned content path is same-origin and never reveals a MinIO origin
@@ -583,8 +584,9 @@ paths:
       operationId: finalizeUploadSession
       description: >-
         Requires the session-owning principal and rechecks the current owner
-        proof. TASK_BOARD_ENTRY finalization preserves clientReferenceId in the
-        emitted media fact so task-board can complete the reservation. A
+        proof. TASK_BOARD_ENTRY and DRIVER_SHIFT finalization preserve
+        clientReferenceId in the emitted media fact so task-board can complete
+        the reservation. A
         client-variant image can complete only after all three declared WebP
         objects are pinned and the request repeats their immutable metadata.
       parameters:
@@ -623,6 +625,10 @@ paths:
         task-evidence and inventory folders remain separately grouped.
         CustomerApp may list only its exact subject-bound shipment or profile
         avatar owner; manager and worker identities cannot read profile avatars.
+        A DRIVER WORKER may list DRIVER_SHIFT/SHIFT_EVIDENCE only with
+        driver.tasks, the matching warehouse and worker_id in the active
+        current proof's readerWorkerIds; missing, inactive or quarantined proof
+        fails closed.
       parameters:
         - $ref: '#/components/parameters/OwnerType'
         - $ref: '#/components/parameters/OwnerId'
@@ -687,7 +693,10 @@ paths:
       description: >-
         CustomerApp may stream only its exact subject-bound shipment or profile
         avatar original. Manager and worker identities cannot read profile
-        avatars.
+        avatars. A DRIVER WORKER may stream DRIVER_SHIFT/SHIFT_EVIDENCE only
+        with driver.tasks, the matching warehouse and worker_id in the active
+        current proof's readerWorkerIds; missing, inactive or quarantined proof
+        fails closed.
       parameters:
         - $ref: '#/components/parameters/MediaId'
         - name: generation
@@ -731,7 +740,10 @@ paths:
       description: >-
         CustomerApp may stream only its exact subject-bound shipment or profile
         avatar derivative. Manager and worker identities cannot read profile
-        avatars.
+        avatars. A DRIVER WORKER may stream DRIVER_SHIFT/SHIFT_EVIDENCE only
+        with driver.tasks, the matching warehouse and worker_id in the active
+        current proof's readerWorkerIds; missing, inactive or quarantined proof
+        fails closed.
       parameters:
         - $ref: '#/components/parameters/MediaId'
         - $ref: '#/components/parameters/Variant'
@@ -835,7 +847,7 @@ components:
       name: ownerId
       in: query
       required: false
-      description: Required for inventory, cabin, maintenance, task-board and LOGISTICS_CUSTOMER_PROFILE owners; forbidden for structured logistics owners.
+      description: Required for inventory, cabin, maintenance, task-board, driver-shift and LOGISTICS_CUSTOMER_PROFILE owners; forbidden for structured logistics owners.
       schema: { type: string, format: uuid }
     DocumentId:
       name: documentId
@@ -1006,9 +1018,10 @@ components:
         - LOGISTICS_TRANSFER
         - LOGISTICS_CUSTOMER_PROFILE
         - TASK_BOARD_ENTRY
+        - DRIVER_SHIFT
     MediaOwnerContext:
       type: string
-      enum: [INSPECTION, WAREHOUSE, ESTIMATE, REPAIR, ACCEPTANCE, CATALOG, RETURN_INSPECTION, SHIPMENT, TRANSFER, PROFILE_AVATAR, WORK_RESULT]
+      enum: [INSPECTION, WAREHOUSE, ESTIMATE, REPAIR, ACCEPTANCE, CATALOG, RETURN_INSPECTION, SHIPMENT, TRANSFER, PROFILE_AVATAR, WORK_RESULT, SHIFT_EVIDENCE]
     MaintenanceOwnerType:
       type: string
       enum: [MAINTENANCE_ESTIMATE, MAINTENANCE_REPAIR, MAINTENANCE_ACCEPTANCE, MAINTENANCE_CATALOG_NODE]
@@ -1368,8 +1381,10 @@ components:
         lineId: { type: string, format: uuid }
         clientReferenceId:
           description: >-
-            Stable task-board evidenceId. Required and trusted only for
-            TASK_BOARD_ENTRY; forbidden for every other owner type.
+            Stable task-board evidenceId or driver-shift reservation evidenceId.
+            Required and trusted only for TASK_BOARD_ENTRY and DRIVER_SHIFT;
+            forbidden for every other owner type. A DRIVER WORKER uses the
+            same UUID as Idempotency-Key.
           type: string
           format: uuid
         warehouseId:
@@ -1468,6 +1483,11 @@ components:
           properties:
             ownerType: { const: TASK_BOARD_ENTRY }
             context: { const: WORK_RESULT }
+          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }] }
+        - required: [ownerId, clientReferenceId]
+          properties:
+            ownerType: { const: DRIVER_SHIFT }
+            context: { const: SHIFT_EVIDENCE }
           not: { anyOf: [{ required: [documentId] }, { required: [lineId] }] }
       allOf:
         - oneOf:

@@ -39,6 +39,7 @@ class AuthTaskBoardServiceClientIntegrationTest {
     void mintsOnlySeparateExactServiceTokens() throws Exception {
         for (String scope : List.of(
                 "worker-credentials.manage",
+                "warehouse.identity.read",
                 "warehouse.timezone.read",
                 "warehouse.lifecycle.read",
                 "warehouse.lifecycle.confirm")) {
@@ -68,6 +69,9 @@ class AuthTaskBoardServiceClientIntegrationTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("invalid_scope"));
         mvc.perform(token("warehouse.operation.mark"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("invalid_scope"));
+        mvc.perform(token("warehouse.read"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("invalid_scope"));
         mvc.perform(token("asset.internal"))

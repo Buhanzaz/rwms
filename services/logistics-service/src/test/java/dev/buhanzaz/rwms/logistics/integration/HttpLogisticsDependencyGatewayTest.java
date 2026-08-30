@@ -61,6 +61,8 @@ class HttpLogisticsDependencyGatewayTest {
                     case "logistics-maintenance" -> "maintenance.logistics";
                     case "logistics-media" -> "media.logistics";
                     case "logistics-task-board" -> "task-board.logistics";
+                    case "logistics-task-board-driver-shift-plan" ->
+                        "task-board.driver-shifts.plan";
                     default -> throw new IllegalArgumentException("unexpected registration");
                   };
               OAuth2AuthorizedClient authorized = mock(OAuth2AuthorizedClient.class);
@@ -518,6 +520,106 @@ class HttpLogisticsDependencyGatewayTest {
     assertThat(assignment.homeWarehouseId()).isEqualTo(homeWarehouseId);
     assertThat(assignment.sourceWarehouseId()).isEqualTo(homeWarehouseId);
     assertThat(assignment.effectiveUntil()).isEqualTo(arrival);
+    server.verify();
+  }
+
+  @Test
+  void publishesExactDriverShiftPlanWithDedicatedScopeAndIdempotency() {
+    UUID sourceShiftId = UUID.randomUUID();
+    UUID sourcePlanId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID driverId = UUID.randomUUID();
+    UUID vehicleId = UUID.randomUUID();
+    UUID trailerId = UUID.randomUUID();
+    UUID idempotencyKey = UUID.randomUUID();
+    var plan =
+        new LogisticsDependencyGateway.DriverShiftPlanSnapshot(
+            sourcePlanId,
+            4,
+            warehouseId,
+            driverId,
+            "Александр Водитель",
+            LocalDate.of(2026, 9, 14),
+            new LogisticsDependencyGateway.DriverShiftPlanVehicle(
+                vehicleId,
+                "MAN TGS",
+                "А123АА78",
+                "FLATBED_CRANE",
+                "MAN",
+                "TGS",
+                "TRUCK_WITH_TRAILER",
+                null),
+            new LogisticsDependencyGateway.DriverShiftPlanTrailer(
+                trailerId, "Schmitz", "В456ВВ78"),
+            3,
+            247_500L);
+    server
+        .expect(
+            requestTo(
+                "http://task-board.test/api/internal/task-board/v1/driver-shift-plans/"
+                    + sourceShiftId))
+        .andExpect(method(HttpMethod.PUT))
+        .andExpect(header("Idempotency-Key", idempotencyKey.toString()))
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+        .andExpect(
+            header(
+                "Authorization", "Bearer test-task-board.driver-shifts.plan"))
+        .andExpect(jsonPath("$.sourceShiftId").doesNotExist())
+        .andExpect(jsonPath("$.sourcePlanId").value(sourcePlanId.toString()))
+        .andExpect(jsonPath("$.sourcePlanVersion").value(4))
+        .andExpect(jsonPath("$.warehouseId").value(warehouseId.toString()))
+        .andExpect(jsonPath("$.driverId").value(driverId.toString()))
+        .andExpect(jsonPath("$.workDate").value("2026-09-14"))
+        .andExpect(jsonPath("$.vehicle.id").value(vehicleId.toString()))
+        .andExpect(jsonPath("$.vehicle.configurationType").value("TRUCK_WITH_TRAILER"))
+        .andExpect(jsonPath("$.vehicle.startOdometer").doesNotExist())
+        .andExpect(jsonPath("$.trailer.id").value(trailerId.toString()))
+        .andExpect(jsonPath("$.tripCount").value(3))
+        .andExpect(jsonPath("$.routeDistanceKm").doesNotExist())
+        .andExpect(jsonPath("$.routeDistanceMeters").value(247_500))
+        .andRespond(withSuccess());
+
+    gateway.registerDriverShiftPlan(idempotencyKey, sourceShiftId, plan);
+
+    server.verify();
+  }
+
+  @Test
+  void acceptsCreatedDriverShiftPlanAndRejectsOtherSuccessfulStatuses() {
+    UUID sourceShiftId = UUID.randomUUID();
+    UUID idempotencyKey = UUID.randomUUID();
+    var plan =
+        new LogisticsDependencyGateway.DriverShiftPlanSnapshot(
+            UUID.randomUUID(),
+            1,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            "Александр Водитель",
+            LocalDate.of(2026, 9, 14),
+            new LogisticsDependencyGateway.DriverShiftPlanVehicle(
+                UUID.randomUUID(),
+                "MAN TGS",
+                "А123АА78",
+                null,
+                null,
+                null,
+                "TRUCK",
+                null),
+            null,
+            0,
+            0L);
+    String uri =
+        "http://task-board.test/api/internal/task-board/v1/driver-shift-plans/"
+            + sourceShiftId;
+    server.expect(requestTo(uri)).andRespond(withStatus(HttpStatus.CREATED));
+    server.expect(requestTo(uri)).andRespond(withStatus(HttpStatus.NO_CONTENT));
+
+    gateway.registerDriverShiftPlan(idempotencyKey, sourceShiftId, plan);
+
+    assertThatThrownBy(
+            () -> gateway.registerDriverShiftPlan(idempotencyKey, sourceShiftId, plan))
+        .isInstanceOf(LogisticsDependencyException.class)
+        .hasMessageContaining("unexpected idempotent PUT status");
     server.verify();
   }
 

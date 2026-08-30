@@ -318,6 +318,18 @@ can read back only planner-created assignment status for one warehouse/date, so 
 shown with the authoritative driver after claim; ordinary manually created documents and customer
 contacts are excluded. It never reads or writes the RWMS database directly.
 
+The same apply command may carry `driverShiftPlans` for the concrete
+simulator-assigned driver and work date. Logistics validates unique source-shift and
+driver/work-date identities, then publishes every plan before applying individual shipment
+assignments through idempotent
+`PUT /api/internal/task-board/v1/driver-shift-plans/{sourceShiftId}`. The snapshot contains the
+planner identity/version, warehouse, driver display snapshot, assigned vehicle and optional
+trailer, start odometer, trip count and exact unrounded `routeDistanceMeters`. Task-board owns the
+resulting daily shift; logistics stores no duplicate shift aggregate. Generated and manual
+simulator jobs remain simulator-only because assignment apply still accepts only `RWMS`-sourced
+deliveries. The private call uses the existing logistics service credentials with the dedicated
+least-privilege scope `task-board.driver-shifts.plan`.
+
 `GET /api/internal/logistics/v1/planning/warehouses` exposes only active warehouse-service facts
 `{warehouseId,name,city,address,timeZone}`; the owner-held address is nullable. After validating that
 warehouse identity, `GET /api/internal/logistics/v1/planning/drivers?warehouseId=...` exposes only
@@ -799,6 +811,11 @@ base URLs. See `src/main/resources/application.yaml` for exact variable names; n
 credentials or presentation secrets. Non-local Kafka settings and, in production,
 `LOGISTICS_DEPENDENCIES_ENABLED` plus `LOGISTICS_DEV_AUTH_BYPASS` are validated together by the
 startup guard without including configured secrets in failures.
+
+Driver-shift plan publication reuses `TASK_BOARD_SERVICE_URL`, `AUTH_TOKEN_URI`,
+`LOGISTICS_CLIENT_ID` and `LOGISTICS_CLIENT_SECRET`; no additional credential or direct database
+connection is introduced. Auth-service must grant the same service client the exact
+`task-board.driver-shifts.plan` scope.
 
 The presentation-token secret must be at least 32 characters, and production rejects the known local
 default. The general API is stateless OAuth2/JWT; dev auth bypass is limited to the `dev` profile.

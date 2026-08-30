@@ -328,6 +328,17 @@ scope `logistics.planning`. Ограниченный feed передаёт ident
 claim общая доставка показывается с авторитетным водителем; обычные ручные документы и контакты
 клиента исключены. Симулятор никогда не читает и не пишет базу RWMS напрямую.
 
+Та же apply-команда может передавать `driverShiftPlans` для конкретного назначенного симулятором
+водителя и рабочей даты. Logistics проверяет уникальность source shift и пары водитель/рабочая
+дата, затем публикует все планы до применения отдельных shipment assignments через idempotent
+`PUT /api/internal/task-board/v1/driver-shift-plans/{sourceShiftId}`. Snapshot содержит identity и
+версию плана, склад, display snapshot водителя, назначенный автомобиль и необязательный прицеп,
+начальный одометр, число ходок и точное неокруглённое `routeDistanceMeters`. Владельцем созданной
+daily shift является task-board; logistics не хранит второй aggregate смены. Сгенерированные и
+ручные jobs остаются только в симуляторе, потому что assignment apply по-прежнему принимает лишь
+доставки с source `RWMS`. Private-вызов использует существующие service credentials logistics с
+отдельным least-privilege scope `task-board.driver-shifts.plan`.
+
 `GET /api/internal/logistics/v1/planning/warehouses` публикует только факты активных складов от
 warehouse-service: `{warehouseId,name,city,address,timeZone}`; принадлежащий owner-у адрес nullable.
 После проверки identity склада
@@ -817,6 +828,11 @@ base URLs. Точные variable names находятся в `src/main/resources
 коммитить live credentials или presentation secrets. Startup guard совместно проверяет non-local
 Kafka settings и, в production, `LOGISTICS_DEPENDENCIES_ENABLED` с
 `LOGISTICS_DEV_AUTH_BYPASS`, не включая configured secrets в failures.
+
+Публикация планов смен использует существующие `TASK_BOARD_SERVICE_URL`, `AUTH_TOKEN_URI`,
+`LOGISTICS_CLIENT_ID` и `LOGISTICS_CLIENT_SECRET`; новый credential или прямое подключение к чужой
+БД не вводится. Auth-service должен выдать тому же service client точный scope
+`task-board.driver-shifts.plan`.
 
 Секрет presentation token должен иметь не менее 32 символов, а production отклоняет известный local
 default. Основной API использует stateless OAuth2/JWT; dev auth bypass ограничен профилем `dev`.

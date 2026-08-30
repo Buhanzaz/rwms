@@ -61,8 +61,10 @@ class MediaUploadPipeline @Inject constructor(
             val upload = gateway.createUploadSession(
                 idempotencyKey = evidence.uploadOperationId,
                 request = CreateUploadSessionRequestDto(
+                    ownerType = evidence.ownerType,
                     ownerId = evidence.entryId,
                     warehouseId = warehouseId,
+                    context = evidence.mediaContext,
                     clientReferenceId = evidence.evidenceId,
                     fileName = evidence.fileName,
                     contentLength = evidence.sizeBytes,
@@ -125,7 +127,33 @@ class MediaUploadPipeline @Inject constructor(
     /** Polling deliberately gates completion until task-board has observed Media READY. */
     private suspend fun awaitTaskBoardEvidence(evidence: TaskEvidenceEntity): EvidenceUploadResult {
         repeat(8) {
-            val remote = gateway.detail(evidence.entryId).evidence.firstOrNull { it.evidenceId == evidence.evidenceId }
+            val remote = if (evidence.ownerType == "DRIVER_SHIFT") {
+                gateway.todayDriverShift().photos
+                    .firstOrNull { it.evidenceId == evidence.evidenceId }
+                    ?.let { photo ->
+                        RemoteEvidenceState(
+                            state = photo.state,
+                            mediaId = photo.mediaId,
+                            mediaGeneration = photo.mediaGeneration,
+                            reviewReason = if (photo.state == "REVIEW_REQUIRED") {
+                                "Фотография требует проверки"
+                            } else {
+                                null
+                            },
+                        )
+                    }
+            } else {
+                gateway.detail(evidence.entryId).evidence
+                    .firstOrNull { it.evidenceId == evidence.evidenceId }
+                    ?.let { taskEvidence ->
+                        RemoteEvidenceState(
+                            state = taskEvidence.state,
+                            mediaId = taskEvidence.mediaId,
+                            mediaGeneration = taskEvidence.mediaGeneration,
+                            reviewReason = taskEvidence.reviewReason,
+                        )
+                    }
+            }
             if (remote != null) {
                 when (remote.state) {
                     "READY" -> {
@@ -188,6 +216,14 @@ class MediaUploadPipeline @Inject constructor(
         val terminalStates = setOf("READY", "REVIEW_REQUIRED", "REJECTED")
     }
 }
+
+/** Minimal common projection used while polling task and Driver Shift evidence owners. */
+private data class RemoteEvidenceState(
+    val state: String,
+    val mediaId: String?,
+    val mediaGeneration: Long?,
+    val reviewReason: String?,
+)
 
 @Module
 @InstallIn(SingletonComponent::class)

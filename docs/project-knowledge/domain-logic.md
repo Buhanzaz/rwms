@@ -276,6 +276,33 @@ idle full-table polling or a browser-owned authorization fallback. The reconcile
 complete WorkerApp plan once per warehouse batch; normal proof updates evaluate only their current
 entry and do not load the whole board. A failed pass does not advance its revision watermark.
 
+#### Driver daily shift
+
+Task-board also owns the Driver Up daily-shift aggregate and every transition in its explicit state
+machine. Logistics is only the source of the concrete planner snapshot: its private idempotent
+command carries the driver, warehouse, vehicle/trailer, start odometer, trip count and exact route
+meters. Task-board serializes first-open creation on that source plan and enforces one shift per
+`(driver_id, work_date)`. The work date comes from the warehouse-service timezone and 06:00 local
+boundary; Android time, background jobs and local flags are never authoritative.
+
+Briefing acknowledgement, test medical self-confirmation, inspection item outcomes, inspection
+completion, shift start, closing start, warehouse return, closing report, evidence reservation and
+close are separate idempotent, optimistic-concurrency commands with server audit time and actor.
+Inspection history is a template snapshot with per-item `NOT_CHECKED`/`OK`/`DEFECT` results, not
+boolean columns. Every required item must be resolved and a blocking defect prevents start. Closing
+is enabled only after all required task-board tasks assigned/planned to that exact driver/date are
+terminal; Android cannot infer the last task by list position. Return confirmation, non-decreasing
+odometer, bounded fuel level and any defect-required `READY` media are mandatory close gates. Route
+distance and odometer distance remain separate measurements.
+
+Weather and traffic are informational projections, never state-machine prerequisites. Task-board's
+bounded MET Norway adapter normalizes/cache forecasts and configurable hazards; failures yield an
+unavailable briefing. DriverApp's replaceable MapKit traffic provider follows the same fail-open
+rule. Shift photos retain media-service byte ownership under
+`DRIVER_SHIFT/SHIFT_EVIDENCE`; task-board publishes the exact worker proof and consumes the READY
+fact for its stable reservation. A queued/offline Android command never fabricates a completed
+server transition, especially `SHIFT_CLOSED`.
+
 Evidence: [`services/task-board-service/`](../../services/task-board-service/),
 [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml),
 [`DriverTaskAudienceService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/DriverTaskAudienceService.java),
@@ -292,6 +319,10 @@ Evidence: [`services/task-board-service/`](../../services/task-board-service/),
 [`MaintenanceTaskExecutionPackageService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/MaintenanceTaskExecutionPackageService.java),
 [`OrdinaryQueueAvailabilityPolicy.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/OrdinaryQueueAvailabilityPolicy.java),
 [`V31__ordinary_queue_availability_and_holding_gate.sql`](../../services/task-board-service/src/main/resources/db/migration/V31__ordinary_queue_availability_and_holding_gate.sql),
+[`DriverShiftService.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/DriverShiftService.java),
+[`V39__driver_daily_shift.sql`](../../services/task-board-service/src/main/resources/db/migration/V39__driver_daily_shift.sql),
+[`MetNoWeatherProvider.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/MetNoWeatherProvider.java),
+[`media driver-shift projection`](../../services/media-service/internal/persistence/driver_shift_owner_projection.go),
 and
 [`WorkerPushDispatcher.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/push/WorkerPushDispatcher.java).
 

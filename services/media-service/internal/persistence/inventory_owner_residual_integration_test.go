@@ -107,6 +107,7 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 			{19, "17", "consolidate legacy cabin photo folders", "V17__consolidate_legacy_cabin_photo_folders.sql", mediamigration.V17},
 			{20, "18", "customer shipment subject binding", "V18__customer_shipment_subject_binding.sql", mediamigration.V18},
 			{21, "19", "customer profile avatar owner", "V19__customer_profile_avatar_owner.sql", mediamigration.V19},
+			{22, "20", "driver shift media owner", "V20__driver_shift_media_owner.sql", mediamigration.V20},
 		} {
 			applyResidualMigration(t, ctx, pool, migration.rank, migration.version,
 				migration.description, migration.script, migration.body)
@@ -132,19 +133,19 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 		}
 	})
 
-	t.Run("clean V1 through V19 repeat and checksum drift", func(t *testing.T) {
+	t.Run("clean V1 through V20 repeat and checksum drift", func(t *testing.T) {
 		databaseURL := testsupport.NewIsolatedPostgresDatabase(t, environment.DatabaseURL)
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		pool := openResidualPool(t, ctx, databaseURL)
-		installResidualMigrations(t, ctx, pool, 21)
+		installResidualMigrations(t, ctx, pool, 22)
 		pool.Close()
 
 		first, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open clean V1 through V19 database: %v", err)
+			t.Fatalf("open clean V1 through V20 database: %v", err)
 		}
-		assertTaskBoardV8ConstraintsValidated(t, ctx, first.Pool)
+		assertWorkerEvidenceConstraintsValidated(t, ctx, first.Pool)
 		first.Close()
 		second, err := Open(ctx, databaseURL)
 		if err != nil {
@@ -208,10 +209,12 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 			"V18__customer_shipment_subject_binding.sql", mediamigration.V18)
 		applyResidualMigration(t, ctx, pool, 21, "19", "customer profile avatar owner",
 			"V19__customer_profile_avatar_owner.sql", mediamigration.V19)
+		applyResidualMigration(t, ctx, pool, 22, "20", "driver shift media owner",
+			"V20__driver_shift_media_owner.sql", mediamigration.V20)
 		pool.Close()
 		database, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open V14 reader-backfill database after V19: %v", err)
+			t.Fatalf("open V14 reader-backfill database after V20: %v", err)
 		}
 		database.Close()
 	})
@@ -316,10 +319,12 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 			"V18__customer_shipment_subject_binding.sql", mediamigration.V18)
 		applyResidualMigration(t, ctx, pool, 21, "19", "customer profile avatar owner",
 			"V19__customer_profile_avatar_owner.sql", mediamigration.V19)
+		applyResidualMigration(t, ctx, pool, 22, "20", "driver shift media owner",
+			"V20__driver_shift_media_owner.sql", mediamigration.V20)
 		pool.Close()
 		upgraded, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("Open(V19 membership-marker upgrade) error = %v", err)
+			t.Fatalf("Open(V20 membership-marker upgrade) error = %v", err)
 		}
 		upgraded.Close()
 	})
@@ -379,13 +384,15 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 			"V18__customer_shipment_subject_binding.sql", mediamigration.V18)
 		applyResidualMigration(t, ctx, pool, 21, "19", "customer profile avatar owner",
 			"V19__customer_profile_avatar_owner.sql", mediamigration.V19)
+		applyResidualMigration(t, ctx, pool, 22, "20", "driver shift media owner",
+			"V20__driver_shift_media_owner.sql", mediamigration.V20)
 		pool.Close()
 		database, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open upgraded V19 database: %v", err)
+			t.Fatalf("open upgraded V20 database: %v", err)
 		}
 		defer database.Close()
-		assertTaskBoardV8ConstraintsValidated(t, ctx, database.Pool)
+		assertWorkerEvidenceConstraintsValidated(t, ctx, database.Pool)
 		var active bool
 		var proofAggregateType, proofConsumerName string
 		if err := database.Pool.QueryRow(ctx, `select active,proof_aggregate_type,proof_consumer_name
@@ -456,7 +463,7 @@ func TestInventoryOwnerResidualStreamAndReconciliationGateReal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	pool := openResidualPool(t, ctx, databaseURL)
-	installResidualMigrations(t, ctx, pool, 21)
+	installResidualMigrations(t, ctx, pool, 22)
 	pool.Close()
 	database, err := Open(ctx, databaseURL)
 	if err != nil {
@@ -743,10 +750,11 @@ func installResidualMigrations(t testing.TB, ctx context.Context, pool *pgxpool.
 		{"consolidate legacy cabin photo folders", "V17__consolidate_legacy_cabin_photo_folders.sql", mediamigration.V17},
 		{"customer shipment subject binding", "V18__customer_shipment_subject_binding.sql", mediamigration.V18},
 		{"customer profile avatar owner", "V19__customer_profile_avatar_owner.sql", mediamigration.V19},
+		{"driver shift media owner", "V20__driver_shift_media_owner.sql", mediamigration.V20},
 	}
 	for index := 0; index < through; index++ {
 		migration := migrations[index]
-		versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19"}
+		versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20"}
 		applyResidualMigration(t, ctx, pool, index+1, versions[index], migration.description,
 			migration.script, migration.body)
 	}
@@ -767,19 +775,19 @@ func applyResidualMigration(t testing.TB, ctx context.Context, pool *pgxpool.Poo
 	}
 }
 
-func assertTaskBoardV8ConstraintsValidated(t testing.TB, ctx context.Context, pool *pgxpool.Pool) {
+func assertWorkerEvidenceConstraintsValidated(t testing.TB, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	for _, name := range []string{
-		"media_asset_task_board_client_reference_check",
+		"media_asset_worker_evidence_client_reference_check",
 		"media_asset_created_by_actor_check",
 	} {
 		var validated bool
 		if err := pool.QueryRow(ctx, `select convalidated from pg_constraint
 			where conrelid='media_asset'::regclass and conname=$1`, name).Scan(&validated); err != nil {
-			t.Fatalf("read V8 constraint %s: %v", name, err)
+			t.Fatalf("read current worker-evidence constraint %s: %v", name, err)
 		}
 		if !validated {
-			t.Fatalf("V8 constraint %s remains NOT VALID", name)
+			t.Fatalf("current worker-evidence constraint %s remains NOT VALID", name)
 		}
 	}
 }

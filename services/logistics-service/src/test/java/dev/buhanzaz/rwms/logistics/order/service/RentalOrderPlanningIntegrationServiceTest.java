@@ -3,10 +3,16 @@ package dev.buhanzaz.rwms.logistics.order.service;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.ApplyPlanningAssignmentsRequest;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningAssignmentRequest;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverAudienceMode;
+import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftPlanRequest;
+import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftTrailerRequest;
+import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftVehicleConfiguration;
+import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftVehicleRequest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -52,6 +58,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 /** Verifies the versioned, date-fenced hand-off between RWMS orders and the route planner. */
 class RentalOrderPlanningIntegrationServiceTest {
@@ -400,7 +407,8 @@ class RentalOrderPlanningIntegrationServiceTest {
                         formerlyEligibleDate,
                         DRIVER_ID,
                         "Водитель 1",
-                        List.of(UNIT_ONE)))));
+                        List.of(UNIT_ONE))),
+                List.of(shiftPlan(formerlyEligibleDate))));
 
     assertThat(response.rejected()).isEmpty();
     assertThat(response.applied()).singleElement().satisfies(applied -> {
@@ -409,6 +417,135 @@ class RentalOrderPlanningIntegrationServiceTest {
     });
     verify(orders, never()).findPlanningCandidateById(any());
     verify(lifecycle, never()).prepareDocument(any(), any(), any(), any());
+    verify(dependencies).registerDriverShiftPlan(any(), any(), any());
+  }
+
+  @Test
+  void registersShiftPlanBeforeCreatingShipmentAndPreservesTheExactSnapshot() {
+    LocalDate scheduled = LocalDate.now(MOSCOW).plusDays(3);
+    LogisticsDependencyGateway.OrderUnitReservation unitReservation = reservation(UNIT_ONE);
+    when(order.getDesiredDeliveryWindows())
+        .thenReturn(List.of(DesiredDeliveryWindow.create(scheduled, scheduled)));
+    when(reads.readUnits(order)).thenReturn(List.of(unitReservation));
+    when(lifecycle.prepareDocument(any(), any(), any(), any())).thenReturn(mockAdmission());
+    when(rentalOrders.createRentalShipment(any(), any(), any(), any(), any(), any()))
+        .thenReturn(documentResult(UUID.randomUUID()));
+    PlanningDriverShiftPlanRequest shiftPlan = shiftPlan(scheduled);
+
+    var response =
+        service.apply(
+            UUID.randomUUID(),
+            request(
+                List.of(
+                    new PlanningAssignmentRequest(
+                        ORDER_ID, 7L, scheduled, DRIVER_ID, "Водитель 1", List.of(UNIT_ONE))),
+                List.of(shiftPlan)));
+
+    assertThat(response.applied()).hasSize(1);
+    ArgumentCaptor<UUID> registrationKey = ArgumentCaptor.forClass(UUID.class);
+    ArgumentCaptor<UUID> registeredSourceShiftId = ArgumentCaptor.forClass(UUID.class);
+    ArgumentCaptor<LogisticsDependencyGateway.DriverShiftPlanSnapshot> snapshot =
+        ArgumentCaptor.forClass(LogisticsDependencyGateway.DriverShiftPlanSnapshot.class);
+    InOrder sequence = inOrder(dependencies, rentalOrders);
+    sequence
+        .verify(dependencies)
+        .registerDriverShiftPlan(
+            registrationKey.capture(), registeredSourceShiftId.capture(), snapshot.capture());
+    sequence
+        .verify(rentalOrders)
+        .createRentalShipment(any(), eq(ORDER_ID), any(), any(), any(), any());
+    assertThat(registrationKey.getValue()).isNotNull();
+    assertThat(registeredSourceShiftId.getValue()).isEqualTo(shiftPlan.sourceShiftId());
+    assertThat(snapshot.getValue())
+        .extracting(
+            LogisticsDependencyGateway.DriverShiftPlanSnapshot::sourcePlanId,
+            LogisticsDependencyGateway.DriverShiftPlanSnapshot::sourcePlanVersion,
+            LogisticsDependencyGateway.DriverShiftPlanSnapshot::warehouseId,
+            LogisticsDependencyGateway.DriverShiftPlanSnapshot::driverId,
+            LogisticsDependencyGateway.DriverShiftPlanSnapshot::workDate,
+            LogisticsDependencyGateway.DriverShiftPlanSnapshot::tripCount,
+            LogisticsDependencyGateway.DriverShiftPlanSnapshot::routeDistanceMeters)
+        .containsExactly(
+            shiftPlan.sourcePlanId(),
+            1L,
+            WAREHOUSE_ID,
+            DRIVER_ID,
+            scheduled,
+            3,
+            247_500L);
+    assertThat(snapshot.getValue().vehicle().configurationType())
+        .isEqualTo("TRUCK_WITH_TRAILER");
+    assertThat(snapshot.getValue().trailer().registrationNumber()).isEqualTo("В456ВВ78");
+  }
+
+  @Test
+  void exactShiftPlanReplayUsesTheSameRegistrationKeyAcrossBatchRetries() {
+    LocalDate scheduled = LocalDate.now(MOSCOW).plusDays(3);
+    ApplyPlanningAssignmentsRequest command = request(List.of(), List.of(shiftPlan(scheduled)));
+
+    service.apply(UUID.randomUUID(), command);
+    service.apply(UUID.randomUUID(), command);
+
+    ArgumentCaptor<UUID> keys = ArgumentCaptor.forClass(UUID.class);
+    verify(dependencies, times(2)).registerDriverShiftPlan(keys.capture(), any(), any());
+    assertThat(keys.getAllValues()).hasSize(2).doesNotContainNull();
+    assertThat(keys.getAllValues().get(0)).isEqualTo(keys.getAllValues().get(1));
+  }
+
+  @Test
+  void taskBoardShiftPlanFailureStopsBeforeAnyShipmentOutcome() {
+    LocalDate scheduled = LocalDate.now(MOSCOW).plusDays(3);
+    doThrow(new IllegalStateException("task-board unavailable"))
+        .when(dependencies)
+        .registerDriverShiftPlan(any(), any(), any());
+
+    assertThatThrownBy(
+            () ->
+                service.apply(
+                    UUID.randomUUID(),
+                    request(
+                        List.of(
+                            new PlanningAssignmentRequest(
+                                ORDER_ID,
+                                7L,
+                                scheduled,
+                                DRIVER_ID,
+                                "Водитель 1",
+                                List.of(UNIT_ONE))),
+                        List.of(shiftPlan(scheduled)))))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("task-board unavailable");
+    verify(rentalOrders, never()).replayRentalShipment(any(), any(), any(), any());
+    verify(rentalOrders, never()).createRentalShipment(any(), any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void rejectsTwoSourceShiftsForTheSameDriverWorkdayBeforePublication() {
+    LocalDate scheduled = LocalDate.now(MOSCOW).plusDays(3);
+    PlanningDriverShiftPlanRequest first = shiftPlan(scheduled);
+    PlanningDriverShiftPlanRequest second = shiftPlan(scheduled, UUID.randomUUID());
+
+    assertThatThrownBy(
+            () ->
+                service.apply(
+                    UUID.randomUUID(), request(List.of(), List.of(first, second))))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("one shift plan");
+    verify(dependencies, never()).registerDriverShiftPlan(any(), any(), any());
+  }
+
+  @Test
+  void rejectsDuplicateSourceShiftIdentityBeforePublication() {
+    PlanningDriverShiftPlanRequest shiftPlan =
+        shiftPlan(LocalDate.now(MOSCOW).plusDays(3));
+
+    assertThatThrownBy(
+            () ->
+                service.apply(
+                    UUID.randomUUID(), request(List.of(), List.of(shiftPlan, shiftPlan))))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("source driver shift");
+    verify(dependencies, never()).registerDriverShiftPlan(any(), any(), any());
   }
 
   @Test
@@ -527,8 +664,50 @@ class RentalOrderPlanningIntegrationServiceTest {
 
   private static ApplyPlanningAssignmentsRequest request(
       List<PlanningAssignmentRequest> assignments) {
+    return request(assignments, List.of());
+  }
+
+  private static ApplyPlanningAssignmentsRequest request(
+      List<PlanningAssignmentRequest> assignments,
+      List<PlanningDriverShiftPlanRequest> driverShiftPlans) {
     return new ApplyPlanningAssignmentsRequest(
-        WAREHOUSE_ID, UUID.fromString("10000000-0000-0000-0000-000000000010"), 1L, assignments);
+        WAREHOUSE_ID,
+        UUID.fromString("10000000-0000-0000-0000-000000000010"),
+        1L,
+        assignments,
+        driverShiftPlans);
+  }
+
+  private static PlanningDriverShiftPlanRequest shiftPlan(LocalDate workDate) {
+    return shiftPlan(
+        workDate, UUID.fromString("10000000-0000-0000-0000-000000000011"));
+  }
+
+  private static PlanningDriverShiftPlanRequest shiftPlan(
+      LocalDate workDate, UUID sourceShiftId) {
+    return new PlanningDriverShiftPlanRequest(
+        sourceShiftId,
+        UUID.fromString("10000000-0000-0000-0000-000000000010"),
+        1L,
+        WAREHOUSE_ID,
+        DRIVER_ID,
+        "Водитель 1",
+        workDate,
+        new PlanningDriverShiftVehicleRequest(
+            UUID.fromString("10000000-0000-0000-0000-000000000012"),
+            "MAN TGS",
+            "А123АА78",
+            "FLATBED_CRANE",
+            "MAN",
+            "TGS",
+            PlanningDriverShiftVehicleConfiguration.TRUCK_WITH_TRAILER,
+            null),
+        new PlanningDriverShiftTrailerRequest(
+            UUID.fromString("10000000-0000-0000-0000-000000000013"),
+            "Schmitz",
+            "В456ВВ78"),
+        3,
+        247_500L);
   }
 
   private static LogisticsDependencyGateway.OrderUnitReservation reservation(UUID unitId) {

@@ -13,6 +13,7 @@ const (
 	OwnerTypeMaintenanceCatalogNode   = "MAINTENANCE_CATALOG_NODE"
 	OwnerTypeLogisticsCustomerProfile = "LOGISTICS_CUSTOMER_PROFILE"
 	OwnerTypeTaskBoardEntry           = "TASK_BOARD_ENTRY"
+	OwnerTypeDriverShift              = "DRIVER_SHIFT"
 	ViewerContextEstimate             = "ESTIMATE"
 	ViewerContextRepair               = "REPAIR"
 	ViewerContextAcceptance           = "ACCEPTANCE"
@@ -22,6 +23,7 @@ const (
 	ViewerContextTransfer             = "TRANSFER"
 	ViewerContextProfileAvatar        = "PROFILE_AVATAR"
 	ViewerContextWorkResult           = "WORK_RESULT"
+	ViewerContextShiftEvidence        = "SHIFT_EVIDENCE"
 	MaintenanceOwnerProofConsumer     = "media-service-maintenance-owner-proof-v1"
 	LogisticsOwnerProofConsumer       = "media-service-logistics-owner-proof-v1"
 	MaintenanceOwnerProofService      = "maintenance-service"
@@ -31,6 +33,9 @@ const (
 	TaskBoardEntryOwnerProofConsumer  = "media-service-task-board-entry-owner-proof-v1"
 	TaskBoardEntryOwnerProofTopic     = "rwms.task-board.entry-owner-proof.v1"
 	TaskBoardEntryOwnerProofAggregate = "TASK_BOARD_ENTRY_OWNER_PROOF"
+	DriverShiftOwnerProofConsumer     = "media-service-driver-shift-owner-proof-v1"
+	DriverShiftOwnerProofTopic        = "rwms.task-board.driver-shift-owner-proof.v1"
+	DriverShiftOwnerProofAggregate    = "DRIVER_SHIFT_OWNER_PROOF"
 )
 
 // OwnerScopeDefinition declares the authoritative service, scope, aggregate,
@@ -97,6 +102,17 @@ var ownerScopeDefinitions = map[string]OwnerScopeDefinition{
 		ConsumerName:  TaskBoardEntryOwnerProofConsumer,
 		AggregateType: TaskBoardEntryOwnerProofAggregate,
 	},
+	OwnerTypeDriverShift: {
+		OwnerType: OwnerTypeDriverShift, ViewerContext: ViewerContextShiftEvidence,
+		ConsumerName:  DriverShiftOwnerProofConsumer,
+		AggregateType: DriverShiftOwnerProofAggregate,
+	},
+}
+
+// IsWorkerEvidenceOwnerType reports whether the owner requires a stable client
+// reference and a current task-board worker-audience proof.
+func IsWorkerEvidenceOwnerType(ownerType string) bool {
+	return ownerType == OwnerTypeTaskBoardEntry || ownerType == OwnerTypeDriverShift
 }
 
 // PublicOwnerScope returns the owner definition only when its browser-facing

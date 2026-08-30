@@ -947,6 +947,44 @@ class LogisticsContractFoundationTest {
   }
 
   @Test
+  void plannerApplyContractCarriesOnlyImmutableDriverVehicleShiftSnapshots() throws Exception {
+    Map<String, Object> schemas = child(child(openApi(), "components"), "schemas");
+    Map<String, Object> command = child(schemas, "ApplyPlanningAssignmentsRequest");
+    Map<String, Object> commandProperties = child(command, "properties");
+    assertThat(command.get("required"))
+        .isEqualTo(List.of("warehouseId", "planId", "planVersion", "assignments"));
+    assertThat(child(commandProperties, "driverShiftPlans"))
+        .containsEntry("default", List.of())
+        .containsEntry("maxItems", 500);
+
+    Map<String, Object> plan = child(schemas, "PlanningDriverShiftPlan");
+    assertThat(child(plan, "properties"))
+        .containsOnlyKeys(
+            "sourceShiftId",
+            "sourcePlanId",
+            "sourcePlanVersion",
+            "warehouseId",
+            "driverId",
+            "driverName",
+            "workDate",
+            "vehicle",
+            "trailer",
+            "tripCount",
+            "routeDistanceMeters")
+        .doesNotContainKeys("apiKey", "accessToken", "clientSecret");
+    assertThat(child(child(schemas, "PlanningDriverShiftVehicle"), "properties"))
+        .containsOnlyKeys(
+            "id",
+            "name",
+            "registrationNumber",
+            "vehicleType",
+            "manufacturer",
+            "model",
+            "configurationType",
+            "startOdometer");
+  }
+
+  @Test
   void plannerResourceDirectoryExposesWarehouseRoutingAndQualifiedDriverAvailability()
       throws Exception {
     Map<String, Object> document = openApi();

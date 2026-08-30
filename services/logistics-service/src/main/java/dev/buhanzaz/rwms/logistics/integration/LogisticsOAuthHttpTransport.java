@@ -214,6 +214,33 @@ final class LogisticsOAuthHttpTransport {
     }
   }
 
+  /** Sends an idempotent PUT whose successful owner response intentionally has no required body. */
+  void putBodiless(
+      String uri,
+      UUID key,
+      Object body,
+      String registration,
+      String scope,
+      FailurePolicy failurePolicy) {
+    try {
+      ResponseEntity<Void> response =
+          client
+              .put()
+              .uri(uri)
+              .header("Idempotency-Key", key.toString())
+              .header(HttpHeaders.AUTHORIZATION, bearer(registration, scope))
+              .body(body)
+              .retrieve()
+              .toBodilessEntity();
+      if (response.getStatusCode() != HttpStatus.OK
+          && response.getStatusCode() != HttpStatus.CREATED) {
+        throw malformed("Dependency returned an unexpected idempotent PUT status");
+      }
+    } catch (RuntimeException exception) {
+      throw failure(failurePolicy, exception);
+    }
+  }
+
   /** Sends already-canonical JSON with PUT so durable retries preserve the exact request bytes. */
   <T> T putExactJson(
       String uri,

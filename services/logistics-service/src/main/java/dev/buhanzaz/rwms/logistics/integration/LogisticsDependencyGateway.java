@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.integration;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskAudienceMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskWorkerContent;
 import java.math.BigDecimal;
@@ -100,6 +101,38 @@ public interface LogisticsDependencyGateway
       this(workerId, displayName, "STAFF", null, null, null, null, "HOME");
     }
   }
+
+  /** Immutable planned vehicle identity sent to the task-board shift owner. */
+  @JsonInclude(JsonInclude.Include.NON_NULL)
+  record DriverShiftPlanVehicle(
+      UUID id,
+      String name,
+      String registrationNumber,
+      String vehicleType,
+      String manufacturer,
+      String model,
+      String configurationType,
+      Long startOdometer) {}
+
+  /** Optional immutable planned trailer identity sent to the task-board shift owner. */
+  record DriverShiftPlanTrailer(UUID id, String name, String registrationNumber) {}
+
+  /**
+   * Exact plan-version snapshot used by task-board to prepare one driver workday idempotently;
+   * route distance remains an unrounded int64 meter total across the owner boundary.
+   */
+  @JsonInclude(JsonInclude.Include.NON_NULL)
+  record DriverShiftPlanSnapshot(
+      UUID sourcePlanId,
+      long sourcePlanVersion,
+      UUID warehouseId,
+      UUID driverId,
+      String driverName,
+      LocalDate workDate,
+      DriverShiftPlanVehicle vehicle,
+      DriverShiftPlanTrailer trailer,
+      int tripCount,
+      long routeDistanceMeters) {}
 
   /** Task-board-owned operational placement history linked to one logistics transfer. */
   record WorkerOperationalAssignment(
