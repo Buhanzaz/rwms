@@ -3187,7 +3187,7 @@ components:
     CustomerCabinPage:
       type: object
       additionalProperties: false
-      required: [content, page, size, totalElements, totalPages]
+      required: [content, page, size, totalElements, totalPages, estimatedDeliveryDates]
       properties:
         content:
           type: array
@@ -3196,6 +3196,12 @@ components:
         size: { type: integer, format: int64, minimum: 1, maximum: 100 }
         totalElements: { type: integer, format: int64, minimum: 0 }
         totalPages: { type: integer, format: int64, minimum: 0 }
+        estimatedDeliveryDates:
+          type: array
+          maxItems: 4
+          uniqueItems: true
+          description: Earliest warehouse-local days with provisional one-cabin capacity derived from simulator shifts, generated jobs, durable bookings and representative support calendars. This guidance is not an address-based route promise or capacity reservation.
+          items: { type: string, format: date }
     ReplaceCustomerCabinsRequest:
       type: object
       additionalProperties: false
@@ -6979,8 +6985,9 @@ components:
           description: True for NORMAL presentations, which collect one to four requestable client receiving dates; false for REPLACEMENT.
         requestableDeliveryDates:
           type: array
+          maxItems: 4
           uniqueItems: true
-          description: For NORMAL, the four warehouse-local dates from day +2 through day +5; empty for REPLACEMENT. These dates are requestable preferences, not a promise that capacity has already been reserved.
+          description: For NORMAL, up to four earliest warehouse-local dates with provisional one-cabin capacity derived from simulator shifts, current workload and representative support calendars; empty for REPLACEMENT. These dates are requestable preferences, not an address-based route promise or capacity reservation.
           items: { type: string, format: date }
         desiredDeliveryWindows:
           type: array

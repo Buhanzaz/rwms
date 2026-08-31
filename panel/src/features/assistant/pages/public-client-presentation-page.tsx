@@ -2,26 +2,36 @@ import { useMemo, useRef, useState } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import {
   Add01Icon,
+  ArrowRight01Icon,
   Calendar03Icon,
   CheckmarkCircle02Icon,
+  ComputerIcon,
+  DeliveryTruck01Icon,
   Image01Icon,
   Loading03Icon,
+  Moon02Icon,
   MinusSignIcon,
+  ShoppingCart01Icon,
+  ShoppingCartAdd01Icon,
+  ShoppingCartRemove01Icon,
+  Store01Icon,
+  Sun03Icon,
 } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ru } from "date-fns/locale"
 import { useParams } from "react-router-dom"
 
 import { PhotoCarousel } from "@/components/media/photo-carousel"
+import { type Theme, useTheme } from "@/components/theme-provider"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Calendar } from "@/components/ui/calendar"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   Card,
   CardContent,
   CardDescription,
+  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
@@ -35,7 +45,6 @@ import {
 } from "@/components/ui/dialog"
 import {
   Field,
-  FieldContent,
   FieldDescription,
   FieldError,
   FieldGroup,
@@ -52,6 +61,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Separator } from "@/components/ui/separator"
 import {
   confirmPublicPresentation,
   getPublicPresentation,
@@ -307,6 +317,17 @@ export function PublicClientPresentationPage() {
         })
       : 0
   const selectedCabinList = selectedCabins(presentation, selectedIds)
+  const deliveryGuidance = normalPresentation
+    ? formatDeliveryGuidance(requestableDeliveryDates)
+    : presentation.desiredDeliveryWindows[0]
+      ? formatDesiredWindow(presentation.desiredDeliveryWindows[0])
+      : "по условиям текущего заказа"
+  const deliveryGuidanceLabel = normalPresentation
+    ? "Ориентир доставки"
+    : "Срок доставки"
+  const deliveryGuidanceHint = normalPresentation
+    ? "Точный срок уточним после адреса и маршрута."
+    : "Дата и срок аренды при замене не меняются."
   const normalDetailsStep = normalPresentation && normalStep === "details"
   const canAdvanceToDetails =
     !viewOnly &&
@@ -433,57 +454,78 @@ export function PublicClientPresentationPage() {
 
   return (
     <main className="h-svh overflow-y-auto bg-muted/30 text-foreground">
-      <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
-          <div>
-            <p className="text-base font-bold tracking-tight">RWMS</p>
-            <p className="text-xs text-muted-foreground">
-              {presentation.mode === "REPLACEMENT"
-                ? "Выбор замены бытовок"
-                : "Подборка бытовок для аренды"}
-            </p>
+      <header className="sticky top-0 z-30 border-b bg-background/95 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-foreground text-background">
+              <HugeiconsIcon icon={Store01Icon} className="size-5" />
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-base font-semibold tracking-tight">
+                Каталог бытовок
+              </p>
+              <p className="truncate text-xs text-muted-foreground">
+                {presentation.mode === "REPLACEMENT"
+                  ? "Выбор замены для текущего заказа"
+                  : "Аренда с доставкой и установкой"}
+              </p>
+            </div>
           </div>
-          {presentation.mode === "REPLACEMENT" || normalStep === "selection" ? (
-            <Select
-              onValueChange={(value) =>
-                document
-                  .getElementById(`offer-group-${value}`)
-                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
-              }
-            >
-              <SelectTrigger
-                aria-label="Перейти к группе бытовок"
-                className="w-48 sm:w-64"
+          <div className="flex min-w-0 basis-full items-center justify-end gap-2 sm:basis-auto sm:flex-none">
+            {presentation.mode === "REPLACEMENT" ||
+            normalStep === "selection" ? (
+              <Select
+                onValueChange={(value) =>
+                  document
+                    .getElementById(`offer-group-${value}`)
+                    ?.scrollIntoView({ behavior: "smooth", block: "start" })
+                }
               >
-                <SelectValue placeholder="Перейти к группе" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {presentation.groups.map((group) => (
-                    <SelectItem key={group.key} value={group.key}>
-                      {group.label}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          ) : null}
+                <SelectTrigger
+                  aria-label="Перейти к группе бытовок"
+                  className="min-w-0 flex-1 sm:w-56 sm:flex-none"
+                >
+                  <SelectValue placeholder="Группа бытовок" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {presentation.groups.map((group) => (
+                      <SelectItem key={group.key} value={group.key}>
+                        {group.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            ) : null}
+            <ThemeControl />
+          </div>
         </div>
       </header>
 
-      <div className="mx-auto max-w-6xl px-4 pt-8 pb-[calc(10rem+env(safe-area-inset-bottom))] sm:px-6">
-        <div className="mb-8 flex flex-col gap-4 rounded-2xl border bg-background p-5 shadow-sm">
+      <div className="mx-auto max-w-7xl px-4 pt-6 pb-[calc(10rem+env(safe-area-inset-bottom))] sm:px-6 sm:pt-8">
+        <section
+          className="mb-8 flex flex-col gap-4"
+          aria-labelledby="offer-title"
+        >
           <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <h1 className="text-2xl font-semibold tracking-tight">
+            <div className="max-w-3xl">
+              <h1
+                id="offer-title"
+                className="text-2xl font-semibold tracking-tight sm:text-3xl"
+              >
                 {presentation.mode === "REPLACEMENT"
                   ? "Выберите бытовки на замену"
-                  : "Доступные бытовки"}
+                  : normalDetailsStep
+                    ? "Оформление заявки"
+                    : "Бытовки в аренду"}
               </h1>
-              <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+              <p className="mt-2 text-sm text-muted-foreground sm:text-base">
                 {presentation.mode === "REPLACEMENT"
                   ? `Нужно выбрать ровно ${requiredSelectionCount ?? 0}. Порядок выбора соответствует порядку заменяемых бытовок.`
-                  : "Выберите бытовки и при необходимости добавьте наполнение отдельно в каждую из них."}
+                  : normalDetailsStep
+                    ? "Укажите удобную дату, срок аренды и адрес доставки."
+                    : "Каждая бытовка — отдельный экземпляр. Выберите подходящие варианты и комплектацию."}
               </p>
             </div>
             <Badge variant={viewOnly ? "outline" : "secondary"}>
@@ -563,234 +605,266 @@ export function PublicClientPresentationPage() {
               </AlertDescription>
             </Alert>
           ) : null}
-        </div>
+        </section>
 
         {normalDetailsStep ? (
           <section
             aria-label="Дата, срок и доставка"
             className="flex flex-col gap-6"
           >
-            <Card>
-              <CardHeader>
-                <CardTitle>Выбранные бытовки и наполнение</CardTitle>
-                <CardDescription>
-                  Проверьте выбранные бытовки. Чтобы изменить выбор или
-                  наполнение, вернитесь на предыдущий шаг.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ul className="flex flex-col gap-3">
-                  {selectedCabinList.map((cabin) => {
-                    const furniture =
-                      presentation.equipmentAvailability.flatMap(
-                        (equipment) => {
-                          const quantity = desiredQuantity(
-                            furnitureDraft,
-                            cabin.id,
-                            equipment.equipmentId
+            <div className="grid items-start gap-6 xl:grid-cols-[minmax(20rem,0.8fr)_minmax(32rem,1.2fr)]">
+              <div className="flex flex-col gap-4">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Выбранные бытовки и наполнение</CardTitle>
+                    <CardDescription>
+                      Проверьте выбранные бытовки. Чтобы изменить выбор или
+                      наполнение, вернитесь на предыдущий шаг.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <ul className="flex flex-col gap-3">
+                      {selectedCabinList.map((cabin) => {
+                        const furniture =
+                          presentation.equipmentAvailability.flatMap(
+                            (equipment) => {
+                              const quantity = desiredQuantity(
+                                furnitureDraft,
+                                cabin.id,
+                                equipment.equipmentId
+                              )
+                              return quantity > 0
+                                ? [`${equipment.equipmentName} — ${quantity}`]
+                                : []
+                            }
                           )
-                          return quantity > 0
-                            ? [`${equipment.equipmentName} — ${quantity}`]
+                        return (
+                          <li
+                            key={cabin.id}
+                            className="flex flex-col gap-1 rounded-lg bg-muted p-3"
+                          >
+                            <span className="font-medium">
+                              Бытовка {cabin.number}
+                            </span>
+                            <span className="text-sm text-muted-foreground">
+                              {furniture.length > 0
+                                ? `Добавлено: ${furniture.join(", ")}`
+                                : "Дополнительное наполнение не выбрано."}
+                            </span>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </CardContent>
+                </Card>
+                <Alert className="text-delivery-estimate">
+                  <HugeiconsIcon icon={DeliveryTruck01Icon} />
+                  <AlertTitle>Ориентир доставки: {deliveryGuidance}</AlertTitle>
+                  <AlertDescription>
+                    Даты учитывают текущую загрузку доставки и рабочие дни
+                    склада. Точный срок уточним после адреса и проверки
+                    маршрута.
+                  </AlertDescription>
+                </Alert>
+              </div>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Дата, срок и данные доставки</CardTitle>
+                  <CardDescription>
+                    Дата — пожелание для согласования с логистом. Срок начнёт
+                    считаться от фактической даты отгрузки.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <FieldSet className="gap-5">
+                    <FieldGroup className="gap-5">
+                      <Field
+                        data-invalid={
+                          requestableDesiredDates.length === 0 ||
+                          Boolean(desiredDateError)
+                            ? true
+                            : undefined
+                        }
+                      >
+                        <FieldLabel>Желаемые даты получения</FieldLabel>
+                        <div className="w-fit max-w-full overflow-x-auto rounded-lg border">
+                          <Calendar
+                            key={requestableDeliveryDates[0] ?? "no-dates"}
+                            mode="multiple"
+                            locale={ru}
+                            defaultMonth={
+                              requestableDeliveryDates[0]
+                                ? new Date(
+                                    `${requestableDeliveryDates[0]}T12:00:00`
+                                  )
+                                : undefined
+                            }
+                            selected={requestableDesiredDates}
+                            disabled={(date) =>
+                              viewOnly ||
+                              Boolean(effectiveBooking) ||
+                              !requestableDeliveryDateSet.has(
+                                calendarDateValue(date)
+                              ) ||
+                              (requestableDesiredDates.length >=
+                                maxDesiredDeliveryDates &&
+                                !requestableDesiredDates.some(
+                                  (selectedDate) =>
+                                    calendarDateValue(selectedDate) ===
+                                    calendarDateValue(date)
+                                ))
+                            }
+                            aria-label="Календарь выбора желаемой даты получения"
+                            aria-invalid={requestableDesiredDates.length === 0}
+                            onSelect={selectDesiredDates}
+                          />
+                        </div>
+                        <FieldDescription>
+                          {requestableDeliveryDates.length > 0
+                            ? `Доступны для запроса и согласования: ${requestableDeliveryDates
+                                .map(formatCalendarDate)
+                                .join(", ")}`
+                            : "Сейчас нет дат, доступных для запроса. Обратитесь к менеджеру за новым предложением."}
+                        </FieldDescription>
+                        <FieldDescription>
+                          Выбор даты не резервирует логистическую мощность до
+                          согласования с логистом.
+                        </FieldDescription>
+                        <FieldDescription>
+                          {`Выбрано дней: ${requestableDesiredDates.length} из ${maxDesiredDeliveryDates}.`}
+                        </FieldDescription>
+                        {requestableDesiredDates.length > 0 ? (
+                          <FieldDescription>
+                            {desiredWindowInputs
+                              .map((window) =>
+                                formatCalendarDate(window.startDate)
+                              )
+                              .join(", ")}
+                          </FieldDescription>
+                        ) : null}
+                        {desiredDateError ? (
+                          <FieldError>{desiredDateError}</FieldError>
+                        ) : null}
+                      </Field>
+
+                      <Field>
+                        <FieldLabel id="public-presentation-rental-months-label">
+                          Срок аренды
+                        </FieldLabel>
+                        <div
+                          role="group"
+                          aria-labelledby="public-presentation-rental-months-label"
+                          className="flex w-fit items-center gap-2"
+                        >
+                          <Button
+                            type="button"
+                            size="icon-sm"
+                            variant="outline"
+                            disabled={
+                              viewOnly ||
+                              Boolean(effectiveBooking) ||
+                              rentalMonths <= 1
+                            }
+                            aria-label="Уменьшить срок аренды"
+                            onClick={() => setRentalMonths(rentalMonths - 1)}
+                          >
+                            <HugeiconsIcon icon={MinusSignIcon} />
+                          </Button>
+                          <output
+                            aria-live="polite"
+                            className="min-w-20 text-center text-sm font-medium tabular-nums"
+                          >
+                            {formatRentalMonths(rentalMonths)}
+                          </output>
+                          <Button
+                            type="button"
+                            size="icon-sm"
+                            variant="outline"
+                            disabled={viewOnly || Boolean(effectiveBooking)}
+                            aria-label="Увеличить срок аренды"
+                            onClick={() => setRentalMonths(rentalMonths + 1)}
+                          >
+                            <HugeiconsIcon icon={Add01Icon} />
+                          </Button>
+                        </div>
+                        <FieldDescription>
+                          После назначения отгрузки система автоматически
+                          рассчитает дату возврата для выбранных бытовок.
+                        </FieldDescription>
+                      </Field>
+
+                      <Field
+                        data-invalid={!normalizedDeliveryAddress || undefined}
+                      >
+                        <FieldLabel htmlFor="public-presentation-delivery-address">
+                          Адрес доставки
+                        </FieldLabel>
+                        <Input
+                          id="public-presentation-delivery-address"
+                          value={deliveryAddress}
+                          required
+                          disabled={viewOnly || Boolean(effectiveBooking)}
+                          maxLength={1_000}
+                          aria-invalid={!normalizedDeliveryAddress}
+                          autoComplete="street-address"
+                          placeholder="Город, улица, дом, ориентир"
+                          onChange={(event) =>
+                            setDeliveryAddress(event.target.value)
+                          }
+                        />
+                        {!normalizedDeliveryAddress ? (
+                          <FieldError>Укажите адрес доставки.</FieldError>
+                        ) : null}
+                      </Field>
+
+                      <Field
+                        data-invalid={
+                          Boolean(parsedCoordinates.error) || undefined
+                        }
+                      >
+                        <FieldLabel htmlFor="public-presentation-coordinates">
+                          Координаты
+                        </FieldLabel>
+                        <Input
+                          id="public-presentation-coordinates"
+                          value={coordinates}
+                          disabled={viewOnly || Boolean(effectiveBooking)}
+                          maxLength={64}
+                          aria-invalid={Boolean(parsedCoordinates.error)}
+                          autoComplete="off"
+                          placeholder="55.75, 37.61"
+                          onChange={(event) =>
+                            setCoordinates(event.target.value)
+                          }
+                        />
+                        {parsedCoordinates.error ? (
+                          <FieldError>{parsedCoordinates.error}</FieldError>
+                        ) : (
+                          <FieldDescription>
+                            Необязательно. Укажите широту и долготу через
+                            запятую.
+                          </FieldDescription>
+                        )}
+                      </Field>
+
+                      <AdditionalContactsFields
+                        idPrefix="public-presentation"
+                        value={additionalContacts}
+                        errors={
+                          parsedAdditionalContacts.contacts === null
+                            ? parsedAdditionalContacts.errors
                             : []
                         }
-                      )
-                    return (
-                      <li
-                        key={cabin.id}
-                        className="flex flex-col gap-1 rounded-lg border p-3"
-                      >
-                        <span className="font-medium">
-                          Бытовка {cabin.number}
-                        </span>
-                        <span className="text-sm text-muted-foreground">
-                          {furniture.length > 0
-                            ? `Добавлено: ${furniture.join(", ")}`
-                            : "Дополнительное наполнение не выбрано."}
-                        </span>
-                      </li>
-                    )
-                  })}
-                </ul>
-              </CardContent>
-            </Card>
-
-            <FieldSet className="gap-5">
-              <FieldLegend>Дата, срок и данные доставки</FieldLegend>
-              <FieldDescription>
-                Дата — пожелание для согласования с логистом. Срок начнёт
-                считаться от фактической даты отгрузки.
-              </FieldDescription>
-              <FieldGroup className="gap-5">
-                <Field
-                  data-invalid={
-                    requestableDesiredDates.length === 0 ||
-                    Boolean(desiredDateError)
-                      ? true
-                      : undefined
-                  }
-                >
-                  <FieldLabel>Желаемые даты получения</FieldLabel>
-                  <div className="w-fit max-w-full overflow-x-auto rounded-lg border">
-                    <Calendar
-                      key={requestableDeliveryDates[0] ?? "no-dates"}
-                      mode="multiple"
-                      locale={ru}
-                      defaultMonth={
-                        requestableDeliveryDates[0]
-                          ? new Date(`${requestableDeliveryDates[0]}T12:00:00`)
-                          : undefined
-                      }
-                      selected={requestableDesiredDates}
-                      disabled={(date) =>
-                        viewOnly ||
-                        Boolean(effectiveBooking) ||
-                        !requestableDeliveryDateSet.has(
-                          calendarDateValue(date)
-                        ) ||
-                        (requestableDesiredDates.length >=
-                          maxDesiredDeliveryDates &&
-                          !requestableDesiredDates.some(
-                            (selectedDate) =>
-                              calendarDateValue(selectedDate) ===
-                              calendarDateValue(date)
-                          ))
-                      }
-                      aria-label="Календарь выбора желаемой даты получения"
-                      aria-invalid={requestableDesiredDates.length === 0}
-                      onSelect={selectDesiredDates}
-                    />
-                  </div>
-                  <FieldDescription>
-                    {requestableDeliveryDates.length > 0
-                      ? `Доступны для запроса и согласования: ${requestableDeliveryDates
-                          .map(formatCalendarDate)
-                          .join(", ")}`
-                      : "Сейчас нет дат, доступных для запроса. Обратитесь к менеджеру за новым предложением."}
-                  </FieldDescription>
-                  <FieldDescription>
-                    Выбор даты не резервирует логистическую мощность до
-                    согласования с логистом.
-                  </FieldDescription>
-                  <FieldDescription>
-                    {`Выбрано дней: ${requestableDesiredDates.length} из ${maxDesiredDeliveryDates}.`}
-                  </FieldDescription>
-                  {requestableDesiredDates.length > 0 ? (
-                    <FieldDescription>
-                      {desiredWindowInputs
-                        .map((window) => formatCalendarDate(window.startDate))
-                        .join(", ")}
-                    </FieldDescription>
-                  ) : null}
-                  {desiredDateError ? (
-                    <FieldError>{desiredDateError}</FieldError>
-                  ) : null}
-                </Field>
-
-                <Field>
-                  <FieldLabel id="public-presentation-rental-months-label">
-                    Срок аренды
-                  </FieldLabel>
-                  <div
-                    role="group"
-                    aria-labelledby="public-presentation-rental-months-label"
-                    className="flex w-fit items-center gap-2"
-                  >
-                    <Button
-                      type="button"
-                      size="icon-sm"
-                      variant="outline"
-                      disabled={
-                        viewOnly ||
-                        Boolean(effectiveBooking) ||
-                        rentalMonths <= 1
-                      }
-                      aria-label="Уменьшить срок аренды"
-                      onClick={() => setRentalMonths(rentalMonths - 1)}
-                    >
-                      <HugeiconsIcon icon={MinusSignIcon} />
-                    </Button>
-                    <output
-                      aria-live="polite"
-                      className="min-w-20 text-center text-sm font-medium tabular-nums"
-                    >
-                      {formatRentalMonths(rentalMonths)}
-                    </output>
-                    <Button
-                      type="button"
-                      size="icon-sm"
-                      variant="outline"
-                      disabled={viewOnly || Boolean(effectiveBooking)}
-                      aria-label="Увеличить срок аренды"
-                      onClick={() => setRentalMonths(rentalMonths + 1)}
-                    >
-                      <HugeiconsIcon icon={Add01Icon} />
-                    </Button>
-                  </div>
-                  <FieldDescription>
-                    После назначения отгрузки система автоматически рассчитает
-                    дату возврата для выбранных бытовок.
-                  </FieldDescription>
-                </Field>
-
-                <Field data-invalid={!normalizedDeliveryAddress || undefined}>
-                  <FieldLabel htmlFor="public-presentation-delivery-address">
-                    Адрес доставки
-                  </FieldLabel>
-                  <Input
-                    id="public-presentation-delivery-address"
-                    value={deliveryAddress}
-                    required
-                    disabled={viewOnly || Boolean(effectiveBooking)}
-                    maxLength={1_000}
-                    aria-invalid={!normalizedDeliveryAddress}
-                    autoComplete="street-address"
-                    placeholder="Город, улица, дом, ориентир"
-                    onChange={(event) => setDeliveryAddress(event.target.value)}
-                  />
-                  {!normalizedDeliveryAddress ? (
-                    <FieldError>Укажите адрес доставки.</FieldError>
-                  ) : null}
-                </Field>
-
-                <Field
-                  data-invalid={Boolean(parsedCoordinates.error) || undefined}
-                >
-                  <FieldLabel htmlFor="public-presentation-coordinates">
-                    Координаты
-                  </FieldLabel>
-                  <Input
-                    id="public-presentation-coordinates"
-                    value={coordinates}
-                    disabled={viewOnly || Boolean(effectiveBooking)}
-                    maxLength={64}
-                    aria-invalid={Boolean(parsedCoordinates.error)}
-                    autoComplete="off"
-                    placeholder="55.75, 37.61"
-                    onChange={(event) => setCoordinates(event.target.value)}
-                  />
-                  {parsedCoordinates.error ? (
-                    <FieldError>{parsedCoordinates.error}</FieldError>
-                  ) : (
-                    <FieldDescription>
-                      Необязательно. Укажите широту и долготу через запятую.
-                    </FieldDescription>
-                  )}
-                </Field>
-
-                <AdditionalContactsFields
-                  idPrefix="public-presentation"
-                  value={additionalContacts}
-                  errors={
-                    parsedAdditionalContacts.contacts === null
-                      ? parsedAdditionalContacts.errors
-                      : []
-                  }
-                  disabled={viewOnly || Boolean(effectiveBooking)}
-                  ownerLabel="заказа"
-                  onChange={setAdditionalContacts}
-                />
-              </FieldGroup>
-            </FieldSet>
+                        disabled={viewOnly || Boolean(effectiveBooking)}
+                        ownerLabel="заказа"
+                        onChange={setAdditionalContacts}
+                      />
+                    </FieldGroup>
+                  </FieldSet>
+                </CardContent>
+              </Card>
+            </div>
           </section>
         ) : (
           <div className="flex flex-col gap-12">
@@ -804,8 +878,7 @@ export function PublicClientPresentationPage() {
                   <div>
                     <h2 className="text-xl font-semibold">{group.label}</h2>
                     <p className="text-sm text-muted-foreground">
-                      {group.cabins.length}{" "}
-                      {formatCabinCount(group.cabins.length)}
+                      Каждый вариант — отдельный экземпляр
                     </p>
                   </div>
                 </div>
@@ -817,6 +890,9 @@ export function PublicClientPresentationPage() {
                       selected={selectedIds.includes(cabin.id)}
                       furniture={furnitureDraft[cabin.id] ?? {}}
                       equipmentAvailability={presentation.equipmentAvailability}
+                      deliveryGuidance={deliveryGuidance}
+                      deliveryGuidanceLabel={deliveryGuidanceLabel}
+                      deliveryGuidanceHint={deliveryGuidanceHint}
                       disabled={viewOnly || Boolean(effectiveBooking)}
                       furnitureDisabled={presentation.mode === "REPLACEMENT"}
                       onToggle={() => toggleCabin(cabin.id)}
@@ -833,78 +909,102 @@ export function PublicClientPresentationPage() {
         )}
       </div>
 
-      <div className="sticky bottom-0 z-40 border-t bg-background/95 px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
-          <div className="text-sm">
+      <div className="pointer-events-none sticky bottom-0 z-30 px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:px-6">
+        <div className="mx-auto flex max-w-7xl justify-end">
+          <section
+            aria-label="Корзина заказа"
+            aria-live="polite"
+            className="pointer-events-auto flex w-full flex-col gap-3 rounded-2xl bg-cart-surface p-3 text-cart-surface-foreground shadow-2xl sm:w-auto sm:min-w-xl sm:flex-row sm:items-center sm:justify-between"
+          >
             {completed ? (
-              <span className="inline-flex items-center gap-2 font-medium text-emerald-700">
+              <span className="inline-flex items-center gap-2 text-sm font-medium">
                 <HugeiconsIcon icon={CheckmarkCircle02Icon} />
                 Выбор отправлен менеджеру
               </span>
             ) : rejected ? (
-              <span className="text-destructive">
+              <span className="text-sm text-destructive">
                 Выбор больше нельзя подтвердить. Попросите менеджера отправить
                 обновлённую ссылку.
               </span>
             ) : effectiveBooking?.state === "PENDING" ? (
-              <span className="inline-flex items-center gap-2">
+              <span className="inline-flex items-center gap-2 text-sm">
                 <HugeiconsIcon icon={Loading03Icon} className="animate-spin" />
                 Создаём бронирование…
               </span>
             ) : viewOnly ? (
-              <span className="text-muted-foreground">
+              <span className="text-sm text-cart-surface-foreground/70">
                 Срок удержания истёк — представление доступно только для
                 просмотра.
               </span>
-            ) : requiredSelectionCount === null ? (
-              <>
-                Выбрано: <strong>{selectedIds.length}</strong>
-              </>
             ) : (
-              <>
-                Выбрано: <strong>{selectedIds.length}</strong> из{" "}
-                <strong>{requiredSelectionCount}</strong>
-              </>
-            )}
-          </div>
-          {!viewOnly && !effectiveBooking ? (
-            normalPresentation ? (
-              normalDetailsStep ? (
-                <div className="flex flex-wrap justify-end gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setNormalStep("selection")}
-                  >
-                    Назад к выбору
-                  </Button>
-                  <Button
-                    type="button"
-                    disabled={!canConfirm}
-                    onClick={() => setConfirmOpen(true)}
-                  >
-                    Подтвердить выбор
-                  </Button>
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="relative flex size-10 shrink-0 items-center justify-center rounded-xl bg-cart-surface-foreground/10">
+                  <HugeiconsIcon icon={ShoppingCart01Icon} className="size-5" />
+                  <Badge className="absolute -top-2 -right-2 min-w-5 px-1">
+                    {selectedIds.length}
+                  </Badge>
+                </span>
+                <div className="min-w-0">
+                  <p className="text-xs text-cart-surface-foreground/65">
+                    {normalDetailsStep ? "Оформление заказа" : "Корзина"}
+                  </p>
+                  <p className="truncate text-sm font-semibold">
+                    {requiredSelectionCount === null
+                      ? `В заказе ${selectedIds.length} ${formatPositionCount(selectedIds.length)}`
+                      : `Выбрано ${selectedIds.length} из ${requiredSelectionCount}`}
+                  </p>
                 </div>
+              </div>
+            )}
+            {!viewOnly && !effectiveBooking ? (
+              normalPresentation ? (
+                normalDetailsStep ? (
+                  <div className="flex shrink-0 gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setNormalStep("selection")}
+                    >
+                      Назад к выбору
+                    </Button>
+                    <Button
+                      type="button"
+                      disabled={!canConfirm}
+                      aria-label="Подтвердить выбор"
+                      onClick={() => setConfirmOpen(true)}
+                    >
+                      Отправить заявку
+                      <HugeiconsIcon
+                        icon={ArrowRight01Icon}
+                        data-icon="inline-end"
+                      />
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    type="button"
+                    disabled={!canAdvanceToDetails}
+                    aria-label="Далее: дата, срок и доставка"
+                    onClick={() => setNormalStep("details")}
+                  >
+                    Оформить заказ
+                    <HugeiconsIcon
+                      icon={ArrowRight01Icon}
+                      data-icon="inline-end"
+                    />
+                  </Button>
+                )
               ) : (
                 <Button
                   type="button"
-                  disabled={!canAdvanceToDetails}
-                  onClick={() => setNormalStep("details")}
+                  disabled={!canConfirm}
+                  onClick={() => setConfirmOpen(true)}
                 >
-                  Далее: дата, срок и доставка
+                  Подтвердить выбор
                 </Button>
               )
-            ) : (
-              <Button
-                type="button"
-                disabled={!canConfirm}
-                onClick={() => setConfirmOpen(true)}
-              >
-                Подтвердить выбор
-              </Button>
-            )
-          ) : null}
+            ) : null}
+          </section>
         </div>
       </div>
 
@@ -1154,6 +1254,9 @@ function PublicCabinCard({
   selected,
   furniture,
   equipmentAvailability,
+  deliveryGuidance,
+  deliveryGuidanceLabel,
+  deliveryGuidanceHint,
   disabled,
   furnitureDisabled,
   onToggle,
@@ -1163,6 +1266,9 @@ function PublicCabinCard({
   selected: boolean
   furniture: Record<string, number>
   equipmentAvailability: PresentationEquipmentAvailability[]
+  deliveryGuidance: string
+  deliveryGuidanceLabel: string
+  deliveryGuidanceHint: string
   disabled: boolean
   furnitureDisabled: boolean
   onToggle: () => void
@@ -1197,19 +1303,21 @@ function PublicCabinCard({
     const quantity = furniture[equipment.equipmentId] ?? 0
     return quantity > 0 ? [`${equipment.equipmentName} — ${quantity}`] : []
   })
-  const selectionCheckboxId = `public-presentation-cabin-${cabin.id}`
+  const titleId = `public-presentation-cabin-title-${cabin.id}`
 
   return (
-    <article
+    <Card
+      role="article"
+      aria-labelledby={titleId}
       className={cn(
-        "overflow-hidden rounded-2xl border bg-background shadow-sm transition sm:grid sm:grid-cols-[minmax(0,1.15fr)_minmax(18rem,0.85fr)]",
+        "gap-0 overflow-hidden py-0 transition lg:grid lg:grid-cols-[minmax(20rem,0.9fr)_minmax(22rem,1.15fr)_1px_minmax(15rem,0.58fr)]",
         selected && "border-primary ring-2 ring-primary/15"
       )}
     >
       <PhotoCarousel
         photos={photos}
         title={`Бытовка ${cabin.number}`}
-        className="aspect-[4/3] rounded-none sm:aspect-auto sm:min-h-80"
+        className="aspect-[4/3] rounded-none lg:aspect-auto lg:min-h-80"
         imageClassName="h-full"
         fullscreenQuality="original"
         controlsVisibility="mobile-visible"
@@ -1219,111 +1327,139 @@ function PublicCabinCard({
           </div>
         }
       />
-      <div className="flex flex-col p-5 sm:p-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-xs font-medium tracking-wide text-primary uppercase">
-              {cabin.rentalType ?? "Бытовка"}
-            </p>
-            <h3 className="mt-1 text-xl font-semibold">
+      <div className="flex min-w-0 flex-col py-5 lg:py-6">
+        <CardHeader>
+          <CardDescription className="font-medium tracking-wide uppercase">
+            {cabin.rentalType ?? "Бытовка"}
+          </CardDescription>
+          <CardTitle>
+            <h3 id={titleId} className="text-xl tracking-tight sm:text-2xl">
               Бытовка {cabin.number}
             </h3>
+          </CardTitle>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline">Учётный № {cabin.number}</Badge>
+            <Badge variant="secondary">
+              <HugeiconsIcon icon={CheckmarkCircle02Icon} />В наличии
+            </Badge>
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <Field
-              orientation="horizontal"
-              data-disabled={disabled || undefined}
-              className="w-auto gap-2"
-            >
-              <Checkbox
-                id={selectionCheckboxId}
-                checked={selected}
-                disabled={disabled}
-                onCheckedChange={onToggle}
-              />
-              <FieldContent>
-                <FieldLabel htmlFor={selectionCheckboxId}>
-                  Выбрать бытовку {cabin.number}
-                </FieldLabel>
-              </FieldContent>
-            </Field>
-            {selected && !furnitureDisabled ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={disabled}
-                onClick={onAddFurniture}
-              >
-                <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-                Добавить наполнение
-              </Button>
-            ) : null}
-          </div>
-        </div>
-        <dl className="mt-6 grid grid-cols-2 gap-x-5 gap-y-4 text-sm">
-          <Characteristic label="Габариты" value={cabin.dimensions} />
-          <Characteristic label="Отделка" value={cabin.finishing} />
-          <Characteristic label="Категория" value={cabin.category} />
-          <Characteristic
-            label="Линолеум"
-            value={
-              cabin.linoleum === null ? null : cabin.linoleum ? "Да" : "Нет"
-            }
-          />
-          {passport.map(([key, value]) => (
-            <Characteristic key={key} label={key} value={String(value)} />
-          ))}
-        </dl>
-        {cabin.characteristics ? (
-          <div className="mt-6 border-t pt-4">
-            <p className="text-xs font-medium text-muted-foreground">
-              Дополнительные характеристики
-            </p>
-            <p className="mt-2 text-sm whitespace-pre-wrap">
-              {cabin.characteristics}
-            </p>
-          </div>
-        ) : null}
-        {selectedFurniture.length > 0 ? (
-          <div className="mt-5 flex flex-col gap-2">
-            <p className="text-xs font-medium text-muted-foreground">
-              Добавленное наполнение
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {selectedFurniture.map((label) => (
-                <Badge key={label} variant="secondary">
-                  {label}
-                </Badge>
-              ))}
-            </div>
-          </div>
-        ) : null}
-        {cabin.currentContents.length > 0 ? (
-          <div className="mt-5 flex flex-col gap-2">
-            <p className="text-xs font-medium text-muted-foreground">
-              Уже находится в бытовке
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {cabin.currentContents.map((item) => (
-                <Badge key={item.equipmentId} variant="outline">
-                  {item.equipmentName ?? "Наполнение"} — {item.quantity}
-                </Badge>
-              ))}
-            </div>
-          </div>
-        ) : null}
-        {cabin.tags.length > 0 ? (
-          <div className="mt-auto flex flex-wrap gap-2 pt-5">
-            {cabin.tags.map((tag) => (
-              <Badge key={tag} variant="outline">
-                {tag}
-              </Badge>
+        </CardHeader>
+        <CardContent className="flex flex-1 flex-col gap-5">
+          <dl className="grid grid-cols-2 gap-x-5 gap-y-4 text-sm">
+            <Characteristic label="Габариты" value={cabin.dimensions} />
+            <Characteristic label="Отделка" value={cabin.finishing} />
+            <Characteristic label="Категория" value={cabin.category} />
+            <Characteristic
+              label="Линолеум"
+              value={
+                cabin.linoleum === null ? null : cabin.linoleum ? "Да" : "Нет"
+              }
+            />
+            {passport.map(([key, value]) => (
+              <Characteristic key={key} label={key} value={String(value)} />
             ))}
-          </div>
-        ) : null}
+          </dl>
+          {cabin.characteristics ? (
+            <>
+              <Separator />
+              <div>
+                <p className="text-xs font-medium text-muted-foreground">
+                  Дополнительные характеристики
+                </p>
+                <p className="mt-2 text-sm whitespace-pre-wrap">
+                  {cabin.characteristics}
+                </p>
+              </div>
+            </>
+          ) : null}
+          {selectedFurniture.length > 0 ? (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-medium text-muted-foreground">
+                Добавленное наполнение
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {selectedFurniture.map((label) => (
+                  <Badge key={label} variant="secondary">
+                    {label}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {cabin.currentContents.length > 0 ? (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-medium text-muted-foreground">
+                Уже находится в бытовке
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {cabin.currentContents.map((item) => (
+                  <Badge key={item.equipmentId} variant="outline">
+                    {item.equipmentName ?? "Наполнение"} — {item.quantity}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {cabin.tags.length > 0 ? (
+            <div className="mt-auto flex flex-wrap gap-2">
+              {cabin.tags.map((tag) => (
+                <Badge key={tag} variant="outline">
+                  {tag}
+                </Badge>
+              ))}
+            </div>
+          ) : null}
+        </CardContent>
       </div>
-    </article>
+      <Separator className="lg:hidden" />
+      <Separator orientation="vertical" className="hidden lg:block" />
+      <CardFooter className="items-stretch p-5 lg:p-6">
+        <div className="flex w-full flex-col gap-4">
+          <div className="flex items-start gap-3 text-delivery-estimate">
+            <HugeiconsIcon
+              icon={DeliveryTruck01Icon}
+              className="mt-0.5 size-5 shrink-0"
+            />
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase">
+                {deliveryGuidanceLabel}
+              </p>
+              <p className="mt-1 text-sm font-medium">{deliveryGuidance}</p>
+              <p className="mt-1 text-xs">{deliveryGuidanceHint}</p>
+            </div>
+          </div>
+          <Button
+            type="button"
+            variant={selected ? "secondary" : "default"}
+            disabled={disabled}
+            aria-pressed={selected}
+            aria-label={
+              selected
+                ? `Убрать бытовку ${cabin.number} из заказа`
+                : `Добавить бытовку ${cabin.number} в заказ`
+            }
+            onClick={onToggle}
+          >
+            <HugeiconsIcon
+              icon={selected ? ShoppingCartRemove01Icon : ShoppingCartAdd01Icon}
+              data-icon="inline-start"
+            />
+            {selected ? "В заказе" : "В заказ"}
+          </Button>
+          {selected && !furnitureDisabled ? (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={disabled}
+              onClick={onAddFurniture}
+            >
+              <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+              Добавить наполнение
+            </Button>
+          ) : null}
+        </div>
+      </CardFooter>
+    </Card>
   )
 }
 
@@ -1340,6 +1476,37 @@ function Characteristic({
       <dt className="text-xs text-muted-foreground">{label}</dt>
       <dd className="mt-1 font-medium">{value}</dd>
     </div>
+  )
+}
+
+function ThemeControl() {
+  const { theme, setTheme } = useTheme()
+  const options: Array<{
+    value: Theme
+    label: string
+    icon: typeof ComputerIcon
+  }> = [
+    { value: "system", label: "Как на устройстве", icon: ComputerIcon },
+    { value: "light", label: "Светлая", icon: Sun03Icon },
+    { value: "dark", label: "Тёмная", icon: Moon02Icon },
+  ]
+
+  return (
+    <Select value={theme} onValueChange={(value) => setTheme(value as Theme)}>
+      <SelectTrigger aria-label="Тема оформления" className="w-36">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectGroup>
+          {options.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              <HugeiconsIcon icon={option.icon} />
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectGroup>
+      </SelectContent>
+    </Select>
   )
 }
 
@@ -1376,6 +1543,14 @@ function formatCalendarDate(value: string) {
   return Number.isNaN(date.getTime())
     ? value
     : new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium" }).format(date)
+}
+
+function formatDeliveryGuidance(values: string[]) {
+  const firstDate = values[0]
+  if (!firstDate) {
+    return "уточним после адреса"
+  }
+  return `ближайшая дата — ${formatCalendarDate(firstDate)}`
 }
 
 function parseCoordinates(value: string) {
@@ -1437,12 +1612,12 @@ function formatDesiredWindow(window: DesiredDeliveryWindow) {
   return dates
 }
 
-function formatCabinCount(count: number) {
+function formatPositionCount(count: number) {
   const last = count % 10
   const lastTwo = count % 100
-  if (last === 1 && lastTwo !== 11) return "бытовка"
+  if (last === 1 && lastTwo !== 11) return "позиция"
   if ([2, 3, 4].includes(last) && ![12, 13, 14].includes(lastTwo)) {
-    return "бытовки"
+    return "позиции"
   }
-  return "бытовок"
+  return "позиций"
 }

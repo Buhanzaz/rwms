@@ -133,7 +133,8 @@ public final class CustomerApiModels {
       long page,
       long size,
       long totalElements,
-      long totalPages) {}
+      long totalPages,
+      List<LocalDate> estimatedDeliveryDates) {}
 
   /** Replaces the complete cabin selection under an optimistic cart fence. */
   public record ReplaceCustomerCabinsRequest(

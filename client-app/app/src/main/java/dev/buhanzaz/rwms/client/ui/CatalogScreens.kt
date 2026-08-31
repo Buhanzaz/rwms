@@ -1,11 +1,13 @@
 package dev.buhanzaz.rwms.client.ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -31,18 +34,24 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Chair
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.LocalShipping
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.ShoppingCart
-import androidx.compose.material3.AssistChip
+import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FabPosition
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -63,6 +72,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -77,6 +87,9 @@ import dev.buhanzaz.rwms.client.data.AvailableEquipment
 import dev.buhanzaz.rwms.client.data.CabinFilters
 import dev.buhanzaz.rwms.client.data.CustomerCabin
 import dev.buhanzaz.rwms.client.data.CustomerWarehouse
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /**
  * Shared customer header with an optional warehouse selector and a circular profile affordance.
@@ -104,7 +117,7 @@ fun CustomerTopBar(
     Surface(
         modifier = Modifier.fillMaxWidth().testTag("customer-header"),
         color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 3.dp,
+        shadowElevation = 1.dp,
     ) {
         Column(Modifier.fillMaxWidth().statusBarsPadding()) {
             Box(Modifier.fillMaxWidth().height(64.dp)) {
@@ -134,8 +147,9 @@ fun CustomerTopBar(
                             modifier = Modifier.testTag("warehouse-selector"),
                         ) {
                             Text(
-                                selectedWarehouse.name,
+                                "Склад: ${selectedWarehouse.name}",
                                 color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.SemiBold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 textAlign = TextAlign.Center,
@@ -161,7 +175,7 @@ fun CustomerTopBar(
                         modifier = Modifier.size(40.dp),
                         shape = CircleShape,
                         color = MaterialTheme.colorScheme.primaryContainer,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             val initials = avatarInitials?.trim()?.takeIf(String::isNotEmpty)
@@ -220,7 +234,7 @@ fun CustomerTopBar(
     }
 }
 
-/** Displays only server-returned free cabins as one card per row, including selection expansion. */
+/** Displays each server-returned free cabin as one unique, photo-led rental card. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CabinCatalogScreen(
@@ -239,7 +253,11 @@ fun CabinCatalogScreen(
 ) {
     var showFilters by remember { mutableStateOf(false) }
     var furnitureCabin by remember { mutableStateOf<String?>(null) }
+    val deliveryEstimate = remember(state.estimatedDeliveryDates) {
+        deliveryEstimateLabel(state.estimatedDeliveryDates)
+    }
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             CustomerTopBar(
                 title = state.selectedWarehouse?.name ?: "Склад не выбран",
@@ -252,43 +270,39 @@ fun CabinCatalogScreen(
                 avatarInitials = avatarInitials ?: state.profileInitials(),
             )
         },
+        floatingActionButtonPosition = FabPosition.End,
         floatingActionButton = {
             if (state.selectedCabinIds.isNotEmpty()) {
-                ExtendedFloatingActionButton(
-                    onClick = onCart,
-                    icon = { Icon(Icons.Default.ShoppingCart, contentDescription = null) },
-                    text = { Text("Корзина · ${state.selectedCabinIds.size}") },
-                    modifier = Modifier.testTag("cart-fab"),
+                CustomerFloatingCart(
+                    count = state.selectedCabinIds.size,
+                    onCart = onCart,
+                    modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth().padding(start = 16.dp),
                 )
             }
         },
     ) { padding ->
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 12.dp).testTag("catalog-screen"),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 16.dp)
+                .testTag("catalog-screen"),
+            contentPadding = PaddingValues(top = 20.dp, bottom = 116.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             item {
-                OutlinedButton(
-                    onClick = { showFilters = true },
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .widthIn(max = 760.dp)
-                        .testTag("catalog-filter-button"),
-                ) {
-                    Icon(
-                        Icons.Default.FilterList,
-                        contentDescription = "Фильтры, выбрано ${state.filters.activeCount}",
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text("Фильтры${if (state.filters.activeCount > 0) " · ${state.filters.activeCount}" else ""}")
-                }
+                CatalogIntroduction(
+                    warehouse = state.selectedWarehouse,
+                    activeFilterCount = state.filters.activeCount,
+                    onFilters = { showFilters = true },
+                )
             }
             if (state.cabins.isEmpty() && !state.busy) {
                 item {
                     Text(
                         "Свободных бытовок по выбранным условиям нет",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(32.dp),
                     )
                 }
@@ -300,6 +314,7 @@ fun CabinCatalogScreen(
                     selected = selected,
                     selectedEquipment = state.equipmentDraft.filterKeys { it.cabinUnitId == cabin.unitId },
                     equipment = state.equipment,
+                    deliveryEstimate = deliveryEstimate,
                     onToggle = { onToggleCabin(cabin.unitId) },
                     onFurniture = { furnitureCabin = cabin.unitId },
                     onPhoto = { page -> onPhoto(cabin.unitId, page) },
@@ -309,15 +324,14 @@ fun CabinCatalogScreen(
                 item {
                     OutlinedButton(
                         onClick = onLoadMore,
-                        modifier = Modifier.fillMaxWidth().widthIn(max = 760.dp),
+                        modifier = Modifier.fillMaxWidth().widthIn(max = 1120.dp),
                         enabled = !state.busy,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                     ) {
                         Text("Показать ещё")
                     }
                 }
             }
-            item { Spacer(Modifier.height(84.dp)) }
         }
     }
     if (showFilters) {
@@ -343,6 +357,90 @@ fun CabinCatalogScreen(
     }
 }
 
+@Composable
+private fun CatalogIntroduction(
+    warehouse: CustomerWarehouse?,
+    activeFilterCount: Int,
+    onFilters: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().widthIn(max = 1120.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            "Бытовки в аренду",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            warehouse?.city?.takeIf(String::isNotBlank)
+                ?.let { city -> "Выберите отдельный экземпляр со склада в городе $city" }
+                ?: "Выберите отдельный экземпляр на складе",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = onFilters,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier.fillMaxWidth().testTag("catalog-filter-button"),
+        ) {
+            Icon(
+                Icons.Default.FilterList,
+                contentDescription = "Фильтры, выбрано $activeFilterCount",
+            )
+            Spacer(Modifier.width(8.dp))
+            Text("Фильтры${if (activeFilterCount > 0) " · $activeFilterCount" else ""}")
+        }
+    }
+}
+
+@Composable
+private fun CustomerFloatingCart(count: Int, onCart: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.testTag("cart-fab"),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.inverseSurface,
+        contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+        shadowElevation = 12.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.ShoppingCart, contentDescription = null, modifier = Modifier.size(28.dp))
+                Surface(
+                    modifier = Modifier.align(Alignment.TopEnd).size(20.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(count.toString(), style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+            Text(
+                cartPositionsLabel(count),
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier.weight(1f),
+            )
+            Button(
+                onClick = onCart,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                ),
+                modifier = Modifier.heightIn(min = 48.dp).testTag("cart-checkout-button"),
+            ) {
+                Text("Оформить заказ")
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CabinCard(
@@ -350,104 +448,327 @@ private fun CabinCard(
     selected: Boolean,
     selectedEquipment: Map<EquipmentKey, Long>,
     equipment: List<AvailableEquipment>,
+    deliveryEstimate: String,
     onToggle: () -> Unit,
     onFurniture: () -> Unit,
     onPhoto: (Int) -> Unit,
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth().widthIn(max = 760.dp).testTag("cabin-${cabin.unitId}"),
-        border = BorderStroke(2.dp, MaterialTheme.colorScheme.onSurface),
-        colors = CardDefaults.cardColors(
-            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxWidth().widthIn(max = 1120.dp).testTag("cabin-${cabin.unitId}"),
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(
+            width = if (selected) 2.dp else 1.dp,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
         ),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
-        CabinPhotoPager(cabin, onPhoto)
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        cabin.type ?: "Тип не указан",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.SemiBold,
+        BoxWithConstraints {
+            val wide = usesWideCabinCard(maxWidth.value)
+            if (wide) {
+                Row(Modifier.fillMaxWidth().testTag("cabin-card-wide")) {
+                    CabinPhotoPager(
+                        cabin = cabin,
+                        onPhoto = onPhoto,
+                        modifier = Modifier.width(350.dp).height(286.dp),
                     )
-                    Text("№ ${cabin.accountingNo}", style = MaterialTheme.typography.bodyMedium)
+                    CabinCardBody(
+                        cabin = cabin,
+                        selected = selected,
+                        selectedEquipment = selectedEquipment,
+                        equipment = equipment,
+                        deliveryEstimate = deliveryEstimate,
+                        onToggle = onToggle,
+                        onFurniture = onFurniture,
+                        wide = true,
+                        modifier = Modifier.weight(1f),
+                    )
                 }
-                cabin.category?.let { AssistChip(onClick = {}, label = { Text(it) }) }
-            }
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                cabin.finish?.let { CabinFact("Отделка: $it") }
-                cabin.dimensions?.let { CabinFact(it) }
-                cabin.linoleum?.let { CabinFact(if (it) "Линолеум" else "Без линолеума") }
-                cabin.characteristics.forEach { CabinFact(it) }
-            }
-            Button(onClick = onToggle, modifier = Modifier.fillMaxWidth()) {
-                Text(if (selected) "Отменить" else "Добавить к заказу")
-            }
-            if (selected) {
-                HorizontalDivider()
-                Text("Мебель в бытовке", style = MaterialTheme.typography.titleMedium)
-                if (selectedEquipment.isEmpty()) {
-                    Text("Мебель пока не добавлена", style = MaterialTheme.typography.bodySmall)
-                } else {
-                    selectedEquipment.forEach { (key, quantity) ->
-                        val name = equipment.firstOrNull { it.inventoryItemId == key.inventoryItemId }?.name
-                            ?: key.inventoryItemId
-                        Text("• $name — $quantity шт.")
-                    }
-                }
-                OutlinedButton(
-                    onClick = onFurniture,
-                    modifier = Modifier.fillMaxWidth(),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface),
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Добавить мебель")
+            } else {
+                Column(Modifier.fillMaxWidth().testTag("cabin-card-compact")) {
+                    CabinPhotoPager(
+                        cabin = cabin,
+                        onPhoto = onPhoto,
+                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                    )
+                    CabinCardBody(
+                        cabin = cabin,
+                        selected = selected,
+                        selectedEquipment = selectedEquipment,
+                        equipment = equipment,
+                        deliveryEstimate = deliveryEstimate,
+                        onToggle = onToggle,
+                        onFurniture = onFurniture,
+                        wide = false,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
             }
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun CabinPhotoPager(cabin: CustomerCabin, onPhoto: (Int) -> Unit) {
+private fun CabinCardBody(
+    cabin: CustomerCabin,
+    selected: Boolean,
+    selectedEquipment: Map<EquipmentKey, Long>,
+    equipment: List<AvailableEquipment>,
+    deliveryEstimate: String,
+    onToggle: () -> Unit,
+    onFurniture: () -> Unit,
+    wide: Boolean,
+    modifier: Modifier,
+) {
+    val details: @Composable ColumnScope.() -> Unit = {
+        Text(
+            cabin.category?.uppercase() ?: "БЫТОВКА",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                cabin.type ?: "Тип не указан",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f),
+            )
+            Surface(
+                shape = RoundedCornerShape(7.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+            ) {
+                Text(
+                    "№ ${cabin.accountingNo}",
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            cabin.dimensions?.let { CabinFact(Icons.Default.Straighten, it) }
+            cabin.finish?.let { CabinFact(Icons.Default.Palette, "Отделка: $it") }
+            cabin.linoleum?.let { CabinFact(Icons.Default.CheckCircle, if (it) "Линолеум" else "Без линолеума") }
+            cabin.characteristics.forEach { CabinFact(Icons.Default.CheckCircle, it) }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Icon(
+                Icons.Default.Chair,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    if (selectedEquipment.isEmpty()) "Мебель по выбору" else "Мебель добавлена",
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Text(
+                    furnitureSummary(selectedEquipment, equipment),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (selected) {
+            OutlinedButton(
+                onClick = onFurniture,
+                modifier = Modifier.fillMaxWidth(),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Настроить мебель")
+            }
+        }
+    }
+    if (wide) {
+        Row(modifier.padding(20.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+            Column(
+                Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                content = details,
+            )
+            CabinCardAction(
+                selected = selected,
+                deliveryEstimate = deliveryEstimate,
+                onToggle = onToggle,
+                modifier = Modifier.width(205.dp),
+            )
+        }
+    } else {
+        Column(modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            details()
+            CabinCardAction(
+                selected = selected,
+                deliveryEstimate = deliveryEstimate,
+                onToggle = onToggle,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CabinCardAction(
+    selected: Boolean,
+    deliveryEstimate: String,
+    onToggle: () -> Unit,
+    modifier: Modifier,
+) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(
+                Icons.Default.CheckCircle,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp),
+            )
+            Text("В наличии", style = MaterialTheme.typography.labelLarge)
+        }
+        if (selected) {
+            OutlinedButton(
+                onClick = onToggle,
+                modifier = Modifier.fillMaxWidth(),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+            ) {
+                Text("Убрать из заказа")
+            }
+        } else {
+            Button(onClick = onToggle, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.ShoppingCart, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("В заказ")
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+            Icon(
+                Icons.Default.LocalShipping,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier.size(20.dp),
+            )
+            Text(
+                deliveryEstimate,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.tertiary,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CabinPhotoPager(cabin: CustomerCabin, onPhoto: (Int) -> Unit, modifier: Modifier) {
     if (cabin.photos.isEmpty()) {
         Box(
-            Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+            modifier.then(Modifier.testTag("cabin-photo-placeholder")),
             contentAlignment = Alignment.Center,
-        ) { Text("Фотографий пока нет") }
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    Icons.Default.PhotoLibrary,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Фотографий пока нет",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
         return
     }
     val pager = rememberPagerState { cabin.photos.size }
-    Box {
-        HorizontalPager(state = pager) { page ->
+    Box(modifier) {
+        HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
             val photo = cabin.photos[page]
             AsyncImage(
                 model = customerMediaUrl(photo.thumbnailUrl),
                 contentDescription = "Бытовка ${cabin.accountingNo}, фото ${page + 1} из ${cabin.photos.size}",
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(16f / 9f)
+                    .fillMaxSize()
                     .clickable(onClickLabel = "Открыть фотографию") { onPhoto(page) },
             )
         }
         Surface(
-            color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.65f),
-            contentColor = MaterialTheme.colorScheme.surface,
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.align(Alignment.BottomEnd).padding(10.dp),
-        ) { Text("${pager.currentPage + 1}/${cabin.photos.size}", modifier = Modifier.padding(8.dp, 4.dp)) }
+            color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.76f),
+            contentColor = Color.White,
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier.align(Alignment.BottomStart).padding(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(16.dp))
+                Text(
+                    if (cabin.photos.size == 1) "1 фото" else "${pager.currentPage + 1}/${cabin.photos.size} фото",
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
+        }
     }
 }
 
 @Composable
-private fun CabinFact(text: String) {
+private fun CabinFact(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String) {
     Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
-        Text(text, modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp), style = MaterialTheme.typography.bodySmall)
+        Row(
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp))
+            Text(text, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+internal fun usesWideCabinCard(widthDp: Float): Boolean = widthDp >= 920f
+
+internal fun cartPositionsLabel(count: Int): String {
+    val mod100 = count % 100
+    val suffix = when {
+        mod100 in 11..14 -> "позиций"
+        count % 10 == 1 -> "позиция"
+        count % 10 in 2..4 -> "позиции"
+        else -> "позиций"
+    }
+    return "В заказе $count $suffix"
+}
+
+internal fun deliveryEstimateLabel(dates: List<String>): String {
+    val firstDate = dates.mapNotNull { value -> runCatching { LocalDate.parse(value) }.getOrNull() }.minOrNull()
+        ?: return "Ориентир доставки уточняется · точный срок после адреса"
+    val formatter = DateTimeFormatter.ofPattern("d MMMM", Locale.forLanguageTag("ru-RU"))
+    return "Ориентир: с ${firstDate.format(formatter)} · точный срок после адреса"
+}
+
+private fun furnitureSummary(
+    selectedEquipment: Map<EquipmentKey, Long>,
+    equipment: List<AvailableEquipment>,
+): String = if (selectedEquipment.isEmpty()) {
+    "Столы, стулья и хранение можно добавить после выбора бытовки"
+} else {
+    selectedEquipment.entries.joinToString { (key, quantity) ->
+        val name = equipment.firstOrNull { it.inventoryItemId == key.inventoryItemId }?.name
+            ?: key.inventoryItemId
+        "$name — $quantity"
     }
 }
 

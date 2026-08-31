@@ -1,19 +1,31 @@
 package dev.buhanzaz.rwms.client.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ArrowDropUp
+import androidx.compose.material.icons.filled.BatterySaver
 import androidx.compose.material.icons.filled.Book
+import androidx.compose.material.icons.filled.BrightnessAuto
+import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.HomeWork
+import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
@@ -22,6 +34,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -29,10 +42,15 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -93,7 +111,11 @@ internal data class GalleryRoute(val unitId: String, val initialPage: Int) : Nav
 @Composable
 fun CustomerApp(viewModel: CustomerAppViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    CustomerTheme {
+    val context = LocalContext.current
+    val appearanceStore = remember(context.applicationContext) { CustomerAppearanceStore(context) }
+    val appearanceMode by appearanceStore.mode.collectAsStateWithLifecycle(CustomerAppearanceMode.SYSTEM)
+    val appearanceScope = rememberCoroutineScope()
+    CustomerTheme(appearanceMode = appearanceMode) {
         CustomerAppContent(
             state = state,
             onLogin = viewModel::login,
@@ -124,6 +146,10 @@ fun CustomerApp(viewModel: CustomerAppViewModel = hiltViewModel()) {
             onAcceptCabin = viewModel::acceptCabin,
             onReportProblem = viewModel::reportCabinProblem,
             onDismissError = viewModel::dismissError,
+            appearanceMode = appearanceMode,
+            onAppearanceMode = { mode ->
+                appearanceScope.launch { appearanceStore.setMode(mode) }
+            },
         )
     }
 }
@@ -161,6 +187,8 @@ fun CustomerAppContent(
     onAcceptCabin: (String, String, List<dev.buhanzaz.rwms.client.data.CustomerSignatureStroke>) -> Unit = { _, _, _ -> },
     onReportProblem: (String, String, String, String, List<dev.buhanzaz.rwms.client.data.CustomerEvidenceFile>) -> Unit = { _, _, _, _, _ -> },
     onDismissError: () -> Unit = {},
+    appearanceMode: CustomerAppearanceMode = CustomerAppearanceMode.SYSTEM,
+    onAppearanceMode: (CustomerAppearanceMode) -> Unit = {},
 ) {
     when (state) {
         CustomerAppState.Loading -> LoadingCustomerScreen("Проверяем безопасную сессию…")
@@ -206,6 +234,8 @@ fun CustomerAppContent(
                     onAcceptCabin = onAcceptCabin,
                     onReportProblem = onReportProblem,
                     onDismissError = onDismissError,
+                    appearanceMode = appearanceMode,
+                    onAppearanceMode = onAppearanceMode,
                 )
             }
         }
@@ -277,12 +307,15 @@ private fun SignedInNavigation(
     onAcceptCabin: (String, String, List<dev.buhanzaz.rwms.client.data.CustomerSignatureStroke>) -> Unit,
     onReportProblem: (String, String, String, String, List<dev.buhanzaz.rwms.client.data.CustomerEvidenceFile>) -> Unit,
     onDismissError: () -> Unit,
+    appearanceMode: CustomerAppearanceMode,
+    onAppearanceMode: (CustomerAppearanceMode) -> Unit,
 ) {
     val backStack = rememberNavBackStack(CatalogRoute)
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val coroutineScope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val current = backStack.lastOrNull()
+    var appearanceExpanded by remember { mutableStateOf(false) }
 
     fun topLevel(route: NavKey) {
         backStack.clear()
@@ -308,7 +341,7 @@ private fun SignedInNavigation(
         drawerState = drawerState,
         gesturesEnabled = !current.isDeliveryFlowRoute(),
         drawerContent = {
-            ModalDrawerSheet {
+            ModalDrawerSheet(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text("RWMS Клиент", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(24.dp))
                 NavigationDrawerItem(
                     label = { Text("Свободные бытовки") },
@@ -334,6 +367,57 @@ private fun SignedInNavigation(
                     onClick = { topLevel(ProfileRoute) },
                     icon = { Icon(Icons.Default.Person, contentDescription = null) },
                 )
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                NavigationDrawerItem(
+                    label = {
+                        Column {
+                            Text("Оформление")
+                            Text(
+                                appearanceMode.title,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                    selected = false,
+                    onClick = { appearanceExpanded = !appearanceExpanded },
+                    icon = { Icon(Icons.Default.Palette, contentDescription = null) },
+                    badge = {
+                        Icon(
+                            if (appearanceExpanded) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
+                            contentDescription = if (appearanceExpanded) "Свернуть выбор темы" else "Выбрать тему",
+                        )
+                    },
+                    modifier = Modifier.testTag("appearance-selector"),
+                )
+                AnimatedVisibility(visible = appearanceExpanded) {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+                        CustomerAppearanceMode.entries.forEach { mode ->
+                            NavigationDrawerItem(
+                                label = {
+                                    Column {
+                                        Text(mode.title)
+                                        Text(
+                                            mode.description,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                },
+                                selected = appearanceMode == mode,
+                                onClick = { onAppearanceMode(mode) },
+                                icon = { Icon(mode.appearanceIcon(), contentDescription = null) },
+                                badge = {
+                                    RadioButton(
+                                        selected = appearanceMode == mode,
+                                        onClick = null,
+                                    )
+                                },
+                                modifier = Modifier.testTag("appearance-mode-${mode.name.lowercase()}"),
+                            )
+                        }
+                    }
+                }
                 NavigationDrawerItem(label = { Text("Выйти") }, selected = false, onClick = onLogout)
             }
         },
@@ -468,8 +552,11 @@ private fun SignedInNavigation(
                     },
                 )
                 SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
-                if (state.busy) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                if (shouldShowGlobalBusyOverlay(state.busy, current)) {
+                    Box(
+                        Modifier.fillMaxSize().testTag("global-busy-overlay"),
+                        contentAlignment = Alignment.Center,
+                    ) {
                         CircularProgressIndicator()
                     }
                 }
@@ -551,6 +638,16 @@ private fun NavKey?.isDeliveryFlowRoute(): Boolean =
         this is DeliveryDatesRoute ||
         this is DeliverySlotsRoute ||
         this is DeliveryConfirmationRoute
+
+internal fun shouldShowGlobalBusyOverlay(isBusy: Boolean, current: NavKey?): Boolean =
+    isBusy && current !is DeliveryMapRoute
+
+private fun CustomerAppearanceMode.appearanceIcon(): ImageVector = when (this) {
+    CustomerAppearanceMode.SYSTEM -> Icons.Default.BrightnessAuto
+    CustomerAppearanceMode.LIGHT -> Icons.Default.LightMode
+    CustomerAppearanceMode.DARK -> Icons.Default.DarkMode
+    CustomerAppearanceMode.BATTERY -> Icons.Default.BatterySaver
+}
 
 @Composable
 private fun LoadingCustomerScreen(message: String) {

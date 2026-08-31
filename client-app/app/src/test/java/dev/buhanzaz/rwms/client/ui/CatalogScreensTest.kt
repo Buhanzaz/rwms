@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.client.ui
 import android.app.Application
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -48,7 +49,7 @@ class CatalogScreensTest {
         }
 
         composeRule.onNodeWithText("Свободные бытовки").assertDoesNotExist()
-        composeRule.onNodeWithText("СПБ").assertExists()
+        composeRule.onNodeWithText("Склад: СПБ").assertExists()
         composeRule.onNodeWithTag("profile-avatar").assertExists()
         composeRule.onNodeWithText("ИП").assertExists()
 
@@ -153,6 +154,97 @@ class CatalogScreensTest {
         composeRule.onNodeWithText("Усиленная дверь").assertExists()
     }
 
+    @Test
+    fun `catalog card presents one available cabin with server delivery guidance and no price`() {
+        composeRule.setContent {
+            CustomerTheme {
+                CabinCatalogScreen(
+                    state = catalogState().copy(
+                        cabins = listOf(catalogCabin()),
+                        estimatedDeliveryDates = listOf("2026-09-08", "2026-09-10"),
+                    ),
+                    onMenu = {},
+                    onProfile = {},
+                    onCart = {},
+                    onFilters = {},
+                    onLoadMore = {},
+                    onToggleCabin = {},
+                    onEquipment = { _, _, _ -> },
+                    onPhoto = { _, _ -> },
+                    onWarehouse = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("В наличии").assertExists()
+        composeRule.onNodeWithText("Ориентир: с 8 сентября · точный срок после адреса").assertExists()
+        composeRule.onAllNodesWithText("шт.", substring = true).assertCountEquals(0)
+        composeRule.onAllNodesWithText("₽", substring = true).assertCountEquals(0)
+    }
+
+    @Test
+    fun `floating cart keeps the selected count and opens checkout`() {
+        var cartOpened = false
+        composeRule.setContent {
+            CustomerTheme {
+                CabinCatalogScreen(
+                    state = catalogState().copy(
+                        cabins = listOf(catalogCabin()),
+                        selectedCabinIds = setOf("cabin-1"),
+                    ),
+                    onMenu = {},
+                    onProfile = {},
+                    onCart = { cartOpened = true },
+                    onFilters = {},
+                    onLoadMore = {},
+                    onToggleCabin = {},
+                    onEquipment = { _, _, _ -> },
+                    onPhoto = { _, _ -> },
+                    onWarehouse = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("cart-fab").assertExists()
+        composeRule.onNodeWithText("В заказе 1 позиция").assertExists()
+        composeRule.onNodeWithTag("cart-checkout-button").performClick()
+        composeRule.runOnIdle { assertThat(cartOpened).isTrue() }
+    }
+
+    @Test
+    @Config(sdk = [35], application = Application::class, qualifiers = "w1000dp-h800dp")
+    fun `wide catalog keeps the photo led horizontal card`() {
+        composeRule.setContent {
+            CustomerTheme {
+                CabinCatalogScreen(
+                    state = catalogState().copy(cabins = listOf(catalogCabin())),
+                    onMenu = {},
+                    onProfile = {},
+                    onCart = {},
+                    onFilters = {},
+                    onLoadMore = {},
+                    onToggleCabin = {},
+                    onEquipment = { _, _, _ -> },
+                    onPhoto = { _, _ -> },
+                    onWarehouse = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("cabin-card-wide").assertExists()
+        composeRule.onNodeWithTag("cabin-card-compact").assertDoesNotExist()
+    }
+
+    @Test
+    fun `adaptive and cart labels keep stable customer semantics`() {
+        assertThat(usesWideCabinCard(919f)).isFalse()
+        assertThat(usesWideCabinCard(920f)).isTrue()
+        assertThat(cartPositionsLabel(2)).isEqualTo("В заказе 2 позиции")
+        assertThat(cartPositionsLabel(11)).isEqualTo("В заказе 11 позиций")
+        assertThat(deliveryEstimateLabel(emptyList()))
+            .isEqualTo("Ориентир доставки уточняется · точный срок после адреса")
+    }
+
     private fun catalogState(): CustomerWorkflowState {
         val selected = CustomerWarehouse(
             id = "warehouse-spb",
@@ -185,4 +277,16 @@ class CatalogScreensTest {
             inquiryId = "inquiry-spb",
         )
     }
+
+    private fun catalogCabin(): CustomerCabin = CustomerCabin(
+        unitId = "cabin-1",
+        version = 1,
+        accountingNo = "БК-1",
+        type = "Офисная бытовка",
+        finish = "Графит",
+        dimensions = "6,0 × 2,4 × 2,6 м",
+        category = "Офисная",
+        linoleum = true,
+        characteristics = listOf("Панорамное остекление", "Электрика и освещение"),
+    )
 }

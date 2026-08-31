@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 import "./index.css"
 import { AuthRouter } from "@/features/auth/auth-router"
+import { ThemeProvider } from "@/components/theme-provider"
 import { Toaster } from "@/components/ui/sonner"
 
 // Public offer routes and bootstrap work keep this root client. AuthProvider
@@ -13,11 +14,13 @@ const publicQueryClient = new QueryClient()
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <QueryClientProvider client={publicQueryClient}>
-      <BrowserRouter>
-        <AuthRouter />
-      </BrowserRouter>
-      <Toaster position="top-right" richColors />
-    </QueryClientProvider>
+    <ThemeProvider defaultTheme="system" storageKey="rwms-panel-theme">
+      <QueryClientProvider client={publicQueryClient}>
+        <BrowserRouter>
+          <AuthRouter />
+        </BrowserRouter>
+        <Toaster position="top-right" richColors />
+      </QueryClientProvider>
+    </ThemeProvider>
   </StrictMode>
 )

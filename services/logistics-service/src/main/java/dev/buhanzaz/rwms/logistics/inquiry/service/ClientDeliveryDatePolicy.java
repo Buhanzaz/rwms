@@ -1,32 +1,25 @@
 package dev.buhanzaz.rwms.logistics.inquiry.service;
 
-import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
+import dev.buhanzaz.rwms.logistics.customer.service.CustomerDeliveryEstimateService;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
-import java.util.stream.LongStream;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 /**
- * Computes the warehouse-local calendar days an ordinary client may request for initial delivery.
- * Today and tomorrow are intentionally locked; the fifth day after confirmation is the deadline.
+ * Exposes the capacity-aware, non-binding delivery-day guidance a presentation client may select.
+ * Address routing and capacity reservation still happen only in the authenticated delivery flow.
  */
 @Component
 @RequiredArgsConstructor
 public class ClientDeliveryDatePolicy {
-  private static final long FIRST_REQUESTABLE_DAY_OFFSET = 2;
-  private static final long LAST_REQUESTABLE_DAY_OFFSET = 5;
+  private final CustomerDeliveryEstimateService deliveryEstimate;
 
-  private final LogisticsWarehouseLifecycle warehouseLifecycle;
-
-  /** Returns the four requestable calendar days for one warehouse and authoritative instant. */
+  /** Returns up to four currently estimated warehouse-local dates for one presentation. */
   public List<LocalDate> requestableDates(UUID warehouseId, OffsetDateTime at) {
-    LocalDate today = warehouseLifecycle.localDateAt(warehouseId, at);
-    return LongStream.rangeClosed(FIRST_REQUESTABLE_DAY_OFFSET, LAST_REQUESTABLE_DAY_OFFSET)
-        .mapToObj(today::plusDays)
-        .toList();
+    return deliveryEstimate.estimatedDates(warehouseId, at);
   }
 
   /** Returns whether every independently selected day belongs to the current requestable horizon. */

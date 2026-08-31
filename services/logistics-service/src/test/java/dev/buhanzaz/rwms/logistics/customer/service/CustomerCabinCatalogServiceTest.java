@@ -32,6 +32,7 @@ class CustomerCabinCatalogServiceTest {
   void omitsNullLegacyFactInsteadOfFailingTheWholeCatalogPage() {
     CustomerRentalSessionRepository sessions = mock(CustomerRentalSessionRepository.class);
     LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
+    CustomerDeliveryEstimateService deliveryEstimate = mock(CustomerDeliveryEstimateService.class);
     CustomerRentalSession session = mock(CustomerRentalSession.class);
     when(session.getWarehouseId()).thenReturn(WAREHOUSE);
     when(sessions.findByInquiryIdAndCustomerSubjectId(INQUIRY, SUBJECT))
@@ -73,8 +74,10 @@ class CustomerCabinCatalogServiceTest {
                 WAREHOUSE, List.of(cabin), 0, 20, 1, 1));
     when(dependencies.readCabinMediaSnapshots(WAREHOUSE, List.of(CABIN)))
         .thenReturn(List.of());
+    when(deliveryEstimate.estimatedDates(WAREHOUSE))
+        .thenReturn(List.of(java.time.LocalDate.of(2026, 8, 28)));
     CustomerCabinCatalogService service =
-        new CustomerCabinCatalogService(sessions, dependencies);
+        new CustomerCabinCatalogService(sessions, dependencies, deliveryEstimate);
 
     var result =
         service.page(
@@ -93,5 +96,7 @@ class CustomerCabinCatalogServiceTest {
     assertThat(result.content()).hasSize(1);
     assertThat(result.content().getFirst().facts()).containsEntry("wall", "ДВП");
     assertThat(result.content().getFirst().facts()).doesNotContainKey("legacy");
+    assertThat(result.estimatedDeliveryDates())
+        .containsExactly(java.time.LocalDate.of(2026, 8, 28));
   }
 }

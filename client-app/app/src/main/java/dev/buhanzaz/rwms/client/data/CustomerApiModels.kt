@@ -158,6 +158,7 @@ data class CabinPage(
     val size: Long = 20,
     val totalElements: Long = 0,
     val totalPages: Long = 0,
+    val estimatedDeliveryDates: List<String> = emptyList(),
 )
 
 /** Replaces a cabin selection using an optimistic version fence. */

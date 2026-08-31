@@ -23,6 +23,7 @@ import type {
   PresentationBooking,
   PublicClientPresentation,
 } from "@/features/assistant/api/rental-presentations-api"
+import { ThemeProvider } from "@/components/theme-provider"
 import { ApiError } from "@/lib/api-client"
 
 const api = vi.hoisted(() => ({
@@ -177,16 +178,22 @@ function renderPage() {
     defaultOptions: { queries: { retry: false } },
   })
   return render(
-    <MemoryRouter initialEntries={["/client-presentations/example-token"]}>
-      <QueryClientProvider client={queryClient}>
-        <Routes>
-          <Route
-            path="/client-presentations/:token"
-            element={<PublicClientPresentationPage />}
-          />
-        </Routes>
-      </QueryClientProvider>
-    </MemoryRouter>
+    <ThemeProvider
+      defaultTheme="system"
+      storageKey="rwms-panel-theme"
+      disableTransitionOnChange={false}
+    >
+      <MemoryRouter initialEntries={["/client-presentations/example-token"]}>
+        <QueryClientProvider client={queryClient}>
+          <Routes>
+            <Route
+              path="/client-presentations/:token"
+              element={<PublicClientPresentationPage />}
+            />
+          </Routes>
+        </QueryClientProvider>
+      </MemoryRouter>
+    </ThemeProvider>
   )
 }
 
@@ -227,8 +234,8 @@ async function chooseCalendarDates(
 
 async function openNormalDetails(user: ReturnType<typeof userEvent.setup>) {
   await user.click(
-    await screen.findByRole("checkbox", {
-      name: "Выбрать бытовку БЫТ-1",
+    await screen.findByRole("button", {
+      name: "Добавить бытовку БЫТ-1 в заказ",
     })
   )
   await user.click(
@@ -261,16 +268,28 @@ afterEach(() => {
 })
 
 describe("public client presentation", () => {
-  it("uses labelled cabin checkboxes and keeps the sticky safe-area layout", async () => {
+  it("renders unique cabin cards, delivery guidance, theme control and the floating cart", async () => {
+    const user = userEvent.setup()
     renderPage()
 
     expect(
       await screen.findByRole("heading", { name: "Бытовка БЫТ-1" })
     ).toBeTruthy()
     expect(
-      screen.getAllByRole("checkbox", { name: /Выбрать бытовку/ })
+      screen.getAllByRole("button", {
+        name: /Добавить бытовку .+ в заказ/,
+      })
     ).toHaveLength(2)
-    expect(screen.queryByRole("button", { name: "Выбрать" })).toBeNull()
+    expect(screen.getAllByText("В наличии")).toHaveLength(2)
+    expect(screen.getAllByText(/Учётный № БЫТ-/)).toHaveLength(2)
+    expect(screen.queryByText(/В наличии\s+\d/)).toBeNull()
+    expect(screen.queryByText(/₽/)).toBeNull()
+    expect(screen.getAllByText("Ориентир доставки")).toHaveLength(2)
+    expect(
+      screen.getAllByText("Точный срок уточним после адреса и маршрута.")
+    ).toHaveLength(2)
+    expect(screen.getByText("В заказе 0 позиций")).toBeTruthy()
+    expect(screen.getByText("Оформить заказ")).toBeTruthy()
     expect(
       screen.queryByRole("button", { name: "Добавить наполнение" })
     ).toBeNull()
@@ -282,7 +301,7 @@ describe("public client presentation", () => {
     expect(page.className).toContain("h-svh")
     expect(page.className).toContain("overflow-y-auto")
     const content = Array.from(page.children).find((element) =>
-      element.classList.contains("max-w-6xl")
+      element.classList.contains("max-w-7xl")
     )
     const actionBar = Array.from(page.children).find((element) =>
       element.classList.contains("bottom-0")
@@ -293,6 +312,14 @@ describe("public client presentation", () => {
     expect(actionBar?.className).toContain(
       "pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
     )
+
+    const theme = screen.getByRole("combobox", { name: "Тема оформления" })
+    await user.click(theme)
+    await user.click(await screen.findByRole("option", { name: "Тёмная" }))
+    await waitFor(() =>
+      expect(document.documentElement.classList.contains("dark")).toBe(true)
+    )
+    expect(window.localStorage.getItem("rwms-panel-theme")).toBe("dark")
   })
 
   it("shares free and held physical furniture while enforcing the per-cabin maximum", () => {
@@ -390,8 +417,8 @@ describe("public client presentation", () => {
     renderPage()
 
     await user.click(
-      await screen.findByRole("checkbox", {
-        name: "Выбрать бытовку БЫТ-1",
+      await screen.findByRole("button", {
+        name: "Добавить бытовку БЫТ-1 в заказ",
       })
     )
     const addFilling = screen.getAllByRole("button", {
@@ -495,10 +522,15 @@ describe("public client presentation", () => {
       screen.queryByRole("button", { name: "Далее: дата, срок и доставка" })
     ).toBeNull()
     expect(screen.getByText("Условия текущего заказа")).toBeTruthy()
-    expect(screen.getByText("2026-08-11")).toBeTruthy()
+    expect(screen.getAllByText("2026-08-11")).toHaveLength(4)
+    expect(screen.getAllByText("Срок доставки")).toHaveLength(3)
+    expect(screen.queryByText("Ориентир доставки")).toBeNull()
+    expect(
+      screen.getAllByText("Дата и срок аренды при замене не меняются.")
+    ).toHaveLength(4)
 
-    const choose = screen.getAllByRole("checkbox", {
-      name: /Выбрать бытовку/,
+    const choose = screen.getAllByRole("button", {
+      name: /Добавить бытовку .+ в заказ/,
     })
     await user.click(choose[1])
     await user.click(choose[0])
@@ -683,8 +715,8 @@ describe("public client presentation", () => {
     renderPage()
 
     await user.click(
-      await screen.findByRole("checkbox", {
-        name: "Выбрать бытовку БЫТ-1",
+      await screen.findByRole("button", {
+        name: "Добавить бытовку БЫТ-1 в заказ",
       })
     )
     await user.click(
@@ -716,9 +748,9 @@ describe("public client presentation", () => {
     await user.click(screen.getByRole("button", { name: "Назад к выбору" }))
     expect(
       screen
-        .getByRole("checkbox", { name: "Выбрать бытовку БЫТ-1" })
-        .getAttribute("data-state")
-    ).toBe("checked")
+        .getByRole("button", { name: "Убрать бытовку БЫТ-1 из заказа" })
+        .getAttribute("aria-pressed")
+    ).toBe("true")
     await user.click(
       screen.getByRole("button", { name: "Добавить наполнение" })
     )
@@ -782,8 +814,8 @@ describe("public client presentation", () => {
     renderPage()
 
     await user.click(
-      await screen.findByRole("checkbox", {
-        name: "Выбрать бытовку БЫТ-1",
+      await screen.findByRole("button", {
+        name: "Добавить бытовку БЫТ-1 в заказ",
       })
     )
     await user.click(

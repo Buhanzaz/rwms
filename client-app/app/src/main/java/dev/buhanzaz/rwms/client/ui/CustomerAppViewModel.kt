@@ -53,6 +53,7 @@ data class CustomerWorkflowState(
     val cabins: List<CustomerCabin> = emptyList(),
     val cabinPage: Long = 0,
     val cabinTotalPages: Long = 0,
+    val estimatedDeliveryDates: List<String> = emptyList(),
     val selectedCabinIds: Set<String> = emptySet(),
     val equipment: List<AvailableEquipment> = emptyList(),
     val equipmentDraft: Map<EquipmentKey, Long> = emptyMap(),
@@ -261,6 +262,7 @@ class CustomerAppViewModel @Inject constructor(
             cabins = page.content,
             cabinPage = page.page,
             cabinTotalPages = page.totalPages,
+            estimatedDeliveryDates = page.estimatedDeliveryDates,
         )
     }
 
@@ -743,6 +745,7 @@ class CustomerAppViewModel @Inject constructor(
             cabins = emptyList(),
             cabinPage = 0,
             cabinTotalPages = 0,
+            estimatedDeliveryDates = emptyList(),
             filters = CabinFilters(),
             selectedCabinIds = emptySet(),
             equipment = emptyList(),
@@ -776,6 +779,7 @@ class CustomerAppViewModel @Inject constructor(
             cabins = page.content,
             cabinPage = page.page,
             cabinTotalPages = page.totalPages,
+            estimatedDeliveryDates = page.estimatedDeliveryDates,
             selectedCabinIds = selectedIds,
             siteCabinCapacity = normalizedSiteCabinCapacity(
                 selectedIds.size,

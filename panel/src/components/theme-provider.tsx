@@ -1,7 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import * as React from "react"
 
-type Theme = "dark" | "light" | "system"
+export type Theme = "dark" | "light" | "system"
 type ResolvedTheme = "dark" | "light"
 
 type ThemeProviderProps = {
@@ -32,7 +32,10 @@ function isTheme(value: string | null): value is Theme {
 }
 
 function getSystemTheme(): ResolvedTheme {
-  if (window.matchMedia(COLOR_SCHEME_QUERY).matches) {
+  if (
+    typeof window.matchMedia === "function" &&
+    window.matchMedia(COLOR_SCHEME_QUERY).matches
+  ) {
     return "dark"
   }
 
@@ -124,6 +127,10 @@ export function ThemeProvider({
     applyTheme(theme)
 
     if (theme !== "system") {
+      return undefined
+    }
+
+    if (typeof window.matchMedia !== "function") {
       return undefined
     }
 

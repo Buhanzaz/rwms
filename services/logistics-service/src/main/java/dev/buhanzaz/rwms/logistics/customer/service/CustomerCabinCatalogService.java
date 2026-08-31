@@ -35,6 +35,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class CustomerCabinCatalogService {
   private final CustomerRentalSessionRepository sessions;
   private final LogisticsDependencyGateway dependencies;
+  private final CustomerDeliveryEstimateService deliveryEstimate;
 
   /** Returns one page of currently bookable cabin cards with protected photo URLs. */
   public CustomerCabinPage page(
@@ -77,7 +78,8 @@ public class CustomerCabinCatalogService {
           result.page(),
           result.size(),
           result.totalElements(),
-          result.totalPages());
+          result.totalPages(),
+          deliveryEstimate.estimatedDates(session.getWarehouseId()));
     } catch (LogisticsDependencyException exception) {
       throw dependencyProblem(exception, "CUSTOMER_CABIN_CATALOG_UNAVAILABLE");
     }

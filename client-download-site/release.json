@@ -1,17 +1,17 @@
 {
   "applicationName": "RWMS Клиент",
   "packageName": "dev.buhanzaz.rwms.client",
-  "versionCode": 14,
-  "versionName": "0.1.13",
+  "versionCode": 15,
+  "versionName": "0.1.14",
   "status": "published",
   "minimumAndroidVersion": "Android 11",
   "publicGateway": "https://77-90-158-90.sslip.io",
-  "artifactPath": "/downloads/rwms-customer-0.1.13.apk",
-  "downloadUrl": "https://77-90-158-90.sslip.io/downloads/rwms-customer-0.1.13.apk",
-  "sha256": "65203aa9b8485951f34db5b4ec4117161068ecdc81278a7e8b9e6896f297549a",
+  "artifactPath": "/downloads/rwms-customer-0.1.14.apk",
+  "downloadUrl": "https://77-90-158-90.sslip.io/downloads/rwms-customer-0.1.14.apk",
+  "sha256": "823e248f45e23d26e6aee6ad4505499e46bb9e3bc0ca2ef213824399f53413d9",
   "signerCertificateDn": "CN=RWMS CustomerApp, OU=Mobile, O=RWMS, L=Moscow, ST=Moscow, C=RU",
   "signerCertificateSha256": "3d1a6c3ddcd7cdea0c8d0508557c1684c945ea4ee0aeb349a800e9bdc7968839",
-  "sourceRevision": "19198402d06bf8269cae70516397d8ebe3c62f08",
-  "applicationDiffSha256": "53456819c3715b3fb0f1ce60b81caadb9d7f5f64de42bc69de796ba782411430",
-  "publishedAt": "2026-08-30"
+  "sourceRevision": "723b64575bdfb11ad1a49a54745993079e36aecc",
+  "applicationDiffSha256": "9f1ffea9ef9ee25aa3c965d8f8a3285fb99882d52663b9e11058195754f4c093",
+  "publishedAt": "2026-08-31"
 }
