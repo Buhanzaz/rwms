@@ -970,8 +970,9 @@ routing, `siteCabinCapacity=1|2`, the applicable solo or trailer dimensions,
 weight and axle profile, and the resolved isochrone tariff.
 The customer route adapter preserves exact directed travel beyond one
 32-point provider request by assembling bounded `32 x 32` matrix blocks. It
-supports at most 128 online points and reports a typed workload-limit failure
-above that ceiling; a technical matrix bound cannot be represented as “no
+supports at most 128 online points, including the depot and candidate address.
+Slot search delegates that ceiling to the route adapter and propagates its typed
+workload-limit failure; a technical matrix bound cannot be represented as “no
 available slots”.
 Site capacity one splits a multi-cabin order into sequential solo-truck visits;
 site capacity two merely permits a trailer and cannot override an absent truck

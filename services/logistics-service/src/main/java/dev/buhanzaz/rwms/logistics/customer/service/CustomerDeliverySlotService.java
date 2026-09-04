@@ -71,7 +71,6 @@ import org.springframework.stereotype.Service;
 @Service
 @RequiredArgsConstructor
 public class CustomerDeliverySlotService {
-  private static final int MAX_MATRIX_POINTS = 32;
   private final CustomerRentalService rentals;
   private final CustomerWarehouseService warehouses;
   private final CustomerRentalSessionStore sessions;
@@ -549,18 +548,6 @@ public class CustomerDeliverySlotService {
     }
     for (WarehouseCapacityJob job : generated) {
       if (!job.isTrailerAccessAllowed()) conservativeTripCapacity = 1;
-    }
-    if (points.size() > MAX_MATRIX_POINTS) {
-      return new RouteContext(
-          List.of(),
-          candidateIndex,
-          List.of(),
-          workloadSha256,
-          wholeDayReservations,
-          List.of(),
-          conservativeTripCapacity,
-          isochroneTariffs,
-          policy);
     }
     List<DeliveryJob> baseJobs = new ArrayList<>();
     for (int index = 0; index < existing.size(); index++) {

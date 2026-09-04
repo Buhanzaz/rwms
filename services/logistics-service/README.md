@@ -89,8 +89,9 @@ representative warehouses fail closed when confirmed capacity is absent.
 [`CustomerDeliverySlotService`](src/main/java/dev/buhanzaz/rwms/logistics/customer/service/CustomerDeliverySlotService.java)
 persists offered and held capacity and uses a private Valhalla truck matrix to calculate exact road
 time. A day with more than thirty customer/workload points is split into exact directed
-`32 x 32` provider blocks and reassembled into one matrix; up to 128 points remain an exact
-calculation. Exceeding that bounded online ceiling returns the typed
+`32 x 32` provider blocks and reassembled into one matrix; up to 128 points, including the depot
+and candidate address, remain an exact calculation through slot search. Exceeding that bounded
+online ceiling returns the typed
 `CUSTOMER_DELIVERY_WORKLOAD_LIMIT` error instead of silently reporting that no dates are
 available. `travelZoneHours` remains an informational unbounded depot band; it does not determine either
 feasibility or price. The configured isochrone tiers cap delivery coverage only after an exact road

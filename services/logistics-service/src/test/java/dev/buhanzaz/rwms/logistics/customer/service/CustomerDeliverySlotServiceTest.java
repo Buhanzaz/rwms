@@ -65,6 +65,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.http.HttpStatus;
 import tools.jackson.databind.ObjectMapper;
 
 /** Covers delivery-priority workload selection before CustomerApp slot routing. */
@@ -348,20 +351,55 @@ class CustomerDeliverySlotServiceTest {
     assertThat(harness.search()).isEmpty();
   }
 
-  @Test
-  void thirtyOnePublishedJobsStayFailClosedEvenInsideASpecialPriceZone() {
+  @ParameterizedTest
+  @ValueSource(ints = {31, 126})
+  void largePublishedWorkloadUsesExactRouteCapacityBeforeOfferingSlots(int existingJobs) {
     SlotHarness harness = new SlotHarness(1, 1_800, snapshot(4));
-    harness.withGeneratedDeliveries(31);
+    harness.withGeneratedDeliveries(existingJobs);
     harness.withPriceZone(7_000);
 
-    assertThat(harness.search()).isEmpty();
-    verify(harness.travelTimes, never())
+    assertThat(harness.search())
+        .hasSize(4)
+        .allSatisfy(offer -> assertThat(offer.deliveryPriceRubles()).isEqualTo(7_000));
+    verify(harness.travelTimes, times(4))
         .matrix(
-            anyList(),
+            org.mockito.ArgumentMatchers.argThat(points -> points.size() == existingJobs + 2),
             any(),
             any(),
             any(CustomerDeliveryProperties.Validated.class),
             any(CustomerVehicleRouteProfile.class));
+    verify(harness.capacity, times(4))
+        .evaluate(
+            any(CustomerTravelTimeMatrix.class),
+            org.mockito.ArgumentMatchers.argThat(
+                jobs ->
+                    jobs.size() == existingJobs + 1
+                        && jobs.stream().filter(DeliveryJob::candidate).count() == 1),
+            any(CustomerDeliveryProperties.Validated.class),
+            anyList(),
+            anyInt());
+  }
+
+  @Test
+  void oversizedWorkloadPropagatesRoutingLimitWithoutReplacingOffersWithAnEmptyList() {
+    SlotHarness harness = new SlotHarness(1, 1_800, snapshot(4));
+    harness.withGeneratedDeliveries(127);
+    OrderProblemException workloadLimit =
+        new OrderProblemException(
+            HttpStatus.SERVICE_UNAVAILABLE,
+            "CUSTOMER_DELIVERY_WORKLOAD_LIMIT",
+            "Нагрузка склада слишком велика для онлайн-расчёта слотов");
+    when(harness.travelTimes.matrix(
+            org.mockito.ArgumentMatchers.argThat(points -> points.size() == 129),
+            any(),
+            any(),
+            any(CustomerDeliveryProperties.Validated.class),
+            any(CustomerVehicleRouteProfile.class)))
+        .thenThrow(workloadLimit);
+
+    assertThatThrownBy(harness::search).isSameAs(workloadLimit);
+    verify(harness.slotStore, never()).replaceOffers(any(), any(), anyList());
+    verify(harness.capacity, never()).evaluate(any(), anyList(), any(), anyList(), anyInt());
   }
 
   @Test
