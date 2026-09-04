@@ -9,6 +9,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -206,6 +207,13 @@ class UnavailablePlannerFacade:
 
         raise self._unavailable()
 
+    async def validate_confirmation(
+        self, session: AsyncSession, plan: RoutePlan, *, accept_warnings: bool,
+    ) -> None:
+        """Never confirm a draft without a configured current-facts validator."""
+
+        raise self._unavailable()
+
     async def refresh_plan_after_request_changes(
         self,
         session: AsyncSession,
@@ -317,6 +325,7 @@ async def get_plan(
     *,
     for_update: bool = False,
     populate_existing: bool = False,
+    nowait: bool = False,
 ) -> RoutePlan:
     """Load a complete saved plan graph, optionally locking its version row."""
 
@@ -343,7 +352,7 @@ async def get_plan(
     if populate_existing:
         statement = statement.execution_options(populate_existing=True)
     if for_update:
-        statement = statement.with_for_update()
+        statement = statement.with_for_update(nowait=nowait)
     plan = await session.scalar(statement)
     if plan is None:
         raise not_found("plan", plan_id)
@@ -453,11 +462,11 @@ def plan_read(plan: RoutePlan) -> RoutePlanRead:
 
 
 async def assert_plan_version(
-    session: AsyncSession, plan_id: UUID, expected_version: int
+    session: AsyncSession, plan_id: UUID, expected_version: int, *, nowait: bool = False,
 ) -> RoutePlan:
     """Lock the plan row and reject stale mutable commands with a stable 409."""
 
-    plan = await get_plan(session, plan_id, for_update=True)
+    plan = await get_plan(session, plan_id, for_update=True, nowait=nowait)
     if plan.version != expected_version:
         raise ApiError(
             409,
@@ -1049,6 +1058,35 @@ async def confirm_plan(
     empty_positioning_reason: str | None,
     confirmed_by: str,
 ) -> RoutePlan:
+    """Confirm under current-facts locks, surfacing contention without hidden retries."""
+
+    try:
+        return await _confirm_plan_locked(
+            session, plan_id, expected_version, planner=planner,
+            accept_warnings=accept_warnings,
+            empty_positioning_reason=empty_positioning_reason, confirmed_by=confirmed_by,
+        )
+    except DBAPIError as exc:
+        if getattr(exc.orig, "sqlstate", None) != "55P03":
+            raise
+        # PostgreSQL has aborted this transaction. Let the request dependency roll
+        # it back; never query or retry against that transaction here.
+        raise ApiError(
+            409, "PLAN_RESOURCES_BUSY",
+            "Resources are being updated; reload the plan and retry confirmation",
+        ) from exc
+
+
+async def _confirm_plan_locked(
+    session: AsyncSession,
+    plan_id: UUID,
+    expected_version: int,
+    *,
+    planner: PlannerFacade,
+    accept_warnings: bool,
+    empty_positioning_reason: str | None,
+    confirmed_by: str,
+) -> RoutePlan:
     """Confirm a valid plan and audit an explicitly accepted empty support leg."""
 
     plan_identity = (
@@ -1074,24 +1112,24 @@ async def confirm_plan(
                 "PLAN_REQUEST_MISSING",
                 "A request referenced by the plan no longer exists",
             )
-    # Catalog edits lock equipment before advancing warehouse capacity. Use the
-    # same order, then keep those rows fenced through the confirmation commit.
+    # Catalog and incident commands own different lock orders. Never wait while
+    # holding this cross-resource fence, which must remain through the commit.
     shift_ids = select(RouteCycle.driver_shift_id).where(RouteCycle.route_plan_id == plan_id)
     driver_ids = select(DriverShift.driver_id).where(DriverShift.id.in_(shift_ids))
     await session.scalars(
         select(Driver).where(Driver.id.in_(driver_ids))
-        .order_by(Driver.id).with_for_update()
+        .order_by(Driver.id).with_for_update(nowait=True)
         .execution_options(populate_existing=True)
     )
     await session.scalars(
         select(DriverShift).where(DriverShift.id.in_(shift_ids))
-        .order_by(DriverShift.id).with_for_update()
+        .order_by(DriverShift.id).with_for_update(nowait=True)
         .execution_options(populate_existing=True)
     )
     vehicle_ids = select(DriverShift.vehicle_id).where(DriverShift.id.in_(shift_ids))
     vehicles = tuple(await session.scalars(
         select(Vehicle).where(Vehicle.id.in_(vehicle_ids))
-        .order_by(Vehicle.id).with_for_update()
+        .order_by(Vehicle.id).with_for_update(nowait=True)
         .execution_options(populate_existing=True)
     ))
     trailer_ids = [vehicle.default_trailer_id for vehicle in vehicles
@@ -1099,15 +1137,16 @@ async def confirm_plan(
     if trailer_ids:
         await session.scalars(
             select(Trailer).where(Trailer.id.in_(trailer_ids))
-            .order_by(Trailer.id).with_for_update()
+            .order_by(Trailer.id).with_for_update(nowait=True)
             .execution_options(populate_existing=True)
         )
     warehouse = await session.scalar(
-        select(Warehouse).where(Warehouse.id == plan_identity.warehouse_id).with_for_update()
+        select(Warehouse).where(Warehouse.id == plan_identity.warehouse_id)
+        .with_for_update(nowait=True)
     )
     if warehouse is None:
         raise not_found("warehouse", plan_identity.warehouse_id)
-    plan = await assert_plan_version(session, plan_id, expected_version)
+    plan = await assert_plan_version(session, plan_id, expected_version, nowait=True)
     if await _plan_referenced_request_ids(session, plan_id) != referenced_request_ids:
         raise ApiError(
             409,
