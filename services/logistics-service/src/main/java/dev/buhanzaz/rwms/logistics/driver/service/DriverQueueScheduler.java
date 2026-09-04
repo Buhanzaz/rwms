@@ -6,9 +6,9 @@ import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskPlanningMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsNotFoundException;
-import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -104,6 +104,13 @@ public class DriverQueueScheduler {
     DriverLogisticsTask task =
         tasks.findById(taskId).orElseThrow(LogisticsNotFoundException::new);
     lockWarehouseQueue(task.getWarehouseId());
+    if (task.getTripExpiryRequestedAt() != null
+        || ((task.getKind() == DriverTaskKind.SHIPMENT
+                || task.getKind() == DriverTaskKind.RETURN
+                || task.getKind() == DriverTaskKind.TRANSFER)
+            && task.isOverdueTrip(warehouseToday(task.getWarehouseId())))) {
+      throw new LogisticsConflictException("День рейса завершён: требуется новый рейс");
+    }
     processor.processUntilIdle(taskId);
     task = tasks.findById(taskId).orElseThrow(LogisticsNotFoundException::new);
     if (task.getState() != DriverTaskState.SCHEDULED) {
@@ -144,7 +151,13 @@ public class DriverQueueScheduler {
     LogisticsDependencyGateway.DriverBoardSnapshot board =
         dependencies.readDriverBoard(warehouseId);
     Map<UUID, DriverLogisticsTask> localTasks = localTasksByExternalId(warehouseId);
-    List<ScheduledCandidate> ordered = scheduledCandidates(board, localTasks);
+    List<ScheduledCandidate> ordered =
+        scheduledCandidates(board, localTasks).stream()
+            .filter(
+                candidate ->
+                    !candidate.task().isOverdueTrip(today)
+                        && candidate.task().getTripExpiryRequestedAt() == null)
+            .toList();
     List<ScheduledPlacement> placements =
         schedulePlacements(ordered, today, repairPlaceCount);
 
@@ -274,6 +287,8 @@ public class DriverQueueScheduler {
         DriverLogisticsTask local = local(boardTask.externalTaskId());
         if (local != null
             && local.getState() == DriverTaskState.SCHEDULED
+            && !local.isOverdueTrip(today)
+            && local.getTripExpiryRequestedAt() == null
             && !local.hasPendingRepairPlaceRelease()
             && !excludedTaskIds.contains(local.getExternalTaskId())) {
           result.add(new Candidate(local, boardTask));

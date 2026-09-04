@@ -22,6 +22,114 @@ import org.mockito.ArgumentCaptor;
 
 /** Verifies idempotency-key derivation for the durable driver completion relay. */
 class DriverTaskProcessorTest {
+  @Test
+  void outerTransactionCommitsIntentBeforeAnyCancellationIo() {
+    UUID id = UUID.randomUUID();
+    when(store.nextWork(id))
+        .thenReturn(
+            Optional.of(
+                new DriverTaskWorkflowStore.ExpiryWork(
+                    id, id, LocalDate.now(ZoneOffset.UTC).minusDays(1))));
+    org.springframework.transaction.support.TransactionSynchronizationManager
+        .setActualTransactionActive(true);
+    try {
+      assertThat(processor.processUntilIdle(id)).isZero();
+      org.mockito.Mockito.verifyNoInteractions(dependencies);
+    } finally {
+      org.springframework.transaction.support.TransactionSynchronizationManager
+          .setActualTransactionActive(false);
+    }
+  }
+
+  @Test
+  void directExecutionChecksTheWarehouseDayBeforeSelectingAnyWork() {
+    UUID taskId = UUID.randomUUID();
+    UUID warehouse = UUID.randomUUID();
+    when(store.expirableTripWarehouse(taskId)).thenReturn(Optional.of(warehouse));
+    when(dependencies.warehouseTimeZoneAt(org.mockito.ArgumentMatchers.eq(warehouse), any()))
+        .thenAnswer(
+            call ->
+                new LogisticsDependencyGateway.WarehouseTimeZone(
+                    warehouse, "UTC", call.getArgument(1)));
+    when(store.nextWork(taskId)).thenReturn(Optional.empty());
+    processor.processUntilIdle(taskId);
+    var order = org.mockito.Mockito.inOrder(store);
+    order.verify(store).requestTripExpiry(taskId, LocalDate.now(ZoneOffset.UTC));
+    order.verify(store).nextWork(taskId);
+  }
+
+  @Test
+  void newerAuthoritativeDateIsReconciledInsteadOfCancelled() {
+    UUID taskId = UUID.randomUUID();
+    UUID externalId = UUID.randomUUID();
+    LocalDate old = LocalDate.now(ZoneOffset.UTC).minusDays(1);
+    var current = mock(LogisticsDependencyGateway.DriverBoardTask.class);
+    when(current.status()).thenReturn("ACTIVE");
+    when(current.entryStatus()).thenReturn("WAITING");
+    when(current.scheduledDate()).thenReturn(old.plusDays(2));
+    when(store.nextWork(taskId))
+        .thenReturn(
+            Optional.of(new DriverTaskWorkflowStore.ExpiryWork(taskId, externalId, old)),
+            Optional.empty());
+    when(dependencies.readDriverTask(externalId)).thenReturn(current);
+    processor.processUntilIdle(taskId);
+    verify(store).confirmStatus(taskId, current);
+    verify(dependencies, org.mockito.Mockito.never())
+        .cancelDriverTask(any(), any(Long.class), any());
+  }
+
+  @Test
+  void expiredTripIsCancelledWithTheFreshVersionAndCargoRecordedBeforeRemoteEffect() {
+    UUID taskId = UUID.randomUUID();
+    UUID externalId = UUID.randomUUID();
+    var work =
+        new DriverTaskWorkflowStore.ExpiryWork(
+            taskId, externalId, LocalDate.now(ZoneOffset.UTC).minusDays(1));
+    var active = mock(LogisticsDependencyGateway.DriverBoardTask.class);
+    var cancelled = mock(LogisticsDependencyGateway.DriverBoardTask.class);
+    when(active.status()).thenReturn("ACTIVE");
+    when(active.entryStatus()).thenReturn("IN_PROGRESS");
+    when(active.taskVersion()).thenReturn(12L);
+    when(store.nextWork(taskId)).thenReturn(Optional.of(work), Optional.empty());
+    when(dependencies.readDriverTask(externalId)).thenReturn(active);
+    when(dependencies.cancelDriverTask(
+            org.mockito.ArgumentMatchers.eq(externalId),
+            org.mockito.ArgumentMatchers.eq(12L),
+            any(String.class)))
+        .thenReturn(cancelled);
+    processor.processUntilIdle(taskId);
+    var order = org.mockito.Mockito.inOrder(store, dependencies);
+    order.verify(store).observeExpiredTripCargo(taskId, active);
+    order
+        .verify(dependencies)
+        .cancelDriverTask(
+            org.mockito.ArgumentMatchers.eq(externalId),
+            org.mockito.ArgumentMatchers.eq(12L),
+            any(String.class));
+    order.verify(store).confirmStatus(taskId, cancelled);
+  }
+
+  @Test
+  void expiredTripThatFinishedOrWasAlreadyCancelledIsOnlyReconciled() {
+    for (String status : List.of("DONE", "CANCELLED")) {
+      UUID taskId = UUID.randomUUID();
+      UUID externalId = UUID.randomUUID();
+      var current = mock(LogisticsDependencyGateway.DriverBoardTask.class);
+      when(current.status()).thenReturn(status);
+      when(store.nextWork(taskId))
+          .thenReturn(
+              Optional.of(
+                  new DriverTaskWorkflowStore.ExpiryWork(
+                      taskId, externalId, LocalDate.now(ZoneOffset.UTC).minusDays(1))),
+              Optional.empty());
+      when(dependencies.readDriverTask(externalId)).thenReturn(current);
+      processor.processUntilIdle(taskId);
+      verify(store).confirmStatus(taskId, current);
+    }
+    verify(dependencies, org.mockito.Mockito.never())
+        .cancelDriverTask(any(), any(Long.class), any());
+  }
+
   private final DriverTaskWorkflowStore store = mock(DriverTaskWorkflowStore.class);
   private final LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
   private final DriverTransferExecutionService transferExecution =

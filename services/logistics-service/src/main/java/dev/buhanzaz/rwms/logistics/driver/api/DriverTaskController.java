@@ -3,9 +3,9 @@ package dev.buhanzaz.rwms.logistics.driver.api;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.CreateDriverTaskRequest;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.DriverTaskResponse;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverQueueScheduler;
-import dev.buhanzaz.rwms.logistics.driver.service.FutureDriverTaskClaimService;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverTaskProcessor;
 import dev.buhanzaz.rwms.logistics.driver.service.DriverTaskService;
+import dev.buhanzaz.rwms.logistics.driver.service.FutureDriverTaskClaimService;
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
 import dev.buhanzaz.rwms.logistics.service.LogisticsNotFoundException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
@@ -66,9 +66,11 @@ public class DriverTaskController {
 
   @GetMapping
   public List<DriverTaskResponse> list(
-      @AuthenticationPrincipal Jwt jwt, @RequestParam UUID warehouseId) {
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestParam UUID warehouseId,
+      @RequestParam(defaultValue = "false") boolean expiredOnly) {
     access.requireRead(jwt, warehouseId);
-    return service.list(warehouseId);
+    return expiredOnly ? service.expiredTrips(warehouseId) : service.list(warehouseId);
   }
 
   @GetMapping("/{taskId}")

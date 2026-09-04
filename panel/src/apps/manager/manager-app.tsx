@@ -23,6 +23,7 @@ import { OrdersRoutes } from "@/features/orders/orders-routes"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { cn } from "@/lib/utils"
 import { ManagerBookingChangeQuotes } from "@/apps/manager/manager-booking-change-quotes"
+import { ExpiredTripAlert } from "@/features/logistics/driver-board/expired-trip-alert"
 
 type ManagerNavigationItem = {
   to: string
@@ -66,7 +67,7 @@ function ManagerNavigation({ mobile = false }: { mobile?: boolean }) {
 }
 
 function ManagerLayout() {
-  const { currentUser, logout } = useAuth()
+  const { accessToken, currentUser, logout } = useAuth()
   const { warehouses, isLoading, error } = useWarehouse()
 
   if (isLoading) {
@@ -140,6 +141,15 @@ function ManagerLayout() {
             </Alert>
           ) : null}
           <ManagerBookingChangeQuotes />
+          {accessToken && currentUser?.rentalAccess && currentUser.globalRole === "RENTAL_MANAGER" ? (
+            <ExpiredTripAlert
+              accessToken={accessToken}
+              subjectId={currentUser.id}
+              warehouseNames={Object.fromEntries(
+                warehouses.map((warehouse) => [warehouse.id, warehouse.name])
+              )}
+            />
+          ) : null}
           <Routes>
             <Route path="/assistant" element={<AssistantPage />} />
             <Route

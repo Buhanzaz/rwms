@@ -37,6 +37,23 @@ export function getDriverTask(accessToken: string, driverTaskId: string) {
   )
 }
 
+export function getExpiredTrips(accessToken: string, warehouseId: string) {
+  const query = new URLSearchParams({ warehouseId, expiredOnly: "true" })
+  return bearerRequest<DriverTask[]>(accessToken, `${DRIVER_TASKS_API}?${query}`)
+}
+
+export type ExpiredTripNotice = Pick<
+  DriverTask,
+  "id" | "warehouseId" | "unitNumber" | "kind" | "scheduledDate" | "state" | "failureCode" | "updatedAt"
+> & { tripDetails?: DriverTask["tripDetails"] }
+
+export function getRentalExpiredTrips(accessToken: string) {
+  return bearerRequest<ExpiredTripNotice[]>(
+    accessToken,
+    `${getGatewayRuntimeConfig().logisticsApiBaseUrl}/v1/rental-expired-trips`
+  )
+}
+
 export function moveDriverBoardTask(params: {
   accessToken: string
   externalTaskId: string

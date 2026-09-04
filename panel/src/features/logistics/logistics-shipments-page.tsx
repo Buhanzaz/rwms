@@ -53,6 +53,7 @@ import { SingleDayPicker } from "@/components/ui/single-day-picker"
 import { Skeleton } from "@/components/ui/skeleton"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
+import { ExpiredTripAlert } from "@/features/logistics/driver-board/expired-trip-alert"
 import {
   getEquipmentMovementTask,
   type EquipmentMovementTask,
@@ -889,6 +890,9 @@ export function LogisticsShipmentsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
+      {accessToken && selectedWarehouseId && currentUser ? (
+        <ExpiredTripAlert accessToken={accessToken} warehouseId={selectedWarehouseId} subjectId={currentUser.id} />
+      ) : null}
       <PageToolbar>
         <PageToolbarContent className="max-w-xl">
           <Input

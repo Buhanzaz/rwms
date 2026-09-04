@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { ManagerApp } from "@/apps/manager/manager-app"
 
+vi.mock("@/features/logistics/driver-board/expired-trip-alert", () => ({ ExpiredTripAlert: () => <div>История автоотмен</div> }))
+
 const mocks = vi.hoisted(() => ({
   logout: vi.fn(),
   useAuth: vi.fn(),
@@ -41,6 +43,12 @@ afterEach(() => {
 })
 
 describe("ManagerApp", () => {
+  it("shows expiry notices to rental managers without selecting a single warehouse", () => {
+    mocks.useAuth.mockReturnValue({ accessToken: "token", currentUser: { id: "manager", rentalAccess: true, globalRole: "RENTAL_MANAGER" }, logout: mocks.logout })
+    mocks.useWarehouse.mockReturnValue({ warehouses: [{ id: "w1", name: "Основной" }, { id: "w2", name: "Представительство" }], isLoading: false, error: null })
+    render(<MemoryRouter><ManagerApp /></MemoryRouter>)
+    expect(screen.getByText("История автоотмен")).toBeTruthy()
+  })
   it("reuses the manager workflows under an adaptive /manager shell", async () => {
     mocks.useAuth.mockReturnValue({
       currentUser: { displayName: "Анна Менеджер" },

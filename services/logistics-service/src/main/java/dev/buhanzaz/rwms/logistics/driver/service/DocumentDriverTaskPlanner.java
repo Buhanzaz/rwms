@@ -411,6 +411,10 @@ public class DocumentDriverTaskPlanner {
       DriverTaskWorkerContent workerContent,
       String workerContentJson,
       String checksum) {
+    if (task.getTripExpiryRequestedAt() != null) {
+      throw new LogisticsConflictException(
+          "Рейс отменяется по окончании дня: требуется новый рейс");
+    }
     if (task.getState() == DriverTaskState.REGISTERING && task.getTaskBoardTaskId() == null) {
       task.replanBeforeStart(
           document.getScheduledDate(),

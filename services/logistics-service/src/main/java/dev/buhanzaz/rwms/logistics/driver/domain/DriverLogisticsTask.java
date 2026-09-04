@@ -251,6 +251,12 @@ public class DriverLogisticsTask {
   @Column(name = "failure_code", length = 96)
   private String failureCode;
 
+  @Column(name = "trip_expiry_requested_at")
+  private OffsetDateTime tripExpiryRequestedAt;
+
+  @Column(name = "trip_expiry_cargo_review_required", nullable = false)
+  private boolean tripExpiryCargoReviewRequired;
+
   @Column(name = "created_at", nullable = false)
   private OffsetDateTime createdAt;
 
@@ -756,6 +762,9 @@ public class DriverLogisticsTask {
       UUID workerId,
       String workerName,
       String requestHash) {
+    if (tripExpiryRequestedAt != null) {
+      throw new IllegalStateException("Expiring driver work cannot be replanned");
+    }
     if (state != DriverTaskState.REGISTERING
         && state != DriverTaskState.SCHEDULED
         && state != DriverTaskState.CURRENT) {
@@ -960,6 +969,44 @@ public class DriverLogisticsTask {
     touch();
   }
 
+  /** A transport date is a deadline, unlike the rolling maintenance queue. */
+  public boolean isOverdueTrip(LocalDate warehouseToday) {
+    return (kind == DriverTaskKind.SHIPMENT
+            || kind == DriverTaskKind.RETURN
+            || kind == DriverTaskKind.TRANSFER)
+        && scheduledDate != null
+        && scheduledDate.isBefore(warehouseToday);
+  }
+
+  /** Persists cancellation intent before task-board I/O; no cabin or money transition occurs. */
+  public void requestTripExpiry(LocalDate warehouseToday, OffsetDateTime timestamp) {
+    if (!isOverdueTrip(warehouseToday)
+        || state.isTerminal()
+        || state == DriverTaskState.FINALIZING
+        || tripExpiryRequestedAt != null) return;
+    tripExpiryRequestedAt = Objects.requireNonNull(timestamp);
+    tripExpiryCargoReviewRequired = state == DriverTaskState.CURRENT;
+    nextAttemptAt = timestamp;
+    touch();
+  }
+
+  /** Started cargo remains reserved until an explicit return or agreed redirection is recorded. */
+  public void observeExpiredTripCargo(String entryStatus) {
+    if (tripExpiryRequestedAt == null) throw new IllegalStateException("No trip expiry intent");
+    if (!"WAITING".equals(entryStatus) && !tripExpiryCargoReviewRequired) {
+      tripExpiryCargoReviewRequired = true;
+      touch();
+    }
+  }
+
+  /** A newer authoritative pre-start date invalidates an expiry based on a stale projection. */
+  public void withdrawStaleTripExpiry() {
+    if (state == DriverTaskState.CANCELLED || state == DriverTaskState.COMPLETED) return;
+    tripExpiryRequestedAt = null;
+    tripExpiryCargoReviewRequired = false;
+    touch();
+  }
+
   /**
    * Records a task-board-confirmed pre-start cancellation after logistics has released a reserved
    * inbound repair place with its durable compensation key.
@@ -1066,6 +1113,10 @@ public class DriverLogisticsTask {
       state = DriverTaskState.CANCELLED;
       clearProvisionalEta();
       clearRetryFailure();
+      if (tripExpiryRequestedAt != null) {
+        failureCode =
+            tripExpiryCargoReviewRequired ? "TRIP_DAY_EXPIRED_CARGO_REVIEW" : "TRIP_DAY_EXPIRED";
+      }
       nextAttemptAt = null;
       touch();
       return;

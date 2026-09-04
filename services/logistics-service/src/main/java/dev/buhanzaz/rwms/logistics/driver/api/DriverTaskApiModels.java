@@ -24,6 +24,19 @@ import java.util.UUID;
 public final class DriverTaskApiModels {
   private DriverTaskApiModels() {}
 
+  /**
+   * Limited operational expiry notice; excludes order, customer, address and free-text contents.
+   */
+  public record ExpiredTripNoticeResponse(
+      UUID id,
+      UUID warehouseId,
+      String unitNumber,
+      DriverTaskKind kind,
+      LocalDate scheduledDate,
+      DriverTaskState state,
+      String failureCode,
+      OffsetDateTime updatedAt) {}
+
   /** Requested furniture line for one cabin in a driver trip. */
   public record DriverTripDesiredEquipmentResponse(
       UUID equipmentId, String equipmentName, long quantity) {}

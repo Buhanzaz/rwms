@@ -1,13 +1,13 @@
 package dev.buhanzaz.rwms.logistics.driver.repository;
 
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
-import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskAudienceMode;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import jakarta.persistence.LockModeType;
-import java.time.OffsetDateTime;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -154,6 +154,36 @@ public interface DriverLogisticsTaskRepository extends JpaRepository<DriverLogis
   @EntityGraph(attributePaths = "members")
   List<DriverLogisticsTask> findAllByWarehouseIdOrderByCreatedAtAscIdAsc(UUID warehouseId);
 
+  /** Bounded expiry candidates; completed/finalizing work is never a cancellation candidate. */
+  @Query(
+      """
+      select task.id from DriverLogisticsTask task
+      where task.warehouseId = :warehouseId and task.scheduledDate < :today
+        and task.tripExpiryRequestedAt is null
+        and task.kind in (
+          dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind.SHIPMENT,
+          dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind.RETURN,
+          dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind.TRANSFER)
+        and task.state in (
+          dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState.REGISTERING,
+          dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState.SCHEDULED,
+          dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState.CURRENT)
+      order by task.scheduledDate, task.id
+      """)
+  List<UUID> findOverdueTripIds(
+      @Param("warehouseId") UUID warehouseId, @Param("today") LocalDate today, Pageable page);
+
+  /** Recent terminal expiry history, strictly scoped to the authorized warehouse. */
+  @EntityGraph(attributePaths = "members")
+  List<DriverLogisticsTask>
+      findByWarehouseIdAndStateAndTripExpiryRequestedAtIsNotNullOrderByUpdatedAtDescIdDesc(
+          UUID warehouseId, DriverTaskState state, Pageable page);
+
+  /** One bounded operational feed across the rental manager's current warehouse grants. */
+  List<DriverLogisticsTask>
+      findByWarehouseIdInAndStateAndTripExpiryRequestedAtIsNotNullOrderByUpdatedAtDescIdDesc(
+          Collection<UUID> warehouseIds, DriverTaskState state, Pageable page);
+
   /**
    * Counts active date-only transport work that must conservatively reserve one driver for the
    * whole day until the planner supplies an exact service window.
@@ -191,8 +221,7 @@ public interface DriverLogisticsTaskRepository extends JpaRepository<DriverLogis
               dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotState.CONFIRMED))
       """)
   long countWholeDayDeliveryReservations(
-      @Param("warehouseId") UUID warehouseId,
-      @Param("scheduledDate") LocalDate scheduledDate);
+      @Param("warehouseId") UUID warehouseId, @Param("scheduledDate") LocalDate scheduledDate);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select task from DriverLogisticsTask task where task.id = :id")
@@ -212,8 +241,8 @@ public interface DriverLogisticsTaskRepository extends JpaRepository<DriverLogis
       Pageable page);
 
   /**
-   * Defers an unchanged status fallback poll without advancing the business aggregate version.
-   * The workflow store holds the row lock while issuing this technical scheduling update.
+   * Defers an unchanged status fallback poll without advancing the business aggregate version. The
+   * workflow store holds the row lock while issuing this technical scheduling update.
    */
   @Modifying(flushAutomatically = true)
   @Query(

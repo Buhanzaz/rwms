@@ -2243,9 +2243,19 @@ and
    final filling status. Board enrichment performs at most one asset order read
    per distinct rental order; an unavailable owner snapshot is explicit rather
    than false readiness. The public board publishes only warehouse-local
-   current/future columns; every overdue active task-board card is folded into
+   current/future columns; overdue rolling maintenance cards are folded into
    `currentDate`, while the Current lane remains a vertically scrollable ordered
    list with no six-card display limit.
+   Shipment/return/transfer dates are deadlines: after the warehouse-local day ends,
+   the bounded driver relay persists V97 expiry intent and cancels unfinished task-board
+   work with a fresh version fence. DONE/FINALIZING wins a cancellation race. Expiring
+   transport cannot be promoted, reflowed or moved to a new date. The last 50 terminal
+   auto-cancellations remain visible through `driver-tasks?expiredOnly=true` and the panel.
+   Cargo and lease ownership are unchanged; current work requires custody review and
+   an explicit return or customer-agreed redirection, with no auto-cancellation fee.
+   The isolated Manager app polls `rental-expired-trips` across all of the current rental
+   manager's readable warehouses, with a bounded 50-row operational-only projection and
+   no expansion of full-order visibility.
 5. Dragging a card always moves the whole grouped task. A locked local
    pre-start check runs before task-board; after version-fenced remote success
    logistics synchronizes the owning document date while preserving the desired

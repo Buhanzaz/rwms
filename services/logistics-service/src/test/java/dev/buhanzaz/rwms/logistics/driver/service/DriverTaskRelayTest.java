@@ -17,6 +17,38 @@ import org.springframework.data.domain.Pageable;
 
 /** Verifies that the scheduled driver recovery pass cannot materialize an unbounded backlog. */
 class DriverTaskRelayTest {
+  @Test
+  void expiryUsesWarehouseCalendarAndRunsBeforeOrdinaryProcessing() {
+    var tasks = mock(DriverLogisticsTaskRepository.class);
+    var processor = mock(DriverTaskProcessor.class);
+    var scheduler = mock(DriverQueueScheduler.class);
+    var dependencies = mock(LogisticsDependencyGateway.class);
+    UUID warehouse = UUID.randomUUID();
+    UUID task = UUID.randomUUID();
+    var capturedDate = new java.util.concurrent.atomic.AtomicReference<java.time.LocalDate>();
+    when(dependencies.listWarehouseIdentities())
+        .thenReturn(
+            List.of(
+                new LogisticsDependencyGateway.WarehouseIdentity(
+                    warehouse, 0, true, "Pacific/Kiritimati")));
+    when(dependencies.warehouseTimeZoneAt(org.mockito.ArgumentMatchers.eq(warehouse), any()))
+        .thenAnswer(
+            invocation -> {
+              java.time.OffsetDateTime at = invocation.getArgument(1);
+              capturedDate.set(
+                  at.atZoneSameInstant(java.time.ZoneId.of("Pacific/Kiritimati")).toLocalDate());
+              return new LogisticsDependencyGateway.WarehouseTimeZone(
+                  warehouse, "Pacific/Kiritimati", at);
+            });
+    when(tasks.findOverdueTripIds(org.mockito.ArgumentMatchers.eq(warehouse), any(), any()))
+        .thenReturn(List.of(task));
+    when(tasks.findDueIds(any(), any(), any())).thenReturn(List.of(task));
+    new DriverTaskRelay(tasks, processor, scheduler, dependencies).relay();
+    var order = org.mockito.Mockito.inOrder(processor, scheduler);
+    order.verify(processor).expireTrip(task, capturedDate.get());
+    order.verify(processor).processUntilIdle(task);
+    order.verify(scheduler).reconcileAndPromote(warehouse);
+  }
 
   @Test
   void relayRequestsOnlyOneBoundedPageOfDueTasks() {

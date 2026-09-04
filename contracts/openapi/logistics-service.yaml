@@ -655,12 +655,49 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/rental-expired-trips:
+    get:
+      operationId: listRentalExpiredTrips
+      description: >-
+        Latest 50 auto-cancelled trips across the authenticated rental manager's current
+        readable warehouses, newest first. Requires rental access and RENTAL_MANAGER role.
+        Does not grant full-order visibility or expose customer/address/free-text contents.
+      responses:
+        "200":
+          description: Limited operational expiry notices.
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 50
+                items:
+                  type: object
+                  required: [id, warehouseId, unitNumber, kind, scheduledDate, state, failureCode, updatedAt]
+                  properties:
+                    id: { type: string, format: uuid }
+                    warehouseId: { type: string, format: uuid }
+                    unitNumber: { type: string }
+                    kind: { type: string, enum: [SHIPMENT, RETURN, TRANSFER] }
+                    scheduledDate: { type: string, format: date }
+                    state: { type: string, const: CANCELLED }
+                    failureCode: { type: [string, "null"], maxLength: 96 }
+                    updatedAt: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
   /api/logistics/v1/driver-tasks:
     get:
       operationId: listDriverTasks
       description: Lists logistics-owned task intents for the selected warehouse.
       parameters:
         - $ref: "#/components/parameters/WarehouseIdQuery"
+        - name: expiredOnly
+          in: query
+          description: >-
+            Return only the latest 50 automatically cancelled transport trips, newest first.
+            TRIP_DAY_EXPIRED means the warehouse-local planned day ended;
+            TRIP_DAY_EXPIRED_CARGO_REVIEW also requires checking custody with the driver.
+            Cancellation does not release cabins or charge customer penalties.
+          schema: { type: boolean, default: false }
       responses:
         "200":
           description: Driver task intents. Ordering and execution remain authoritative in task-board.

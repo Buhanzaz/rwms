@@ -47,6 +47,29 @@ class DriverTaskRelay {
       fixedDelayString = "${rwms.logistics.driver-queue.relay-delay:1s}",
       initialDelayString = "${rwms.logistics.driver-queue.relay-initial-delay:1s}")
   void relay() {
+    var warehouses = dependencies.listWarehouseIdentities();
+    for (var warehouse : warehouses) {
+      if (!warehouse.active()) continue;
+      try {
+        OffsetDateTime at = OffsetDateTime.now(ZoneOffset.UTC);
+        var today =
+            at.atZoneSameInstant(
+                    java.time.ZoneId.of(
+                        dependencies.warehouseTimeZoneAt(warehouse.id(), at).timeZone()))
+                .toLocalDate();
+        for (UUID id :
+            tasks.findOverdueTripIds(
+                warehouse.id(), today, PageRequest.of(0, MAX_TASKS_PER_PASS))) {
+          try {
+            processor.expireTrip(id, today);
+          } catch (RuntimeException exception) {
+            log.warn("Overdue trip {} cancellation remains pending", id, exception);
+          }
+        }
+      } catch (RuntimeException exception) {
+        log.warn("Warehouse {} trip expiry pass failed", warehouse.id(), exception);
+      }
+    }
     for (UUID taskId :
         tasks.findDueIds(
             ACTIVE_STATES,
@@ -58,8 +81,7 @@ class DriverTaskRelay {
         log.warn("Driver task {} relay failed", taskId, exception);
       }
     }
-    for (LogisticsDependencyGateway.WarehouseIdentity warehouse :
-        dependencies.listWarehouseIdentities()) {
+    for (LogisticsDependencyGateway.WarehouseIdentity warehouse : warehouses) {
       if (!warehouse.active()) continue;
       try {
         scheduler.reconcileAndPromote(warehouse.id());

@@ -9,6 +9,17 @@ transfers, driver work and logistics orchestration. It owns document/workflow st
 equipment, repair or warehouse aggregates. Effects on those owners use narrow private APIs and
 durable logistics recovery work.
 
+Unfinished shipment, return and transfer trips expire after their planned calendar day in
+the owning warehouse timezone. V97 persists intent before task-board cancellation; the
+bounded driver relay retries ambiguous responses and never cancels DONE/FINALIZING work.
+Expired trips do not roll into today's queue. Cancellation preserves cargo/lease custody
+and charges no customer fee: loaded cargo needs an explicit return or agreed redirection.
+`GET /api/logistics/v1/driver-tasks?warehouseId=…&expiredOnly=true` exposes the last 50
+auto-cancellations to warehouse-authorized readers; the panel shows them with contact guidance.
+The isolated Manager app uses `GET /api/logistics/v1/rental-expired-trips`: one bounded
+feed for every rental manager's current readable warehouses, containing operational trip
+facts only, never another manager's order/customer/address/free-text data.
+
 Global `GET/PUT /api/logistics/v1/settings/rental` also owns late-change policy.
 V94 adds `lateChangeNoticeDays` (default 2 warehouse-local calendar days), nullable
 `lateChangeFeeMode` (`FIXED`/`PERCENT`), exact decimal-string `lateChangeFeeValue`,

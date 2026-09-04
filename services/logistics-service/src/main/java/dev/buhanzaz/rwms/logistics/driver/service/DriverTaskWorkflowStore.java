@@ -63,11 +63,30 @@ class DriverTaskWorkflowStore {
   private final CustomerDeliveryCapacityFence capacityFence;
   private final DriverTaskWorkerContentCodec workerContentCodec;
 
+  /** Execution admission must also check the calendar while a bounded expiry scan catches up. */
+  public Optional<UUID> expirableTripWarehouse(UUID taskId) {
+    var task = tasks.findById(taskId).orElseThrow(LogisticsNotFoundException::new);
+    return task.getTripExpiryRequestedAt() == null
+            && !task.getState().isTerminal()
+            && task.getState() != DriverTaskState.FINALIZING
+            && (task.getKind() == DriverTaskKind.SHIPMENT
+                || task.getKind() == DriverTaskKind.RETURN
+                || task.getKind() == DriverTaskKind.TRANSFER)
+        ? Optional.of(task.getWarehouseId())
+        : Optional.empty();
+  }
+
   @Transactional
   public Optional<Work> nextWork(UUID taskId) {
     DriverLogisticsTask task =
         tasks.findForUpdate(taskId).orElseThrow(LogisticsNotFoundException::new);
     if (task.getState().isTerminal() || !task.isDue(now())) return Optional.empty();
+    if (task.getTripExpiryRequestedAt() != null
+        && task.getState() != DriverTaskState.REGISTERING
+        && task.getState() != DriverTaskState.FINALIZING) {
+      return Optional.of(
+          new ExpiryWork(task.getId(), task.getExternalTaskId(), task.getScheduledDate()));
+    }
     return switch (task.getState()) {
       case REGISTERING ->
           Optional.of(
@@ -134,6 +153,24 @@ class DriverTaskWorkflowStore {
     tasks.saveAndFlush(task);
   }
 
+  /** Commits expiry intent independently of the eventual remote cancellation. */
+  @Transactional
+  public void requestTripExpiry(UUID taskId, java.time.LocalDate today) {
+    DriverLogisticsTask task = locked(taskId);
+    task.requestTripExpiry(today, now());
+    tasks.saveAndFlush(task);
+  }
+
+  /** Retains possible loaded cargo before issuing an interrupting cancellation. */
+  @Transactional
+  public void observeExpiredTripCargo(
+      UUID taskId, LogisticsDependencyGateway.DriverBoardTask board) {
+    DriverLogisticsTask task = locked(taskId);
+    requireBoardTask(task, board);
+    task.observeExpiredTripCargo(board.entryStatus());
+    tasks.saveAndFlush(task);
+  }
+
   @Transactional
   public void confirmStatus(UUID taskId, LogisticsDependencyGateway.DriverBoardTask board) {
     fenceCapacityObservation(board);
@@ -144,6 +181,12 @@ class DriverTaskWorkflowStore {
     }
     requireBoardTask(task, board);
     synchronizeGroupedDocumentDate(task, board);
+    if (task.getTripExpiryRequestedAt() != null
+        && "ACTIVE".equals(board.status())
+        && "WAITING".equals(board.entryStatus())
+        && !task.getScheduledDate().equals(board.scheduledDate())) {
+      task.withdrawStaleTripExpiry();
+    }
     if (matchesCurrentStatus(task, board)) {
       int deferred =
           tasks.deferStatusPoll(
@@ -181,7 +224,7 @@ class DriverTaskWorkflowStore {
     DriverLogisticsTask task =
         tasks.findById(taskId).orElseThrow(LogisticsNotFoundException::new);
     if (task.getState() != DriverTaskState.RECONCILIATION_REQUIRED
-        || !isRecoverableDependencyReconciliation(task.getFailureCode())) {
+        || !isRecoverableDependencyReconciliation(task)) {
       return Optional.empty();
     }
     return Optional.of(task.getExternalTaskId());
@@ -198,7 +241,7 @@ class DriverTaskWorkflowStore {
     fenceCapacityObservation(board);
     DriverLogisticsTask task = locked(taskId);
     if (task.getState() != DriverTaskState.RECONCILIATION_REQUIRED
-        || !isRecoverableDependencyReconciliation(task.getFailureCode())) {
+        || !isRecoverableDependencyReconciliation(task)) {
       return;
     }
     requireBoardTask(task, board);
@@ -519,6 +562,7 @@ class DriverTaskWorkflowStore {
         switch (work) {
           case RegisterWork ignored -> "TASK_BOARD";
           case StatusWork ignored -> "TASK_BOARD";
+          case ExpiryWork ignored -> "TASK_BOARD";
           case EvidenceWork ignored -> "TASK_BOARD";
           case TransferDepartureWork ignored -> "TRANSFER_EFFECT";
           case TransferArrivalWork ignored -> "TRANSFER_EFFECT";
@@ -557,10 +601,17 @@ class DriverTaskWorkflowStore {
         || "TASK_BOARD_DEPENDENCY_PERMANENT_REJECTION".equals(failureCode);
   }
 
+  private static boolean isRecoverableDependencyReconciliation(DriverLogisticsTask task) {
+    return isRecoverableDependencyReconciliation(task.getFailureCode())
+        || (task.getTripExpiryRequestedAt() != null
+            && "TASK_BOARD_DEPENDENCY_TRANSIENT".equals(task.getFailureCode()));
+  }
+
   private static UUID workTaskId(Work work) {
     return switch (work) {
       case RegisterWork value -> value.taskId();
       case StatusWork value -> value.taskId();
+      case ExpiryWork value -> value.taskId();
       case EvidenceWork value -> value.taskId();
       case TransferDepartureWork value -> value.taskId();
       case TransferArrivalWork value -> value.taskId();
@@ -837,6 +888,7 @@ class DriverTaskWorkflowStore {
   /** One exact persisted workflow stage selected for a remote relay attempt. */
   sealed interface Work
       permits RegisterWork,
+          ExpiryWork,
           StatusWork,
           EvidenceWork,
           TransferDepartureWork,
@@ -863,6 +915,10 @@ class DriverTaskWorkflowStore {
 
   /** Status lookup used only to reconcile an already registered task-board identity. */
   record StatusWork(UUID taskId, UUID externalTaskId) implements Work {}
+
+  /** Version-fenced overdue cancellation; completion wins a race with this work item. */
+  record ExpiryWork(UUID taskId, UUID externalTaskId, java.time.LocalDate scheduledDate)
+      implements Work {}
 
   /** Completion-evidence lookup for a task whose task-board card is already done. */
   record EvidenceWork(UUID taskId, UUID externalTaskId) implements Work {}

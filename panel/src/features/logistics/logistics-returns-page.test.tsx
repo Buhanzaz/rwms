@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event"
 import { MemoryRouter, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+vi.mock("@/features/logistics/driver-board/expired-trip-alert", () => ({ ExpiredTripAlert: () => <div>История автоотмен</div> }))
+
 import type {
   ReturnDocument,
   ReturnLine,

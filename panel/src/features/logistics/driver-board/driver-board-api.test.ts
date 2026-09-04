@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   createManualMovement,
   getDriverTask,
+  getExpiredTrips,
+  getRentalExpiredTrips,
   moveDriverBoardTask,
   pinDriverBoardTask,
   promoteCapitalRepair,
@@ -28,6 +30,14 @@ afterEach(() => {
 })
 
 describe("driver board API", () => {
+  it("uses separate warehouse and limited rental expiry endpoints with bearer authentication", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse([]))
+    await getExpiredTrips("warehouse-token", WAREHOUSE_ID)
+    await getRentalExpiredTrips("rental-token")
+    expect(String(fetchMock.mock.calls[0]![0])).toContain(`driver-tasks?warehouseId=${WAREHOUSE_ID}&expiredOnly=true`)
+    expect(String(fetchMock.mock.calls[1]![0])).toContain("/v1/rental-expired-trips")
+    expect(new Headers(fetchMock.mock.calls[1]![1]?.headers).get("Authorization")).toBe("Bearer rental-token")
+  })
   it("loads the authoritative grouped trip detail from the driver-task endpoint", async () => {
     const detail = {
       id: EXTERNAL_TASK_ID,

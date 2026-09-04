@@ -12,6 +12,83 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 class DriverLogisticsTaskTest {
   @Test
+  void onlyUnfinishedTransportExpiresAfterItsCalendarDay() {
+    LocalDate today = LocalDate.now(ZoneOffset.UTC);
+    for (DriverTaskKind kind : DriverTaskKind.values()) {
+      for (DriverTaskState state : DriverTaskState.values()) {
+        var task =
+            create(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                null,
+                DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE,
+                UUID.randomUUID(),
+                DriverTaskKind.SHIPMENT);
+        ReflectionTestUtils.setField(task, "kind", kind);
+        ReflectionTestUtils.setField(task, "state", state);
+        task.requestTripExpiry(today, OffsetDateTime.now(ZoneOffset.UTC));
+        assertThat(task.getTripExpiryRequestedAt()).isNull();
+        task.requestTripExpiry(today.plusDays(1), OffsetDateTime.now(ZoneOffset.UTC));
+        boolean expected =
+            (kind == DriverTaskKind.SHIPMENT
+                    || kind == DriverTaskKind.RETURN
+                    || kind == DriverTaskKind.TRANSFER)
+                && !state.isTerminal()
+                && state != DriverTaskState.FINALIZING;
+        assertThat(task.getTripExpiryRequestedAt() != null)
+            .as("%s %s", kind, state)
+            .isEqualTo(expected);
+      }
+    }
+  }
+
+  @Test
+  void expiredStartedTripKeepsCargoReviewAndNeverAppliesPhysicalEffects() {
+    var task =
+        create(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            null,
+            DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE,
+            UUID.randomUUID(),
+            DriverTaskKind.SHIPMENT);
+    var entry = UUID.randomUUID();
+    var boardTask = UUID.randomUUID();
+    task.registerBoardTask(boardTask, 0, entry, "WAITING", "SCHEDULED", null);
+    var now = OffsetDateTime.now(ZoneOffset.UTC);
+    task.requestTripExpiry(task.getScheduledDate().plusDays(1), now);
+    task.observeExpiredTripCargo("IN_PROGRESS");
+    task.observeBoardTask(
+        boardTask, 1, entry, "CANCELLED", task.getScheduledDate(), "CURRENT", "CANCELLED", now);
+    assertThat(task.getState()).isEqualTo(DriverTaskState.CANCELLED);
+    assertThat(task.getFailureCode()).isEqualTo("TRIP_DAY_EXPIRED_CARGO_REVIEW");
+    assertThat(task.getTripExpiryRequestedAt()).isEqualTo(now);
+    assertThat(task.isCoverApplied()).isFalse();
+    assertThat(task.getCompletedAt()).isNull();
+  }
+
+  @Test
+  void confirmedCompletionWinsOverPersistedExpiryIntent() {
+    var task =
+        create(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            null,
+            DriverTaskSourceType.LOGISTICS_DOCUMENT_LINE,
+            UUID.randomUUID(),
+            DriverTaskKind.SHIPMENT);
+    var entry = UUID.randomUUID();
+    var boardTask = UUID.randomUUID();
+    task.registerBoardTask(boardTask, 0, entry, "WAITING", "SCHEDULED", null);
+    var now = OffsetDateTime.now(ZoneOffset.UTC);
+    task.requestTripExpiry(task.getScheduledDate().plusDays(1), now);
+    task.observeBoardTask(
+        boardTask, 1, entry, "DONE", task.getScheduledDate(), "CURRENT", "DONE", now);
+    assertThat(task.getState()).isEqualTo(DriverTaskState.FINALIZING);
+    assertThat(task.getFailureCode()).isNull();
+  }
+
+  @Test
   void repairDeliveryCompletesOnlyAfterPhotoCoverAndFactualOccupation() {
     UUID warehouseId = UUID.randomUUID();
     UUID cabinId = UUID.randomUUID();

@@ -41,6 +41,22 @@ import org.springframework.test.util.ReflectionTestUtils;
 import tools.jackson.databind.ObjectMapper;
 
 class DriverTaskWorkflowStoreTest {
+  @Test
+  void persistedExpiryTakesPrecedenceOverCurrentTransferExecution() {
+    UUID id = UUID.randomUUID();
+    var task = mock(DriverLogisticsTask.class);
+    when(task.getId()).thenReturn(id);
+    when(task.getExternalTaskId()).thenReturn(id);
+    when(task.getScheduledDate()).thenReturn(LocalDate.of(2026, 9, 4));
+    when(task.getState()).thenReturn(DriverTaskState.CURRENT);
+    when(task.isDue(any())).thenReturn(true);
+    when(task.getTripExpiryRequestedAt()).thenReturn(OffsetDateTime.parse("2026-09-05T00:00:00Z"));
+    when(tasks.findForUpdate(id)).thenReturn(Optional.of(task));
+    assertThat(store.nextWork(id).orElseThrow())
+        .isInstanceOf(DriverTaskWorkflowStore.ExpiryWork.class);
+    org.mockito.Mockito.verifyNoInteractions(documents, documentLines);
+  }
+
   private final DriverLogisticsTaskRepository tasks = mock(DriverLogisticsTaskRepository.class);
   private final LogisticsDocumentRepository documents = mock(LogisticsDocumentRepository.class);
   private final LogisticsDocumentLineRepository documentLines =

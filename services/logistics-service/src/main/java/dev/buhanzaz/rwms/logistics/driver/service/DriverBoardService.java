@@ -153,6 +153,9 @@ public class DriverBoardService {
     if (!request.warehouseId().equals(local.getWarehouseId())) {
       throw new LogisticsConflictException("Задание не принадлежит выбранному складу");
     }
+    if (local.isOverdueTrip(today) || local.getTripExpiryRequestedAt() != null) {
+      throw new LogisticsConflictException("День рейса завершён: требуется новый рейс");
+    }
     if (local.getSourceType() == DriverTaskSourceType.LOGISTICS_DOCUMENT) {
       workflowStore.requireGroupedDocumentMovePreStart(local.getId());
     }

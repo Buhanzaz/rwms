@@ -37,6 +37,7 @@ import { Input } from "@/components/ui/input"
 import { SingleDayPicker } from "@/components/ui/single-day-picker"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
+import { ExpiredTripAlert } from "@/features/logistics/driver-board/expired-trip-alert"
 import {
   LogisticsDocumentFilters,
   LogisticsFiltersToggle,
@@ -498,6 +499,9 @@ export function LogisticsReturnsPage() {
 
       {!accessToken ? (
         <FieldError>Для просмотра возвратов требуется авторизация.</FieldError>
+      ) : null}
+      {accessToken && selectedWarehouseId && currentUser ? (
+        <ExpiredTripAlert accessToken={accessToken} warehouseId={selectedWarehouseId} subjectId={currentUser.id} />
       ) : null}
       {!selectedWarehouseId ? (
         <FieldError>Выберите склад для просмотра возвратов.</FieldError>

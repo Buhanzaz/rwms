@@ -3,10 +3,12 @@ package dev.buhanzaz.rwms.logistics.driver.service;
 import dev.buhanzaz.rwms.logistics.customer.capacity.service.CustomerDeliveryCapacityFence;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.CreateDriverTaskRequest;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.DriverTaskResponse;
+import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.ExpiredTripNoticeResponse;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskPlanningMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import dev.buhanzaz.rwms.logistics.driver.mapper.DriverTaskResponseMapper;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
@@ -64,8 +66,39 @@ public class DriverTaskService {
         .toList();
   }
 
+  /**
+   * Returns the latest 50 automatically cancelled trips without loading the full warehouse history.
+   */
+  public List<DriverTaskResponse> expiredTrips(UUID warehouseId) {
+    var recent =
+        tasks.findByWarehouseIdAndStateAndTripExpiryRequestedAtIsNotNullOrderByUpdatedAtDescIdDesc(
+            warehouseId,
+            DriverTaskState.CANCELLED,
+            org.springframework.data.domain.PageRequest.of(0, 50));
+    var details = tripProjection.boardDetails(recent);
+    return recent.stream().map(task -> mapper.toResponse(task, details.get(task.getId()))).toList();
+  }
+
   public DriverLogisticsTask required(UUID taskId) {
     return tasks.findById(taskId).orElseThrow(LogisticsNotFoundException::new);
+  }
+
+  /** Operational trip facts only; this feed grants no access to another manager's order. */
+  public List<ExpiredTripNoticeResponse> expiredTripsForManager(
+      dev.buhanzaz.rwms.logistics.order.security.OrderActor actor) {
+    if (!actor.rentalAccess() || !"RENTAL_MANAGER".equals(actor.role())) {
+      throw new org.springframework.security.access.AccessDeniedException(
+          "Rental manager access required");
+    }
+    if (actor.readableWarehouses().isEmpty()) return List.of();
+    return tasks
+        .findByWarehouseIdInAndStateAndTripExpiryRequestedAtIsNotNullOrderByUpdatedAtDescIdDesc(
+            actor.readableWarehouses(),
+            DriverTaskState.CANCELLED,
+            org.springframework.data.domain.PageRequest.of(0, 50))
+        .stream()
+        .map(mapper::toExpiredTripNotice)
+        .toList();
   }
 
   @Transactional

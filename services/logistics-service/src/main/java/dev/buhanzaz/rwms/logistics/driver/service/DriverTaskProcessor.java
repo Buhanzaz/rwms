@@ -32,10 +32,26 @@ public class DriverTaskProcessor {
    */
   public int processUntilIdle(UUID taskId) {
     if (taskId == null) throw new IllegalArgumentException("taskId is required");
+    Optional<UUID> calendarWarehouse = store.expirableTripWarehouse(taskId);
+    java.time.ZoneId warehouseZone = null;
+    if (calendarWarehouse.isPresent()) {
+      var at = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC);
+      warehouseZone =
+          java.time.ZoneId.of(
+              dependencies.warehouseTimeZoneAt(calendarWarehouse.orElseThrow(), at).timeZone());
+    }
     int processed = 0;
     while (processed < MAX_STEPS_PER_DRAIN) {
+      if (warehouseZone != null) {
+        store.requestTripExpiry(taskId, java.time.LocalDate.now(warehouseZone));
+      }
       Optional<DriverTaskWorkflowStore.Work> next = store.nextWork(taskId);
       if (next.isEmpty()) return processed;
+      // A caller may own an outer document/queue transaction. Let its expiry intent commit
+      // before the relay performs an irreversible task-board cancellation in a later pass.
+      if (next.get() instanceof DriverTaskWorkflowStore.ExpiryWork
+          && org.springframework.transaction.support.TransactionSynchronizationManager
+              .isActualTransactionActive()) return processed;
       execute(next.get());
       processed++;
       if (next.get() instanceof DriverTaskWorkflowStore.StatusWork) {
@@ -63,6 +79,12 @@ public class DriverTaskProcessor {
     }
   }
 
+  /** Marks expiry durably, then drains the existing retryable workflow. */
+  public void expireTrip(UUID taskId, java.time.LocalDate warehouseToday) {
+    store.requestTripExpiry(taskId, warehouseToday);
+    processUntilIdle(taskId);
+  }
+
   private void execute(DriverTaskWorkflowStore.Work work) {
     try {
       if (work instanceof DriverTaskWorkflowStore.RegisterWork value) {
@@ -86,6 +108,27 @@ public class DriverTaskProcessor {
       if (work instanceof DriverTaskWorkflowStore.StatusWork value) {
         store.confirmStatus(
             value.taskId(), dependencies.readDriverTask(value.externalTaskId()));
+        return;
+      }
+      if (work instanceof DriverTaskWorkflowStore.ExpiryWork value) {
+        var current = dependencies.readDriverTask(value.externalTaskId());
+        if ("ACTIVE".equals(current.status())
+            && "WAITING".equals(current.entryStatus())
+            && !value.scheduledDate().equals(current.scheduledDate())) {
+          store.confirmStatus(value.taskId(), current);
+          return;
+        }
+        if ("ACTIVE".equals(current.status()) && !"DONE".equals(current.entryStatus())) {
+          store.observeExpiredTripCargo(value.taskId(), current);
+          current =
+              dependencies.cancelDriverTask(
+                  value.externalTaskId(),
+                  current.taskVersion(),
+                  "Запланированный день склада завершён: невыполненный рейс отменён. Проверить"
+                      + " фактический груз и согласовать возврат или новую доставку. Без"
+                      + " неустойки.");
+        }
+        store.confirmStatus(value.taskId(), current);
         return;
       }
       if (work instanceof DriverTaskWorkflowStore.EvidenceWork value) {
@@ -155,6 +198,7 @@ public class DriverTaskProcessor {
     return switch (work) {
       case DriverTaskWorkflowStore.RegisterWork value -> value.taskId();
       case DriverTaskWorkflowStore.StatusWork value -> value.taskId();
+      case DriverTaskWorkflowStore.ExpiryWork value -> value.taskId();
       case DriverTaskWorkflowStore.EvidenceWork value -> value.taskId();
       case DriverTaskWorkflowStore.TransferDepartureWork value -> value.taskId();
       case DriverTaskWorkflowStore.TransferArrivalWork value -> value.taskId();
