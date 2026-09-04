@@ -3,10 +3,29 @@ import {
   warehouseAttachedName,
   warehouseDisplayName,
   warehouseLocation,
+  warehouseMapKind,
 } from '../src/domain/warehouse-presentation';
 import { warehouseFixture } from './fixtures';
 
 describe('warehouse presentation', () => {
+  it.each([
+    [true, false, false, 'ПС'],
+    [true, true, true, 'ПС'],
+    [false, false, true, 'С'],
+    [false, true, false, 'П'],
+    [false, true, true, 'Ц'],
+  ] as const)('labels canonical flags %s/%s/%s as %s', (representative, production, mainWarehouse, glyph) => {
+    const warehouse = warehouseFixture({ representative });
+    expect(warehouseMapKind(warehouse, { id: warehouse.external_warehouse_id, representative, production, mainWarehouse })).toMatchObject({ glyph, known: true });
+  });
+
+  it('does not infer a type from a name, unmatched identity or inconsistent projection', () => {
+    const warehouse = warehouseFixture({ name: 'Центральный склад и производство' });
+    expect(warehouseMapKind(warehouse).known).toBe(false);
+    expect(warehouseMapKind(warehouse, { id: 'different', representative: false, production: true, mainWarehouse: true }).known).toBe(false);
+    expect(warehouseMapKind(warehouse, { id: warehouse.external_warehouse_id, representative: true, production: false, mainWarehouse: false }).known).toBe(false);
+    expect(warehouseMapKind(warehouse, { id: warehouse.external_warehouse_id, representative: false, production: false, mainWarehouse: false }).glyph).toBe('?');
+  });
   it('uses one concise format for a main warehouse', () => {
     const warehouse = warehouseFixture({ name: 'Склад СПБ', city: 'СПБ' });
 

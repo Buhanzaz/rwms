@@ -34,6 +34,8 @@ import { userFacingErrorDetail } from '../utils/user-facing-error';
 import { deriveSimulationRouteLayers } from '../simulation/route-layers';
 import { RequestMapPopup } from './RequestMapCard';
 import type { MapInsets } from '../app/map-layout';
+import type { WarehouseKindMetadata } from '../api/warehouse-directory';
+import { warehouseMapKind } from '../domain/warehouse-presentation';
 import type { PlanMove } from '../features/planning/PlanPanel';
 import type { SlotPlanningGeoJson, SlotPlanningMapPresentation } from '../features/slot-availability/types';
 import {
@@ -189,6 +191,8 @@ export interface PendingWarehouseMapPoint {
 }
 
 interface MapCanvasProps {
+  warehouseKinds?: ReadonlyMap<string, WarehouseKindMetadata> | undefined;
+  warehouseKindsFailed?: boolean;
   cameraPadding?: MapInsets;
   workspace: WarehouseWorkspace;
   plan: RoutePlan | null;
@@ -306,14 +310,14 @@ function requestPointFeatures(
   });
 }
 
-function markerElement(kind: 'warehouse' | 'delivery' | 'pickup' | 'truck', label: string, selected: boolean): HTMLElement {
+function markerElement(kind: 'warehouse' | 'delivery' | 'pickup' | 'truck', label: string, selected: boolean, glyph?: string): HTMLElement {
   const element = document.createElement('button');
   element.type = 'button';
   element.className = `map-marker map-marker--${kind}${selected ? ' map-marker--selected' : ''}`;
   element.setAttribute('aria-label', label);
   element.title = label;
   const span = document.createElement('span');
-  span.textContent = kind === 'warehouse' ? 'С' : kind === 'delivery' ? 'Д' : kind === 'pickup' ? 'В' : '🚚';
+  span.textContent = glyph ?? (kind === 'warehouse' ? '?' : kind === 'delivery' ? 'Д' : kind === 'pickup' ? 'В' : '🚚');
   element.append(span);
   return element;
 }
@@ -492,6 +496,8 @@ export function MapCanvas({
   onPlanningCheckPoint,
   pendingWarehousePoint,
   cameraPadding,
+  warehouseKinds,
+  warehouseKindsFailed = false,
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -1032,7 +1038,8 @@ export function MapCanvas({
     const markers: Marker[] = [];
     if (layers.warehouse || planningCheck?.active) {
       workspace.warehouses.forEach((warehouse) => {
-        const element = markerElement('warehouse', `Склад: ${warehouse.name}`, selected?.kind === 'warehouse' && selected.id === warehouse.id);
+        const kind = warehouseMapKind(warehouse, warehouseKinds?.get(warehouse.external_warehouse_id));
+        const element = markerElement('warehouse', `${kind.label}: ${warehouse.name}`, selected?.kind === 'warehouse' && selected.id === warehouse.id, kind.glyph);
         element.addEventListener('click', (event) => {
           event.stopPropagation();
           onSelect({ kind: 'warehouse', id: warehouse.id });
@@ -1072,7 +1079,7 @@ export function MapCanvas({
     }
     markersRef.current = markers;
     return () => markers.forEach((marker) => marker.remove());
-  }, [layers.trucks, layers.warehouse, mapReady, onSelect, pendingWarehousePoint, planningCheck?.active, planningCheck?.point, selected, simulation, workspace.warehouse.id, workspace.warehouse.timezone, workspace.warehouses]);
+  }, [layers.trucks, layers.warehouse, mapReady, onSelect, pendingWarehousePoint, planningCheck?.active, planningCheck?.point, selected, simulation, warehouseKinds, workspace.warehouse.id, workspace.warehouse.timezone, workspace.warehouses]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1122,8 +1129,9 @@ export function MapCanvas({
         <button type="button" aria-label="Слои карты" title="Слои карты" aria-pressed={layersOpen} onClick={() => setLayersOpen((open) => !open)}><Layers3 size={17} aria-hidden="true" /></button>
         <WarehouseActivationControl currentWarehouseId={workspace.warehouse.id} warehouses={workspace.warehouses} selected={selected} onActivate={onWarehouseActivate} />
       </div>
-      {(layersOpen || (layers.routes && routeLegend.length > 0)) ? (
+      {(layersOpen || warehouseKindsFailed || (layers.routes && routeLegend.length > 0)) ? (
         <div className="map-overlay map-overlay-stack">
+          {warehouseKindsFailed ? <div className="layer-menu" role="status">Типы складов временно недоступны. Маркеры «?» не означают основной склад. Повторная загрузка — через минуту.</div> : null}
           {layers.routes && routeLegend.length ? (
             <div className="route-legend" aria-label="Все участки построенного плана">
               <strong>Полные маршруты</strong>

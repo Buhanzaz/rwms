@@ -63,6 +63,7 @@ import { UnassignedDeliveryRescheduleDialog } from '../features/planning/Unassig
 import { warehouseDisplayName } from '../domain/warehouse-presentation';
 import { useMapLayout } from './map-layout';
 import logotypeUrl from '../assets/logotype.svg';
+import { loadWarehouseKinds } from '../api/warehouse-directory';
 
 type DialogState =
   | { kind: 'workload-generator' }
@@ -304,6 +305,7 @@ export function App() {
   }, []);
 
   const warehousesQuery = useQuery({ queryKey: ['warehouses'], queryFn: api.listWarehouses, refetchInterval: 15_000 });
+  const warehouseKindsQuery = useQuery({ queryKey: ['warehouse-kinds'], queryFn: ({ signal }) => loadWarehouseKinds(signal), staleTime: 60_000, refetchInterval: 60_000, retry: false, enabled: Boolean(warehousesQuery.data?.length) });
   const availableWarehousesQuery = useQuery({ queryKey: ['available-warehouses'], queryFn: api.listAvailableWarehouses, refetchInterval: 15_000 });
   useEffect(() => {
     const warehouses = warehousesQuery.data;
@@ -1193,6 +1195,8 @@ export function App() {
           onPlanningCheckPoint={setSlotPlannerPoint}
           pendingWarehousePoint={null}
           cameraPadding={mapLayout.padding}
+          warehouseKinds={warehouseKindsQuery.isError ? undefined : warehouseKindsQuery.data}
+          warehouseKindsFailed={warehouseKindsQuery.isError}
         />
         {inspectorOpen && !slotPlannerOpen ? <Inspector
           workspace={workspace} plan={plan} simulation={simulationState} validation={validation} busy={busy}

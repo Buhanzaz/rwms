@@ -192,15 +192,21 @@ describe('warehouse selection on the shared map', () => {
       pendingWarehousePoint: null,
     };
     const padding = { top: 148, left: 256, right: 456, bottom: 36 };
-    const view = render(<MapCanvas {...commonProps} cameraPadding={padding} selected={null} />);
+    const warehouseKinds = new globalThis.Map([
+      [currentWarehouse.external_warehouse_id, { id: currentWarehouse.external_warehouse_id, representative: false, mainWarehouse: true, production: true }],
+      ['not-in-workspace', { id: 'not-in-workspace', representative: false, mainWarehouse: true, production: false }],
+    ]);
+    const view = render(<MapCanvas {...commonProps} cameraPadding={padding} warehouseKinds={warehouseKinds} selected={null} />);
 
     expect(screen.queryByRole('button', { name: 'Нарисовать зону' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Вырезать область внутри зоны' })).not.toBeInTheDocument();
 
-    await waitFor(() => expect(mapState.markers.some((marker) => marker.getAttribute('aria-label') === 'Склад: Склад Великий Новгород')).toBe(true));
+    await waitFor(() => expect(mapState.markers.some((marker) => marker.getAttribute('aria-label') === 'Центральный склад и производство: Склад Великий Новгород')).toBe(true));
+    expect(mapState.markers).toHaveLength(2);
+    expect(mapState.markers.map((marker) => marker.textContent)).toEqual(['Ц', 'Ц']);
     expect(mapState.setPadding).toHaveBeenLastCalledWith(padding);
     const originalMap = mapState.activeMap;
-    const targetMarker = mapState.markers.find((marker) => marker.getAttribute('aria-label') === 'Склад: Склад Великий Новгород');
+    const targetMarker = mapState.markers.find((marker) => marker.getAttribute('aria-label') === 'Центральный склад и производство: Склад Великий Новгород');
     const zoomCallsBeforeSelection = mapState.easeTo.mock.calls.length;
     fireEvent.click(targetMarker as HTMLElement);
 
@@ -211,6 +217,9 @@ describe('warehouse selection on the shared map', () => {
     view.rerender(<MapCanvas {...commonProps} cameraPadding={{ ...padding, right: 24 }} selected={{ kind: 'warehouse', id: targetWarehouse.id }} />);
     expect(mapState.activeMap).toBe(originalMap);
     expect(mapState.setPadding).toHaveBeenLastCalledWith({ ...padding, right: 24 });
+    expect(mapState.markers.at(-1)?.textContent).toBe('?');
+    view.rerender(<MapCanvas {...commonProps} warehouseKindsFailed selected={{ kind: 'warehouse', id: targetWarehouse.id }} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Типы складов временно недоступны');
     fireEvent.click(screen.getByRole('button', { name: `Перейти к складу ${targetWarehouse.name}` }));
     expect(onWarehouseActivate).toHaveBeenCalledWith(targetWarehouse.id);
   });
@@ -424,7 +433,7 @@ describe('warehouse selection on the shared map', () => {
     await waitFor(() => expect((mapState.sourceData.get('rwms-requests') as { features?: unknown[] })?.features).toHaveLength(120));
     expect(mapState.sourceOptions.get('rwms-requests')).toMatchObject({ cluster: true, clusterMaxZoom: 13, clusterRadius: 48 });
     expect(mapState.markers).toHaveLength(1);
-    expect(mapState.markers[0]).toHaveAttribute('aria-label', `Склад: ${warehouse.name}`);
+    expect(mapState.markers[0]).toHaveAttribute('aria-label', `Тип склада не подтверждён: ${warehouse.name}`);
 
     const stopPropagation = vi.fn();
     const pointEvent = {

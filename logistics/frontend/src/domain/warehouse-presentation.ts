@@ -1,4 +1,17 @@
 import type { Warehouse } from './types';
+import type { WarehouseKindMetadata } from '../api/warehouse-directory';
+
+/** Canonical admin flags, joined only to warehouses already admitted to this workspace. */
+export function warehouseMapKind(warehouse: Pick<Warehouse, 'external_warehouse_id' | 'representative'>, metadata?: WarehouseKindMetadata) {
+  if (!metadata || metadata.id !== warehouse.external_warehouse_id || metadata.representative !== warehouse.representative) {
+    return { glyph: '?', label: 'Тип склада не подтверждён', known: false };
+  }
+  if (metadata.representative) return { glyph: 'ПС', label: 'Представительский склад', known: true };
+  if (metadata.production && metadata.mainWarehouse) return { glyph: 'Ц', label: 'Центральный склад и производство', known: true };
+  if (metadata.mainWarehouse) return { glyph: 'С', label: 'Основной склад', known: true };
+  if (metadata.production) return { glyph: 'П', label: 'Производство', known: true };
+  return { glyph: '?', label: 'Тип склада не задан', known: false };
+}
 
 /**
  * Produces the operator-facing warehouse name without exposing planning-group

@@ -26,6 +26,11 @@ collapsible inspector. Slot checking replaces that inspector, and camera insets
 follow the visible panels, header and simulation bar. Detailed plan statistics
 and route explanations are expandable; errors and required operator decisions
 remain visible. Translucency is limited to the main surfaces.
+Warehouse marker types come from the canonical public warehouse directory:
+`ПС` for representatives, `С` for main warehouses, `П` for production, and `Ц`
+for combined main warehouse/production. Unknown or inconsistent metadata is
+shown as `?`, never guessed from a name. Directory metadata adds no locations
+to the planner workspace and is refreshed once per minute.
 The map is one common canvas for every active canonical RWMS warehouse with an
 owner-held coordinate pair. Directory reconciliation creates or updates its
 planner projection under the same UUID; there is no second connect action or
