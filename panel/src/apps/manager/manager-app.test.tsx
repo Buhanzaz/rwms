@@ -57,6 +57,11 @@ describe("ManagerApp", () => {
     )
 
     expect(screen.getByText("Рабочие клиенты")).toBeTruthy()
+    expect(
+      screen
+        .getByRole("link", { name: "BLOCKBOX: менеджер аренды" })
+        .getAttribute("href")
+    ).toBe("/manager/assistant")
     expect(screen.getAllByRole("navigation")).toHaveLength(2)
     expect(
       screen

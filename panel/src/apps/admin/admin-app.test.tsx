@@ -115,8 +115,8 @@ describe("AdminApp", () => {
     expect(workspace.className).toContain("min-h-0")
     expect(workspace.className).toContain("flex-1")
     expect(workspace.className).toContain("overflow-hidden")
-    expect(workspace.className).toContain("bg-background")
-    expect(workspace.className).toContain("border-border")
+    expect(workspace.className).toContain("bg-shell-surface")
+    expect(workspace.className).toContain("rwms-shell-surface")
     expect(workspace.parentElement?.className).toContain("h-svh")
     expect(workspace.id).toBe("admin-content")
     expect(
@@ -136,8 +136,8 @@ describe("AdminApp", () => {
     })
     const sidebar = navigation.closest('[data-slot="sidebar"]')
     expect(sidebar).not.toBeNull()
-    expect(sidebar?.className).toContain("bg-sidebar")
-    expect(sidebar?.className).toContain("border-border")
+    expect(sidebar?.className).toContain("bg-shell-surface")
+    expect(sidebar?.className).toContain("rwms-shell-surface")
     expect(document.querySelector('[data-slot="sidebar-rail"]')).toBeNull()
     expect(
       within(sidebar as HTMLElement).queryByText("Администратор")

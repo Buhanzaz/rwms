@@ -8,7 +8,7 @@ afterEach(() => {
 })
 
 describe("Button", () => {
-  it("uses the panel action style for default, outline and secondary actions", () => {
+  it("distinguishes primary, outline and secondary actions from destructive actions", () => {
     render(
       <>
         <Button>Тёмная</Button>
@@ -22,11 +22,11 @@ describe("Button", () => {
       "rwms-button-dark"
     )
     expect(screen.getByRole("button", { name: "Светлая" }).className).toContain(
-      "rwms-button-dark"
+      "rwms-button-outline"
     )
     expect(
       screen.getByRole("button", { name: "Вторичная" }).className
-    ).toContain("rwms-button-dark")
+    ).toContain("rwms-button-secondary")
     expect(
       screen.getByRole("button", { name: "Опасная" }).className
     ).not.toContain("rwms-button-dark")

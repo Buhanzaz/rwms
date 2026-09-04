@@ -243,7 +243,7 @@ function AdminLayout() {
       >
         <PanelSidebarShell
           collapsible="none"
-          className="rounded-lg border border-border bg-sidebar/75 shadow-sm backdrop-blur-md"
+          className="rwms-shell-surface rounded-2xl bg-shell-surface"
           ariaLabel="BLOCKBOX: администрирование"
           caption="Панель администратора"
           onLogout={() => void logout()}
@@ -254,7 +254,7 @@ function AdminLayout() {
         <SidebarInset
           id="admin-content"
           tabIndex={-1}
-          className="min-h-0 overflow-hidden rounded-lg border border-border bg-background/75 shadow-sm backdrop-blur-md"
+          className="rwms-shell-surface min-h-0 overflow-hidden rounded-2xl bg-shell-surface"
         >
           <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-4">
             <div className="min-w-0">

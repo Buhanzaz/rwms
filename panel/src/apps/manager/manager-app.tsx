@@ -7,11 +7,12 @@ import {
   Logout03Icon,
   UserGroupIcon,
 } from "@hugeicons/core-free-icons"
-import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom"
+import { NavLink, Navigate, Route, Routes } from "react-router-dom"
+
+import logotypeUrl from "../../../../Logotype.svg"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Separator } from "@/components/ui/separator"
 import { WarehouseProvider } from "@/contexts/warehouse-provider"
 import { AssistantPage } from "@/features/assistant/pages/assistant-page"
 import { useAuth } from "@/features/auth/use-auth"
@@ -35,30 +36,23 @@ const navigation: readonly ManagerNavigationItem[] = [
   { to: "/claims", label: "Претензии", icon: ClipboardCheckIcon },
 ]
 
-function isActivePath(pathname: string, target: string) {
-  return pathname === target || pathname.startsWith(`${target}/`)
-}
-
 function ManagerNavigation({ mobile = false }: { mobile?: boolean }) {
-  const location = useLocation()
-
   return (
     <nav
       aria-label={mobile ? "Основные разделы менеджера" : "Разделы менеджера"}
-      className={cn(mobile ? "grid grid-cols-4 gap-1" : "flex flex-col gap-1")}
+      className={cn(
+        "rwms-manager-navigation",
+        mobile ? "grid grid-cols-4 gap-1" : "flex flex-col gap-1"
+      )}
     >
       {navigation.map((item) => {
-        const active = isActivePath(location.pathname, item.to)
         return (
           <NavLink
             key={item.to}
             to={item.to}
             className={cn(
-              "flex min-w-0 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-              mobile ? "flex-col gap-1 px-1 text-xs" : "justify-start",
-              active
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              "flex min-w-0 items-center justify-center gap-2 rounded-xl px-3 py-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring aria-[current=page]:bg-accent aria-[current=page]:text-accent-foreground motion-reduce:transition-none",
+              mobile ? "flex-col gap-1 px-1 py-2 text-xs" : "justify-start"
             )}
           >
             <HugeiconsIcon icon={item.icon} className="size-5 shrink-0" />
@@ -91,18 +85,23 @@ function ManagerLayout() {
   }
 
   return (
-    <div className="flex min-h-svh flex-col bg-muted/30">
-      <header className="sticky top-0 z-30 border-b bg-background/95 backdrop-blur">
+    <div className="rwms-manager-shell relative isolate flex h-svh flex-col gap-2 overflow-hidden p-2 md:p-3">
+      <header className="rwms-shell-surface z-30 shrink-0 rounded-2xl">
         <div className="mx-auto flex w-full max-w-[1600px] items-center gap-3 px-4 py-3 lg:px-6">
           <NavLink
             to="/assistant"
+            aria-label="BLOCKBOX: менеджер аренды"
             className="mr-auto flex min-w-0 items-center gap-2"
           >
-            <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary font-bold text-primary-foreground">
-              R
-            </span>
+            <img
+              src={logotypeUrl}
+              alt=""
+              className="size-9 shrink-0 object-contain"
+            />
             <span className="min-w-0">
-              <span className="block truncate text-sm font-semibold">RWMS</span>
+              <span className="block truncate text-sm font-bold tracking-wide text-primary">
+                BLOCKBOX
+              </span>
               <span className="block truncate text-xs text-muted-foreground">
                 Менеджер аренды
               </span>
@@ -125,17 +124,17 @@ function ManagerLayout() {
         </div>
       </header>
 
-      <div className="mx-auto flex min-h-0 w-full max-w-[1600px] flex-1">
-        <aside className="hidden w-60 shrink-0 border-r bg-background p-4 md:block">
+      <div className="mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 gap-2 pb-[calc(5rem+env(safe-area-inset-bottom))] md:pb-0">
+        <aside className="rwms-shell-surface hidden w-56 shrink-0 overflow-y-auto rounded-2xl p-3 md:block">
           <ManagerNavigation />
         </aside>
-        <main className="min-h-0 min-w-0 flex-1 p-3 pb-24 sm:p-4 sm:pb-24 lg:p-6 lg:pb-6">
+        <main className="min-h-0 min-w-0 flex-1 overflow-auto rounded-2xl p-2 sm:p-4 lg:p-5">
           {warehouses.length === 0 ? (
             <Alert className="mb-4">
               <AlertTitle>Не назначены обслуживаемые склады</AlertTitle>
               <AlertDescription>
-                Чат и клиенты доступны. Для подбора бытовок и оформления
-                заказов попросите администратора назначить вам склады.
+                Чат и клиенты доступны. Для подбора бытовок и оформления заказов
+                попросите администратора назначить вам склады.
               </AlertDescription>
             </Alert>
           ) : null}
@@ -164,9 +163,8 @@ function ManagerLayout() {
         </main>
       </div>
 
-      <div className="fixed inset-x-0 bottom-0 z-30 bg-background md:hidden">
-        <Separator />
-        <div className="px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+      <div className="rwms-shell-surface fixed inset-x-2 bottom-[max(0.5rem,env(safe-area-inset-bottom))] z-30 rounded-2xl md:hidden">
+        <div className="p-1.5">
           <ManagerNavigation mobile />
         </div>
       </div>

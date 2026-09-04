@@ -208,13 +208,13 @@ function AppLayout() {
       >
         <AppSidebar
           collapsible="none"
-          className="rounded-lg border border-border bg-sidebar/75 shadow-sm backdrop-blur-md"
+          className="rwms-shell-surface rounded-2xl bg-shell-surface"
         />
 
         <SidebarInset
           id="panel-content"
           tabIndex={-1}
-          className="min-h-0 overflow-hidden rounded-lg border border-border bg-background/75 shadow-sm backdrop-blur-md"
+          className="rwms-shell-surface min-h-0 overflow-hidden rounded-2xl bg-shell-surface"
         >
           <SiteHeader />
 
