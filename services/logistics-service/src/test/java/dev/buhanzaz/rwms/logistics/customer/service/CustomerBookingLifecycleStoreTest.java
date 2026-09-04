@@ -815,7 +815,7 @@ class CustomerBookingLifecycleStoreTest {
       when(newSlot.getWindowEnd()).thenReturn(java.time.LocalTime.of(12, 0));
       when(newSlot.getDeliveryPriceRubles()).thenReturn(28_500L);
       when(slots.findCapacityWorkloadForUpdate(
-              any(), any(), any(), any(), any(), any(), any()))
+              any(), any(), any(), any(), any(), any()))
           .thenReturn(List.of());
       when(capacityJobs.findCapacityWorkload(WAREHOUSE, NEW_DATE)).thenReturn(List.of());
       when(capacityShifts.findCapacityShifts(WAREHOUSE, NEW_DATE)).thenReturn(List.of());

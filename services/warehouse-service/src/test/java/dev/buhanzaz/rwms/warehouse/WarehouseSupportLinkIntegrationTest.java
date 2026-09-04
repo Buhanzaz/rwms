@@ -13,10 +13,7 @@ import dev.buhanzaz.rwms.warehouse.api.ReplaceWarehouseSupportLinksRequest;
 import dev.buhanzaz.rwms.warehouse.api.WarehouseResponse;
 import dev.buhanzaz.rwms.warehouse.api.WarehouseSupportLinkInput;
 import dev.buhanzaz.rwms.warehouse.api.WarehouseSupportLinksResponse;
-import dev.buhanzaz.rwms.warehouse.domain.WarehouseDefaults;
-import dev.buhanzaz.rwms.warehouse.domain.WarehouseType;
 import dev.buhanzaz.rwms.warehouse.service.WarehouseConflictException;
-import dev.buhanzaz.rwms.warehouse.service.WarehouseNotFoundException;
 import dev.buhanzaz.rwms.warehouse.service.WarehouseService;
 import dev.buhanzaz.rwms.warehouse.service.WarehouseSupportLinkService;
 import java.math.BigDecimal;
@@ -49,9 +46,6 @@ import tools.jackson.databind.ObjectMapper;
 @ActiveProfiles({"dev", "test"})
 @AutoConfigureMockMvc
 class WarehouseSupportLinkIntegrationTest {
-  private static final UUID COMPANY = WarehouseDefaults.INITIAL_COMPANY_ID;
-  private static final UUID OTHER_COMPANY =
-      UUID.fromString("00000000-0000-0000-0000-0000000000c2");
   private static final UUID SPB = UUID.fromString("00000000-0000-0000-0000-000000000001");
   private static final UUID MSK = UUID.fromString("00000000-0000-0000-0000-000000000002");
   private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
@@ -98,14 +92,13 @@ class WarehouseSupportLinkIntegrationTest {
     assertThat(created.address()).isNull();
     assertThat(created.latitude()).isEqualByComparingTo("58.521475");
     assertThat(created.longitude()).isEqualByComparingTo("31.275475");
-    assertThat(warehouses.get(COMPANY, created.id()).latitude())
+    assertThat(warehouses.get(created.id()).latitude())
         .isEqualByComparingTo("58.521475");
     assertThat(warehouses.logisticsIdentity(created.id()).latitude())
         .isEqualByComparingTo("58.521475");
 
     WarehouseResponse replaced =
         warehouses.replace(
-            COMPANY,
             created.id(),
             new ReplaceWarehouseRequest(
                 created.version(),
@@ -116,8 +109,9 @@ class WarehouseSupportLinkIntegrationTest {
                 new BigDecimal("31.400000"),
                 created.timeZone(),
                 created.sortOrder(),
-                WarehouseType.REPRESENTATIVE,
-                created.productionWarehouseId()));
+                false,
+                false,
+                created.representativeParentWarehouseId()));
 
     assertThat(replaced.latitude()).isEqualByComparingTo("58.600000");
     assertThat(replaced.longitude()).isEqualByComparingTo("31.400000");
@@ -138,7 +132,6 @@ class WarehouseSupportLinkIntegrationTest {
 
     WarehouseSupportLinksResponse one =
         supportLinks.replace(
-            COMPANY,
             served.id(),
             new ReplaceWarehouseSupportLinksRequest(served.version(), List.of(first)));
     assertThat(one.links()).singleElement().extracting(link -> link.supportWarehouseId())
@@ -147,7 +140,6 @@ class WarehouseSupportLinkIntegrationTest {
     WarehouseSupportLinkInput second = input(supportTwo.id(), true, 2, Set.of());
     WarehouseSupportLinksResponse two =
         supportLinks.replace(
-            COMPANY,
             served.id(),
             new ReplaceWarehouseSupportLinksRequest(one.warehouseVersion(), List.of(first, second)));
     assertThat(two.links()).hasSize(2);
@@ -156,7 +148,6 @@ class WarehouseSupportLinkIntegrationTest {
 
     WarehouseSupportLinksResponse replay =
         supportLinks.replace(
-            COMPANY,
             served.id(),
             new ReplaceWarehouseSupportLinksRequest(two.warehouseVersion(), List.of(first, second)));
     assertThat(replay).isEqualTo(two);
@@ -176,7 +167,6 @@ class WarehouseSupportLinkIntegrationTest {
     assertThatThrownBy(
             () ->
                 supportLinks.replace(
-                    COMPANY,
                     served.id(),
                     new ReplaceWarehouseSupportLinksRequest(
                         served.version(), List.of(input(served.id(), true, 1, Set.of())))))
@@ -185,7 +175,6 @@ class WarehouseSupportLinkIntegrationTest {
     assertThatThrownBy(
             () ->
                 supportLinks.replace(
-                    COMPANY,
                     served.id(),
                     new ReplaceWarehouseSupportLinksRequest(
                         served.version(),
@@ -199,7 +188,6 @@ class WarehouseSupportLinkIntegrationTest {
     assertThatThrownBy(
             () ->
                 supportLinks.replace(
-                    COMPANY,
                     ordinary.id(),
                     new ReplaceWarehouseSupportLinksRequest(
                         ordinary.version(), List.of(input(support.id(), true, 1, Set.of())))))
@@ -239,7 +227,6 @@ class WarehouseSupportLinkIntegrationTest {
             LocalTime.parse("18:00"));
     WarehouseSupportLinksResponse configured =
         supportLinks.replace(
-            COMPANY,
             served.id(),
             new ReplaceWarehouseSupportLinksRequest(served.version(), List.of(calendar)));
 
@@ -271,10 +258,8 @@ class WarehouseSupportLinkIntegrationTest {
     assertThat(internal.size()).isOne();
     assertThat(internal.get(0).get("supportWarehouse").get("id").stringValue())
         .isEqualTo(support.id().toString());
-    assertThat(internal.get(0).get("supportWarehouse").get("companyId").stringValue())
-        .isEqualTo(COMPANY.toString());
-    assertThat(internal.get(0).get("servedWarehouse").get("companyId").stringValue())
-        .isEqualTo(COMPANY.toString());
+    assertThat(internal.get(0).get("supportWarehouse").get("companyId")).isNull();
+    assertThat(internal.get(0).get("servedWarehouse").get("companyId")).isNull();
 
     WarehouseSupportLinkInput inactive =
         new WarehouseSupportLinkInput(
@@ -293,7 +278,6 @@ class WarehouseSupportLinkIntegrationTest {
             calendar.serviceStart(),
             calendar.serviceEnd());
     supportLinks.replace(
-        COMPANY,
         served.id(),
         new ReplaceWarehouseSupportLinksRequest(configured.warehouseVersion(), List.of(inactive)));
     assertThat(eligible(served.id(), "2026-09-01T09:00:00+03:00")).isEmpty();
@@ -305,13 +289,11 @@ class WarehouseSupportLinkIntegrationTest {
     WarehouseResponse first = create("Network served first", true, null, null);
     WarehouseResponse second = create("Network served second", true, null, null);
     supportLinks.replace(
-        COMPANY,
         first.id(),
         new ReplaceWarehouseSupportLinksRequest(
             first.version(),
             List.of(input(support.id(), true, 2, Set.of(DayOfWeek.MONDAY)))));
     supportLinks.replace(
-        COMPANY,
         second.id(),
         new ReplaceWarehouseSupportLinksRequest(
             second.version(),
@@ -429,7 +411,6 @@ class WarehouseSupportLinkIntegrationTest {
     WarehouseResponse support = create("Protected support", false, null, null);
     WarehouseSupportLinksResponse configured =
         supportLinks.replace(
-            COMPANY,
             served.id(),
             new ReplaceWarehouseSupportLinksRequest(
                 served.version(), List.of(input(support.id(), true, 1, Set.of()))));
@@ -437,7 +418,6 @@ class WarehouseSupportLinkIntegrationTest {
     assertThatThrownBy(
             () ->
                 warehouses.replace(
-                    COMPANY,
                     served.id(),
                     new ReplaceWarehouseRequest(
                         configured.warehouseVersion(),
@@ -448,44 +428,16 @@ class WarehouseSupportLinkIntegrationTest {
                         served.longitude(),
                         served.timeZone(),
                         served.sortOrder(),
-                        false)))
+                        false,
+                        true,
+                        null)))
         .isInstanceOf(WarehouseConflictException.class)
         .hasMessageContaining("Remove warehouse support links");
-  }
-
-  @Test
-  void rejectsSupportEndpointsFromAnotherCompanyAtServiceAndHttpBoundaries() throws Exception {
-    WarehouseResponse served = create("Company scoped representative", true, null, null);
-    WarehouseResponse foreignSupport =
-        create(OTHER_COMPANY, "Foreign production", false, null, null, null);
-    ReplaceWarehouseSupportLinksRequest request =
-        new ReplaceWarehouseSupportLinksRequest(
-            served.version(), List.of(input(foreignSupport.id(), true, 1, Set.of())));
-
-    assertThatThrownBy(() -> supportLinks.replace(COMPANY, served.id(), request))
-        .isInstanceOf(WarehouseNotFoundException.class);
-
-    mockMvc
-        .perform(
-            put("/api/warehouse/v1/warehouses/{servedWarehouseId}/support-links", served.id())
-                .with(warehouseManagerJwt(served.id(), foreignSupport.id()))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsBytes(request)))
-        .andExpect(status().isNotFound());
-
-    mockMvc
-        .perform(
-            put("/api/warehouse/v1/warehouses/{servedWarehouseId}/support-links", served.id())
-                .with(administrationJwt("SYSTEM_ADMIN", "rwms-admin-web", "admin.manage"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsBytes(request)))
-        .andExpect(status().isNotFound());
   }
 
   private WarehouseResponse create(
       String name, boolean representative, BigDecimal latitude, BigDecimal longitude) {
     return create(
-        COMPANY,
         name,
         representative,
         latitude,
@@ -494,15 +446,13 @@ class WarehouseSupportLinkIntegrationTest {
   }
 
   private WarehouseResponse create(
-      UUID companyId,
       String name,
       boolean representative,
       BigDecimal latitude,
       BigDecimal longitude,
-      UUID productionWarehouseId) {
+      UUID representativeParentWarehouseId) {
     return warehouses
         .create(
-            companyId,
             UUID.randomUUID(),
             UUID.randomUUID(),
             new CreateWarehouseRequest(
@@ -513,8 +463,9 @@ class WarehouseSupportLinkIntegrationTest {
                 longitude,
                 "Europe/Moscow",
                 null,
-                representative ? WarehouseType.REPRESENTATIVE : WarehouseType.PRODUCTION,
-                productionWarehouseId))
+                !representative,
+                false,
+                representativeParentWarehouseId))
         .response();
   }
 
@@ -556,7 +507,6 @@ class WarehouseSupportLinkIntegrationTest {
                     .subject(UUID.randomUUID().toString())
                     .claim("principal_type", "USER")
                     .claim("global_role", "WAREHOUSE_MANAGER")
-                    .claim("company_id", COMPANY.toString())
                     .claim("scope", "warehouse.read rwms.write")
                     .claim("warehouse_access", access));
   }
@@ -571,7 +521,6 @@ class WarehouseSupportLinkIntegrationTest {
                     .subject(UUID.randomUUID().toString())
                     .claim("principal_type", "USER")
                     .claim("global_role", role)
-                    .claim("company_id", COMPANY.toString())
                     .claim("client_id", clientId)
                     .claim("scope", scope));
   }

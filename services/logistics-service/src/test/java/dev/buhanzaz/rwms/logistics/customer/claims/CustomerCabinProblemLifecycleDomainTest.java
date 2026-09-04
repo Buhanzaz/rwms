@@ -67,7 +67,6 @@ class CustomerCabinProblemLifecycleDomainTest {
   private static CustomerCabinProblem problem(OffsetDateTime reportedAt) {
     return CustomerCabinProblem.create(
         UUID.fromString("00000000-0000-0000-0000-000000000001"),
-        UUID.fromString("00000000-0000-0000-0000-000000000002"),
         UUID.fromString("00000000-0000-0000-0000-000000000003"),
         UUID.fromString("00000000-0000-0000-0000-000000000004"),
         UUID.fromString("00000000-0000-0000-0000-000000000005"),
