@@ -16,6 +16,7 @@ from app.planner import (
 )
 from app.planner.candidate_comparison import (
     RoutedCandidatePool,
+    _conflict,
     candidate_fingerprint,
     compare_candidate_selection,
 )
@@ -159,3 +160,49 @@ def test_turnaround_conflict_cannot_create_a_shorter_but_impossible_day(comparis
         input_data, settings, baseline, pool, verify_route=verify
     )
     assert comparison.cycles == baseline.cycles
+
+
+def test_turnaround_conflict_is_conservative_regardless_of_candidate_order(comparison_case):
+    input_data, settings, baseline, _, _ = comparison_case
+    source = baseline.cycles[0]
+    early_depot = replace(input_data.warehouse, id="early", turnaround_minutes=180)
+    late_depot = replace(input_data.warehouse, id="late", turnaround_minutes=0)
+    early_shift = replace(
+        input_data.shifts[0],
+        id="early-shift",
+        driver_id="early-driver",
+        resource_option_id="early-option",
+        route_depot=early_depot,
+    )
+    late_shift = replace(
+        input_data.shifts[0],
+        id="late-shift",
+        driver_id="late-driver",
+        resource_option_id="late-option",
+        route_depot=late_depot,
+    )
+    early = replace(
+        source,
+        id="early-cycle",
+        driver_shift_id=early_shift.id,
+        driver_id=early_shift.driver_id,
+        resource_option_id=early_shift.resource_option_id,
+        planned_start=START,
+        planned_finish=START + timedelta(hours=1),
+    )
+    late = replace(
+        source,
+        id="late-cycle",
+        driver_shift_id=late_shift.id,
+        driver_id=late_shift.driver_id,
+        resource_option_id=late_shift.resource_option_id,
+        planned_start=START + timedelta(hours=3),
+        planned_finish=START + timedelta(hours=4),
+    )
+    shifts = {
+        early_shift.resource_option_id: early_shift,
+        late_shift.resource_option_id: late_shift,
+    }
+
+    assert _conflict(early, late, shifts, input_data, settings)
+    assert _conflict(late, early, shifts, input_data, settings)

@@ -14,11 +14,10 @@ import json
 from dataclasses import asdict, replace
 from datetime import timedelta
 from hashlib import sha256
+from importlib.metadata import version as package_version
 from math import ceil
 from time import perf_counter, process_time
 from typing import Any
-
-import ortools
 
 from app.planner import (
     HeuristicPlanner,
@@ -45,16 +44,21 @@ def benchmark_input(size: int) -> PlanningInput:
     if not 1 <= size <= 100:
         raise ValueError("benchmark sizes must be between 1 and 100 tasks")
     depot = Warehouse("benchmark", "Synthetic depot", GeoPoint(30.32, 59.93))
+    base_vehicle = _vehicle()
+    base_routing_spec = base_vehicle.routing_spec
+    base_trailer = base_vehicle.default_trailer
+    if base_routing_spec is None or base_trailer is None:
+        raise RuntimeError("benchmark vehicle must retain its truck and trailer profiles")
     vehicles = tuple(
         replace(
-            _vehicle(),
+            base_vehicle,
             id=f"vehicle-{index}",
             routing_spec=replace(
-                _vehicle().routing_spec,
+                base_routing_spec,
                 vehicle_id=f"vehicle-{index}",
             ),
             default_trailer=replace(
-                _vehicle().default_trailer,
+                base_trailer,
                 trailer_id=f"trailer-{index}",
             ),
         )
@@ -173,7 +177,7 @@ async def benchmark(size: int, args: argparse.Namespace) -> dict[str, Any]:
             ).hexdigest(),
             "size": len(baseline.tasks),
             "routing": routing_name,
-            "ortools": ortools.__version__,
+            "ortools": package_version("ortools"),
             "generation_seconds": round(generation_seconds, 4),
             "generation_cpu_seconds": round(generation_cpu_seconds, 4),
             "heuristic_timed_out": baseline.timed_out,

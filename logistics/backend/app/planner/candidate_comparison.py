@@ -115,7 +115,10 @@ def _conflict(
     if first_depot.point.coordinates != second_depot.point.coordinates:
         return True
     earlier, later = sorted((first, second), key=lambda item: item.planned_start)
-    turnaround = (first_depot.turnaround_minutes + settings.default_route_buffer_minutes) * 60
+    turnaround = (
+        max(first_depot.turnaround_minutes, second_depot.turnaround_minutes)
+        + settings.default_route_buffer_minutes
+    ) * 60
     if (later.planned_start - earlier.planned_finish).total_seconds() < turnaround:
         return True
     if first.driver_shift_id == second.driver_shift_id:
