@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+import app.planner.heuristic as heuristic_module
 from app.planner import (
     DriverShift,
     HeuristicPlanner,
@@ -1962,3 +1963,73 @@ def test_candidate_evaluations_stay_bounded_across_driver_shifts() -> None:
     assert evaluation_count <= len(requests) * len(shifts) * 4
     assert result.metrics.assigned_tasks == len(requests)
     assert not result.timed_out
+
+
+@pytest.mark.parametrize("separate_depots", (False, True))
+def test_candidate_specs_are_built_once_per_depot_not_per_vehicle(separate_depots: bool) -> None:
+    """Identical tasks share specs only when their physical depot matrix is identical."""
+
+    data = three_shift_input((request("single", TaskType.DELIVERY),))
+    if separate_depots:
+        data = replace(
+            data,
+            shifts=tuple(
+                replace(
+                    shift,
+                    route_depot=replace(
+                        data.warehouse,
+                        id=f"depot-{index}",
+                        point=GeoPoint(37.6 + index * 0.01, 55.75, True),
+                    ),
+                )
+                for index, shift in enumerate(data.shifts)
+            ),
+        )
+    with patch.object(
+        heuristic_module, "_candidate_specs", wraps=heuristic_module._candidate_specs
+    ) as specs:
+        result = run_plan(data)
+
+    assert result.metrics.assigned_tasks == 1
+    assert specs.call_count == (3 if separate_depots else 1)
+
+
+def test_candidate_specs_cache_keeps_distinct_service_warehouse_scopes() -> None:
+    """A representative-only driver never inherits the main warehouse's candidate set."""
+
+    data = three_shift_input(
+        tuple(
+            replace(request(name, TaskType.DELIVERY), service_warehouse_id=name)
+            for name in ("main", "representative")
+        )
+    )
+    data = replace(
+        data,
+        shifts=tuple(
+            replace(shift, allowed_service_warehouse_ids=scope)
+            for shift, scope in zip(
+                data.shifts,
+                (
+                    frozenset({"main"}),
+                    frozenset({"representative"}),
+                    frozenset({"main", "representative"}),
+                ),
+                strict=True,
+            )
+        ),
+    )
+    with patch.object(
+        heuristic_module, "_candidate_specs", wraps=heuristic_module._candidate_specs
+    ) as specs:
+        result = run_plan(data)
+
+    assert result.metrics.assigned_tasks == 2
+    initial_scopes = {
+        frozenset(task.service_warehouse_id for task in call.args[0])
+        for call in specs.call_args_list[:3]
+    }
+    assert initial_scopes == {
+        frozenset({"main"}),
+        frozenset({"representative"}),
+        frozenset({"main", "representative"}),
+    }

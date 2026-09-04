@@ -142,7 +142,9 @@ Sparse-matrix preparation and candidate optimization each receive one bounded
 interval equal to `max_optimization_seconds`. A completed matrix therefore
 leaves the full configured interval for mandatory exact-candidate routing;
 interrupted candidates are still discarded and only fully verified cycles are
-persisted. See [`app/planner/heuristic.py`](app/planner/heuristic.py).
+persisted. Candidate combinations are reused only across shifts that share the
+same physical depot and eligible task set; scheduling and exact loaded-truck
+checks remain per shift. See [`app/planner/heuristic.py`](app/planner/heuristic.py).
 
 ## Offline native-solver comparison
 

@@ -499,6 +499,12 @@ class HeuristicPlanner:
             )
             best_per_shift: list[_Candidate] = []
             wall_deadline_hit = False
+            # Specs depend on the depot matrix and eligible demand, not the truck
+            # or departure. Reuse only within this immutable remaining-work set;
+            # scheduling and exact loaded-truck checks still run for every shift.
+            specs_by_context: dict[
+                tuple[tuple[object, ...], tuple[str, ...]], tuple[_CandidateSpec, ...]
+            ] = {}
             for shift in active_shifts:
                 option_id = _shift_option_id(shift)
                 selected_option_ids = {
@@ -519,12 +525,18 @@ class HeuristicPlanner:
                     if task.id in option_matrix.loaded_task_ids
                     and _shift_allows_task(shift, task)
                 )
-                all_candidate_specs = _candidate_specs(
-                    eligible_tasks,
-                    option_matrix,
-                    option_matrix_index,
-                    settings,
+                specs_key = (
+                    depot_key_by_option_id[option_id],
+                    tuple(task.id for task in eligible_tasks),
                 )
+                if specs_key not in specs_by_context:
+                    specs_by_context[specs_key] = _candidate_specs(
+                        eligible_tasks,
+                        option_matrix,
+                        option_matrix_index,
+                        settings,
+                    )
+                all_candidate_specs = specs_by_context[specs_key]
                 if delivery_phase:
                     candidate_specs = tuple(
                         spec for spec in all_candidate_specs if spec.deliveries
