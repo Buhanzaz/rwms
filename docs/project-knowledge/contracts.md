@@ -149,7 +149,7 @@ and preserves the mapped old-cabin requirements. The explicit direct command is
 `POST /api/logistics/v1/orders/{orderId}/units/{unitId}/replace`.
 [`assistant-service.yaml`](../../contracts/openapi/assistant-service.yaml)
 exposes durable clarification questions, exact button-answer turns, structured
-clarification/selection SSE events and a signed-company/owner-checked selection proxy. It
+clarification/selection SSE events and a signed-manager/owner-checked selection proxy. It
 does not redefine availability or hold state. Asset private contracts carry
 the exact result mode/facets and remain the hold-effect boundary.
 
@@ -1013,12 +1013,13 @@ historical operations keep the zone effective at their own timestamp.
 
 The same warehouse contract carries nullable `address`, an all-or-none
 latitude/longitude pair, independent `production` and `mainWarehouse` flags,
-and `representativeParentWarehouseId` on create, replace and reads. A regular
-object selects at least one of the two flags; a representative selects neither
-and requires one same-company production or main parent. `WarehouseType`,
-`productionWarehouseId`, and `representative` remain backward-compatible
-projections. The schema and owner reject inconsistent classification/parent
-combinations. A version-fenced support-link
+and `representativeParentWarehouseId` on create, replace and reads. The
+derived `representative` discriminator is `true` exactly when
+`representativeParentWarehouseId` is non-null. A regular object selects at
+least one of the two flags; a representative selects neither and requires one
+production or main parent. Only the `WarehouseType`/`warehouseType` and
+`productionWarehouseId` aliases are removed. The schema and owner reject
+inconsistent classification/parent combinations. A version-fenced support-link
 collection represents the directed many-to-many service graph; each edge has
 independent capabilities, priority and recurring/date-exception availability.
 Public commands reject self-links, duplicate support warehouses and links on a

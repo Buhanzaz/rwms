@@ -71,7 +71,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
   void cumulativeVersionFourEventSourcingAndTaskSyncMigrateCleanDatabaseAndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(44);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(46);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -126,8 +126,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             "worker_task_evidence",
             "warehouse_metadata",
             "warehouse_event_inbox",
-            "warehouse_kpi_settings",
-            "company_kpi_settings",
+            "kpi_settings",
             "kpi_palette",
             "kpi_palette_range",
             "kpi_activation_receipt",
@@ -152,7 +151,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
                 Map.entry("task_sync_source", 13),
                 Map.entry("task_time_event", 10),
                 Map.entry("task_board_warehouse_lifecycle_intent", 10),
-                Map.entry("warehouse_kpi_settings", 10),
+                Map.entry("kpi_settings", 8),
                 Map.entry("queue_definition", 17),
                 Map.entry("queue_definition_class_binding", 8),
                 Map.entry("work_queue", 15),
@@ -432,10 +431,38 @@ class TaskBoardFlywayMigrationIntegrationTest {
         .containsEntry("success", true);
     assertThat(
             jdbc.queryForMap(
-                "select is_nullable from information_schema.columns "
-                    + "where table_schema='public' and table_name='kpi_work_schedule' "
-                    + "and column_name='company_id'"))
-        .containsEntry("is_nullable", "YES");
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='48'"))
+        .containsEntry("version", "48")
+        .containsEntry("description", "normalize global kpi settings")
+        .containsEntry("script", "V48__normalize_global_kpi_settings.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='49'"))
+        .containsEntry("version", "49")
+        .containsEntry("description", "rename kpi settings primary key")
+        .containsEntry("script", "V49__rename_kpi_settings_primary_key.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select conname
+                from pg_constraint
+                where conrelid = 'public.kpi_settings'::regclass
+                  and contype = 'p'
+                """,
+                String.class))
+        .isEqualTo("kpi_settings_pkey");
+    assertThat(jdbc.queryForObject("select to_regclass('public.warehouse_kpi_settings')", String.class))
+        .isNull();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from information_schema.columns where table_schema='public' "
+                    + "and table_name='kpi_work_schedule' and column_name='company_id'",
+                Integer.class))
+        .isZero();
     assertThat(
             jdbc.queryForObject(
                 "select to_regclass('public.worker_feed_revision_seq')", String.class))
@@ -2171,7 +2198,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(41);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(45);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
 
@@ -2196,6 +2223,246 @@ class TaskBoardFlywayMigrationIntegrationTest {
         .isEqualTo(1);
     assertThat(jdbc.queryForObject("select count(*) from domain_event", Integer.class))
         .isEqualTo(22);
+  }
+
+  @Test
+  void versionFortyEightPromotesTheOnlyLegacyKpiHeadWithoutDroppingItsLiveConfiguration() {
+    configuration(MIGRATION_LOCATION).target("47").load().migrate();
+    UUID warehouseId = UUID.fromString("c89b0000-0000-0000-0000-000000000001");
+    UUID paletteId = UUID.fromString("c6a00000-0000-0000-0000-000000000001");
+    UUID activeScheduleId = UUID.fromString("48490000-0000-0000-0000-000000000001");
+    UUID pendingScheduleId = UUID.fromString("48490000-0000-0000-0000-000000000002");
+    UUID legacySettingsId = UUID.fromString("c89b0000-0000-0000-0000-000000000002");
+    UUID receiptId = UUID.fromString("c89b0000-0000-0000-0000-000000000003");
+
+    jdbc.update(
+        """
+        insert into kpi_palette(id,version,overdue_color)
+        values (?,3,'#7F1D1D')
+        """,
+        paletteId);
+    jdbc.update(
+        """
+        insert into kpi_work_schedule(
+          id,version,warehouse_id,effective_from,shift_start,shift_end,days_off_mask,scheduled,company_id)
+        values (?,2,?,'2026-08-24','09:00','18:00',0,true,null)
+        """,
+        activeScheduleId,
+        warehouseId);
+    jdbc.update(
+        """
+        insert into kpi_work_schedule(
+          id,version,warehouse_id,effective_from,shift_start,shift_end,days_off_mask,scheduled,company_id)
+        values (?,4,?,'2026-09-07','10:00','19:00',3,false,null)
+        """,
+        pendingScheduleId,
+        warehouseId);
+    jdbc.update(
+        """
+        insert into warehouse_kpi_settings(
+          id,version,revision_marker,warehouse_id,time_zone,status,data_available_from,
+          palette_id,active_schedule_id,pending_schedule_id)
+        values (?,7,? ,?,'Europe/Moscow','ACTIVE','2026-08-24',?,?,?)
+        """,
+        legacySettingsId,
+        UUID.fromString("c89b0000-0000-0000-0000-000000000004"),
+        warehouseId,
+        paletteId,
+        activeScheduleId,
+        pendingScheduleId);
+    jdbc.update(
+        """
+        insert into kpi_activation_receipt(
+          operation_id,warehouse_id,expected_version,resulting_version,processed_at,company_id)
+        values (?, ?,6,7,clock_timestamp(),null)
+        """,
+        receiptId,
+        warehouseId);
+
+    Flyway v48 = configuration(MIGRATION_LOCATION).target("48").load();
+    assertThat(v48.migrate().migrationsExecuted).isOne();
+    v48.validate();
+
+    assertThat(
+            jdbc.queryForMap(
+                "select id,version,revision_marker,palette_id,status,data_available_from,"
+                    + "active_schedule_id,pending_schedule_id from kpi_settings"))
+        .containsEntry("id", UUID.fromString("00000000-0000-0000-0000-000000000001"))
+        .containsEntry("version", 7L)
+        .containsEntry("revision_marker", UUID.fromString("c89b0000-0000-0000-0000-000000000004"))
+        .containsEntry("palette_id", paletteId)
+        .containsEntry("status", "ACTIVE")
+        .containsEntry("active_schedule_id", activeScheduleId)
+        .containsEntry("pending_schedule_id", pendingScheduleId);
+    assertThat(
+            jdbc.queryForObject(
+                "select data_available_from::text from kpi_settings", String.class))
+        .isEqualTo("2026-08-24");
+    assertThat(
+            jdbc.queryForList(
+                "select id from kpi_work_schedule where warehouse_id is null order by id", UUID.class))
+        .containsExactly(activeScheduleId, pendingScheduleId);
+    assertThat(
+            jdbc.queryForObject(
+                "select warehouse_id from kpi_activation_receipt where operation_id=?",
+                UUID.class,
+                receiptId))
+        .isEqualTo(warehouseId);
+    assertThat(jdbc.queryForObject("select to_regclass('public.warehouse_kpi_settings')", String.class))
+        .isNull();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from information_schema.columns where table_schema='public' "
+                    + "and table_name='kpi_work_schedule' and column_name='company_id'",
+                Integer.class))
+        .isZero();
+  }
+
+  @Test
+  void versionFortyEightRejectsAmbiguousLegacyKpiHeadsBeforeDroppingEitherOne() {
+    configuration(MIGRATION_LOCATION).target("47").load().migrate();
+    jdbc.update(
+        """
+        insert into warehouse_kpi_settings(
+          id,version,revision_marker,warehouse_id,time_zone,status,data_available_from,
+          palette_id,active_schedule_id,pending_schedule_id)
+        values (?,0,?,?, 'Europe/Moscow','UNCONFIGURED',null,null,null,null)
+        """,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into warehouse_kpi_settings(
+          id,version,revision_marker,warehouse_id,time_zone,status,data_available_from,
+          palette_id,active_schedule_id,pending_schedule_id)
+        values (?,0,?,?, 'Europe/Moscow','UNCONFIGURED',null,null,null,null)
+        """,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID());
+
+    assertThatThrownBy(() -> configuration(MIGRATION_LOCATION).target("48").load().migrate())
+        .isInstanceOf(FlywayException.class)
+        .hasMessageContaining("multiple legacy warehouse KPI settings heads");
+    assertThat(jdbc.queryForObject("select count(*) from warehouse_kpi_settings", Integer.class))
+        .isEqualTo(2);
+  }
+
+  @Test
+  void versionFortyEightRefusesToMergeDifferentGlobalOwnerIdentifiers() {
+    configuration(MIGRATION_LOCATION).target("47").load().migrate();
+    UUID settingsOwnerId = UUID.randomUUID();
+    UUID scheduleOwnerId = UUID.randomUUID();
+    jdbc.update(
+        "insert into company_kpi_settings(id,version,revision_marker) values (?,0,?)",
+        settingsOwnerId,
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into kpi_work_schedule(
+          id,version,warehouse_id,effective_from,shift_start,shift_end,days_off_mask,scheduled,company_id)
+        values (?,0,null,'2026-08-24','09:00','18:00',0,false,?)
+        """,
+        UUID.randomUUID(),
+        scheduleOwnerId);
+
+    assertThatThrownBy(() -> configuration(MIGRATION_LOCATION).target("48").load().migrate())
+        .isInstanceOf(FlywayException.class)
+        .hasMessageContaining("multiple distinct owner identifiers");
+    assertThat(jdbc.queryForObject("select count(*) from company_kpi_settings", Integer.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from information_schema.columns where table_schema='public' "
+                    + "and table_name='kpi_work_schedule' and column_name='company_id'",
+                Integer.class))
+        .isOne();
+  }
+
+  @Test
+  void versionFortyEightKeepsAStrictlyNewerGlobalHeadAndRetainsLegacyReferencedArtifacts() {
+    configuration(MIGRATION_LOCATION).target("47").load().migrate();
+    UUID globalPaletteId = UUID.randomUUID();
+    UUID legacyPaletteId = UUID.randomUUID();
+    UUID legacyWarehouseId = UUID.randomUUID();
+    UUID legacyScheduleId = UUID.randomUUID();
+    jdbc.update(
+        "insert into kpi_palette(id,version,overdue_color) values (?,0,'#112233')", globalPaletteId);
+    jdbc.update(
+        "insert into kpi_palette(id,version,overdue_color) values (?,0,'#445566')", legacyPaletteId);
+    jdbc.update(
+        """
+        insert into company_kpi_settings(
+          id,version,revision_marker,palette_id,status,data_available_from,active_schedule_id,pending_schedule_id)
+        values (?,9,? ,?,'ACTIVE','2026-08-24',null,null)
+        """,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        globalPaletteId);
+    jdbc.update(
+        """
+        insert into kpi_work_schedule(
+          id,version,warehouse_id,effective_from,shift_start,shift_end,days_off_mask,scheduled,company_id)
+        values (?,0,?,'2026-08-24','09:00','18:00',0,true,null)
+        """,
+        legacyScheduleId,
+        legacyWarehouseId);
+    jdbc.update(
+        """
+        insert into warehouse_kpi_settings(
+          id,version,revision_marker,warehouse_id,time_zone,status,data_available_from,
+          palette_id,active_schedule_id,pending_schedule_id)
+        values (?,8,?,?, 'Europe/Moscow','ACTIVE','2026-08-24',?, ?,null)
+        """,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        legacyWarehouseId,
+        legacyPaletteId,
+        legacyScheduleId);
+
+    Flyway v48 = configuration(MIGRATION_LOCATION).target("48").load();
+    assertThat(v48.migrate().migrationsExecuted).isOne();
+
+    assertThat(jdbc.queryForObject("select version from kpi_settings", Long.class)).isEqualTo(9L);
+    assertThat(jdbc.queryForObject("select palette_id from kpi_settings", UUID.class))
+        .isEqualTo(globalPaletteId);
+    assertThat(jdbc.queryForObject("select count(*) from kpi_palette where id=?", Integer.class, legacyPaletteId))
+        .isOne();
+    assertThat(jdbc.queryForObject("select warehouse_id from kpi_work_schedule where id=?", UUID.class, legacyScheduleId))
+        .isEqualTo(legacyWarehouseId);
+  }
+
+  @Test
+  void versionFortyNineRenamesTheLegacyKpiSettingsPrimaryKey() {
+    configuration(MIGRATION_LOCATION).target("48").load().migrate();
+
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select conname
+                from pg_constraint
+                where conrelid = 'public.kpi_settings'::regclass
+                  and contype = 'p'
+                """,
+                String.class))
+        .isEqualTo("company_kpi_settings_pkey");
+
+    Flyway v49 = configuration(MIGRATION_LOCATION).target("49").load();
+    assertThat(v49.migrate().migrationsExecuted).isOne();
+    v49.validate();
+
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select conname
+                from pg_constraint
+                where conrelid = 'public.kpi_settings'::regclass
+                  and contype = 'p'
+                """,
+                String.class))
+        .isEqualTo("kpi_settings_pkey");
+    assertThat(v49.migrate().migrationsExecuted).isZero();
   }
 
   private Flyway flyway(String location) {

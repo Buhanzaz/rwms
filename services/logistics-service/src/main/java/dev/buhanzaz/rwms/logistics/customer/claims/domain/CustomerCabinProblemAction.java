@@ -1,5 +1,8 @@
-package dev.buhanzaz.rwms.logistics.customer.claims;
+package dev.buhanzaz.rwms.logistics.customer.claims.domain;
 
+import dev.buhanzaz.rwms.logistics.customer.claims.CustomerCabinProblemActionKind;
+import dev.buhanzaz.rwms.logistics.customer.claims.CustomerCabinProblemResolutionKind;
+import dev.buhanzaz.rwms.logistics.customer.claims.CustomerCabinProblemStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;

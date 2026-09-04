@@ -48,7 +48,7 @@ class WarehouseFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndOwnsOnlyWarehouseOutboxAndIdempotencyData() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(10);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(11);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -79,13 +79,14 @@ class WarehouseFlywayMigrationIntegrationTest {
     assertThat(columnExists("warehouse", "time_zone_revision")).isTrue();
     assertThat(columnExists("warehouse", "lifecycle_state")).isTrue();
     assertThat(columnExists("warehouse", "lifecycle_revision")).isTrue();
-    assertThat(columnExists("warehouse", "representative")).isTrue();
+    assertThat(columnExists("warehouse", "representative")).isFalse();
     assertThat(columnExists("warehouse", "latitude")).isTrue();
     assertThat(columnExists("warehouse", "longitude")).isTrue();
     assertThat(columnExists("warehouse", "support_link_revision")).isTrue();
-    assertThat(columnExists("warehouse", "company_id")).isTrue();
-    assertThat(columnExists("warehouse", "warehouse_type")).isTrue();
-    assertThat(columnExists("warehouse", "production_warehouse_id")).isTrue();
+    assertThat(columnExists("warehouse", "company_id")).isFalse();
+    assertThat(columnExists("warehouse", "warehouse_type")).isFalse();
+    assertThat(columnExists("warehouse", "production_warehouse_id")).isFalse();
+    assertThat(columnExists("warehouse", "representative_parent_warehouse_id")).isTrue();
     assertThat(columnExists("warehouse", "production")).isTrue();
     assertThat(columnExists("warehouse", "main_warehouse")).isTrue();
     assertThat(columnExists("outbox_event", "review_version")).isTrue();
@@ -95,16 +96,14 @@ class WarehouseFlywayMigrationIntegrationTest {
                 select id::text || '|' || name || '|' || normalized_name || '|' || city || '|'
                        || coalesce(address, '<null>') || '|' || time_zone || '|' || active::text
                        || '|' || coalesce(sort_order::text, '<null>') || '|'
-                       || representative::text || '|' || company_id::text || '|'
-                       || warehouse_type || '|'
-                       || coalesce(production_warehouse_id::text, '<null>') || '|'
-                       || production::text || '|' || main_warehouse::text
+                       || production::text || '|' || main_warehouse::text || '|'
+                       || coalesce(representative_parent_warehouse_id::text, '<null>')
                   from warehouse order by id
                 """,
                 String.class))
         .containsExactly(
-            "00000000-0000-0000-0000-000000000001|СПБ|спб|Санкт-Петербург|<null>|Europe/Moscow|true|<null>|false|ae0d6f97-f0c5-576a-9ea7-1ddcc1a03b48|PRODUCTION|<null>|false|true",
-            "00000000-0000-0000-0000-000000000002|Москва|москва|Москва|<null>|Europe/Moscow|true|<null>|false|ae0d6f97-f0c5-576a-9ea7-1ddcc1a03b48|PRODUCTION|<null>|false|true");
+            "00000000-0000-0000-0000-000000000001|СПБ|спб|Санкт-Петербург|<null>|Europe/Moscow|true|<null>|false|true|<null>",
+            "00000000-0000-0000-0000-000000000002|Москва|москва|Москва|<null>|Europe/Moscow|true|<null>|false|true|<null>");
     assertThat(
             jdbc.queryForList(
                 "select lifecycle_state from warehouse order by id", String.class))
@@ -119,7 +118,7 @@ class WarehouseFlywayMigrationIntegrationTest {
                   and constraint_name='uk_warehouse_company_normalized_name'
                 """,
                 Integer.class))
-        .isOne();
+        .isZero();
     assertThat(
             jdbc.queryForObject(
                 """
@@ -129,44 +128,41 @@ class WarehouseFlywayMigrationIntegrationTest {
                   and constraint_name='uk_warehouse_normalized_name'
                 """,
                 Integer.class))
-        .isZero();
+        .isOne();
     assertThatThrownBy(
             () ->
                 jdbc.update(
                     """
                     insert into warehouse(
                       id,version,name,normalized_name,city,address,time_zone,active,sort_order,
-                      company_id,warehouse_type,created_at,updated_at)
-                    values (?,0,'СПБ','спб','Санкт-Петербург',null,'Europe/Moscow',true,null,?,
-                      'PRODUCTION',
+                      production,main_warehouse,created_at,updated_at)
+                    values (?,0,'СПБ','спб','Санкт-Петербург',null,'Europe/Moscow',true,null,false,true,
                       clock_timestamp(),clock_timestamp())
                     """,
-                    UUID.randomUUID(),
-                    INITIAL_COMPANY_ID))
+                    UUID.randomUUID()))
         .isInstanceOf(DataIntegrityViolationException.class)
-        .hasMessageContaining("uk_warehouse_company_normalized_name");
-    UUID otherCompanyWarehouse = UUID.randomUUID();
+        .hasMessageContaining("uk_warehouse_normalized_name");
+    UUID coordinateWarehouse = UUID.randomUUID();
     assertThat(
             jdbc.update(
                 """
                 insert into warehouse(
                   id,version,name,normalized_name,city,address,time_zone,active,sort_order,
-                  company_id,warehouse_type,created_at,updated_at)
-                values (?,0,'СПБ','спб','Санкт-Петербург',null,'Europe/Moscow',true,null,?,
-                  'PRODUCTION',clock_timestamp(),clock_timestamp())
+                  production,main_warehouse,created_at,updated_at)
+                values (?,0,'Coordinate depot','coordinate depot','Санкт-Петербург',null,
+                  'Europe/Moscow',true,null,false,true,clock_timestamp(),clock_timestamp())
                 """,
-                otherCompanyWarehouse,
-                SECOND_COMPANY_ID))
+                coordinateWarehouse))
         .isOne();
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from warehouse where normalized_name='спб'", Integer.class))
-        .isEqualTo(2);
+        .isOne();
     assertThatThrownBy(
             () ->
                 jdbc.update(
                     "update warehouse set latitude=0.000000, longitude=0.000000 where id=?",
-                    otherCompanyWarehouse))
+                    coordinateWarehouse))
         .isInstanceOf(DataIntegrityViolationException.class)
         .hasMessageContaining("ck_warehouse_coordinates_not_origin");
     assertThat(
@@ -438,9 +434,9 @@ class WarehouseFlywayMigrationIntegrationTest {
     assertThat(versionNine.migrate().migrationsExecuted).isOne();
     versionNine.validate();
 
-    Flyway current = flyway(MIGRATIONS);
-    assertThat(current.migrate().migrationsExecuted).isOne();
-    current.validate();
+    Flyway versionTen = configuration(MIGRATIONS).target("10").load();
+    assertThat(versionTen.migrate().migrationsExecuted).isOne();
+    versionTen.validate();
 
     assertThat(
             jdbc.queryForObject(
@@ -554,11 +550,59 @@ class WarehouseFlywayMigrationIntegrationTest {
                     representativeWarehouse))
         .isInstanceOf(RuntimeException.class)
         .hasMessageContaining("remove warehouse support links");
+
+    Flyway versionEleven = configuration(MIGRATIONS).target("11").load();
+    assertThat(versionEleven.migrate().migrationsExecuted).isOne();
+    versionEleven.validate();
+
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select production::text || '|' || main_warehouse::text || '|'
+                       || representative_parent_warehouse_id::text
+                  from warehouse
+                 where id=?
+                """,
+                String.class,
+                representativeWarehouse))
+        .isEqualTo("false|false|" + productionWarehouse);
+    assertThat(columnExists("warehouse", "company_id")).isFalse();
+    assertThat(columnExists("warehouse", "warehouse_type")).isFalse();
+    assertThat(columnExists("warehouse", "representative")).isFalse();
+    assertThat(columnExists("warehouse", "production_warehouse_id")).isFalse();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select jsonb_exists(response_body, 'companyId')
+                    or jsonb_exists(response_body, 'warehouseType')
+                    or jsonb_exists(response_body, 'productionWarehouseId')
+                  from idempotency_record
+                 where subject_id=? and idempotency_key=?
+                """,
+                Boolean.class,
+                subjectId,
+                idempotencyKey))
+        .isFalse();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select (response_body->>'representative') || '|'
+                       || (response_body->>'production') || '|'
+                       || (response_body->>'mainWarehouse') || '|'
+                       || (response_body->>'representativeParentWarehouseId')
+                  from idempotency_record
+                 where subject_id=? and idempotency_key=?
+                """,
+                String.class,
+                subjectId,
+                idempotencyKey))
+        .isEqualTo("true|false|false|" + productionWarehouse);
   }
 
   @Test
   void versionTenEnforcesIndependentObjectClassificationAndSupportLinkBoundaries() {
-    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(10);
+    assertThat(configuration(MIGRATIONS).target("10").load().migrate().migrationsExecuted)
+        .isEqualTo(10);
     UUID initialProduction =
         UUID.fromString("00000000-0000-0000-0000-000000000001");
     UUID secondProduction = UUID.randomUUID();
@@ -657,6 +701,24 @@ class WarehouseFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void versionElevenRefusesToDiscardMultipleWarehouseCompanyOwners() {
+    configuration(MIGRATIONS).target("10").load().migrate();
+    insertVersionNineWarehouse(
+        UUID.randomUUID(),
+        SECOND_COMPANY_ID,
+        "Other installation warehouse",
+        "other installation warehouse",
+        "PRODUCTION",
+        null);
+
+    assertThatThrownBy(() -> configuration(MIGRATIONS).target("11").load().migrate())
+        .isInstanceOf(FlywayException.class)
+        .hasMessageContaining("multi-company database");
+    assertThat(columnExists("warehouse", "company_id")).isTrue();
+    assertThat(columnExists("warehouse", "warehouse_type")).isTrue();
+  }
+
+  @Test
   void versionNineFailsWhenRepresentativeHasAmbiguousProductionSources() {
     Flyway throughVersionEight = configuration(MIGRATIONS).target("8").load();
     assertThat(throughVersionEight.migrate().migrationsExecuted).isEqualTo(8);
@@ -727,7 +789,7 @@ class WarehouseFlywayMigrationIntegrationTest {
         warehouseId);
 
     Flyway versionTwo = flyway(MIGRATIONS);
-    assertThat(versionTwo.migrate().migrationsExecuted).isEqualTo(9);
+    assertThat(versionTwo.migrate().migrationsExecuted).isEqualTo(10);
     versionTwo.validate();
 
     assertThat(columnExists("warehouse", "code")).isFalse();

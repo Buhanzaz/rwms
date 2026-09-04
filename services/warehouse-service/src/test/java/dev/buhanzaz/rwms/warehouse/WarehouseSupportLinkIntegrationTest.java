@@ -256,10 +256,34 @@ class WarehouseSupportLinkIntegrationTest {
                 .getResponse()
                 .getContentAsString());
     assertThat(internal.size()).isOne();
-    assertThat(internal.get(0).get("supportWarehouse").get("id").stringValue())
+    JsonNode supportWarehouse = internal.get(0).get("supportWarehouse");
+    JsonNode servedWarehouse = internal.get(0).get("servedWarehouse");
+    assertThat(supportWarehouse.get("id").stringValue())
         .isEqualTo(support.id().toString());
-    assertThat(internal.get(0).get("supportWarehouse").get("companyId")).isNull();
-    assertThat(internal.get(0).get("servedWarehouse").get("companyId")).isNull();
+    assertThat(Set.copyOf(supportWarehouse.propertyNames()))
+        .containsExactlyInAnyOrder(
+            "id",
+            "version",
+            "active",
+            "name",
+            "city",
+            "address",
+            "latitude",
+            "longitude",
+            "timeZone",
+            "representative");
+    assertThat(Set.copyOf(servedWarehouse.propertyNames()))
+        .containsExactlyInAnyOrder(
+            "id",
+            "version",
+            "active",
+            "name",
+            "city",
+            "address",
+            "latitude",
+            "longitude",
+            "timeZone",
+            "representative");
 
     WarehouseSupportLinkInput inactive =
         new WarehouseSupportLinkInput(

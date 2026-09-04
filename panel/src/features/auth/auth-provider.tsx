@@ -370,7 +370,7 @@ function OidcAuthProvider({
       completeLogin,
       logout,
     }),
-    [beginLogin, completeLogin, error, logout, oidcUser, status]
+    [beginLogin, completeLogin, currentUser, error, logout, oidcUser, status]
   )
 
   return (

@@ -18,12 +18,9 @@ import dev.buhanzaz.rwms.warehouse.api.WarehouseOperationMarkRequest;
 import dev.buhanzaz.rwms.warehouse.api.WarehouseResponse;
 import dev.buhanzaz.rwms.warehouse.api.WarehouseTimeZoneAtResponse;
 import dev.buhanzaz.rwms.warehouse.api.WarehouseTimeZoneChangeResponse;
-import dev.buhanzaz.rwms.warehouse.domain.WarehouseDefaults;
-import dev.buhanzaz.rwms.warehouse.domain.WarehouseType;
 import dev.buhanzaz.rwms.warehouse.service.WarehouseConflictException;
 import dev.buhanzaz.rwms.warehouse.service.WarehouseIdempotencyStore;
 import dev.buhanzaz.rwms.warehouse.service.WarehouseLifecycleReadinessOwner;
-import dev.buhanzaz.rwms.warehouse.service.WarehouseNotFoundException;
 import dev.buhanzaz.rwms.warehouse.service.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.warehouse.service.WarehouseOperationSource;
 import dev.buhanzaz.rwms.warehouse.service.WarehouseService;
@@ -51,9 +48,6 @@ import tools.jackson.databind.ObjectMapper;
 @ActiveProfiles({"dev", "test"})
 @AutoConfigureMockMvc
 class WarehouseServiceIntegrationTest {
-  private static final UUID COMPANY = WarehouseDefaults.INITIAL_COMPANY_ID;
-  private static final UUID OTHER_COMPANY =
-      UUID.fromString("00000000-0000-0000-0000-0000000000c2");
   private static final UUID SPB = UUID.fromString("00000000-0000-0000-0000-000000000001");
   private static final UUID MSK = UUID.fromString("00000000-0000-0000-0000-000000000002");
   private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
@@ -93,9 +87,9 @@ class WarehouseServiceIntegrationTest {
     UUID key = UUID.randomUUID();
     CreateWarehouseRequest first = request(" Test west ", 4);
 
-    WarehouseService.CreateResult created = service.create(COMPANY, subject, key, first);
+    WarehouseService.CreateResult created = service.create(subject, key, first);
     WarehouseService.CreateResult replayed =
-        service.create(COMPANY, subject, key, request("Test west", 4));
+        service.create(subject, key, request("Test west", 4));
 
     assertThat(created.replayed()).isFalse();
     assertThat(replayed.replayed()).isTrue();
@@ -109,22 +103,13 @@ class WarehouseServiceIntegrationTest {
     assertThatThrownBy(
             () ->
                 service.create(
-                    COMPANY,
                     subject,
                     key,
                     new CreateWarehouseRequest(
-                        "Test west",
-                        "Москва",
-                        "",
-                        null,
-                        null,
-                        "Europe/Moscow",
-                        4,
-                        WarehouseType.REPRESENTATIVE,
-                        SPB)))
+                        "Test west", "Москва", "", null, null, "Europe/Moscow", 4, true, false, null)))
         .isInstanceOf(WarehouseConflictException.class)
         .hasMessageContaining("Idempotency-Key");
-    assertThatThrownBy(() -> service.create(COMPANY, subject, key, request("Test east", 4)))
+    assertThatThrownBy(() -> service.create(subject, key, request("Test east", 4)))
         .isInstanceOf(WarehouseConflictException.class)
         .hasMessageContaining("Idempotency-Key");
 
@@ -138,7 +123,7 @@ class WarehouseServiceIntegrationTest {
         subject,
         key);
     assertThat(idempotency.cleanupExpired()).isOne();
-    assertThat(service.create(COMPANY, subject, key, request("Test east", 4)).replayed())
+    assertThat(service.create(subject, key, request("Test east", 4)).replayed())
         .isFalse();
   }
 
@@ -146,12 +131,11 @@ class WarehouseServiceIntegrationTest {
   void createsOrdinaryAndRepresentativeWarehousesAndReplacesTheCharacteristic() {
     WarehouseResponse ordinary =
         service
-            .create(COMPANY, UUID.randomUUID(), UUID.randomUUID(), request("Ordinary depot", null))
+            .create(UUID.randomUUID(), UUID.randomUUID(), request("Ordinary depot", null))
             .response();
     WarehouseResponse representative =
         service
             .create(
-                COMPANY,
                 UUID.randomUUID(),
                 UUID.randomUUID(),
                 new CreateWarehouseRequest(
@@ -162,7 +146,8 @@ class WarehouseServiceIntegrationTest {
                     null,
                     "Europe/Moscow",
                     null,
-                    WarehouseType.REPRESENTATIVE,
+                    false,
+                    false,
                     SPB))
             .response();
 
@@ -170,14 +155,13 @@ class WarehouseServiceIntegrationTest {
     assertThat(representative.representative()).isTrue();
     assertThat(
             jdbc.queryForObject(
-                "select representative from warehouse where id=?",
+                "select representative_parent_warehouse_id is not null from warehouse where id=?",
                 Boolean.class,
                 representative.id()))
         .isTrue();
 
     WarehouseResponse replaced =
         service.replace(
-            COMPANY,
             ordinary.id(),
             new ReplaceWarehouseRequest(
                 ordinary.version(),
@@ -188,16 +172,17 @@ class WarehouseServiceIntegrationTest {
                 ordinary.longitude(),
                 ordinary.timeZone(),
                 ordinary.sortOrder(),
-                WarehouseType.REPRESENTATIVE,
+                false,
+                false,
                 SPB));
 
     assertThat(replaced.representative()).isTrue();
-    assertThat(service.get(COMPANY, ordinary.id()).representative()).isTrue();
+    assertThat(service.get(ordinary.id()).representative()).isTrue();
     assertThat(service.logisticsIdentity(ordinary.id()).representative()).isTrue();
   }
 
   @Test
-  void legacyJsonOmissionDefaultsRepresentativeToFalseForCreateAndFullReplace()
+  void currentJsonClassificationIsPreservedForCreateAndFullReplace()
       throws Exception {
     JsonNode created =
         objectMapper.readTree(
@@ -214,7 +199,10 @@ class WarehouseServiceIntegrationTest {
                               "city": "Москва",
                               "address": null,
                               "timeZone": "Europe/Moscow",
-                              "sortOrder": null
+                              "sortOrder": null,
+                              "production": false,
+                              "mainWarehouse": true,
+                              "representativeParentWarehouseId": null
                             }
                             """))
                 .andExpect(status().isCreated())
@@ -239,7 +227,10 @@ class WarehouseServiceIntegrationTest {
                               "city": "Москва",
                               "address": null,
                               "timeZone": "Europe/Moscow",
-                              "sortOrder": null
+                              "sortOrder": null,
+                              "production": false,
+                              "mainWarehouse": true,
+                              "representativeParentWarehouseId": null
                             }
                             """
                                 .formatted(created.get("version").longValue())))
@@ -255,11 +246,11 @@ class WarehouseServiceIntegrationTest {
   void enforcesFencedOneWayLifecycleAndRequiresEveryReadinessOwner() {
     WarehouseResponse created =
         service
-            .create(COMPANY, UUID.randomUUID(), UUID.randomUUID(), request("Operations", null))
+            .create(UUID.randomUUID(), UUID.randomUUID(), request("Operations", null))
             .response();
     WarehouseResponse noOp =
         service.replace(
-            COMPANY, created.id(), replace(created, created.version(), "Operations", null));
+            created.id(), replace(created, created.version(), "Operations", null));
     assertThat(noOp.version()).isEqualTo(created.version());
     assertThat(
             count(
@@ -268,28 +259,26 @@ class WarehouseServiceIntegrationTest {
 
     WarehouseResponse changed =
         service.replace(
-            COMPANY, created.id(), replace(created, created.version(), "Operations updated", 5));
+            created.id(), replace(created, created.version(), "Operations updated", 5));
     assertThat(changed.version()).isEqualTo(created.version() + 1);
     assertThat(eventTypes(created.id()))
         .containsExactly("warehouse.warehouse.created.v1", "warehouse.warehouse.changed.v1");
     assertThatThrownBy(
             () ->
                 service.replace(
-                    COMPANY, created.id(), replace(changed, created.version(), "Stale", 5)))
+                    created.id(), replace(changed, created.version(), "Stale", 5)))
         .isInstanceOf(WarehouseConflictException.class);
 
     assertThatThrownBy(
             () ->
                 service.completeInactivation(
-                    COMPANY,
-                    created.id(),
-                    new WarehouseLifecycleTransitionRequest(changed.version())))
+                    created.id(), new WarehouseLifecycleTransitionRequest(changed.version())))
         .isInstanceOf(WarehouseConflictException.class)
         .hasMessageContaining("DRAINING");
 
     WarehouseResponse draining =
         service.startDraining(
-            COMPANY, created.id(), new WarehouseLifecycleTransitionRequest(changed.version()));
+            created.id(), new WarehouseLifecycleTransitionRequest(changed.version()));
     assertThat(draining.lifecycleState()).isEqualTo("DRAINING");
     assertThat(draining.active()).isFalse();
     assertThat(service.admission(draining.id(), WarehouseOperationDirection.INCOMING).admitted())
@@ -299,9 +288,7 @@ class WarehouseServiceIntegrationTest {
     assertThatThrownBy(
             () ->
                 service.startDraining(
-                    COMPANY,
-                    created.id(),
-                    new WarehouseLifecycleTransitionRequest(draining.version())))
+                    created.id(), new WarehouseLifecycleTransitionRequest(draining.version())))
         .isInstanceOf(WarehouseConflictException.class)
         .hasMessageContaining("ACTIVE");
     assertThatThrownBy(
@@ -315,9 +302,7 @@ class WarehouseServiceIntegrationTest {
     assertThatThrownBy(
             () ->
                 service.completeInactivation(
-                    COMPANY,
-                    created.id(),
-                    new WarehouseLifecycleTransitionRequest(draining.version())))
+                    created.id(), new WarehouseLifecycleTransitionRequest(draining.version())))
         .isInstanceOf(WarehouseConflictException.class)
         .hasMessageContaining("readiness");
 
@@ -346,7 +331,7 @@ class WarehouseServiceIntegrationTest {
     }
     WarehouseResponse inactive =
         service.completeInactivation(
-            COMPANY, created.id(), new WarehouseLifecycleTransitionRequest(readinessVersion));
+            created.id(), new WarehouseLifecycleTransitionRequest(readinessVersion));
     assertThat(inactive.lifecycleState()).isEqualTo("INACTIVE");
     assertThat(inactive.active()).isFalse();
     assertThat(service.admission(inactive.id(), WarehouseOperationDirection.INCOMING).admitted())
@@ -367,7 +352,6 @@ class WarehouseServiceIntegrationTest {
     assertThatThrownBy(
             () ->
                 service.create(
-                    COMPANY,
                     UUID.randomUUID(),
                     UUID.randomUUID(),
                     request(" operations\tUPDATED ", null)))
@@ -376,20 +360,17 @@ class WarehouseServiceIntegrationTest {
     assertThatThrownBy(
             () ->
                 service.startDraining(
-                    COMPANY,
-                    inactive.id(),
-                    new WarehouseLifecycleTransitionRequest(inactive.version())))
+                    inactive.id(), new WarehouseLifecycleTransitionRequest(inactive.version())))
         .isInstanceOf(WarehouseConflictException.class)
         .hasMessageContaining("ACTIVE");
 
     WarehouseResponse anotherWarehouse =
         service
-            .create(COMPANY, UUID.randomUUID(), UUID.randomUUID(), request("Field office", null))
+            .create(UUID.randomUUID(), UUID.randomUUID(), request("Field office", null))
             .response();
     assertThatThrownBy(
             () ->
                 service.replace(
-                        COMPANY,
                         anotherWarehouse.id(),
                         replace(
                             anotherWarehouse,
@@ -403,18 +384,13 @@ class WarehouseServiceIntegrationTest {
   @Test
   void reconcilesOnlyTheAuthenticatedOwnersOutstandingDrainingWorkWithAKeyset() {
     WarehouseResponse first =
-        service
-            .create(COMPANY, UUID.randomUUID(), UUID.randomUUID(), request("Drain work first", null))
-            .response();
+        service.create(UUID.randomUUID(), UUID.randomUUID(), request("Drain work first", null)).response();
     WarehouseResponse second =
-        service
-            .create(COMPANY, UUID.randomUUID(), UUID.randomUUID(), request("Drain work second", null))
-            .response();
+        service.create(UUID.randomUUID(), UUID.randomUUID(), request("Drain work second", null)).response();
     WarehouseResponse firstDraining =
         service.startDraining(
-            COMPANY, first.id(), new WarehouseLifecycleTransitionRequest(first.version()));
-    service.startDraining(
-        COMPANY, second.id(), new WarehouseLifecycleTransitionRequest(second.version()));
+            first.id(), new WarehouseLifecycleTransitionRequest(first.version()));
+    service.startDraining(second.id(), new WarehouseLifecycleTransitionRequest(second.version()));
 
     var firstPage =
         service.lifecycleReadinessWork(WarehouseLifecycleReadinessOwner.ASSET, null, 1);
@@ -449,11 +425,7 @@ class WarehouseServiceIntegrationTest {
       throws Exception {
     WarehouseResponse created =
         service
-            .create(
-                COMPANY,
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                request("Historical warehouse", null))
+            .create(UUID.randomUUID(), UUID.randomUUID(), request("Historical warehouse", null))
             .response();
     WarehouseResponse inactive = drainAndInactivate(created);
 
@@ -468,12 +440,8 @@ class WarehouseServiceIntegrationTest {
 
     assertThat(objectMapper.readTree(body).get("active").booleanValue()).isFalse();
     assertThat(objectMapper.readTree(body).get("lifecycleState").stringValue()).isEqualTo("INACTIVE");
-    assertThat(service.list(COMPANY, false))
-        .extracting(WarehouseResponse::id)
-        .doesNotContain(inactive.id());
-    assertThat(service.list(COMPANY, true))
-        .extracting(WarehouseResponse::id)
-        .contains(inactive.id());
+    assertThat(service.list(false)).extracting(WarehouseResponse::id).doesNotContain(inactive.id());
+    assertThat(service.list(true)).extracting(WarehouseResponse::id).contains(inactive.id());
     mockMvc
         .perform(
             delete("/api/warehouse/v1/warehouses/{id}", inactive.id())
@@ -486,12 +454,11 @@ class WarehouseServiceIntegrationTest {
   void duplicateWarehouseNamesReturnConflictForCreateAndReplace() throws Exception {
     WarehouseResponse existing =
         service
-            .create(COMPANY, UUID.randomUUID(), UUID.randomUUID(), request("Registry depot", null))
+            .create(UUID.randomUUID(), UUID.randomUUID(), request("Registry depot", null))
             .response();
     WarehouseResponse other =
         service
-            .create(
-                COMPANY, UUID.randomUUID(), UUID.randomUUID(), request("Registry overflow", null))
+            .create(UUID.randomUUID(), UUID.randomUUID(), request("Registry overflow", null))
             .response();
 
     mockMvc
@@ -537,107 +504,49 @@ class WarehouseServiceIntegrationTest {
   }
 
   @Test
-  void scopesNamesListsAndUuidReadsToTheAuthenticatedCompany() throws Exception {
-    WarehouseResponse initial =
-        service
-            .create(COMPANY, UUID.randomUUID(), UUID.randomUUID(), request("Shared name", null))
-            .response();
-    WarehouseResponse other =
+  void rentalManagerCanReadTheGlobalDirectoryButCannotReadByIdOrMutate() throws Exception {
+    WarehouseResponse listed =
         service
             .create(
-                OTHER_COMPANY,
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                request(" shared  NAME ", null))
-            .response();
-
-    assertThat(service.list(COMPANY, false))
-        .extracting(WarehouseResponse::id)
-        .contains(initial.id())
-        .doesNotContain(other.id());
-    assertThat(service.list(OTHER_COMPANY, false))
-        .extracting(WarehouseResponse::id)
-        .containsExactly(other.id());
-    assertThatThrownBy(() -> service.get(COMPANY, other.id()))
-        .isInstanceOf(WarehouseNotFoundException.class);
-
-    mockMvc
-        .perform(
-            get("/api/warehouse/v1/warehouses/{id}", other.id())
-                .with(warehouseReadUserJwt(COMPANY)))
-        .andExpect(status().isNotFound());
-    mockMvc
-        .perform(
-            get("/api/warehouse/v1/warehouses/{id}", other.id())
-                .with(warehouseReadUserJwt(OTHER_COMPANY)))
-        .andExpect(status().isOk())
-        .andExpect(
-            result ->
-                assertThat(
-                        objectMapper
-                            .readTree(result.getResponse().getContentAsString())
-                            .get("companyId")
-                            .stringValue())
-                    .isEqualTo(OTHER_COMPANY.toString()));
-  }
-
-  @Test
-  void rentalManagerListsOnlySignedCompanyWarehousesAndCannotReadByIdOrMutate()
-      throws Exception {
-    WarehouseResponse own =
-        service
-            .create(COMPANY, UUID.randomUUID(), UUID.randomUUID(), request("Manager depot", null))
-            .response();
-    WarehouseResponse foreign =
-        service
-            .create(
-                OTHER_COMPANY,
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                request("Foreign manager depot", null))
+                UUID.randomUUID(), UUID.randomUUID(), request("Rental directory depot", null))
             .response();
 
     JsonNode directory =
         objectMapper.readTree(
             mockMvc
-                .perform(
-                    get("/api/warehouse/v1/warehouses")
-                        .with(rentalManagerDirectoryJwt(COMPANY)))
+                .perform(get("/api/warehouse/v1/warehouses").with(rentalManagerDirectoryJwt()))
                 .andExpect(status().isOk())
                 .andReturn()
                 .getResponse()
                 .getContentAsString());
-
     assertThat(
             java.util.stream.StreamSupport.stream(directory.spliterator(), false)
                 .map(value -> value.get("id").stringValue())
                 .toList())
-        .contains(own.id().toString())
-        .doesNotContain(foreign.id().toString());
+        .contains(listed.id().toString());
     assertThat(
             java.util.stream.StreamSupport.stream(directory.spliterator(), false)
-                .map(value -> value.get("companyId").stringValue())
-                .toList())
-        .containsOnly(COMPANY.toString());
+                .allMatch(value -> value.has("id") && value.has("production") && value.has("mainWarehouse")))
+        .isTrue();
 
     mockMvc
         .perform(
-            get("/api/warehouse/v1/warehouses/{id}", own.id())
-                .with(rentalManagerDirectoryJwt(COMPANY)))
+            get("/api/warehouse/v1/warehouses/{id}", listed.id())
+                .with(rentalManagerDirectoryJwt()))
         .andExpect(status().isForbidden());
     mockMvc
         .perform(
             get("/api/warehouse/v1/warehouses")
                 .queryParam("includeInactive", "true")
-                .with(rentalManagerDirectoryJwt(COMPANY)))
+                .with(rentalManagerDirectoryJwt()))
         .andExpect(status().isForbidden());
     mockMvc
         .perform(
             post("/api/warehouse/v1/warehouses")
-                .with(rentalManagerDirectoryJwt(COMPANY))
+                .with(rentalManagerDirectoryJwt())
                 .header("Idempotency-Key", UUID.randomUUID())
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(request("Denied manager depot", null))))
+                .content(objectMapper.writeValueAsString(request("Denied rental manager depot", null))))
         .andExpect(status().isForbidden());
   }
 
@@ -645,20 +554,23 @@ class WarehouseServiceIntegrationTest {
   void preservesEffectiveDatedTimezoneHistoryAndPreventsPostOperationCorrections() throws Exception {
     WarehouseResponse created =
         service
-            .create(
-                COMPANY, UUID.randomUUID(), UUID.randomUUID(), request("Timezone history", null))
+            .create(UUID.randomUUID(), UUID.randomUUID(), request("Timezone history", null))
             .response();
     WarehouseResponse corrected =
         service.replace(
-            COMPANY,
             created.id(),
             new ReplaceWarehouseRequest(
                 created.version(),
                 created.name(),
                 created.city(),
                 created.address(),
+                created.latitude(),
+                created.longitude(),
                 "Europe/Samara",
-                created.sortOrder()));
+                created.sortOrder(),
+                created.production(),
+                created.mainWarehouse(),
+                created.representativeParentWarehouseId()));
     assertThat(corrected.timeZone()).isEqualTo("Europe/Samara");
 
     OffsetDateTime operationAt = databaseNow();
@@ -679,13 +591,12 @@ class WarehouseServiceIntegrationTest {
     OffsetDateTime effectiveFrom = OffsetDateTime.now(ZoneOffset.UTC).plusDays(1);
     WarehouseTimeZoneChangeResponse scheduled =
         service.scheduleTimeZone(
-            COMPANY,
             corrected.id(),
             new ScheduleWarehouseTimeZoneRequest(
                 corrected.version(), "Europe/Moscow", effectiveFrom));
     assertThat(scheduled.warehouseVersion()).isEqualTo(corrected.version() + 1);
     assertThat(scheduled.timeZone()).isEqualTo("Europe/Moscow");
-    assertThat(service.get(COMPANY, created.id()).timeZone()).isEqualTo("Europe/Samara");
+    assertThat(service.get(created.id()).timeZone()).isEqualTo("Europe/Samara");
     WarehouseTimeZoneAtResponse historical = service.timeZoneAt(created.id(), operationAt);
     assertThat(historical.timeZone()).isEqualTo("Europe/Samara");
     WarehouseTimeZoneAtResponse future =
@@ -695,15 +606,19 @@ class WarehouseServiceIntegrationTest {
     assertThatThrownBy(
             () ->
                 service.replace(
-                    COMPANY,
                     created.id(),
                     new ReplaceWarehouseRequest(
                         scheduled.warehouseVersion(),
                         corrected.name(),
                         corrected.city(),
                         corrected.address(),
+                        corrected.latitude(),
+                        corrected.longitude(),
                         "Europe/Moscow",
-                        corrected.sortOrder())))
+                        corrected.sortOrder(),
+                        corrected.production(),
+                        corrected.mainWarehouse(),
+                        corrected.representativeParentWarehouseId())))
         .isInstanceOf(WarehouseConflictException.class)
         .hasMessageContaining("scheduled");
     assertThat(count("select count(*) from warehouse_time_zone_history where warehouse_id=?", created.id()))
@@ -743,11 +658,7 @@ class WarehouseServiceIntegrationTest {
   void exposesTimezoneAsOfAndOperationMarkOnlyToExactOperationOwnerScopes() throws Exception {
     WarehouseResponse created =
         service
-            .create(
-                COMPANY,
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                request("Timezone private boundary", null))
+            .create(UUID.randomUUID(), UUID.randomUUID(), request("Timezone private boundary", null))
             .response();
     OffsetDateTime now = databaseNow();
     String asOfBody =
@@ -797,15 +708,11 @@ class WarehouseServiceIntegrationTest {
       throws Exception {
     WarehouseResponse created =
         service
-            .create(
-                COMPANY,
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                request("Lifecycle admission", null))
+            .create(UUID.randomUUID(), UUID.randomUUID(), request("Lifecycle admission", null))
             .response();
     WarehouseResponse draining =
         service.startDraining(
-            COMPANY, created.id(), new WarehouseLifecycleTransitionRequest(created.version()));
+            created.id(), new WarehouseLifecycleTransitionRequest(created.version()));
 
     JsonNode incoming =
         objectMapper.readTree(
@@ -919,10 +826,8 @@ class WarehouseServiceIntegrationTest {
             .getContentAsString();
     JsonNode response = objectMapper.readTree(body);
     assertThat(Set.copyOf(response.propertyNames()))
-        .containsExactlyInAnyOrder("id", "companyId", "version", "active");
+        .containsExactlyInAnyOrder("id", "version", "active");
     assertThat(response.get("id").stringValue()).isEqualTo(SPB.toString());
-    assertThat(response.get("companyId").stringValue())
-        .isEqualTo(COMPANY.toString());
     assertThat(response.get("active").booleanValue()).isTrue();
 
     mockMvc
@@ -956,12 +861,16 @@ class WarehouseServiceIntegrationTest {
             .andReturn()
             .getResponse()
             .getContentAsString();
-    assertThat(Set.copyOf(objectMapper.readTree(assetBody).propertyNames()))
+    JsonNode assetResponse = objectMapper.readTree(assetBody);
+    assertThat(Set.copyOf(assetResponse.propertyNames()))
         .containsExactlyInAnyOrder("id", "version", "active");
+    assertThat(assetResponse.get("id").stringValue()).isEqualTo(SPB.toString());
+    assertThat(assetResponse.get("version").longValue()).isZero();
+    assertThat(assetResponse.get("active").booleanValue()).isTrue();
   }
 
   @Test
-  void exposesAuthoritativeCompanyInTheTaskBoardWarehouseIdentity() throws Exception {
+  void exposesExactTaskBoardWarehouseIdentity() throws Exception {
     String body =
         mockMvc
             .perform(
@@ -975,18 +884,16 @@ class WarehouseServiceIntegrationTest {
     JsonNode response = objectMapper.readTree(body);
     assertThat(Set.copyOf(response.propertyNames()))
         .containsExactlyInAnyOrder(
-            "id",
-            "companyId",
-            "version",
-            "active",
-            "name",
-            "city",
-            "address",
-            "latitude",
-            "longitude",
-            "timeZone");
+            "id", "version", "active", "name", "city", "address", "latitude", "longitude", "timeZone");
     assertThat(response.get("id").stringValue()).isEqualTo(SPB.toString());
-    assertThat(response.get("companyId").stringValue()).isEqualTo(COMPANY.toString());
+    assertThat(response.get("version").longValue()).isZero();
+    assertThat(response.get("active").booleanValue()).isTrue();
+    assertThat(response.get("name").stringValue()).isEqualTo("СПБ");
+    assertThat(response.get("city").stringValue()).isEqualTo("Санкт-Петербург");
+    assertThat(response.get("address").isNull()).isTrue();
+    assertThat(response.get("latitude").isNull()).isTrue();
+    assertThat(response.get("longitude").isNull()).isTrue();
+    assertThat(response.get("timeZone").stringValue()).isEqualTo("Europe/Moscow");
 
     mockMvc
         .perform(
@@ -1022,7 +929,6 @@ class WarehouseServiceIntegrationTest {
     WarehouseResponse inventoryCreated =
         service
             .create(
-                COMPANY,
                 UUID.randomUUID(),
                 UUID.randomUUID(),
                 request("Inventory hidden", null))
@@ -1089,7 +995,6 @@ class WarehouseServiceIntegrationTest {
     assertThat(Set.copyOf(response.propertyNames()))
         .containsExactlyInAnyOrder(
             "id",
-            "companyId",
             "version",
             "active",
             "name",
@@ -1100,7 +1005,6 @@ class WarehouseServiceIntegrationTest {
             "timeZone",
             "representative");
     assertThat(response.get("id").stringValue()).isEqualTo(SPB.toString());
-    assertThat(response.get("companyId").stringValue()).isEqualTo(COMPANY.toString());
     assertThat(response.get("version").longValue()).isZero();
     assertThat(response.get("active").booleanValue()).isTrue();
     assertThat(response.get("name").stringValue()).isEqualTo("СПБ");
@@ -1114,7 +1018,6 @@ class WarehouseServiceIntegrationTest {
     WarehouseResponse logisticsCreated =
         service
             .create(
-                COMPANY,
                 UUID.randomUUID(),
                 UUID.randomUUID(),
                 request("Logistics inactive", null))
@@ -1162,11 +1065,6 @@ class WarehouseServiceIntegrationTest {
                 .toList())
         .containsExactlyInAnyOrder(SPB.toString(), MSK.toString())
         .doesNotContain(inactive.id().toString());
-    assertThat(
-            java.util.stream.StreamSupport.stream(active.spliterator(), false)
-                .map(value -> value.get("companyId").stringValue())
-                .toList())
-        .containsOnly(COMPANY.toString());
 
     mockMvc
         .perform(
@@ -1229,25 +1127,18 @@ class WarehouseServiceIntegrationTest {
   private static org.springframework.security.test.web.servlet.request
           .SecurityMockMvcRequestPostProcessors.JwtRequestPostProcessor
       warehouseReadUserJwt() {
-    return warehouseReadUserJwt(COMPANY);
-  }
-
-  private static org.springframework.security.test.web.servlet.request
-          .SecurityMockMvcRequestPostProcessors.JwtRequestPostProcessor
-      warehouseReadUserJwt(UUID companyId) {
     return jwt()
         .jwt(
             token ->
                 token
                     .subject(UUID.randomUUID().toString())
                     .claim("principal_type", "USER")
-                    .claim("company_id", companyId.toString())
                     .claim("scope", "warehouse.read"));
   }
 
   private static org.springframework.security.test.web.servlet.request
           .SecurityMockMvcRequestPostProcessors.JwtRequestPostProcessor
-      rentalManagerDirectoryJwt(UUID companyId) {
+      rentalManagerDirectoryJwt() {
     return jwt()
         .jwt(
             token ->
@@ -1255,7 +1146,6 @@ class WarehouseServiceIntegrationTest {
                     .subject(UUID.randomUUID().toString())
                     .claim("principal_type", "USER")
                     .claim("global_role", "RENTAL_MANAGER")
-                    .claim("company_id", companyId.toString())
                     .claim("client_id", "rwms-rental-manager-web")
                     .claim("rentalAccess", true)
                     .claim("scope", "openid profile offline_access rental.manage"));
@@ -1271,7 +1161,6 @@ class WarehouseServiceIntegrationTest {
                     .subject(UUID.randomUUID().toString())
                     .claim("principal_type", "USER")
                     .claim("global_role", "SYSTEM_ADMIN")
-                    .claim("company_id", COMPANY.toString())
                     .claim("scope", "rwms.write"));
   }
 
@@ -1318,7 +1207,8 @@ class WarehouseServiceIntegrationTest {
   }
 
   private CreateWarehouseRequest request(String name, Integer sortOrder) {
-    return new CreateWarehouseRequest(name, "Москва", "", "Europe/Moscow", sortOrder);
+    return new CreateWarehouseRequest(
+        name, "Москва", "", null, null, "Europe/Moscow", sortOrder, false, true, null);
   }
 
   private ReplaceWarehouseRequest replace(
@@ -1331,14 +1221,19 @@ class WarehouseServiceIntegrationTest {
         name,
         warehouse.city(),
         warehouse.address(),
+        warehouse.latitude(),
+        warehouse.longitude(),
         warehouse.timeZone(),
-        sortOrder);
+        sortOrder,
+        warehouse.production(),
+        warehouse.mainWarehouse(),
+        warehouse.representativeParentWarehouseId());
   }
 
   private WarehouseResponse drainAndInactivate(WarehouseResponse warehouse) {
     WarehouseResponse draining =
         service.startDraining(
-            COMPANY, warehouse.id(), new WarehouseLifecycleTransitionRequest(warehouse.version()));
+            warehouse.id(), new WarehouseLifecycleTransitionRequest(warehouse.version()));
     long expectedVersion = draining.version();
     for (WarehouseLifecycleReadinessOwner owner : WarehouseLifecycleReadinessOwner.values()) {
       expectedVersion =
@@ -1348,7 +1243,7 @@ class WarehouseServiceIntegrationTest {
               .warehouseVersion();
     }
     return service.completeInactivation(
-        COMPANY, warehouse.id(), new WarehouseLifecycleTransitionRequest(expectedVersion));
+        warehouse.id(), new WarehouseLifecycleTransitionRequest(expectedVersion));
   }
 
   private long count(String query, Object... arguments) {

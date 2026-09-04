@@ -418,6 +418,71 @@ class LogisticsRecoveryMetricsIntegrationTest {
   }
 
   private void insertRentalInquiryOutbox(OffsetDateTime createdAt) {
+    UUID clientId = UUID.randomUUID();
+    UUID managerId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID conversationId = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into order_client(
+          id,version,client_type,display_name,normalized_name,created_by_subject_id,
+          phone,normalized_phone,responsible_manager_id,responsible_manager_display_name,
+          creation_idempotency_key,creation_request_sha256,created_at,updated_at)
+        values (
+          ?, 0, 'INDIVIDUAL',
+          ?, ?, ?, ?, ?, ?, 'Metrics actor', ?, ?, ?, ?)
+        """,
+        clientId,
+        "Metrics outbox customer " + clientId,
+        "metrics outbox customer " + clientId,
+        managerId,
+        "+79990000002",
+        "+79990000002",
+        managerId,
+        UUID.randomUUID(),
+        REQUEST_DIGEST,
+        createdAt,
+        createdAt);
+    jdbc.update(
+        """
+        insert into rental_order(
+          id,version,order_number,status,client_id,manager_id,manager_display_name,
+          created_by_subject_id,created_by_display_name,created_by_role,warehouse_id,
+          creation_idempotency_key,creation_request_sha256,created_at,updated_at)
+        values (?,0,?,'DRAFT',?,?,'Metrics actor',?,'Metrics actor',
+          'RENTAL_MANAGER',?,?,?, ?,?)
+        """,
+        orderId,
+        "ORD-%019d".formatted(orderId.getMostSignificantBits() & Long.MAX_VALUE),
+        clientId,
+        managerId,
+        managerId,
+        warehouseId,
+        UUID.randomUUID(),
+        RESPONSE_DIGEST,
+        createdAt,
+        createdAt);
+    jdbc.update(
+        """
+        insert into rental_inquiry(
+          id,version,conversation_id,client_id,manager_id,manager_display_name,manager_role,
+          warehouse_id,rental_order_id,state,booked_order_id,creation_idempotency_key,
+          created_at,updated_at,booked_at)
+        values (?,0,?,?,?,'Metrics actor','RENTAL_MANAGER',? ,?,'BOOKED',?,?,?, ?,?)
+        """,
+        inquiryId,
+        conversationId,
+        clientId,
+        managerId,
+        warehouseId,
+        orderId,
+        orderId,
+        UUID.randomUUID(),
+        createdAt,
+        createdAt,
+        createdAt);
     jdbc.update(
         """
         insert into rental_inquiry_outbox(
@@ -426,9 +491,9 @@ class LogisticsRecoveryMetricsIntegrationTest {
         values (?,'logistics.rental-inquiry.booked.v1',?,?,?,'{}'::jsonb,'PENDING',0,?,?)
         """,
         UUID.randomUUID(),
-        UUID.randomUUID(),
-        UUID.randomUUID(),
-        UUID.randomUUID(),
+        inquiryId,
+        conversationId,
+        orderId,
         createdAt,
         createdAt);
   }

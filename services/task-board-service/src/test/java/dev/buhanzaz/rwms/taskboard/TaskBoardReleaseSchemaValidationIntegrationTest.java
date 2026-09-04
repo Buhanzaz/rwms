@@ -38,7 +38,7 @@ class TaskBoardReleaseSchemaValidationIntegrationTest {
   @Autowired JdbcTemplate jdbc;
 
   @Test
-  void flywayVersionTwentyTwoSchemaValidatesAndGlobalQueueBindingsAreReadableThroughJpa() {
+  void currentFlywaySchemaValidatesAndGlobalQueueBindingsAreReadableThroughJpa() {
     UUID warehouseOne = UUID.fromString("00000000-0000-0000-0000-000000000001");
     jdbc.update(
         """
@@ -120,20 +120,17 @@ class TaskBoardReleaseSchemaValidationIntegrationTest {
             "credential_operation_type");
     assertThat(
             jdbc.queryForObject(
-                "select count(*) from flyway_schema_history where version='22' and success",
+                "select count(*) from flyway_schema_history where version='48' and success",
                 Integer.class))
         .isOne();
     assertThat(
-            jdbc.queryForList(
-                """
-                select column_name
-                  from information_schema.columns
-                 where table_schema='public'
-                   and table_name='warehouse_kpi_settings'
-                   and column_name like 'repair_%_boundary_minutes'
-                """,
-                String.class))
-        .isEmpty();
+            jdbc.queryForObject("select to_regclass('public.warehouse_kpi_settings')", String.class))
+        .isNull();
+    assertThat(
+            jdbc.queryForObject("select to_regclass('public.company_kpi_settings')", String.class))
+        .isNull();
+    assertThat(jdbc.queryForObject("select to_regclass('public.kpi_settings')", String.class))
+        .isEqualTo("kpi_settings");
     assertThat(
             jdbc.queryForList(
                 """

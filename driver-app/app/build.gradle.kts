@@ -122,8 +122,8 @@ android {
         applicationId = "dev.buhanzaz.rwms.driver"
         minSdk = 23
         targetSdk = 36
-        versionCode = 22
-        versionName = "0.1.21"
+        versionCode = 23
+        versionName = "0.1.22"
         testInstrumentationRunner = "dev.buhanzaz.rwms.driver.HiltDriverTestRunner"
         manifestPlaceholders["appAuthRedirectScheme"] = "rwms-driver-auth"
         buildConfigField("String", "MAPKIT_API_KEY", "\"$mapkitApiKey\"")

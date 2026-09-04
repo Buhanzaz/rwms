@@ -1610,6 +1610,7 @@ class AssistantPersistenceIntegrationTest {
               new ObjectMapper()
                   .createObjectNode()
                   .put("id", selectedRentalItemId.toString())
+                  .put("warehouseId", selectedWarehouseId.toString())
                   .put("number", "CAB-1")));
     }
 
@@ -1628,6 +1629,7 @@ class AssistantPersistenceIntegrationTest {
                           new ObjectMapper()
                               .createObjectNode()
                               .put("id", id.toString())
+                              .put("warehouseId", warehouseId.toString())
                               .put("number", "CAB-1"))
               .toList();
       return new CabinSelection(

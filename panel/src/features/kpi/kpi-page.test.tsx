@@ -205,4 +205,26 @@ describe("KpiPage", () => {
     expect(within(card).getByText("—")).toBeTruthy()
     expect(screen.getByText("За выбранный период нет данных KPI.")).toBeTruthy()
   })
+
+  it("explains that the KPI palette is shared by all objects", async () => {
+    mocks.getKpiSettings.mockResolvedValue({
+      warehouseId,
+      timeZone: "Europe/Moscow",
+      status: "ACTIVE",
+      version: 4,
+      dataAvailableFrom: "2026-07-01",
+      palette: null,
+      activeSchedule: null,
+      pendingSchedule: null,
+    })
+
+    renderPage()
+
+    expect(await screen.findByText("Палитра не настроена")).toBeTruthy()
+    expect(
+      screen.getByText(
+        "Сначала сохраните и активируйте общие диапазоны KPI для всех объектов."
+      )
+    ).toBeTruthy()
+  })
 })

@@ -877,6 +877,17 @@ export function InventorySessionPage() {
     },
   })
 
+  useEffect(() => {
+    if (
+      actor &&
+      selectedWarehouse &&
+      session &&
+      session.status !== "ACTIVE"
+    ) {
+      navigate(`/inventory/history/${session.id}`, { replace: true })
+    }
+  }, [actor, navigate, selectedWarehouse, session])
+
   if (!actor || !selectedWarehouse)
     return (
       <InventoryUnavailable
@@ -899,10 +910,7 @@ export function InventorySessionPage() {
         description="Сессия не найдена на выбранном складе или нет прав на просмотр."
       />
     )
-  if (session.status !== "ACTIVE") {
-    navigate(`/inventory/history/${session.id}`, { replace: true })
-    return <InventoryLoading />
-  }
+  if (session.status !== "ACTIVE") return <InventoryLoading />
   if (isMobile && findingId)
     return (
       <MobileAppRequiredDialog

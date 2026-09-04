@@ -8,7 +8,7 @@ afterEach(() => {
 })
 
 describe("Button", () => {
-  it("maps dark actions to the registration style and light actions to the login style", () => {
+  it("uses the panel action style for default, outline and secondary actions", () => {
     render(
       <>
         <Button>Тёмная</Button>
@@ -22,11 +22,11 @@ describe("Button", () => {
       "rwms-button-dark"
     )
     expect(screen.getByRole("button", { name: "Светлая" }).className).toContain(
-      "rwms-button-light"
+      "rwms-button-dark"
     )
     expect(
       screen.getByRole("button", { name: "Вторичная" }).className
-    ).toContain("rwms-button-light")
+    ).toContain("rwms-button-dark")
     expect(
       screen.getByRole("button", { name: "Опасная" }).className
     ).not.toContain("rwms-button-dark")

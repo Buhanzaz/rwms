@@ -24,7 +24,6 @@ import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import dev.buhanzaz.rwms.asset.eventing.AssetEventStore;
 import dev.buhanzaz.rwms.asset.eventing.AssetReplayVerifier;
 import dev.buhanzaz.rwms.asset.service.AssetConflictException;
-import dev.buhanzaz.rwms.asset.service.AssetNotFoundException;
 import dev.buhanzaz.rwms.asset.service.AssetService;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -129,36 +128,6 @@ class AdministrativeAssetCorrectionServiceIntegrationTest {
   }
 
   @Test
-  void cabinCorrectionReplayIsCompanyFencedBeforeReturningStoredResponse() {
-    UUID firstCompanyId = UUID.randomUUID();
-    UUID secondCompanyId = UUID.randomUUID();
-    UUID subjectId = UUID.randomUUID();
-    UUID sourceWarehouseId = UUID.randomUUID();
-    UUID targetWarehouseId = UUID.randomUUID();
-    RentalItemResponse cabin =
-        createFreeCabin(firstCompanyId, subjectId, sourceWarehouseId);
-    UUID idempotencyKey = UUID.randomUUID();
-    CreateCabinAdministrativeCorrectionRequest request =
-        new CreateCabinAdministrativeCorrectionRequest(
-            CABIN,
-            cabin.id(),
-            cabin.version(),
-            sourceWarehouseId,
-            targetWarehouseId,
-            "Company-fenced correction replay",
-            "https://evidence.example/company-fence");
-
-    assertThat(corrections.create(firstCompanyId, subjectId, idempotencyKey, request).replayed())
-        .isFalse();
-    assertThatThrownBy(
-            () ->
-                corrections.create(
-                    secondCompanyId, subjectId, idempotencyKey, request))
-        .isInstanceOf(AssetNotFoundException.class)
-        .hasMessage("Rental item was not found");
-  }
-
-  @Test
   void equipmentCorrectionCanCreateMissingTargetStockWithVersionZeroAndIsPermanentlyFenced() {
     UUID subjectId = UUID.randomUUID();
     UUID sourceWarehouseId = UUID.randomUUID();
@@ -249,18 +218,9 @@ class AdministrativeAssetCorrectionServiceIntegrationTest {
   }
 
   private RentalItemResponse createFreeCabin(UUID subjectId, UUID warehouseId) {
-    return createFreeCabin(
-        dev.buhanzaz.rwms.asset.domain.AssetCompanyDefaults.INITIAL_COMPANY_ID,
-        subjectId,
-        warehouseId);
-  }
-
-  private RentalItemResponse createFreeCabin(
-      UUID companyId, UUID subjectId, UUID warehouseId) {
     RentalItemResponse created =
         assets
             .createRentalItem(
-                companyId,
                 subjectId,
                 UUID.randomUUID(),
                 new CreateRentalItemRequest(
@@ -276,7 +236,6 @@ class AdministrativeAssetCorrectionServiceIntegrationTest {
                     List.of()))
             .response();
     return assets.updateStatus(
-        companyId,
         created.id(),
         new UpdateStatusRequest(created.version(), RentalItemStatus.FREE));
   }

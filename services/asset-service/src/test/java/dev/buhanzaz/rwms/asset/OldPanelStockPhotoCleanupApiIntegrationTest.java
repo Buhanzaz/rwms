@@ -8,7 +8,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import dev.buhanzaz.rwms.asset.domain.AssetCompanyDefaults;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
@@ -178,7 +177,6 @@ class OldPanelStockPhotoCleanupApiIntegrationTest {
                 token
                     .subject(UUID.randomUUID().toString())
                     .claim("principal_type", "USER")
-                    .claim("company_id", AssetCompanyDefaults.INITIAL_COMPANY_ID.toString())
                     .claim("scope", "rwms.read")
                     .claim("global_role", "SYSTEM_ADMIN"));
   }
@@ -190,7 +188,6 @@ class OldPanelStockPhotoCleanupApiIntegrationTest {
                 token
                     .subject(UUID.randomUUID().toString())
                     .claim("principal_type", "USER")
-                    .claim("company_id", AssetCompanyDefaults.INITIAL_COMPANY_ID.toString())
                     .claim("scope", "rwms.write")
                     .claim("global_role", "SYSTEM_ADMIN"));
   }

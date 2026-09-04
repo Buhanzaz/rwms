@@ -144,12 +144,17 @@ Flyway is external to this process. Apply
 `db/migration/V17__consolidate_legacy_cabin_photo_folders.sql`, then
 `db/migration/V18__customer_shipment_subject_binding.sql`, then
 `db/migration/V19__customer_profile_avatar_owner.sql`, then
-`db/migration/V20__driver_shift_media_owner.sql` before starting the
+`db/migration/V20__driver_shift_media_owner.sql`, then the immutable applied
+`db/migration/V21__media_asset_company_boundary.sql`, then the immutable
+`db/migration/V22__task_board_worker_profile_avatar_owner.sql`, then
+`db/migration/V23__remove_media_company_boundary.sql` before starting the
 service. The Go application never migrates, baselines, repairs or silently
 adopts a database.
 
-- New local/test databases migrate through V1 to V20.
-- A database already at V19 applies V20. V14 adds
+- New local/test databases migrate through V1 to V23.
+- V21 and V22 remain immutable applied history. V23 is the forward migration
+  that removes the obsolete platform-ownership columns after rejecting a
+  database whose rows prove more than one owner. V14 adds
   and backfills the task-entry read audience without deleting owner proofs,
   media rows or objects. V15 replaces only
   `media_inventory_finding_inbox_check2`: canonical departed, refreshed and
@@ -169,7 +174,9 @@ adopts a database.
   V20 additively admits `DRIVER_SHIFT/SHIFT_EVIDENCE`, its stable unique
   reservation reference, isolated owner-proof inbox/projection/audiences and
   conflict quarantine; existing assets, proofs and object versions are not
-  rewritten or removed.
+  rewritten or removed. V22 additively admits the task-board worker profile
+  avatar owner without rewriting existing assets. V23 only removes the
+  obsolete platform-ownership boundary after its single-owner preflight.
 - `baselineOnMigrate` must remain `false`; a non-empty unversioned database is
   rejected.
 - Startup verifies both successful Flyway history rows, their versions,

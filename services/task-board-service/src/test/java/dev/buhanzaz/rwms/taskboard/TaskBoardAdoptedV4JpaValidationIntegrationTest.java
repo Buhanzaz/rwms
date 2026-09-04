@@ -89,7 +89,7 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
 
   @Test
   @Transactional
-  void bootMigratesAdoptedVersionFourThroughVersionThirtyEightAndValidatesJpa() {
+  void bootMigratesAdoptedVersionFourThroughVersionFortyEightAndValidatesJpa() {
     assertThat(entityManagerFactory.isOpen()).isTrue();
     assertThat(retainedDigests(jdbc)).containsExactlyInAnyOrderEntriesOf(beforeStartup);
     assertThat(
@@ -182,15 +182,19 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
         .isEqualTo("queue_definition_class_binding");
     assertThat(
             jdbc.queryForObject(
-                """
-                select count(*)
-                  from information_schema.columns
-                 where table_schema='public'
-                   and table_name='warehouse_kpi_settings'
-                   and column_name like 'repair_%_boundary_minutes'
-                """,
+                "select to_regclass('public.warehouse_kpi_settings')", String.class))
+        .isNull();
+    assertThat(
+            jdbc.queryForObject(
+                "select to_regclass('public.company_kpi_settings')", String.class))
+        .isNull();
+    assertThat(jdbc.queryForObject("select to_regclass('public.kpi_settings')", String.class))
+        .isEqualTo("kpi_settings");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from flyway_schema_history where version='48' and type='SQL' and success",
                 Integer.class))
-        .isZero();
+        .isOne();
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from flyway_schema_history "

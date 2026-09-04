@@ -548,6 +548,7 @@ class AssistantConversationRemoteBoundaryTest {
                           new ObjectMapper()
                               .createObjectNode()
                               .put("id", id.toString())
+                              .put("warehouseId", warehouseId.toString())
                               .put("number", "CAB-1"))
               .toList());
     }

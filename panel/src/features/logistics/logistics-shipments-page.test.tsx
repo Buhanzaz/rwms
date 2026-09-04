@@ -622,8 +622,7 @@ describe("LogisticsShipmentsPage", () => {
     expect(
       screen.getAllByRole("button", { name: "Назначение" })
     ).not.toHaveLength(0)
-    expect(screen.getByText("День отгрузок")).toBeTruthy()
-    expect(screen.getByRole("button", { name: /^День отгрузок:/ })).toBeTruthy()
+    expect(screen.getByRole("button", { name: /^Календарь:/ })).toBeTruthy()
     expect(screen.queryByLabelText("Отгрузка с")).toBeNull()
     expect(screen.queryByLabelText("Отгрузка по")).toBeNull()
     expect(screen.queryByText("Дата", { exact: true })).toBeNull()

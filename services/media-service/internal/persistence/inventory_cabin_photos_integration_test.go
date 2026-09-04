@@ -14,7 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestAuthoritativeInventoryCabinPhotosCleanV1ThroughV20Integration(t *testing.T) {
+func TestAuthoritativeInventoryCabinPhotosCleanV1ThroughV23Integration(t *testing.T) {
 	databaseURL := os.Getenv("MEDIA_TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("MEDIA_TEST_DATABASE_URL is not configured")
@@ -322,17 +322,43 @@ func TestAuthoritativeInventoryCabinPhotosV12ToV13BackfillIntegration(t *testing
 		t.Fatalf("record V20 history: %v", err)
 	}
 	started = time.Now()
+	if _, err := pool.Exec(ctx, string(mediamigration.V21)); err != nil {
+		pool.Close()
+		t.Fatalf("apply V21 upgrade: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
+		installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
+	values (23,'21','media asset company boundary','SQL',
+		'V21__media_asset_company_boundary.sql',$1,current_user,$2,true)`,
+		flywayChecksum(mediamigration.V21), int(time.Since(started)/time.Millisecond)); err != nil {
+		pool.Close()
+		t.Fatalf("record V21 history: %v", err)
+	}
+	started = time.Now()
 	if _, err := pool.Exec(ctx, string(mediamigration.V22)); err != nil {
 		pool.Close()
 		t.Fatalf("apply V22 upgrade: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
 		installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
-	values (23,'22','task board worker profile avatar owner','SQL',
+	values (24,'22','task board worker profile avatar owner','SQL',
 		'V22__task_board_worker_profile_avatar_owner.sql',$1,current_user,$2,true)`,
 		flywayChecksum(mediamigration.V22), int(time.Since(started)/time.Millisecond)); err != nil {
 		pool.Close()
 		t.Fatalf("record V22 history: %v", err)
+	}
+	started = time.Now()
+	if _, err := pool.Exec(ctx, string(mediamigration.V23)); err != nil {
+		pool.Close()
+		t.Fatalf("apply V23 upgrade: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
+		installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
+	values (25,'23','remove media company boundary','SQL',
+		'V23__remove_media_company_boundary.sql',$1,current_user,$2,true)`,
+		flywayChecksum(mediamigration.V23), int(time.Since(started)/time.Millisecond)); err != nil {
+		pool.Close()
+		t.Fatalf("record V23 history: %v", err)
 	}
 	pool.Close()
 	if galleryFolderID != folderID || activeFolderID != folderID {
@@ -341,7 +367,7 @@ func TestAuthoritativeInventoryCabinPhotosV12ToV13BackfillIntegration(t *testing
 	}
 	verified, err := Open(ctx, databaseURL)
 	if err != nil {
-		t.Fatalf("Open(V22-complete upgrade) error = %v", err)
+		t.Fatalf("Open(V23-complete upgrade) error = %v", err)
 	}
 	verified.Close()
 }

@@ -658,10 +658,10 @@ schedule; its client-side marker advances once per second in that warehouse
 time zone. A missing active schedule or a warehouse-local day off remains
 explicit instead of inventing a working day.
 
-The KPI palette and work schedule are one company-scoped settings head selected
-only from the signed principal. Neither admin editor accepts a warehouse
-selector. A saved palette and an activated schedule are used by every company
-object and native worker context under one shared expected-version fence.
+The KPI palette and work schedule are one installation-wide settings head.
+Neither admin editor accepts a scope selector. A saved palette
+and an activated schedule are used by every warehouse and native worker context
+under one shared expected-version fence.
 
 The settings page may save one pending schedule effective on the current UTC
 configuration date or later. Saving alone leaves it `DRAFT`, including when an
@@ -670,7 +670,7 @@ Activation is idempotent and applies the same local-calendar effective date,
 shift, breaks and days off to every warehouse; each warehouse interprets that
 policy through its own authoritative timezone. A current-date revision is
 promoted immediately, a future activation remains `SCHEDULED`, and a past date
-is rejected. The activation receipt also belongs to the company and replacement
+is rejected. The activation receipt belongs to the global settings head and replacement
 of an earlier revision for the same date remains deterministic.
 
 Task-board owns `GET
@@ -702,9 +702,9 @@ Evidence:
 [`HomePage`](../../panel/src/features/home/home-page.tsx),
 [`daily activity client`](../../panel/src/features/home/daily-brigade-activity-api.ts),
 [`daily brigade projection`](../../panel/src/features/home/daily-brigade-timeline.ts),
-[`company KPI editor`](../../panel/src/features/settings/kpi/company-kpi-palette-settings-page.tsx),
+[`KPI editor`](../../panel/src/features/settings/kpi/kpi-palette-settings-page.tsx),
 [`work-schedule editor`](../../panel/src/features/settings/kpi/kpi-settings-page.tsx),
-[`company palette owner`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/CompanyKpiPaletteService.java),
+[`palette owner`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/KpiPaletteService.java),
 [`work-schedule owner`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/KpiSettingsService.java),
 [`daily activity owner`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/DailyBrigadeActivityService.java),
 [`task-board API`](../../contracts/openapi/task-board-service.yaml),
@@ -969,9 +969,9 @@ and
    so it replays idempotently and cannot archive the newer order conversation.
 7. The public assistant boundary accepts only the dedicated rental-manager web
    or Android clients with the exact `rental.manage` application scope. The
-   signed `company_id` and manager subject scope every list, direct read and
-   mutation; no request parameter can select a company. Existing history is
-   adopted into the initial company, and company ownership is immutable.
+   signed manager subject scopes every list, direct read and mutation; no
+   request parameter can select another owner. Conversation ownership is
+   immutable.
 8. Rental-manager Android consumes that same owner boundary for history,
    existing-client conversation creation, archive, text turns and the sole
    visible `PENDING` clarification. A create request keeps one actor-scoped
@@ -1000,8 +1000,6 @@ Evidence:
 [`AssistantCabinReferenceTool.java`](../../services/assistant-service/src/main/java/dev/buhanzaz/rwms/assistant/service/AssistantCabinReferenceTool.java),
 [`RentalInquiryCabinSelectionStore.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/RentalInquiryCabinSelectionStore.java),
 [`V6__order_linked_sequential_conversations.sql`](../../services/assistant-service/src/main/resources/db/migration/V6__order_linked_sequential_conversations.sql),
-[`V7__assistant_conversation_company_ownership.sql`](../../services/assistant-service/src/main/resources/db/migration/V7__assistant_conversation_company_ownership.sql),
-and
 [`PresentationHoldService.java`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/PresentationHoldService.java).
 
 ### CustomerApp registration, capacity and checkout
@@ -1211,9 +1209,9 @@ and [`dynamic-slot design`](../isochrone-slot-planning.md).
 
 The dedicated manager web and Android applications obtain only
 `rental.manage`. Auth-service also freezes `RENTAL_MANAGER`,
-`rentalAccess=true`, signed `company_id` and the
-dedicated client ID into that boundary. Warehouse-service accepts it only for the
-company directory list; a direct warehouse UUID read, inactive listing, mutation,
+`rentalAccess=true` and the dedicated client ID into that boundary.
+Warehouse-service accepts it only for the active warehouse directory; a direct warehouse UUID
+read, inactive listing, mutation,
 support or internal route still fails. The shared browser provider then shows only
 warehouses present in the token's explicit grants. An `EDIT` grant is required for
 the existing cabin-search and order-selection commands; no grant produces a clear
@@ -1222,9 +1220,9 @@ orders reject a token carrying any application scope in addition to
 `rental.manage`; operational return, shipment and transfer APIs still require their
 ordinary RWMS scopes.
 
-The standalone Android client validates the authoritative `/me` subject and the
-signed company before exposing data, then intersects the live company warehouse
-directory with explicit active `EDIT`/`MANAGE` grants. It pages clients and
+The standalone Android client validates the authoritative `/me` subject and rental access before
+exposing data, then intersects the live warehouse directory with explicit active `EDIT`/`MANAGE`
+grants. It pages clients and
 orders through the same public logistics API as the web application, obeys
 server `permissions.canEdit`, sends version-fenced updates and stable
 idempotency keys, and stores only a SHA-256 request fingerprint for command
@@ -2362,16 +2360,13 @@ the local movement is terminal `RECONCILIATION_REQUIRED` with
 `TASK_BOARD_COMPLETED_AFTER_RESERVATION_EXPIRY`. This does not reopen or reject the worker task and
 does not prevent maintenance from consuming the independent completed repair-stage event.
 
-The browser-facing equipment-movement create, read and cancel boundary first requires its existing
-scope and warehouse grant, then resolves every source and target warehouse from warehouse-service.
-Each resolved immutable company must match the signed USER `company_id`; a global administrator
-cannot bypass this tenant fence, and a foreign warehouse is rejected before admission, reservation
-or cancellation effects. Reads and cancels validate the warehouse IDs retained on every task line,
-not only the task's primary warehouse. The warehouse shipment-task settings read/update boundary
-uses the same owner proof before the read can lazily create its default row or an update can mutate
-the version-fenced policy. Creating or revoking a contractor route capability also proves the path
-warehouse against the signed company before idempotency replay, local persistence, task-board reads
-or revocation.
+The browser-facing equipment-movement create, read and cancel boundary requires its existing scope
+and warehouse grant before admission, reservation or cancellation effects. Reads and cancels
+validate the warehouse IDs retained on every task line, not only the task's primary warehouse. The
+warehouse shipment-task settings read/update boundary uses the same warehouse authorization before
+the read can lazily create its default row or an update can mutate the version-fenced policy.
+Creating or revoking a contractor route capability likewise requires path-warehouse `EDIT` access
+before idempotency replay, local persistence, task-board reads or revocation.
 
 Evidence:
 [`DocumentDriverTaskPlanner.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/driver/service/DocumentDriverTaskPlanner.java),

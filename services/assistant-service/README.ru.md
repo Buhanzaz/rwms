@@ -24,8 +24,8 @@ Public assistant API позволяет пользователю отдельн�
     public gateway /api/assistant/**
             |
             v
-    exact rental-manager client/scope + signed company check
-            -> company/owner-scoped conversation/message persistence
+    exact rental-manager client/scope + signed manager subject
+            -> owner-scoped conversation/message persistence
             |
             +--> private logistics REST с current user bearer
             |        -> exact cabin facets/searches и rental inquiry state
@@ -61,10 +61,10 @@ Optional `rentalOrderId` связывает conversation с существующ
 требует его existing `clientId`. Assistant-service передаёт обе identity в
 logistics-service и не дублирует принадлежащие logistics проверки editable
 order, client или warehouse. `GET /api/assistant/v1/conversations?rentalOrderId=...`
-возвращает company/owner-scoped active link. Partial unique database index допускает
-только одну non-archived conversation для заказа внутри компании: active conversation
+возвращает owner-scoped active link. Partial unique database index допускает
+только одну non-archived conversation для заказа: active conversation
 переоткрывается, а после archive можно создать новую связанную conversation.
-Local company/order-scoped finalization lock сводит concurrent creates к этой одной
+Local order-scoped finalization lock сводит concurrent creates к этой одной
 active link. Перед повторным использованием link через order-filtered list или
 create assistant-service читает в logistics точный inquiry/client/order context
 вне local transaction. `ACTIVE` можно переиспользовать; `BOOKED` или `ARCHIVED`
@@ -133,11 +133,11 @@ Interactive clients вызывают только public gateway routes, а не
 
 | Public route | Meaning | Authorization |
 | --- | --- | --- |
-| POST /api/assistant/v1/conversations | Создать или replay conversation и delegated inquiry | Dedicated rental-manager client и `rental.manage` в signed company |
-| GET /api/assistant/v1/conversations | Получить company/owner history или найти active conversation по optional `rentalOrderId` | Та же company/owner boundary |
-| GET или DELETE /api/assistant/v1/conversations/{conversationId} | Прочитать или archive одну company/owner-scoped conversation | Та же company/owner boundary |
-| POST /api/assistant/v1/conversations/{conversationId}/turns | SSE stream одного persisted user turn | Та же company/owner boundary |
-| PUT /api/assistant/v1/conversations/{conversationId}/selection | Сохранить точные current cabin IDs и немедленно освободить удалённые | Та же company/owner boundary плюс Idempotency-Key |
+| POST /api/assistant/v1/conversations | Создать или replay conversation и delegated inquiry | Dedicated rental-manager client, `rental.manage` и signed manager subject |
+| GET /api/assistant/v1/conversations | Получить owner history или найти active conversation по optional `rentalOrderId` | Та же manager/owner boundary |
+| GET или DELETE /api/assistant/v1/conversations/{conversationId} | Прочитать или archive одну owner-scoped conversation | Та же manager/owner boundary |
+| POST /api/assistant/v1/conversations/{conversationId}/turns | SSE stream одного persisted user turn | Та же manager/owner boundary |
+| PUT /api/assistant/v1/conversations/{conversationId}/selection | Сохранить точные current cabin IDs и немедленно освободить удалённые | Та же manager/owner boundary плюс Idempotency-Key |
 
 Conversation creation принимает ровно одно из `clientId` или `newClient`.
 При передаче `rentalOrderId` дополнительно требуется `clientId`;
@@ -150,9 +150,9 @@ Responsible manager остаётся во владении logistics и не м�
 
 Сервис принимает только USER tokens клиентов `rwms-rental-manager-web` и
 `rwms-rental-manager-android` с ролью `RENTAL_MANAGER`, `rentalAccess`, точным
-application scope `rental.manage`, UUID subject и подписанным UUID `company_id`.
-Company identity не принимается как request parameter. Lists, direct reads и
-mutations требуют одновременно эту company и owner; foreign ID выглядит
+application scope `rental.manage` и подписанным UUID manager subject.
+Manager identity не принимается как request parameter. Lists, direct reads и
+mutations требуют этого owner; foreign ID выглядит
 отсутствующим. Private logistics request пересылает current Bearer token,
 поэтому logistics сохраняет собственное user и warehouse authorization
 decision. Сервис никогда не отправляет этот token LLM provider и не логирует
@@ -162,9 +162,7 @@ request bodies или provider credentials.
 
 Flyway владеет service-local schema; Hibernate только валидирует её. V6
 добавляет nullable order link, active-order partial uniqueness constraint и
-ordered clarification sequence. V7 привязывает существующие conversations к
-initial company, запрещает смену ownership и переводит inquiry/order uniqueness
-и indexes на company-leading keys. Existing questions ранжируются без потерь;
+ordered clarification sequence. Existing questions ранжируются без потерь;
 если в старых данных несколько `PENDING` rows, только старейшая остаётся
 actionable, а остальные становятся `QUEUED`. Conversation records используют
 optimistic versioning; только короткие local creation и clarification

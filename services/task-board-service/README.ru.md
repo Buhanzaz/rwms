@@ -22,17 +22,17 @@ Maintenance, logistics, inventory и менеджерам нужна опера�
 | Operational work | Tasks, route entries, assignment, pinning, pause/resume/complete и history | Source domain владеет причиной работы и состоянием своего агрегата |
 | Native execution | Раздельные driver/worker feeds, offline action leases, evidence reservation, SSE и transactional FCM invalidation | DriverApp и WorkerApp обновляют authoritative REST state и загружают media через media-service |
 | Ежедневная смена водителя | Рабочая дата склада, state machine подготовки/закрытия, snapshot осмотра, дефекты, audit timestamps и media proof | Logistics передаёт проверенный план водитель/машина/дата; warehouse владеет identity/timezone; media владеет байтами |
-| KPI | Общая для компании display palette, warehouse work-schedule revisions и emitted daily evidence | Analytics владеет KPI read projection |
+| KPI | Installation-wide display palette, work-schedule revisions и emitted daily evidence | Analytics владеет KPI read projection |
 | Warehouse lifecycle | Local operation marks, admission fence, draining blockers и exact-version readiness | Warehouse-service владеет lifecycle state и admission decisions |
 
 Сервис не владеет users/roles, warehouse identity, repair или logistics
 aggregates, media bytes, analytics projections или gateway routing.
 
 Каждая публичная операция, привязанная к складу, сначала получает актуальную
-identity склада из warehouse-service и сравнивает её неизменяемую компанию с
-подписанным `company_id` токена USER или WORKER, а уже затем проверяет роль,
-warehouse grant или home-склад работника. Поэтому `SYSTEM_ADMIN` и `WMS_ADMIN`
-не обходят границу компании при прямой подстановке warehouse ID.
+identity склада из warehouse-service, а уже затем проверяет роль подписанного
+principal, warehouse grant или home-склад работника. Поэтому `SYSTEM_ADMIN` и
+`WMS_ADMIN` не обходят warehouse authorization rules при прямой подстановке
+warehouse ID.
 
 ## Поток команды и задачи
 
@@ -103,9 +103,9 @@ surfaces. Инварианты подтверждаются
 [`TaskBoardFutureAvailabilityService`](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardFutureAvailabilityService.java) и
 [`OrdinaryQueueAvailabilityPolicy`](src/main/java/dev/buhanzaz/rwms/taskboard/service/OrdinaryQueueAvailabilityPolicy.java).
 
-Display palette KPI и рабочий график образуют одну company-scoped настройку с общей version fence.
-Граница компании берётся из подписанного principal; склад не выбирается ни для одной из этих
-настроек. Один активированный график задаёт всем складам компании одинаковые локальную дату
+Display palette KPI и рабочий график образуют одну installation-wide настройку с общей version fence.
+Склад не выбирается ни для одной из этих настроек. Один активированный график задаёт всем
+складам одинаковые локальную дату
 вступления, смену, перерывы и выходные, а operational clock каждого склада интерпретирует их в его
 authoritative timezone. Сохранение оставляет ревизию в `DRAFT`; активация идемпотентно планирует
 её, а ревизия на текущую UTC configuration date сразу становится `ACTIVE`. Будущая ревизия
@@ -388,8 +388,8 @@ Public gateway преобразует `/api/task-board/**` в downstream `/api/*
 | `/api/warehouses/{warehouseId}/work-queues` | Warehouse-authorized user | Physical queue projections и capabilities |
 | `/api/warehouses/{warehouseId}/task-board/**` | Warehouse-authorized user | Чтение агрегированной ordinary board и поддерживаемые task-команды |
 | `/api/warehouses/{warehouseId}/task-board/daily-brigade-activity` | Warehouse-authorized user | Фактические интервалы assignments, пересекающие текущий warehouse-local день |
-| `/api/task-board/kpi-palette` | Authenticated company; global management для `PUT` | Одна version-fenced KPI palette для всех складов компании |
-| `/api/task-board/kpi-settings/**` | Authenticated company; global management для mutations | Один version-fenced рабочий график для всех складов компании; выбор склада отсутствует |
+| `/api/task-board/kpi-palette` | Authenticated user; global management для `PUT` | Одна version-fenced KPI palette для всех складов установки |
+| `/api/task-board/kpi-settings/**` | Authenticated user; global management для mutations | Один version-fenced рабочий график для всех складов установки; выбор склада отсутствует |
 | `/api/worker/v1/**` | Worker credential и `worker.tasks` scope | Context, feed, detail, actions, evidence reservations, devices и events |
 | `/api/driver/v1/**` | Worker credential и `driver.tasks` scope | Driver-only context, primary feed, actions, evidence reservations, devices и events |
 | `/api/driver/v1/shift/today` и `/api/driver/v1/shifts/{shiftId}/**` | Точная identity водителя и `driver.tasks` | Startup aggregate и version-fenced переходы ежедневной смены |

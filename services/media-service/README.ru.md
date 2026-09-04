@@ -148,13 +148,18 @@ Flyway выполняется вне процесса. До запуска пр�
 `db/migration/V17__consolidate_legacy_cabin_photo_folders.sql`, затем
 `db/migration/V18__customer_shipment_subject_binding.sql`, затем
 `db/migration/V19__customer_profile_avatar_owner.sql`, затем
-`db/migration/V20__driver_shift_media_owner.sql`.
+`db/migration/V20__driver_shift_media_owner.sql`, затем неизменяемые уже
+применённые `db/migration/V21__media_asset_company_boundary.sql` и
+`db/migration/V22__task_board_worker_profile_avatar_owner.sql`, затем
+`db/migration/V23__remove_media_company_boundary.sql`.
 
 Go-приложение не выполняет миграции, baseline, repair и не принимает молча
 чужую непустую базу.
 
-- Новая local/test база мигрируется от V1 до V20.
-- База на V19 применяет V20. V14 добавляет и backfill-ит
+- Новая local/test база мигрируется от V1 до V23.
+- V21 и V22 остаются неизменяемой применённой историей. V23 — forward-миграция,
+  удаляющая устаревшие platform-ownership колонки только после отказа для базы,
+  где строки доказывают более одного владельца. V14 добавляет и backfill-ит
   task-entry read audience без удаления owner proofs, media rows или объектов.
   V15 заменяет только `media_inventory_finding_inbox_check2`: канонические
   departed, refreshed и restored membership markers принимаются с null
@@ -173,7 +178,10 @@ Go-приложение не выполняет миграции, baseline, repa
   V20 additively разрешает `DRIVER_SHIFT/SHIFT_EVIDENCE`, его стабильный
   уникальный reservation reference, изолированные owner-proof
   inbox/projection/audiences и conflict quarantine; существующие assets,
-  proofs и версии объектов не переписываются и не удаляются.
+  proofs и версии объектов не переписываются и не удаляются. V22 additively
+  добавляет owner для profile-avatar работника task-board без переписывания
+  существующих assets. V23 удаляет только устаревшую platform-ownership границу
+  после single-owner preflight.
 - `baselineOnMigrate` должен оставаться `false`; непустая база без истории
   миграций отклоняется.
 - На старте и readiness проверяются успешные строки Flyway, их версии,

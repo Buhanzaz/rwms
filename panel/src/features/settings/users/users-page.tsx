@@ -44,6 +44,8 @@ import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { ApiError } from "@/lib/api-client"
 
+const EMPTY_USERS: AdminUser[] = []
+
 function isConflict(error: unknown): error is ApiError {
   return error instanceof ApiError && error.status === 409
 }
@@ -192,7 +194,7 @@ export function UsersPage() {
     },
   })
 
-  const visibleUsers = usersQuery.data ?? []
+  const visibleUsers = usersQuery.data ?? EMPTY_USERS
   const filteredUsers = useMemo(() => {
     return filterAdminUsers(visibleUsers, search, filters)
   }, [filters, search, visibleUsers])

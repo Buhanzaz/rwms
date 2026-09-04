@@ -17,6 +17,7 @@ import dev.buhanzaz.rwms.worker.core.network.CreateUploadSessionRequestDto
 import dev.buhanzaz.rwms.worker.core.network.EvidenceReservationRequestDto
 import dev.buhanzaz.rwms.worker.core.network.FinalizeUploadRequestDto
 import dev.buhanzaz.rwms.worker.core.network.MediaAssetDto
+import dev.buhanzaz.rwms.worker.core.network.MediaAssetPageDto
 import dev.buhanzaz.rwms.worker.core.network.TaskEvidenceDto
 import dev.buhanzaz.rwms.worker.core.network.UploadSessionDto
 import dev.buhanzaz.rwms.worker.core.network.UploadedObjectDto
@@ -30,6 +31,7 @@ import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayApi
 import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayClient
 import dev.buhanzaz.rwms.worker.core.network.WorkerIdentityDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerOfflineLeaseDto
+import dev.buhanzaz.rwms.worker.core.network.WorkerProfileAvatarScopeDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerTaskDetailDto
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
@@ -650,6 +652,8 @@ class BlockedMediaFeedReconciliationRobolectricTest {
             ),
         )
 
+        override suspend fun prepareWorkerProfileAvatarScope(): Response<WorkerProfileAvatarScopeDto> = unused()
+
         override suspend fun workerFeed(
             cursor: String?,
             limit: Int,
@@ -691,6 +695,14 @@ class BlockedMediaFeedReconciliationRobolectricTest {
             idempotencyKey: String,
             request: CreateUploadSessionRequestDto,
         ): Response<UploadSessionDto> = unused()
+
+        override suspend fun mediaAssets(
+            ownerType: String,
+            ownerId: String,
+            warehouseId: String,
+            context: String,
+            limit: Int,
+        ): Response<MediaAssetPageDto> = unused()
 
         override suspend fun uploadMediaContent(
             sameOriginContentPath: String,

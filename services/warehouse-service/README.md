@@ -30,10 +30,9 @@ documents, users, warehouse grants, or client-side warehouse selection.
 
 Every warehouse has independent `production` and `mainWarehouse` classifications; an ordinary
 object may have either or both. A representative has neither classification and exactly one
-same-company `representativeParentWarehouseId` whose object is production or main. The legacy
-`warehouseType`, `productionWarehouseId`, and `representative` fields remain compatibility
-projections; they do not define a lifecycle state, workforce, inventory direction, or delivery
-capability. WGS84
+`representativeParentWarehouseId` whose object is production or main. No legacy classification
+alias is exposed; the four current fields define neither a lifecycle state, workforce, inventory
+direction, nor delivery capability. WGS84
 `latitude` and `longitude` are an all-or-none pair owned with the warehouse
 metadata; `address` may remain absent when the coordinate pair is present. The exact pair `0,0` is
 reserved as an unset placeholder and is rejected by create, replacement and persistence
@@ -105,7 +104,7 @@ The public gateway exposes `/api/warehouse/**` unchanged.
 
 | Boundary | Audience | Purpose |
 | --- | --- | --- |
-| `/api/warehouse/v1/warehouses/**` | Authenticated `USER`; writes require exact administrator policy | Company directory, create/replace, draining, inactivation, and timezone scheduling |
+| `/api/warehouse/v1/warehouses/**` | Authenticated `USER`; writes require exact administrator policy | Installation directory, create/replace, draining, inactivation, and timezone scheduling |
 | `/api/warehouse/v1/warehouses/{id}/support-links` | Authenticated warehouse manager with grants for every endpoint | Read or atomically replace one representative warehouse's complete support graph |
 | `/api/warehouse/v1/admin/outbox-events/**` | Reviewed administrator recovery | Requeue one immutable terminal/quarantined outbox fact under a review fence |
 | `/api/internal/warehouse/v1/warehouses/{id}/existence` | Exact auth-service credential/scope | Narrow existence validation for warehouse grants |
@@ -121,8 +120,8 @@ The public gateway exposes `/api/warehouse/**` unchanged.
 | `/api/internal/warehouse/v1/warehouses/{id}/time-zone` | Least-privilege service credential | Timezone at an immutable instant |
 | `/api/internal/warehouse/v1/warehouses/{id}/operation-marks` | Contract-defined owner | Idempotent proof of first warehouse operation |
 
-The public directory is scoped by the signed company identity. Warehouse grants do not further
-filter that company directory; write and domain access checks remain separate.
+The public directory is installation-wide. Warehouse grants do not filter it;
+write and warehouse-bound domain access checks remain separate.
 
 The logistics identity and directory responses always include the warehouse
 owner's `address` field; it is nullable for warehouses whose address has not
@@ -159,14 +158,13 @@ This service owns one PostgreSQL database. Flyway migrations under
 only schema authority; Hibernate uses `ddl-auto=validate` and never mutates the
 schema.
 
-V7 adds the backward-compatible non-null `representative=false` column. V8 adds the coordinate pair,
+V7 adds the historical non-null `representative=false` column. V8 adds the coordinate pair,
 the warehouse-owned support revision, directed support-link rows and their weekday/date value
-tables with uniqueness and direction constraints. V9 adds company ownership and the compatibility
-`warehouse_type`/`production_warehouse_id` projections; an existing representative keeps that
-classification only when exactly one eligible parent can be derived from prior support-link
-evidence, otherwise the migration fails closed. V10 adds independent
-`production`/`main_warehouse` flags: existing ordinary warehouses become main objects, while a
-representative has neither flag. Classification and parent consistency are protected by database
+tables with uniqueness and direction constraints. V9 and V10 are immutable historical migration
+steps for earlier ownership and classification layouts. V11 establishes the current
+installation-wide schema: independent `production`/`main_warehouse` flags and one strict
+`representative_parent_warehouse_id` for a representative, with no platform ownership or legacy
+classification aliases. Classification and parent consistency are protected by database
 constraints and owner validation. The representative parent is not a replacement for the
 independent support-link graph.
 
@@ -190,7 +188,7 @@ production profile is combined with a local profile, production safety wins.
 ## Security and isolation
 
 - The service is a JWT resource server and validates issuer and audience.
-- The company directory list accepts ordinary `warehouse.read`, exact company-admin
+- The installation directory list accepts ordinary `warehouse.read`, exact administrator
   `admin.manage`, or the exact dedicated rental-manager credential with `rentalAccess=true` and
   only `rental.manage`. That manager credential cannot read a warehouse UUID directly, include
   inactive warehouses, mutate, use support links, or enter private routes.

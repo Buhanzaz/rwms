@@ -37,7 +37,9 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 	v18 := flywayChecksum(mediamigration.V18)
 	v19 := flywayChecksum(mediamigration.V19)
 	v20 := flywayChecksum(mediamigration.V20)
+	v21 := flywayChecksum(mediamigration.V21)
 	v22 := flywayChecksum(mediamigration.V22)
+	v23 := flywayChecksum(mediamigration.V23)
 	const (
 		flyway124V1      int32 = -1307356325
 		flyway124V2      int32 = -573926044
@@ -61,7 +63,9 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 		flyway124V18     int32 = -227466898
 		flyway124V19     int32 = 1811753772
 		flyway124V20     int32 = 336643391
+		flyway124V21     int32 = -1301109675
 		flyway124V22     int32 = -1543669809
+		flyway124V23     int32 = -1754904860
 	)
 	if v1 != flyway124V1 || v2 != flyway124V2 || v3 != flyway124V3 || v4 != flyway124V4 ||
 		v4Guard != flyway124V4Guard || v5 != flyway124V5 || v5Guard != flyway124V5Guard ||
@@ -120,8 +124,14 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 	if v20 != flyway124V20 {
 		t.Fatalf("Flyway 12.4 checksum drift: V20=%d (want %d)", v20, flyway124V20)
 	}
+	if v21 != flyway124V21 {
+		t.Fatalf("Flyway 12.4 checksum drift: V21=%d (want %d)", v21, flyway124V21)
+	}
 	if v22 != flyway124V22 {
 		t.Fatalf("Flyway 12.4 checksum drift: V22=%d (want %d)", v22, flyway124V22)
+	}
+	if v23 != flyway124V23 {
+		t.Fatalf("Flyway 12.4 checksum drift: V23=%d (want %d)", v23, flyway124V23)
 	}
 }
 
@@ -277,7 +287,9 @@ func approvedMigrationHistory() []migrationHistoryRow {
 		{"18", "customer shipment subject binding", "V18__customer_shipment_subject_binding.sql", mediamigration.V18},
 		{"19", "customer profile avatar owner", "V19__customer_profile_avatar_owner.sql", mediamigration.V19},
 		{"20", "driver shift media owner", "V20__driver_shift_media_owner.sql", mediamigration.V20},
+		{"21", "media asset company boundary", "V21__media_asset_company_boundary.sql", mediamigration.V21},
 		{"22", "task board worker profile avatar owner", "V22__task_board_worker_profile_avatar_owner.sql", mediamigration.V22},
+		{"23", "remove media company boundary", "V23__remove_media_company_boundary.sql", mediamigration.V23},
 	}
 	history := make([]migrationHistoryRow, 0, len(migrations))
 	for _, migration := range migrations {
@@ -592,7 +604,7 @@ func TestDriverShiftMediaMigrationAddsDedicatedProofsWithoutRewritingAssets(t *t
 	}
 }
 
-func TestV18ToV22CustomerProfileDriverShiftAndWorkerProfileUpgradeIntegration(t *testing.T) {
+func TestV18ToV23CustomerProfileDriverShiftAndWorkerProfileUpgradeIntegration(t *testing.T) {
 	baseURL := os.Getenv("MEDIA_TEST_DATABASE_URL")
 	if baseURL == "" {
 		t.Skip("MEDIA_TEST_DATABASE_URL is not configured")
@@ -652,6 +664,18 @@ func TestV18ToV22CustomerProfileDriverShiftAndWorkerProfileUpgradeIntegration(t 
 		pool.Close()
 		t.Fatalf("record V20 driver-shift migration: %v", err)
 	}
+	if _, err := pool.Exec(ctx, string(mediamigration.V21)); err != nil {
+		pool.Close()
+		t.Fatalf("apply V21 media company migration: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
+		installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
+	values ((select coalesce(max(installed_rank),0)+1 from flyway_schema_history),
+		'21','media asset company boundary','SQL','V21__media_asset_company_boundary.sql',$1,
+		current_user,0,true)`, flywayChecksum(mediamigration.V21)); err != nil {
+		pool.Close()
+		t.Fatalf("record V21 media company migration: %v", err)
+	}
 	if _, err := pool.Exec(ctx, string(mediamigration.V22)); err != nil {
 		pool.Close()
 		t.Fatalf("apply V22 worker profile avatar migration: %v", err)
@@ -664,6 +688,18 @@ func TestV18ToV22CustomerProfileDriverShiftAndWorkerProfileUpgradeIntegration(t 
 		flywayChecksum(mediamigration.V22)); err != nil {
 		pool.Close()
 		t.Fatalf("record V22 worker profile avatar migration: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(mediamigration.V23)); err != nil {
+		pool.Close()
+		t.Fatalf("apply V23 media company removal: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
+		installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
+	values ((select coalesce(max(installed_rank),0)+1 from flyway_schema_history),
+		'23','remove media company boundary','SQL','V23__remove_media_company_boundary.sql',$1,
+		current_user,0,true)`, flywayChecksum(mediamigration.V23)); err != nil {
+		pool.Close()
+		t.Fatalf("record V23 media company removal: %v", err)
 	}
 	var assetsAfter int64
 	if err := pool.QueryRow(ctx, `select count(*) from media_asset`).Scan(&assetsAfter); err != nil {
@@ -691,9 +727,92 @@ func TestV18ToV22CustomerProfileDriverShiftAndWorkerProfileUpgradeIntegration(t 
 	pool.Close()
 	database, err := Open(ctx, databaseURL)
 	if err != nil {
-		t.Fatalf("open upgraded V22 media database: %v", err)
+		t.Fatalf("open upgraded V23 media database: %v", err)
 	}
 	database.Close()
+}
+
+func TestV23RejectsMultiCompanyMediaOwnershipBeforeDroppingItsBoundaryIntegration(t *testing.T) {
+	baseURL := os.Getenv("MEDIA_TEST_DATABASE_URL")
+	if baseURL == "" {
+		t.Skip("MEDIA_TEST_DATABASE_URL is not configured")
+	}
+	databaseURL := testsupport.NewMigratedMediaDatabaseThroughV18(t, baseURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open V18 media database: %v", err)
+	}
+	defer pool.Close()
+	firstMediaID, secondMediaID := uuid.New(), uuid.New()
+	warehouseID := uuid.New()
+	for _, mediaID := range []uuid.UUID{firstMediaID, secondMediaID} {
+		if _, err := pool.Exec(ctx, `insert into media_asset (
+			media_id,folder_id,client_reference_id,owner_type,owner_id,warehouse_id,media_kind,
+			original_file_name,original_content_type,source_object_key,processing_status,version)
+		values ($1,$1,$2,'TASK_BOARD_ENTRY',$3,$4,'IMAGE','legacy-task.jpg','image/jpeg',$5,'UPLOADING',1)`,
+			mediaID, uuid.New(), uuid.NewString(), warehouseID,
+			"media/"+mediaID.String()+"/source/legacy-task.jpg"); err != nil {
+			t.Fatalf("seed V18 media asset for V23 preflight: %v", err)
+		}
+	}
+
+	for _, migration := range []struct {
+		version, description, script string
+		body                         []byte
+	}{
+		{"19", "customer profile avatar owner", "V19__customer_profile_avatar_owner.sql", mediamigration.V19},
+		{"20", "driver shift media owner", "V20__driver_shift_media_owner.sql", mediamigration.V20},
+		{"21", "media asset company boundary", "V21__media_asset_company_boundary.sql", mediamigration.V21},
+		{"22", "task board worker profile avatar owner", "V22__task_board_worker_profile_avatar_owner.sql", mediamigration.V22},
+	} {
+		if _, err := pool.Exec(ctx, string(migration.body)); err != nil {
+			t.Fatalf("apply V%s migration: %v", migration.version, err)
+		}
+		if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
+			installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
+		values ((select coalesce(max(installed_rank),0)+1 from flyway_schema_history),
+			$1,$2,'SQL',$3,$4,current_user,0,true)`,
+			migration.version, migration.description, migration.script, flywayChecksum(migration.body)); err != nil {
+			t.Fatalf("record V%s migration: %v", migration.version, err)
+		}
+	}
+
+	if _, err := pool.Exec(ctx, "alter table media_asset disable trigger media_asset_company_immutable"); err != nil {
+		t.Fatalf("disable V21 media-asset ownership trigger: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `update media_asset set company_id=$1
+		where media_id=$2`, uuid.New(), secondMediaID); err != nil {
+		t.Fatalf("seed second media owner: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "alter table media_asset enable trigger media_asset_company_immutable"); err != nil {
+		t.Fatalf("restore V21 media-asset ownership trigger: %v", err)
+	}
+
+	if _, err := pool.Exec(ctx, string(mediamigration.V23)); err == nil ||
+		!strings.Contains(err.Error(), "multi-company database") {
+		t.Fatalf("V23 multi-company preflight error = %v", err)
+	}
+	var companyColumns, ownershipTriggers, distinctOwners int
+	if err := pool.QueryRow(ctx, `select count(*) from information_schema.columns
+		where table_schema='public' and column_name='company_id'
+		and table_name in ('media_asset','media_asset_import_job')`).Scan(&companyColumns); err != nil {
+		t.Fatalf("inspect V23-protected ownership columns: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `select count(*) from pg_trigger
+		where not tgisinternal and tgname in (
+			'media_asset_company_immutable','media_asset_import_company_immutable')`).Scan(&ownershipTriggers); err != nil {
+		t.Fatalf("inspect V23-protected ownership triggers: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `select count(distinct company_id) from media_asset
+		where company_id is not null`).Scan(&distinctOwners); err != nil {
+		t.Fatalf("inspect V23-protected media owners: %v", err)
+	}
+	if companyColumns != 2 || ownershipTriggers != 2 || distinctOwners != 2 {
+		t.Fatalf("V23 changed multi-company state: columns=%d triggers=%d owners=%d",
+			companyColumns, ownershipTriggers, distinctOwners)
+	}
 }
 
 func TestInventoryOwnerDLTWireValidationMatchesClosedFailureEnum(t *testing.T) {

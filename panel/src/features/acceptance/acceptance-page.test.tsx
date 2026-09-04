@@ -206,10 +206,10 @@ describe("AcceptancePage filters", () => {
     expect(
       within(filtersPanel as HTMLElement)
         .getByRole("button", {
-          name: /От кого/,
+          name: "От кого: выбрано 1",
         })
-        .getAttribute("data-variant")
-    ).toBe("secondary")
+        .getAttribute("aria-pressed")
+    ).toBe("true")
   })
 })
 

@@ -26,8 +26,8 @@ Russian version: [README.ru.md](README.ru.md).
   [auth model](src/features/auth/auth-model.ts), [user model](src/features/settings/users/model/users.ts)
   and [order permissions](src/features/orders/permissions/orders-permissions.ts).
 - `/manager/` is the separate rental-manager web surface. It accepts only the
-  dedicated `rwms-rental-manager-web` session with `RENTAL_MANAGER`, signed
-  company, `rentalAccess=true`, and exactly `rental.manage`. Its shared warehouse
+  dedicated `rwms-rental-manager-web` session of an authenticated `RENTAL_MANAGER`
+  user with `rentalAccess=true` and exactly `rental.manage`. Its shared warehouse
   provider keeps only explicitly granted warehouses; an empty grant set is
   explained without blocking chat or client lookup.
 - The Vite proxy is a local-development convenience only. Production browser
@@ -522,8 +522,8 @@ normal `DRAFT`; explicit activation applies a today's revision immediately to
 the whole warehouse-local calendar day, while a future revision remains
 scheduled. Past dates are rejected.
 
-The KPI palette is edited once for the whole company and is independent of the
-selected warehouse; the work schedule remains an object-specific setting.
+The KPI palette is edited once for the installation and is independent of the
+selected warehouse; the work schedule applies globally to all objects.
 
 `/` is the selected warehouse's live daily-brigade view. It reads the current
 [task-board snapshot and daily activity projection](../contracts/openapi/task-board-service.yaml),
@@ -538,7 +538,7 @@ Each segment starts at task-board's persisted TAKE timestamp and ends at its
 persisted completion timestamp; a live segment ends at current server-aligned
 time. Shift bounds only position and clip segments and never replace those
 actual times. Completed tasks remain as neutral history, while a currently
-`IN_PROGRESS` or `PAUSED` segment uses the server-configured, company-wide KPI palette range
+`IN_PROGRESS` or `PAUSED` segment uses the server-configured, installation-wide KPI palette range
 for its live remaining percentage. Hover/focus shows its exact start and end,
 cabin, physical queue, repair complexity, priority and remaining percentage.
 An unconfigured palette leaves live work neutral and explains why. The dashboard

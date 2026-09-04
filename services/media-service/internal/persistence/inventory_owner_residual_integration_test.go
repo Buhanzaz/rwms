@@ -108,7 +108,9 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 			{20, "18", "customer shipment subject binding", "V18__customer_shipment_subject_binding.sql", mediamigration.V18},
 			{21, "19", "customer profile avatar owner", "V19__customer_profile_avatar_owner.sql", mediamigration.V19},
 			{22, "20", "driver shift media owner", "V20__driver_shift_media_owner.sql", mediamigration.V20},
-			{23, "22", "task board worker profile avatar owner", "V22__task_board_worker_profile_avatar_owner.sql", mediamigration.V22},
+			{23, "21", "media asset company boundary", "V21__media_asset_company_boundary.sql", mediamigration.V21},
+			{24, "22", "task board worker profile avatar owner", "V22__task_board_worker_profile_avatar_owner.sql", mediamigration.V22},
+			{25, "23", "remove media company boundary", "V23__remove_media_company_boundary.sql", mediamigration.V23},
 		} {
 			applyResidualMigration(t, ctx, pool, migration.rank, migration.version,
 				migration.description, migration.script, migration.body)
@@ -134,17 +136,17 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 		}
 	})
 
-	t.Run("clean V1 through V20 and V22 repeat and checksum drift", func(t *testing.T) {
+	t.Run("clean V1 through V23 repeat and checksum drift", func(t *testing.T) {
 		databaseURL := testsupport.NewIsolatedPostgresDatabase(t, environment.DatabaseURL)
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		pool := openResidualPool(t, ctx, databaseURL)
-		installResidualMigrations(t, ctx, pool, 23)
+		installResidualMigrations(t, ctx, pool, 25)
 		pool.Close()
 
 		first, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open clean V1 through V20 and V22 database: %v", err)
+			t.Fatalf("open clean V1 through V23 database: %v", err)
 		}
 		assertWorkerEvidenceConstraintsValidated(t, ctx, first.Pool)
 		first.Close()
@@ -212,12 +214,16 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 			"V19__customer_profile_avatar_owner.sql", mediamigration.V19)
 		applyResidualMigration(t, ctx, pool, 22, "20", "driver shift media owner",
 			"V20__driver_shift_media_owner.sql", mediamigration.V20)
-		applyResidualMigration(t, ctx, pool, 23, "22", "task board worker profile avatar owner",
+		applyResidualMigration(t, ctx, pool, 23, "21", "media asset company boundary",
+			"V21__media_asset_company_boundary.sql", mediamigration.V21)
+		applyResidualMigration(t, ctx, pool, 24, "22", "task board worker profile avatar owner",
 			"V22__task_board_worker_profile_avatar_owner.sql", mediamigration.V22)
+		applyResidualMigration(t, ctx, pool, 25, "23", "remove media company boundary",
+			"V23__remove_media_company_boundary.sql", mediamigration.V23)
 		pool.Close()
 		database, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open V14 reader-backfill database after V20: %v", err)
+			t.Fatalf("open V14 reader-backfill database after V23: %v", err)
 		}
 		database.Close()
 	})
@@ -324,12 +330,16 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 			"V19__customer_profile_avatar_owner.sql", mediamigration.V19)
 		applyResidualMigration(t, ctx, pool, 22, "20", "driver shift media owner",
 			"V20__driver_shift_media_owner.sql", mediamigration.V20)
-		applyResidualMigration(t, ctx, pool, 23, "22", "task board worker profile avatar owner",
+		applyResidualMigration(t, ctx, pool, 23, "21", "media asset company boundary",
+			"V21__media_asset_company_boundary.sql", mediamigration.V21)
+		applyResidualMigration(t, ctx, pool, 24, "22", "task board worker profile avatar owner",
 			"V22__task_board_worker_profile_avatar_owner.sql", mediamigration.V22)
+		applyResidualMigration(t, ctx, pool, 25, "23", "remove media company boundary",
+			"V23__remove_media_company_boundary.sql", mediamigration.V23)
 		pool.Close()
 		upgraded, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("Open(V20 membership-marker upgrade) error = %v", err)
+			t.Fatalf("Open(V23 membership-marker upgrade) error = %v", err)
 		}
 		upgraded.Close()
 	})
@@ -391,12 +401,16 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 			"V19__customer_profile_avatar_owner.sql", mediamigration.V19)
 		applyResidualMigration(t, ctx, pool, 22, "20", "driver shift media owner",
 			"V20__driver_shift_media_owner.sql", mediamigration.V20)
-		applyResidualMigration(t, ctx, pool, 23, "22", "task board worker profile avatar owner",
+		applyResidualMigration(t, ctx, pool, 23, "21", "media asset company boundary",
+			"V21__media_asset_company_boundary.sql", mediamigration.V21)
+		applyResidualMigration(t, ctx, pool, 24, "22", "task board worker profile avatar owner",
 			"V22__task_board_worker_profile_avatar_owner.sql", mediamigration.V22)
+		applyResidualMigration(t, ctx, pool, 25, "23", "remove media company boundary",
+			"V23__remove_media_company_boundary.sql", mediamigration.V23)
 		pool.Close()
 		database, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open upgraded V20 database: %v", err)
+			t.Fatalf("open upgraded V23 database: %v", err)
 		}
 		defer database.Close()
 		assertWorkerEvidenceConstraintsValidated(t, ctx, database.Pool)

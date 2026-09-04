@@ -114,6 +114,8 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 @Testcontainers
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class MaintenanceCorePostgresIntegrationTest {
+  private static final UUID GLOBAL_CATALOG_AUDIT_WAREHOUSE_ID =
+      UUID.fromString("00000000-0000-0000-0000-000000000001");
   private static final UUID REVIEWED_WAREHOUSE_ID =
       UUID.fromString("00000000-0000-0000-0000-000000000002");
 
@@ -4761,7 +4763,102 @@ class MaintenanceCorePostgresIntegrationTest {
   }
 
   @Test
-  void operationAdmittedBeforeDrainingCannotCommitAfterTheLocalReadinessFence() throws Exception {
+  void globalCatalogRemainsEditableWhenItsRetainedAuditWarehouseIsDrainingAndFenced() {
+    UUID auditWarehouseId = GLOBAL_CATALOG_AUDIT_WAREHOUSE_ID;
+    UUID furnitureCategoryId = UUID.randomUUID();
+    UUID furnitureMaterialId = UUID.randomUUID();
+    UUID furnitureEquipmentId = UUID.randomUUID();
+    UUID routedWorkId = UUID.randomUUID();
+    UUID queueId = UUID.randomUUID();
+    when(dependencies.productionReady()).thenReturn(true);
+    when(dependencies.warehouseAdmission(
+            auditWarehouseId,
+            MaintenanceDependencyGateway.WarehouseOperationDirection.INCOMING))
+        .thenReturn(new MaintenanceDependencyGateway.WarehouseOperationAdmission(
+            auditWarehouseId,
+            7,
+            MaintenanceDependencyGateway.WarehouseLifecycleState.DRAINING,
+            MaintenanceDependencyGateway.WarehouseOperationDirection.INCOMING,
+            false));
+    when(dependencies.ensureFurnitureEquipment(furnitureMaterialId, "Chair"))
+        .thenReturn(new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
+            furnitureEquipmentId, "Chair"));
+
+    assertThat(warehouseReadinessFences.begin(auditWarehouseId, 7).state())
+        .isEqualTo(WarehouseReadinessFenceStore.BeginState.FENCED);
+
+    CatalogVersionResponse created = service.createGlobalCatalog(
+        UUID.randomUUID(), UUID.randomUUID()).response();
+    assertThat(created.warehouseId()).isEqualTo(auditWarehouseId);
+
+    CatalogNodeInput routedWork = new CatalogNodeInput(
+        routedWorkId,
+        CatalogNodeType.WORK,
+        "Repair chair",
+        true,
+        null,
+        false,
+        null,
+        "piece",
+        "100.00",
+        15,
+        true,
+        false,
+        true,
+        null,
+        null,
+        new CatalogRoutingInput(queueId, "REPAIR"),
+        null,
+        null,
+        false,
+        null);
+    CatalogVersionResponse changed = service.changeCatalog(
+        created.id(),
+        new ChangeCatalogRequest(
+            created.version(),
+            List.of(
+                furnitureCategory(furnitureCategoryId),
+                furnitureMaterial(furnitureMaterialId, furnitureCategoryId, "Chair", null),
+                routedWork),
+            List.of()));
+    assertThat(changed.warehouseId()).isEqualTo(auditWarehouseId);
+
+    var fork = service.forkCatalog(
+        UUID.randomUUID(), UUID.randomUUID(), changed.id(), new VersionCommand(changed.version()));
+    CatalogVersionResponse activated = service.activateCatalog(
+        UUID.randomUUID(), UUID.randomUUID(), fork.response().id(),
+        new VersionCommand(fork.response().version())).response();
+    assertThat(activated.warehouseId()).isEqualTo(auditWarehouseId);
+    assertThat(furnitureEquipmentLinks.require(furnitureMaterialId))
+        .extracting(FurnitureEquipmentLinkStore.LinkSnapshot::warehouseId)
+        .isEqualTo(auditWarehouseId);
+    assertThat(jdbc.queryForObject(
+        "select count(*) from integration_reconciliation where catalog_version_id=? and state='PENDING'",
+        Integer.class,
+        activated.id())).isPositive();
+
+    furnitureEquipmentLinks.prepareAll(
+        auditWarehouseId,
+        activated.id(),
+        activated.version(),
+        List.of(new FurnitureEquipmentLinkStore.LinkRequirement(
+            UUID.randomUUID(), "Pending chair", null, null)));
+    assertThat(jdbc.queryForObject(
+        "select count(*) from warehouse_operation_mark_outbox where warehouse_id=?",
+        Integer.class,
+        auditWarehouseId)).isZero();
+    verify(dependencies, never()).warehouseAdmission(
+        eq(auditWarehouseId), eq(MaintenanceDependencyGateway.WarehouseOperationDirection.INCOMING));
+
+    assertThat(warehouseReadinessFences.release(auditWarehouseId, 7, "CATALOG_AUDIT_ONLY"))
+        .isTrue();
+    assertThat(warehouseReadinessFences.begin(auditWarehouseId, 8).state())
+        .isEqualTo(WarehouseReadinessFenceStore.BeginState.FENCED);
+  }
+
+  @Test
+  void operationAdmittedBeforeDrainingCannotCommitAfterTheLocalReadinessFenceAndRejectsOwnerlessReconciliation()
+      throws Exception {
     UUID warehouseId = UUID.randomUUID();
     UUID catalogId = insertDraftCatalog(warehouseId, "f".repeat(64));
     when(dependencies.productionReady()).thenReturn(true);
@@ -4833,16 +4930,14 @@ class MaintenanceCorePostgresIntegrationTest {
             """
             insert into integration_reconciliation(
               id,dependency_type,operation_type,idempotency_key,state,attempt_count,
-              next_attempt_at,response_snapshot,review_version,created_at,updated_at,
-              catalog_version_id)
+              next_attempt_at,response_snapshot,review_version,created_at,updated_at)
             values (?,'ASSET','TEST_READINESS',?,'PENDING',0,clock_timestamp(),'{}',0,
-                    clock_timestamp(),clock_timestamp(),?)
+                    clock_timestamp(),clock_timestamp())
             """,
             UUID.randomUUID(),
-            UUID.randomUUID(),
-            catalogId))
+            UUID.randomUUID()))
         .isInstanceOf(DataIntegrityViolationException.class)
-        .hasMessageContaining("readiness fence");
+        .hasMessageContaining("no warehouse owner");
     verify(dependencies).warehouseAdmission(
         warehouseId,
         MaintenanceDependencyGateway.WarehouseOperationDirection.INCOMING);

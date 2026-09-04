@@ -3,7 +3,6 @@ package dev.buhanzaz.rwms.asset.security;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import dev.buhanzaz.rwms.asset.domain.AssetCompanyDefaults;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
@@ -104,52 +103,6 @@ class AssetAuthorizerTest {
     AssetAuthorizer bypass = new AssetAuthorizer(development, true);
     bypass.requireOutboxRecovery(null);
     assertThat(bypass.subjectId(null)).isNotNull();
-    assertThat(bypass.companyId(null)).isEqualTo(AssetCompanyDefaults.INITIAL_COMPANY_ID);
-  }
-
-  @Test
-  void companyFenceRequiresAValidSignedUserClaim() {
-    AssetAuthorizer authorizer = new AssetAuthorizer(new MockEnvironment(), false);
-    UUID companyId = UUID.randomUUID();
-    Jwt valid =
-        jwt(
-            Map.of(
-                "sub",
-                UUID.randomUUID().toString(),
-                "principal_type",
-                "USER",
-                "company_id",
-                companyId.toString()));
-
-    assertThat(authorizer.companyId(valid)).isEqualTo(companyId);
-    assertThatThrownBy(
-            () ->
-                authorizer.companyId(
-                    jwt(
-                        Map.of(
-                            "sub",
-                            UUID.randomUUID().toString(),
-                            "principal_type",
-                            "USER"))))
-        .isInstanceOf(AccessDeniedException.class)
-        .hasMessageContaining("company claim");
-    assertThatThrownBy(
-            () ->
-                authorizer.companyId(
-                    jwt(
-                        Map.of(
-                            "sub",
-                            UUID.randomUUID().toString(),
-                            "principal_type",
-                            "USER",
-                            "company_id",
-                            "not-a-uuid"))))
-        .isInstanceOf(AccessDeniedException.class)
-        .hasMessageContaining("UUID");
-    assertThatThrownBy(
-            () -> authorizer.companyId(service("asset.inventory", "inventory-service")))
-        .isInstanceOf(AccessDeniedException.class)
-        .hasMessageContaining("USER");
   }
 
   @Test
@@ -224,7 +177,6 @@ class AssetAuthorizerTest {
         "principal_type", "USER",
         "scope", scope,
         "global_role", globalRole,
-        "company_id", AssetCompanyDefaults.INITIAL_COMPANY_ID.toString(),
         "warehouse_access", java.util.List.of(Map.of("warehouseId", warehouseId.toString(), "level", level))));
   }
 

@@ -197,7 +197,7 @@ describe("RepairEstimateCatalogPicker", () => {
     expect(card?.getAttribute("style")).toContain(
       "background-color: rgb(248, 231, 28)"
     )
-    expect(card?.getAttribute("style")).toContain("color: rgb(17, 24, 39)")
+    expect(card?.getAttribute("style")).toContain("color: rgb(65, 54, 32)")
   })
 
   it("places catalog root and back buttons before the breadcrumb path", async () => {

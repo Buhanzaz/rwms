@@ -30,9 +30,8 @@ documents, пользователями, warehouse grants или client-side в�
 Каждый склад имеет независимые классификации `production` и `mainWarehouse`; обычный объект
 может иметь одну или обе. Представительский склад не имеет этих классификаций и обязан иметь
 ровно один `representativeParentWarehouseId`, указывающий на производственный или основной
-объект той же компании. Устаревшие поля `warehouseType`, `productionWarehouseId` и
-`representative` остаются compatibility-проекциями; они не задают lifecycle-состояние,
-персонал, направление остатков или возможность доставки. WGS84-поля
+объект. Устаревшие aliases классификации не публикуются; эти четыре текущих поля не задают
+lifecycle-состояние, персонал, направление остатков или возможность доставки. WGS84-поля
 `latitude` и `longitude` принадлежат метаданным склада и задаются только парой; `address` может отсутствовать,
 если координаты заполнены. Точная пара `0,0` зарезервирована как placeholder незаданной точки и
 отклоняется при создании, полной замене и persistence normalization; точка на одной нулевой оси
@@ -106,7 +105,7 @@ owner сохраняет pending, ambiguous, quarantined и non-terminal work к
 
 | Граница | Audience | Назначение |
 | --- | --- | --- |
-| `/api/warehouse/v1/warehouses/**` | Authenticated `USER`; writes требуют exact administrator policy | Directory компании, create/replace, draining, inactivation и timezone scheduling |
+| `/api/warehouse/v1/warehouses/**` | Authenticated `USER`; writes требуют exact administrator policy | Directory установки, create/replace, draining, inactivation и timezone scheduling |
 | `/api/warehouse/v1/warehouses/{id}/support-links` | Authenticated warehouse manager с grants для всех endpoints | Чтение или атомарная замена полного графа обслуживания представительского склада |
 | `/api/warehouse/v1/admin/outbox-events/**` | Reviewed administrator recovery | Повтор одного immutable terminal/quarantined outbox fact под review fence |
 | `/api/internal/warehouse/v1/warehouses/{id}/existence` | Exact auth-service credential/scope | Узкая existence-проверка warehouse grants |
@@ -122,8 +121,8 @@ owner сохраняет pending, ambiguous, quarantined и non-terminal work к
 | `/api/internal/warehouse/v1/warehouses/{id}/time-zone` | Least-privilege service credential | Timezone на immutable instant |
 | `/api/internal/warehouse/v1/warehouses/{id}/operation-marks` | Contract-defined owner | Идемпотентное доказательство первой операции |
 
-Public directory ограничен компанией из подписанной identity. Warehouse grants дополнительно не
-фильтруют directory этой компании; write- и domain access checks остаются отдельными.
+Public directory охватывает всю установку. Warehouse grants его не фильтруют;
+write- и warehouse-bound domain access checks остаются отдельными.
 
 Responses logistics identity и directory всегда содержат принадлежащее
 warehouse-service поле `address`; оно nullable для складов, адрес которых ещё
@@ -161,16 +160,14 @@ client ID `task-board-service` ровно со scope `warehouse.identity.read` �
 единственный schema authority; Hibernate использует `ddl-auto=validate` и не
 изменяет схему.
 
-V7 добавляет обратносуместимый non-null столбец `representative=false`. V8 добавляет пару координат,
+V7 добавляет исторический non-null столбец `representative=false`. V8 добавляет пару координат,
 warehouse-owned support revision, направленные строки связей и их weekday/date value tables с
-ограничениями уникальности и направления. V9 добавляет принадлежность компании и
-compatibility-проекции `warehouse_type`/`production_warehouse_id`: существующий
-представительский склад сохраняет классификацию только при однозначно выводимом из прежних
-support-связей допустимом родителе; иначе миграция завершается с явной ошибкой. V10 добавляет
-независимые флаги `production`/`main_warehouse`: существующие обычные склады становятся
-основными объектами, а представительский склад не имеет ни одного флага. Согласованность
-классификации и родителя защищают database constraints и owner validation. Representative-parent
-не заменяет независимый support graph.
+ограничениями уникальности и направления. V9 и V10 — неизменяемые исторические migration steps
+для прежних ownership и classification layouts. V11 задаёт текущую installation-wide schema:
+независимые флаги `production`/`main_warehouse` и один строгий
+`representative_parent_warehouse_id` для представительского склада, без platform ownership и
+устаревших aliases классификации. Согласованность классификации и родителя защищают database
+constraints и owner validation. Representative-parent не заменяет независимый support graph.
 
 Aggregate transition, append-only domain history и outbox envelope фиксируются
 локально. Kafka relay забирает упорядоченную запись с lease, проверяет immutable
@@ -191,8 +188,8 @@ checksum и schema валидны, прежде чем тот же relay пов�
 ## Безопасность и изоляция
 
 - Сервис является JWT resource server и валидирует issuer и audience.
-- Список складов компании принимает обычный `warehouse.read`, exact `admin.manage` администратора
-  компании либо точный credential менеджера аренды с `rentalAccess=true` и только
+- Installation directory принимает обычный `warehouse.read`, exact `admin.manage` администратора
+  либо точный credential менеджера аренды с `rentalAccess=true` и только
   `rental.manage`. Этот manager credential не может читать склад напрямую по UUID, включать
   неактивные склады, изменять данные, использовать support-links или private routes.
 - Public writes требуют exact user, scope и global administrator rules из

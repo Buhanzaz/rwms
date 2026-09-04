@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerCabinProblemCategory;
 import dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerCabinProblemPhase;
+import dev.buhanzaz.rwms.logistics.customer.claims.domain.CustomerCabinProblemAction;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerCabinProblem;
 import dev.buhanzaz.rwms.logistics.customer.repository.CustomerCabinProblemRepository;
 import dev.buhanzaz.rwms.logistics.order.domain.ClientType;

@@ -79,6 +79,12 @@ const CABIN_IDS = [
   "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
 ]
 
+function futureScheduledDate(daysAhead = 2) {
+  const date = new Date()
+  date.setDate(date.getDate() + daysAhead)
+  return date.toISOString().slice(0, 10)
+}
+
 const currentUser = {
   id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
   username: "logist",
@@ -580,7 +586,8 @@ describe("TransferPlanDialog", () => {
 
   it("saves a zero-line draft without allocations and surfaces confirm blockers", async () => {
     const user = userEvent.setup()
-    renderDialog({ initialScheduledDate: "2026-09-02" })
+    const scheduledDate = futureScheduledDate()
+    renderDialog({ initialScheduledDate: scheduledDate })
     await addConfiguredGroup()
 
     expect(screen.getByText("Не назначено бытовок: 2.")).toBeTruthy()
@@ -594,7 +601,7 @@ describe("TransferPlanDialog", () => {
     ).toMatchObject({
       warehouseId: SOURCE_ID,
       destinationWarehouseId: DESTINATION_ID,
-      scheduledDate: "2026-09-02",
+      scheduledDate,
       lines: [],
       furnitureReplacements: [],
       plan: {
@@ -614,12 +621,16 @@ describe("TransferPlanDialog", () => {
 
   it("selects a driver, stores temporary reposition intent, and confirms a complete draft", async () => {
     const user = userEvent.setup()
-    renderDialog({ initialScheduledDate: "2026-09-02" })
+    const scheduledDate = futureScheduledDate()
+    const plannedDepartureAt = `${scheduledDate}T08:00`
+    const plannedArrivalAt = `${scheduledDate}T12:00`
+    const repositionUntil = `${futureScheduledDate(4)}T18:00`
+    renderDialog({ initialScheduledDate: scheduledDate })
     fireEvent.change(screen.getByLabelText("Отправление"), {
-      target: { value: "2026-09-02T08:00" },
+      target: { value: plannedDepartureAt },
     })
     fireEvent.change(screen.getByLabelText("Прибытие"), {
-      target: { value: "2026-09-02T12:00" },
+      target: { value: plannedArrivalAt },
     })
     await waitFor(() =>
       expect(driverApi.listLogisticsDriverResources).toHaveBeenCalled()
@@ -630,7 +641,7 @@ describe("TransferPlanDialog", () => {
       "Временно работает на складе назначения"
     )
     fireEvent.change(screen.getByLabelText("Работает до"), {
-      target: { value: "2026-09-04T18:00" },
+      target: { value: repositionUntil },
     })
     await addConfiguredGroup()
     await user.click(screen.getByRole("button", { name: "Подобрать бытовки" }))
@@ -652,7 +663,7 @@ describe("TransferPlanDialog", () => {
       driverReposition: {
         resourceId: DRIVER_ID,
         mode: "TEMPORARY",
-        until: "2026-09-04T15:00:00.000Z",
+        until: new Date(repositionUntil).toISOString(),
       },
       tripVehicleId: null,
       vehicleReposition: null,

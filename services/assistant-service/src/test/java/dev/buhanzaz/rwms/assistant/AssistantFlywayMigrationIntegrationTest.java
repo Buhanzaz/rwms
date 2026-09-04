@@ -15,7 +15,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
-/** Validates clean assistant schema creation and supported Flyway upgrade paths through V7. */
+/** Validates clean assistant schema creation and supported Flyway upgrade paths through V6. */
 @Testcontainers
 class AssistantFlywayMigrationIntegrationTest {
   @Container
@@ -116,7 +116,7 @@ class AssistantFlywayMigrationIntegrationTest {
         }
         """);
 
-    assertThat(flyway().load().migrate().migrationsExecuted).isEqualTo(6);
+    assertThat(flyway().load().migrate().migrationsExecuted).isEqualTo(5);
 
     String result =
         jdbc.queryForObject(
@@ -210,7 +210,7 @@ class AssistantFlywayMigrationIntegrationTest {
         {"code":"LOGISTICS_UNAVAILABLE"}
         """);
 
-    assertThat(flyway().load().migrate().migrationsExecuted).isEqualTo(5);
+    assertThat(flyway().load().migrate().migrationsExecuted).isEqualTo(4);
 
     String facets =
         jdbc.queryForObject(
@@ -243,7 +243,7 @@ class AssistantFlywayMigrationIntegrationTest {
         UUID.randomUUID(),
         UUID.randomUUID());
 
-    assertThat(flyway().load().migrate().migrationsExecuted).isEqualTo(4);
+    assertThat(flyway().load().migrate().migrationsExecuted).isEqualTo(3);
 
     Map<String, Object> legacy =
         jdbc.queryForMap(
@@ -342,7 +342,7 @@ class AssistantFlywayMigrationIntegrationTest {
         UUID.randomUUID(),
         options);
 
-    assertThat(flyway().load().migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(flyway().load().migrate().migrationsExecuted).isOne();
     assertThat(
             jdbc.queryForList(
                 """
@@ -367,13 +367,11 @@ class AssistantFlywayMigrationIntegrationTest {
                 jdbc.update(
                     """
                     insert into assistant_conversation(
-                      id,version,company_id,owner_subject_id,client_id,rental_inquiry_id,rental_order_id,
+                      id,version,owner_subject_id,client_id,rental_inquiry_id,rental_order_id,
                       archived,created_at,updated_at)
-                    values (?,?,?::uuid,?,?,?,?,false,clock_timestamp(),clock_timestamp())
+                    values (?,0,?,?,?,?,false,clock_timestamp(),clock_timestamp())
                     """,
                     secondConversationId,
-                    0,
-                    "ae0d6f97-f0c5-576a-9ea7-1ddcc1a03b48",
                     UUID.randomUUID(),
                     UUID.randomUUID(),
                     UUID.randomUUID(),
@@ -386,13 +384,11 @@ class AssistantFlywayMigrationIntegrationTest {
             jdbc.update(
                 """
                 insert into assistant_conversation(
-                  id,version,company_id,owner_subject_id,client_id,rental_inquiry_id,rental_order_id,
+                  id,version,owner_subject_id,client_id,rental_inquiry_id,rental_order_id,
                   archived,created_at,updated_at)
-                values (?,?,?::uuid,?,?,?,?,false,clock_timestamp(),clock_timestamp())
+                values (?,0,?,?,?,?,false,clock_timestamp(),clock_timestamp())
                 """,
                 secondConversationId,
-                0,
-                "ae0d6f97-f0c5-576a-9ea7-1ddcc1a03b48",
                 UUID.randomUUID(),
                 UUID.randomUUID(),
                 UUID.randomUUID(),
@@ -401,10 +397,14 @@ class AssistantFlywayMigrationIntegrationTest {
   }
 
   @Test
-  void upgradeFromV6BackfillsAndFreezesConversationCompanyOwnership() {
-    flyway().target(MigrationVersion.fromVersion("6")).load().migrate();
+  void cumulativeCurrentMigrationsRetainManagerOwnershipWithoutLegacyBoundaryColumn() {
+    Flyway current = flyway().load();
+    assertThat(current.migrate().migrationsExecuted).isEqualTo(6);
+    current.validate();
+    assertThat(current.migrate().migrationsExecuted).isZero();
     UUID conversationId = UUID.randomUUID();
     UUID rentalOrderId = UUID.randomUUID();
+    UUID managerSubjectId = UUID.randomUUID();
     jdbc.update(
         """
         insert into assistant_conversation(
@@ -413,43 +413,31 @@ class AssistantFlywayMigrationIntegrationTest {
         values (?,0,?,?,?,?,false,clock_timestamp(),clock_timestamp())
         """,
         conversationId,
-        UUID.randomUUID(),
+        managerSubjectId,
         UUID.randomUUID(),
         UUID.randomUUID(),
         rentalOrderId);
 
-    assertThat(flyway().load().migrate().migrationsExecuted).isOne();
-    UUID bootstrapCompany =
-        UUID.fromString("ae0d6f97-f0c5-576a-9ea7-1ddcc1a03b48");
     assertThat(
             jdbc.queryForObject(
-                "select company_id from assistant_conversation where id=?",
+                "select owner_subject_id from assistant_conversation where id=?",
                 UUID.class,
                 conversationId))
-        .isEqualTo(bootstrapCompany);
-    assertThatThrownBy(
-            () ->
-                jdbc.update(
-                    "update assistant_conversation set company_id=? where id=?",
-                    UUID.randomUUID(),
-                    conversationId))
-        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
-
+        .isEqualTo(managerSubjectId);
     assertThat(
-            jdbc.update(
+            jdbc.queryForObject(
                 """
-                insert into assistant_conversation(
-                  id,version,company_id,owner_subject_id,client_id,rental_inquiry_id,
-                  rental_order_id,archived,created_at,updated_at)
-                values (?,0,?,?,?,?,?,false,clock_timestamp(),clock_timestamp())
+                select count(*) from information_schema.columns
+                where table_schema='public' and table_name='assistant_conversation'
+                  and column_name='company_id'
                 """,
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                rentalOrderId))
-        .isOne();
+                Integer.class))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from flyway_schema_history where success",
+                Integer.class))
+        .isEqualTo(6);
   }
 
   private org.flywaydb.core.api.configuration.FluentConfiguration flyway() {

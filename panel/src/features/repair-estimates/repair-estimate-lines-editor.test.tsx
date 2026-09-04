@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 
@@ -128,7 +128,16 @@ async function selectHoldingQueue(user: ReturnType<typeof userEvent.setup>) {
   expect(
     screen.queryByRole("option", { name: /Неактивная очередь/ })
   ).toBeNull()
-  await user.click(screen.getByRole("option", { name: /Ожидание проверки/ }))
+  await user.keyboard("{Enter}")
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("option", { name: /Ожидание проверки/ })
+    ).toBeNull()
+  )
+}
+
+async function waitForCustomQueues() {
+  await screen.findByText("Выберите этап, к которому будет привязана строка.")
 }
 
 afterEach(() => {
@@ -256,6 +265,7 @@ describe("custom repair lines", () => {
     )
     await user.type(duration, "45")
     expect(listQueues).toHaveBeenCalledWith("panel-token", warehouseId)
+    await waitForCustomQueues()
     await selectHoldingQueue(user)
     await user.click(screen.getByRole("button", { name: "Сохранить строку" }))
 
@@ -289,13 +299,14 @@ describe("custom repair lines", () => {
     await user.click(
       screen.getByRole("combobox", { name: "Тип пользовательской строки" })
     )
-    await user.click(screen.getByRole("option", { name: "Материал" }))
+    await user.keyboard("{ArrowDown}{Enter}")
 
     expect(screen.queryByLabelText("Время, мин")).toBeNull()
     await user.type(
       screen.getByLabelText("Наименование пользовательской строки"),
       "Саморезы"
     )
+    await waitForCustomQueues()
     await selectHoldingQueue(user)
     await user.click(screen.getByRole("button", { name: "Сохранить строку" }))
 

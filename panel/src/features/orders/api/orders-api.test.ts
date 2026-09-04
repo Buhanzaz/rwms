@@ -134,8 +134,8 @@ describe("parseOrderDetail", () => {
   })
 
   it("requires the current rental delivery purpose in order projections", () => {
-    const { customerDeliveryPurpose: _purpose, ...missingPurpose } =
-      orderDetailResponse
+    const missingPurpose = { ...orderDetailResponse }
+    Reflect.deleteProperty(missingPurpose, "customerDeliveryPurpose")
 
     expect(() => parseOrderDetail(missingPurpose)).toThrow(
       "Сервис логистики вернул некорректный ответ модуля бронирований."
@@ -263,8 +263,8 @@ describe("parseOrderDetail", () => {
     ).toThrow(
       "Сервис логистики вернул некорректный ответ модуля бронирований."
     )
-    const { customerDeliveryPurpose: _purpose, ...missingPurposeMovement } =
-      shipmentMovement
+    const missingPurposeMovement = { ...shipmentMovement }
+    Reflect.deleteProperty(missingPurposeMovement, "customerDeliveryPurpose")
     expect(() =>
       parseOrderDetail({
         ...orderDetailResponse,

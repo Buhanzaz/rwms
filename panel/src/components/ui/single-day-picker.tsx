@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react"
+import { useId, useState } from "react"
 import { Calendar03Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ru } from "date-fns/locale"
@@ -83,11 +83,12 @@ export function SingleDayPicker({
   const selected = parseCalendarDate(value)
   const [open, setOpen] = useState(false)
   const [month, setMonth] = useState(() => selected ?? new Date())
+  const [monthValue, setMonthValue] = useState(value)
 
-  useEffect(() => {
-    const nextMonth = parseCalendarDate(value)
-    if (nextMonth) setMonth(nextMonth)
-  }, [value])
+  if (value !== monthValue) {
+    setMonthValue(value)
+    setMonth(selected ?? new Date())
+  }
 
   const selectedLabel = calendarDateLabel(selected)
   const triggerValue = triggerLabel
@@ -147,8 +148,8 @@ export function SingleDayPicker({
               },
             }}
             month={month}
-            selected={selected}
             onMonthChange={setMonth}
+            selected={selected}
             aria-label={`${label}: календарь`}
             onSelect={(date) => {
               if (!date) return

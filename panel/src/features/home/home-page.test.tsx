@@ -346,6 +346,11 @@ describe("HomePage", () => {
     renderPage()
 
     expect(await screen.findByText("Рабочий день не настроен")).toBeTruthy()
+    expect(
+      screen.getByText(
+        "Сначала сохраните и активируйте общий график работы для всех объектов в настройках KPI."
+      )
+    ).toBeTruthy()
     expect(screen.queryByTestId("daily-brigade-track-group-active")).toBeNull()
   })
 })

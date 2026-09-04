@@ -67,10 +67,10 @@ class TaskBoardEventStoreMigrationIntegrationTest {
   }
 
   @Test
-  void cleanInstallAppliesV4ThroughV47AndRepeatIsNoOp() {
+  void cleanInstallAppliesV4ThroughV48AndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(44);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(45);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -96,14 +96,13 @@ class TaskBoardEventStoreMigrationIntegrationTest {
             "task_board_outbox",
             "task_board_inbox",
             "warehouse_metadata",
-            "warehouse_kpi_settings",
-            "company_kpi_settings",
+            "kpi_settings",
             "kpi_activation_receipt",
             "queue_definition",
             "queue_definition_class_binding",
             "task_relocation_receipt",
             "task_board_warehouse_lifecycle_intent");
-    assertThat(tables()).doesNotContain("worker_pii");
+    assertThat(tables()).doesNotContain("worker_pii", "warehouse_kpi_settings", "company_kpi_settings");
     assertThat(jdbc.queryForObject("select count(*) from domain_event", Integer.class)).isZero();
     assertThat(jdbc.queryForObject("select count(*) from outbox_event", Integer.class)).isZero();
     assertThat(
@@ -274,6 +273,14 @@ class TaskBoardEventStoreMigrationIntegrationTest {
         .containsEntry("script", "V47__company_kpi_work_schedule.sql")
         .containsEntry("success", true);
     assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='48'"))
+        .containsEntry("version", "48")
+        .containsEntry("description", "normalize global kpi settings")
+        .containsEntry("script", "V48__normalize_global_kpi_settings.sql")
+        .containsEntry("success", true);
+    assertThat(
             jdbc.queryForList(
                 """
                 select column_name
@@ -290,7 +297,7 @@ class TaskBoardEventStoreMigrationIntegrationTest {
                 select column_name
                   from information_schema.columns
                  where table_schema='public'
-                   and table_name='warehouse_kpi_settings'
+                   and table_name='kpi_settings'
                    and column_name like 'repair_%_boundary_minutes'
                 """,
                 String.class))
@@ -728,7 +735,7 @@ class TaskBoardEventStoreMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(41);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(44);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
     assertThat(retainedContentDigests()).containsExactlyInAnyOrderEntriesOf(before);

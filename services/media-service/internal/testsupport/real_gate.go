@@ -225,7 +225,7 @@ func NewMigratedMediaDatabaseThroughV12(t testing.TB, baseURL string) string {
 // NewMigratedMediaDatabaseThroughV18 creates an isolated database at the exact
 // pre-profile-avatar migration boundary for additive V19 and V20 upgrade tests.
 func NewMigratedMediaDatabaseThroughV18(t testing.TB, baseURL string) string {
-	return newMigratedMediaDatabase(t, baseURL, 3)
+	return newMigratedMediaDatabase(t, baseURL, 5)
 }
 
 func newMigratedMediaDatabase(t testing.TB, baseURL string, omittedTail int) string {
@@ -276,7 +276,9 @@ func newMigratedMediaDatabase(t testing.TB, baseURL string, omittedTail int) str
 		{"customer shipment subject binding", "V18__customer_shipment_subject_binding.sql", mediamigration.V18},
 		{"customer profile avatar owner", "V19__customer_profile_avatar_owner.sql", mediamigration.V19},
 		{"driver shift media owner", "V20__driver_shift_media_owner.sql", mediamigration.V20},
+		{"media asset company boundary", "V21__media_asset_company_boundary.sql", mediamigration.V21},
 		{"task board worker profile avatar owner", "V22__task_board_worker_profile_avatar_owner.sql", mediamigration.V22},
+		{"remove media company boundary", "V23__remove_media_company_boundary.sql", mediamigration.V23},
 	}
 	if omittedTail < 0 || omittedTail >= len(migrations) {
 		t.Fatalf("invalid omitted media migration tail: %d", omittedTail)
@@ -292,7 +294,7 @@ func newMigratedMediaDatabase(t testing.TB, baseURL string, omittedTail int) str
 		if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
 			installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
 		values ($1,$2,$3,'SQL',$4,$5,current_user,$6,true)`, index+1,
-			[]string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "22"}[index],
+			[]string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23"}[index],
 			migration.description, migration.script, realFlywayChecksum(migration.body),
 			int(time.Since(started)/time.Millisecond)); err != nil {
 			t.Fatalf("record isolated media %s: %v", migration.script, err)

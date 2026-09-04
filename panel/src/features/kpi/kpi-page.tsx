@@ -528,7 +528,8 @@ function KpiContent({
             <Alert>
               <AlertTitle>Палитра не настроена</AlertTitle>
               <AlertDescription>
-                Сначала сохраните и активируйте диапазоны KPI выбранного склада.
+                Сначала сохраните и активируйте общие диапазоны KPI для всех
+                объектов.
               </AlertDescription>
             </Alert>
           ) : null}

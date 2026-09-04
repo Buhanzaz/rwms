@@ -199,6 +199,7 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.material3:material3-adaptive-navigation-suite")
     implementation("androidx.core:core-ktx:1.18.0")
+    implementation("androidx.startup:startup-runtime:1.2.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
     implementation("androidx.navigation3:navigation3-runtime:1.1.1")

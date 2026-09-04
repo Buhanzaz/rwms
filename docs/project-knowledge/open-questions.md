@@ -4,37 +4,37 @@ Use this file only for unresolved contradictions or product decisions that
 block a safe implementation. This is not a backlog and does not authorize
 work.
 
-## Claims Aggregate And Dedicated Chat Owner
+## Dedicated Claim Chat And Orchestration Owner
 
 - Status: `Open`
-- Affected owner and consumers: the future claim aggregate, CustomerApp,
-  rental-manager web/Android, RWMS warehouse staff, company administrators,
-  logistics order/return/replacement flows and media attachments.
-- Requested behavior: create one company-isolated claim for a delivered rented
-  cabin, retain a three-day deadline and resolution history, and provide a
-  dedicated three-party text/photo/voice conversation.
-- Conflicting contract or invariant: logistics-service already accepts one
-  customer-only immutable arrived-cabin problem report, but no active canonical
-  manager/RWMS lifecycle contract, participant authorization matrix or
-  deadline/resolution state machine exists for claims. Assistant-service
-  conversations are manager-owned rental inquiries and cannot safely become a
-  customer/manager/warehouse claim chat. Choosing the lifecycle owner implicitly
-  decides responsibility derivation, financial discount authority,
-  replacement/return orchestration, attachment access and cross-service recovery.
-- Evidence: the customer-only intake is
-  [`CustomerCabinProblem`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/domain/CustomerCabinProblem.java)
-  and its canonical POST operation is under `logistics-service.yaml`; it has no
-  manager list/detail/decision boundary, three-day deadline, resolution or
-  dedicated conversation. The current assistant boundary is documented in
-  [`assistant-service`](service-catalog.md) and rental order transitions remain
+- Affected owner and consumers: logistics-service's customer-cabin-problem claim
+  lifecycle, CustomerApp, rental-manager web/Android, RWMS warehouse staff,
+  system administrators, logistics order/return/replacement flows and media
+  attachments.
+- Requested behavior: add a dedicated three-party text/photo/voice conversation
+  to the delivered rented-cabin claim lifecycle, with a participant model, media
+  access and financial-discount/replacement/return orchestration.
+- Conflicting contract or invariant: logistics-service already owns the manager
+  list/detail/start-progress/resolve lifecycle, its three-day resolution deadline
+  and append-only action ledger under warehouse-and-actor authorization. It does
+  not define a dedicated three-party conversation, participant matrix, media
+  access or cross-service commands for discount, replacement and return.
+  Assistant-service conversations are manager-owned rental inquiries and cannot
+  safely become a customer/manager/warehouse claim chat.
+- Evidence: [`CustomerCabinProblemClaimController`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/claims/api/CustomerCabinProblemClaimController.java)
+  and the [canonical logistics contract](../../contracts/openapi/logistics-service.yaml)
+  define manager list/detail/start-progress/resolve actions, the deadline and
+  resolution history. [`CustomerCabinProblemAction`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/claims/domain/CustomerCabinProblemAction.java)
+  is the immutable action ledger. Neither boundary defines the dedicated
+  conversation or its participant/media contract; rental order transitions remain
   logistics-owned in [`runtime flows`](runtime-flows.md#rental-client-and-order-entry).
-- Smallest decision needed: decide whether logistics-service extends the existing
-  immutable problem evidence into the claim lifecycle or another current service
-  owns that lifecycle, then approve participant/warehouse/company authorization,
-  deadline clock, terminal resolution values and integration commands for
-  discount, replacement and return. Media-service remains the only byte owner.
-- Resolution and date: none. On 2026-09-02 the Android manager foundation did
-  not invent a parallel claim or reuse private assistant conversations.
+- Smallest decision needed: choose the owner and contract for the dedicated
+  conversation, participant warehouse-and-actor authorization and media
+  references/access, then approve integration commands for financial discount,
+  replacement and return. Media-service remains the only byte owner.
+- Resolution and date: none. On 2026-09-04 the existing logistics-service
+  lifecycle is canonical; this question is limited to dedicated chat and related
+  orchestration rather than a parallel claim or private assistant conversation.
 
 ## Rental-Order Mutation Quarantine Resolution
 

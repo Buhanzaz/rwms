@@ -53,9 +53,9 @@ function supportedTimeZones() {
   )
 }
 
-export const timeZoneOptions = supportedTimeZones()
+const timeZoneOptions = supportedTimeZones()
 
-export function formatTimeZoneOffset(timeZone: string, date = new Date()) {
+function formatTimeZoneOffset(timeZone: string, date = new Date()) {
   const offset = new Intl.DateTimeFormat("en-US", {
     timeZone,
     timeZoneName: "longOffset",
@@ -75,7 +75,7 @@ export function formatTimeZoneOffset(timeZone: string, date = new Date()) {
     : `${sign}${normalizedHours}:${minutes}`
 }
 
-export function formatTimeZoneOption(timeZone: string, date = new Date()) {
+function formatTimeZoneOption(timeZone: string, date = new Date()) {
   return `${timeZone} · ${formatTimeZoneOffset(timeZone, date)}`
 }
 

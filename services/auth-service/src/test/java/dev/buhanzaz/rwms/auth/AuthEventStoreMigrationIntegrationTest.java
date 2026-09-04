@@ -54,7 +54,7 @@ class AuthEventStoreMigrationIntegrationTest {
     void cleanInstallAppliesAllMigrationsAndRepeatIsNoOp() {
         Flyway flyway = flyway(MIGRATION_LOCATION);
 
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(9);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(10);
         flyway.validate();
         assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -70,12 +70,18 @@ class AuthEventStoreMigrationIntegrationTest {
                 "sanitized_dead_letter",
                 "inbox_message",
                 "consumer_aggregate_checkpoint",
-                "company",
                 "customer_registration_throttle",
                 "version_gap_quarantine",
                 "replay_operation_audit");
         assertThat(jdbc.queryForObject("select count(*) from domain_event", Integer.class)).isZero();
         assertThat(jdbc.queryForObject("select count(*) from outbox_event", Integer.class)).isZero();
+        assertThat(
+                jdbc.queryForObject(
+                        "select count(*) from information_schema.columns "
+                                + "where table_schema='public' and table_name='auth_subject' "
+                                + "and column_name='company_id'",
+                        Integer.class))
+                .isZero();
         assertThat(jdbc.update(
                         "insert into consumer_aggregate_checkpoint(consumer_group, aggregate_type, aggregate_id, "
                                 + "last_event_id, last_aggregate_version, blocked, updated_at) "
@@ -101,7 +107,7 @@ class AuthEventStoreMigrationIntegrationTest {
                 .load();
         adopted.baseline();
 
-        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(8);
+        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(9);
         adopted.validate();
         assertThat(adopted.migrate().migrationsExecuted).isZero();
 
@@ -730,7 +736,7 @@ class AuthEventStoreMigrationIntegrationTest {
         seedVersionTwoRows();
         Flyway adopted = configuration(MIGRATION_LOCATION).baselineVersion("2").load();
         adopted.baseline();
-        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(8);
+        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(9);
     }
 
     private void seedVersionTwoRows() {

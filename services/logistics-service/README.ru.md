@@ -31,7 +31,7 @@ document/workflow state, но не агрегатами кабин, оборуд
 
 Подмножество clients, inquiries, presentations и orders аренды также принимает только выделенный
 credential `rwms-rental-manager-web` или `rwms-rental-manager-android` с `RENTAL_MANAGER`,
-`rentalAccess=true`, подписанной компанией и ровно `rental.manage` как application scope. Поиск
+`rentalAccess=true` и ровно `rental.manage` как application scope. Поиск
 бытовок и выбор склада сохраняют существующие явные grants уровня `EDIT`. Смешанные application
 scopes запрещены, а возвраты, отгрузки, перемещения и остальные операционные API по-прежнему
 требуют обычные RWMS scopes.
@@ -505,9 +505,8 @@ claim общая доставка показывается с авторитет
 
 Диспетчер с доступом EDIT может явно создать ограниченный маршрут подрядчика через
 `POST /api/logistics/v1/warehouses/{warehouseId}/contractor-route-shares`. Одна durable capability
-создаётся или отзывается только после того, как warehouse-service подтвердит принадлежность склада
-из path подписанной компании пользователя; глобальная роль или подставленный UUID склада не могут
-обойти эту tenant-границу. Capability
+создаётся или отзывается только после проверки существующего права пользователя `EDIT` для склада
+из path; подставленный UUID склада без такого доступа отклоняется. Capability
 привязывает одного точного активного работника `CONTRACTOR` к одному–пятидесяти точным logistics
 `externalTaskId`, истекает не позднее чем через тридцать дней, поддерживает точный subject-scoped
 idempotent replay и отзывается с `expectedVersion`. Domain-separated HMAC token возвращается только

@@ -62,13 +62,17 @@ class AuthAdoptedV2JpaValidationIntegrationTest {
         assertThat(jdbc.queryForObject("select count(*) from auth_subject", Integer.class)).isOne();
         assertThat(jdbc.queryForObject("select count(*) from user_warehouse_access", Integer.class)).isOne();
         assertThat(jdbc.queryForMap(
-                        "select version, company_id, mobile_app_access, rental_access from auth_subject"))
+                        "select version, mobile_app_access, rental_access from auth_subject"))
                 .containsEntry("version", 6)
-                .containsEntry(
-                        "company_id",
-                        java.util.UUID.fromString("ae0d6f97-f0c5-576a-9ea7-1ddcc1a03b48"))
                 .containsEntry("mobile_app_access", false)
                 .containsEntry("rental_access", false);
+        assertThat(
+                jdbc.queryForObject(
+                        "select count(*) from information_schema.columns "
+                                + "where table_schema='public' and table_name='auth_subject' "
+                                + "and column_name='company_id'",
+                        Integer.class))
+                .isZero();
     }
 
     @AfterAll

@@ -2604,8 +2604,7 @@ paths:
       description: >-
         Explicitly creates one expiring and revocable public route for an exact active CONTRACTOR
         worker and one to fifty already assigned logistics externalTaskIds. The caller requires
-        rwms.write plus warehouse EDIT access, and the warehouse must belong to the signed
-        company_id. Logistics re-proves every local
+        rwms.write plus warehouse EDIT access. Logistics re-proves every local
         DriverLogisticsTask -> LogisticsDocument -> RentalOrder binding and the live exact-worker
         task-board snapshot before inserting only identities and link lifecycle. Exact
         subject-scoped Idempotency-Key replay returns the original link; changed reuse conflicts.
@@ -2651,8 +2650,7 @@ paths:
       operationId: revokeContractorRouteShare
       description: >-
         Revokes one warehouse-owned capability and rotates its signed token revision under an
-        expectedVersion fence. The caller requires rwms.write plus warehouse EDIT access, and the
-        warehouse must belong to the signed company_id.
+        expectedVersion fence. The caller requires rwms.write plus warehouse EDIT access.
       requestBody:
         required: true
         content:
@@ -3600,8 +3598,8 @@ paths:
     get:
       operationId: listCustomerCabinProblems
       description: >-
-        Lists only customer cabin problem claims visible to the authenticated company and warehouse
-        actor. The compact context is a current order/client projection; immutable evidence and
+        Lists only customer cabin problem claims visible to the authenticated actor. The compact
+        context is a current order/client projection; immutable evidence and
         lifecycle actions remain owned by logistics.
       parameters:
         - name: status
@@ -3647,7 +3645,7 @@ paths:
             schema: { $ref: "#/components/schemas/StartCustomerCabinProblemRequest" }
       responses:
         "200":
-          description: Updated company- and warehouse-fenced claim.
+          description: Updated warehouse-fenced claim.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CustomerCabinProblemClaim" }
@@ -3672,7 +3670,7 @@ paths:
             schema: { $ref: "#/components/schemas/ResolveCustomerCabinProblemRequest" }
       responses:
         "200":
-          description: Resolved company- and warehouse-fenced claim.
+          description: Resolved warehouse-fenced claim.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CustomerCabinProblemClaim" }

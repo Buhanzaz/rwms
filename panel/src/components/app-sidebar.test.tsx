@@ -371,7 +371,6 @@ describe("AppSidebar collapsed desktop navigation", () => {
       name: "BLOCKBOX: Панель WMS",
     })
     expect(brand.className).toContain("items-center")
-    expect(screen.getByRole("img", { name: "BLOCKBOX" })).toBeTruthy()
     expect(screen.getByText("Панель WMS")).toBeTruthy()
     expect(
       document

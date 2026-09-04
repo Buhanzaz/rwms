@@ -55,10 +55,11 @@ they do not reproduce the warehouse registry in shared tables.
 
 A warehouse has independent `production` and `mainWarehouse` classifications;
 a regular object has at least one, while a representative has neither and
-exactly one same-company production or main parent. `WarehouseType`,
-`productionWarehouseId`, and `representative` are compatibility projections,
-not lifecycle state. The owner also keeps an optional WGS84 coordinate pair and a
-directed many-to-many support graph. The coordinate pair is all-or-none; exact `0,0` is
+exactly one production or main parent. The derived `representative` field is
+`true` exactly when `representativeParentWarehouseId` is non-null. Only
+`WarehouseType`/`warehouseType` and `productionWarehouseId` are removed; they
+no longer define lifecycle state. The owner also keeps an optional WGS84
+coordinate pair and a directed many-to-many support graph. The coordinate pair is all-or-none; exact `0,0` is
 the reserved unset placeholder and is not an operational route origin, while a
 single zero axis remains valid when the other component is non-zero. New owner
 commands reject the placeholder. Consumers retain old identity facts but mark
@@ -80,7 +81,7 @@ an operation may correct its timezone immediately; after first use, timezone
 changes are effective-dated and do not rewrite earlier facts or reports.
 Deactivation proceeds through `DRAINING` and exact-version confirmations from
 operation owners before `INACTIVE`. The public warehouse directory is scoped
-by signed company identity rather than warehouse grants.
+to the installation; warehouse grants do not filter it.
 
 Evidence: [`services/warehouse-service/`](../../services/warehouse-service/),
 [`warehouse-service.yaml`](../../contracts/openapi/warehouse-service.yaml),
@@ -89,8 +90,7 @@ Evidence: [`services/warehouse-service/`](../../services/warehouse-service/),
 [`V5__warehouse_lifecycle.sql`](../../services/warehouse-service/src/main/resources/db/migration/V5__warehouse_lifecycle.sql),
 [`V7__warehouse_representative_characteristic.sql`](../../services/warehouse-service/src/main/resources/db/migration/V7__warehouse_representative_characteristic.sql),
 [`V8__warehouse_coordinates_and_support_links.sql`](../../services/warehouse-service/src/main/resources/db/migration/V8__warehouse_coordinates_and_support_links.sql),
-[`V9__warehouse_company_and_type.sql`](../../services/warehouse-service/src/main/resources/db/migration/V9__warehouse_company_and_type.sql), and
-[`V10__warehouse_object_classifications.sql`](../../services/warehouse-service/src/main/resources/db/migration/V10__warehouse_object_classifications.sql),
+historical [`V9`](../../services/warehouse-service/src/main/resources/db/migration/V9__warehouse_company_and_type.sql) and [`V10`](../../services/warehouse-service/src/main/resources/db/migration/V10__warehouse_object_classifications.sql), and current [`V11`](../../services/warehouse-service/src/main/resources/db/migration/V11__remove_platform_company_boundary.sql),
 [`Warehouse`](../../services/warehouse-service/src/main/java/dev/buhanzaz/rwms/warehouse/domain/Warehouse.java),
 [`WarehouseSupportLinkService`](../../services/warehouse-service/src/main/java/dev/buhanzaz/rwms/warehouse/service/WarehouseSupportLinkService.java),
 [`CustomerWarehouseService`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/service/CustomerWarehouseService.java),
@@ -279,10 +279,9 @@ pre-start updates in
 [`RepairRoutePhaseOrder`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/RepairRoutePhaseOrder.java),
 so a producer cannot make a later phase executable by changing array order.
 
-The KPI display palette is a company-scoped, version-fenced task-board aggregate:
-`GET`/`PUT /api/task-board/kpi-palette` derive the company only from the signed
-principal, and one replacement applies to every warehouse and native worker in
-that company. Legacy warehouse palette records are not selected as an implicit
+The KPI display palette is an installation-wide, version-fenced task-board aggregate:
+`GET`/`PUT /api/task-board/kpi-palette` have no scope selector,
+and one replacement applies to every warehouse and native worker. Legacy warehouse palette records are not selected as an implicit
 baseline. KPI schedule revisions remain effective-dated in the warehouse time zone. Saving
 creates or updates the pending `DRAFT`; activation of a revision effective
 today promotes it to `ACTIVE` in the same command and applies it to the whole
@@ -765,9 +764,9 @@ repair dates start from that effective date. A manual past date is rejected,
 and a final-plan draft that became stale overnight must be prepared and
 reviewed again before preview or completion.
 
-The effective-dated company work schedule remains task-board-owned; Driver Up
+The effective-dated installation work schedule remains task-board-owned; Driver Up
 shifts are a separate aggregate and do not define this calendar. The same
-effective local date, shift, breaks and `daysOff` apply to every company object,
+effective local date, shift, breaks and `daysOff` apply to every warehouse,
 while each object's calendar projection retains its authoritative timezone.
 Inventory's public planning settings retain only explicit inventory holidays.
 It reads the bounded private task-board object calendar for every new plan or corrective appended entry, schedules any number of eligible

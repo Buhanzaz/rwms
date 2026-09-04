@@ -142,9 +142,6 @@ describe("AdminApp", () => {
     expect(
       within(sidebar as HTMLElement).queryByText("Администратор")
     ).toBeNull()
-    expect(
-      within(sidebar as HTMLElement).getByRole("img", { name: "BLOCKBOX" })
-    ).toBeTruthy()
     expect(navigation.className).toContain("flex-col")
     expect(navigation.className).not.toContain("overflow-x-auto")
     expect(screen.getByText("Настройки пользователей")).toBeTruthy()

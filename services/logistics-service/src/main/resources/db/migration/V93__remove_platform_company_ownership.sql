@@ -5,7 +5,7 @@
 DO $$
 BEGIN
     IF (
-        SELECT count(*)
+        SELECT count(DISTINCT company_id)
         FROM (
             SELECT company_id FROM public.order_client
             UNION
@@ -43,6 +43,7 @@ BEGIN
             UNION
             SELECT company_id FROM public.customer_cabin_problem_action
         ) owned_company
+        WHERE company_id IS NOT NULL
     ) > 1 THEN
         RAISE EXCEPTION
             'Cannot collapse platform company ownership for a multi-company logistics database';

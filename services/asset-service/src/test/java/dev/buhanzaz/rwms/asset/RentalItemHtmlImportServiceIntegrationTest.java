@@ -928,7 +928,6 @@ class RentalItemHtmlImportServiceIntegrationTest {
     private final AtomicInteger preflightCalls = new AtomicInteger();
     private final AtomicBoolean loseNextPreflightResponse = new AtomicBoolean();
     private UUID importId;
-    private UUID companyId;
     private UUID warehouseId;
 
     private void reset() {
@@ -944,19 +943,16 @@ class RentalItemHtmlImportServiceIntegrationTest {
       preflightCalls.set(0);
       loseNextPreflightResponse.set(false);
       importId = null;
-      companyId = null;
       warehouseId = null;
     }
 
     @Override
     public MediaAssetImportJob preflight(
-        UUID requestedCompanyId,
         UUID assetImportId,
         UUID requestedWarehouseId,
         List<MediaAssetImportSource> sources,
         UUID idempotencyKey) {
       importId = assetImportId;
-      companyId = requestedCompanyId;
       warehouseId = requestedWarehouseId;
       preflightSources.set(List.copyOf(sources));
       preflightTransactionActive.set(TransactionSynchronizationManager.isActualTransactionActive());
@@ -969,8 +965,7 @@ class RentalItemHtmlImportServiceIntegrationTest {
     }
 
     @Override
-    public MediaAssetImportJob get(UUID requestedCompanyId, UUID requestedJobId) {
-      assertThat(requestedCompanyId).isEqualTo(companyId);
+    public MediaAssetImportJob get(UUID requestedJobId) {
       assertThat(requestedJobId).isEqualTo(jobId);
       getTransactionActive.set(TransactionSynchronizationManager.isActualTransactionActive());
       return job(status.get());
@@ -978,11 +973,9 @@ class RentalItemHtmlImportServiceIntegrationTest {
 
     @Override
     public MediaAssetImportJob activate(
-        UUID requestedCompanyId,
         UUID requestedJobId,
         List<MediaAssetImportBinding> bindings,
         UUID idempotencyKey) {
-      assertThat(requestedCompanyId).isEqualTo(companyId);
       assertThat(requestedJobId).isEqualTo(jobId);
       activationTransactionActive.set(TransactionSynchronizationManager.isActualTransactionActive());
       activationBindings.set(List.copyOf(bindings));
@@ -991,9 +984,7 @@ class RentalItemHtmlImportServiceIntegrationTest {
     }
 
     @Override
-    public MediaAssetImportJob retry(
-        UUID requestedCompanyId, UUID requestedJobId, UUID idempotencyKey) {
-      assertThat(requestedCompanyId).isEqualTo(companyId);
+    public MediaAssetImportJob retry(UUID requestedJobId, UUID idempotencyKey) {
       assertThat(requestedJobId).isEqualTo(jobId);
       retryTransactionActive.set(TransactionSynchronizationManager.isActualTransactionActive());
       status.set(MediaAssetImportJob.Status.PREFLIGHT_PENDING);
@@ -1002,11 +993,9 @@ class RentalItemHtmlImportServiceIntegrationTest {
 
     @Override
     public MediaAssetImportJob replacePreflightSources(
-        UUID requestedCompanyId,
         UUID requestedJobId,
         List<MediaAssetImportSource> sources,
         UUID idempotencyKey) {
-      assertThat(requestedCompanyId).isEqualTo(companyId);
       assertThat(requestedJobId).isEqualTo(jobId);
       replacementTransactionActive.set(TransactionSynchronizationManager.isActualTransactionActive());
       replacementSources.set(List.copyOf(sources));
@@ -1036,7 +1025,6 @@ class RentalItemHtmlImportServiceIntegrationTest {
       return new MediaAssetImportJob(
           jobId,
           importId,
-          companyId,
           warehouseId,
           current,
           0,

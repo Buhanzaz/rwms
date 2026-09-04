@@ -25,6 +25,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -107,6 +108,30 @@ class InventoryInspectionApiContractIntegrationTest {
         restart identity cascade
         """);
     when(jwtDecoder.decode(TOKEN)).thenReturn(jwt());
+    when(dependencies.workCalendarSnapshot(any(), any(), any()))
+        .thenAnswer(
+            invocation -> {
+              UUID warehouseId = invocation.getArgument(0, UUID.class);
+              LocalDate from = invocation.getArgument(1, LocalDate.class);
+              LocalDate through = invocation.getArgument(2, LocalDate.class);
+              return new InventoryDependencyGateway.WorkCalendarSnapshot(
+                  warehouseId,
+                  from,
+                  through,
+                  "a".repeat(64),
+                  from.datesUntil(through.plusDays(1))
+                      .map(
+                          date ->
+                              new InventoryDependencyGateway.WorkCalendarDate(
+                                  date,
+                                  true,
+                                  "UTC",
+                                  OffsetDateTime.parse("2026-01-01T00:00:00Z"),
+                                  UUID.fromString("00000000-0000-0000-0000-000000000701"),
+                                  1L,
+                                  LocalDate.of(2026, 1, 1)))
+                      .toList());
+            });
   }
 
   @AfterAll

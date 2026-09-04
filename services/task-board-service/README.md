@@ -22,17 +22,16 @@ keeping source-domain facts and decisions with their original owners.
 | Operational work | Tasks, route entries, assignment, pinning, pause/resume/complete, and history | Source domain owns why the work exists and its aggregate state |
 | Native execution | Separate driver/worker feeds, offline action leases, evidence reservation, SSE and transactional FCM invalidation | DriverApp and WorkerApp refresh authoritative REST state and upload media through media-service |
 | Driver daily shift | Warehouse-local work date, preparation/closing state machine, inspection snapshot, defects, audit timestamps and media proof | Logistics supplies the reviewed driver/vehicle/day plan; warehouse owns identity/timezone; media owns bytes |
-| KPI | Company-wide display palette, warehouse work-schedule revisions, and emitted daily evidence | Analytics owns the KPI read projection |
+| KPI | Installation-wide display palette, work-schedule revisions, and emitted daily evidence | Analytics owns the KPI read projection |
 | Warehouse lifecycle | Local operation marks, admission fence, draining blockers, exact-version readiness | Warehouse-service owns lifecycle state and admission decisions |
 
 The service does not own users and roles, warehouse identity, repair or
 logistics aggregates, media bytes, analytics projections, or gateway routing.
 
 Every public warehouse-bound operation resolves the current warehouse identity
-from warehouse-service and compares its immutable company with the signed
-`company_id` of the USER or WORKER token before applying role, warehouse grant,
-or worker-home rules. `SYSTEM_ADMIN` and `WMS_ADMIN` therefore do not bypass the
-company boundary when a warehouse ID is supplied directly.
+from warehouse-service before applying the signed principal's role, warehouse
+grant, or worker-home rules. `SYSTEM_ADMIN` and `WMS_ADMIN` do not bypass those
+warehouse authorization rules when a warehouse ID is supplied directly.
 
 ## Command and task flow
 
@@ -102,10 +101,10 @@ Dated driver and shipment planning remains on the separate logistics surfaces. T
 [`TaskBoardFutureAvailabilityService`](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardFutureAvailabilityService.java),
 and [`OrdinaryQueueAvailabilityPolicy`](src/main/java/dev/buhanzaz/rwms/taskboard/service/OrdinaryQueueAvailabilityPolicy.java).
 
-The KPI display palette and work schedule form one company-scoped, version-fenced settings head.
-The company boundary comes from the signed principal; no warehouse is selected for either setting.
+The KPI display palette and work schedule form one installation-wide, version-fenced settings head.
+No warehouse is selected for either setting.
 One activated schedule applies the same effective local-calendar date, shift, breaks and days off
-to every company warehouse, while each operational clock interprets those values in its own
+to every warehouse, while each operational clock interprets those values in its own
 authoritative timezone. Saving keeps a revision in `DRAFT`; activation schedules it idempotently,
 and a revision effective on the current UTC configuration date is promoted immediately. A future
 revision remains `SCHEDULED` until its date, and a date before the current UTC date is rejected.
@@ -381,8 +380,8 @@ The public gateway maps `/api/task-board/**` to this service's downstream
 | `/api/warehouses/{warehouseId}/work-queues` | Warehouse-authorized user | Physical queue projections and capabilities |
 | `/api/warehouses/{warehouseId}/task-board/**` | Warehouse-authorized user | Aggregate ordinary-board read and supported task commands |
 | `/api/warehouses/{warehouseId}/task-board/daily-brigade-activity` | Warehouse-authorized user | Actual task-assignment intervals overlapping the current warehouse-local day |
-| `/api/task-board/kpi-palette` | Authenticated company; global management for `PUT` | One version-fenced KPI palette shared by every company warehouse |
-| `/api/task-board/kpi-settings/**` | Authenticated company; global management for mutations | One version-fenced work schedule shared by every company warehouse; no warehouse selector |
+| `/api/task-board/kpi-palette` | Authenticated user; global management for `PUT` | One version-fenced KPI palette shared by every installation warehouse |
+| `/api/task-board/kpi-settings/**` | Authenticated user; global management for mutations | One version-fenced work schedule shared by every installation warehouse; no warehouse selector |
 | `/api/worker/v1/**` | Worker credential and `worker.tasks` scope | Context, feed, detail, actions, evidence reservations, devices, and events |
 | `/api/driver/v1/**` | Worker credential and `driver.tasks` scope | Driver-only context, primary feed, actions, evidence reservations, devices, and events |
 | `/api/driver/v1/shift/today` and `/api/driver/v1/shifts/{shiftId}/**` | Exact driver identity and `driver.tasks` | Startup aggregate and version-fenced daily-shift transitions |

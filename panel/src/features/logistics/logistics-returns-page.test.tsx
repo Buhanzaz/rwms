@@ -485,10 +485,7 @@ describe("LogisticsReturnsPage", () => {
     expect(
       screen.getAllByRole("button", { name: "Водитель" })
     ).not.toHaveLength(0)
-    expect(screen.getByText("День возвратов")).toBeTruthy()
-    expect(
-      screen.getByRole("button", { name: /^День возвратов:/ })
-    ).toBeTruthy()
+    expect(screen.getByRole("button", { name: /^Календарь:/ })).toBeTruthy()
     expect(screen.queryByLabelText("Вывоз с")).toBeNull()
     expect(screen.queryByLabelText("Вывоз по")).toBeNull()
     expect(screen.queryByText("Дата", { exact: true })).toBeNull()

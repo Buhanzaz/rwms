@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.logistics.customer.claims;
 
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerCabinProblem;
+import dev.buhanzaz.rwms.logistics.customer.claims.domain.CustomerCabinProblemAction;
 import dev.buhanzaz.rwms.logistics.customer.repository.CustomerCabinProblemRepository;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;

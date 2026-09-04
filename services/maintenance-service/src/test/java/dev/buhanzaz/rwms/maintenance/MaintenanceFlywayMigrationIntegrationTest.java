@@ -42,7 +42,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsTheAuthoritativeMaintenanceSchema() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(49);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(50);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
@@ -308,8 +308,8 @@ class MaintenanceFlywayMigrationIntegrationTest {
         .contains("guard_maintenance_disposition_claim_readiness");
     assertThat(triggerDefinition("integration_reconciliation_readiness_guard"))
         .contains("guard_maintenance_reconciliation_readiness");
-    assertThat(triggerDefinition("catalog_version_readiness_guard"))
-        .contains("guard_maintenance_warehouse_readiness_fence");
+    assertThat(triggerExists("catalog_version_readiness_guard")).isFalse();
+    assertThat(triggerExists("furniture_equipment_link_readiness_guard")).isFalse();
     assertThat(columns("property_disposition_decision")).contains(
         "maintenance_custody_claim_id", "maintenance_custody_version");
     assertThat(columnNullable("property_disposition_decision", "expected_asset_version"))
@@ -388,6 +388,81 @@ class MaintenanceFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void v50DetachesGlobalCatalogAuditFromWarehouseReadinessWithoutWeakeningOwnerChecks() {
+    Flyway throughV49 = Flyway.configure()
+        .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+        .locations(MIGRATIONS)
+        .target("49")
+        .baselineOnMigrate(false)
+        .cleanDisabled(true)
+        .validateOnMigrate(true)
+        .validateMigrationNaming(true)
+        .outOfOrder(false)
+        .load();
+    assertThat(throughV49.migrate().migrationsExecuted).isEqualTo(49);
+
+    UUID auditWarehouseId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+    UUID catalogId = UUID.randomUUID();
+    insertCatalogVersion(catalogId, auditWarehouseId, "a".repeat(64));
+    jdbc.update(
+        """
+        insert into warehouse_readiness_fence(
+          id,warehouse_id,warehouse_version,state,fenced_at,updated_at)
+        values (?,?,7,'FENCED',clock_timestamp(),clock_timestamp())
+        """,
+        UUID.randomUUID(),
+        auditWarehouseId);
+    assertThatThrownBy(() -> jdbc.update(
+            "update catalog_version set node_count=node_count+1 where id=?", catalogId))
+        .hasMessageContaining("readiness fence");
+
+    Flyway upgraded = flyway(MIGRATIONS);
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+    assertThat(triggerExists("catalog_version_readiness_guard")).isFalse();
+    assertThat(triggerExists("furniture_equipment_link_readiness_guard")).isFalse();
+    assertThat(jdbc.update(
+        "update catalog_version set node_count=node_count+1 where id=?", catalogId)).isOne();
+
+    UUID reconciliationId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into integration_reconciliation(
+          id,repair_id,dependency_type,operation_type,idempotency_key,state,attempt_count,
+          next_attempt_at,response_snapshot,review_version,created_at,updated_at,
+          catalog_version_id,catalog_node_id,catalog_queue_id,catalog_external_reference_id)
+        values (?,null,'TASK_BOARD','REGISTER_CATALOG_POSITION',?,'PENDING',0,
+          clock_timestamp(),'{}'::jsonb,0,clock_timestamp(),clock_timestamp(),?,?,?,?)
+        """,
+        reconciliationId,
+        UUID.randomUUID(),
+        catalogId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "catalog:" + catalogId + ":position");
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*)
+          from maintenance_reconciliation_warehouse_ids(
+            (select to_jsonb(value) from integration_reconciliation value where id=?))
+        """,
+        Integer.class,
+        reconciliationId)).isZero();
+    assertThatThrownBy(() -> jdbc.update(
+            """
+            insert into integration_reconciliation(
+              id,dependency_type,operation_type,idempotency_key,state,attempt_count,
+              next_attempt_at,response_snapshot,review_version,created_at,updated_at)
+            values (?,'ASSET','OWNERLESS_TEST',?,'PENDING',0,clock_timestamp(),'{}',0,
+              clock_timestamp(),clock_timestamp())
+            """,
+            UUID.randomUUID(),
+            UUID.randomUUID()))
+        .hasMessageContaining("no warehouse owner");
+    assertThat(upgraded.migrate().migrationsExecuted).isZero();
+  }
+
+  @Test
   void versionFortySevenAdmitsTaskEvidenceIntoTheDurableInbox() {
     Flyway throughV46 =
         Flyway.configure()
@@ -409,7 +484,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         .doesNotContain("rwms.task-board.task-evidence.v1");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(4);
     upgraded.validate();
     assertThat(
             constraintDefinition(
@@ -453,7 +528,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
     throughV34.validate();
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(15);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(16);
     upgraded.validate();
     assertThat(constraintDefinition("event_stream_head", "ck_maintenance_stream_type"))
         .contains("PROPERTY_DISPOSITION");
@@ -541,7 +616,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         activeCatalogId);
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(7);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(8);
     upgraded.validate();
 
     assertThat(
@@ -786,7 +861,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         catalogId.toString(),
         "0".repeat(64));
 
-    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(25);
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(26);
 
     assertThat(jdbc.queryForObject(
         "select count(*) from catalog_node where catalog_version_id=? and node_type='WORK'",
@@ -1167,7 +1242,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "0".repeat(64));
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(26);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(27);
     upgraded.validate();
 
     assertThat(
@@ -1330,7 +1405,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
     insertLegacyEstimateStage(estimateId, UUID.randomUUID(), 2, "MOVE_FROM_REPAIR");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(23);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(24);
     upgraded.validate();
 
     assertThat(jdbc.queryForMap(
@@ -1512,7 +1587,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         repairStageId);
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(22);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(23);
     upgraded.validate();
 
     assertThat(
@@ -1625,7 +1700,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "0".repeat(64));
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(21);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(22);
     upgraded.validate();
 
     assertThat(jdbc.queryForMap(
@@ -1725,7 +1800,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
     insertV20CatalogStreamArtifacts(otherCatalogId, otherNodeId, "ACTIVE");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(29);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(30);
     upgraded.validate();
 
     assertThat(jdbc.queryForObject(
@@ -2595,6 +2670,23 @@ class MaintenanceFlywayMigrationIntegrationTest {
         """,
         String.class,
         trigger);
+  }
+
+  private boolean triggerExists(String trigger) {
+    Boolean exists = jdbc.queryForObject(
+        """
+        select exists (
+          select 1
+            from pg_trigger trigger
+            join pg_class relation on relation.oid=trigger.tgrelid
+            join pg_namespace namespace on namespace.oid=relation.relnamespace
+           where namespace.nspname='public'
+             and not trigger.tgisinternal
+             and trigger.tgname=?)
+        """,
+        Boolean.class,
+        trigger);
+    return Boolean.TRUE.equals(exists);
   }
 
   private String columnDefault(String table, String column) {

@@ -467,10 +467,7 @@ describe("WarehouseTransfersPage", () => {
     expect(
       screen.getByRole("textbox", { name: "Поиск по маршруту" })
     ).toBeTruthy()
-    expect(screen.getByText("День перемещений")).toBeTruthy()
-    expect(
-      screen.getByRole("button", { name: /^День перемещений:/ })
-    ).toBeTruthy()
+    expect(screen.getByRole("button", { name: /^Календарь:/ })).toBeTruthy()
     expect(screen.queryByLabelText("Перемещение с")).toBeNull()
     expect(screen.queryByLabelText("Перемещение по")).toBeNull()
     expect(screen.queryByRole("combobox", { name: "Наличие даты" })).toBeNull()

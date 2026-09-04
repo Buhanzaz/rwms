@@ -20,11 +20,11 @@ Do not start unrelated work.
 
 Do not push, publish or deploy unless the user explicitly requests it or the current command clearly includes that action.
 
-Every completed implementation task must leave no WIP: before the final handoff, finish,
-verify and commit the complete shared change set, leaving `git status --short` empty. Do not
-leave task changes, generated source, partial fixes or deferred integration as an uncommitted
-handoff. An exception requires an explicit user instruction to keep the worktree dirty and must
-name the paths that remain unfinished.
+The repository must not accumulate WIP. Before changing behavior, reconcile and commit any
+existing shared changes so that `git status --short` is empty. Keep implementation steps small,
+verify and commit each coherent step before switching to another task or component. Final
+handoff, publication and task switching always require an empty `git status --short`; there is no
+dirty-worktree exception.
 
 ---
 
@@ -214,8 +214,10 @@ If preserving both requires choosing which existing behavior to discard, stop an
 ## One Shared Completion State
 
 RWMS development has exactly one mutable working state: the current primary repository worktree
-on its current branch. It may be dirty only while an active task is being completed. There is no
-acceptable WIP after a task handoff.
+on its current branch. A non-empty worktree is permitted only as the transient state of the
+single implementation step currently being edited. It must be verified and committed before
+starting another step, changing task, publishing or handing work off. Uncommitted changes must
+never become stored or deferred WIP.
 
 Agents must not create or use a separate:
 
@@ -230,7 +232,17 @@ All implementation, verification and publication must use the same on-disk share
 task may narrow the files it edits or the runtime it restarts, but it must not create an isolated
 source snapshot that can omit shared work.
 
-Before declaring a task complete:
+Before starting new implementation when the worktree is not clean:
+
+1. inspect the full current diff and `git status --short`;
+2. identify the owner and purpose of every changed or untracked path;
+3. reconcile the complete shared state without discarding protected work;
+4. verify it; and
+5. commit it so that `git status --short` is empty.
+
+Do not add another feature or unrelated fix on top of unknown uncommitted state.
+
+Before declaring a task complete, switching to another task or publishing:
 
 1. inspect the full current diff and `git status --short`;
 2. reconcile every changed or untracked path into the completed task, preserving valid existing
@@ -1012,39 +1024,22 @@ Do not automatically launch large cross-service suites unless:
 
 # 26. Panel UI Verification
 
-For a change to active `panel/` UI, focused UI verification must exercise the changed user flow.
+For a change to active `panel/` UI, verify the changed flow with repository-owned tests and
+deterministic build checks.
 
-When a separate `gpt-5.6-luna` verification agent is available, use it as the independent verifier for active panel UI changes.
+Use the narrowest sufficient combination of:
 
-Its role is verification, not uncontrolled repository review.
+* focused Vitest and Testing Library tests that exercise the user interaction;
+* TypeScript checking;
+* linting;
+* a production build;
+* authenticated HTTP/API probes when publication was requested.
 
-The verifier should receive:
+Inspect the actual command output, test counts and failures. A summary without the underlying
+result is not proof.
 
-* exact changed flow;
-* expected behavior;
-* relevant test command;
-* read-only production/test source scope unless specifically assigned otherwise.
-
-The primary agent remains responsible for the verdict.
-
-Inspect actual:
-
-* command output;
-* test counts;
-* failures;
-* screenshot/trace/browser artifacts when generated.
-
-A child-agent summary alone is not proof.
-
-If Luna is unavailable, perform the strongest focused verification available and report that fact.
-
-Do not create separate agents merely to:
-
-* brainstorm;
-* plan;
-* write status reports;
-* inspect unrelated architecture;
-* search for extra bugs.
+Do not use browser-automation frameworks for RWMS verification. Do not add browser-verification
+dependencies, scripts, agents, screenshots, traces or runtime artifacts to the repository.
 
 ---
 
@@ -1281,8 +1276,7 @@ requires matching changes elsewhere.
 
 Inspect the full release diff before publication. Do not selectively reconstruct or copy only
 task hunks into an artifact: that produces a truncated release. If the worktree is dirty, the
-release is blocked until the active work is completed, verified and committed, unless the user
-explicitly authorizes a named dirty-state exception.
+release is blocked until the active work is completed, verified and committed.
 
 ---
 
@@ -1450,8 +1444,8 @@ Never send secrets to external tools or agents unnecessarily.
 
 Preserve user and concurrent changes.
 
-Commit the complete verified task state before handoff so that no WIP remains. A user may
-explicitly authorize named paths to remain dirty; otherwise a clean worktree is mandatory.
+Commit the complete verified task state before handoff so that no WIP remains. A clean worktree
+is mandatory before publication, task switching and handoff.
 
 Do not push unless the user asks.
 
@@ -1593,8 +1587,7 @@ An implementation task is done when all applicable conditions are true:
 9. durable documentation is updated when necessary;
 10. no task-owned build/test processes remain;
 11. publication has been verified when publication was explicitly requested; and
-12. `git status --short` is empty after the completed work has been committed, unless the user
-    explicitly authorized named remaining WIP paths.
+12. `git status --short` is empty after the completed work has been committed.
 
 Do not require unrelated repository problems to be solved before completing the task.
 

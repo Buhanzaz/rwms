@@ -18,12 +18,12 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -33,6 +33,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 
 @SpringBootTest
 @ActiveProfiles("test")
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class TaskBoardEventingRuntimeIntegrationTest {
   private static final PostgreSQLContainer postgres =
       new PostgreSQLContainer("postgres:17-alpine");
@@ -580,10 +581,5 @@ class TaskBoardEventingRuntimeIntegrationTest {
             String.class,
             eventId);
     return value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-  }
-
-  @AfterAll
-  static void stopDatabase() {
-    postgres.stop();
   }
 }

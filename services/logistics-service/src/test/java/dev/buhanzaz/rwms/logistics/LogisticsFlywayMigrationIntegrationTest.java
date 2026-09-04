@@ -629,6 +629,7 @@ class LogisticsFlywayMigrationIntegrationTest {
     UUID clientId = UUID.randomUUID();
     UUID inquiryId = UUID.randomUUID();
     UUID presentationId = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
     UUID selectedCabinId = UUID.randomUUID();
     UUID historicalBookingId = UUID.randomUUID();
     OffsetDateTime historicalCompletedAt = OffsetDateTime.parse("2026-07-27T10:15:00Z");
@@ -644,6 +645,22 @@ class LogisticsFlywayMigrationIntegrationTest {
         subjectId,
         UUID.randomUUID(),
         "a".repeat(64));
+    jdbc.update(
+        """
+        insert into rental_order(
+          id,version,order_number,status,client_id,manager_id,manager_display_name,
+          created_by_subject_id,created_by_display_name,created_by_role,warehouse_id,
+          creation_idempotency_key,creation_request_sha256,created_at,updated_at)
+        values (?,0,'ORD-220001','DRAFT',?,?,'Менеджер',?,'Менеджер',
+          'RENTAL_MANAGER',?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        orderId,
+        clientId,
+        subjectId,
+        subjectId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "b".repeat(64));
     jdbc.update(
         """
         insert into rental_inquiry(
@@ -682,7 +699,7 @@ class LogisticsFlywayMigrationIntegrationTest {
         historicalBookingId,
         presentationId,
         UUID.randomUUID(),
-        UUID.randomUUID(),
+        orderId,
         "[\"" + selectedCabinId + "\"]",
         historicalCompletedAt.minusMinutes(2),
         historicalCompletedAt,
@@ -718,7 +735,7 @@ class LogisticsFlywayMigrationIntegrationTest {
         newBookingId,
         presentationId,
         UUID.randomUUID(),
-        UUID.randomUUID(),
+        orderId,
         "[\"" + selectedCabinId + "\"]");
     assertThat(
             jdbc.queryForObject(
@@ -4152,9 +4169,25 @@ class LogisticsFlywayMigrationIntegrationTest {
     Flyway beforeV93 = configuration(MIGRATIONS).target("92").load();
     assertThat(beforeV93.migrate().migrationsExecuted).isPositive();
 
+    UUID bootstrapCompany = UUID.fromString("ae0d6f97-f0c5-576a-9ea7-1ddcc1a03b48");
+    UUID companyClientId = UUID.randomUUID();
+    UUID nullableLegacyClientId = UUID.randomUUID();
+    jdbc.execute("alter table order_client alter column company_id drop not null");
+    insertV92OrderClient(companyClientId, bootstrapCompany, "V93 installation client");
+    // An interrupted historical ownership backfill can leave a nullable row; it is not a company.
+    insertV92OrderClient(nullableLegacyClientId, null, "V93 nullable legacy client");
+
     Flyway upgraded = configuration(MIGRATIONS).target("93").load();
     assertThat(upgraded.migrate().migrationsExecuted).isOne();
     upgraded.validate();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from order_client where id in (?, ?)",
+                Long.class,
+                companyClientId,
+                nullableLegacyClientId))
+        .isEqualTo(2L);
 
     assertThat(
             jdbc.queryForList(
@@ -4223,6 +4256,46 @@ class LogisticsFlywayMigrationIntegrationTest {
                 String.class))
         .isEmpty();
     assertJpaValidationStarts();
+  }
+
+  @Test
+  void v93RejectsMultiCompanyOwnershipBeforeSchemaChanges() {
+    Flyway beforeV93 = configuration(MIGRATIONS).target("92").load();
+    assertThat(beforeV93.migrate().migrationsExecuted).isPositive();
+
+    insertV92OrderClient(
+        UUID.randomUUID(),
+        UUID.fromString("ae0d6f97-f0c5-576a-9ea7-1ddcc1a03b48"),
+        "V93 first installation client");
+    insertV92OrderClient(
+        UUID.randomUUID(),
+        UUID.fromString("be5a11c2-98ce-5ae5-85b2-21e5991e282a"),
+        "V93 second installation client");
+
+    Flyway upgraded = configuration(MIGRATIONS).target("93").load();
+
+    assertThatThrownBy(upgraded::migrate)
+        .isInstanceOf(FlywayException.class)
+        .hasMessageContaining("Cannot collapse platform company ownership for a multi-company logistics database");
+
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from information_schema.columns
+                where table_schema='public'
+                  and table_name='order_client'
+                  and column_name='company_id'
+                """,
+                Integer.class))
+        .isOne();
+    assertThat(constraintDefinition("order_client", "uk_order_client_creator_idempotency"))
+        .contains("company_id");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from flyway_schema_history where version='93' and success",
+                Integer.class))
+        .isZero();
   }
 
   @Test
@@ -4330,6 +4403,35 @@ class LogisticsFlywayMigrationIntegrationTest {
         constraintName);
   }
 
+  private void insertV92OrderClient(UUID id, UUID companyId, String name) {
+    UUID managerId = UUID.randomUUID();
+    String phone =
+        "+7%010d".formatted(Math.floorMod(id.getLeastSignificantBits(), 10_000_000_000L));
+    jdbc.update(
+        """
+        insert into order_client(
+          id,company_id,version,client_type,display_name,normalized_name,created_by_subject_id,
+          phone,normalized_phone,contact_person,responsible_manager_id,
+          responsible_manager_display_name,creation_idempotency_key,creation_request_sha256,
+          created_at,updated_at)
+        values (
+          ?, ?, 0, 'LEGAL_ENTITY',
+          ?, ?, ?, ?, ?, ?, ?, 'V93 manager', ?, ?,
+          clock_timestamp(), clock_timestamp())
+        """,
+        id,
+        companyId,
+        name,
+        name.toLowerCase(java.util.Locale.ROOT),
+        managerId,
+        phone,
+        phone,
+        "V93 contact",
+        managerId,
+        UUID.randomUUID(),
+        "a".repeat(64));
+  }
+
   private UUID[] insertLegacyBookingOutbox(String status) {
     UUID eventId = UUID.randomUUID();
     UUID inquiryId = UUID.randomUUID();
@@ -4339,6 +4441,7 @@ class LogisticsFlywayMigrationIntegrationTest {
     UUID managerSubjectId = UUID.randomUUID();
     UUID clientId = UUID.randomUUID();
     UUID presentationId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
     jdbc.update(
         """
         insert into order_client(
@@ -4353,6 +4456,23 @@ class LogisticsFlywayMigrationIntegrationTest {
         "a".repeat(64));
     jdbc.update(
         """
+        insert into rental_order(
+          id,version,order_number,status,client_id,manager_id,manager_display_name,
+          created_by_subject_id,created_by_display_name,created_by_role,warehouse_id,
+          creation_idempotency_key,creation_request_sha256,created_at,updated_at)
+        values (?,0,?,'DRAFT',?,?,'Migration manager',?,'Migration manager',
+          'RENTAL_MANAGER',?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        orderId,
+        "ORD-%019d".formatted(orderId.getMostSignificantBits() & Long.MAX_VALUE),
+        clientId,
+        managerSubjectId,
+        managerSubjectId,
+        warehouseId,
+        UUID.randomUUID(),
+        "b".repeat(64));
+    jdbc.update(
+        """
         insert into rental_inquiry(
           id,version,conversation_id,client_id,manager_id,manager_display_name,manager_role,
           warehouse_id,state,booked_order_id,created_at,updated_at,booked_at)
@@ -4363,7 +4483,7 @@ class LogisticsFlywayMigrationIntegrationTest {
         conversationId,
         clientId,
         managerSubjectId,
-        UUID.randomUUID(),
+        warehouseId,
         orderId);
     jdbc.update(
         """

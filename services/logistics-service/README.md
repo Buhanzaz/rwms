@@ -31,7 +31,7 @@ lines for one page are loaded in one batch.
 
 The rental client, inquiry, presentation and order subset also accepts only the dedicated
 `rwms-rental-manager-web` or `rwms-rental-manager-android` credential with `RENTAL_MANAGER`,
-`rentalAccess=true`, a signed company and exactly `rental.manage` as its application scope. Cabin
+`rentalAccess=true` and exactly `rental.manage` as its application scope. Cabin
 search and warehouse selection retain the existing explicit `EDIT` grants. Mixed application
 scopes fail closed, and returns, shipments, transfers and other operational APIs still require
 their ordinary RWMS scopes.
@@ -490,8 +490,8 @@ identity from an order, document or planner-local ID.
 
 An EDIT-authorized dispatcher can explicitly create a bounded contractor route through
 `POST /api/logistics/v1/warehouses/{warehouseId}/contractor-route-shares`. One durable capability
-is created or revoked only after warehouse-service proves that the path warehouse belongs to the
-signed user company; a global role or a forged warehouse UUID cannot cross that tenant boundary.
+is created or revoked only after the existing caller's `EDIT` authorization for the path warehouse
+is checked; a forged warehouse UUID without that access is rejected.
 The capability
 binds one exact active `CONTRACTOR` worker to one through fifty exact logistics
 `externalTaskId` values, expires within thirty days, uses subject-scoped exact idempotent replay and

@@ -577,7 +577,7 @@ export function RentalItemsTableView({
       ...dataColumns,
       {
         id: "actions",
-        header: () => null,
+        header: () => <span className="sr-only">Действия</span>,
         size: 176,
         minSize: 136,
         maxSize: 240,

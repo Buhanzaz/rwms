@@ -52,36 +52,32 @@ public class WarehouseLifecycleBlockerStore {
            where warehouse_id=? and state <> 'CONFIRMED'
           union all
           select 1
-            from furniture_equipment_link_intent
-           where warehouse_id=? and state not in ('CONFIRMED','ABANDONED')
-          union all
-          select 1
             from integration_reconciliation ir
             left join maintenance_repair repair on repair.id=ir.repair_id
             left join maintenance_estimate estimate
               on ir.operation_type='COMPLETE_EMPTY_ESTIMATE'
              and estimate.id::text=ir.response_snapshot->>'estimateId'
-            left join catalog_version catalog on catalog.id=ir.catalog_version_id
            where ir.state not in ('CONFIRMED','CANCELLED')
              and (
                repair.warehouse_id=?
                or ir.media_warehouse_id=?
                or estimate.warehouse_id=?
-               or catalog.warehouse_id=?
                or ir.response_snapshot->>'warehouseId'=?::text
                or (
                  repair.warehouse_id is null
                  and ir.media_warehouse_id is null
                  and estimate.warehouse_id is null
-                 and catalog.warehouse_id is null
                  and ir.response_snapshot->>'warehouseId' is null
+                 and not (
+                   ir.dependency_type='TASK_BOARD'
+                   and ir.operation_type in ('REGISTER_CATALOG_POSITION','DELETE_CATALOG_POSITION')
+                   and ir.catalog_version_id is not null
+                 )
                )
              )
         )
         """,
         Boolean.class,
-        warehouseId,
-        warehouseId,
         warehouseId,
         warehouseId,
         warehouseId,

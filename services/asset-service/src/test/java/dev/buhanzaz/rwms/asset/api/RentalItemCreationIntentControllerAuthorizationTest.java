@@ -11,7 +11,6 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateRentalItemRequest;
-import dev.buhanzaz.rwms.asset.domain.AssetCompanyDefaults;
 import dev.buhanzaz.rwms.asset.domain.RentalItemCreationIntentState;
 import dev.buhanzaz.rwms.asset.security.AssetAuthorizer;
 import dev.buhanzaz.rwms.asset.service.RentalItemCreationIntentService;
@@ -65,7 +64,7 @@ class RentalItemCreationIntentControllerAuthorizationTest {
     UUID allowedWarehouseId = UUID.randomUUID();
     UUID deniedWarehouseId = UUID.randomUUID();
     UUID intentId = UUID.randomUUID();
-    when(intents.get(AssetCompanyDefaults.INITIAL_COMPANY_ID, intentId))
+    when(intents.get(intentId))
         .thenReturn(intent(intentId, deniedWarehouseId));
 
     assertThatThrownBy(() -> controller.get(user(allowedWarehouseId), intentId))
@@ -142,8 +141,6 @@ class RentalItemCreationIntentControllerAuthorizationTest {
             "rwms.read rwms.write",
             "global_role",
             "WAREHOUSE_MANAGER",
-            "company_id",
-            AssetCompanyDefaults.INITIAL_COMPANY_ID.toString(),
             "warehouse_access",
             List.of(
                 Map.of(

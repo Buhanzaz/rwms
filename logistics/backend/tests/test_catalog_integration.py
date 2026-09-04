@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import ApiError
-from app.models import Driver, RoutePlan, UnassignedTask
+from app.models import Driver, LogisticsRequest, RoutePlan, UnassignedTask
 from app.schemas.domain import (
     LogisticsRequestUpdate,
     RequestPlanningDetailsInput,
@@ -30,6 +30,14 @@ from tests.factories import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+def _mark_rwms_delivery(request: LogisticsRequest) -> None:
+    """Populate the source-owned fields required for an RWMS delivery row."""
+
+    request.source_system = "RWMS"
+    request.customer_delivery_purpose = "RENTAL_DELIVERY"
+    request.external_payload = {"customerDeliveryPurpose": "RENTAL_DELIVERY"}
 
 
 @pytest.mark.asyncio
@@ -406,6 +414,8 @@ async def test_planning_details_update_operator_mandatory_for_every_request_sour
     )
     request.source_system = source_system
     request.type = request_type
+    if source_system == "RWMS" and request_type == "DELIVERY":
+        _mark_rwms_delivery(request)
     for task in request.tasks:
         task.type = request_type
     source_facts = (
@@ -454,7 +464,7 @@ async def test_rwms_fixed_window_failure_does_not_apply_mandatory_metadata(
 
     warehouse = await make_warehouse(db_session)
     request = await make_request(db_session, warehouse, mandatory=False)
-    request.source_system = "RWMS"
+    _mark_rwms_delivery(request)
     await db_session.flush()
 
     with pytest.raises(ApiError) as rejected:
@@ -487,7 +497,7 @@ async def test_rwms_flexible_day_accepts_mandatory_without_inventing_a_window(
 
     warehouse = await make_warehouse(db_session)
     request = await make_request(db_session, warehouse, mandatory=False)
-    request.source_system = "RWMS"
+    _mark_rwms_delivery(request)
     option = request.date_options[0]
     option.window_start = None
     option.window_end = None
@@ -525,7 +535,7 @@ async def test_rwms_flexible_day_rejects_dispatcher_time_narrowing(
 
     warehouse = await make_warehouse(db_session)
     request = await make_request(db_session, warehouse, mandatory=False)
-    request.source_system = "RWMS"
+    _mark_rwms_delivery(request)
     option = request.date_options[0]
     option.window_start = None
     option.window_end = None

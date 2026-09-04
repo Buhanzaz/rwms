@@ -25,7 +25,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-/** HTTP boundary for company- and warehouse-fenced customer cabin problem lifecycle actions. */
+/** HTTP boundary for warehouse-access-controlled customer cabin problem lifecycle actions. */
 @RestController
 @Validated
 @RequestMapping("/api/logistics/v1/customer-cabin-problems")

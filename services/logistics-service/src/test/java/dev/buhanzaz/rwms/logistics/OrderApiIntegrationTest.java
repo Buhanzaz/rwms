@@ -345,7 +345,7 @@ class OrderApiIntegrationTest {
   }
 
   @Test
-  void dedicatedManagerWebAndAndroidTokensCanUseCompanyScopedClientAndOrderApis()
+  void dedicatedManagerWebAndAndroidTokensCanUseClientAndOrderApis()
       throws Exception {
     MvcResult clientResult =
         mvc.perform(

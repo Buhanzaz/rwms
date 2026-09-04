@@ -13,6 +13,7 @@ import {
 } from "vitest"
 
 import App from "@/App"
+import { ThemeProvider } from "@/components/theme-provider"
 import type { CurrentUser } from "@/features/auth/auth-model"
 
 const mocks = vi.hoisted(() => ({
@@ -152,7 +153,9 @@ describe("logistics navigation", () => {
             })
           }
         >
-          <App />
+          <ThemeProvider defaultTheme="system" storageKey="rwms-panel-theme">
+            <App />
+          </ThemeProvider>
         </QueryClientProvider>
       </MemoryRouter>
     )

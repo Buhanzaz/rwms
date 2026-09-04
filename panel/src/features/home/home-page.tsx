@@ -450,8 +450,8 @@ function HomeContent({
       <Alert>
         <AlertTitle>Рабочий день не настроен</AlertTitle>
         <AlertDescription>
-          Сначала сохраните и активируйте график работы выбранного склада в
-          настройках KPI.
+          Сначала сохраните и активируйте общий график работы для всех объектов
+          в настройках KPI.
         </AlertDescription>
       </Alert>
     )
@@ -462,7 +462,7 @@ function HomeContent({
       <Alert>
         <AlertTitle>Сегодня нерабочий день</AlertTitle>
         <AlertDescription>
-          В графике выбранного склада этот день отмечен как выходной.
+          В общем графике работы этот день отмечен как выходной.
         </AlertDescription>
       </Alert>
     )

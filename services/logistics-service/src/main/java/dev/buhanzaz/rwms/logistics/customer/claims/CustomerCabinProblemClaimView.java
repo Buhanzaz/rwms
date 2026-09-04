@@ -7,7 +7,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
-/** Company-scoped manager projection of evidence-preserving customer cabin problem lifecycle data. */
+/** Warehouse-access-controlled manager projection of evidence-preserving customer cabin problem data. */
 public record CustomerCabinProblemClaimView(
     UUID problemId,
     UUID orderId,

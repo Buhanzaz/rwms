@@ -769,7 +769,7 @@ function CustomEstimateLineDialog({
                   Boolean(customQueuesError) ||
                   Boolean(customQueuesUnavailable)
                 }
-                value={selectedQueue?.queueId}
+                value={selectedQueue?.queueId ?? ""}
                 onValueChange={(queueDefinitionId) => {
                   const queue = customQueues.find(
                     (candidate) => candidate.definitionId === queueDefinitionId

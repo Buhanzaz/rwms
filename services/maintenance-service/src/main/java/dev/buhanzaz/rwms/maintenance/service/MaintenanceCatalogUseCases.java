@@ -33,7 +33,6 @@ public class MaintenanceCatalogUseCases {
   private final MaintenanceEventStore events;
   private final MaintenanceIdempotencyStore idempotency;
   private final FurnitureEquipmentLinkResolver furnitureEquipmentLinks;
-  private final WarehouseLifecycleOperations warehouseLifecycle;
   private final TransactionTemplate transactions;
   private final MaintenanceCatalogModelSupport catalogModelSupport;
   private final MaintenanceCatalogSupport catalogSupport;
@@ -47,7 +46,6 @@ public class MaintenanceCatalogUseCases {
       MaintenanceEventStore events,
       MaintenanceIdempotencyStore idempotency,
       FurnitureEquipmentLinkResolver furnitureEquipmentLinks,
-      WarehouseLifecycleOperations warehouseLifecycle,
       PlatformTransactionManager transactionManager,
       MaintenanceCatalogModelSupport catalogModelSupport,
       MaintenanceCatalogSupport catalogSupport,
@@ -59,7 +57,6 @@ public class MaintenanceCatalogUseCases {
     this.events = events;
     this.idempotency = idempotency;
     this.furnitureEquipmentLinks = furnitureEquipmentLinks;
-    this.warehouseLifecycle = warehouseLifecycle;
     this.transactions = new TransactionTemplate(transactionManager);
     this.catalogModelSupport = catalogModelSupport;
     this.catalogSupport = catalogSupport;
@@ -115,9 +112,6 @@ public class MaintenanceCatalogUseCases {
     if (preflight.replay() != null) {
       return preflight.replay();
     }
-    if (preflight.warehouseId() != null) {
-      warehouseLifecycle.requireIncoming(preflight.warehouseId());
-    }
     return commandSupport.inLocalTransaction(
         "catalog create finalization", () -> createCatalogInTransaction(subjectId, key, request));
   }
@@ -137,10 +131,7 @@ public class MaintenanceCatalogUseCases {
       return new WarehouseAdmissionPreflight<>(
           null, new CreateResult<>(commandSupport.read(replay.get(), CatalogVersionResponse.class), true));
     }
-    boolean activeExists =
-        catalogVersions.findAllByOrderByCreatedAtDesc().stream()
-            .anyMatch(version -> version.getState() == CatalogVersionState.ACTIVE);
-    return new WarehouseAdmissionPreflight<>(activeExists ? null : request.warehouseId(), null);
+    return new WarehouseAdmissionPreflight<>(null, null);
   }
 
   private CreateResult<CatalogVersionResponse> createCatalogInTransaction(
@@ -196,8 +187,6 @@ public class MaintenanceCatalogUseCases {
         eventPayloadSupport.catalogLocal(active),
         eventPayloadSupport.catalogFact(MaintenanceEventType.CATALOG_ACTIVATED, active),
         eventPayloadSupport.catalogSnapshot(active));
-    warehouseLifecycle.recordOperation(
-        active.getWarehouseId(), active.getId(), active.getActivatedAt());
     CatalogVersionResponse response = catalogModelSupport.catalogResponse(active);
     idempotency.store(subjectId, "catalog.create", key, requestHash, 201, response);
     return new CreateResult<>(response, false);
@@ -228,9 +217,6 @@ public class MaintenanceCatalogUseCases {
             });
     if (target == null) {
       throw new IllegalStateException("Catalog mutation preflight was empty");
-    }
-    if (target.state() == CatalogVersionState.ACTIVE) {
-      warehouseLifecycle.requireIncoming(routingContextWarehouseId);
     }
     List<CatalogNodeInput> resolvedNodes = furnitureEquipmentLinks.resolve(
         id,
@@ -362,7 +348,6 @@ public class MaintenanceCatalogUseCases {
     if (preflight.replay() != null) {
       return preflight.replay();
     }
-    warehouseLifecycle.requireIncoming(preflight.warehouseId());
     return commandSupport.inLocalTransaction(
         "catalog fork finalization", () -> forkCatalogInTransaction(subjectId, key, id, request));
   }
@@ -474,7 +459,6 @@ public class MaintenanceCatalogUseCases {
     if (!Boolean.TRUE.equals(preflight)) {
       throw new IllegalStateException("Catalog activation preflight transaction was empty");
     }
-    warehouseLifecycle.requireIncoming(routingContextWarehouseId);
     catalogSupport.canonicalCatalogRouting(catalogSupport.catalogNodeInputs(id));
     CreateResult<CatalogVersionResponse> result = transactions.execute(
         status -> activateCatalogAfterPreflight(subjectId, key, id, request, requestHash));
@@ -550,8 +534,6 @@ public class MaintenanceCatalogUseCases {
         eventPayloadSupport.catalogLocal(saved),
         eventPayloadSupport.catalogFact(MaintenanceEventType.CATALOG_ACTIVATED, saved),
         eventPayloadSupport.catalogSnapshot(saved));
-    warehouseLifecycle.recordOperation(
-        saved.getWarehouseId(), saved.getId(), saved.getActivatedAt());
     catalogSupport.enqueueCatalogRouting(saved, superseded);
     CatalogVersionResponse response = catalogModelSupport.catalogResponse(saved);
     idempotency.store(subjectId, "catalog.activate:" + id, key, requestHash, 200, response);

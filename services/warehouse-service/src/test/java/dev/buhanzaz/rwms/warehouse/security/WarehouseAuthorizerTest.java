@@ -16,7 +16,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 
 class WarehouseAuthorizerTest {
   @Test
-  void dedicatedRentalManagerClientsMayReadTheCompanyWarehouseDirectory() {
+  void dedicatedRentalManagerClientsMayReadTheWarehouseDirectory() {
     WarehouseAuthorizer authorizer = new WarehouseAuthorizer(new MockEnvironment(), false);
 
     for (String clientId :
@@ -72,16 +72,6 @@ class WarehouseAuthorizerTest {
           .isInstanceOf(AccessDeniedException.class);
     }
 
-    assertThatThrownBy(
-            () ->
-                authorizer.requireWarehouseDirectoryRead(
-                    jwtWithoutCompany(
-                        "USER",
-                        "rental.manage",
-                        "RENTAL_MANAGER",
-                        "rwms-rental-manager-web")))
-        .isInstanceOf(AccessDeniedException.class)
-        .hasMessageContaining("company_id");
   }
 
   @Test
@@ -95,7 +85,7 @@ class WarehouseAuthorizerTest {
             "rwms-rental-manager-web");
     UUID warehouseId = UUID.randomUUID();
 
-    assertThatThrownBy(() -> authorizer.requireCompanyAdminWrite(manager))
+    assertThatThrownBy(() -> authorizer.requireAdminWrite(manager))
         .isInstanceOf(AccessDeniedException.class);
     assertThatThrownBy(() -> authorizer.requireSystemAdmin(manager))
         .isInstanceOf(AccessDeniedException.class);
@@ -112,7 +102,7 @@ class WarehouseAuthorizerTest {
   }
 
   @Test
-  void dedicatedAdministrationScopeAllowsCompanyDirectoryAndMutationsForAdministrators() {
+  void dedicatedAdministrationScopeAllowsDirectoryAndMutationsForAdministrators() {
     WarehouseAuthorizer authorizer = new WarehouseAuthorizer(new MockEnvironment(), false);
 
     for (String role : List.of("SYSTEM_ADMIN", "WMS_ADMIN")) {
@@ -121,7 +111,7 @@ class WarehouseAuthorizerTest {
       authorizer.requireWarehouseDirectoryRead(administrator);
       assertThatThrownBy(() -> authorizer.requireWarehouseRead(administrator))
           .isInstanceOf(AccessDeniedException.class);
-      authorizer.requireCompanyAdminWrite(administrator);
+      authorizer.requireAdminWrite(administrator);
     }
 
     Jwt mixedApplicationScopes =
@@ -129,7 +119,7 @@ class WarehouseAuthorizerTest {
     assertThatThrownBy(() -> authorizer.requireWarehouseDirectoryRead(mixedApplicationScopes))
         .isInstanceOf(AccessDeniedException.class)
         .hasMessageContaining("Exact application scope");
-    assertThatThrownBy(() -> authorizer.requireCompanyAdminWrite(mixedApplicationScopes))
+    assertThatThrownBy(() -> authorizer.requireAdminWrite(mixedApplicationScopes))
         .isInstanceOf(AccessDeniedException.class)
         .hasMessageContaining("Exact application scope");
   }
@@ -181,37 +171,23 @@ class WarehouseAuthorizerTest {
       Jwt nonAdministrator = jwt("USER", "admin.manage", role, null);
       assertThatThrownBy(() -> authorizer.requireWarehouseDirectoryRead(nonAdministrator))
           .isInstanceOf(AccessDeniedException.class);
-      assertThatThrownBy(() -> authorizer.requireCompanyAdminWrite(nonAdministrator))
+      assertThatThrownBy(() -> authorizer.requireAdminWrite(nonAdministrator))
           .isInstanceOf(AccessDeniedException.class);
     }
   }
 
   @Test
-  void dedicatedAdministrationScopeStillRequiresSignedCompanyBoundary() {
-    WarehouseAuthorizer authorizer = new WarehouseAuthorizer(new MockEnvironment(), false);
-    Jwt missingCompany =
-        jwtWithoutCompany("USER", "admin.manage", "SYSTEM_ADMIN", null);
-
-    assertThatThrownBy(() -> authorizer.requireWarehouseDirectoryRead(missingCompany))
-        .isInstanceOf(AccessDeniedException.class)
-        .hasMessageContaining("company_id");
-    assertThatThrownBy(() -> authorizer.requireCompanyAdminWrite(missingCompany))
-        .isInstanceOf(AccessDeniedException.class)
-        .hasMessageContaining("company_id");
-  }
-
-  @Test
-  void companyAdministratorsWithSignedCompanyAndWriteScopeMayMutate() {
+  void administratorsWithWriteScopeMayMutate() {
     WarehouseAuthorizer authorizer = new WarehouseAuthorizer(new MockEnvironment(), false);
 
-    authorizer.requireCompanyAdminWrite(jwt("USER", "rwms.write", "SYSTEM_ADMIN", null));
-    authorizer.requireCompanyAdminWrite(jwt("USER", "rwms.write", "WMS_ADMIN", null));
+    authorizer.requireAdminWrite(jwt("USER", "rwms.write", "SYSTEM_ADMIN", null));
+    authorizer.requireAdminWrite(jwt("USER", "rwms.write", "WMS_ADMIN", null));
     assertThatThrownBy(
-            () -> authorizer.requireCompanyAdminWrite(jwt("USER", "rwms.write", "VIEWER", null)))
+            () -> authorizer.requireAdminWrite(jwt("USER", "rwms.write", "VIEWER", null)))
         .isInstanceOf(AccessDeniedException.class);
     assertThatThrownBy(
             () ->
-                authorizer.requireCompanyAdminWrite(
+                authorizer.requireAdminWrite(
                     jwt("USER", "warehouse.read", "SYSTEM_ADMIN", null)))
         .isInstanceOf(AccessDeniedException.class);
 
@@ -224,26 +200,6 @@ class WarehouseAuthorizerTest {
                 authorizer.requireSystemAdminWrite(
                     jwt("USER", "warehouse.read", "SYSTEM_ADMIN", null)))
         .isInstanceOf(AccessDeniedException.class);
-  }
-
-  @Test
-  void publicCompanyBoundaryRequiresAValidSignedCompanyClaim() {
-    WarehouseAuthorizer authorizer = new WarehouseAuthorizer(new MockEnvironment(), false);
-    UUID companyId = UUID.randomUUID();
-    Jwt valid = jwt("USER", "warehouse.read", "WMS_ADMIN", null, UUID.randomUUID().toString(), companyId);
-
-    assertThat(authorizer.companyId(valid)).isEqualTo(companyId);
-    authorizer.requireWarehouseRead(valid);
-    assertThatThrownBy(
-            () -> authorizer.requireWarehouseRead(
-                jwtWithoutCompany("USER", "warehouse.read", "WMS_ADMIN", null)))
-        .isInstanceOf(AccessDeniedException.class)
-        .hasMessageContaining("company_id");
-    assertThatThrownBy(
-            () -> authorizer.companyId(
-                jwtWithCompanyClaim("USER", "warehouse.read", "WMS_ADMIN", null, "not-a-uuid")))
-        .isInstanceOf(AccessDeniedException.class)
-        .hasMessageContaining("UUID");
   }
 
   @Test
@@ -481,8 +437,6 @@ class WarehouseAuthorizerTest {
     assertThat(authorizer.isSystemAdmin(null)).isTrue();
     assertThat(authorizer.subjectId(null))
         .isEqualTo(UUID.fromString("00000000-0000-0000-0000-0000000000d1"));
-    assertThat(authorizer.companyId(null))
-        .isEqualTo(UUID.fromString("ae0d6f97-f0c5-576a-9ea7-1ddcc1a03b48"));
     assertThatThrownBy(() -> authorizer.requireInternalAuthService(null))
         .isInstanceOf(AccessDeniedException.class);
     assertThatThrownBy(() -> authorizer.requireInternalInventoryService(null))
@@ -509,44 +463,14 @@ class WarehouseAuthorizerTest {
 
   private static Jwt jwt(
       String principalType, String scope, String globalRole, String clientId, String subject) {
-    return jwt(
-        principalType,
-        scope,
-        globalRole,
-        clientId,
-        subject,
-        UUID.fromString("ae0d6f97-f0c5-576a-9ea7-1ddcc1a03b48"));
-  }
-
-  private static Jwt jwt(
-      String principalType,
-      String scope,
-      String globalRole,
-      String clientId,
-      String subject,
-      UUID companyId) {
     Map<String, Object> claims =
         new java.util.LinkedHashMap<>(
             Map.of("sub", subject, "principal_type", principalType, "scope", scope));
     if (globalRole != null) claims.put("global_role", globalRole);
     if (clientId != null) claims.put("client_id", clientId);
     if ("USER".equals(principalType)) {
-      claims.put("company_id", companyId.toString());
       claims.put("rentalAccess", true);
     }
-    return new Jwt(
-        "token", Instant.now(), Instant.now().plusSeconds(60), Map.of("alg", "none"), claims);
-  }
-
-  private static Jwt jwtWithoutCompany(
-      String principalType, String scope, String globalRole, String clientId) {
-    Map<String, Object> claims =
-        new java.util.LinkedHashMap<>(Map.of(
-            "sub", UUID.randomUUID().toString(),
-            "principal_type", principalType,
-            "scope", scope));
-    if (globalRole != null) claims.put("global_role", globalRole);
-    if (clientId != null) claims.put("client_id", clientId);
     return new Jwt(
         "token", Instant.now(), Instant.now().plusSeconds(60), Map.of("alg", "none"), claims);
   }
@@ -566,21 +490,4 @@ class WarehouseAuthorizerTest {
         claims);
   }
 
-  private static Jwt jwtWithCompanyClaim(
-      String principalType,
-      String scope,
-      String globalRole,
-      String clientId,
-      String companyId) {
-    Map<String, Object> claims =
-        new java.util.LinkedHashMap<>(Map.of(
-            "sub", UUID.randomUUID().toString(),
-            "principal_type", principalType,
-            "scope", scope,
-            "company_id", companyId));
-    if (globalRole != null) claims.put("global_role", globalRole);
-    if (clientId != null) claims.put("client_id", clientId);
-    return new Jwt(
-        "token", Instant.now(), Instant.now().plusSeconds(60), Map.of("alg", "none"), claims);
-  }
 }

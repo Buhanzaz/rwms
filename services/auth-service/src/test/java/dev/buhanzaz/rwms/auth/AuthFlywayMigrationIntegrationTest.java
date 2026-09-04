@@ -59,7 +59,7 @@ class AuthFlywayMigrationIntegrationTest {
     void cumulativeBaselineMigratesCleanDatabaseAndRepeatIsNoOp() {
         Flyway flyway = flyway(MIGRATION_LOCATION);
 
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(9);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(10);
         flyway.validate();
         assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -72,7 +72,6 @@ class AuthFlywayMigrationIntegrationTest {
                         "auth_subject",
                         "auth_subject_credential",
                         "auth_subject_pii",
-                        "company",
                         "consumer_aggregate_checkpoint",
                         "customer_registration_throttle",
                         "domain_event",
@@ -90,7 +89,7 @@ class AuthFlywayMigrationIntegrationTest {
                         "user_warehouse_access_note",
                         "version_gap_quarantine");
         assertThat(columnCounts()).containsAllEntriesOf(Map.of(
-                "auth_subject", 18,
+                "auth_subject", 17,
                 "user_warehouse_access", 9,
                 "oauth2_registered_client", 13,
                 "oauth2_authorization", 33,
@@ -158,6 +157,15 @@ class AuthFlywayMigrationIntegrationTest {
                 .containsEntry("description", "restore subject company boundary")
                 .containsEntry("script", "V10__restore_subject_company_boundary.sql")
                 .containsEntry("success", true);
+        assertThat(jdbc.queryForMap(
+                        "select version, description, script, success from flyway_schema_history "
+                                + "where version='11'"))
+                .containsEntry("version", "11")
+                .containsEntry("description", "remove platform company boundary")
+                .containsEntry("script", "V11__remove_platform_company_boundary.sql")
+                .containsEntry("success", true);
+        assertThat(columnCount("auth_subject", "company_id")).isZero();
+        assertThat(jdbc.queryForObject("select to_regclass('public.company')", String.class)).isNull();
         assertThat(jdbc.queryForList(
                         "select constraint_name from information_schema.table_constraints "
                                 + "where table_schema='public' and table_name='customer_registration_throttle'",
@@ -173,6 +181,7 @@ class AuthFlywayMigrationIntegrationTest {
         assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isZero();
         assertThat(jdbc.queryForObject("select count(*) from domain_event", Integer.class)).isZero();
         assertThat(jdbc.queryForObject("select count(*) from outbox_event", Integer.class)).isZero();
+        assertNoPlatformCompanyClaimInEventHistory();
     }
 
     @Test
@@ -211,7 +220,7 @@ class AuthFlywayMigrationIntegrationTest {
                 .authority(new SimpleGrantedAuthority("SCOPE_worker.tasks"))
                 .build());
 
-        assertThat(flyway(MIGRATION_LOCATION).migrate().migrationsExecuted).isEqualTo(5);
+        assertThat(flyway(MIGRATION_LOCATION).migrate().migrationsExecuted).isEqualTo(8);
 
         assertThat(clients.findByClientId("rwms-worker")).isNull();
         assertThat(clients.findByClientId("rwms-worker-android")).isNotNull();
@@ -228,7 +237,7 @@ class AuthFlywayMigrationIntegrationTest {
                 "update auth_subject set global_role='WAREHOUSE_MANAGER' where id=?",
                 managerId);
 
-        assertThat(flyway(MIGRATION_LOCATION).migrate().migrationsExecuted).isEqualTo(6);
+        assertThat(flyway(MIGRATION_LOCATION).migrate().migrationsExecuted).isEqualTo(9);
 
         assertThat(jdbc.queryForMap(
                         "select version, mobile_app_access from auth_subject where id=?",
@@ -293,6 +302,126 @@ class AuthFlywayMigrationIntegrationTest {
         assertThat(rentalAccess(rentalManagerId)).isTrue();
         assertThat(rentalAccess(warehouseManagerId)).isFalse();
         assertThat(rentalAccess(viewerId)).isFalse();
+    }
+
+    @Test
+    void versionElevenDropsUnreferencedCompanyRowsAndRemovesBoundary() {
+        Flyway versionTen = configuration(MIGRATION_LOCATION).target("10").load();
+        assertThat(versionTen.migrate().migrationsExecuted).isEqualTo(9);
+        UUID subjectId = UUID.fromString("10000000-0000-0000-0000-000000000081");
+        jdbc.update(
+                "insert into auth_subject(id, version, principal_type, username, password_hash, global_role, "
+                        + "active, company_id, created_at, updated_at) "
+                        + "values (?, 3, 'USER', ?, '{noop}password', 'RENTAL_MANAGER', true, ?, "
+                        + "'2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z')",
+                subjectId,
+                "preserved.user",
+                UUID.fromString("ae0d6f97-f0c5-576a-9ea7-1ddcc1a03b48"));
+        jdbc.update(
+                "insert into company(id, version, code, name, active, created_at, updated_at) "
+                        + "values (?, 0, 'UNUSED', 'Unused company', true, clock_timestamp(), clock_timestamp())",
+                UUID.fromString("ae0d6f97-f0c5-576a-9ea7-1ddcc1a03b49"));
+
+        Flyway versionEleven = configuration(MIGRATION_LOCATION).target("11").load();
+        assertThat(versionEleven.migrate().migrationsExecuted).isOne();
+        versionEleven.validate();
+
+        assertThat(jdbc.queryForMap(
+                        "select id, version, principal_type, username, global_role, active from auth_subject "
+                                + "where id=?",
+                        subjectId))
+                .containsEntry("id", subjectId)
+                .containsEntry("version", 3)
+                .containsEntry("principal_type", "USER")
+                .containsEntry("username", "preserved.user")
+                .containsEntry("global_role", "RENTAL_MANAGER")
+                .containsEntry("active", true);
+        assertThat(columnCount("auth_subject", "company_id")).isZero();
+        assertThat(jdbc.queryForObject("select to_regclass('public.company')", String.class)).isNull();
+        assertThat(versionEleven.migrate().migrationsExecuted).isZero();
+    }
+
+    @Test
+    void versionElevenNormalizesPendingHistoricalPayloadsWithoutChangingTheirFacts() {
+        UUID subjectId = migrateHistoricalV8PayloadToVersionTen();
+        Map<String, Object> eventBefore = jdbc.queryForMap(
+                "select event_id, aggregate_type, aggregate_id, aggregate_version, event_type, correlation_id, "
+                        + "recorded_at, (payload - 'companyId')::text as payload from domain_event "
+                        + "where aggregate_id=? and event_id=md5(? || ':company-foundation:v1')::uuid",
+                subjectId.toString(),
+                subjectId.toString());
+        Map<String, Object> outboxBefore = jdbc.queryForMap(
+                "select event_id, aggregate_type, aggregate_id, aggregate_version, event_type, topic, status, "
+                        + "attempt_count, created_at, (envelope_body #- '{payload,companyId}')::text as envelope_body "
+                        + "from outbox_event where event_id=?",
+                eventBefore.get("event_id"));
+        Map<String, Object> checkpointBefore = jdbc.queryForMap(
+                "select aggregate_type, aggregate_id, aggregate_version, updated_at from projection_checkpoint "
+                        + "where projection_name='auth-live-v1' and aggregate_id=?",
+                subjectId.toString());
+        int domainEventCount = jdbc.queryForObject("select count(*) from domain_event", Integer.class);
+        int outboxEventCount = jdbc.queryForObject("select count(*) from outbox_event", Integer.class);
+
+        Flyway versionEleven = configuration(MIGRATION_LOCATION).target("11").load();
+        assertThat(versionEleven.migrate().migrationsExecuted).isOne();
+        versionEleven.validate();
+
+        assertThat(jdbc.queryForMap(
+                        "select event_id, aggregate_type, aggregate_id, aggregate_version, event_type, correlation_id, "
+                                + "recorded_at, payload::text as payload from domain_event where event_id=?",
+                        eventBefore.get("event_id")))
+                .containsExactlyInAnyOrderEntriesOf(eventBefore);
+        assertThat(jdbc.queryForMap(
+                        "select event_id, aggregate_type, aggregate_id, aggregate_version, event_type, topic, status, "
+                                + "attempt_count, created_at, envelope_body::text as envelope_body from outbox_event "
+                                + "where event_id=?",
+                        eventBefore.get("event_id")))
+                .containsExactlyInAnyOrderEntriesOf(outboxBefore);
+        assertThat(jdbc.queryForMap(
+                        "select aggregate_type, aggregate_id, aggregate_version, updated_at from projection_checkpoint "
+                                + "where projection_name='auth-live-v1' and aggregate_id=?",
+                        subjectId.toString()))
+                .containsExactlyInAnyOrderEntriesOf(checkpointBefore);
+        assertThat(jdbc.queryForObject("select count(*) from domain_event", Integer.class)).isEqualTo(domainEventCount);
+        assertThat(jdbc.queryForObject("select count(*) from outbox_event", Integer.class)).isEqualTo(outboxEventCount);
+        assertNoPlatformCompanyClaimInEventHistory();
+        assertThat(enabledTriggerCount("domain_event", "trg_domain_event_append_only")).isOne();
+        assertThat(enabledTriggerCount("outbox_event", "trg_outbox_event_immutable_metadata")).isOne();
+        assertThat(enabledTriggerCount("outbox_event", "trg_outbox_event_domain_parity")).isOne();
+    }
+
+    @Test
+    void versionElevenRejectsAnUnprovenMultipleOwnerAuthDatabaseWithoutChangingEventHistory() {
+        UUID subjectId = migrateHistoricalV8PayloadToVersionTen();
+        Map<String, String> historyBefore = eventHistoryDigest();
+        UUID secondCompanyId = UUID.fromString("ae0d6f97-f0c5-576a-9ea7-1ddcc1a03b49");
+        jdbc.update(
+                "insert into company(id, version, code, name, active, created_at, updated_at) "
+                        + "values (?, 0, 'SECOND', 'Second company', true, clock_timestamp(), clock_timestamp())",
+                secondCompanyId);
+        jdbc.update(
+                "insert into auth_subject(id, version, principal_type, username, password_hash, global_role, "
+                        + "active, company_id, created_at, updated_at) "
+                        + "values (?, 0, 'USER', ?, '{noop}password', 'VIEWER', true, ?, "
+                        + "'2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                UUID.fromString("10000000-0000-0000-0000-000000000083"),
+                "second.owner",
+                secondCompanyId);
+
+        Flyway versionEleven = configuration(MIGRATION_LOCATION).target("11").load();
+        assertThatThrownBy(versionEleven::migrate)
+                .isInstanceOf(FlywayException.class)
+                .hasStackTraceContaining("multi-company auth database");
+        assertThat(columnCount("auth_subject", "company_id")).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select to_regclass('public.company')", String.class))
+                .isEqualTo("company");
+        assertThat(eventHistoryDigest()).isEqualTo(historyBefore);
+        assertThat(jdbc.queryForObject(
+                        "select payload->>'companyId' from domain_event "
+                                + "where event_id=md5(? || ':company-foundation:v1')::uuid",
+                        String.class,
+                        subjectId.toString()))
+                .isEqualTo("ae0d6f97-f0c5-576a-9ea7-1ddcc1a03b48");
     }
 
     @Test
@@ -426,7 +555,7 @@ class AuthFlywayMigrationIntegrationTest {
                 .baselineDescription("Auth post-F1C schema")
                 .load();
         adopted.baseline();
-        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(8);
+        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(9);
         adopted.validate();
         assertThat(adopted.migrate().migrationsExecuted).isZero();
 
@@ -692,6 +821,103 @@ class AuthFlywayMigrationIntegrationTest {
                 String.class);
     }
 
+    private UUID migrateHistoricalV8PayloadToVersionTen() {
+        Flyway versionTwo = configuration(MIGRATION_LOCATION).target("2").load();
+        assertThat(versionTwo.migrate().migrationsExecuted).isOne();
+        UUID subjectId = UUID.fromString("10000000-0000-0000-0000-000000000082");
+        insertUser(subjectId, "legacy.event.payload");
+
+        Flyway versionThree = configuration(MIGRATION_LOCATION).target("3").load();
+        assertThat(versionThree.migrate().migrationsExecuted).isOne();
+        Flyway versionSeven = configuration(MIGRATION_LOCATION).target("7").load();
+        assertThat(versionSeven.migrate().migrationsExecuted).isEqualTo(4);
+        Flyway versionTen = configuration(MIGRATION_LOCATION).target("10").load();
+        assertThat(versionTen.migrate().migrationsExecuted).isEqualTo(3);
+
+        assertThat(jdbc.queryForObject(
+                        "select count(*) from domain_event "
+                                + "where event_id=md5(? || ':company-foundation:v1')::uuid "
+                                + "and jsonb_exists(payload, 'companyId')",
+                        Integer.class,
+                        subjectId.toString()))
+                .isOne();
+        assertThat(jdbc.queryForObject(
+                        "select count(*) from outbox_event "
+                                + "where event_id=md5(? || ':company-foundation:v1')::uuid "
+                                + "and jsonb_exists(envelope_body->'payload', 'companyId') and status='PENDING'",
+                        Integer.class,
+                        subjectId.toString()))
+                .isOne();
+        return subjectId;
+    }
+
+    private void assertNoPlatformCompanyClaimInEventHistory() {
+        assertThat(jdbc.queryForObject(
+                        "select count(*) from domain_event "
+                                + "where jsonb_path_exists(payload, '$.**.companyId')",
+                        Integer.class))
+                .isZero();
+        assertThat(jdbc.queryForObject(
+                        "select count(*) from outbox_event "
+                                + "where jsonb_path_exists(envelope_body, '$.**.companyId')",
+                        Integer.class))
+                .isZero();
+        assertThat(jdbc.queryForObject(
+                        "select count(*) from domain_event where payload_sha256 <> "
+                                + "encode(sha256(convert_to(payload::text, 'UTF8')), 'hex')",
+                        Integer.class))
+                .isZero();
+        assertThat(jdbc.queryForObject(
+                        "select count(*) from outbox_event where envelope_sha256 <> "
+                                + "encode(sha256(convert_to(envelope_body::text, 'UTF8')), 'hex')",
+                        Integer.class))
+                .isZero();
+        assertThat(jdbc.queryForObject(
+                        "select count(*) from outbox_event outbox join domain_event event "
+                                + "on event.event_id=outbox.event_id "
+                                + "where outbox.envelope_body->'payload' is distinct from event.payload",
+                        Integer.class))
+                .isZero();
+        assertThat(jdbc.queryForObject(
+                        "select count(*) from projection_checkpoint checkpoint join domain_event event "
+                                + "on event.aggregate_type=checkpoint.aggregate_type "
+                                + "and event.aggregate_id=checkpoint.aggregate_id "
+                                + "and event.aggregate_version=checkpoint.aggregate_version "
+                                + "where checkpoint.projection_name='auth-live-v1' "
+                                + "and checkpoint.projection_sha256 is distinct from event.payload_sha256",
+                        Integer.class))
+                .isZero();
+    }
+
+    private Map<String, String> eventHistoryDigest() {
+        return Map.of(
+                "domain",
+                jdbc.queryForObject(
+                        "select coalesce(string_agg(event_id::text || ':' || payload::text || ':' || payload_sha256, "
+                                + "E'\\n' order by recorded_at, event_id), '') from domain_event",
+                        String.class),
+                "outbox",
+                jdbc.queryForObject(
+                        "select coalesce(string_agg(event_id::text || ':' || envelope_body::text || ':' "
+                                + "|| envelope_sha256, E'\\n' order by created_at, event_id), '') from outbox_event",
+                        String.class),
+                "checkpoint",
+                jdbc.queryForObject(
+                        "select coalesce(string_agg(projection_name || ':' || aggregate_type || ':' || aggregate_id "
+                                + "|| ':' || aggregate_version || ':' || projection_sha256, E'\\n' "
+                                + "order by projection_name, aggregate_type, aggregate_id), '') "
+                                + "from projection_checkpoint",
+                        String.class));
+    }
+
+    private int enabledTriggerCount(String table, String trigger) {
+        return jdbc.queryForObject(
+                "select count(*) from pg_trigger where tgrelid=?::regclass and tgname=? and tgenabled='O'",
+                Integer.class,
+                "public." + table,
+                trigger);
+    }
+
     private Map<String, Integer> columnCounts() {
         return jdbc.query(
                 "select table_name, count(*) from information_schema.columns "
@@ -703,6 +929,16 @@ class AuthFlywayMigrationIntegrationTest {
                     }
                     return counts;
                 });
+    }
+
+    private int columnCount(String table, String column) {
+        Integer count = jdbc.queryForObject(
+                "select count(*) from information_schema.columns "
+                        + "where table_schema='public' and table_name=? and column_name=?",
+                Integer.class,
+                table,
+                column);
+        return count == null ? 0 : count;
     }
 
     private boolean rentalAccess(UUID subjectId) {

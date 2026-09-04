@@ -115,7 +115,17 @@ var V19 []byte
 //go:embed V20__driver_shift_media_owner.sql
 var V20 []byte
 
+// V21 contains the immutable applied media company-boundary migration bytes.
+//
+//go:embed V21__media_asset_company_boundary.sql
+var V21 []byte
+
 // V22 contains the immutable Worker profile-avatar owner migration bytes.
 //
 //go:embed V22__task_board_worker_profile_avatar_owner.sql
 var V22 []byte
+
+// V23 contains the forward removal of the obsolete media company boundary.
+//
+//go:embed V23__remove_media_company_boundary.sql
+var V23 []byte

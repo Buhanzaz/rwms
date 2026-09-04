@@ -791,7 +791,8 @@ class RentalInquiryPresentationIntegrationTest {
                                     .claim("global_role", "RENTAL_MANAGER")
                                     .claim("preferred_username", "Менеджер")
                                     .claim("rentalAccess", true)
-                                    .claim("scope", "rwms.read rwms.write")
+                                    .claim("client_id", "rwms-rental-manager-web")
+                                    .claim("scope", "rental.manage")
                                     .claim(
                                         "warehouse_access",
                                         List.of(
@@ -819,7 +820,8 @@ class RentalInquiryPresentationIntegrationTest {
                                     .claim("global_role", "RENTAL_MANAGER")
                                     .claim("preferred_username", "Менеджер")
                                     .claim("rentalAccess", true)
-                                    .claim("scope", "rwms.read rwms.write")
+                                    .claim("client_id", "rwms-rental-manager-web")
+                                    .claim("scope", "rental.manage")
                                     .claim(
                                         "warehouse_access",
                                         List.of(

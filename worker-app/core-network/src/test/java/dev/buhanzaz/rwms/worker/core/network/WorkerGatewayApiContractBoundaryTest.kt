@@ -46,7 +46,7 @@ class WorkerGatewayApiContractBoundaryTest {
             .filterNot(Method::isSynthetic)
             .associateBy(Method::getName)
 
-        assertThat(expected).hasSize(11)
+        assertThat(expected).hasSize(13)
         assertWithMessage(
             "WorkerGatewayApi method inventory must stay synchronized with canonical public OpenAPI",
         ).that(methods.keys)
@@ -441,6 +441,7 @@ private fun expectedWorkerRoutes(): Map<String, WorkerContractRoute> {
 
     return linkedMapOf(
         "workerContext" to route("GET", "/api/task-board/worker/v1/context", "$taskBoard /worker/v1/context"),
+        "prepareWorkerProfileAvatarScope" to route("POST", "/api/task-board/worker/v1/profile/avatar-scope", "$taskBoard /worker/v1/profile/avatar-scope"),
         "workerFeed" to route("GET", "/api/task-board/worker/v1/feed", "$taskBoard /worker/v1/feed"),
         "workerTaskDetail" to route("GET", "/api/task-board/worker/v1/entries/{entryId}", "$taskBoard /worker/v1/entries/{entryId}"),
         "applyAction" to route("POST", "/api/task-board/worker/v1/entries/{entryId}/actions", "$taskBoard /worker/v1/entries/{entryId}/actions"),
@@ -448,6 +449,7 @@ private fun expectedWorkerRoutes(): Map<String, WorkerContractRoute> {
         "registerDevice" to route("PUT", "/api/task-board/worker/v1/devices/{installationId}", "$taskBoard /worker/v1/devices/{installationId}"),
         "unregisterDevice" to route("DELETE", "/api/task-board/worker/v1/devices/{installationId}", "$taskBoard /worker/v1/devices/{installationId}"),
         "createUploadSession" to route("POST", "/api/media/v1/upload-sessions", "$media /api/media/v1/upload-sessions"),
+        "mediaAssets" to route("GET", "/api/media/v1/assets", "$media /api/media/v1/assets"),
         "uploadMediaContent" to route(
             "PUT",
             "",

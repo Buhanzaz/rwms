@@ -430,7 +430,7 @@ function WarehouseEditorDialog({
                 Код города объекта
               </FieldLabel>
               <Select
-                value={values.representativeParentWarehouseId || undefined}
+                value={values.representativeParentWarehouseId ?? ""}
                 disabled={!values.representative}
                 onValueChange={(value) =>
                   updateValue("representativeParentWarehouseId", value)

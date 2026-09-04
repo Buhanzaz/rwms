@@ -102,7 +102,7 @@ grants, manager-mobile access или rental-manager entitlement. Она може
 пользователи не могут применять этот client.
 
 User access и ID tokens содержат канонические claims `sub`,
-`preferred_username`, `principal_type=USER`, immutable `company_id`, `global_role` и camel-case
+`preferred_username`, `principal_type=USER`, `global_role` и camel-case
 `rentalAccess`, а также managed `client_id`, выпустивший токен. Источником истины
 для точной формы claims и endpoint остаётся публичный контракт, а не этот
 README.
@@ -118,10 +118,6 @@ authorization endpoints остаются standards-based.
 | --- | --- | --- |
 | `GET /api/auth/csrf` | Получение CSRF cookie/header pair для регистрации | Анонимное чтение. |
 | `POST /api/customer/v1/registrations` | Создание customer-only credential и authorization stream | Анонимно с точной CSRF cookie/header pair; логин из 3–64 portable символов, пароль из 8–128 символов и совпадающее подтверждение. |
-| `GET /api/admin/companies` | Список видимых компаний | `SYSTEM_ADMIN` видит все компании; `WMS_ADMIN` — только свою. |
-| `POST /api/admin/companies` | Создание границы компании | Только `SYSTEM_ADMIN`. |
-| `GET /api/admin/companies/{id}` | Чтение одной видимой компании | `SYSTEM_ADMIN` либо `WMS_ADMIN` этой компании. |
-| `PUT /api/admin/companies/{id}` | Version-fenced изменение компании | То же правило видимости; обязателен `expectedVersion`. |
 | `GET /api/admin/users` | Список администрируемых пользователей | USER JWT с `SYSTEM_ADMIN` или `WMS_ADMIN`. |
 | `POST /api/admin/users` | Создание администрируемого пользователя | Та же роль; только `SYSTEM_ADMIN` может создать `SYSTEM_ADMIN` account. |
 | `GET /api/admin/users/{id}` | Чтение administrative user projection | USER JWT с `SYSTEM_ADMIN` или `WMS_ADMIN`. |

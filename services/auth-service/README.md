@@ -101,7 +101,7 @@ whose query-free HTTPS callback is `/auth/customer/callback` and whose only
 business scope is `customer.rental`; other users cannot use that client.
 
 User access and ID tokens include the canonical claims `sub`,
-`preferred_username`, `principal_type=USER`, immutable `company_id`, `global_role`, and camel-case
+`preferred_username`, `principal_type=USER`, `global_role`, and camel-case
 `rentalAccess`, plus the managed `client_id` that minted the token. The public
 contract, not this README, is authoritative for the exact claim and endpoint
 shape.
@@ -117,10 +117,6 @@ authorization endpoints are standards-based.
 | --- | --- | --- |
 | `GET /api/auth/csrf` | Bootstrap the registration CSRF cookie/header pair | Anonymous read. |
 | `POST /api/customer/v1/registrations` | Create a customer-only credential and authorization stream | Anonymous with the exact CSRF cookie/header pair; login 3–64 portable characters, password 8–128 characters, and matching confirmation. |
-| `GET /api/admin/companies` | List visible companies | `SYSTEM_ADMIN` sees all companies; `WMS_ADMIN` sees only its own company. |
-| `POST /api/admin/companies` | Create a company boundary | `SYSTEM_ADMIN` only. |
-| `GET /api/admin/companies/{id}` | Read one visible company | `SYSTEM_ADMIN`, or a `WMS_ADMIN` from that company. |
-| `PUT /api/admin/companies/{id}` | Version-fenced company update | Same visibility rule; `expectedVersion` is required. |
 | `GET /api/admin/users` | List administrable users | USER JWT with `SYSTEM_ADMIN` or `WMS_ADMIN`. |
 | `POST /api/admin/users` | Create an administrable user | Same role; only `SYSTEM_ADMIN` may create a `SYSTEM_ADMIN` account. |
 | `GET /api/admin/users/{id}` | Read one administrative user projection | USER JWT with `SYSTEM_ADMIN` or `WMS_ADMIN`. |
