@@ -426,7 +426,7 @@ export function PhotoCarousel({
               type="button"
               aria-label="Предыдущее фото"
               className={cn(
-                "absolute inset-y-0 left-0 flex w-1/5 items-center justify-start bg-gradient-to-r from-primary/60 via-primary/25 to-transparent pl-3 text-primary-foreground transition-opacity",
+                "absolute inset-y-0 left-0 flex w-1/5 items-center justify-start bg-gradient-to-r from-black/80 via-black/40 to-transparent pl-3 text-primary-foreground transition-opacity",
                 hideEdgeControlsOnMobile && "hidden lg:flex",
                 controlsClass
               )}
@@ -441,7 +441,7 @@ export function PhotoCarousel({
               type="button"
               aria-label="Следующее фото"
               className={cn(
-                "absolute inset-y-0 right-0 flex w-1/5 items-center justify-end bg-gradient-to-l from-primary/60 via-primary/25 to-transparent pr-3 text-primary-foreground transition-opacity",
+                "absolute inset-y-0 right-0 flex w-1/5 items-center justify-end bg-gradient-to-l from-black/80 via-black/40 to-transparent pr-3 text-primary-foreground transition-opacity",
                 hideEdgeControlsOnMobile && "hidden lg:flex",
                 controlsClass
               )}
@@ -640,7 +640,7 @@ function PhotoFullscreenViewer({
                 type="button"
                 aria-label="Предыдущее фото"
                 data-slot="photo-fullscreen-previous"
-                className="pointer-events-auto absolute inset-y-0 left-0 z-30 flex w-1/5 items-center justify-start bg-gradient-to-r from-primary/70 via-primary/30 to-transparent pl-5 text-primary-foreground opacity-100 transition-opacity focus-visible:pointer-events-auto focus-visible:opacity-100 lg:pointer-events-none lg:opacity-0 lg:group-focus-within/fullscreen-carousel:pointer-events-auto lg:group-focus-within/fullscreen-carousel:opacity-100 lg:group-hover/fullscreen-carousel:pointer-events-auto lg:group-hover/fullscreen-carousel:opacity-100"
+                className="pointer-events-auto absolute inset-y-0 left-0 z-30 flex w-1/5 items-center justify-start bg-gradient-to-r from-black/85 via-black/45 to-transparent pl-5 text-primary-foreground opacity-100 transition-opacity focus-visible:pointer-events-auto focus-visible:opacity-100 lg:pointer-events-none lg:opacity-0 lg:group-focus-within/fullscreen-carousel:pointer-events-auto lg:group-focus-within/fullscreen-carousel:opacity-100 lg:group-hover/fullscreen-carousel:pointer-events-auto lg:group-hover/fullscreen-carousel:opacity-100"
                 onClick={(event) => {
                   event.stopPropagation()
                   goPrev()
@@ -655,7 +655,7 @@ function PhotoFullscreenViewer({
                 type="button"
                 aria-label="Следующее фото"
                 data-slot="photo-fullscreen-next"
-                className="pointer-events-auto absolute inset-y-0 right-0 z-30 flex w-1/5 items-center justify-end bg-gradient-to-l from-primary/70 via-primary/30 to-transparent pr-5 text-primary-foreground opacity-100 transition-opacity focus-visible:pointer-events-auto focus-visible:opacity-100 lg:pointer-events-none lg:opacity-0 lg:group-focus-within/fullscreen-carousel:pointer-events-auto lg:group-focus-within/fullscreen-carousel:opacity-100 lg:group-hover/fullscreen-carousel:pointer-events-auto lg:group-hover/fullscreen-carousel:opacity-100"
+                className="pointer-events-auto absolute inset-y-0 right-0 z-30 flex w-1/5 items-center justify-end bg-gradient-to-l from-black/85 via-black/45 to-transparent pr-5 text-primary-foreground opacity-100 transition-opacity focus-visible:pointer-events-auto focus-visible:opacity-100 lg:pointer-events-none lg:opacity-0 lg:group-focus-within/fullscreen-carousel:pointer-events-auto lg:group-focus-within/fullscreen-carousel:opacity-100 lg:group-hover/fullscreen-carousel:pointer-events-auto lg:group-hover/fullscreen-carousel:opacity-100"
                 onClick={(event) => {
                   event.stopPropagation()
                   goNext()

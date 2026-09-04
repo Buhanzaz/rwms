@@ -3,7 +3,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 
 import { SearchableMultiSelectFilter } from "@/components/searchable-multi-select-filter"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { SingleDayPicker } from "@/components/ui/single-day-picker"
 import type { RepairTaskAcceptanceStatus } from "@/features/repair-tasks/model/repair-task"
 
 import {
@@ -49,19 +49,15 @@ function DateFilter({
   onChange: (value: string) => void
 }) {
   return (
-    <label
-      htmlFor={id}
-      className="flex h-9 w-full items-center gap-2 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 sm:min-w-52 sm:w-auto dark:bg-input/30"
-    >
-      <span className="shrink-0 text-muted-foreground">{label}</span>
-      <Input
-        id={id}
-        type="date"
-        value={value}
-        className="h-auto min-w-0 flex-1 border-0 bg-transparent p-0 text-sm shadow-none focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
-        onChange={(event) => onChange(event.target.value)}
-      />
-    </label>
+    <SingleDayPicker
+      id={id}
+      label={label}
+      hideLabel
+      triggerLabel={label}
+      value={value}
+      className="w-full sm:w-56"
+      onValueChange={onChange}
+    />
   )
 }
 
