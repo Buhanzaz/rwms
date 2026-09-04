@@ -9,7 +9,7 @@
   "publicGateway": "https://77-90-158-90.sslip.io",
   "artifactPath": "/downloads/rwms-customer-0.1.20.apk",
   "downloadUrl": "https://77-90-158-90.sslip.io/downloads/rwms-customer-0.1.20.apk",
-  "sha256": "dd56a18d9dc81979c040eaec4f1019b1a9ddd046f3f937705153ec52440f634e",
+  "sha256": "9e13b8113b67cd7b0e6014b8f637daaa24e4682b3575f0bb05a99f841862a09a",
   "signerCertificateDn": "CN=RWMS CustomerApp, OU=Mobile, O=RWMS, L=Moscow, ST=Moscow, C=RU",
   "signerCertificateSha256": "3d1a6c3ddcd7cdea0c8d0508557c1684c945ea4ee0aeb349a800e9bdc7968839",
   "sourceRevision": "23422e716057a0305564e96781bf2b08ab91ebcd",
