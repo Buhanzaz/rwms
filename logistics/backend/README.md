@@ -213,6 +213,9 @@ RWMS command is sent. Only a `CONFIRMED` plan can be published. Its shift
 snapshot carries the actual `routeOriginWarehouseId` and exact
 `supportWarehouseLinkId`; the adapter validates persisted origin/link evidence
 and includes inbound plus return positioning distance exactly once per shift.
+Anonymous customer capacity and exact slot equipment use the same effective capacity:
+one cabin without an explicitly supported, assigned, active trailer; at most two with it.
+An inactive trailer is excluded from both slot and day-route physical profiles.
 The vehicle snapshot carries the existing effective truck/trailer cabin capacity. The standalone
 planner emits only its own depot/customer/positioning operations and never selects or mutates
 transfer cargo; logistics-service may append canonical `sourceTransferId` load/unload pairs only

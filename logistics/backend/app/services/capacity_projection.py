@@ -23,6 +23,7 @@ from app.models import (
     PlanningDayClosure,
     PlanningDayMode,
     PlanningDayPolicy,
+    Vehicle,
     Warehouse,
     WarehousePolicyZone,
 )
@@ -49,6 +50,7 @@ from app.services.planning_group import (
     resolve_planning_warehouse_group,
 )
 from app.services.workload_generator import GENERATOR_SOURCE_SYSTEM
+from app.slot_planning.configuration import effective_vehicle_cabin_capacity
 
 _COORDINATE_QUANTUM = Decimal("0.000001")
 _CAPACITY_IDEMPOTENCY_NAMESPACE = UUID("3bbef2d9-2f94-45a4-831a-61402ce25b27")
@@ -277,7 +279,7 @@ async def build_capacity_projection(
             )
             .options(
                 selectinload(DriverShift.driver),
-                selectinload(DriverShift.vehicle),
+                selectinload(DriverShift.vehicle).selectinload(Vehicle.default_trailer),
             )
             .order_by(DriverShift.date_from, DriverShift.start_time, DriverShift.id)
         )
@@ -339,7 +341,7 @@ async def build_capacity_projection(
                             settings,
                         ),
                         break_minutes=shift.break_minutes,
-                        cabin_capacity=shift.vehicle.capacity,
+                        cabin_capacity=effective_vehicle_cabin_capacity(shift.vehicle),
                     )
                 )
             current_date += timedelta(days=1)

@@ -2327,7 +2327,7 @@ class RuntimePlannerFacade:
     def _trailer_spec(trailer: Any | None) -> TrailerSpec | None:
         """Translate an optional assigned trailer into the pure routing boundary."""
 
-        if trailer is None:
+        if trailer is None or not trailer.active:
             return None
         return TrailerSpec(
             trailer_id=trailer.id,

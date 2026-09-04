@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.rwms import RwmsPlanningClient
-from app.models import PlanningDayClosure, WarehouseIsochroneTariff
+from app.models import PlanningDayClosure, Trailer, WarehouseIsochroneTariff
 from app.schemas.domain import RwmsCapacitySnapshotCommand, RwmsCapacitySnapshotResult
 from app.services.capacity_projection import build_capacity_projection, publish_warehouse_capacity
 from app.services.workload_generator import GENERATOR_SOURCE_SYSTEM
@@ -21,6 +21,54 @@ from tests.factories import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("capacity", "can_use_trailer", "trailer_active", "expected_capacity"),
+    (
+        (2, False, None, 1),
+        (2, True, None, 1),
+        (2, True, True, 2),
+        (2, True, False, 1),
+        (1, True, True, 1),
+    ),
+)
+async def test_projection_uses_only_available_assigned_trailer_capacity(
+    db_session: AsyncSession,
+    capacity: int,
+    can_use_trailer: bool,
+    trailer_active: bool | None,
+    expected_capacity: int,
+) -> None:
+    """A cold projection cannot offer a second platform absent from actual equipment."""
+
+    planning_date = date(2026, 8, 30)
+    warehouse = await make_warehouse(db_session, default_planning_date=planning_date)
+    warehouse.capacity_generation = 1
+    driver = await make_driver(db_session, warehouse)
+    vehicle = await make_vehicle(db_session, warehouse)
+    vehicle.capacity = capacity
+    vehicle.can_use_trailer = can_use_trailer
+    if trailer_active is not None:
+        vehicle.default_trailer = Trailer(
+            warehouse_id=warehouse.id,
+            name="Capacity test trailer",
+            registration_number=f"TRAILER-{uuid4()}",
+            active=trailer_active,
+        )
+    await make_shift(
+        db_session, warehouse, driver, vehicle,
+        date_from=planning_date, date_to=planning_date,
+    )
+    await db_session.flush()
+    warehouse_id = warehouse.id
+    db_session.expire_all()
+
+    projection = await build_capacity_projection(db_session, warehouse_id)
+
+    assert len(projection.command.shifts) == 1
+    assert projection.command.shifts[0].cabin_capacity == expected_capacity
 
 
 @pytest.mark.asyncio
