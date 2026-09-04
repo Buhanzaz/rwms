@@ -2,6 +2,7 @@ import { MapPin, Route, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AddressSuggestion, GeocodedAddress } from '../../api/client';
 import type { Warehouse } from '../../domain/types';
+import { DatePicker } from '../../components/DatePicker';
 import { Button, CheckboxField, Spinner } from '../../components/ui';
 import { useUiStore } from '../../stores/ui-store';
 import { userFacingErrorDetail } from '../../utils/user-facing-error';
@@ -40,6 +41,7 @@ const REASON_LABELS: Record<string, string> = {
   PICKUP_DEFERRED: 'Вывоз перенесён, чтобы не рисковать доставками',
   SITE_CAPACITY_EXCEEDED: 'Объект не может принять столько бытовок за один заезд',
   TRAILER_ACCESS_REQUIRED: 'Для заказа нужен прицеп, но он не проедет к адресу',
+  TRAILER_ACCESS_NOT_ALLOWED: 'Проезд к адресу с прицепом не разрешён',
   AVAILABILITY_NOT_CONFIRMED: 'Сервис не подтвердил выполнимость этого слота',
   AVAILABILITY_NOT_RETURNED: 'Сервис не вернул расчёт для этого окна',
 };
@@ -58,7 +60,7 @@ const STOP_LABELS: Record<string, string> = {
 };
 
 function slotFailureLabel(code: string): string {
-  return REASON_LABELS[code] ?? `Причина: ${code}`;
+  return REASON_LABELS[code] ?? 'Слот недоступен из-за ограничений маршрута';
 }
 
 function timeLabel(value: string | undefined): string {
@@ -299,14 +301,14 @@ export function SlotAvailabilityPanel({
   return (
     <aside className="slot-planner" aria-label="Проверка клиентского слота">
       <header className="slot-planner__header">
-        <span><Route size={17} /><strong>Проверка нового заказа</strong></span>
+        <span><Route size={17} /><strong>Поиск слота для нового заказа</strong></span>
         <button type="button" aria-label="Закрыть проверку слотов" onClick={onClose}><X size={17} /></button>
       </header>
       <div className="slot-planner__body">
         <p className="slot-planner__hint">Выберите найденный адрес или поставьте точку на карте. Доступность определяет полная симуляция дня; изохроны включаются отдельно в слоях карты.</p>
         <div className="slot-planner__form">
           <label className="field span-2"><span className="field__label">Склад</span><select className="input" aria-label="Склад для расчёта" value={warehouseId} onChange={(event) => setWarehouseId(event.target.value)}>{warehouses.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>)}</select></label>
-          <label className="field"><span className="field__label">Дата</span><input className="input" aria-label="Дата нового заказа" type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
+          <DatePicker label="Дата нового заказа" value={date} onChange={setDate} />
           <label className="field"><span className="field__label">Бытовок</span><input className="input" aria-label="Количество бытовок" type="number" min="1" step="1" value={cabinCount} onChange={(event) => setCabinCount(Number.isFinite(event.currentTarget.valueAsNumber) ? event.currentTarget.valueAsNumber : 0)} /></label>
           <div className="field span-2 address-search"><label><span className="field__label">Адрес клиента</span><input className="input" aria-label="Адрес нового клиента" autoComplete="off" aria-expanded={suggestions.length > 0} aria-controls="slot-address-suggestions" value={address} onChange={(event) => changeAddress(event.target.value)} placeholder="Начните вводить адрес" /></label>
             {suggestions.length > 0 ? <div id="slot-address-suggestions" className="address-search__suggestions" role="listbox" aria-label="Подсказки адреса">{suggestions.map((suggestion) => <button type="button" role="option" aria-selected="false" key={suggestion.id} onClick={() => void selectSuggestion(suggestion)}><strong>{suggestion.title}</strong>{suggestion.subtitle || suggestion.address ? <small>{suggestion.subtitle ?? suggestion.address}</small> : null}</button>)}</div> : null}
@@ -322,7 +324,7 @@ export function SlotAvailabilityPanel({
         <div className="slot-planner__point"><MapPin size={15} />{point ? `Точка: ${point.latitude.toFixed(6)}, ${point.longitude.toFixed(6)}` : 'Нажмите на карту, чтобы поставить точку клиента'}</div>
 
         <section className="slot-price" aria-label="Стоимость доставки">
-          <small>Стоимость доставки · изохрона склада</small>
+          <small>Стоимость доставки</small>
           {response?.delivery_price_rubles !== undefined
             ? <strong>{response.delivery_price_rubles.toLocaleString('ru-RU')} ₽{response.price_isochrone_minutes ? <span> · до {response.price_isochrone_minutes / 60} ч</span> : null}</strong>
             : <strong>Время и стоимость подтвердит логист</strong>}

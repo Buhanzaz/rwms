@@ -351,6 +351,8 @@ class CustomerRouteCapacityPlannerTest {
                 BigDecimal.valueOf(55.75),
                 BigDecimal.valueOf(37.61))),
         "http://127.0.0.1:8002",
+        "test-routing-data-v1",
+        Duration.ofMinutes(15),
         Duration.ofSeconds(1),
         Duration.ofSeconds(2),
         30,

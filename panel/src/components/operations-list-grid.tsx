@@ -122,7 +122,7 @@ export function OperationsListGrid<T extends { id: string }>({
     <div
       data-slot="operations-list-grid"
       className={cn(
-        "min-h-0 overflow-hidden rounded-lg border bg-card",
+        "min-h-0 overflow-hidden rounded-lg border bg-transparent",
         className
       )}
     >
@@ -130,8 +130,12 @@ export function OperationsListGrid<T extends { id: string }>({
         <TableHeader className={GRID_HEADER_CLASS}>
           <TableRow className="hover:bg-transparent">
             {columns.map((column) => {
+              const isActionColumn =
+                column.id === "action" || column.id === "actions"
               const direction =
-                sortState?.columnId === column.id ? sortState.direction : null
+                !isActionColumn && sortState?.columnId === column.id
+                  ? sortState.direction
+                  : null
 
               return (
                 <TableHead
@@ -142,18 +146,22 @@ export function OperationsListGrid<T extends { id: string }>({
                     column.className
                   )}
                   aria-sort={
-                    direction === "asc"
-                      ? "ascending"
-                      : direction === "desc"
-                        ? "descending"
-                        : "none"
+                    isActionColumn
+                      ? undefined
+                      : direction === "asc"
+                        ? "ascending"
+                        : direction === "desc"
+                          ? "descending"
+                          : "none"
                   }
                 >
-                  <GridSortButton
-                    label={column.label}
-                    direction={direction}
-                    onClick={() => toggleSort(column.id)}
-                  />
+                  {!isActionColumn ? (
+                    <GridSortButton
+                      label={column.label}
+                      direction={direction}
+                      onClick={() => toggleSort(column.id)}
+                    />
+                  ) : null}
                 </TableHead>
               )
             })}
@@ -173,14 +181,29 @@ export function OperationsListGrid<T extends { id: string }>({
                     getRowClassName?.(item)
                   )}
                 >
-                  {columns.map((column) => (
-                    <TableCell
-                      key={column.id}
-                      className={cn(GRID_CELL_CLASS, column.cellClassName)}
-                    >
-                      {column.render(item)}
-                    </TableCell>
-                  ))}
+                  {columns.map((column) => {
+                    const isActionColumn =
+                      column.id === "action" || column.id === "actions"
+
+                    return (
+                      <TableCell
+                        key={column.id}
+                        className={cn(
+                          GRID_CELL_CLASS,
+                          column.cellClassName,
+                          isActionColumn && "text-right"
+                        )}
+                      >
+                        {isActionColumn ? (
+                          <div className="flex min-w-0 justify-end gap-1 [&>div]:justify-end">
+                            {column.render(item)}
+                          </div>
+                        ) : (
+                          column.render(item)
+                        )}
+                      </TableCell>
+                    )
+                  })}
                 </TableRow>
 
                 {expanded ? (

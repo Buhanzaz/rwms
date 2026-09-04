@@ -47,6 +47,44 @@ class LogisticsFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void planningCommitmentAndRetentionFoundationMigratesOnACleanSchema() {
+    Flyway flyway = flyway(MIGRATIONS);
+
+    flyway.migrate();
+    flyway.validate();
+
+    assertThat(tableNames())
+        .contains("logistics_retention_legal_hold", "logistics_archive_manifest");
+    assertThat(
+            jdbc.queryForList(
+                """
+                select column_name
+                from information_schema.columns
+                where table_schema = 'public'
+                  and table_name = 'driver_logistics_task'
+                  and column_name like 'provisional_eta%'
+                order by column_name
+                """,
+                String.class))
+        .containsExactly(
+            "provisional_eta",
+            "provisional_eta_source_plan_id",
+            "provisional_eta_source_plan_version");
+    assertThat(
+            jdbc.queryForList(
+                """
+                select column_name
+                from information_schema.columns
+                where table_schema = 'public'
+                  and table_name = 'customer_booking_mutation'
+                  and column_name in ('decision_code', 'decision_actor_subject_id', 'decision_reason')
+                order by column_name
+                """,
+                String.class))
+        .containsExactly("decision_actor_subject_id", "decision_code", "decision_reason");
+  }
+
+  @Test
   void cleanInstallIsRepeatSafeAndCreatesOnlyLogisticsOwnedState() {
     Flyway flyway = flyway(MIGRATIONS);
     int pendingMigrations = flyway.info().pending().length;
@@ -65,6 +103,8 @@ class LogisticsFlywayMigrationIntegrationTest {
             "customer_warehouse_capacity_command_receipt",
             "customer_warehouse_capacity_isochrone_tariff",
             "customer_warehouse_capacity_job",
+            "customer_warehouse_capacity_price_zone",
+            "customer_warehouse_capacity_restriction_zone",
             "customer_warehouse_capacity_shift",
             "customer_warehouse_capacity_snapshot",
             "driver_logistics_task",
@@ -108,6 +148,7 @@ class LogisticsFlywayMigrationIntegrationTest {
             "rental_order_audit_event",
             "rental_order_command_receipt",
             "rental_order_desired_delivery_window",
+            "rental_order_mutation_command",
             "rental_order_unit_term",
             "rental_settings",
             "shipment_task_settings",
@@ -119,9 +160,7 @@ class LogisticsFlywayMigrationIntegrationTest {
             "warehouse",
             "rental_item",
             "inventory_session",
-            "reservation",
-            "customer_warehouse_capacity_price_zone",
-            "customer_warehouse_capacity_restriction_zone");
+            "reservation");
     assertThat(toRegclass("databasechangelog")).isNull();
     assertThat(
             jdbc.queryForObject(
@@ -2044,6 +2083,87 @@ class LogisticsFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void v86RestoresNewSoleProprietorsWithoutRewritingV43HistoryOnUpgradeAndCleanInstall() {
+    Flyway beforeV43 = configuration(MIGRATIONS).target("42").load();
+    assertThat(beforeV43.migrate().migrationsExecuted).isEqualTo(42);
+
+    UUID managerId = UUID.randomUUID();
+    UUID historicalProprietorId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into order_client(
+          id,version,client_type,display_name,normalized_name,phone,normalized_phone,
+          contact_person,responsible_manager_id,responsible_manager_display_name,
+          created_by_subject_id,creation_idempotency_key,creation_request_sha256,
+          created_at,updated_at)
+        values (?,0,'SOLE_PROPRIETOR','ИП История V86','ип история v86',
+          '+79990000086','+79990000086','Исторический контакт',?,'Менеджер',?,?,?,
+          clock_timestamp(),clock_timestamp())
+        """,
+        historicalProprietorId,
+        managerId,
+        managerId,
+        UUID.randomUUID(),
+        "8".repeat(64));
+
+    Flyway beforeV86 = configuration(MIGRATIONS).target("85").load();
+    assertThat(beforeV86.migrate().migrationsExecuted).isEqualTo(43);
+    beforeV86.validate();
+    assertThat(
+            jdbc.queryForObject(
+                "select client_type from order_client where id=?",
+                String.class,
+                historicalProprietorId))
+        .isEqualTo("LEGAL_ENTITY");
+    assertThatThrownBy(
+            () ->
+                insertV42Client(
+                    "SOLE_PROPRIETOR",
+                    "ИП До V86",
+                    "ип до v86",
+                    "+79990000186",
+                    managerId))
+        .hasMessageContaining("ck_order_client_type");
+
+    Flyway upgraded = configuration(MIGRATIONS).target("86").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+    assertThat(upgraded.migrate().migrationsExecuted).isZero();
+    insertV42Client(
+        "SOLE_PROPRIETOR", "ИП После V86", "ип после v86", "+79990000286", managerId);
+    assertThat(
+            jdbc.queryForObject(
+                "select client_type from order_client where id=?",
+                String.class,
+                historicalProprietorId))
+        .isEqualTo("LEGAL_ENTITY");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from order_client where client_type='SOLE_PROPRIETOR'",
+                Long.class))
+        .isOne();
+
+    jdbc.execute("drop schema public cascade");
+    jdbc.execute("create schema public");
+    Flyway cleanInstall = flyway(MIGRATIONS);
+    assertThat(cleanInstall.migrate().migrationsExecuted).isPositive();
+    cleanInstall.validate();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from flyway_schema_history where version='86' and success",
+                Long.class))
+        .isOne();
+    insertV42Client(
+        "SOLE_PROPRIETOR", "ИП Чистая V86", "ип чистая v86", "+79990000386", managerId);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from order_client where client_type='SOLE_PROPRIETOR'",
+                Long.class))
+        .isOne();
+    assertJpaValidationStarts();
+  }
+
+  @Test
   void v45RemovesTransferAndSharedDriverHintsAndEnforcesAudienceByTaskKind() {
     Flyway beforeV45 = configuration(MIGRATIONS).target("44").load();
     assertThat(beforeV45.migrate().migrationsExecuted).isEqualTo(44);
@@ -3645,6 +3765,463 @@ class LogisticsFlywayMigrationIntegrationTest {
                     "update customer_delivery_slot set price_isochrone_minutes=90 where id=?",
                     slotId))
         .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v76RestoresOnlyExceptionalZonePoliciesWithoutInventingDeletedGeometry() {
+    Flyway beforeV76 = configuration(MIGRATIONS).target("75").load();
+    assertThat(beforeV76.migrate().migrationsExecuted).isPositive();
+    UUID warehouseId = UUID.randomUUID();
+    UUID snapshotId = UUID.randomUUID();
+    UUID receiptId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into customer_warehouse_capacity_snapshot(
+          id,version,warehouse_id,source_generation,source_revision,created_at,updated_at)
+        values (?,0,?,1,?,clock_timestamp(),clock_timestamp())
+        """,
+        snapshotId,
+        warehouseId,
+        "a".repeat(64));
+    jdbc.update(
+        """
+        insert into customer_warehouse_capacity_command_receipt(
+          idempotency_key,warehouse_id,source_generation,source_revision,request_sha256,
+          snapshot_version,job_count,shift_count,isochrone_tariff_count,
+          response_updated_at,created_at)
+        values (?,?,1,?,?,0,0,0,4,clock_timestamp(),clock_timestamp())
+        """,
+        receiptId,
+        warehouseId,
+        "a".repeat(64),
+        "b".repeat(64));
+
+    Flyway versionSeventySix = configuration(MIGRATIONS).target("76").load();
+    assertThat(versionSeventySix.migrate().migrationsExecuted).isOne();
+    versionSeventySix.validate();
+
+    assertThat(toRegclass("customer_warehouse_capacity_price_zone")).isNotNull();
+    assertThat(toRegclass("customer_warehouse_capacity_restriction_zone")).isNotNull();
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select price_zone_count,restriction_zone_count
+                from customer_warehouse_capacity_command_receipt where idempotency_key=?
+                """,
+                receiptId))
+        .containsEntry("price_zone_count", 0)
+        .containsEntry("restriction_zone_count", 0);
+    UUID rollingDeploymentReceiptId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into customer_warehouse_capacity_command_receipt(
+          idempotency_key,warehouse_id,source_generation,source_revision,request_sha256,
+          snapshot_version,job_count,shift_count,isochrone_tariff_count,
+          response_updated_at,created_at)
+        values (?,?,2,?,?,0,0,0,4,clock_timestamp(),clock_timestamp())
+        """,
+        rollingDeploymentReceiptId,
+        warehouseId,
+        "c".repeat(64),
+        "d".repeat(64));
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select price_zone_count,restriction_zone_count
+                from customer_warehouse_capacity_command_receipt where idempotency_key=?
+                """,
+                rollingDeploymentReceiptId))
+        .containsEntry("price_zone_count", 0)
+        .containsEntry("restriction_zone_count", 0);
+
+    String geometry =
+        """
+        {"type":"MultiPolygon","coordinates":[[[[30.0,59.0],[31.0,59.0],
+        [31.0,60.0],[30.0,60.0],[30.0,59.0]]]]}
+        """;
+    jdbc.update(
+        """
+        insert into customer_warehouse_capacity_price_zone(
+          id,snapshot_id,source_zone_id,source_zone_version,delivery_price_rubles,
+          pickup_price_rubles,geometry_json)
+        values (?,?,?,?,?,?,?)
+        """,
+        UUID.randomUUID(),
+        snapshotId,
+        UUID.randomUUID(),
+        1,
+        12_000,
+        8_000,
+        geometry);
+    jdbc.update(
+        """
+        insert into customer_warehouse_capacity_restriction_zone(
+          id,snapshot_id,source_zone_id,source_zone_version,restriction_kind,geometry_json)
+        values (?,?,?,?,?,?)
+        """,
+        UUID.randomUUID(),
+        snapshotId,
+        UUID.randomUUID(),
+        1,
+        "NO_TRAILER",
+        geometry);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    insert into customer_warehouse_capacity_restriction_zone(
+                      id,snapshot_id,source_zone_id,source_zone_version,restriction_kind,
+                      geometry_json)
+                    values (?,?,?,?,?,?)
+                    """,
+                    UUID.randomUUID(),
+                    snapshotId,
+                    UUID.randomUUID(),
+                    1,
+                    "ORDINARY_DELIVERY_ZONE",
+                    geometry))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    insert into customer_warehouse_capacity_price_zone(
+                      id,snapshot_id,source_zone_id,source_zone_version,delivery_price_rubles,
+                      pickup_price_rubles,geometry_json)
+                    values (?,?,?,?,?,?,?)
+                    """,
+                    UUID.randomUUID(),
+                    snapshotId,
+                    UUID.randomUUID(),
+                    1,
+                    12_000,
+                    8_000,
+                    "{\"type\":\"Polygon\",\"coordinates\":[]}"))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v77AddsLeaseFencedRentalOrderMutationRecoveryWithoutChangingExistingOrders() {
+    Flyway beforeV77 = configuration(MIGRATIONS).target("76").load();
+    assertThat(beforeV77.migrate().migrationsExecuted).isPositive();
+    UUID subjectId = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into order_client(
+          id,version,client_type,display_name,normalized_name,phone,normalized_phone,
+          responsible_manager_id,created_by_subject_id,creation_idempotency_key,
+          creation_request_sha256,created_at,updated_at)
+        values (?,0,'INDIVIDUAL','V77 client',?,'+79990000077','+79990000077',
+          ?,?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        clientId,
+        "v77-client-" + clientId,
+        subjectId,
+        subjectId,
+        UUID.randomUUID(),
+        "a".repeat(64));
+    jdbc.update(
+        """
+        insert into rental_order(
+          id,version,order_number,status,client_id,manager_id,manager_display_name,
+          created_by_subject_id,created_by_display_name,created_by_role,warehouse_id,
+          creation_idempotency_key,creation_request_sha256,created_at,updated_at)
+        values (?,0,'ORD-990077','DRAFT',?,?,'V77 manager',?,'V77 manager',
+          'WAREHOUSE_MANAGER',?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        orderId,
+        clientId,
+        subjectId,
+        subjectId,
+        warehouseId,
+        UUID.randomUUID(),
+        "b".repeat(64));
+
+    Flyway versionSeventySeven = configuration(MIGRATIONS).target("77").load();
+    assertThat(versionSeventySeven.migrate().migrationsExecuted).isOne();
+    versionSeventySeven.validate();
+
+    assertThat(toRegclass("rental_order_mutation_command")).isNotNull();
+    assertThat(toRegclass("uk_rental_order_mutation_command_open_order")).isNotNull();
+    assertThat(toRegclass("idx_rental_order_mutation_command_due")).isNotNull();
+    assertThat(
+            jdbc.queryForObject(
+                "select status from rental_order where id=?", String.class, orderId))
+        .isEqualTo("DRAFT");
+    jdbc.update(
+        """
+        insert into rental_order_mutation_command(
+          id,order_id,operation,state,step,target_unit_id,expected_order_version,
+          actor_subject_id,actor_role,idempotency_key,request_sha256,warehouse_id,
+          release_units_idempotency_key,release_equipment_idempotency_key,
+          equipment_release_required,intent_json,next_attempt_at,created_at,updated_at)
+        values (?,?,'CANCEL_ORDER','PENDING','RELEASE_UNITS',null,0,?,'WAREHOUSE_MANAGER',
+          ?,?,?,?, ?,true,'{}',clock_timestamp(),clock_timestamp(),clock_timestamp())
+        """,
+        UUID.randomUUID(),
+        orderId,
+        subjectId,
+        UUID.randomUUID(),
+        "c".repeat(64),
+        warehouseId,
+        UUID.randomUUID(),
+        UUID.randomUUID());
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    insert into rental_order_mutation_command(
+                      id,order_id,operation,state,step,target_unit_id,expected_order_version,
+                      actor_subject_id,actor_role,idempotency_key,request_sha256,warehouse_id,
+                      release_units_idempotency_key,release_equipment_idempotency_key,
+                      equipment_release_required,intent_json,next_attempt_at,created_at,updated_at)
+                    values (?,?,'REMOVE_UNIT','PENDING','RELEASE_UNITS',?,0,?,
+                      'WAREHOUSE_MANAGER',?,?,?, ?,?,true,'{}',clock_timestamp(),
+                      clock_timestamp(),clock_timestamp())
+                    """,
+                    UUID.randomUUID(),
+                    orderId,
+                    UUID.randomUUID(),
+                    subjectId,
+                    UUID.randomUUID(),
+                    "d".repeat(64),
+                    warehouseId,
+                    UUID.randomUUID(),
+                    UUID.randomUUID()))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v85GeneralizesPublishedRecoveryWithoutLosingExistingRescheduleIntents() {
+    Flyway beforeV85 = configuration(MIGRATIONS).target("84").load();
+    assertThat(beforeV85.migrate().migrationsExecuted).isPositive();
+    UUID existingId = UUID.randomUUID();
+    UUID existingSourcePlanId = UUID.randomUUID();
+    UUID existingOrderId = UUID.randomUUID();
+    UUID existingBookingId = UUID.randomUUID();
+    UUID existingCustomerId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into planning_published_reschedule_saga(
+          id,version,order_id,booking_id,customer_subject_id,source_plan_id,
+          expected_source_plan_version,replacement_plan_version,source_plan_warehouse_id,
+          source_plan_date,removed_document_id,removed_external_task_id,request_sha256,
+          request_json,state,attempt_count,next_attempt_at,created_at,updated_at)
+        values (?,0,?,?,?,?,1,2,?,date '2026-09-03',?,?,?,'{}','PENDING',0,
+          clock_timestamp(),clock_timestamp(),clock_timestamp())
+        """,
+        existingId,
+        existingOrderId,
+        existingBookingId,
+        existingCustomerId,
+        existingSourcePlanId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "a".repeat(64));
+
+    Flyway upgraded = configuration(MIGRATIONS).target("85").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForMap(
+                "select operation,booking_id,customer_subject_id from "
+                    + "planning_published_reschedule_saga where id=?",
+                existingId))
+        .containsEntry("operation", "RESCHEDULE")
+        .containsEntry("booking_id", existingBookingId)
+        .containsEntry("customer_subject_id", existingCustomerId);
+    UUID cancellationId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into planning_published_reschedule_saga(
+          id,version,order_id,booking_id,customer_subject_id,operation,source_plan_id,
+          expected_source_plan_version,replacement_plan_version,source_plan_warehouse_id,
+          source_plan_date,removed_document_id,removed_external_task_id,request_sha256,
+          request_json,state,attempt_count,next_attempt_at,created_at,updated_at)
+        values (?,0,?,null,null,'CANCELLATION',?,4,5,?,date '2026-09-04',?,?,?,'{}',
+          'PENDING',0,clock_timestamp(),clock_timestamp(),clock_timestamp())
+        """,
+        cancellationId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "b".repeat(64));
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    insert into planning_published_reschedule_saga(
+                      id,version,order_id,booking_id,customer_subject_id,operation,source_plan_id,
+                      expected_source_plan_version,replacement_plan_version,
+                      source_plan_warehouse_id,source_plan_date,removed_document_id,
+                      removed_external_task_id,request_sha256,request_json,state,attempt_count,
+                      next_attempt_at,created_at,updated_at)
+                    values (?,0,?,null,null,'CANCELLATION',?,1,3,?,date '2026-09-03',
+                      ?,?,?,'{}','PENDING',0,clock_timestamp(),clock_timestamp(),clock_timestamp())
+                    """,
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    existingSourcePlanId,
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    "c".repeat(64)))
+        .hasMessageContaining("uk_planning_published_recovery_active_source");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update planning_published_reschedule_saga set booking_id=null where id=?",
+                    existingId))
+        .hasMessageContaining("ck_planning_published_recovery_customer_context");
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v91BackfillsRentalShipmentsAndFencesCustomerDeliveryPurpose() {
+    Flyway beforeV91 = configuration(MIGRATIONS).target("90").load();
+    assertThat(beforeV91.migrate().migrationsExecuted).isPositive();
+    UUID shipmentId = UUID.randomUUID();
+    UUID returnId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into logistics_document(
+          id,version,document_type,state,warehouse_id,party_snapshot,driver_snapshot,
+          requested_by_subject_id,correlation_id,created_at,updated_at)
+        values (?,0,'SHIPMENT','DRAFT',?,'Клиент','Водитель',?,?,clock_timestamp(),clock_timestamp()),
+               (?,0,'RETURN','DRAFT',?,null,null,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        shipmentId,
+        warehouseId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        returnId,
+        warehouseId,
+        UUID.randomUUID(),
+        UUID.randomUUID());
+
+    Flyway upgraded = configuration(MIGRATIONS).target("91").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select customer_delivery_purpose from logistics_document where id=?",
+                String.class,
+                shipmentId))
+        .isEqualTo("RENTAL_DELIVERY");
+    assertThat(
+            jdbc.queryForObject(
+                "select customer_delivery_purpose from logistics_document where id=?",
+                String.class,
+                returnId))
+        .isNull();
+    jdbc.update(
+        "update logistics_document set customer_delivery_purpose='SALE_DELIVERY' where id=?",
+        shipmentId);
+    jdbc.update(
+        "update logistics_document set customer_delivery_purpose='CUSTOMER_RELOCATION' where id=?",
+        shipmentId);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update logistics_document set customer_delivery_purpose='RENTAL_DELIVERY' where id=?",
+                    returnId))
+        .hasMessageContaining("ck_logistics_document_customer_delivery_purpose");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update logistics_document set customer_delivery_purpose='UNKNOWN' where id=?",
+                    shipmentId))
+        .hasMessageContaining("ck_logistics_document_customer_delivery_purpose");
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v93RemovesPlatformCompanyOwnershipAndKeepsGlobalLogisticsFences() {
+    Flyway beforeV93 = configuration(MIGRATIONS).target("92").load();
+    assertThat(beforeV93.migrate().migrationsExecuted).isPositive();
+
+    Flyway upgraded = configuration(MIGRATIONS).target("93").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForList(
+                """
+                select table_name
+                from information_schema.columns
+                where table_schema='public'
+                  and column_name='company_id'
+                  and table_name in (
+                    'order_client', 'rental_order', 'rental_order_command_receipt',
+                    'rental_order_mutation_command', 'customer_booking_mutation',
+                    'rental_inquiry', 'rental_inquiry_search_attempt',
+                    'rental_inquiry_selection_receipt', 'client_presentation',
+                    'client_presentation_item', 'presentation_booking', 'rental_inquiry_outbox',
+                    'customer_profile', 'customer_rental_session', 'customer_delivery_slot',
+                    'customer_cabin_acceptance', 'customer_cabin_problem',
+                    'customer_cabin_problem_action'
+                  )
+                order by table_name
+                """,
+                String.class))
+        .isEmpty();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                from information_schema.columns
+                where table_schema='public'
+                  and table_name='customer_profile'
+                  and column_name='company_name'
+                """,
+                Integer.class))
+        .isOne();
+    assertThat(constraintDefinition("order_client", "uk_order_client_creator_idempotency"))
+        .contains("created_by_subject_id", "creation_idempotency_key")
+        .doesNotContain("company_id");
+    assertThat(constraintDefinition("rental_order", "fk_rental_order_client"))
+        .contains("FOREIGN KEY (client_id)", "REFERENCES order_client(id)")
+        .doesNotContain("company_id");
+    assertThat(constraintDefinition("rental_inquiry", "uk_rental_inquiry_creation_key"))
+        .contains("manager_id", "creation_idempotency_key")
+        .doesNotContain("company_id");
+    assertThat(constraintDefinition("customer_booking_mutation", "uk_customer_booking_mutation_subject_key"))
+        .contains("customer_subject_id", "idempotency_key")
+        .doesNotContain("company_id");
+    assertThat(constraintDefinition("customer_cabin_problem_action", "fk_customer_cabin_problem_action_problem"))
+        .contains("FOREIGN KEY (problem_id)", "REFERENCES customer_cabin_problem(id)")
+        .doesNotContain("company_id");
+    assertThat(
+            jdbc.queryForList(
+                """
+                select indexdef
+                from pg_indexes
+                where schemaname='public' and indexdef ilike '%company_id%'
+                """,
+                String.class))
+        .isEmpty();
+    assertThat(
+            jdbc.queryForList(
+                """
+                select trigger_name
+                from information_schema.triggers
+                where event_object_schema='public'
+                  and trigger_name like '%company_change'
+                """,
+                String.class))
+        .isEmpty();
     assertJpaValidationStarts();
   }
 

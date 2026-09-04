@@ -51,6 +51,11 @@ Retrofit.
 Проекции логистических документов передают только календарную дату
 (`scheduledDate`); менеджерский клиент не использует устаревшее поле времени
 планирования.
+При открытии редактора перемещения эта дата инициализируется по каноническому
+IANA timezone выбранного склада-источника в инъецированный момент серверных
+часов. Submit проверяет ту же warehouse-local дату и никогда не использует
+`LocalDate.now()` Android-устройства; отсутствующий склад или некорректный
+timezone дают явную ошибку.
 
 ## Экраны и владение локальным состоянием
 
@@ -316,9 +321,25 @@ user info. Значение по умолчанию — тестовый пуб�
 
 ## Целостность релиза
 
+Любая release-задача создания артефакта закрывается с ошибкой, если
+`-PsigningPropertiesFile` не указывает на читаемый внешний файл с
+`storeFile`, `storePassword`, `keyAlias` и `keyPassword` либо указанный keystore
+недоступен. Используйте
+[`signing.properties.example`](signing.properties.example) только как шаблон
+названий ключей; настоящие signing material остаются вне Git:
+
+```bash
+bash ./gradlew \
+  -PsigningPropertiesFile=/secure/path/rwms-manager-signing.properties \
+  assembleRelease
+```
+
 Соберите точный reviewed source scope, затем зафиксируйте package name APK,
 `versionCode`, `versionName`, signing certificate и SHA-256 до публикации.
-Установите именно этот APK на device/emulator, пройдите вход через нужный
+`manager-download-site/release-trust-policy.json` дополнительно фиксирует
+сертификаты, допустимые для каналов `PRODUCTION` и `INTERNAL_TEST`; пустой
+production allowlist намеренно запрещает production-публикацию. Установите
+именно этот APK на device/emulator, пройдите вход через нужный
 публичный gateway и проверьте первый profile/workspace request и изменённый
 manager-flow. Debug APK, успешная Gradle-задача или HTTP 200 сами по себе не
 являются доказательством релиза.

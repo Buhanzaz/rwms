@@ -6,6 +6,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import java.time.OffsetDateTime;
 import java.util.Objects;
 import java.util.UUID;
@@ -20,7 +21,16 @@ import org.hibernate.proxy.HibernateProxy;
  * JPA persistence model for Client Presentation Item in the logistics-owned database.
  */
 @Entity
-@Table(name = "client_presentation_item")
+@Table(
+    name = "client_presentation_item",
+    uniqueConstraints = {
+      @UniqueConstraint(
+          name = "uk_client_presentation_item_revision_cabin",
+          columnNames = {"presentation_id", "presentation_revision", "rental_item_id"}),
+      @UniqueConstraint(
+          name = "uk_client_presentation_item_revision_order",
+          columnNames = {"presentation_id", "presentation_revision", "sort_order"})
+    })
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class ClientPresentationItem {

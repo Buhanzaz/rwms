@@ -20,7 +20,7 @@ describe("warehouse settings conflict handling", () => {
     )
   })
 
-  it("explains domain conflicts instead of presenting them as stale data", () => {
+  it("does not expose diagnostic conflict details in a user-facing message", () => {
     expect(
       getWarehouseMutationError(
         new ApiError(
@@ -28,7 +28,7 @@ describe("warehouse settings conflict handling", () => {
           409
         )
       )
-    ).toContain("не все сервисы подтвердили")
+    ).toBe("Данные объекта изменились. Список обновлён; откройте запись заново.")
     expect(
       getWarehouseMutationError(
         new ApiError(
@@ -36,6 +36,6 @@ describe("warehouse settings conflict handling", () => {
           409
         )
       )
-    ).toContain("нужно назначить с даты")
+    ).toBe("Данные объекта изменились. Список обновлён; откройте запись заново.")
   })
 })

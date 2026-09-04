@@ -49,6 +49,12 @@ public class WarehouseCapacityCommandReceipt {
   @Column(name = "isochrone_tariff_count", nullable = false)
   private int isochroneTariffCount;
 
+  @Column(name = "price_zone_count", nullable = false)
+  private int priceZoneCount;
+
+  @Column(name = "restriction_zone_count", nullable = false)
+  private int restrictionZoneCount;
+
   @Column(name = "response_updated_at", nullable = false)
   private OffsetDateTime responseUpdatedAt;
 
@@ -71,6 +77,8 @@ public class WarehouseCapacityCommandReceipt {
         snapshot.getJobs().size(),
         snapshot.getShifts().size(),
         snapshot.getIsochroneTariffs().size(),
+        snapshot.getPriceZones().size(),
+        snapshot.getRestrictionZones().size(),
         snapshot.getUpdatedAt(),
         createdAt);
   }
@@ -91,6 +99,8 @@ public class WarehouseCapacityCommandReceipt {
         original.jobCount,
         original.shiftCount,
         original.isochroneTariffCount,
+        original.priceZoneCount,
+        original.restrictionZoneCount,
         original.responseUpdatedAt,
         createdAt);
   }
@@ -110,6 +120,8 @@ public class WarehouseCapacityCommandReceipt {
       int jobCount,
       int shiftCount,
       int isochroneTariffCount,
+      int priceZoneCount,
+      int restrictionZoneCount,
       OffsetDateTime responseUpdatedAt,
       OffsetDateTime createdAt) {
     WarehouseCapacityCommandReceipt receipt = new WarehouseCapacityCommandReceipt();
@@ -125,13 +137,19 @@ public class WarehouseCapacityCommandReceipt {
         || jobCount < 0
         || shiftCount < 0
         || isochroneTariffCount < 1
-        || isochroneTariffCount > 12) {
+        || isochroneTariffCount > 12
+        || priceZoneCount < 0
+        || priceZoneCount > 500
+        || restrictionZoneCount < 0
+        || restrictionZoneCount > 500) {
       throw new IllegalArgumentException("Capacity receipt result is invalid");
     }
     receipt.snapshotVersion = snapshotVersion;
     receipt.jobCount = jobCount;
     receipt.shiftCount = shiftCount;
     receipt.isochroneTariffCount = isochroneTariffCount;
+    receipt.priceZoneCount = priceZoneCount;
+    receipt.restrictionZoneCount = restrictionZoneCount;
     receipt.responseUpdatedAt =
         Objects.requireNonNull(responseUpdatedAt, "responseUpdatedAt");
     receipt.createdAt = Objects.requireNonNull(createdAt, "createdAt");

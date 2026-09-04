@@ -65,6 +65,9 @@ public class RentalInquirySelectionReceipt {
   @Column(name = "public_idempotency_key", nullable = false)
   private UUID publicIdempotencyKey;
 
+  @Column(name = "downstream_idempotency_key", nullable = false)
+  private UUID downstreamIdempotencyKey;
+
   @JdbcTypeCode(Types.CHAR)
   @Column(name = "request_sha256", nullable = false, length = 64)
   private String requestSha256;
@@ -116,6 +119,7 @@ public class RentalInquirySelectionReceipt {
       UUID inquiryId,
       UUID subjectId,
       UUID publicIdempotencyKey,
+      UUID downstreamIdempotencyKey,
       String requestSha256,
       UUID warehouseId,
       RentalInquirySelectionCommandType commandType,
@@ -140,6 +144,8 @@ public class RentalInquirySelectionReceipt {
     receipt.subjectId = Objects.requireNonNull(subjectId, "subjectId");
     receipt.publicIdempotencyKey =
         Objects.requireNonNull(publicIdempotencyKey, "publicIdempotencyKey");
+    receipt.downstreamIdempotencyKey =
+        Objects.requireNonNull(downstreamIdempotencyKey, "downstreamIdempotencyKey");
     receipt.requestSha256 = requireHash(requestSha256, "requestSha256");
     receipt.warehouseId = Objects.requireNonNull(warehouseId, "warehouseId");
     receipt.commandType = requiredType;

@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -40,6 +41,7 @@ public class RentalOrderService {
   private final RentalOrderCreationService creation;
   private final RentalOrderLifecycleService lifecycle;
   private final RentalOrderReservationService reservations;
+  private final RentalOrderMutationRecoveryService mutationRecovery;
   private final RentalOrderTermsService terms;
   private final RentalOrderShipmentService shipments;
   private final RentalOrderUnitReplacementService replacements;
@@ -145,12 +147,16 @@ public class RentalOrderService {
     return new MutationResult(outcome.response(), outcome.replayed());
   }
 
-  @Transactional
+  @Transactional(propagation = Propagation.NOT_SUPPORTED)
   public MutationResult removeUnit(
       OrderActor actor, UUID orderId, UUID unitId, long expectedVersion, UUID idempotencyKey) {
-    RentalOrderCommandOutcome outcome =
-        reservations.removeUnit(actor, orderId, unitId, expectedVersion, idempotencyKey);
-    return new MutationResult(outcome.response(), outcome.replayed());
+    try {
+      RentalOrderCommandOutcome outcome =
+          mutationRecovery.removeUnit(actor, orderId, unitId, expectedVersion, idempotencyKey);
+      return new MutationResult(outcome.response(), outcome.replayed());
+    } catch (dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException exception) {
+      throw RentalOrderProblems.dependencyProblem(exception);
+    }
   }
 
   public MutationResult replaceUnit(
@@ -241,12 +247,16 @@ public class RentalOrderService {
     return new MutationResult(outcome.response(), outcome.replayed());
   }
 
-  @Transactional
+  @Transactional(propagation = Propagation.NOT_SUPPORTED)
   public MutationResult cancel(
       OrderActor actor, UUID orderId, long expectedVersion, UUID idempotencyKey) {
-    RentalOrderCommandOutcome outcome =
-        reservations.cancel(actor, orderId, expectedVersion, idempotencyKey);
-    return new MutationResult(outcome.response(), outcome.replayed());
+    try {
+      RentalOrderCommandOutcome outcome =
+          mutationRecovery.cancel(actor, orderId, expectedVersion, idempotencyKey);
+      return new MutationResult(outcome.response(), outcome.replayed());
+    } catch (dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException exception) {
+      throw RentalOrderProblems.dependencyProblem(exception);
+    }
   }
 
   @Transactional

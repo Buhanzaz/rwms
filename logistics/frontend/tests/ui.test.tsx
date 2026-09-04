@@ -1,12 +1,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
 import { CatalogDialog, RequestDialog } from '../src/components/EntityDialogs';
-import type { DriverInput, LogisticsRequestInput, VehicleInput } from '../src/api/client';
+import type { LogisticsRequestInput, VehicleInput } from '../src/api/client';
 import { NotificationCenter, ThemeSwitch, Toasts } from '../src/components/ui';
 import { useUiStore } from '../src/stores/ui-store';
+import { dateInTimeZone, formatDate, nextDate } from '../src/utils/format';
 import { requestFixture, warehouseFixture, workspaceFixture } from './fixtures';
 
 vi.mock('../src/map/MapCanvas', () => ({
@@ -24,7 +25,19 @@ function requestUrl(input: RequestInfo | URL): string {
 }
 
 describe('application states', () => {
-  beforeEach(() => useUiStore.setState({ notifications: [], notificationDurationSeconds: 8 }));
+  beforeEach(() => {
+    window.localStorage.clear();
+    useUiStore.setState({
+      mode: 'PLAN_DAY',
+      section: 'WAREHOUSE',
+      mapTool: 'SELECT',
+      shiftVisibility: 'ACTIVE',
+      selected: null,
+      mapClickDraft: null,
+      notifications: [],
+      notificationDurationSeconds: 8,
+    });
+  });
 
   it('shows an actionable backend-unavailable state', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new TypeError('network down'))));
@@ -93,7 +106,7 @@ describe('application states', () => {
     renderApp();
 
     const warehouseSelector = await screen.findByRole('button', { name: 'Склад логистической группы' });
-    expect(warehouseSelector).toHaveTextContent('Склад СПб — Санкт-Петербург');
+    expect(warehouseSelector).toHaveTextContent('Склад СПб');
     expect(warehouseSelector).toHaveTextContent('Europe/Moscow');
     expect(warehouseSelector).toHaveAttribute('aria-expanded', 'false');
     const warehouseHome = screen.getByRole('button', { name: 'Открыть склад' });
@@ -103,6 +116,42 @@ describe('application states', () => {
 
     await user.click(warehouseHome);
     expect(useUiStore.getState()).toMatchObject({ mode: 'PLAN_DAY', section: 'WAREHOUSE', selected: { kind: 'warehouse', id: warehouse.id } });
+  });
+
+  it('explains that a committed settings change is retrying its slot projection', async () => {
+    const warehouse = warehouseFixture({
+      capacity_generation: 12,
+      capacity_published_generation: 11,
+      capacity_publish_status: 'FAILED',
+      capacity_publish_attempts: 1,
+      capacity_publish_error_code: 'RWMS_CAPACITY_UNAVAILABLE',
+      capacity_publish_next_attempt_at: '2026-08-31T04:00:05Z',
+    });
+    const workspace = workspaceFixture({ warehouse, warehouses: [warehouse], requests: [], plans: [] });
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      let body: unknown = null;
+      if (url.endsWith('/warehouses/available')) body = [];
+      else if (url.endsWith('/warehouses')) body = [warehouse];
+      else if (url.includes(`/warehouses/${warehouse.id}/workspace`)) body = workspace;
+      else if (url.includes('/planning-days/')) body = {
+        warehouse_id: warehouse.id,
+        date: warehouse.default_planning_date,
+        accepting_requests: true,
+        closed_at: null,
+        closed_by: null,
+        plan_id: null,
+      };
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    }));
+
+    renderApp();
+
+    const warning = await screen.findByRole('alert');
+    expect(warning).toHaveTextContent('Слоты обновляются');
+    expect(warning).toHaveTextContent('Локальные настройки сохранены');
+    expect(warning).toHaveTextContent('повторно сохранять форму не нужно');
+    expect(warning).not.toHaveTextContent('RWMS_CAPACITY_UNAVAILABLE');
   });
 
   it('switches from a planning root to its representative warehouse in the group selector', async () => {
@@ -154,15 +203,15 @@ describe('application states', () => {
     renderApp();
 
     const trigger = await screen.findByRole('button', { name: 'Склад логистической группы' });
-    expect(trigger).toHaveTextContent('Опорный склад — Основной город');
+    expect(trigger).toHaveTextContent('Склад Основной город');
     await user.click(trigger);
 
     const listbox = screen.getByRole('listbox', { name: 'Склад логистической группы' });
     const options = within(listbox).getAllByRole('option');
     expect(options.map((option) => option.textContent)).toEqual([
-      'Опорный склад — Основной город',
-      '\u00a0\u00a0· Представительский склад — Региональный город',
-      'Другой основной склад — Другой город',
+      'Склад Основной город',
+      'Представительский склад Региональный город / Основной город',
+      'Склад Другой город',
     ]);
     expect(options[0]).toHaveAttribute('aria-selected', 'true');
 
@@ -172,16 +221,62 @@ describe('application states', () => {
     await user.click(trigger);
     await user.click(within(screen.getByRole('listbox', { name: 'Склад логистической группы' })).getByRole('option', { name: /Представительский склад/ }));
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Склад логистической группы' })).toHaveTextContent('Представительский склад — Региональный город'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Склад логистической группы' })).toHaveTextContent('Представительский склад Региональный город / Основной город'));
     expect(screen.getByRole('button', { name: 'Склад логистической группы' })).toHaveTextContent('Asia/Novosibirsk');
     expect(fetchMock.mock.calls.map(([input]) => requestUrl(input))).toContainEqual(expect.stringContaining(`/warehouses/${representativeWarehouse.id}/workspace`));
     await user.click(screen.getByRole('button', { name: 'Склад логистической группы' }));
     expect(within(screen.getByRole('listbox', { name: 'Склад логистической группы' })).getByRole('option', { name: /Представительский склад/ })).toHaveAttribute('aria-selected', 'true');
     await user.click(screen.getByRole('button', { name: 'Дата планирования' }));
     expect(screen.queryByRole('listbox', { name: 'Склад логистической группы' })).not.toBeInTheDocument();
+    expect(window.localStorage.getItem('rwms:logistics:last-warehouse')).toBe(representativeWarehouse.id);
   });
 
-  it('opens a new RWMS request from a direct representative warehouse on its planning date', async () => {
+  it('restores the saved representative warehouse and its planning date', async () => {
+    const mainWarehouse = warehouseFixture({ id: 'warehouse-main', name: 'Опорный склад' });
+    const representativeWarehouse = warehouseFixture({
+      id: 'warehouse-representative',
+      name: 'Склад Великий Новгород',
+      city: 'Великий Новгород',
+      representative: true,
+    });
+    const workspace = workspaceFixture({
+      warehouse: representativeWarehouse,
+      warehouses: [mainWarehouse, representativeWarehouse],
+      planning_root_warehouse_id: mainWarehouse.id,
+      planning_group_warehouse_ids: [mainWarehouse.id, representativeWarehouse.id],
+      requests: [],
+      plans: [],
+    });
+    window.localStorage.setItem('rwms:logistics:last-warehouse', representativeWarehouse.id);
+    window.localStorage.setItem(`rwms:logistics:planning-date:${representativeWarehouse.id}`, '2026-09-02');
+    useUiStore.setState({ mode: 'PLAN_DAY', section: 'SHIFTS', shiftVisibility: 'ARCHIVED', selected: null });
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      let body: unknown = null;
+      if (url.endsWith('/warehouses/available')) body = [];
+      else if (url.endsWith('/warehouses')) body = [mainWarehouse, representativeWarehouse];
+      else if (url.includes(`/warehouses/${representativeWarehouse.id}/workspace`)) body = { ...workspace, planning_date: '2026-09-02' };
+      else if (url.includes(`/warehouses/${mainWarehouse.id}/plans/ensure`)) body = null;
+      else if (url.includes(`/warehouses/${mainWarehouse.id}/planning-days/2026-09-02`)) body = {
+        warehouse_id: mainWarehouse.id,
+        date: '2026-09-02',
+        accepting_requests: true,
+        closed_at: null,
+        closed_by: null,
+        plan_id: null,
+      };
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    }));
+
+    renderApp();
+
+    expect(await screen.findByRole('button', { name: 'Склад логистической группы' })).toHaveTextContent('Представительский склад Великий Новгород / Санкт-Петербург');
+    expect(screen.getByRole('button', { name: 'Дата планирования' })).toHaveTextContent('2 сентября 2026');
+    expect(screen.getByRole('button', { name: 'Архив' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('Смен по выбранному фильтру нет')).toBeVisible();
+  });
+
+  it('baselines existing regional requests and opens only a request received afterwards', async () => {
     const mainWarehouse = warehouseFixture({ id: 'warehouse-main', name: 'Опорный склад' });
     const representativeWarehouse = warehouseFixture({
       id: 'warehouse-representative',
@@ -189,6 +284,12 @@ describe('application states', () => {
       name: 'Представительский склад',
       city: 'Региональный город',
       representative: true,
+    });
+    const existingRegionalRequest = requestFixture({
+      id: 'existing-regional-request',
+      warehouse_id: representativeWarehouse.id,
+      source_system: 'RWMS',
+      name: 'Существующий заказ',
     });
     const regionalRequest = requestFixture({
       id: 'regional-request',
@@ -204,19 +305,19 @@ describe('application states', () => {
         is_hard: false,
       }],
     });
-    const workspace = workspaceFixture({
+    let workspace = workspaceFixture({
       warehouse: mainWarehouse,
       planning_root_warehouse_id: mainWarehouse.id,
       planning_group_warehouse_ids: [mainWarehouse.id, representativeWarehouse.id],
       warehouses: [mainWarehouse, representativeWarehouse],
       requests: [
-        regionalRequest,
+        existingRegionalRequest,
         requestFixture({ id: 'generated-request', warehouse_id: representativeWarehouse.id, source_system: 'WAREHOUSE_WORKLOAD_GENERATOR' }),
         requestFixture({ id: 'manual-request', warehouse_id: representativeWarehouse.id, source_system: null }),
       ],
       plans: [],
     });
-    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = requestUrl(input);
       let body: unknown = null;
       if (url.endsWith('/warehouses/available')) body = [];
@@ -231,9 +332,22 @@ describe('application states', () => {
         plan_id: null,
       };
       return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
-    }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
     const user = userEvent.setup();
-    renderApp();
+    render(<QueryClientProvider client={queryClient}><App /></QueryClientProvider>);
+
+    await screen.findByRole('button', { name: 'Склад логистической группы' });
+    expect(useUiStore.getState().notifications).toEqual([]);
+
+    workspace = {
+      ...workspace,
+      requests: [...workspace.requests, regionalRequest],
+    };
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ['workspace', mainWarehouse.id] });
+    });
 
     expect(await screen.findByText('Новая заявка · Представительский склад')).toBeVisible();
     expect(useUiStore.getState().notifications).toHaveLength(1);
@@ -256,7 +370,7 @@ describe('application states', () => {
       requests: [requestFixture()],
       plans: [],
     });
-    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = requestUrl(input);
       let body: unknown = null;
       if (url.endsWith('/warehouses/available')) body = [];
@@ -271,17 +385,202 @@ describe('application states', () => {
         plan_id: null,
       };
       return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
-    }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
     useUiStore.setState({ mode: 'PLAN_DAY', section: 'REQUESTS', selected: null });
     const user = userEvent.setup();
     renderApp();
 
     await user.click(await screen.findByRole('button', { name: /^Доставки/ }));
-    await user.click(screen.getByRole('button', { name: /^Следующая дата: 31 августа 2026/ }));
+    const currentWarehouseDate = dateInTimeZone(new Date(), warehouse.timezone);
+    const followingWarehouseDate = nextDate(currentWarehouseDate, 1);
+    await user.click(screen.getByRole('button', {
+      name: `Следующая дата: ${formatDate(followingWarehouseDate)}`,
+    }));
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Дата планирования' })).toHaveTextContent('31 августа 2026'));
+    await waitFor(() => expect(fetchMock.mock.calls.map(([input]) => requestUrl(input)))
+      .toContainEqual(expect.stringContaining(`/planning-days/${followingWarehouseDate}`)));
+    expect(fetchMock.mock.calls.map(([input]) => requestUrl(input))).toContainEqual(expect.stringContaining(
+      `/workspace?planning_date=${followingWarehouseDate}&request_limit=250`,
+    ));
     expect(useUiStore.getState().section).toBe('REQUESTS');
     expect(screen.getByRole('region', { name: 'Подготовка доставок и вывозов на день' })).toBeVisible();
+  });
+
+  it('loads the next bounded request page explicitly without changing the inspector section', async () => {
+    const warehouse = warehouseFixture();
+    const planningDate = dateInTimeZone(new Date(), warehouse.timezone);
+    const onDate = (id: string, name: string) => requestFixture({
+      id,
+      name,
+      scheduled_date: planningDate,
+      date_options: [{ date: planningDate, priority: 1, window_start: '12:00', window_end: '15:00', is_hard: true }],
+    });
+    const firstPage = workspaceFixture({
+      warehouse,
+      planning_date: planningDate,
+      requests: [onDate('request-first', 'Доставка первая')],
+      request_total: 2,
+      request_next_cursor: 'request-cursor',
+      plans: [],
+    });
+    const secondPage = workspaceFixture({
+      warehouse,
+      planning_date: planningDate,
+      requests: [onDate('request-second', 'Доставка вторая')],
+      request_total: 2,
+      request_next_cursor: null,
+      plans: [],
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      let body: unknown = null;
+      if (url.endsWith('/warehouses/available')) body = [];
+      else if (url.endsWith('/warehouses')) body = [warehouse];
+      else if (url.includes(`/warehouses/${warehouse.id}/workspace`)) body = url.includes('request_cursor=request-cursor') ? secondPage : firstPage;
+      else if (url.includes('/planning-days/')) body = { warehouse_id: warehouse.id, date: planningDate, accepting_requests: true, closed_at: null, closed_by: null, plan_id: null };
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    useUiStore.setState({ mode: 'PLAN_DAY', section: 'REQUESTS', selected: null });
+    const user = userEvent.setup();
+
+    renderApp();
+
+    expect(await screen.findByText('· №первая')).toBeVisible();
+    expect(screen.getByText('Показано заявок: 1 из 2')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Загрузить ещё заявки' }));
+
+    expect(await screen.findByText('· №вторая')).toBeVisible();
+    expect(screen.getByText('Показано заявок: 2 из 2')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Загрузить ещё заявки' })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.map(([input]) => requestUrl(input))).toContainEqual(expect.stringContaining(
+      `planning_date=${planningDate}&request_limit=250&request_cursor=request-cursor`,
+    ));
+    expect(useUiStore.getState().section).toBe('REQUESTS');
+  });
+
+  it('clears accumulated request pages after a mutation refresh and ignores a late page response', async () => {
+    const warehouse = warehouseFixture();
+    const planningDate = dateInTimeZone(new Date(), warehouse.timezone);
+    const onDate = (id: string, name: string) => requestFixture({
+      id,
+      name,
+      scheduled_date: planningDate,
+      date_options: [{ date: planningDate, priority: 1, window_start: '12:00', window_end: '15:00', is_hard: true }],
+    });
+    const firstPage = workspaceFixture({
+      warehouse,
+      planning_date: planningDate,
+      requests: [onDate('request-first', 'Доставка первая')],
+      request_total: 3,
+      request_next_cursor: 'request-cursor',
+      plans: [],
+    });
+    const secondRequest = onDate('request-second', 'Доставка вторая');
+    const secondPage = workspaceFixture({
+      warehouse,
+      planning_date: planningDate,
+      requests: [secondRequest],
+      request_total: 3,
+      request_next_cursor: 'late-cursor',
+      plans: [],
+    });
+    const latePage = workspaceFixture({
+      warehouse,
+      planning_date: planningDate,
+      requests: [onDate('request-late', 'Устаревшая доставка')],
+      request_total: 3,
+      request_next_cursor: null,
+      plans: [],
+    });
+    let resolveLatePage!: (response: Response) => void;
+    const latePageResponse = new Promise<Response>((resolve) => { resolveLatePage = resolve; });
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>((input, init) => {
+      const url = requestUrl(input);
+      let body: unknown = null;
+      if (url.endsWith('/warehouses/available')) body = [];
+      else if (url.endsWith('/warehouses')) body = [warehouse];
+      else if (url.includes('request_cursor=late-cursor')) return latePageResponse;
+      else if (url.includes('request_cursor=request-cursor')) body = secondPage;
+      else if (url.includes(`/warehouses/${warehouse.id}/workspace`)) body = firstPage;
+      else if (url === '/api/requests/request-second/planning-details' && init?.method === 'POST') body = { ...secondRequest, version: 2, mandatory: true };
+      else if (url.endsWith(`/warehouses/${warehouse.id}/planning-days/${planningDate}/operations`)) body = {
+        warehouse_id: warehouse.id,
+        day: planningDate,
+        mode: 'DELIVERIES_AND_PICKUPS',
+        mode_version: 0,
+        pending_action_count: 0,
+        events: [],
+        notices: [],
+        actions: [],
+        decisions: [],
+        proposals: [],
+        truncated_collections: [],
+      };
+      else if (url.includes('/planning-days/')) body = { warehouse_id: warehouse.id, date: planningDate, accepting_requests: true, closed_at: null, closed_by: null, plan_id: null };
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    useUiStore.setState({ mode: 'PLAN_DAY', section: 'REQUESTS', selected: null });
+    const user = userEvent.setup();
+
+    renderApp();
+    expect(await screen.findByText('· №первая')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Загрузить ещё заявки' }));
+    const secondCard = await screen.findByTestId('planning-request-request-second');
+    await user.click(screen.getByRole('button', { name: 'Загрузить ещё заявки' }));
+    await waitFor(() => expect(fetchMock.mock.calls.map(([input]) => requestUrl(input)))
+      .toContainEqual(expect.stringContaining('request_cursor=late-cursor')));
+    await user.click(within(secondCard).getByLabelText('Обязательная доставка'));
+    await user.click(within(secondCard).getByRole('button', { name: 'Сохранить условия' }));
+
+    expect(await screen.findByText('Условия доставки сохранены')).toBeVisible();
+    expect(useUiStore.getState().section).toBe('REQUESTS');
+    expect(screen.getByRole('region', { name: 'Подготовка доставок и вывозов на день' })).toBeVisible();
+    await user.click(screen.getByTitle('Доставки'));
+    expect(await screen.findByTestId('planning-request-request-first')).toBeVisible();
+    expect(screen.queryByTestId('planning-request-request-second')).not.toBeInTheDocument();
+    await act(async () => {
+      resolveLatePage(new Response(JSON.stringify(latePage), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      await new Promise((resolve) => { setTimeout(resolve, 0); });
+    });
+    expect(screen.queryByTestId('planning-request-request-late')).not.toBeInTheDocument();
+    expect(screen.getByTestId('planning-request-request-first')).toBeVisible();
+  });
+
+  it('does not offer staff-driver creation from logistics', async () => {
+    const warehouse = warehouseFixture({ id: 'warehouse-local', name: 'Региональный склад', representative: true });
+    const root = warehouseFixture({ id: 'warehouse-root', name: 'Опорный склад' });
+    const workspace = workspaceFixture({
+      warehouse,
+      warehouses: [root, warehouse],
+      planning_root_warehouse_id: root.id,
+      planning_group_warehouse_ids: [root.id, warehouse.id],
+      drivers: [],
+      shifts: [],
+      requests: [],
+      plans: [],
+    });
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>((input) => {
+      const url = requestUrl(input);
+      let body: unknown = null;
+      if (url.endsWith('/warehouses/available')) body = [];
+      else if (url.endsWith('/warehouses')) body = [warehouse, root];
+      else if (url.includes(`/warehouses/${warehouse.id}/workspace`)) body = workspace;
+      else if (url.includes('/planning-days/')) body = { warehouse_id: warehouse.id, date: workspace.planning_date, accepting_requests: true, closed_at: null, closed_by: null, plan_id: null };
+      else if (url.endsWith(`/warehouses/${warehouse.id}/available-drivers`)) body = [];
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    window.localStorage.setItem('rwms:logistics:last-warehouse', warehouse.id);
+    useUiStore.setState({ mode: 'PLAN_DAY', section: 'DRIVERS', selected: null });
+    renderApp();
+    expect(await screen.findByRole('heading', { name: 'Водители — Региональный склад' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Добавить' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Изменить' })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input, init]) => requestUrl(input).endsWith(`/warehouses/${warehouse.id}/drivers`) && init?.method === 'POST')).toBe(false);
+    expect(fetchMock.mock.calls.some(([input]) => requestUrl(input).endsWith(`/warehouses/${warehouse.id}/available-drivers`))).toBe(false);
   });
 
   it('builds and closes the common day through the planning root when a representative is open', async () => {
@@ -301,7 +600,7 @@ describe('application states', () => {
       requests: [],
       plans: [],
     });
-    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = requestUrl(input);
       let body: unknown = null;
       if (url.endsWith('/warehouses/available')) body = [];
@@ -316,19 +615,38 @@ describe('application states', () => {
         closed_by: null,
         plan_id: null,
       };
+      else if (url.includes(`/warehouses/${mainWarehouse.id}/generated-workload?`) && init?.method === 'DELETE') body = {
+        warehouse_id: mainWarehouse.id,
+        date: representativeWarehouse.default_planning_date,
+        deleted_requests: 3,
+        deleted_plans: 1,
+        capacity_projection_status: 'PUBLISHED',
+      };
       return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     });
     vi.stubGlobal('fetch', fetchMock);
+    useUiStore.setState({ mode: 'PLAN_DAY', section: 'WAREHOUSE', selected: null });
+    const user = userEvent.setup();
 
     renderApp();
 
-    expect(await screen.findByRole('button', { name: 'Склад логистической группы' })).toHaveTextContent('Представительский склад — Региональный город');
+    expect(await screen.findByRole('button', { name: 'Склад логистической группы' })).toHaveTextContent('Представительский склад Региональный город / Санкт-Петербург');
     await waitFor(() => {
       const urls = fetchMock.mock.calls.map(([input]) => requestUrl(input));
       expect(urls.some((url) => url.includes(`/warehouses/${mainWarehouse.id}/plans/ensure`))).toBe(true);
       expect(urls.some((url) => url.includes(`/warehouses/${mainWarehouse.id}/planning-days/`))).toBe(true);
       expect(urls.some((url) => url.includes(`/warehouses/${representativeWarehouse.id}/plans/ensure`))).toBe(false);
     });
+    await user.click(screen.getByRole('button', { name: 'Удалить нагрузку' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Удалить нагрузку' }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => (
+      requestUrl(input).includes(`/warehouses/${mainWarehouse.id}/generated-workload?`)
+      && init?.method === 'DELETE'
+    ))).toBe(true));
+    expect(fetchMock.mock.calls.some(([input, init]) => (
+      requestUrl(input).includes(`/warehouses/${representativeWarehouse.id}/generated-workload?`)
+      && init?.method === 'DELETE'
+    ))).toBe(false);
   });
 });
 
@@ -390,69 +708,64 @@ describe('theme switch', () => {
 });
 
 describe('request editor', () => {
-  it('submits complete cargo dimensions with multiple date windows', async () => {
+  it('keeps cargo fields out of logistics and creates a request without inventing its dimensions', async () => {
     const user = userEvent.setup();
     const submit = vi.fn<(input: LogisticsRequestInput) => Promise<void>>(() => Promise.resolve());
     render(<RequestDialog type="DELIVERY" point={{ latitude: 55.7, longitude: 37.6 }} defaultDate="2026-08-25" busy={false} onClose={() => undefined} onSubmit={submit} />);
     expect(screen.getByText(/изохроне склада/)).toBeVisible();
     await user.type(screen.getByLabelText('Название / номер'), '№142');
-    await user.type(screen.getByLabelText('Длина бытовки, мм'), '6000');
-    await user.type(screen.getByLabelText('Ширина бытовки, мм'), '2400');
-    await user.type(screen.getByLabelText('Высота бытовки, мм'), '2400');
-    await user.type(screen.getByLabelText('Масса бытовки, кг'), '2500');
-    await user.click(screen.getByRole('button', { name: 'Дата' }));
-    expect(screen.getAllByLabelText('Дата')).toHaveLength(2);
-    fireEvent.change(screen.getAllByLabelText('Дата')[1]!, { target: { value: '2026-08-26' } });
+    expect(screen.getByText('Параметры из заказа клиента')).toBeVisible();
+    expect(screen.getByText('Ожидаем параметры бытовки из заказа')).toBeVisible();
+    expect(screen.queryByLabelText('Длина бытовки, мм')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Масса бытовки, кг')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Широта')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Долгота')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Сохранить доставку' }));
     await waitFor(() => expect(submit).toHaveBeenCalledOnce());
     const submitted = submit.mock.calls[0]?.[0];
-    expect(submitted).toMatchObject({ cargo_length_mm: 6000, cargo_width_mm: 2400, cargo_height_mm: 2400, cargo_weight_kg: 2500 });
-    expect(submitted?.date_options).toHaveLength(2);
+    expect(submitted).toMatchObject({ cargo_length_mm: null, cargo_width_mm: null, cargo_height_mm: null, cargo_weight_kg: null });
+    expect(submitted?.date_options).toHaveLength(1);
   });
 
-  it('does not submit a partial cargo routing profile', async () => {
+  it('preserves the cargo profile provided by a client order', async () => {
     const user = userEvent.setup();
     const submit = vi.fn<(input: LogisticsRequestInput) => Promise<void>>(() => Promise.resolve());
-    render(<RequestDialog type="PICKUP" point={{ latitude: 55.7, longitude: 37.6 }} defaultDate="2026-08-25" busy={false} onClose={() => undefined} onSubmit={submit} />);
-    await user.type(screen.getByLabelText('Название / номер'), 'Вывоз 98');
-    await user.type(screen.getByLabelText('Длина бытовки, мм'), '6000');
-    await user.click(screen.getByRole('button', { name: 'Сохранить вывоз' }));
-    expect(await screen.findByText('Укажите все четыре параметра груза или оставьте все поля пустыми')).toBeVisible();
-    expect(submit).not.toHaveBeenCalled();
+    const request = requestFixture({
+      cargo_length_mm: 6000,
+      cargo_width_mm: 2400,
+      cargo_height_mm: 2400,
+      cargo_weight_kg: 2500,
+    });
+    render(<RequestDialog request={request} type="DELIVERY" defaultDate="2026-08-25" busy={false} onClose={() => undefined} onSubmit={submit} />);
+    expect(screen.getByText('6.0 × 2.4 × 2.4 м · 2.5 т')).toBeVisible();
+    await user.clear(screen.getByLabelText('Название / номер'));
+    await user.type(screen.getByLabelText('Название / номер'), 'Заказ 98');
+    await user.click(screen.getByRole('button', { name: 'Сохранить доставку' }));
+    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    expect(submit.mock.calls[0]?.[0]).toMatchObject({
+      cargo_length_mm: 6000,
+      cargo_width_mm: 2400,
+      cargo_height_mm: 2400,
+      cargo_weight_kg: 2500,
+    });
   });
 });
 
 describe('vehicle editor', () => {
-  it('starts a new vehicle with an empty name and omits browser-owned driver names', async () => {
-    const user = userEvent.setup();
+  it('starts a new vehicle with an empty name', () => {
     const vehicleSubmit = vi.fn<(input: VehicleInput) => Promise<void>>(() => Promise.resolve());
-    const vehicleView = render(<CatalogDialog kind="vehicle" busy={false} onClose={() => undefined} onSubmit={(input) => vehicleSubmit(input as VehicleInput)} />);
+    render(<CatalogDialog busy={false} onClose={() => undefined} onSubmit={(input) => vehicleSubmit(input as VehicleInput)} />);
 
     expect(screen.getByLabelText('Название')).toHaveValue('');
-    vehicleView.unmount();
-
-    const driverSubmit = vi.fn<(input: DriverInput) => Promise<void>>(() => Promise.resolve());
-    render(<CatalogDialog kind="driver" busy={false} onClose={() => undefined} onSubmit={(input) => driverSubmit(input as DriverInput)} />);
-    expect(screen.getByLabelText('Назначение в RWMS')).toHaveValue('WAREHOUSE_DRIVERS');
-    await user.click(screen.getByRole('button', { name: 'Сохранить' }));
-
-    await waitFor(() => expect(driverSubmit).toHaveBeenCalledOnce());
-    expect(driverSubmit.mock.calls[0]?.[0]).toMatchObject({
-      rwms_assignment_mode: 'WAREHOUSE_DRIVERS',
-      external_worker_id: null,
-    });
-    expect(driverSubmit.mock.calls[0]?.[0]).not.toHaveProperty('name');
   });
 
   it('rejects capacity above the backend maximum with an inline error', async () => {
     const user = userEvent.setup();
     const submit = vi.fn<(input: VehicleInput) => Promise<void>>(() => Promise.resolve());
-    render(<CatalogDialog kind="vehicle" busy={false} onClose={() => undefined} onSubmit={(input) => submit(input as VehicleInput)} />);
+    render(<CatalogDialog busy={false} onClose={() => undefined} onSubmit={(input) => submit(input as VehicleInput)} />);
     await user.type(screen.getByLabelText('Название'), 'Машина 1');
     await user.type(screen.getByLabelText('Госномер'), 'А123БВ');
-    const capacity = screen.getByLabelText('Вместимость');
+    const capacity = screen.getByLabelText('Вместимость, бытовок');
     await user.clear(capacity);
     await user.type(capacity, '3');
     await user.click(screen.getByRole('button', { name: 'Сохранить' }));

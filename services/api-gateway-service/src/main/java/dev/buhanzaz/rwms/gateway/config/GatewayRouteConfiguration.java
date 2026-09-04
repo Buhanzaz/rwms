@@ -365,6 +365,26 @@ public class GatewayRouteConfiguration {
   }
 
   /**
+   * Relays the isolated planner catalog administration surface while preserving FastAPI's private
+   * {@code /api/admin} implementation path.
+   */
+  @Bean
+  RouterFunction<ServerResponse> logisticsPlannerAdminRoutes(
+      GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
+    RequestPredicate publicPlannerAdminPath =
+        path("/api/logistics-planner/v1/admin/**")
+            .and(request -> safePath(request.path()));
+    return route("logistics-planner-admin")
+        .route(publicPlannerAdminPath, http())
+        .before(uri(properties.getRoutes().getLogisticsPlannerUri()))
+        .before(stripPrefix(3))
+        .before(prefixPath("/api"))
+        .before(removeRequestHeader(HttpHeaders.COOKIE))
+        .onError(upstreamProblems::supports, upstreamProblems::handle)
+        .build();
+  }
+
+  /**
    * Uses the dedicated streaming proxy for assistant turns so a legitimate long-lived answer does
    * not inherit the ordinary proxy read deadline.
    */

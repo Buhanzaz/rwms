@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
-import type { IsochroneTariff, PlanningSettings, Warehouse } from '../../domain/types';
+import { MapPinned, Plus, ScrollText, SlidersHorizontal, Trash2 } from 'lucide-react';
+import type { IsochroneTariff, PlanningSettings, UUID, Warehouse } from '../../domain/types';
 import type { WarehouseUpdateInput } from '../../api/client';
 import { Button, CheckboxField, Field, Modal, SwitchField } from '../../components/ui';
 import { useUiStore } from '../../stores/ui-store';
+import { OperationsJournal } from '../operations/OperationsJournal';
+import { PolicyZoneManager } from '../policy-zones/PolicyZoneManager';
 
 interface NumericSetting {
   key: Exclude<keyof PlanningSettings, 'deliveries_before_pickups' | 'allow_soft_overtime'>;
@@ -38,13 +40,11 @@ const routingFields: NumericSetting[] = [
 ];
 
 const operationFields: NumericSetting[] = [
-  { key: 'vehicle_capacity', label: 'Вместимость машины', min: 2, max: 2, disabled: true, hint: 'Текущая конфигурация: 2 бытовки' },
   { key: 'max_delivery_stops', label: 'Доставок в цикле', min: 1, max: 2 },
   { key: 'max_pickup_stops', label: 'Вывозов в цикле', min: 1, max: 2 },
-  { key: 'default_load_minutes', label: 'Загрузка, мин', min: 0 },
-  { key: 'default_unload_minutes', label: 'Выгрузка, мин', min: 0 },
+  { key: 'default_load_minutes', label: 'Среднее время загрузки, мин', min: 0 },
+  { key: 'default_unload_minutes', label: 'Среднее время выгрузки, мин', min: 0 },
   { key: 'default_pickup_minutes', label: 'Вывоз, мин', min: 0 },
-  { key: 'default_depot_turnaround_minutes', label: 'Оборот на складе, мин', min: 0 },
   { key: 'default_route_buffer_minutes', label: 'Резерв цикла, мин', min: 0 },
   {
     key: 'max_customer_wait_minutes',
@@ -54,16 +54,6 @@ const operationFields: NumericSetting[] = [
   },
   { key: 'default_service_minutes', label: 'Обслуживание по умолчанию, мин', min: 0 },
   { key: 'default_buffer_minutes', label: 'Общий резерв по умолчанию, мин', min: 0 },
-  { key: 'default_cargo_length_mm', label: 'Стандартная длина бытовки, мм', min: 1, max: 30_000 },
-  { key: 'default_cargo_width_mm', label: 'Стандартная ширина бытовки, мм', min: 1, max: 10_000 },
-  { key: 'default_cargo_height_mm', label: 'Стандартная высота бытовки, мм', min: 1, max: 10_000 },
-  {
-    key: 'default_cargo_weight_kg',
-    label: 'Стандартная масса бытовки, кг',
-    min: 1,
-    max: 100_000,
-    hint: 'Автоматически применяется к доставкам из RWMS, если источник не передал физические параметры груза',
-  },
 ];
 
 const optimizationFields: NumericSetting[] = [
@@ -114,21 +104,55 @@ function SettingGroup({ title, fields, settings, onNumber }: {
   );
 }
 
-export function SettingsEditor({ warehouse, busy, onSave }: {
+export function SettingsEditor({ warehouse, busy, onSave, journal }: {
   warehouse: Warehouse;
   busy: boolean;
   onSave: (input: WarehouseUpdateInput) => Promise<void>;
+  journal?: {
+    warehouseId: UUID;
+    planningDate: string;
+    timeZone: string;
+    onSelectRequest: (requestId: UUID) => void;
+  };
 }) {
   const [draft, setDraft] = useState(warehouse.settings);
   const [tariffDialogOpen, setTariffDialogOpen] = useState(false);
+  const [policyDialogOpen, setPolicyDialogOpen] = useState(false);
   const notificationDurationSeconds = useUiStore((state) => state.notificationDurationSeconds);
   const setNotificationDurationSeconds = useUiStore((state) => state.setNotificationDurationSeconds);
+  const settingsView = useUiStore((state) => state.settingsView);
+  const setSettingsView = useUiStore((state) => state.setSettingsView);
   useEffect(() => {
     setDraft(warehouse.settings);
   }, [warehouse]);
   const onNumber = (key: NumericSetting['key'], value: number) => setDraft((current) => ({ ...current, [key]: value }));
   return (
     <div>
+      {journal ? (
+        <div className="segmented settings-view-picker" role="tablist" aria-label="Раздел настроек">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={settingsView === 'ALGORITHM'}
+            aria-pressed={settingsView === 'ALGORITHM'}
+            onClick={() => setSettingsView('ALGORITHM')}
+          >
+            <SlidersHorizontal size={14} aria-hidden="true" />Настройки
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={settingsView === 'JOURNAL'}
+            aria-pressed={settingsView === 'JOURNAL'}
+            onClick={() => setSettingsView('JOURNAL')}
+          >
+            <ScrollText size={14} aria-hidden="true" />Журнал
+          </button>
+        </div>
+      ) : null}
+      {settingsView === 'JOURNAL' && journal ? (
+        <OperationsJournal {...journal} />
+      ) : <>
       <h2 className="section-title">Настройки алгоритма</h2>
       <p className="section-subtitle">Снимок настроек сохраняется в каждом запуске оптимизации.</p>
       <section style={{ marginBottom: 16 }}>
@@ -150,7 +174,19 @@ export function SettingsEditor({ warehouse, busy, onSave }: {
         <p className="section-subtitle">Последняя настроенная изохрона определяет максимальную дальность приёма заказов.</p>
         <Button type="button" onClick={() => setTariffDialogOpen(true)}>Настройки изохронов</Button>
       </section>
-      <SettingGroup title="Маршрутизация" fields={routingFields} settings={draft} onNumber={onNumber} />
+      <section className="settings-policy-zones">
+        <div>
+          <h3>Исключения на карте</h3>
+          <p className="section-subtitle">Особая цена, запрет обслуживания или обязательный маршрут без прицепа — только внутри обычного изохронного предела.</p>
+        </div>
+        <Button type="button" onClick={() => setPolicyDialogOpen(true)}>
+          <MapPinned size={15} aria-hidden="true" />Управлять исключениями
+        </Button>
+      </section>
+      <details className="settings-advanced">
+        <summary><strong>Дополнительные настройки маршрута</strong></summary>
+        <SettingGroup title="Расчёт маршрута" fields={routingFields} settings={draft} onNumber={onNumber} />
+      </details>
       <SettingGroup title="Операции" fields={operationFields} settings={draft} onNumber={onNumber} />
       <section className="settings-overtime" aria-label="Настройки переработки">
         <SwitchField
@@ -189,6 +225,10 @@ export function SettingsEditor({ warehouse, busy, onSave }: {
           setTariffDialogOpen(false);
         }}
       /> : null}
+      {policyDialogOpen ? (
+        <PolicyZoneManager warehouse={warehouse} onClose={() => setPolicyDialogOpen(false)} />
+      ) : null}
+      </>}
     </div>
   );
 }

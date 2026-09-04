@@ -22,11 +22,17 @@ Maintenance, logistics, inventory и менеджерам нужна опера�
 | Operational work | Tasks, route entries, assignment, pinning, pause/resume/complete и history | Source domain владеет причиной работы и состоянием своего агрегата |
 | Native execution | Раздельные driver/worker feeds, offline action leases, evidence reservation, SSE и transactional FCM invalidation | DriverApp и WorkerApp обновляют authoritative REST state и загружают media через media-service |
 | Ежедневная смена водителя | Рабочая дата склада, state machine подготовки/закрытия, snapshot осмотра, дефекты, audit timestamps и media proof | Logistics передаёт проверенный план водитель/машина/дата; warehouse владеет identity/timezone; media владеет байтами |
-| KPI | Warehouse palette/schedule revisions и emitted daily evidence | Analytics владеет KPI read projection |
+| KPI | Общая для компании display palette, warehouse work-schedule revisions и emitted daily evidence | Analytics владеет KPI read projection |
 | Warehouse lifecycle | Local operation marks, admission fence, draining blockers и exact-version readiness | Warehouse-service владеет lifecycle state и admission decisions |
 
 Сервис не владеет users/roles, warehouse identity, repair или logistics
 aggregates, media bytes, analytics projections или gateway routing.
+
+Каждая публичная операция, привязанная к складу, сначала получает актуальную
+identity склада из warehouse-service и сравнивает её неизменяемую компанию с
+подписанным `company_id` токена USER или WORKER, а уже затем проверяет роль,
+warehouse grant или home-склад работника. Поэтому `SYSTEM_ADMIN` и `WMS_ADMIN`
+не обходят границу компании при прямой подстановке warehouse ID.
 
 ## Поток команды и задачи
 
@@ -49,6 +55,7 @@ authorization + warehouse admission + idempotency/expectedVersion
 driver app --> primary feed/detail --> take/action/evidence reservation
 worker app --> обычная работа + active slinger feed --> join/action/evidence reservation
            --> media upload --> media fact --> shared completion
+logistics-service --> snapshot точного задания подрядчика --> evidence reservation --> start/complete
 ```
 
 Source-owned task использует stable external identity, поэтому retry находит ту
@@ -96,12 +103,15 @@ surfaces. Инварианты подтверждаются
 [`TaskBoardFutureAvailabilityService`](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardFutureAvailabilityService.java) и
 [`OrdinaryQueueAvailabilityPolicy`](src/main/java/dev/buhanzaz/rwms/taskboard/service/OrdinaryQueueAvailabilityPolicy.java).
 
-Ревизия графика KPI может начинаться с текущей warehouse-local даты или с будущей даты. Сохранение
-оставляет ревизию в `DRAFT`; явная активация в той же команде переводит ревизию текущей даты в
-`ACTIVE` и применяет её ко всему текущему локальному календарному дню. Будущая ревизия остаётся
-`SCHEDULED` до своей даты, а прошедшая дата отклоняется. Активация замены на ту же дату выводит
-предыдущую scheduled/active ревизию из действия под существующими receipt и
-optimistic-concurrency fences. Поведением владеют
+Display palette KPI и рабочий график образуют одну company-scoped настройку с общей version fence.
+Граница компании берётся из подписанного principal; склад не выбирается ни для одной из этих
+настроек. Один активированный график задаёт всем складам компании одинаковые локальную дату
+вступления, смену, перерывы и выходные, а operational clock каждого склада интерпретирует их в его
+authoritative timezone. Сохранение оставляет ревизию в `DRAFT`; активация идемпотентно планирует
+её, а ревизия на текущую UTC configuration date сразу становится `ACTIVE`. Будущая ревизия
+остаётся `SCHEDULED` до своей даты, а дата раньше текущей UTC-даты отклоняется. Активация замены на
+ту же дату выводит предыдущую scheduled/active ревизию из действия под существующими receipt и
+общей optimistic-concurrency fence. Поведением владеют
 [`KpiSettingsService`](src/main/java/dev/buhanzaz/rwms/taskboard/service/KpiSettingsService.java) и
 [канонический контракт](../../contracts/openapi/task-board-service.yaml).
 
@@ -132,13 +142,19 @@ replay удаляет их только при сравнении immutable hist
 Logistics driver task дополнительно несёт одну сохранённую аудиторию:
 `UNASSIGNED`, `ASSIGNED_DRIVER` или `WAREHOUSE_DRIVERS`. Задавать её может
 только точный driver-task source logistics-service. Только назначенная работа содержит worker
-identity; этот worker должен быть активен на том же складе и иметь primary qualification
-водительской очереди. Task-board игнорирует переданное caller-ом display name и сохраняет
+identity; этот worker должен быть активен. Штатный worker обязан иметь primary qualification
+целевой водительской очереди. Точное назначение активного `CONTRACTOR` — узкое исключение, потому
+что профиль подрядчика не имеет staff qualification, group или app credential; подрядчик никогда
+не становится кандидатом identity-free пула `WAREHOUSE_DRIVERS`. Точный `ASSIGNED_DRIVER` может
+сохранять другой домашний склад; identity-free работа остаётся доступной только на своём складе. Task-board
+игнорирует переданное caller-ом display name и сохраняет
 авторитетный worker snapshot. Неназначенная задача остаётся работой диспетчера. Назначенную видит
 только этот водитель. Ожидающую identity-free общую задачу видят все квалифицированные водители
 склада до take, после чего доступ остаётся только у фактического исполнителя. DriverApp получает
 видимую primary work из lane `SCHEDULED` и `CURRENT` через `/api/driver/v1/**`, поэтому датированный
-экран показывает назначенную будущую работу и общие будущие варианты. WorkerApp получает обычную
+экран показывает назначенную будущую работу, точные межскладские назначения и общие будущие
+варианты. Для remote detail, actions, evidence ownership и task content физический склад
+определяется по серверной entry; домашний склад worker/JWT не меняется. WorkerApp получает обычную
 работу и только активную `CURRENT` secondary logistics work через `/api/worker/v1/**`; scheduled
 работа водителей не попадает на поверхность стропальщика. Take водителя транзакционно сохраняет
 push `TASK_JOIN_AVAILABLE` для подходящих стропальщиков. Ожидающая logistics task анонсируется
@@ -155,12 +171,45 @@ audience под общим task/entry version fence; публичная обыч
 перестановку ожидающих карточек внутри одной очереди, но не logistics replanning и не cross-queue
 move.
 
+Существующая SSE-подписка DriverApp остаётся привязанной к домашнему складу. Точная remote work
+сходится через authoritative REST feed: opaque revision DriverApp использует максимальное значение
+из одной глобальной revision sequence, поэтому мутация любого склада меняет comparison token.
+Консервативный token может вызвать лишнее обновление из-за чужого склада, но response data всё
+равно фильтруется точной аудиторией; отдельное remote-событие пока не создаёт адресный home SSE
+item.
+
 Private directory водителей для exact logistics-service разрешает ownership workforce при каждом
 чтении. Для одного склада она возвращает только `{workerId, displayName}` активных работников, чья
 активная primary qualification соответствует активным logistics-driver queue и definition этого
 склада, в порядке normalized display name, затем UUID. Secondary bindings, неактивные работники,
 queues, definitions и qualifications исключаются; login, group, contact, credential и остальные
 персональные поля через эту границу не проходят.
+
+Private-граница contractor execution принимает только точный SERVICE credential logistics-service
+с единственным scope `task-board.logistics`. Каждое чтение и каждая команда доказывают source client
+`logistics-service`, source type `LOGISTICS_DRIVER_TASK`, `ASSIGNED_DRIVER`, точный активный
+`WorkerEmploymentType.CONTRACTOR` и принадлежность точному route. Snapshot содержит упорядоченные
+entry/status/version, worker-visible title, description, unit, task text, works, materials,
+comments и immutable source-media identities, generation и content type. В нём нет телефона,
+credentials, общей доски, чужих задач или bearer-only media read paths. На этой границе task-board
+не владеет отдельными структурированными адресом/координатами клиента; адрес доступен лишь тогда,
+когда source уже передал его в worker-visible text. `START` и `COMPLETE` делегируются
+`TaskBoardWorkerExecutionService`, сохраняют порядок route и optimistic entry versions и используют
+общий native-инвариант ready/selected result evidence. Stable operation UUID использует существующий
+immutable `worker_action_receipt`; response возвращает изменившуюся entry version для следующей
+команды. Пока точный route entry находится в `IN_PROGRESS`, та же private-граница может
+зарезервировать identity результата через существующие `worker_task_evidence` и entry-owner-proof
+pipeline. Task, route, warehouse, worker и logistics source facts выводятся сервером, каждый request
+и replay заново доказывает live-назначение подрядчика, а native offline lease не принимается и не
+выдаётся. Response содержит только owner и declared media metadata для mediated upload; upload/read
+path в нём нет. Миграция схемы не требуется.
+
+Регистрация внешнего задания не выводит дату из глобального Moscow-timezone
+или календаря сервера. Явный `scheduledDate` остаётся авторитетным; иначе
+deadline instant, либо инъецированное серверное время при отсутствии deadline,
+преобразуется через `WarehouseTimeZoneGateway` для склада задания. Та же
+warehouse-local дата определяет, нужно ли публиковать уведомление о доступности
+запланированного задания сегодня.
 
 ## Ежедневный жизненный цикл смены водителя
 
@@ -172,6 +221,50 @@ startup-read водителя может заморозить plan в shift. Sta
 настраиваемую локальную границу 06:00, блокирует соответствующий plan и создаёт
 не более одной shift. Повторные и конкурентные чтения возвращают тот же
 aggregate.
+
+Зарегистрированный plan может дополнительно содержать одну непрерывную
+последовательность операций. Task-board проверяет sequence, временной порядок,
+identity конечных точек и цепочку загрузки, затем сохраняет операции под
+заменяемым plan в `driver_shift_route_operation`. Более новая source-версия
+может целиком заменить список только до того, как реальная смена заморозит plan;
+после этого plan и операции неизменяемы. `GET /shift/today` возвращает
+упорядоченный snapshot с плановыми instant прибытия/отправления и переходами
+загрузки. Локальные маршруты совместимы с отсутствующим/пустым списком, а
+межскладской snapshot обязан обрамлять складские/клиентские операции стартом на
+исходном складе, входящим и обратным перегоном.
+
+Неизменяемый snapshot автомобиля может дополнительно содержать точную эффективную
+`cabinCapacity`. Transfer-груз использует парные операции `TRANSFER_LOAD`/`TRANSFER_UNLOAD` с одним
+каноническим `sourceTransferId` на складе старта и входящем складе назначения. Task-board отклоняет
+дублирующиеся или несбалансированные identity, обратное изменение загрузки, неверные endpoints и
+превышение cabin capacity на конкретном участке. Перемещение только мебели остаётся физической
+парой операций, но намеренно не меняет число бытовок в загрузке. Legacy plan может не передавать
+capacity только пока в нём нет transfer-cargo операций.
+
+Восстановление опубликованного плана переиспользует те же агрегаты заданий и смен через три
+доступные только logistics команды: `PREPARE`, `COMMIT` и `RELEASE` под
+`/internal/task-board/v1/logistics/planning-replan-holds/**`. `PREPARE` блокирует полный состав
+source plan и точные fences задания, entry, смены, склада, даты и версии. `COMMIT` атомарно
+сохраняет lineage tombstone удалённого участника и заменяет ревизию каждого оставшегося задания и
+смены; `RELEASE` допустим только пока hold остаётся prepared. Уже отменённое владельцем удаляемое
+задание принимается лишь в точной паре состояний task/entry
+`CANCELLED/SCHEDULED/CANCELLED` до старта и второй раз не отменяется; каждый оставшийся участник
+обязан оставаться неназначенным `ACTIVE/SCHEDULED/WAITING`. Flyway
+[`V44`](src/main/resources/db/migration/V44__published_plan_reschedule_hold.sql) владеет hold и
+полями tombstone, а
+[`V45`](src/main/resources/db/migration/V45__single_active_planning_replan_hold.sql) разрешает только
+один prepared hold на source lineage.
+
+JWT DriverApp по-прежнему идентифицирует worker и его неизменяемый домашний
+склад. Перед созданием новой смены task-board выводит текущий оперативный склад
+из истории назначений. Только временное назначение в состоянии `ACTIVE` или
+завершённое постоянное назначение может выбрать склад назначения; состояния
+`PLANNED` и `IN_TRANSIT` не раскрывают и не создают смену на складе назначения.
+Рабочую дату и замороженную смену определяет IANA timezone оперативного склада.
+После создания незакрытая смена восстанавливается по точной паре водитель/смена
+даже после окончания временного назначения, при этом каждая команда продолжает
+сверять домашний склад из JWT с профилем worker. Фотографии смены и другие
+warehouse-owned эффекты используют склад замороженной смены, а не home claim.
 
 Явная последовательная state machine:
 `DAILY_BRIEFING_REQUIRED -> MEDICAL_CHECK_REQUIRED ->
@@ -190,8 +283,9 @@ END_VEHICLE_CHECK_REQUIRED -> SHIFT_READY_TO_CLOSE -> SHIFT_CLOSED`.
 дефект нельзя стереть переключением пункта в OK; новые дефекты предрейсового
 осмотра консервативно считаются `BLOCKING` и запрещают обычный старт. Для работы
 используется существующий экран logistics-задач. Task-board переводит активную
-смену к закрытию только когда для точного водителя на складе/дате существует
-хотя бы одна задача и все такие задачи имеют статус `DONE`.
+смену к закрытию только когда для точного водителя на эту дату существует хотя
+бы одна задача среди всех физических складов и все такие задачи имеют статус
+`DONE`.
 
 Closing отдельно сохраняет ручное возвращение на склад, состояние автомобиля,
 пробег и топливо. Пробег не может уменьшиться; настраиваемый подозрительный
@@ -233,6 +327,7 @@ unavailable DTO. `WeatherHazardRules` создаёт только настраи
 | `DriverTaskAudienceService` | Shape аудитории logistics-driver, qualification, visibility и execution authorization |
 | `LogisticsDriverDirectoryService` | Least-privilege directory активных primary logistics-drivers для exact caller logistics-service |
 | `ContractorDriverService` / `WorkerOperationalAssignmentService` | Принадлежащий складу каталог вызываемых по необходимости подрядчиков и датированные оперативные назначения; профиль подрядчика не требует автомобиля или модели внутреннего route cycle |
+| `ContractorTaskExecutionService` | Snapshot точного logistics-owned route подрядчика, evidence reservation и replay-safe adapter START/COMPLETE поверх существующей worker state machine и evidence invariant |
 | `DriverShiftService` | Регистрация plan, вычисление work date, переходы shift/inspection/defect, receipts и startup projection |
 | `HttpWarehouseIdentityGateway` | Точное private-чтение identity/timezone/coordinates склада для владельца смены |
 | `MetNoWeatherProvider` / `WeatherHazardRules` | Fail-open нормализованный weather cache и настраиваемые рекомендации |
@@ -240,7 +335,7 @@ unavailable DTO. `WeatherHazardRules` создаёт только настраи
 | `WorkerTaskAccessService` | Общая worker/group/qualification аудитория очередей для native task reads и media proofs |
 | `WorkerFeedCountProjection` | Однозапросные route cardinality и READY-evidence counts для bounded native feed page |
 | `WorkerFeedRevisionStore` | Transactional warehouse-scoped opaque revision, продвигаемая authoritative task-board facts |
-| `WorkerActionReceiptStore` | Immutable receipts canonical native-action request и frozen response под advisory lock |
+| `WorkerActionReceiptStore` | Immutable receipts canonical native- и exact-contractor action request и frozen response под advisory lock |
 | `TaskBoardEntryOwnerProofReconciler` | Bounded idempotent восстановление legacy или workforce-stale аудиторий media proof |
 | `WorkerPushOutbox` / `WorkerPushDispatcher` | Transactional уведомление стропальщика, leased FCM delivery и bounded recovery |
 | `WorkforceService` | Стабильный фасад worker/group API над тремя владельцами lifecycle |
@@ -293,14 +388,17 @@ Public gateway преобразует `/api/task-board/**` в downstream `/api/*
 | `/api/warehouses/{warehouseId}/work-queues` | Warehouse-authorized user | Physical queue projections и capabilities |
 | `/api/warehouses/{warehouseId}/task-board/**` | Warehouse-authorized user | Чтение агрегированной ordinary board и поддерживаемые task-команды |
 | `/api/warehouses/{warehouseId}/task-board/daily-brigade-activity` | Warehouse-authorized user | Фактические интервалы assignments, пересекающие текущий warehouse-local день |
-| `/api/warehouses/{warehouseId}/task-board/kpi-settings/**` | Warehouse manager/admin | Palette и effective schedule revisions |
+| `/api/task-board/kpi-palette` | Authenticated company; global management для `PUT` | Одна version-fenced KPI palette для всех складов компании |
+| `/api/task-board/kpi-settings/**` | Authenticated company; global management для mutations | Один version-fenced рабочий график для всех складов компании; выбор склада отсутствует |
 | `/api/worker/v1/**` | Worker credential и `worker.tasks` scope | Context, feed, detail, actions, evidence reservations, devices и events |
 | `/api/driver/v1/**` | Worker credential и `driver.tasks` scope | Driver-only context, primary feed, actions, evidence reservations, devices и events |
 | `/api/driver/v1/shift/today` и `/api/driver/v1/shifts/{shiftId}/**` | Точная identity водителя и `driver.tasks` | Startup aggregate и version-fenced переходы ежедневной смены |
+| `/api/internal/task-board/v1/inventory/warehouses/{warehouseId}/work-calendar` | Точная SERVICE identity `inventory-service` и единственный scope `task-board.inventory-calendar.read` | Bounded snapshot effective object calendar: timezone, revision schedule, результат `daysOff` и fingerprint для inventory planning; browser access и семантика Driver Up shifts отсутствуют |
 | `/api/internal/task-board/v1/maintenance/**` | Exact maintenance-service identity | Routing и catalog preflight |
 | `/api/internal/task-board/v1/tasks/**` | Exact source service identity | Idempotent task synchronization и evidence reads |
 | `/api/internal/task-board/v1/logistics/**` | Exact logistics-service identity | Driver/equipment task integration |
 | `/api/internal/task-board/v1/logistics/warehouses/{warehouseId}/drivers` | Exact identity и scope logistics-service | Только identities активных primary-qualified водителей |
+| `/api/internal/task-board/v1/logistics/contractor-execution/workers/{workerId}/tasks/{externalTaskId}`, `.../entries/{entryId}/actions` и `.../evidence-reservations` | Exact identity logistics-service и единственный scope `task-board.logistics` | Snapshot route точного назначенного активного подрядчика, reservation result evidence и START/COMPLETE без credentials, раскрытия контакта, native offline lease, media bearer path или доступа к общей доске |
 | `/api/internal/task-board/v1/driver-shift-plans/{sourceShiftId}` | Точная identity logistics-service и `task-board.driver-shifts.plan` | Идемпотентная регистрация проверенного плана водитель/машина/дата |
 | `/api/internal/queue-definitions/**` | Allow-listed service identity | Durable queue usage references |
 
@@ -311,7 +409,9 @@ Private paths — service-to-service boundaries, а не client shortcuts. Их 
 примечанием и флагом active. Каталог не хранит даты доступности: выбранный день
 планирования относится к последующему назначению. Каталог не создаёт учётные
 данные, не требует автомобиль и не делает работника кандидатом обычного
-primary-driver оптимизатора.
+primary-driver оптимизатора. Задание становится исполнимым через service-границу только после того,
+как logistics зарегистрирует для этого подрядчика точную аудиторию `ASSIGNED_DRIVER`; сам каталог
+не выдаёт доступ к заданиям.
 
 Чтение дневной активности бригад использует сохранённый `startedAt` assignment
 из TAKE и `finishedAt` из completion. Границы смены только выбирают и размещают
@@ -325,14 +425,17 @@ joined-worker или legacy одной бригады, задачи и physical 
 
 `GET /api/worker/v1/events` — SSE invalidation stream. Текущий producer
 отправляет `FEED_CHANGED` при подписке и последующих изменениях; worker app также
-периодически делает authoritative REST refresh. Payload не является полной task
+периодически делает authoritative REST refresh. Reconnect открывает новую
+подписку и сопровождается authoritative REST refresh feed; этот contract не
+имеет cursor replay и не зависит от `Last-Event-ID`. Payload не является полной task
 projection. Подписка keyed authenticated warehouse, native surface и worker,
 поэтому факт другого склада не продвигает и не уведомляет этот stream. Feed page
 читает warehouse revision и projection в одном repeatable-read snapshot;
 изменения постороннего склада не делают cursor недействительным. Weak ETag
 также scoped authenticated warehouse, native surface и worker вместе с этой revision.
 
-`GET /api/driver/v1/events` имеет ту же invalidation-only семантику. Device
+`GET /api/driver/v1/events` имеет ту же invalidation-only семантику: reconnect
+открывает новую подписку, а DriverApp обновляет authoritative REST feed. Device
 registrations привязаны к surface и принимают текущие Firebase Installation ID
 (`targetKind=FID`) и legacy registration tokens. Успешный TAKE водителя сохраняет
 уведомление стропальщику в `worker_push_outbox` в той же транзакции; leased dispatcher
@@ -387,13 +490,19 @@ canonical request identity и frozen response в `worker_action_receipt` в то
 field даёт `409`. Pre-V36 event с тем же correlation ID, но без receipt, также
 fail-closed отвечает `409`, потому что его исходный response нельзя безопасно
 восстановить. Volatile SSE invalidation отправляется только после commit.
+Private adapter подрядчика повторно использует эту receipt table и lock, добавляя external task и
+service channel в canonical request; перед принятием replay он заново доказывает точное назначение
+активного подрядчика.
 
 Evidence сначала резервируется со stable client
 reference, затем загружается в media-service. Media fact связывает обработанную
 generation с reservation до использования в completion. Legacy-декларация `image/jpeg` может занимать не более 15 MiB; логический клиентский
 bundle `image/webp` — не более 1 MiB, а его `sha256` является детерминированным checksum manifest
 пакета. Оба формата сохраняют одну логическую evidence row, а replay reservation обязан совпадать
-с исходными entry, operation, route step, capture time, MIME type, size и checksum. Те же ограничения
+с исходными entry, operation, route step, capture time, MIME type, size и checksum. Endpoint
+reservation точного подрядчика применяет те же правила declaration и replay, выводит
+route и owner facts на сервере и требует `IN_PROGRESS` entry и точное live-назначение подрядчика
+перед первой reservation и replay. Те же ограничения
 формата и числа байт enforced миграцией
 [`V32__support_worker_evidence_webp_bundles.sql`](src/main/resources/db/migration/V32__support_worker_evidence_webp_bundles.sql).
 
@@ -411,9 +520,10 @@ payload события не меняется.
 warehouse rows backfill-ятся выше прежнего global revision fence; domain events, tasks и evidence
 rows не переписываются.
 
-Текущий OpenAPI упоминает `Last-Event-ID`, но controller и client не реализуют
-durable replay. Reconnect сейчас безопасен благодаря fresh invalidation и
-periodic pull; semantic mismatch и необходимое решение записаны в полном аудите.
+Reconnect SSE намеренно остаётся invalidation-only. Controller и mobile clients
+не принимают и не отправляют replay cursor; reconnect запускает authoritative
+REST refresh, а локальные event IDs остаются только для deduplication
+invalidation и audit.
 
 ## Persistence и eventing
 
@@ -464,6 +574,13 @@ boolean columns, расширяет allow-list event store и не перепи�
 складским справочником для вызова по необходимости; точная дата хранится только в логистическом
 назначении, которое использует подрядчика.
 
+[`V41__driver_shift_route_operations.sql`](src/main/resources/db/migration/V41__driver_shift_route_operations.sql)
+добавляет неизменяемых упорядоченных дочерних operations под заменяемым до freeze планом смены.
+[`V42__driver_shift_transfer_route_operations.sql`](src/main/resources/db/migration/V42__driver_shift_transfer_route_operations.sql)
+добавляет nullable эффективную cabin capacity и каноническую identity transfer, расширяет
+ограничения kind/identity и сохраняет совместимость всех существующих plan через отсутствие новых
+nullable полей.
+
 ## Безопасность и изоляция
 
 - Все API chains валидируют JWT issuer/audience; worker и driver routes требуют
@@ -475,6 +592,8 @@ boolean columns, расширяет allow-list event store и не перепи�
 - Driver-shift планы принимает только точный credential logistics-service со
   scope `task-board.driver-shifts.plan`; mobile shift routes — только совпавшие
   `WORKER` identity, warehouse и scope `driver.tasks`.
+- Межскладские действия DriverApp сохраняют этот home-warehouse token fence и дополнительно требуют
+  точную remote-аудиторию `ASSIGNED_DRIVER`; один entry ID никогда не предоставляет доступ к складу.
 - Auth-service остаётся владельцем credentials. Task-board хранит только
   operational workflow state, нужный для reconciliation.
 - CORS использует explicit panel/worker/driver origins. Browser/mobile clients идут

@@ -1,4 +1,4 @@
-import { simulatorApiUrl } from '../../api/client';
+import { requireSimulatorAccessToken, simulatorApiUrl } from '../../api/client';
 import { createContractorDriver } from '../contractors/contractor-client';
 
 /** One selectable value from the canonical RWMS cabin catalog. */
@@ -240,9 +240,14 @@ export async function loadTransferCargoCatalog(accessToken: string, warehouseId:
 }
 
 /** Loads active source-warehouse vehicles without refreshing canonical RWMS identities. */
-export async function loadTransferRouteVehicles(localWarehouseId: string): Promise<TransferRouteVehicle[]> {
-  const response = await fetch(simulatorApiUrl(`/warehouses/${encodeURIComponent(localWarehouseId)}/workspace?refresh_rwms=false`), {
-    headers: { Accept: 'application/json, application/problem+json' },
+export async function loadTransferRouteVehicles(localWarehouseId: string, planningDate: string): Promise<TransferRouteVehicle[]> {
+  const accessToken = await requireSimulatorAccessToken();
+  const query = new URLSearchParams({ planning_date: planningDate, request_limit: '1' });
+  const response = await fetch(simulatorApiUrl(`/warehouses/${encodeURIComponent(localWarehouseId)}/workspace?${query.toString()}`), {
+    headers: {
+      Accept: 'application/json, application/problem+json',
+      Authorization: `Bearer ${accessToken}`,
+    },
   });
   const value = await readJson(response, 'Не удалось получить автомобили склада');
   if (!isRecord(value) || !Array.isArray(value.vehicles)) throw new Error('Логистика вернула некорректный список автомобилей');
@@ -269,8 +274,12 @@ export async function loadTransferRouteVehicles(localWarehouseId: string): Promi
 
 /** Loads source-qualified canonical drivers without creating a simulator-owned employee. */
 export async function loadTransferDrivers(localWarehouseId: string): Promise<TransferDriver[]> {
+  const accessToken = await requireSimulatorAccessToken();
   const response = await fetch(simulatorApiUrl(`/warehouses/${encodeURIComponent(localWarehouseId)}/available-drivers`), {
-    headers: { Accept: 'application/json, application/problem+json' },
+    headers: {
+      Accept: 'application/json, application/problem+json',
+      Authorization: `Bearer ${accessToken}`,
+    },
   });
   const value = await readJson(response, 'Не удалось получить водителей склада');
   if (!Array.isArray(value)) throw new Error('Логистика вернула некорректный список водителей');
@@ -324,9 +333,14 @@ export async function estimateTransferArrival(input: {
   vehicleId: string;
   cabinCount: number;
 }): Promise<TransferArrivalEstimate> {
+  const accessToken = await requireSimulatorAccessToken();
   const response = await fetch(simulatorApiUrl('/routing/transfer-arrival-estimate'), {
     method: 'POST',
-    headers: { Accept: 'application/json, application/problem+json', 'Content-Type': 'application/json' },
+    headers: {
+      Accept: 'application/json, application/problem+json',
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify({
       source_warehouse_id: input.sourceWarehouseId,
       destination_warehouse_id: input.destinationWarehouseId,

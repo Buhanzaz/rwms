@@ -25,6 +25,8 @@ import tools.jackson.databind.JsonNode;
 /** Owns catalog-version reads, draft mutation, forking and activation workflows without taking ownership of downstream asset positions. */
 @Service
 public class MaintenanceCatalogUseCases {
+  private static final UUID GLOBAL_CATALOG_AUDIT_WAREHOUSE_ID =
+      UUID.fromString("00000000-0000-0000-0000-000000000001");
   private final CatalogVersionRepository catalogVersions;
   private final CatalogNodeRepository catalogNodes;
   private final CatalogLinkRepository catalogLinks;
@@ -73,6 +75,12 @@ public class MaintenanceCatalogUseCases {
         .toList();
   }
 
+  public List<CatalogVersionResponse> catalogVersions() {
+    return catalogVersions.findAllByOrderByCreatedAtDesc().stream()
+        .map(catalogModelSupport::catalogResponse)
+        .toList();
+  }
+
   public CatalogVersionResponse catalogVersion(UUID id) { return catalogModelSupport.catalogResponse(catalogModelSupport.requireCatalog(id)); }
 
   public CatalogVersionResponse catalogVersion(UUID id, UUID authorizationWarehouseId) {
@@ -112,6 +120,12 @@ public class MaintenanceCatalogUseCases {
     }
     return commandSupport.inLocalTransaction(
         "catalog create finalization", () -> createCatalogInTransaction(subjectId, key, request));
+  }
+
+  /** Creates the installation-wide catalog using the retained server-owned audit context. */
+  public CreateResult<CatalogVersionResponse> createGlobalCatalog(UUID subjectId, UUID key) {
+    return createCatalog(
+        subjectId, key, new CreateCatalogRequest(GLOBAL_CATALOG_AUDIT_WAREHOUSE_ID));
   }
 
   private WarehouseAdmissionPreflight<CreateResult<CatalogVersionResponse>> createCatalogPreflight(

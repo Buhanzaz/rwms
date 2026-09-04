@@ -145,6 +145,12 @@ final class LogisticsWarehouseDependencyClient {
     return response;
   }
 
+  /**
+   * Reads owner-held timezone truth at one exact instant.
+   *
+   * <p>The query value is normalized to UTC so an offset {@code +} cannot be decoded as a form
+   * separator by the downstream servlet before {@link OffsetDateTime} binding.
+   */
   WarehouseTimeZone warehouseTimeZoneAt(UUID warehouseId, OffsetDateTime at) {
     if (warehouseId == null || at == null) {
       throw new IllegalArgumentException("Warehouse timezone lookup identity is required");
@@ -152,7 +158,7 @@ final class LogisticsWarehouseDependencyClient {
     String uri =
         UriComponentsBuilder.fromUriString(
                 warehouseInternalBase + "/warehouses/" + warehouseId + "/time-zone")
-            .queryParam("at", at)
+            .queryParam("at", at.toInstant())
             .build()
             .encode()
             .toUriString();
@@ -196,6 +202,12 @@ final class LogisticsWarehouseDependencyClient {
         .toList();
   }
 
+  /**
+   * Reads owner-filtered support links for one exact planning instant.
+   *
+   * <p>UTC query serialization preserves the instant while avoiding ambiguous {@code +} decoding
+   * for positive offsets supplied by warehouse-local planning.
+   */
   List<WarehouseSupportLink> listWarehouseSupportLinks(
       UUID servedWarehouseId, OffsetDateTime at) {
     if (servedWarehouseId == null || at == null) {
@@ -204,7 +216,7 @@ final class LogisticsWarehouseDependencyClient {
     String uri =
         UriComponentsBuilder.fromUriString(
                 warehouseBase + "/" + servedWarehouseId + "/support-links")
-            .queryParam("at", at)
+            .queryParam("at", at.toInstant())
             .build()
             .encode()
             .toUriString();

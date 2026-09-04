@@ -23,12 +23,19 @@ import org.springframework.stereotype.Component;
 public class OrderAuthorizer {
   private static final UUID DEVELOPMENT_SUBJECT =
       UUID.fromString("00000000-0000-0000-0000-0000000000d8");
+  private static final String RENTAL_MANAGER_ROLE = "RENTAL_MANAGER";
+  private static final String RENTAL_MANAGER_SCOPE = "rental.manage";
+  private static final String ADMIN_WEB_CLIENT_ID = "rwms-admin-web";
+  private static final Set<String> INTERACTIVE_PROTOCOL_SCOPES =
+      Set.of("openid", "profile", "offline_access");
+  private static final Set<String> RENTAL_MANAGER_CLIENT_IDS =
+      Set.of("rwms-rental-manager-web", "rwms-rental-manager-android");
   private static final Set<String> ROLES =
       Set.of(
           "SYSTEM_ADMIN",
           "WMS_ADMIN",
           "WAREHOUSE_MANAGER",
-          "RENTAL_MANAGER",
+          RENTAL_MANAGER_ROLE,
           "VIEWER");
 
   private final boolean developmentBypass;
@@ -203,19 +210,39 @@ public class OrderAuthorizer {
       throw new AccessDeniedException("USER principal is required");
     }
     Set<String> scopes = scopes(jwt);
-    String requiredScope = requireWrite ? "rwms.write" : "rwms.read";
-    if (!scopes.contains(requiredScope)) {
-      throw new AccessDeniedException("Required USER scope is missing");
+    String subject = jwt.getSubject();
+    if (subject == null || subject.isBlank()) {
+      throw new AccessDeniedException("USER subject must be a UUID");
     }
     UUID subjectId;
     try {
-      subjectId = UUID.fromString(jwt.getSubject());
+      subjectId = UUID.fromString(subject);
     } catch (IllegalArgumentException exception) {
       throw new AccessDeniedException("USER subject must be a UUID");
     }
     String role = jwt.getClaimAsString("global_role");
-    if (!ROLES.contains(role)) {
+    if (role == null || !ROLES.contains(role)) {
       throw new AccessDeniedException("Recognized USER role is required");
+    }
+    String clientId = jwt.getClaimAsString("client_id");
+    boolean rentalManagerClient =
+        clientId != null && RENTAL_MANAGER_CLIENT_IDS.contains(clientId);
+    boolean rentalManager = RENTAL_MANAGER_ROLE.equals(role);
+    boolean administrationClient = isAdministrationClient(clientId, role, scopes);
+    if (rentalManagerClient && !rentalManager) {
+      throw new AccessDeniedException("Dedicated rental manager client requires RENTAL_MANAGER role");
+    }
+    if (rentalManager) {
+      Set<String> applicationScopes = new HashSet<>(scopes);
+      applicationScopes.removeAll(INTERACTIVE_PROTOCOL_SCOPES);
+      if (!rentalManagerClient || !applicationScopes.equals(Set.of(RENTAL_MANAGER_SCOPE))) {
+        throw new AccessDeniedException("Dedicated rental manager client and scope are required");
+      }
+    } else if (!administrationClient) {
+      String requiredScope = requireWrite ? "rwms.write" : "rwms.read";
+      if (!scopes.contains(requiredScope)) {
+        throw new AccessDeniedException("Required USER scope is missing");
+      }
     }
     WarehouseGrants grants = grants(jwt);
     String displayName = jwt.getClaimAsString("preferred_username");
@@ -239,8 +266,21 @@ public class OrderAuthorizer {
         Set.copyOf(grants.editable()),
         global,
         local,
-        scopes.contains("rwms.write"),
+        rentalManager
+            ? scopes.contains(RENTAL_MANAGER_SCOPE)
+            : administrationClient || scopes.contains("rwms.write"),
         true);
+  }
+
+  /** The isolated administration client may act only for the two global administration roles. */
+  private static boolean isAdministrationClient(String clientId, String role, Set<String> scopes) {
+    if (!ADMIN_WEB_CLIENT_ID.equals(clientId)
+        || !("SYSTEM_ADMIN".equals(role) || "WMS_ADMIN".equals(role))) {
+      return false;
+    }
+    Set<String> applicationScopes = new HashSet<>(scopes);
+    applicationScopes.removeAll(INTERACTIVE_PROTOCOL_SCOPES);
+    return applicationScopes.equals(Set.of("admin.manage"));
   }
 
   private static WarehouseGrants grants(Jwt jwt) {

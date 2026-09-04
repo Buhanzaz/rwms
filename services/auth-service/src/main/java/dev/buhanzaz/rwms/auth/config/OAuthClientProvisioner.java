@@ -306,6 +306,30 @@ public class OAuthClientProvisioner implements ApplicationRunner {
             validateManagerAndroidClientContract(
                     client, authenticationMethods, grantTypes);
         }
+        if (client.rentalManagerWebClient()) {
+            validateDedicatedUserClientContract(
+                    client,
+                    authenticationMethods,
+                    grantTypes,
+                    OAuthClientProperties.RENTAL_MANAGER_SCOPES,
+                    "/manager/auth/callback");
+        }
+        if (client.rentalManagerAndroidClient()) {
+            validateDedicatedUserClientContract(
+                    client,
+                    authenticationMethods,
+                    grantTypes,
+                    OAuthClientProperties.RENTAL_MANAGER_SCOPES,
+                    "/auth/rental-manager/callback");
+        }
+        if (client.adminWebClient()) {
+            validateDedicatedUserClientContract(
+                    client,
+                    authenticationMethods,
+                    grantTypes,
+                    OAuthClientProperties.ADMIN_WEB_SCOPES,
+                    "/admin/auth/callback");
+        }
         if (client.customerAndroidClient()) {
             validateCustomerAndroidClientContract(
                     client, authenticationMethods, grantTypes);
@@ -447,6 +471,53 @@ public class OAuthClientProvisioner implements ApplicationRunner {
             throw new IllegalStateException(
                     "rwms-manager-android redirect must use the same-origin "
                             + "/auth/manager/callback path");
+        }
+    }
+
+    /**
+     * Rejects privilege, redirect, or token-policy drift for a dedicated interactive application.
+     *
+     * <p>The role restriction is enforced against the authoritative subject during token issuance;
+     * this startup check ensures the client itself cannot request panel or another application's
+     * scopes.</p>
+     */
+    private void validateDedicatedUserClientContract(
+            OAuthClientProperties.Client client,
+            Set<ClientAuthenticationMethod> authenticationMethods,
+            Set<AuthorizationGrantType> grantTypes,
+            Set<String> expectedScopes,
+            String expectedCallbackPath) {
+        boolean exactPublicContract =
+                authenticationMethods.equals(Set.of(ClientAuthenticationMethod.NONE))
+                        && grantTypes.equals(Set.of(
+                                AuthorizationGrantType.AUTHORIZATION_CODE,
+                                AuthorizationGrantType.REFRESH_TOKEN))
+                        && client.scopes().equals(expectedScopes)
+                        && client.allowedPrincipalTypes().equals(Set.of(
+                                dev.buhanzaz.rwms.auth.domain.PrincipalType.USER))
+                        && client.audiences().equals(Set.of("rwms-services"))
+                        && client.requireProofKey()
+                        && client.redirectUris().size() == 1
+                        && client.postLogoutRedirectUris().size() == 1
+                        && client.allowedOrigins().size() == 1
+                        && client.accessTokenTtl().equals(Duration.ofMinutes(5))
+                        && client.refreshTokenTtl().equals(Duration.ofDays(30))
+                        && !client.reuseRefreshTokens()
+                        && client.secretEnvironment() == null
+                        && client.developmentSecret() == null;
+        if (!exactPublicContract) {
+            throw new IllegalStateException(
+                    client.clientId() + " must use its exact isolated USER PKCE contract");
+        }
+        URI redirect = URI.create(client.redirectUris().iterator().next());
+        URI postLogout = URI.create(client.postLogoutRedirectUris().iterator().next());
+        URI origin = URI.create(client.allowedOrigins().iterator().next());
+        if (!expectedCallbackPath.equals(redirect.getPath())
+                || redirect.getQuery() != null
+                || !sameOrigin(origin, redirect)
+                || !sameOrigin(origin, postLogout)) {
+            throw new IllegalStateException(
+                    client.clientId() + " redirect and logout URI must use its declared origin");
         }
     }
 

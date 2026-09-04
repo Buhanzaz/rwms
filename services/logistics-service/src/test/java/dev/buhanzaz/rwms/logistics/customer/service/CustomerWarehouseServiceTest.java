@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.logistics.customer.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -10,6 +11,7 @@ import dev.buhanzaz.rwms.logistics.customer.config.CustomerDeliveryProperties;
 import dev.buhanzaz.rwms.logistics.customer.config.CustomerDeliveryProperties.Validated;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseIdentity;
+import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.time.Duration;
@@ -139,12 +141,59 @@ class CustomerWarehouseServiceTest {
     assertThat(new CustomerWarehouseService(properties, dependencies).list()).isEmpty();
   }
 
+  @Test
+  void omitsAndRejectsWarehouseAtNullIsland() {
+    CustomerDeliveryProperties properties = mock(CustomerDeliveryProperties.class);
+    LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
+    UUID zeroAxisWarehouseId = UUID.randomUUID();
+    WarehouseIdentity nullIsland =
+        new WarehouseIdentity(
+            REPRESENTATIVE_WAREHOUSE_ID,
+            2,
+            true,
+            "Региональный склад",
+            "Город",
+            null,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            "Europe/Moscow",
+            true);
+    WarehouseIdentity zeroAxis =
+        new WarehouseIdentity(
+            zeroAxisWarehouseId,
+            1,
+            true,
+            "Склад на экваторе",
+            "Город",
+            null,
+            BigDecimal.ZERO,
+            new BigDecimal("31.200000"),
+            "Europe/Moscow",
+            true);
+    when(properties.validatedDepots()).thenReturn(Map.of(WAREHOUSE_ID, depot()));
+    when(dependencies.listWarehouseIdentities()).thenReturn(List.of(nullIsland, zeroAxis));
+    when(dependencies.readWarehouseIdentity(REPRESENTATIVE_WAREHOUSE_ID))
+        .thenReturn(nullIsland);
+    CustomerWarehouseService service =
+        new CustomerWarehouseService(properties, dependencies);
+
+    assertThat(service.list())
+        .extracting(CustomerWarehouseResponse::id)
+        .containsExactly(zeroAxisWarehouseId);
+    assertThatThrownBy(() -> service.required(REPRESENTATIVE_WAREHOUSE_ID))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            problem -> assertThat(problem.code()).isEqualTo("CUSTOMER_WAREHOUSE_NOT_FOUND"));
+  }
+
   private static Validated depot() {
     return new Validated(
         WAREHOUSE_ID,
         new BigDecimal("59.763806"),
         new BigDecimal("30.471798"),
         URI.create("http://127.0.0.1:8002"),
+        "test-routing-data-v1",
+        Duration.ofMinutes(15),
         Duration.ofSeconds(1),
         Duration.ofSeconds(2),
         30,

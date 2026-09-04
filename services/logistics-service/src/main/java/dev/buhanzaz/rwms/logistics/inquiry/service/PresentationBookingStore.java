@@ -6,7 +6,6 @@ import dev.buhanzaz.rwms.logistics.inquiry.api.RentalInquiryApiModels.Presentati
 import dev.buhanzaz.rwms.logistics.inquiry.domain.ClientPresentation;
 import dev.buhanzaz.rwms.logistics.inquiry.domain.ClientPresentationMode;
 import dev.buhanzaz.rwms.logistics.inquiry.domain.PresentationBooking;
-import dev.buhanzaz.rwms.logistics.inquiry.domain.PresentationBookingState;
 import dev.buhanzaz.rwms.logistics.inquiry.domain.RentalInquiry;
 import dev.buhanzaz.rwms.logistics.inquiry.eventing.RentalInquiryBookedOutboxStore;
 import dev.buhanzaz.rwms.logistics.inquiry.repository.ClientPresentationRepository;
@@ -17,6 +16,7 @@ import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.DesiredDeliveryWindo
 import dev.buhanzaz.rwms.logistics.order.domain.AdditionalContact;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
@@ -27,23 +27,29 @@ import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Coordinates local booking persistence and idempotency records used by presentation booking
- * commands.
+ * Coordinates local booking persistence, idempotency and short recovery transactions. Claims are
+ * committed before remote work starts, and every later local mutation re-locks the exact lease
+ * capability so an expired worker cannot overwrite its successor.
  */
 @Service
 @RequiredArgsConstructor
 public class PresentationBookingStore {
+  private static final int RECOVERY_BATCH_SIZE = 50;
+  private static final Duration RECOVERY_LEASE_DURATION = Duration.ofMinutes(5);
+
   private final PresentationBookingRepository bookings;
   private final ClientPresentationRepository presentations;
   private final RentalInquiryRepository inquiries;
@@ -184,6 +190,22 @@ public class PresentationBookingStore {
   public BookingContext context(UUID bookingId) {
     PresentationBooking booking =
         bookings.findById(bookingId).orElseThrow(() -> notFound("Бронирование не найдено"));
+    return context(booking);
+  }
+
+  /**
+   * Loads the immutable booking snapshot only while the supplied recovery capability is still
+   * current. The transaction ends before the caller performs any remote effect.
+   */
+  @Transactional(readOnly = true)
+  public Optional<BookingContext> claimedContext(RecoveryClaim claim) {
+    RecoveryClaim required = requireClaim(claim);
+    return bookings
+        .findCurrentRecoveryClaim(required.bookingId(), required.leaseToken())
+        .map(this::context);
+  }
+
+  private BookingContext context(PresentationBooking booking) {
     ClientPresentation presentation =
         presentations
             .findById(booking.getPresentationId())
@@ -206,52 +228,118 @@ public class PresentationBookingStore {
         legacyDesiredDeliveryTimes(booking.getDesiredDeliveryWindowsJson()));
   }
 
+  /**
+   * Claims an exact due booking for synchronous confirmation. An active lease, backoff or
+   * quarantine deliberately returns empty so a replay cannot issue a duplicate remote effect.
+   */
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
+  public Optional<RecoveryClaim> claim(UUID bookingId) {
+    UUID requiredId = Objects.requireNonNull(bookingId, "bookingId");
+    return bookings.lockExactDueForRecovery(requiredId).map(this::claimLocked);
+  }
+
+  /**
+   * Claims one stable due page with PostgreSQL SKIP LOCKED and commits every lease before any
+   * remote processing starts.
+   */
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
+  public List<RecoveryClaim> claimDue() {
+    List<PresentationBooking> due =
+        bookings.lockDueForRecovery(PageRequest.of(0, RECOVERY_BATCH_SIZE));
+    if (due.isEmpty()) return List.of();
+    OffsetDateTime timestamp = databaseNow(due.getFirst().getId());
+    OffsetDateTime leaseUntil = timestamp.plus(RECOVERY_LEASE_DURATION);
+    List<RecoveryClaim> claims =
+        due.stream()
+            .map(booking -> claimLocked(booking, timestamp, leaseUntil))
+            .toList();
+    bookings.flush();
+    return claims;
+  }
+
+  private RecoveryClaim claimLocked(PresentationBooking booking) {
+    OffsetDateTime timestamp = databaseNow(booking.getId());
+    RecoveryClaim claim =
+        claimLocked(booking, timestamp, timestamp.plus(RECOVERY_LEASE_DURATION));
+    bookings.flush();
+    return claim;
+  }
+
+  private static RecoveryClaim claimLocked(
+      PresentationBooking booking, OffsetDateTime timestamp, OffsetDateTime leaseUntil) {
+    UUID leaseToken = UUID.randomUUID();
+    booking.claimRecovery(leaseToken, leaseUntil, timestamp);
+    return new RecoveryClaim(booking.getId(), leaseToken);
+  }
+
+  /** Atomically binds the order and presentation only for the worker holding the current lease. */
   @Transactional
-  public void assignOrder(UUID bookingId, UUID orderId) {
+  public boolean assignOrder(RecoveryClaim claim, UUID orderId) {
+    RecoveryClaim required = requireClaim(claim);
     PresentationBooking booking =
-        bookings.findForUpdate(bookingId).orElseThrow(() -> notFound("Бронирование не найдено"));
-    if (booking.getState() != PresentationBookingState.PENDING) return;
+        bookings
+            .lockCurrentRecoveryClaim(required.bookingId(), required.leaseToken())
+            .orElse(null);
+    if (booking == null) return false;
     ClientPresentation presentation =
         presentations
             .findForUpdate(booking.getPresentationId())
             .orElseThrow(() -> notFound("Представление не найдено"));
-    booking.assignOrder(orderId, now());
+    OffsetDateTime timestamp = databaseNow(booking.getId());
+    booking.assignOrder(orderId, required.leaseToken(), timestamp);
     if (presentation.getState()
         == dev.buhanzaz.rwms.logistics.inquiry.domain.ClientPresentationState.ACTIVE) {
-      presentation.markBookingPending(orderId, now());
+      presentation.markBookingPending(orderId, timestamp);
     }
     bookings.saveAndFlush(booking);
     presentations.saveAndFlush(presentation);
+    return true;
   }
 
+  /** Records bounded retry state only for the worker still holding the exact lease capability. */
   @Transactional
-  public void attempted(UUID bookingId, String errorCode) {
+  public boolean attempted(RecoveryClaim claim, String errorCode) {
+    RecoveryClaim required = requireClaim(claim);
     PresentationBooking booking =
-        bookings.findForUpdate(bookingId).orElseThrow(() -> notFound("Бронирование не найдено"));
-    booking.attempted(errorCode, now());
+        bookings
+            .lockCurrentRecoveryClaim(required.bookingId(), required.leaseToken())
+            .orElse(null);
+    if (booking == null) return false;
+    booking.recoveryFailed(required.leaseToken(), errorCode, databaseNow(booking.getId()));
     bookings.saveAndFlush(booking);
+    return true;
   }
 
+  /** Rejects the booking only while the supplied recovery lease is current. */
   @Transactional
-  public void reject(UUID bookingId, String errorCode) {
+  public boolean reject(RecoveryClaim claim, String errorCode) {
+    RecoveryClaim required = requireClaim(claim);
     PresentationBooking booking =
-        bookings.findForUpdate(bookingId).orElseThrow(() -> notFound("Бронирование не найдено"));
-    if (booking.getState() != PresentationBookingState.PENDING) return;
+        bookings
+            .lockCurrentRecoveryClaim(required.bookingId(), required.leaseToken())
+            .orElse(null);
+    if (booking == null) return false;
     ClientPresentation presentation =
         presentations
             .findForUpdate(booking.getPresentationId())
             .orElseThrow(() -> notFound("Представление не найдено"));
-    booking.reject(errorCode, now());
-    presentation.revoke(now());
+    OffsetDateTime timestamp = databaseNow(booking.getId());
+    booking.reject(required.leaseToken(), errorCode, timestamp);
+    presentation.revoke(timestamp);
     bookings.saveAndFlush(booking);
     presentations.saveAndFlush(presentation);
+    return true;
   }
 
+  /** Completes the booking and its local aggregates only for the exact current lease owner. */
   @Transactional
-  public void complete(UUID bookingId) {
+  public boolean complete(RecoveryClaim claim) {
+    RecoveryClaim required = requireClaim(claim);
     PresentationBooking booking =
-        bookings.findForUpdate(bookingId).orElseThrow(() -> notFound("Бронирование не найдено"));
-    if (booking.getState() == PresentationBookingState.COMPLETED) return;
+        bookings
+            .lockCurrentRecoveryClaim(required.bookingId(), required.leaseToken())
+            .orElse(null);
+    if (booking == null) return false;
     ClientPresentation presentation =
         presentations
             .findForUpdate(booking.getPresentationId())
@@ -260,8 +348,8 @@ public class PresentationBookingStore {
         inquiries
             .findForUpdate(presentation.getInquiryId())
             .orElseThrow(() -> notFound("Диалог аренды не найден"));
-    OffsetDateTime timestamp = now();
-    booking.complete(timestamp);
+    OffsetDateTime timestamp = databaseNow(booking.getId());
+    booking.complete(required.leaseToken(), timestamp);
     presentation.markBooked(booking.getOrderId(), timestamp);
     inquiry.markBooked(booking.getOrderId(), timestamp);
     bookings.saveAndFlush(booking);
@@ -277,16 +365,17 @@ public class PresentationBookingStore {
           inquiry.getManagerId(),
           timestamp);
     }
+    return true;
   }
 
-  @Transactional(readOnly = true)
-  public List<UUID> pendingIds() {
+  private OffsetDateTime databaseNow(UUID bookingId) {
     return bookings
-        .findAllByStateOrderByCreatedAtAscIdAsc(
-            PresentationBookingState.PENDING, PageRequest.of(0, 50))
-        .stream()
-        .map(PresentationBooking::getId)
-        .toList();
+        .currentDatabaseTimestamp(bookingId)
+        .orElseThrow(() -> new IllegalStateException("Claimed presentation booking is missing"));
+  }
+
+  private static RecoveryClaim requireClaim(RecoveryClaim claim) {
+    return Objects.requireNonNull(claim, "claim");
   }
 
   private String write(List<?> values) {
@@ -587,6 +676,15 @@ public class PresentationBookingStore {
       List<String> legacyDesiredDeliveryTimes) {
     public List<UUID> selectedRentalItemIds() {
       return selections.stream().map(PresentationCabinSelectionInput::rentalItemId).toList();
+    }
+  }
+
+  /** Immutable, payload-free capability for one exact presentation-booking recovery lease. */
+  public record RecoveryClaim(UUID bookingId, UUID leaseToken) {
+    /** Rejects incomplete capabilities before they can reach a recovery workflow. */
+    public RecoveryClaim {
+      Objects.requireNonNull(bookingId, "bookingId");
+      Objects.requireNonNull(leaseToken, "leaseToken");
     }
   }
 }

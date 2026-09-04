@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 import dev.buhanzaz.rwms.taskboard.domain.BoardTask;
 import dev.buhanzaz.rwms.taskboard.domain.AssignmentStatus;
 import dev.buhanzaz.rwms.taskboard.domain.DriverTaskAudienceMode;
+import dev.buhanzaz.rwms.taskboard.domain.DriverShiftRouteOperationKind;
 import dev.buhanzaz.rwms.taskboard.domain.EndVehicleCondition;
 import dev.buhanzaz.rwms.taskboard.domain.EntryType;
 import dev.buhanzaz.rwms.taskboard.domain.InspectionItemState;
@@ -22,6 +23,9 @@ import dev.buhanzaz.rwms.taskboard.domain.TaskAssignment;
 import dev.buhanzaz.rwms.taskboard.domain.TaskStatus;
 import dev.buhanzaz.rwms.taskboard.domain.VehicleConfigurationType;
 import dev.buhanzaz.rwms.taskboard.domain.Worker;
+import dev.buhanzaz.rwms.taskboard.domain.WorkerOperationalAssignment;
+import dev.buhanzaz.rwms.taskboard.domain.WorkerOperationalAssignmentMode;
+import dev.buhanzaz.rwms.taskboard.domain.WorkerOperationalAssignmentStatus;
 import dev.buhanzaz.rwms.taskboard.domain.WorkQueue;
 import dev.buhanzaz.rwms.taskboard.repository.BoardTaskRepository;
 import dev.buhanzaz.rwms.taskboard.repository.DriverShiftPhotoRepository;
@@ -31,10 +35,12 @@ import dev.buhanzaz.rwms.taskboard.repository.QueueDefinitionRepository;
 import dev.buhanzaz.rwms.taskboard.repository.TaskAssignmentRepository;
 import dev.buhanzaz.rwms.taskboard.repository.VehicleDefectRepository;
 import dev.buhanzaz.rwms.taskboard.repository.WorkerRepository;
+import dev.buhanzaz.rwms.taskboard.repository.WorkerOperationalAssignmentRepository;
 import dev.buhanzaz.rwms.taskboard.repository.WorkQueueRepository;
 import dev.buhanzaz.rwms.taskboard.service.ConflictException;
 import dev.buhanzaz.rwms.taskboard.service.DriverShiftService;
 import dev.buhanzaz.rwms.taskboard.service.DriverWeatherProvider;
+import dev.buhanzaz.rwms.taskboard.service.NotFoundException;
 import dev.buhanzaz.rwms.taskboard.service.WarehouseIdentityGateway;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -67,8 +73,14 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 @Import(DriverShiftServiceIntegrationTest.FixedClockConfiguration.class)
 class DriverShiftServiceIntegrationTest extends PostgresIntegrationTestSupport {
   private static final UUID WAREHOUSE_ID = UUID.fromString("00000000-0000-0000-0000-000000000801");
+  private static final UUID REPRESENTATIVE_WAREHOUSE_ID =
+      UUID.fromString("00000000-0000-0000-0000-000000000804");
   private static final UUID DRIVER_ID = UUID.fromString("00000000-0000-0000-0000-000000000802");
   private static final UUID VEHICLE_ID = UUID.fromString("00000000-0000-0000-0000-000000000803");
+  private static final UUID TRANSFER_A_ID =
+      UUID.fromString("00000000-0000-0000-0000-000000000806");
+  private static final UUID TRANSFER_B_ID =
+      UUID.fromString("00000000-0000-0000-0000-000000000807");
   private static final LocalDate WORK_DATE = LocalDate.of(2026, 8, 30);
 
   @Autowired DriverShiftService shifts;
@@ -80,6 +92,7 @@ class DriverShiftServiceIntegrationTest extends PostgresIntegrationTestSupport {
   @Autowired QueueEntryRepository entries;
   @Autowired QueueDefinitionRepository queueDefinitions;
   @Autowired TaskAssignmentRepository assignments;
+  @Autowired WorkerOperationalAssignmentRepository operationalAssignments;
   @Autowired WorkQueueRepository queues;
   @Autowired JdbcTemplate jdbc;
 
@@ -102,6 +115,18 @@ class DriverShiftServiceIntegrationTest extends PostgresIntegrationTestSupport {
                 BigDecimal.valueOf(59.94),
                 BigDecimal.valueOf(30.32),
                 "Europe/Moscow"));
+    when(warehouses.identity(REPRESENTATIVE_WAREHOUSE_ID))
+        .thenReturn(
+            new WarehouseIdentityGateway.WarehouseIdentity(
+                REPRESENTATIVE_WAREHOUSE_ID,
+                3,
+                true,
+                "Склад Великий Новгород",
+                "Великий Новгород",
+                "Большая Санкт-Петербургская улица, 1",
+                BigDecimal.valueOf(58.52),
+                BigDecimal.valueOf(31.27),
+                "Asia/Novosibirsk"));
     when(weather.briefing(any(), any()))
         .thenReturn(
             new DailyWeatherBriefing(
@@ -165,6 +190,363 @@ class DriverShiftServiceIntegrationTest extends PostgresIntegrationTestSupport {
       executor.shutdownNow();
       assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
     }
+  }
+
+  @Test
+  void replacesAndThenFreezesOneOrderedCrossWarehouseRouteSnapshot() {
+    UUID sourceShiftId = UUID.randomUUID();
+    UUID sourcePlanId = UUID.randomUUID();
+    PutDriverShiftPlanRequest first =
+        crossWarehousePlanRequest(sourcePlanId, 1, "Невский проспект, 1");
+
+    DriverShiftPlanResponse created =
+        shifts.putPlan(sourceShiftId, UUID.randomUUID().toString(), first);
+    DriverShiftPlanResponse replayed =
+        shifts.putPlan(sourceShiftId, UUID.randomUUID().toString(), first);
+    PutDriverShiftPlanRequest replacement =
+        crossWarehousePlanRequest(sourcePlanId, 2, "Невский проспект, 2");
+    DriverShiftPlanResponse replaced =
+        shifts.putPlan(sourceShiftId, UUID.randomUUID().toString(), replacement);
+
+    assertThat(created.result()).isEqualTo(PlanApplyResult.CREATED);
+    assertThat(replayed.result()).isEqualTo(PlanApplyResult.REPLAYED);
+    assertThat(replaced.result()).isEqualTo(PlanApplyResult.REPLACED);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from driver_shift_route_operation", Integer.class))
+        .isEqualTo(6);
+    assertThat(
+            jdbc.queryForObject(
+                "select cabin_capacity from driver_shift_plan", Integer.class))
+        .isNull();
+
+    TodayShiftResponse today = shifts.today(DRIVER_ID, WAREHOUSE_ID);
+
+    assertThat(today.operations())
+        .extracting(RouteOperationView::sequence)
+        .containsExactly(1, 2, 3, 4, 5, 6);
+    assertThat(today.operations())
+        .extracting(RouteOperationView::kind)
+        .containsExactly(
+            DriverShiftRouteOperationKind.ORIGIN_START,
+            DriverShiftRouteOperationKind.INBOUND_POSITIONING,
+            DriverShiftRouteOperationKind.DEPOT_LOAD,
+            DriverShiftRouteOperationKind.DELIVERY,
+            DriverShiftRouteOperationKind.DEPOT_RETURN,
+            DriverShiftRouteOperationKind.RETURN_POSITIONING);
+    assertThat(today.operations().get(1).plannedDeparture())
+        .isEqualTo(OffsetDateTime.parse("2026-08-30T07:00:00Z"));
+    assertThat(today.operations().get(1).plannedArrival())
+        .isEqualTo(OffsetDateTime.parse("2026-08-30T08:00:00Z"));
+    assertThat(today.operations().get(3).locationLabel()).isEqualTo("Невский проспект, 2");
+    assertThat(today.operations().getLast().warehouseId()).isEqualTo(WAREHOUSE_ID);
+    assertThat(today.vehicle().cabinCapacity()).isNull();
+
+    PutDriverShiftPlanRequest frozenReplacement =
+        crossWarehousePlanRequest(sourcePlanId, 3, "Невский проспект, 3");
+    assertThatThrownBy(
+            () ->
+                shifts.putPlan(
+                    sourceShiftId, UUID.randomUUID().toString(), frozenReplacement))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("frozen");
+  }
+
+  @Test
+  void persistsCapacityAndBalancedTransferCargoAcrossTheCrossWarehouseRoute() {
+    PutDriverShiftPlanRequest request = transferCrossWarehousePlanRequest(2);
+
+    DriverShiftPlanResponse created =
+        shifts.putPlan(UUID.randomUUID(), UUID.randomUUID().toString(), request);
+    TodayShiftResponse today = shifts.today(DRIVER_ID, WAREHOUSE_ID);
+
+    assertThat(created.result()).isEqualTo(PlanApplyResult.CREATED);
+    assertThat(today.vehicle().cabinCapacity()).isEqualTo(2);
+    assertThat(
+            jdbc.queryForObject(
+                "select cabin_capacity from driver_shift_plan", Integer.class))
+        .isEqualTo(2);
+    assertThat(
+            jdbc.queryForList(
+                "select source_transfer_id from driver_shift_route_operation "
+                    + "where source_transfer_id is not null order by operation_sequence",
+                UUID.class))
+        .containsExactly(TRANSFER_A_ID, TRANSFER_B_ID, TRANSFER_A_ID, TRANSFER_B_ID);
+    assertThat(today.operations())
+        .extracting(RouteOperationView::kind)
+        .containsExactly(
+            DriverShiftRouteOperationKind.ORIGIN_START,
+            DriverShiftRouteOperationKind.TRANSFER_LOAD,
+            DriverShiftRouteOperationKind.TRANSFER_LOAD,
+            DriverShiftRouteOperationKind.INBOUND_POSITIONING,
+            DriverShiftRouteOperationKind.TRANSFER_UNLOAD,
+            DriverShiftRouteOperationKind.TRANSFER_UNLOAD,
+            DriverShiftRouteOperationKind.DEPOT_LOAD,
+            DriverShiftRouteOperationKind.DELIVERY,
+            DriverShiftRouteOperationKind.DEPOT_RETURN,
+            DriverShiftRouteOperationKind.RETURN_POSITIONING);
+    assertThat(today.operations())
+        .extracting(RouteOperationView::sourceTransferId)
+        .containsExactly(
+            null,
+            TRANSFER_A_ID,
+            TRANSFER_B_ID,
+            null,
+            TRANSFER_A_ID,
+            TRANSFER_B_ID,
+            null,
+            null,
+            null,
+            null);
+  }
+
+  @Test
+  void persistsFurnitureOnlyTransferActionsWithoutChangingTheCabinLoad() {
+    PutDriverShiftPlanRequest valid = transferCrossWarehousePlanRequest(2);
+    List<RouteOperationView> operations = new java.util.ArrayList<>(valid.operations());
+    operations.set(2, withLoad(operations.get(2), 1, 1));
+    operations.set(3, withLoad(operations.get(3), 1, 1));
+    operations.set(4, withLoad(operations.get(4), 1, 0));
+    operations.set(5, withLoad(operations.get(5), 0, 0));
+    PutDriverShiftPlanRequest furnitureTransfer =
+        new PutDriverShiftPlanRequest(
+            valid.sourcePlanId(),
+            valid.sourcePlanVersion(),
+            valid.warehouseId(),
+            valid.driverId(),
+            valid.driverName(),
+            valid.workDate(),
+            valid.vehicle(),
+            valid.trailer(),
+            valid.tripCount(),
+            valid.routeDistanceMeters(),
+            operations);
+
+    shifts.putPlan(UUID.randomUUID(), UUID.randomUUID().toString(), furnitureTransfer);
+
+    assertThat(shifts.today(DRIVER_ID, WAREHOUSE_ID).operations())
+        .filteredOn(operation -> TRANSFER_B_ID.equals(operation.sourceTransferId()))
+        .extracting(RouteOperationView::loadBefore, RouteOperationView::loadAfter)
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(1, 1),
+            org.assertj.core.groups.Tuple.tuple(0, 0));
+  }
+
+  @Test
+  void rejectsTransferCargoWithoutCapacityOrAboveTheVehicleCapacity() {
+    assertThatThrownBy(
+            () ->
+                shifts.putPlan(
+                    UUID.randomUUID(),
+                    UUID.randomUUID().toString(),
+                    transferCrossWarehousePlanRequest(null)))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("require vehicle cabin capacity");
+
+    assertThatThrownBy(
+            () ->
+                shifts.putPlan(
+                    UUID.randomUUID(),
+                    UUID.randomUUID().toString(),
+                    transferCrossWarehousePlanRequest(1)))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("exceeds vehicle cabin capacity");
+    assertThat(jdbc.queryForObject("select count(*) from driver_shift_plan", Integer.class))
+        .isZero();
+  }
+
+  @Test
+  void rejectsChangedTransferIdentityWrongEndpointAndUnrelatedIdentity() {
+    PutDriverShiftPlanRequest valid = transferCrossWarehousePlanRequest(2);
+    List<RouteOperationView> changedTransfer = new java.util.ArrayList<>(valid.operations());
+    RouteOperationView unloadB = changedTransfer.get(5);
+    changedTransfer.set(
+        5,
+        new RouteOperationView(
+            unloadB.sequence(),
+            unloadB.kind(),
+            unloadB.warehouseId(),
+            unloadB.sourceTaskId(),
+            UUID.randomUUID(),
+            unloadB.locationLabel(),
+            unloadB.plannedArrival(),
+            unloadB.plannedDeparture(),
+            unloadB.loadBefore(),
+            unloadB.loadAfter()));
+    assertThatThrownBy(
+            () ->
+                shifts.putPlan(
+                    UUID.randomUUID(),
+                    UUID.randomUUID().toString(),
+                    copyWithOperations(valid, changedTransfer)))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("balanced destination unload");
+
+    List<RouteOperationView> wrongEndpoint = new java.util.ArrayList<>(valid.operations());
+    RouteOperationView loadA = wrongEndpoint.get(1);
+    wrongEndpoint.set(
+        1,
+        new RouteOperationView(
+            loadA.sequence(),
+            loadA.kind(),
+            REPRESENTATIVE_WAREHOUSE_ID,
+            loadA.sourceTaskId(),
+            loadA.sourceTransferId(),
+            loadA.locationLabel(),
+            loadA.plannedArrival(),
+            loadA.plannedDeparture(),
+            loadA.loadBefore(),
+            loadA.loadAfter()));
+    assertThatThrownBy(
+            () ->
+                shifts.putPlan(
+                    UUID.randomUUID(),
+                    UUID.randomUUID().toString(),
+                    copyWithOperations(valid, wrongEndpoint)))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("origin warehouse");
+
+    List<RouteOperationView> unrelatedIdentity = new java.util.ArrayList<>(valid.operations());
+    RouteOperationView delivery = unrelatedIdentity.get(7);
+    unrelatedIdentity.set(
+        7,
+        new RouteOperationView(
+            delivery.sequence(),
+            delivery.kind(),
+            delivery.warehouseId(),
+            delivery.sourceTaskId(),
+            TRANSFER_A_ID,
+            delivery.locationLabel(),
+            delivery.plannedArrival(),
+            delivery.plannedDeparture(),
+            delivery.loadBefore(),
+            delivery.loadAfter()));
+    assertThatThrownBy(
+            () ->
+                shifts.putPlan(
+                    UUID.randomUUID(),
+                    UUID.randomUUID().toString(),
+                    copyWithOperations(valid, unrelatedIdentity)))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("identity or load chain");
+  }
+
+  @Test
+  void rejectsUnbalancedTransferDeltaAndUnloadAfterServiceOperations() {
+    PutDriverShiftPlanRequest valid = transferCrossWarehousePlanRequest(2);
+
+    assertThatThrownBy(
+            () ->
+                shifts.putPlan(
+                    UUID.randomUUID(),
+                    UUID.randomUUID().toString(),
+                    copyWithOperations(valid, unbalancedTransferOperations())))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("balanced destination unload");
+
+    assertThatThrownBy(
+            () ->
+                shifts.putPlan(
+                    UUID.randomUUID(),
+                    UUID.randomUUID().toString(),
+                    copyWithOperations(valid, misplacedTransferUnloadOperations())))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("immediately follow inbound");
+  }
+
+  @Test
+  void activeOperationalAssignmentUsesDestinationShiftWithHomePrincipalAndResumesItAfterReturn() {
+    WorkerOperationalAssignment assignment = activeTemporaryAssignment();
+    shifts.putPlan(
+        UUID.randomUUID(),
+        UUID.randomUUID().toString(),
+        planRequest(REPRESENTATIVE_WAREHOUSE_ID));
+
+    TodayShiftResponse destinationShift = shifts.today(DRIVER_ID, WAREHOUSE_ID);
+
+    assertThat(destinationShift.shift().warehouseId()).isEqualTo(REPRESENTATIVE_WAREHOUSE_ID);
+    assertThat(destinationShift.shift().timeZone()).isEqualTo("Asia/Novosibirsk");
+    assertThat(destinationShift.warehouse().id()).isEqualTo(REPRESENTATIVE_WAREHOUSE_ID);
+    assertThat(workers.findById(DRIVER_ID).orElseThrow().getWarehouseId()).isEqualTo(WAREHOUSE_ID);
+
+    UUID briefingOperation = UUID.randomUUID();
+    ShiftTransitionRequest briefingRequest =
+        new ShiftTransitionRequest(briefingOperation, destinationShift.shift().version());
+    TodayShiftResponse afterBriefing =
+        shifts.markBriefing(
+            DRIVER_ID,
+            WAREHOUSE_ID,
+            destinationShift.shift().id(),
+            briefingOperation.toString(),
+            briefingRequest);
+
+    assignment.transitionTo(
+        WorkerOperationalAssignmentStatus.COMPLETED,
+        OffsetDateTime.parse("2026-08-30T09:01:00Z"),
+        "integration-test");
+    operationalAssignments.saveAndFlush(assignment);
+
+    TodayShiftResponse resumed = shifts.today(DRIVER_ID, WAREHOUSE_ID);
+    TodayShiftResponse replayed =
+        shifts.markBriefing(
+            DRIVER_ID,
+            WAREHOUSE_ID,
+            destinationShift.shift().id(),
+            briefingOperation.toString(),
+            briefingRequest);
+
+    assertThat(resumed.shift().id()).isEqualTo(destinationShift.shift().id());
+    assertThat(resumed.shift().warehouseId()).isEqualTo(REPRESENTATIVE_WAREHOUSE_ID);
+    assertThat(replayed.shift().version()).isEqualTo(afterBriefing.shift().version());
+    assertThat(replayed.warehouse().id()).isEqualTo(REPRESENTATIVE_WAREHOUSE_ID);
+    UUID foreignContextOperation = UUID.randomUUID();
+    assertThatThrownBy(
+            () ->
+                shifts.markBriefing(
+                    DRIVER_ID,
+                    REPRESENTATIVE_WAREHOUSE_ID,
+                    destinationShift.shift().id(),
+                    foreignContextOperation.toString(),
+                    new ShiftTransitionRequest(
+                        foreignContextOperation, destinationShift.shift().version())))
+        .isInstanceOf(NotFoundException.class);
+  }
+
+  @Test
+  void plannedAndInTransitAssignmentsCannotExposeOrCreateDestinationShift() {
+    Worker worker = workers.findById(DRIVER_ID).orElseThrow();
+    WorkerOperationalAssignment assignment =
+        WorkerOperationalAssignment.planned(
+            worker,
+            UUID.randomUUID(),
+            WAREHOUSE_ID,
+            REPRESENTATIVE_WAREHOUSE_ID,
+            WorkerOperationalAssignmentMode.TEMPORARY,
+            OffsetDateTime.parse("2026-08-30T08:00:00Z"),
+            OffsetDateTime.parse("2026-08-30T10:00:00Z"),
+            OffsetDateTime.parse("2026-08-30T18:00:00Z"),
+            OffsetDateTime.parse("2026-08-30T07:00:00Z"),
+            "integration-test");
+    assignment.assignReviewedId(UUID.randomUUID());
+    operationalAssignments.saveAndFlush(assignment);
+    shifts.putPlan(
+        UUID.randomUUID(),
+        UUID.randomUUID().toString(),
+        planRequest(REPRESENTATIVE_WAREHOUSE_ID));
+
+    TodayShiftResponse planned = shifts.today(DRIVER_ID, WAREHOUSE_ID);
+    assignment.transitionTo(
+        WorkerOperationalAssignmentStatus.IN_TRANSIT,
+        OffsetDateTime.parse("2026-08-30T08:30:00Z"),
+        "integration-test");
+    operationalAssignments.saveAndFlush(assignment);
+    TodayShiftResponse inTransit = shifts.today(DRIVER_ID, WAREHOUSE_ID);
+
+    assertThat(planned.nextRequiredAction()).isEqualTo(NextRequiredAction.SHIFT_NOT_AVAILABLE);
+    assertThat(planned.shift()).isNull();
+    assertThat(inTransit.nextRequiredAction()).isEqualTo(NextRequiredAction.SHIFT_NOT_AVAILABLE);
+    assertThat(inTransit.shift()).isNull();
+    assertThat(shiftRepository.count()).isZero();
   }
 
   @Test
@@ -418,15 +800,24 @@ class DriverShiftServiceIntegrationTest extends PostgresIntegrationTestSupport {
             new ShiftTransitionRequest(startOperation, ready.shift().version()));
     assertThat(active.nextRequiredAction()).isEqualTo(NextRequiredAction.SHOW_TASKS);
 
-    BoardTask task = sharedDriverTask();
+    BoardTask task = sharedDriverTask(REPRESENTATIVE_WAREHOUSE_ID);
     task = tasks.saveAndFlush(task);
+    Worker foreignDriver = new Worker();
+    foreignDriver.assignReviewedId(UUID.randomUUID());
+    foreignDriver.setWarehouseId(WAREHOUSE_ID);
+    foreignDriver.setDisplayName("Другой водитель");
+    foreignDriver.setActive(true);
+    foreignDriver = workers.saveAndFlush(foreignDriver);
+    BoardTask foreignTask =
+        assignedTask(REPRESENTATIVE_WAREHOUSE_ID, foreignDriver.getId());
+    tasks.saveAndFlush(foreignTask);
     TodayShiftResponse unassignedSharedTask = shifts.today(DRIVER_ID, WAREHOUSE_ID);
     assertThat(unassignedSharedTask.taskSummary().totalCount()).isZero();
     assertThat(unassignedSharedTask.taskSummary().canStartClosing()).isFalse();
 
     QueueEntry entry = new QueueEntry();
     entry.setTask(task);
-    entry.setQueue(assignmentQueue());
+    entry.setQueue(assignmentQueue(REPRESENTATIVE_WAREHOUSE_ID));
     entry.setRouteIndex(0);
     entry.setQueuePosition(1);
     entry.setEntryType(EntryType.REAL);
@@ -440,7 +831,7 @@ class DriverShiftServiceIntegrationTest extends PostgresIntegrationTestSupport {
     assignment.setPausedAt(OffsetDateTime.parse("2026-08-30T08:30:00+03:00"));
     assignments.saveAndFlush(assignment);
 
-    BoardTask plannedDoneTask = assignedTask();
+    BoardTask plannedDoneTask = assignedTask(REPRESENTATIVE_WAREHOUSE_ID, DRIVER_ID);
     plannedDoneTask.setStatus(TaskStatus.DONE);
     plannedDoneTask.setDoneAt(OffsetDateTime.parse("2026-08-30T18:00:00+03:00"));
     tasks.saveAndFlush(plannedDoneTask);
@@ -865,10 +1256,14 @@ class DriverShiftServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   private PutDriverShiftPlanRequest planRequest() {
+    return planRequest(WAREHOUSE_ID);
+  }
+
+  private PutDriverShiftPlanRequest planRequest(UUID warehouseId) {
     return new PutDriverShiftPlanRequest(
         UUID.randomUUID(),
         1,
-        WAREHOUSE_ID,
+        warehouseId,
         DRIVER_ID,
         "Александр Иванов",
         WORK_DATE,
@@ -886,23 +1281,478 @@ class DriverShiftServiceIntegrationTest extends PostgresIntegrationTestSupport {
         214_000L);
   }
 
+  private PutDriverShiftPlanRequest crossWarehousePlanRequest(
+      UUID sourcePlanId, long sourcePlanVersion, String customerLabel) {
+    PutDriverShiftPlanRequest local = planRequest(WAREHOUSE_ID);
+    UUID sourceTaskId = UUID.fromString("00000000-0000-0000-0000-000000000805");
+    return new PutDriverShiftPlanRequest(
+        sourcePlanId,
+        sourcePlanVersion,
+        local.warehouseId(),
+        local.driverId(),
+        local.driverName(),
+        local.workDate(),
+        local.vehicle(),
+        local.trailer(),
+        local.tripCount(),
+        local.routeDistanceMeters(),
+        List.of(
+            routeOperation(
+                1,
+                DriverShiftRouteOperationKind.ORIGIN_START,
+                WAREHOUSE_ID,
+                null,
+                "Склад Санкт-Петербург",
+                "2026-08-30T07:00:00Z",
+                "2026-08-30T07:00:00Z",
+                0,
+                0),
+            routeOperation(
+                2,
+                DriverShiftRouteOperationKind.INBOUND_POSITIONING,
+                REPRESENTATIVE_WAREHOUSE_ID,
+                null,
+                "Склад Великий Новгород",
+                "2026-08-30T08:00:00Z",
+                "2026-08-30T07:00:00Z",
+                0,
+                0),
+            routeOperation(
+                3,
+                DriverShiftRouteOperationKind.DEPOT_LOAD,
+                REPRESENTATIVE_WAREHOUSE_ID,
+                null,
+                "Склад Великий Новгород",
+                "2026-08-30T08:00:00Z",
+                "2026-08-30T08:15:00Z",
+                0,
+                1),
+            routeOperation(
+                4,
+                DriverShiftRouteOperationKind.DELIVERY,
+                null,
+                sourceTaskId,
+                customerLabel,
+                "2026-08-30T08:30:00Z",
+                "2026-08-30T08:45:00Z",
+                1,
+                0),
+            routeOperation(
+                5,
+                DriverShiftRouteOperationKind.DEPOT_RETURN,
+                REPRESENTATIVE_WAREHOUSE_ID,
+                null,
+                "Склад Великий Новгород",
+                "2026-08-30T09:00:00Z",
+                "2026-08-30T09:00:00Z",
+                0,
+                0),
+            routeOperation(
+                6,
+                DriverShiftRouteOperationKind.RETURN_POSITIONING,
+                WAREHOUSE_ID,
+                null,
+                "Склад Санкт-Петербург",
+                "2026-08-30T10:00:00Z",
+                "2026-08-30T09:00:00Z",
+                0,
+                0)));
+  }
+
+  private PutDriverShiftPlanRequest transferCrossWarehousePlanRequest(Integer cabinCapacity) {
+    PutDriverShiftPlanRequest local = planRequest(WAREHOUSE_ID);
+    PlannedVehicle sourceVehicle = local.vehicle();
+    PlannedVehicle transferVehicle =
+        new PlannedVehicle(
+            sourceVehicle.id(),
+            sourceVehicle.name(),
+            sourceVehicle.registrationNumber(),
+            sourceVehicle.vehicleType(),
+            sourceVehicle.manufacturer(),
+            sourceVehicle.model(),
+            sourceVehicle.configurationType(),
+            cabinCapacity,
+            sourceVehicle.startOdometer());
+    UUID sourceTaskId = UUID.fromString("00000000-0000-0000-0000-000000000805");
+    return new PutDriverShiftPlanRequest(
+        UUID.randomUUID(),
+        1,
+        local.warehouseId(),
+        local.driverId(),
+        local.driverName(),
+        local.workDate(),
+        transferVehicle,
+        local.trailer(),
+        local.tripCount(),
+        local.routeDistanceMeters(),
+        List.of(
+            routeOperation(
+                1,
+                DriverShiftRouteOperationKind.ORIGIN_START,
+                WAREHOUSE_ID,
+                null,
+                null,
+                "Склад Санкт-Петербург",
+                "2026-08-30T07:00:00Z",
+                "2026-08-30T07:00:00Z",
+                0,
+                0),
+            routeOperation(
+                2,
+                DriverShiftRouteOperationKind.TRANSFER_LOAD,
+                WAREHOUSE_ID,
+                null,
+                TRANSFER_A_ID,
+                "Передача A: погрузка",
+                "2026-08-30T07:00:00Z",
+                "2026-08-30T07:05:00Z",
+                0,
+                1),
+            routeOperation(
+                3,
+                DriverShiftRouteOperationKind.TRANSFER_LOAD,
+                WAREHOUSE_ID,
+                null,
+                TRANSFER_B_ID,
+                "Передача B: погрузка",
+                "2026-08-30T07:05:00Z",
+                "2026-08-30T07:10:00Z",
+                1,
+                2),
+            routeOperation(
+                4,
+                DriverShiftRouteOperationKind.INBOUND_POSITIONING,
+                REPRESENTATIVE_WAREHOUSE_ID,
+                null,
+                null,
+                "Склад Великий Новгород",
+                "2026-08-30T08:00:00Z",
+                "2026-08-30T07:10:00Z",
+                2,
+                2),
+            routeOperation(
+                5,
+                DriverShiftRouteOperationKind.TRANSFER_UNLOAD,
+                REPRESENTATIVE_WAREHOUSE_ID,
+                null,
+                TRANSFER_A_ID,
+                "Передача A: разгрузка",
+                "2026-08-30T08:00:00Z",
+                "2026-08-30T08:05:00Z",
+                2,
+                1),
+            routeOperation(
+                6,
+                DriverShiftRouteOperationKind.TRANSFER_UNLOAD,
+                REPRESENTATIVE_WAREHOUSE_ID,
+                null,
+                TRANSFER_B_ID,
+                "Передача B: разгрузка",
+                "2026-08-30T08:05:00Z",
+                "2026-08-30T08:10:00Z",
+                1,
+                0),
+            routeOperation(
+                7,
+                DriverShiftRouteOperationKind.DEPOT_LOAD,
+                REPRESENTATIVE_WAREHOUSE_ID,
+                null,
+                null,
+                "Склад Великий Новгород",
+                "2026-08-30T08:10:00Z",
+                "2026-08-30T08:15:00Z",
+                0,
+                1),
+            routeOperation(
+                8,
+                DriverShiftRouteOperationKind.DELIVERY,
+                null,
+                sourceTaskId,
+                null,
+                "Невский проспект, 1",
+                "2026-08-30T08:30:00Z",
+                "2026-08-30T08:45:00Z",
+                1,
+                0),
+            routeOperation(
+                9,
+                DriverShiftRouteOperationKind.DEPOT_RETURN,
+                REPRESENTATIVE_WAREHOUSE_ID,
+                null,
+                null,
+                "Склад Великий Новгород",
+                "2026-08-30T09:00:00Z",
+                "2026-08-30T09:00:00Z",
+                0,
+                0),
+            routeOperation(
+                10,
+                DriverShiftRouteOperationKind.RETURN_POSITIONING,
+                WAREHOUSE_ID,
+                null,
+                null,
+                "Склад Санкт-Петербург",
+                "2026-08-30T10:00:00Z",
+                "2026-08-30T09:00:00Z",
+                0,
+                0)));
+  }
+
+  private static RouteOperationView withLoad(
+      RouteOperationView operation, int loadBefore, int loadAfter) {
+    return new RouteOperationView(
+        operation.sequence(),
+        operation.kind(),
+        operation.warehouseId(),
+        operation.sourceTaskId(),
+        operation.sourceTransferId(),
+        operation.locationLabel(),
+        operation.plannedArrival(),
+        operation.plannedDeparture(),
+        loadBefore,
+        loadAfter);
+  }
+
+  private PutDriverShiftPlanRequest copyWithOperations(
+      PutDriverShiftPlanRequest source, List<RouteOperationView> operations) {
+    return new PutDriverShiftPlanRequest(
+        source.sourcePlanId(),
+        source.sourcePlanVersion(),
+        source.warehouseId(),
+        source.driverId(),
+        source.driverName(),
+        source.workDate(),
+        source.vehicle(),
+        source.trailer(),
+        source.tripCount(),
+        source.routeDistanceMeters(),
+        operations);
+  }
+
+  private List<RouteOperationView> unbalancedTransferOperations() {
+    return List.of(
+        routeOperation(
+            1,
+            DriverShiftRouteOperationKind.ORIGIN_START,
+            WAREHOUSE_ID,
+            null,
+            null,
+            "Склад Санкт-Петербург",
+            "2026-08-30T07:00:00Z",
+            "2026-08-30T07:00:00Z",
+            0,
+            0),
+        routeOperation(
+            2,
+            DriverShiftRouteOperationKind.TRANSFER_LOAD,
+            WAREHOUSE_ID,
+            null,
+            TRANSFER_A_ID,
+            "Передача A: погрузка",
+            "2026-08-30T07:00:00Z",
+            "2026-08-30T07:10:00Z",
+            0,
+            2),
+        routeOperation(
+            3,
+            DriverShiftRouteOperationKind.INBOUND_POSITIONING,
+            REPRESENTATIVE_WAREHOUSE_ID,
+            null,
+            null,
+            "Склад Великий Новгород",
+            "2026-08-30T08:00:00Z",
+            "2026-08-30T07:10:00Z",
+            2,
+            2),
+        routeOperation(
+            4,
+            DriverShiftRouteOperationKind.TRANSFER_UNLOAD,
+            REPRESENTATIVE_WAREHOUSE_ID,
+            null,
+            TRANSFER_A_ID,
+            "Передача A: частичная разгрузка",
+            "2026-08-30T08:00:00Z",
+            "2026-08-30T08:05:00Z",
+            2,
+            1),
+        routeOperation(
+            5,
+            DriverShiftRouteOperationKind.DEPOT_UNLOAD,
+            REPRESENTATIVE_WAREHOUSE_ID,
+            null,
+            null,
+            "Склад Великий Новгород",
+            "2026-08-30T08:05:00Z",
+            "2026-08-30T08:10:00Z",
+            1,
+            0),
+        routeOperation(
+            6,
+            DriverShiftRouteOperationKind.RETURN_POSITIONING,
+            WAREHOUSE_ID,
+            null,
+            null,
+            "Склад Санкт-Петербург",
+            "2026-08-30T09:00:00Z",
+            "2026-08-30T08:10:00Z",
+            0,
+            0));
+  }
+
+  private List<RouteOperationView> misplacedTransferUnloadOperations() {
+    return List.of(
+        routeOperation(
+            1,
+            DriverShiftRouteOperationKind.ORIGIN_START,
+            WAREHOUSE_ID,
+            null,
+            null,
+            "Склад Санкт-Петербург",
+            "2026-08-30T07:00:00Z",
+            "2026-08-30T07:00:00Z",
+            0,
+            0),
+        routeOperation(
+            2,
+            DriverShiftRouteOperationKind.INBOUND_POSITIONING,
+            REPRESENTATIVE_WAREHOUSE_ID,
+            null,
+            null,
+            "Склад Великий Новгород",
+            "2026-08-30T08:00:00Z",
+            "2026-08-30T07:00:00Z",
+            0,
+            0),
+        routeOperation(
+            3,
+            DriverShiftRouteOperationKind.DEPOT_LOAD,
+            REPRESENTATIVE_WAREHOUSE_ID,
+            null,
+            null,
+            "Склад Великий Новгород",
+            "2026-08-30T08:00:00Z",
+            "2026-08-30T08:05:00Z",
+            0,
+            1),
+        routeOperation(
+            4,
+            DriverShiftRouteOperationKind.TRANSFER_UNLOAD,
+            REPRESENTATIVE_WAREHOUSE_ID,
+            null,
+            TRANSFER_A_ID,
+            "Несвоевременная разгрузка",
+            "2026-08-30T08:05:00Z",
+            "2026-08-30T08:10:00Z",
+            1,
+            0),
+        routeOperation(
+            5,
+            DriverShiftRouteOperationKind.RETURN_POSITIONING,
+            WAREHOUSE_ID,
+            null,
+            null,
+            "Склад Санкт-Петербург",
+            "2026-08-30T09:00:00Z",
+            "2026-08-30T08:10:00Z",
+            0,
+            0));
+  }
+
+  private RouteOperationView routeOperation(
+      int sequence,
+      DriverShiftRouteOperationKind kind,
+      UUID warehouseId,
+      UUID sourceTaskId,
+      String locationLabel,
+      String plannedArrival,
+      String plannedDeparture,
+      int loadBefore,
+      int loadAfter) {
+    return routeOperation(
+        sequence,
+        kind,
+        warehouseId,
+        sourceTaskId,
+        null,
+        locationLabel,
+        plannedArrival,
+        plannedDeparture,
+        loadBefore,
+        loadAfter);
+  }
+
+  private RouteOperationView routeOperation(
+      int sequence,
+      DriverShiftRouteOperationKind kind,
+      UUID warehouseId,
+      UUID sourceTaskId,
+      UUID sourceTransferId,
+      String locationLabel,
+      String plannedArrival,
+      String plannedDeparture,
+      int loadBefore,
+      int loadAfter) {
+    return new RouteOperationView(
+        sequence,
+        kind,
+        warehouseId,
+        sourceTaskId,
+        sourceTransferId,
+        locationLabel,
+        OffsetDateTime.parse(plannedArrival),
+        OffsetDateTime.parse(plannedDeparture),
+        loadBefore,
+        loadAfter);
+  }
+
+  private WorkerOperationalAssignment activeTemporaryAssignment() {
+    Worker worker = workers.findById(DRIVER_ID).orElseThrow();
+    WorkerOperationalAssignment assignment =
+        WorkerOperationalAssignment.planned(
+            worker,
+            UUID.randomUUID(),
+            WAREHOUSE_ID,
+            REPRESENTATIVE_WAREHOUSE_ID,
+            WorkerOperationalAssignmentMode.TEMPORARY,
+            OffsetDateTime.parse("2026-08-30T07:30:00Z"),
+            OffsetDateTime.parse("2026-08-30T08:00:00Z"),
+            OffsetDateTime.parse("2026-08-30T18:00:00Z"),
+            OffsetDateTime.parse("2026-08-30T07:00:00Z"),
+            "integration-test");
+    assignment.assignReviewedId(UUID.randomUUID());
+    assignment.transitionTo(
+        WorkerOperationalAssignmentStatus.IN_TRANSIT,
+        OffsetDateTime.parse("2026-08-30T07:30:00Z"),
+        "integration-test");
+    assignment.transitionTo(
+        WorkerOperationalAssignmentStatus.ACTIVE,
+        OffsetDateTime.parse("2026-08-30T08:00:00Z"),
+        "integration-test");
+    return operationalAssignments.saveAndFlush(assignment);
+  }
+
   private BoardTask assignedTask() {
+    return assignedTask(WAREHOUSE_ID, DRIVER_ID);
+  }
+
+  private BoardTask assignedTask(UUID warehouseId, UUID driverId) {
     BoardTask task = new BoardTask();
     task.assignReviewedId(UUID.randomUUID());
-    task.setWarehouseId(WAREHOUSE_ID);
+    task.setWarehouseId(warehouseId);
     task.setExternalTaskId(UUID.randomUUID());
     task.setTitle("Ходка Driver Up");
     task.setScheduledDate(WORK_DATE);
     task.setDriverAudienceMode(DriverTaskAudienceMode.ASSIGNED_DRIVER);
-    task.setPlannedDriverWorkerId(DRIVER_ID);
-    task.setPlannedDriverNameSnapshot("Александр Иванов");
+    task.setPlannedDriverWorkerId(driverId);
+    task.setPlannedDriverNameSnapshot(
+        DRIVER_ID.equals(driverId) ? "Александр Иванов" : "Другой водитель");
     return task;
   }
 
-  private BoardTask sharedDriverTask() {
+  private BoardTask sharedDriverTask(UUID warehouseId) {
     BoardTask task = new BoardTask();
     task.assignReviewedId(UUID.randomUUID());
-    task.setWarehouseId(WAREHOUSE_ID);
+    task.setWarehouseId(warehouseId);
     task.setExternalTaskId(UUID.randomUUID());
     task.setTitle("Общая ходка склада");
     task.setScheduledDate(WORK_DATE);
@@ -910,12 +1760,12 @@ class DriverShiftServiceIntegrationTest extends PostgresIntegrationTestSupport {
     return task;
   }
 
-  private WorkQueue assignmentQueue() {
+  private WorkQueue assignmentQueue(UUID warehouseId) {
     QueueDefinition definition = new QueueDefinition();
     definition.setName("Driver Shift integration queue " + UUID.randomUUID());
     definition = queueDefinitions.saveAndFlush(definition);
     WorkQueue queue = new WorkQueue();
-    queue.setWarehouseId(WAREHOUSE_ID);
+    queue.setWarehouseId(warehouseId);
     queue.setDefinition(definition);
     return queues.saveAndFlush(queue);
   }

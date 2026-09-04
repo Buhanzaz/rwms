@@ -32,6 +32,7 @@ import tools.jackson.databind.ObjectMapper;
 /** Application service for RepairPlaceService; it coordinates maintenance-owned state and durable effects. */
 @Service
 public class RepairPlaceService {
+  private static final int IMMEDIATE_AUTOMATIC_REFILL_DELAY_MINUTES = 0;
   private static final UUID LOGISTICS_SERVICE_SUBJECT =
       UUID.nameUUIDFromBytes("rwms:logistics-service".getBytes(StandardCharsets.UTF_8));
   private static final List<RepairPlaceAllocationState> CONSUMING_STATES =
@@ -139,7 +140,7 @@ public class RepairPlaceService {
     return new LogisticsRepairPlaceProjectionResponse(
         warehouseId,
         placeCount,
-        settings.automaticRefillDelayMinutes(),
+        IMMEDIATE_AUTOMATIC_REFILL_DELAY_MINUTES,
         reserved,
         occupied,
         ready,

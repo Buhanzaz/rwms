@@ -112,7 +112,8 @@ class WarehouseOutboxRecoveryIntegrationTest {
             jdbc.queryForObject(
                 "select count(*) from warehouse_outbox_recovery_audit where event_id=?", Integer.class, eventId))
         .isEqualTo(1);
-    assertThatThrownBy(() -> recovery.recover(eventId, 0, reviewer, "Different reason"))
+    assertThatThrownBy(
+            () -> recovery.recover(eventId, 0, reviewer, "Different reason"))
         .isInstanceOf(WarehouseConflictException.class);
     assertThatThrownBy(
             () ->
@@ -137,15 +138,21 @@ class WarehouseOutboxRecoveryIntegrationTest {
                 "Head fence changed",
                 created.city(),
                 created.address(),
+                created.latitude(),
+                created.longitude(),
                 created.timeZone(),
-                created.sortOrder()));
+                created.sortOrder(),
+                created.production(),
+                created.mainWarehouse(),
+                created.representativeParentWarehouseId()));
     UUID firstEventId = eventId(created.id(), created.version());
     UUID secondEventId = eventId(changed.id(), changed.version());
     terminal(firstEventId, "DLT", 4, "PUBLISH_FAILED");
     terminal(secondEventId, "QUARANTINED", 1, "ENVELOPE_MISMATCH");
 
     assertThatThrownBy(
-            () -> recovery.recover(secondEventId, 0, UUID.randomUUID(), "Try to skip the head"))
+            () ->
+                recovery.recover(secondEventId, 0, UUID.randomUUID(), "Try to skip the head"))
         .isInstanceOf(WarehouseConflictException.class)
         .hasMessageContaining("first unpublished");
     assertThat(
@@ -262,7 +269,17 @@ class WarehouseOutboxRecoveryIntegrationTest {
         .create(
             UUID.randomUUID(),
             UUID.randomUUID(),
-            new CreateWarehouseRequest(name, "Москва", null, "Europe/Moscow", null))
+            new CreateWarehouseRequest(
+                name,
+                "Москва",
+                null,
+                null,
+                null,
+                "Europe/Moscow",
+                null,
+                false,
+                true,
+                null))
         .response();
   }
 

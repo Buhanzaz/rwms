@@ -33,7 +33,8 @@ import tools.jackson.databind.ObjectMapper;
 /**
  * Rebuilds durable downstream work from immutable completed-inventory evidence.
  *
- * <p>The command performs no remote I/O. It locks the completed session and exact final plan,
+ * <p>A bounded task-board calendar read may occur before the recovery transaction when restored
+ * observations need scheduling; no remote effect occurs while rows are locked. The command then
  * restores any explicit observations lost by the obsolete automatic-membership rule, creates
  * missing outcomes, requeues every existing publication and unresolved furniture delivery in one
  * shared next reapplication generation, and leaves schedulers to call each owning service with
@@ -90,6 +91,8 @@ final class InventoryOutcomeRecoveryService extends InventoryTechnicalRuntimeSup
       RecalculateInventoryOutcomeRequest request) {
     InventorySession scoped = requireScopedCompleted(inventoryId, authorizer.manageScope(jwt));
     authorizer.requireManage(jwt, scoped.getWarehouseId());
+    CompletedInventoryPlanCorrectionService.CorrectionCalendar preparedCalendar =
+        planCorrection.prepareCalendarIfCorrectionLikely(scoped).orElse(null);
     return idempotency.execute(
         authorizer.subjectId(jwt),
         "outcome.recalculate",
@@ -97,11 +100,14 @@ final class InventoryOutcomeRecoveryService extends InventoryTechnicalRuntimeSup
         Map.of("inventoryId", inventoryId, "request", request),
         HttpStatus.ACCEPTED.value(),
         OutcomeRecalculation.class,
-        () -> doRecalculate(jwt, inventoryId, request));
+        () -> doRecalculate(jwt, inventoryId, request, preparedCalendar));
   }
 
   private OutcomeRecalculation doRecalculate(
-      Jwt jwt, UUID inventoryId, RecalculateInventoryOutcomeRequest request) {
+      Jwt jwt,
+      UUID inventoryId,
+      RecalculateInventoryOutcomeRequest request,
+      CompletedInventoryPlanCorrectionService.CorrectionCalendar preparedCalendar) {
     InventorySession session =
         sessions
             .findByIdAndLifecycleForUpdate(inventoryId, SessionLifecycle.COMPLETED)
@@ -125,7 +131,7 @@ final class InventoryOutcomeRecoveryService extends InventoryTechnicalRuntimeSup
       throw InventoryException.conflict("Inventory final plan has no findings");
     }
     CompletedInventoryPlanCorrectionService.CorrectionResult correction =
-        planCorrection.correct(session, plan, entries, actor(jwt));
+        planCorrection.correct(session, plan, entries, preparedCalendar, actor(jwt));
     plan = correction.plan();
     entries = correction.entries();
     if (correction.restoredCount() > 0) {

@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.warehouse.eventing;
 
 import dev.buhanzaz.rwms.warehouse.service.WarehouseConflictException;
+import dev.buhanzaz.rwms.warehouse.service.WarehouseNotFoundException;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
@@ -23,7 +24,10 @@ public class WarehouseOutboxRecoveryStore {
 
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public RecoveryResult recover(
-      UUID eventId, long expectedReviewVersion, UUID reviewedBySubjectId, String reason) {
+      UUID eventId,
+      long expectedReviewVersion,
+      UUID reviewedBySubjectId,
+      String reason) {
     if (eventId == null
         || expectedReviewVersion < 0
         || reviewedBySubjectId == null
@@ -120,8 +124,8 @@ public class WarehouseOutboxRecoveryStore {
                    occurred_at,recorded_at,envelope_body::text,envelope_sha256,
                    status,attempt_count,last_error_code,review_version,
                    last_reviewed_by_subject_id,last_recovery_reason,last_recovered_at
-              from outbox_event
-             where event_id=?
+              from outbox_event event
+             where event.event_id=?
              for update
             """,
             (rs, ignored) ->
@@ -149,7 +153,7 @@ public class WarehouseOutboxRecoveryStore {
             eventId)
         .stream()
         .findFirst()
-        .orElseThrow(() -> conflict("Warehouse outbox event is not recoverable"));
+        .orElseThrow(WarehouseNotFoundException::new);
   }
 
   private boolean isExactReplay(

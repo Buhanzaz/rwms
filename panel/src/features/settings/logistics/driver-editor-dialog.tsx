@@ -1,4 +1,6 @@
 import { useState, type FormEvent } from "react"
+import { Delete02Icon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
 
 import {
   Dialog,
@@ -39,6 +41,10 @@ export type DriverEditorDialogProps = {
   error: string | null
   onClose: () => void
   onSave: (request: WorkerRequest) => Promise<void>
+  onResetPassword?: () => void
+  onDisableCredentials?: () => void
+  onEnableCredentials?: () => void
+  onDelete?: () => void
 }
 
 /**
@@ -53,6 +59,10 @@ export function DriverEditorDialog({
   error,
   onClose,
   onSave,
+  onResetPassword,
+  onDisableCredentials,
+  onEnableCredentials,
+  onDelete,
 }: DriverEditorDialogProps) {
   const [displayName, setDisplayName] = useState(worker?.displayName ?? "")
   const [firstName, setFirstName] = useState(worker?.firstName ?? "")
@@ -189,25 +199,28 @@ export function DriverEditorDialog({
                 value={appLogin}
                 onChange={(event) => setAppLogin(event.target.value)}
                 autoComplete="off"
+                readOnly={Boolean(worker?.appLogin)}
               />
               <FieldDescription>
                 {worker?.credentialStatus === "ERROR"
-                  ? "Доступ в приложение не настроен. Проверьте логин и укажите пароль ещё раз."
-                  : "Необязательно: логин нужен для входа водителя в приложение."}
+                  ? "Доступ в приложение не настроен. Используйте «Сменить пароль», чтобы повторить настройку."
+                  : worker?.appLogin
+                    ? "Пароль и доступ к приложению управляются кнопками внизу окна."
+                    : "Необязательно: логин нужен для входа водителя в приложение."}
               </FieldDescription>
             </Field>
-            <Field>
-              <FieldLabel htmlFor="driver-password">
-                {worker ? "Новый пароль (необязательно)" : "Пароль"}
-              </FieldLabel>
-              <Input
-                id="driver-password"
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                autoComplete="new-password"
-              />
-            </Field>
+            {!worker?.appLogin ? (
+              <Field>
+                <FieldLabel htmlFor="driver-password">Пароль</FieldLabel>
+                <Input
+                  id="driver-password"
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  autoComplete="new-password"
+                />
+              </Field>
+            ) : null}
             <Field className="md:col-span-2">
               <FieldLabel htmlFor="driver-comment">Комментарий</FieldLabel>
               <Textarea
@@ -220,22 +233,73 @@ export function DriverEditorDialog({
           {validation || error ? (
             <FieldError>{validation ?? error}</FieldError>
           ) : null}
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={pending}
-              onClick={onClose}
-            >
-              Отмена
-            </Button>
-            <Button type="submit" disabled={pending}>
-              {pending
-                ? "Сохраняем…"
-                : worker
-                  ? "Сохранить изменения"
-                  : "Сохранить"}
-            </Button>
+          <DialogFooter
+            className={worker ? "gap-2 sm:justify-between" : "gap-2"}
+          >
+            {worker ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {onDelete ? (
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="icon"
+                    aria-label="Удалить"
+                    title="Удалить"
+                    disabled={pending}
+                    onClick={onDelete}
+                  >
+                    <HugeiconsIcon icon={Delete02Icon} aria-hidden="true" />
+                  </Button>
+                ) : null}
+                {worker.appLogin && onResetPassword ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={pending}
+                    onClick={onResetPassword}
+                  >
+                    Сменить пароль
+                  </Button>
+                ) : null}
+                {worker.appLogin && onDisableCredentials ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={pending}
+                    onClick={onDisableCredentials}
+                  >
+                    Отключить вход
+                  </Button>
+                ) : null}
+                {worker.appLogin && onEnableCredentials ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={pending}
+                    onClick={onEnableCredentials}
+                  >
+                    Включить вход
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending}
+                onClick={onClose}
+              >
+                Отмена
+              </Button>
+              <Button type="submit" disabled={pending}>
+                {pending
+                  ? "Сохраняем…"
+                  : worker
+                    ? "Сохранить изменения"
+                    : "Сохранить"}
+              </Button>
+            </div>
           </DialogFooter>
         </form>
       </DialogContent>

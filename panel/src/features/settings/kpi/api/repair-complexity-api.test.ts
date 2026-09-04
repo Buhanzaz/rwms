@@ -68,6 +68,19 @@ describe("repair complexity API", () => {
     })
   })
 
+  it("rejects a response belonging to another warehouse", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        ...setting,
+        warehouseId: "another-warehouse",
+      })
+    )
+
+    await expect(
+      getRepairComplexity("access-token", warehouseId)
+    ).rejects.toThrow("другого склада")
+  })
+
   it("saves only canonical integer minute boundaries", async () => {
     const saved = { ...setting, version: 5, complexBoundaryMinutes: 520 }
     const fetchMock = vi

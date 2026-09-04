@@ -1,26 +1,24 @@
 package dev.buhanzaz.rwms.worker.feature.tasks
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertHeightIsEqualTo
-import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertWidthIsEqualTo
-import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
-import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
-import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.dp
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.worker.core.database.WorkerTaskEntity
+import dev.buhanzaz.rwms.worker.core.ui.RwmsWorkerTheme
+import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -34,381 +32,111 @@ class TaskQueueListComposeTest {
     val compose = createComposeRule()
 
     @Test
-    fun everyAuthorizedQueueIsReachableInOneVerticalScroll() {
-        val sections = (1..12).map { index ->
-            TaskQueueSection(
-                queueId = "queue-$index",
-                name = "Очередь $index",
-                queuePurpose = "GENERAL",
-                sortOrder = index,
-                tasks = emptyList(),
-            )
-        }
+    fun `one translucent task card stays readable and bounded on a wide window`() {
         compose.setContent {
-            MaterialTheme {
-                Box(Modifier.size(width = 320.dp, height = 400.dp)) {
-                    TaskQueueList(
-                        sections = sections,
-                        onTask = {},
-                        modifier = Modifier.testTag("queue-list"),
-                    )
-                }
-            }
-        }
-
-        compose.onNodeWithText("Очередь 1").assertIsDisplayed()
-        compose.onAllNodesWithText("В этой очереди пока нет заданий").onFirst().assertIsDisplayed()
-        compose.onNodeWithTag("queue-list").performScrollToNode(hasText("Очередь 12"))
-        compose.onNodeWithText("Очередь 12").assertIsDisplayed()
-    }
-
-    @Test
-    fun twoGroupColumnsAreSideBySideOnlyWhenEnoughWidthIsAvailable() {
-        val columns = listOf(
-            WorkBoardColumn("a", "Группа А", personal = false, sections = emptyList()),
-            WorkBoardColumn("b", "Группа Б", personal = false, sections = emptyList()),
-        )
-        compose.setContent {
-            MaterialTheme {
-                Box(Modifier.size(width = 800.dp, height = 400.dp)) {
-                    WorkBoardColumns(columns, kpiPalette = null, onTask = {})
-                }
-            }
-        }
-
-        compose.onAllNodesWithTag("work-board-wide").assertCountEquals(1)
-        compose.onAllNodesWithTag("work-board-narrow").assertCountEquals(0)
-        compose.onAllNodesWithTag("work-column-a").assertCountEquals(1)
-        compose.onAllNodesWithTag("work-column-b").assertCountEquals(1)
-    }
-
-    @Test
-    fun narrowBoardPlacesGroupColumnsOneAfterAnotherInOneVerticalList() {
-        val columns = listOf(
-            WorkBoardColumn("a", "Группа А", personal = false, sections = emptyList()),
-            WorkBoardColumn("b", "Группа Б", personal = false, sections = emptyList()),
-        )
-        compose.setContent {
-            MaterialTheme {
-                Box(Modifier.size(width = 360.dp, height = 400.dp)) {
-                    WorkBoardColumns(columns, kpiPalette = null, onTask = {})
-                }
-            }
-        }
-
-        compose.onNodeWithTag("work-board-narrow").assertIsDisplayed()
-        compose.onAllNodesWithTag("work-board-wide").assertCountEquals(0)
-        compose.onNodeWithText("Группа А").assertIsDisplayed()
-        compose.onNodeWithText("Группа Б").assertIsDisplayed()
-    }
-
-    @Test
-    fun roleAndQueuePanelsCollapseIndependently() {
-        val section = TaskQueueSection(
-            queueId = "repair",
-            name = "Ремонты",
-            queuePurpose = "GENERAL",
-            sortOrder = 10,
-            tasks = listOf(task("repair-task")),
-        )
-        compose.setContent {
-            MaterialTheme {
-                Box(Modifier.size(width = 360.dp, height = 500.dp)) {
-                    WorkBoardColumns(
-                        columns = listOf(
-                            WorkBoardColumn(
-                                id = "repair-role",
-                                name = "Ремонтники",
-                                personal = false,
-                                sections = listOf(section),
-                            ),
+            RwmsWorkerTheme {
+                Box(Modifier.size(width = 840.dp, height = 600.dp)) {
+                    SingleTaskCard(
+                        task = task("repair").copy(
+                            categoryName = "Maintenance repair",
+                            unitNumber = "БТ-314",
+                            plannedDurationMinutes = 90,
                         ),
                         kpiPalette = null,
-                        onTask = {},
+                        onOpen = {},
+                        modifier = Modifier.widthIn(max = 620.dp).fillMaxWidth(),
                     )
                 }
             }
         }
 
-        compose.onNodeWithTag("task-card-repair-role-repair-repair-task").assertIsDisplayed()
-        compose.onNodeWithTag("queue-section-toggle-repair-role-repair").performClick()
-        compose.onAllNodesWithTag("task-card-repair-role-repair-repair-task").assertCountEquals(0)
-        compose.onNodeWithTag("queue-section-toggle-repair-role-repair").performClick()
-        compose.onNodeWithTag("task-card-repair-role-repair-repair-task").assertIsDisplayed()
-        compose.onNodeWithTag("work-column-toggle-repair-role").performClick()
-        compose.onAllNodesWithTag("queue-section-repair-role-repair").assertCountEquals(0)
-    }
-
-    @Test
-    fun groupHeaderShowsOnlyNameAndChevronWithoutTaskTotal() {
-        val section = TaskQueueSection(
-            queueId = "repair",
-            name = "Ремонты",
-            queuePurpose = "GENERAL",
-            sortOrder = 10,
-            tasks = (1..8).map { index -> task("repair-$index") },
-        )
-        compose.setContent {
-            MaterialTheme {
-                Box(Modifier.size(width = 360.dp, height = 500.dp)) {
-                    WorkBoardColumns(
-                        columns = listOf(
-                            WorkBoardColumn(
-                                id = "general-workers",
-                                name = "Бригада разнорабочих 1",
-                                personal = false,
-                                sections = listOf(section),
-                            ),
-                        ),
-                        kpiPalette = null,
-                        onTask = {},
-                    )
-                }
-            }
-        }
-
-        compose.onNodeWithText("Бригада разнорабочих 1").assertIsDisplayed()
-        compose.onAllNodesWithText("8").assertCountEquals(0)
-        compose.onNodeWithTag("work-column-chevron-general-workers", useUnmergedTree = true)
-            .assertWidthIsEqualTo(36.dp)
-            .assertHeightIsEqualTo(36.dp)
-        compose.onAllNodesWithText("Групповая роль").assertCountEquals(0)
-    }
-
-    @Test
-    fun activeTaskShowsComplexityWithoutExpansionAndOpensFullScreenTask() {
-        var openedEntryId: String? = null
-        val section = TaskQueueSection(
-            queueId = "repair",
-            name = "Ремонты",
-            queuePurpose = "GENERAL",
-            sortOrder = 10,
-            tasks = listOf(
-                task("timed-task").copy(
-                    title = "Тяжёлый ремонт",
-                    status = "IN_PROGRESS",
-                    activeWorkSeconds = 65,
-                    timerCountedActiveSeconds = 65,
-                    timerRemainingSeconds = 65,
-                    timerRemainingPercent = 50.0,
-                    timerState = "WORKING",
-                    timerServerTime = "2026-08-10T10:00:00Z",
-                ),
-            ),
-        )
-        compose.setContent {
-            MaterialTheme {
-                Box(Modifier.size(width = 360.dp, height = 500.dp)) {
-                    TaskQueueList(
-                        sections = listOf(section),
-                        onTask = { openedEntryId = it },
-                    )
-                }
-            }
-        }
-
-        compose.onAllNodesWithText("Дата: 2026-08-10").assertCountEquals(0)
-        compose.onNodeWithText("Время работы: 0:01:05").assertIsDisplayed()
-        compose.onNodeWithText("KPI: 50.0%").assertIsDisplayed()
-        compose.onNodeWithText("Тяжелый ремонт").assertIsDisplayed()
-        compose.onNodeWithText("Открыть задание").assertIsDisplayed().performClick()
-        assertThat(openedEntryId).isEqualTo("timed-task")
-    }
-
-    @Test
-    fun waitingTaskShowsAllocatedTimeAndBareDifficultyOnce() {
-        val section = TaskQueueSection(
-            queueId = "repair",
-            name = "Ремонты",
-            queuePurpose = "GENERAL",
-            sortOrder = 10,
-            tasks = listOf(
-                task("waiting").copy(
-                    title = "Лёгкий ремонт",
-                    plannedDurationMinutes = 75,
-                ),
-            ),
-        )
-        compose.setContent {
-            MaterialTheme {
-                Box(Modifier.size(width = 360.dp, height = 500.dp)) {
-                    TaskQueueList(sections = listOf(section), onTask = {})
-                }
-            }
-        }
-
-        compose.onNodeWithText("Выделенное время: 1:15:00").assertIsDisplayed()
-        compose.onAllNodesWithText("Легкий ремонт").assertCountEquals(1)
-        compose.onAllNodesWithText("Время работы: 0:00:00").assertCountEquals(0)
-    }
-
-    @Test
-    fun shadowTaskIsExplicitlySubduedAndNeverShowsATakeAction() {
-        val section = TaskQueueSection(
-            queueId = "electric",
-            name = "Электрика",
-            queuePurpose = "GENERAL",
-            sortOrder = 10,
-            tasks = listOf(task("shadow").copy(entryType = "SHADOW")),
-        )
-        compose.setContent {
-            MaterialTheme {
-                Box(Modifier.size(width = 360.dp, height = 500.dp)) {
-                    TaskQueueList(sections = listOf(section), onTask = {})
-                }
-            }
-        }
-
-        compose.onNodeWithTag("task-shadow-shadow").assertIsDisplayed()
-        compose.onNodeWithText("Теневая задача · ожидает предыдущего этапа").assertIsDisplayed()
-        compose.onAllNodesWithText("Взять задание").assertCountEquals(0)
-    }
-
-    @Test
-    fun expandedRepairTaskShowsStagePriorityAndComplexity() {
-        val section = TaskQueueSection(
-            queueId = "repair",
-            name = "Ремонты",
-            queuePurpose = "GENERAL",
-            sortOrder = 10,
-            tasks = listOf(
-                task("metadata").copy(
-                    categoryName = "Внутренние работы",
-                    status = "PAUSED",
-                    priority = 4,
-                    title = "Средний ремонт",
-                    routeIndex = 41,
-                    routeStepIndex = 1,
-                    routeStepCount = 3,
-                    timerState = "PAUSED",
-                    timerServerTime = "2026-08-10T10:00:00Z",
-                    timerCountedActiveSeconds = 65,
-                    timerRemainingSeconds = 120,
-                    timerRemainingPercent = 75.0,
-                ),
-            ),
-        )
-        compose.setContent {
-            MaterialTheme {
-                Box(Modifier.size(width = 360.dp, height = 500.dp)) {
-                    TaskQueueList(sections = listOf(section), onTask = {})
-                }
-            }
-        }
-
-        compose.onNodeWithTag("task-card-toggle-repair-metadata").performClick()
-
-        compose.onNodeWithText("Этап 2 из 3").assertIsDisplayed()
-        compose.onNodeWithText("Приоритет 4").assertIsDisplayed()
-        compose.onNodeWithText("Средний ремонт").assertIsDisplayed()
-        compose.onNodeWithText("Загружено фото: 1").assertIsDisplayed()
-        compose.onAllNodesWithText("Ремонт: Средний ремонт").assertCountEquals(0)
-        compose.onAllNodesWithText("Пауза").assertCountEquals(0)
-        compose.onAllNodesWithText("осталось", substring = true).assertCountEquals(0)
-    }
-
-    @Test
-    fun groupedLogisticsTaskUsesCabinSummaryAsTitleAndNeverShowsTaskText() {
-        val taskText = "Клиент: ООО «Ромашка» · Бытовки: БТ-101, БТ-102, БТ-103"
-        val section = TaskQueueSection(
-            queueId = "logistics",
-            name = "Логистика",
-            queuePurpose = "LOGISTICS_DRIVER",
-            sortOrder = 10,
-            tasks = listOf(
-                task("shipment-group").copy(
-                    unitNumber = "3 бытовки",
-                    taskText = taskText,
-                ),
-            ),
-        )
-        compose.setContent {
-            MaterialTheme {
-                Box(Modifier.size(width = 360.dp, height = 500.dp)) {
-                    TaskQueueList(sections = listOf(section), onTask = {})
-                }
-            }
-        }
-
-        compose.onNodeWithText("3 бытовки").assertIsDisplayed()
-        compose.onAllNodesWithText(taskText).assertCountEquals(0)
-        compose.onNodeWithTag("task-card-toggle-logistics-shipment-group").performClick()
-        compose.onAllNodesWithText(taskText).assertCountEquals(0)
-    }
-
-    @Test
-    fun transferTaskHasExplicitBadgeWithoutExposingTechnicalTaskText() {
-        val taskText = "Перемещение бытовки между складами. Бытовки: БТ-172, БТ-311"
-        val section = TaskQueueSection(
-            queueId = "logistics",
-            name = "Логистика",
-            queuePurpose = "LOGISTICS_DRIVER",
-            sortOrder = 10,
-            tasks = listOf(
-                task("transfer").copy(
-                    title = "Отгрузить бытовки",
-                    unitNumber = "2 бытовки",
-                    taskText = taskText,
-                ),
-            ),
-        )
-        compose.setContent {
-            MaterialTheme {
-                Box(Modifier.size(width = 360.dp, height = 500.dp)) {
-                    TaskQueueList(sections = listOf(section), onTask = {})
-                }
-            }
-        }
-
-        compose.onNodeWithText("Межскладское перемещение").assertIsDisplayed()
-        compose.onNodeWithTag("task-transfer-transfer").assertIsDisplayed()
-        compose.onAllNodesWithText(taskText).assertCountEquals(0)
-    }
-
-    @Test
-    fun oneCabinTaskUsesOnlyCabinNumberAsCardTitle() {
-        val section = TaskQueueSection(
-            queueId = "logistics",
-            name = "Логистика",
-            queuePurpose = "LOGISTICS_DRIVER",
-            sortOrder = 10,
-            tasks = listOf(task("shipment-single").copy(unitNumber = "БТ-101")),
-        )
-        compose.setContent {
-            MaterialTheme {
-                Box(Modifier.size(width = 360.dp, height = 500.dp)) {
-                    TaskQueueList(sections = listOf(section), onTask = {})
-                }
-            }
-        }
-
-        compose.onNodeWithText("БТ-101").assertIsDisplayed()
-        compose.onAllNodesWithText("Бытовка: БТ-101").assertCountEquals(0)
-    }
-
-    @Test
-    fun technicalMaintenanceTitleIsNeverRendered() {
-        val technicalTitle = "  MaInTeNaNcE   RePaIr  "
-        val section = TaskQueueSection(
-            queueId = "repair",
-            name = technicalTitle,
-            queuePurpose = "GENERAL",
-            sortOrder = 10,
-            tasks = listOf(
-                task("maintenance").copy(title = technicalTitle, unitNumber = "БТ-314"),
-            ),
-        )
-        compose.setContent {
-            MaterialTheme {
-                Box(Modifier.size(width = 360.dp, height = 500.dp)) {
-                    TaskQueueList(sections = listOf(section), onTask = {})
-                }
-            }
-        }
-
-        compose.onNodeWithText("Работы").assertIsDisplayed()
+        compose.onNodeWithTag("single-task-card-repair")
+            .assertIsDisplayed()
+            .assertWidthIsEqualTo(620.dp)
         compose.onNodeWithText("БТ-314").assertIsDisplayed()
-        compose.onAllNodesWithText(technicalTitle).assertCountEquals(0)
+        compose.onNodeWithText("Работы").assertIsDisplayed()
+        compose.onNodeWithText("Выделенное время: 1:30:00").assertIsDisplayed()
+        compose.onNodeWithText("Открыть и взять").assertIsDisplayed()
+        compose.onAllNodesWithText("Доска задач").assertCountEquals(0)
+    }
+
+    @Test
+    fun `active task card exposes one continuation action`() {
+        val opened = AtomicBoolean(false)
+        compose.setContent {
+            RwmsWorkerTheme {
+                SingleTaskCard(
+                    task = task("active").copy(
+                        status = "IN_PROGRESS",
+                        activeWorkSeconds = 3_661,
+                        routeStepIndex = 1,
+                        routeStepCount = 3,
+                        readyEvidenceCount = 2,
+                    ),
+                    kpiPalette = null,
+                    onOpen = { opened.set(true) },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Время работы: 1:01:01").assertIsDisplayed()
+        compose.onNodeWithText("Этап 2 из 3").assertIsDisplayed()
+        compose.onNodeWithText("Фото: 2").assertIsDisplayed()
+        compose.onNodeWithText("Продолжить выполнение").performClick()
+
+        compose.runOnIdle { assertThat(opened.get()).isTrue() }
+    }
+
+    @Test
+    fun `slinger interruption overlays the current task with a take action`() {
+        val taken = AtomicBoolean(false)
+        compose.setContent {
+            RwmsWorkerTheme {
+                Box(Modifier.size(width = 840.dp, height = 600.dp)) {
+                    SlingerTaskInterruptionDialog(
+                        task = task("slinger").copy(
+                            categoryName = "Стропальные работы",
+                            status = "IN_PROGRESS",
+                            availabilityMode = "REQUIRED_JOIN",
+                            priority = 5,
+                        ),
+                        currentTaskVisible = true,
+                        onTake = { taken.set(true) },
+                    )
+                }
+            }
+        }
+
+        compose.onNodeWithTag("slinger-task-dialog").assertIsDisplayed()
+        compose.onNodeWithText("Задание стропальщика").assertIsDisplayed()
+        compose.onNodeWithText(
+            "После принятия текущее задание будет приостановлено для всей бригады и автоматически продолжится после этой работы.",
+        ).assertIsDisplayed()
+        compose.onNodeWithTag("slinger-task-take").assertHeightIsEqualTo(56.dp).performClick()
+
+        compose.runOnIdle { assertThat(taken.get()).isTrue() }
+    }
+
+    @Test
+    fun `transfer task keeps its explicit badge without exposing technical task text`() {
+        val technicalText = "Перемещение бытовки между складами. Бытовки: БТ-172"
+        compose.setContent {
+            RwmsWorkerTheme {
+                SingleTaskCard(
+                    task = task("transfer").copy(
+                        title = "Отгрузить бытовку",
+                        unitNumber = "БТ-172",
+                        taskText = technicalText,
+                    ),
+                    kpiPalette = null,
+                    onOpen = {},
+                )
+            }
+        }
+
+        compose.onNodeWithTag("single-task-transfer-transfer").assertIsDisplayed()
+        compose.onNodeWithText("Межскладское перемещение").assertIsDisplayed()
+        compose.onAllNodesWithText(technicalText).assertCountEquals(0)
     }
 
     private fun task(entryId: String) = WorkerTaskEntity(
@@ -420,10 +148,10 @@ class TaskQueueListComposeTest {
         categoryId = "repair",
         categoryName = "Ремонты",
         categorySortOrder = 10,
-        title = "Задание $entryId",
+        title = entryId,
         unitNumber = "БТ-1",
-        taskText = "Проверить бытовку",
-        scheduledDate = "2026-08-10",
+        taskText = null,
+        scheduledDate = "2026-07-26",
         deadlineAt = null,
         priority = 3,
         queuePosition = 0,
@@ -432,7 +160,7 @@ class TaskQueueListComposeTest {
         plannedDurationMinutes = null,
         activeStartedAt = null,
         activeWorkSeconds = 0,
-        readyEvidenceCount = 1,
+        readyEvidenceCount = 0,
         resultPhotoMinCount = 1,
         lastServerRevision = 12,
         locallyPending = false,

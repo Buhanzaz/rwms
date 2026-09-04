@@ -300,7 +300,7 @@ describe("QueueDefinitionEditorDialog", () => {
     )
     await user.click(
       screen.getByRole("checkbox", {
-        name: "Уведомлять после принятия основным исполнителем",
+        name: "Уведомлять после начала работы первого класса",
       })
     )
     await user.click(screen.getByRole("button", { name: "Сохранить" }))

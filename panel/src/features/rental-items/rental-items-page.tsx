@@ -15,7 +15,6 @@ import { useNavigate, useSearchParams } from "react-router-dom"
 import { listAssetRentalItems } from "@/features/rental-items/api/asset-rental-items-api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   PageToolbar,
   PageToolbarActions,
@@ -33,10 +32,8 @@ import {
 } from "@/features/rental-items/rental-items-filtering"
 import { RentalItemsFilters } from "@/features/rental-items/rental-items-filters"
 import { RentalItemsGridView } from "@/features/rental-items/rental-items-grid-view"
-import { RentalItemsGridSettingsDialog } from "@/features/rental-items/rental-items-grid-settings-dialog"
 import {
   getEffectiveRentalItemsGridFormat,
-  getRentalItemsDefaultGridSize,
   getRentalItemsGridFormatMax,
   isRentalItemsMobileViewport,
   normalizeRentalItemsGridSize,
@@ -50,6 +47,7 @@ import {
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { useAuth } from "@/features/auth/use-auth"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
+import { cn } from "@/lib/utils"
 import {
   buildRentalItemsTableSchema,
   getRentalItemSortValue,
@@ -270,7 +268,6 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
   const [photoItem, setPhotoItem] = useState<RentalItemDto | null>(null)
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false)
   const [columnsDialogOpen, setColumnsDialogOpen] = useState(false)
-  const [gridSettingsDialogOpen, setGridSettingsDialogOpen] = useState(false)
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [writeOffDialogOpen, setWriteOffDialogOpen] = useState(false)
 
@@ -483,6 +480,27 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
     navigate(`/warehouse/${item.id}`)
   }
 
+  function selectTableView() {
+    setViewMode("table")
+  }
+
+  function selectGridView() {
+    if (viewMode !== "grid") {
+      setViewMode("grid")
+      return
+    }
+
+    if (!gridFormatSelectionAvailable) {
+      return
+    }
+
+    setSavedGridSize(
+      effectiveGridFormat.columns >= gridFormatMax
+        ? 1
+        : effectiveGridFormat.columns + 1
+    )
+  }
+
   return (
     <div
       className="flex h-full min-h-0 flex-col gap-4"
@@ -491,7 +509,7 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
       <div className="flex flex-col gap-4">
         {!mobileMenuToggleEnabled && activeFiltersCount > 0 ? (
           <div className="flex min-w-0 items-center gap-3">
-            <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+            <span className="text-xs font-medium text-[var(--button-light)]">
               Фильтры: {activeFiltersCount}
             </span>
           </div>
@@ -502,6 +520,7 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
             <PageToolbar>
               <PageToolbarContent className="max-w-xl">
                 <Input
+                  type="search"
                   value={search}
                   onChange={(event) => {
                     setSearch(event.target.value)
@@ -509,6 +528,7 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
                   aria-label="Поиск по реестру склада"
                   name="rental-items-search"
                   autoComplete="off"
+                  className="rwms-search-field"
                   placeholder="Поиск по номеру бытовки…"
                 />
               </PageToolbarContent>
@@ -537,34 +557,6 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
                   <Settings2 aria-hidden="true" />
                 </Button>
 
-                <ToggleGroup
-                  type="single"
-                  value={viewMode}
-                  variant="outline"
-                  size="lg"
-                  spacing={2}
-                  className="lg:hidden"
-                  aria-label="Вид реестра"
-                >
-                  <ToggleGroupItem
-                    value="table"
-                    className="size-8 min-w-0 px-0"
-                    aria-label="Список"
-                    onClick={() => setViewMode("table")}
-                  >
-                    <List aria-hidden="true" />
-                  </ToggleGroupItem>
-
-                  <ToggleGroupItem
-                    value="grid"
-                    className="size-8 min-w-0 px-0"
-                    aria-label="Сетка"
-                    onClick={() => setViewMode("grid")}
-                  >
-                    <Grid2X2 aria-hidden="true" />
-                  </ToggleGroupItem>
-                </ToggleGroup>
-
                 <Button
                   variant="outline"
                   className="hidden lg:inline-flex"
@@ -574,43 +566,50 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
                   Столбцы
                 </Button>
 
-                <ToggleGroup
-                  type="single"
-                  value={viewMode}
-                  variant="outline"
-                  size="lg"
-                  spacing={2}
-                  className="hidden lg:flex"
+                <div
+                  className="flex shrink-0 items-center gap-2"
+                  role="group"
                   aria-label="Вид реестра"
                 >
-                  <ToggleGroupItem
-                    value="table"
-                    className="size-8 min-w-0 px-0"
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className={cn(
+                      "size-8 min-w-0 px-0",
+                      viewMode === "table" && "rwms-button-light"
+                    )}
                     aria-label="Список"
-                    onClick={() => setViewMode("table")}
+                    aria-pressed={viewMode === "table"}
+                    onClick={selectTableView}
                   >
                     <List aria-hidden="true" />
-                  </ToggleGroupItem>
-
-                  <ToggleGroupItem
-                    value="grid"
-                    className="size-8 min-w-0 px-0"
-                    aria-label="Сетка"
-                    onClick={() => setViewMode("grid")}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className={cn(
+                      "h-8 min-w-8 px-0",
+                      viewMode === "grid"
+                        ? "!bg-[var(--button-sky)] !text-[var(--button-foreground)]"
+                        : "!bg-[#fafcfc] !text-[var(--button-sky)]",
+                      viewMode === "grid" &&
+                        gridFormatSelectionAvailable &&
+                        "w-auto px-2"
+                    )}
+                    aria-label={
+                      viewMode === "grid" && gridFormatSelectionAvailable
+                        ? `Карточки: до ${effectiveGridFormat.columns} в ряд. Нажмите ещё раз, чтобы изменить количество.`
+                        : "Карточки"
+                    }
+                    aria-pressed={viewMode === "grid"}
+                    onClick={selectGridView}
                   >
                     <Grid2X2 aria-hidden="true" />
-                  </ToggleGroupItem>
-                </ToggleGroup>
-
-                {viewMode === "grid" && gridFormatSelectionAvailable && (
-                  <Button
-                    variant="outline"
-                    onClick={() => setGridSettingsDialogOpen(true)}
-                  >
-                    <Grid2X2 data-icon="inline-start" />
-                    до {effectiveGridFormat.columns}x{effectiveGridFormat.rows}
+                    {viewMode === "grid" && gridFormatSelectionAvailable ? (
+                      <span>До: {effectiveGridFormat.columns}</span>
+                    ) : null}
                   </Button>
-                )}
+                </div>
 
                 <Button
                   type="button"
@@ -777,19 +776,6 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
         }
         onReset={() => setSavedColumnsConfig(tableSchema.columns)}
       />
-
-      {gridFormatSelectionAvailable && (
-        <RentalItemsGridSettingsDialog
-          open={gridSettingsDialogOpen}
-          value={effectiveGridFormat.columns}
-          maxSize={gridFormatMax}
-          defaultValue={getRentalItemsDefaultGridSize(viewport)}
-          onOpenChange={setGridSettingsDialogOpen}
-          onValueChange={(value) =>
-            setSavedGridSize(normalizeRentalItemsGridSize(value, gridFormatMax))
-          }
-        />
-      )}
 
       <RentalItemPhotoDialog
         item={photoItem}

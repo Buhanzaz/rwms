@@ -2507,17 +2507,132 @@ func TestLogisticsCabinPresentationSnapshotReturnsOpaqueCurrentReferences(t *tes
 	}
 }
 
-func TestLogisticsCabinPresentationVariantStreamsOnlyCurrentCabinVariant(t *testing.T) {
+func TestAssetCabinCreationSnapshotReturnsExactCurrentProof(t *testing.T) {
+	warehouseID, cabinID := uuid.New(), uuid.New()
+	folderID, coverMediaID, secondMediaID := uuid.New(), uuid.New(), uuid.New()
+	repository := &repositoryStub{cabinPresentationRecords: []persistence.CabinPresentationSnapshotRecord{{
+		CabinID: cabinID, ActiveFolderID: &folderID, CoverMediaID: &coverMediaID, PhotoCount: 2,
+		Photos: []persistence.CabinPresentationPhotoRecord{
+			{MediaID: coverMediaID, Generation: 3, SortOrder: 0, PhotoIndex: 0,
+				SourceChecksum: strings.Repeat("a", 64), SourceContentType: "image/webp",
+				SourceContentLength: 101, HasSmall: true},
+			{MediaID: secondMediaID, Generation: 2, SortOrder: 1, PhotoIndex: 1,
+				SourceChecksum: strings.Repeat("b", 64), SourceContentType: "image/jpeg",
+				SourceContentLength: 102, HasLarge: true},
+		},
+	}}}
+	server := newTestServer(t, repository, assetValidatorStub(), &storeStub{})
+	body := fmt.Sprintf(`{"warehouseId":"%s","cabinIds":["%s"]}`, warehouseID, cabinID)
+	request := httptest.NewRequest(http.MethodPost,
+		"/api/internal/media/v1/assets/cabin-creation-snapshots", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer service")
+	response := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("snapshot response = %d %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Items []struct {
+			CabinID        uuid.UUID  `json:"cabinId"`
+			WarehouseID    uuid.UUID  `json:"warehouseId"`
+			ActiveFolderID *uuid.UUID `json:"activeFolderId"`
+			CoverMediaID   *uuid.UUID `json:"coverMediaId"`
+			PhotoCount     int64      `json:"photoCount"`
+			ReadyPhotos    []struct {
+				MediaID        uuid.UUID `json:"mediaId"`
+				Generation     int       `json:"generation"`
+				PhotoIndex     int64     `json:"photoIndex"`
+				ChecksumSHA256 string    `json:"checksumSha256"`
+				ContentType    string    `json:"contentType"`
+				ContentLength  int64     `json:"contentLength"`
+			} `json:"readyPhotos"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode snapshot response: %v", err)
+	}
+	if len(payload.Items) != 1 || payload.Items[0].CabinID != cabinID ||
+		payload.Items[0].WarehouseID != warehouseID || payload.Items[0].ActiveFolderID == nil ||
+		*payload.Items[0].ActiveFolderID != folderID || payload.Items[0].CoverMediaID == nil ||
+		*payload.Items[0].CoverMediaID != coverMediaID || payload.Items[0].PhotoCount != 2 ||
+		len(payload.Items[0].ReadyPhotos) != 2 || payload.Items[0].ReadyPhotos[0].MediaID != coverMediaID ||
+		payload.Items[0].ReadyPhotos[0].Generation != 3 || payload.Items[0].ReadyPhotos[0].PhotoIndex != 0 ||
+		payload.Items[0].ReadyPhotos[0].ChecksumSHA256 != strings.Repeat("a", 64) ||
+		payload.Items[0].ReadyPhotos[0].ContentType != "image/webp" ||
+		payload.Items[0].ReadyPhotos[0].ContentLength != 101 ||
+		payload.Items[0].ReadyPhotos[1].MediaID != secondMediaID ||
+		payload.Items[0].ReadyPhotos[1].Generation != 2 || payload.Items[0].ReadyPhotos[1].PhotoIndex != 1 ||
+		payload.Items[0].ReadyPhotos[1].ChecksumSHA256 != strings.Repeat("b", 64) ||
+		payload.Items[0].ReadyPhotos[1].ContentType != "image/jpeg" ||
+		payload.Items[0].ReadyPhotos[1].ContentLength != 102 {
+		t.Fatalf("snapshot payload = %#v", payload.Items)
+	}
+	if repository.cabinPresentationCalls != 1 || repository.cabinPresentationWarehouseID != warehouseID ||
+		len(repository.cabinPresentationIDs) != 1 || repository.cabinPresentationIDs[0] != cabinID {
+		t.Fatalf("snapshot repository call = %d %s %#v", repository.cabinPresentationCalls,
+			repository.cabinPresentationWarehouseID, repository.cabinPresentationIDs)
+	}
+	for _, forbidden := range []string{"objectKey", "bucket", "url", "fileName", "status", "availableVariants"} {
+		if strings.Contains(strings.ToLower(response.Body.String()), strings.ToLower(`"`+forbidden+`"`)) {
+			t.Fatalf("snapshot response leaked %q: %s", forbidden, response.Body.String())
+		}
+	}
+}
+
+func TestAssetCabinCreationSnapshotRequiresExactServiceScopeAndValidIdentity(t *testing.T) {
+	warehouseID, cabinID := uuid.New(), uuid.New()
+	validBody := fmt.Sprintf(`{"warehouseId":"%s","cabinIds":["%s"]}`, warehouseID, cabinID)
+	for _, testCase := range []struct {
+		name       string
+		validator  validatorStub
+		body       string
+		wantStatus int
+		wantCode   string
+	}{
+		{name: "unauthorized", validator: validatorStub{serviceErr: auth.ErrUnauthorized}, body: validBody,
+			wantStatus: http.StatusUnauthorized, wantCode: "MEDIA_UNAUTHORIZED"},
+		{name: "wrong client", validator: validatorStub{servicePrincipal: auth.ServicePrincipal{
+			Subject: "logistics-service", ClientID: "logistics-service", Scopes: map[string]struct{}{"media.asset": {}},
+		}}, body: validBody, wantStatus: http.StatusForbidden, wantCode: "MEDIA_FORBIDDEN"},
+		{name: "extra scope", validator: validatorStub{servicePrincipal: auth.ServicePrincipal{
+			Subject: "asset-service", ClientID: "asset-service",
+			Scopes: map[string]struct{}{"media.asset": {}, "media.logistics": {}},
+		}}, body: validBody, wantStatus: http.StatusForbidden, wantCode: "MEDIA_FORBIDDEN"},
+		{name: "duplicate cabin", validator: assetValidatorStub(),
+			body:       fmt.Sprintf(`{"warehouseId":"%s","cabinIds":["%s","%s"]}`, warehouseID, cabinID, cabinID),
+			wantStatus: http.StatusBadRequest, wantCode: "MEDIA_INVALID_CABIN_CREATION_SNAPSHOT"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			repository := &repositoryStub{}
+			server := newTestServer(t, repository, testCase.validator, &storeStub{})
+			request := httptest.NewRequest(http.MethodPost,
+				"/api/internal/media/v1/assets/cabin-creation-snapshots", strings.NewReader(testCase.body))
+			request.Header.Set("Authorization", "Bearer service")
+			response := httptest.NewRecorder()
+
+			server.Handler().ServeHTTP(response, request)
+
+			if response.Code != testCase.wantStatus ||
+				!strings.Contains(response.Body.String(), `"code":"`+testCase.wantCode+`"`) {
+				t.Fatalf("response = %d %s", response.Code, response.Body.String())
+			}
+			if repository.cabinPresentationCalls != 0 {
+				t.Fatalf("repository calls = %d, want 0", repository.cabinPresentationCalls)
+			}
+		})
+	}
+}
+
+func TestLogisticsCabinPresentationVariantStreamsPinnedRetainedObjectVersion(t *testing.T) {
 	warehouseID, cabinID, mediaID := uuid.New(), uuid.New(), uuid.New()
 	body := []byte("webp-bytes")
 	variant := &persistence.VariantRecord{
 		Variant: media.VariantSmall, ObjectKey: "media/private/cabin/small.webp", ObjectVersionID: "small-v3",
 		ContentType: "image/webp", SizeBytes: int64(len(body)),
 	}
-	repository := &repositoryStub{currentAsset: persistence.AssetRecord{
-		ID: mediaID, OwnerType: persistence.OwnerTypeCabin, OwnerID: cabinID.String(), WarehouseID: warehouseID,
-		Kind: media.KindImage, Status: media.StatusReady, Generation: 3,
-	}, currentVariant: variant}
+	repository := &repositoryStub{presentationVariant: variant}
 	store := &storeStub{objectBody: body, statMetadata: media.ObjectMetadata{
 		VersionID: "small-v3", SizeBytes: int64(len(body)), ContentType: "image/webp",
 	}}
@@ -2539,14 +2654,13 @@ func TestLogisticsCabinPresentationVariantStreamsOnlyCurrentCabinVariant(t *test
 		strings.Contains(response.Header().Get("Content-Disposition"), mediaID.String()) {
 		t.Fatalf("content disposition leaks media metadata: %q", response.Header().Get("Content-Disposition"))
 	}
-	if repository.currentReadCalls != 1 || repository.currentReadMediaID != mediaID ||
-		repository.currentReadOwnerType != persistence.OwnerTypeCabin || repository.currentReadOwnerID != cabinID.String() ||
-		repository.currentReadWarehouseID != warehouseID || repository.currentReadGeneration != 3 ||
-		repository.currentReadVariant != media.VariantSmall {
-		t.Fatalf("current variant read = calls:%d media:%s owner:%s/%s warehouse:%s generation:%d variant:%s",
-			repository.currentReadCalls, repository.currentReadMediaID, repository.currentReadOwnerType,
-			repository.currentReadOwnerID, repository.currentReadWarehouseID, repository.currentReadGeneration,
-			repository.currentReadVariant)
+	if repository.presentationReadCalls != 1 || repository.presentationReadCabinID != cabinID ||
+		repository.presentationReadMediaID != mediaID || repository.presentationReadWarehouseID != warehouseID ||
+		repository.presentationReadGeneration != 3 || repository.presentationReadVariant != media.VariantSmall {
+		t.Fatalf("presentation variant read = calls:%d cabin:%s media:%s warehouse:%s generation:%d variant:%s",
+			repository.presentationReadCalls, repository.presentationReadCabinID,
+			repository.presentationReadMediaID, repository.presentationReadWarehouseID,
+			repository.presentationReadGeneration, repository.presentationReadVariant)
 	}
 	if store.getCalls != 1 || store.getKey != variant.ObjectKey || store.getVersion != variant.ObjectVersionID {
 		t.Fatalf("store read = calls:%d key:%q version:%q", store.getCalls, store.getKey, store.getVersion)
@@ -2605,13 +2719,13 @@ func TestLogisticsCabinPresentationEndpointsFailClosed(t *testing.T) {
 		{
 			name: "owner warehouse or generation mismatch stays opaque", method: http.MethodGet,
 			path: contentPath, validator: logisticsValidatorStub(),
-			repository: &repositoryStub{currentReadErr: persistence.ErrNotFound},
+			repository: &repositoryStub{presentationReadErr: persistence.ErrNotFound},
 			wantStatus: http.StatusNotFound, wantCode: "MEDIA_NOT_FOUND", wantReads: 1,
 		},
 		{
 			name: "unavailable variant stays opaque", method: http.MethodGet,
 			path: contentPath, validator: logisticsValidatorStub(), repository: &repositoryStub{
-				currentAsset: persistence.AssetRecord{ID: mediaID, Kind: media.KindImage, Status: media.StatusReady, Generation: 1},
+				presentationVariant: &persistence.VariantRecord{Variant: media.VariantSmall},
 			}, wantStatus: http.StatusNotFound, wantCode: "MEDIA_NOT_FOUND", wantReads: 1,
 		},
 	} {
@@ -2627,10 +2741,10 @@ func TestLogisticsCabinPresentationEndpointsFailClosed(t *testing.T) {
 			if response.Code != testCase.wantStatus || !strings.Contains(response.Body.String(), `"code":"`+testCase.wantCode+`"`) {
 				t.Fatalf("response = %d %s", response.Code, response.Body.String())
 			}
-			if testCase.repository.cabinPresentationCalls != 0 || testCase.repository.currentReadCalls != testCase.wantReads ||
+			if testCase.repository.cabinPresentationCalls != 0 || testCase.repository.presentationReadCalls != testCase.wantReads ||
 				store.getCalls != 0 {
 				t.Fatalf("repository/storage calls = snapshots:%d variants:%d storage:%d",
-					testCase.repository.cabinPresentationCalls, testCase.repository.currentReadCalls, store.getCalls)
+					testCase.repository.cabinPresentationCalls, testCase.repository.presentationReadCalls, store.getCalls)
 			}
 		})
 	}
@@ -2640,6 +2754,13 @@ func logisticsValidatorStub() validatorStub {
 	return validatorStub{servicePrincipal: auth.ServicePrincipal{
 		Subject: "logistics-service", ClientID: "logistics-service",
 		Scopes: map[string]struct{}{"media.logistics": {}},
+	}}
+}
+
+func assetValidatorStub() validatorStub {
+	return validatorStub{servicePrincipal: auth.ServicePrincipal{
+		Subject: "asset-service", ClientID: "asset-service",
+		Scopes: map[string]struct{}{"media.asset": {}},
 	}}
 }
 
@@ -2787,6 +2908,14 @@ type repositoryStub struct {
 	cabinPresentationCalls       int
 	cabinPresentationWarehouseID uuid.UUID
 	cabinPresentationIDs         []uuid.UUID
+	presentationVariant          *persistence.VariantRecord
+	presentationReadErr          error
+	presentationReadCalls        int
+	presentationReadCabinID      uuid.UUID
+	presentationReadMediaID      uuid.UUID
+	presentationReadWarehouseID  uuid.UUID
+	presentationReadGeneration   int
+	presentationReadVariant      media.Variant
 	cabinCoverChange             persistence.CabinCoverChangeRecord
 	cabinCoverChangeReplay       bool
 	cabinCoverChangeErr          error
@@ -3018,6 +3147,22 @@ func (stub *repositoryStub) ReadCabinPresentationSnapshots(_ context.Context, wa
 		return errors.New("unexpected ReadCabinPresentationSnapshots")
 	}
 	return consume(stub.cabinPresentationRecords)
+}
+
+func (stub *repositoryStub) ReadCabinPresentationVariant(_ context.Context, cabinID, warehouseID, mediaID uuid.UUID,
+	generation int, variant media.Variant, consume func(persistence.VariantRecord) error,
+) error {
+	stub.presentationReadCalls++
+	stub.presentationReadCabinID, stub.presentationReadWarehouseID = cabinID, warehouseID
+	stub.presentationReadMediaID, stub.presentationReadGeneration = mediaID, generation
+	stub.presentationReadVariant = variant
+	if stub.presentationReadErr != nil {
+		return stub.presentationReadErr
+	}
+	if stub.presentationVariant == nil {
+		return errors.New("unexpected ReadCabinPresentationVariant")
+	}
+	return consume(*stub.presentationVariant)
 }
 
 func (stub *repositoryStub) SetCabinCoverFromTaskEvidence(

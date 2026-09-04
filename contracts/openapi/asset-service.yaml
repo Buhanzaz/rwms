@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Asset Service API
-  version: 1.15.0
+  version: 1.16.0
   description: >-
     Stage 5 canonical asset boundary plus narrow Stage 7 inventory-service and
     Stage 8 logistics-service private surfaces. Rental-item comments and
@@ -132,6 +132,128 @@ paths:
               schema: { $ref: '#/components/schemas/RentalItemCreationOptions' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/asset/v1/rental-item-creation-intents:
+    get:
+      operationId: listPendingRentalItemCreationIntents
+      description: >-
+        Returns a bounded page of incomplete cabin-photo creation intents for one warehouse.
+        Requires USER rwms.read and warehouse VIEW access.
+      parameters:
+        - $ref: '#/components/parameters/WarehouseIdQuery'
+        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: Pending intents ordered by creation time and identity.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RentalItemCreationIntentPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: createRentalItemWithPhotoIntent
+      description: >-
+        Atomically creates a FREE rental item, a durable server-owned photo-completion intent and
+        an asset-owned creation lease that excludes the cabin from availability until completion.
+        The ordered 1-20 item manifest records the expected source checksum, content type and byte
+        length without retaining a filename. The returned unique mediaFolderId, mediaCommandId and
+        per-photo uploadCommandId values are stable on exact replay and allow the client to resume
+        the same media batch after a lost response. Existing createRentalItem remains available for
+        cabin creation that has no mandatory-photo workflow. Requires USER rwms.write and warehouse
+        EDIT access.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateRentalItemWithPhotoIntentRequest' }
+      responses:
+        '201':
+          description: New atomic cabin and photo intent, or the exact frozen replay.
+          headers:
+            Idempotency-Replayed: { schema: { type: string, const: 'true' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreateRentalItemWithPhotoIntentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/DependencyFailure' }
+  /api/asset/v1/rental-item-creation-intents/{intentId}:
+    get:
+      operationId: getRentalItemCreationIntent
+      description: Requires USER rwms.read and warehouse VIEW access for the immutable intent warehouse.
+      parameters:
+        - $ref: '#/components/parameters/RentalItemCreationIntentId'
+      responses:
+        '200':
+          description: Current durable creation intent.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RentalItemCreationIntent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/asset/v1/rental-item-creation-intents/{intentId}/complete:
+    post:
+      operationId: completeRentalItemCreationIntent
+      description: >-
+        Proves through media-service that the intent's exact active folder contains exactly the
+        expected number of current READY images and a current READY cover, then completes the
+        intent and releases its creation lease. The private media call occurs outside local DB
+        locks; finalization rechecks expectedVersion and PENDING state transactionally.
+      parameters:
+        - $ref: '#/components/parameters/RentalItemCreationIntentId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RentalItemCreationIntentCommand' }
+      responses:
+        '200':
+          description: Completed intent or exact replay.
+          headers:
+            Idempotency-Replayed: { schema: { type: string, const: 'true' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RentalItemCreationIntent' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/DependencyFailure' }
+  /api/asset/v1/rental-item-creation-intents/{intentId}/abandon:
+    post:
+      operationId: abandonRentalItemCreationIntent
+      description: >-
+        Ends an incomplete intent, releases its creation lease and changes the cabin from FREE to
+        the existing non-rentable WAREHOUSE status in the same transaction. The cabin and retained
+        media are not deleted. Requires USER rwms.write and warehouse EDIT access.
+      parameters:
+        - $ref: '#/components/parameters/RentalItemCreationIntentId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RentalItemCreationIntentCommand' }
+      responses:
+        '200':
+          description: Abandoned intent or exact replay.
+          headers:
+            Idempotency-Replayed: { schema: { type: string, const: 'true' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RentalItemCreationIntent' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/asset/v1/html-imports:
     get:
       operationId: listRentalItemHtmlImports
@@ -1956,6 +2078,7 @@ components:
     bearerJwt: { type: http, scheme: bearer, bearerFormat: JWT }
   parameters:
     RentalItemId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    RentalItemCreationIntentId: { name: intentId, in: path, required: true, schema: { type: string, format: uuid } }
     EquipmentId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
     EquipmentIdPath: { name: equipmentId, in: path, required: true, schema: { type: string, format: uuid } }
     ClassifierId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -3179,6 +3302,121 @@ components:
       additionalProperties: false
       required: [content, page, size, totalElements, totalPages]
       properties: { content: { type: array, items: { $ref: '#/components/schemas/RentalItem' } }, page: { type: integer }, size: { type: integer }, totalElements: { type: integer, format: int64 }, totalPages: { type: integer, format: int64 } }
+    RentalItemCreationIntentState:
+      type: string
+      enum: [PENDING, COMPLETED, ABANDONED]
+    CreateRentalItemWithPhotoIntentRequest:
+      type: object
+      additionalProperties: false
+      required: [rentalItem, photoManifest]
+      properties:
+        rentalItem: { $ref: '#/components/schemas/CreateRentalItemRequest' }
+        photoManifest:
+          type: array
+          minItems: 1
+          maxItems: 20
+          description: >-
+            Ordered immutable source-photo manifest. photoIndex must equal the zero-based array
+            position; index zero is the intended cover. Filename is deliberately excluded because
+            it is neither required for proof nor safe identity data.
+          items: { $ref: '#/components/schemas/RentalItemCreationPhotoManifestInput' }
+    RentalItemCreationPhotoManifestInput:
+      type: object
+      additionalProperties: false
+      required: [photoIndex, checksumSha256, contentType, contentLength]
+      properties:
+        photoIndex: { type: integer, minimum: 0, maximum: 19 }
+        checksumSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        contentType: { type: string, enum: [image/jpeg, image/png, image/webp] }
+        contentLength: { type: integer, format: int64, minimum: 1 }
+    CreateRentalItemWithPhotoIntentResponse:
+      type: object
+      additionalProperties: false
+      required: [rentalItem, intent]
+      properties:
+        rentalItem: { $ref: '#/components/schemas/RentalItem' }
+        intent: { $ref: '#/components/schemas/RentalItemCreationIntent' }
+    RentalItemCreationIntentCommand:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+    RentalItemCreationIntent:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - version
+        - rentalItemId
+        - warehouseId
+        - state
+        - expectedPhotoCount
+        - mediaFolderId
+        - mediaCommandId
+        - photoManifestSha256
+        - photoManifest
+        - coverMediaId
+        - mediaProofSha256
+        - createdAt
+        - completedAt
+        - abandonedAt
+      properties:
+        id: { type: string, format: uuid }
+        version: { $ref: '#/components/schemas/ExpectedVersion' }
+        rentalItemId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        state: { $ref: '#/components/schemas/RentalItemCreationIntentState' }
+        expectedPhotoCount: { type: integer, minimum: 1, maximum: 20 }
+        mediaFolderId:
+          type: string
+          format: uuid
+          description: Unique media-owned CABIN gallery folder reserved for this intent.
+        mediaCommandId:
+          type: string
+          format: uuid
+          description: Stable command namespace for resumable uploads belonging to this intent.
+        photoManifestSha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: Canonical SHA-256 of the ordered durable manifest including command identities.
+        photoManifest:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items: { $ref: '#/components/schemas/RentalItemCreationPhotoManifestEntry' }
+        coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
+        mediaProofSha256:
+          type: [string, 'null']
+          pattern: '^[0-9a-f]{64}$'
+        createdAt: { type: string, format: date-time }
+        completedAt: { type: [string, 'null'], format: date-time }
+        abandonedAt: { type: [string, 'null'], format: date-time }
+    RentalItemCreationPhotoManifestEntry:
+      type: object
+      additionalProperties: false
+      required: [photoIndex, uploadCommandId, checksumSha256, contentType, contentLength]
+      properties:
+        photoIndex: { type: integer, minimum: 0, maximum: 19 }
+        uploadCommandId:
+          type: string
+          format: uuid
+          description: Stable Idempotency-Key for creating this exact media upload session.
+        checksumSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        contentType: { type: string, enum: [image/jpeg, image/png, image/webp] }
+        contentLength: { type: integer, format: int64, minimum: 1 }
+    RentalItemCreationIntentPage:
+      type: object
+      additionalProperties: false
+      required: [content, page, size, totalElements, totalPages]
+      properties:
+        content:
+          type: array
+          items: { $ref: '#/components/schemas/RentalItemCreationIntent' }
+        page: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1, maximum: 200 }
+        totalElements: { type: integer, format: int64, minimum: 0 }
+        totalPages: { type: integer, format: int64, minimum: 0 }
     ManualNote:
       type: object
       additionalProperties: false

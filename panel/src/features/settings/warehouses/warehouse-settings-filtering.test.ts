@@ -20,6 +20,9 @@ const northWarehouse: WarehouseInfo = {
   lifecycleState: "ACTIVE",
   sortOrder: 1,
   representative: false,
+  production: true,
+  mainWarehouse: false,
+  representativeParentWarehouseId: null,
 }
 
 const southWarehouse: WarehouseInfo = {
@@ -37,6 +40,16 @@ const drainingWarehouse: WarehouseInfo = {
   name: "Склад на выводе",
   active: false,
   lifecycleState: "DRAINING",
+}
+
+const representativeWarehouse: WarehouseInfo = {
+  ...northWarehouse,
+  id: "00000000-0000-4000-8000-000000000004",
+  name: "Представительство на севере",
+  representative: true,
+  production: false,
+  mainWarehouse: false,
+  representativeParentWarehouseId: northWarehouse.id,
 }
 
 describe("warehouse settings filtering", () => {
@@ -93,5 +106,22 @@ describe("warehouse settings filtering", () => {
         createEmptyWarehouseFilters()
       )
     ).toEqual([drainingWarehouse])
+  })
+
+  it("finds representative warehouses by their current classifications", () => {
+    const warehouses = [northWarehouse, representativeWarehouse, southWarehouse]
+    const filters = createEmptyWarehouseFilters()
+
+    expect(filterWarehouses(warehouses, "северный", filters)).toEqual([
+      northWarehouse,
+      representativeWarehouse,
+    ])
+    expect(
+      filterWarehouses(warehouses, "представительский склад", filters)
+    ).toEqual([representativeWarehouse])
+    expect(filterWarehouses(warehouses, "производство", filters)).toEqual([
+      northWarehouse,
+      southWarehouse,
+    ])
   })
 })

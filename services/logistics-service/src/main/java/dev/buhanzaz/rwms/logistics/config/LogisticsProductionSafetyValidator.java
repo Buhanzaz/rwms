@@ -25,12 +25,14 @@ import org.springframework.stereotype.Component;
  * <p>Dependency and authentication checks retain their production-only meaning. Kafka delivery is
  * required outside explicit {@code dev}/{@code test} profiles, and a simultaneously active
  * production profile takes precedence. The Kafka fence validates the exact canonical primary
- * outputs, explicit non-loopback brokers, acknowledged idempotent publishing, a publish wait
- * shorter than the outbox lease, the rental-inquiry outbox, and every required relay/binding bean.
+ * outputs, exact multiplexed inbound function, explicit non-loopback brokers, acknowledged
+ * idempotent publishing, a publish wait shorter than the outbox lease, the rental-inquiry outbox,
+ * and every required relay/binding bean.
  */
 @Component
 @EnableConfigurationProperties(RwmsKafkaProperties.class)
 public final class LogisticsProductionSafetyValidator implements SmartInitializingSingleton {
+  private static final String INBOUND_FUNCTION = "logisticsInbound";
   private final Environment environment;
   private final boolean dependenciesEnabled;
   private final boolean authBypass;
@@ -130,10 +132,20 @@ public final class LogisticsProductionSafetyValidator implements SmartInitializi
       throw new IllegalStateException(
           "Logistics Kafka destinations must exactly match the canonical ordered outputs");
     }
+    requireInboundFunction();
     kafka.validate();
     requireSafeBrokers();
     requireProducerGuarantees();
     requireDeliveryBeans();
+  }
+
+  /** Requires the exact multiplexed inbound function whenever Kafka delivery is mandatory. */
+  private void requireInboundFunction() {
+    String definition = environment.getProperty("spring.cloud.function.definition", "").strip();
+    if (!INBOUND_FUNCTION.equals(definition)) {
+      throw new IllegalStateException(
+          "Logistics Kafka function definition must exactly match the inbound consumer");
+    }
   }
 
   /** Requires every comma-delimited broker to be an explicit safe host and valid TCP port. */

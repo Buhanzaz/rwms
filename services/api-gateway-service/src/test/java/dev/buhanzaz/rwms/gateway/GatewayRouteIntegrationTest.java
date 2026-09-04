@@ -49,6 +49,7 @@ class GatewayRouteIntegrationTest {
   private static HttpServer media;
   private static HttpServer inventory;
   private static HttpServer logistics;
+  private static HttpServer logisticsPlanner;
   private static HttpServer dossier;
   private static HttpServer analytics;
   private static HttpServer assistant;
@@ -61,6 +62,8 @@ class GatewayRouteIntegrationTest {
   private static final List<CapturedRequest> MEDIA_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> INVENTORY_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> LOGISTICS_REQUESTS = new CopyOnWriteArrayList<>();
+  private static final List<CapturedRequest> LOGISTICS_PLANNER_REQUESTS =
+      new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> DOSSIER_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> ANALYTICS_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> ASSISTANT_REQUESTS = new CopyOnWriteArrayList<>();
@@ -77,6 +80,7 @@ class GatewayRouteIntegrationTest {
     media = server(MEDIA_REQUESTS);
     inventory = server(INVENTORY_REQUESTS);
     logistics = server(LOGISTICS_REQUESTS);
+    logisticsPlanner = server(LOGISTICS_PLANNER_REQUESTS);
     dossier = server(DOSSIER_REQUESTS);
     analytics = server(ANALYTICS_REQUESTS);
     assistant = server(ASSISTANT_REQUESTS);
@@ -92,6 +96,7 @@ class GatewayRouteIntegrationTest {
     media.stop(0);
     inventory.stop(0);
     logistics.stop(0);
+    logisticsPlanner.stop(0);
     dossier.stop(0);
     analytics.stop(0);
     assistant.stop(0);
@@ -107,6 +112,7 @@ class GatewayRouteIntegrationTest {
     registry.add("rwms.gateway.routes.media-uri", () -> origin(media));
     registry.add("rwms.gateway.routes.inventory-uri", () -> origin(inventory));
     registry.add("rwms.gateway.routes.logistics-uri", () -> origin(logistics));
+    registry.add("rwms.gateway.routes.logistics-planner-uri", () -> origin(logisticsPlanner));
     registry.add("rwms.gateway.routes.dossier-uri", () -> origin(dossier));
     registry.add("rwms.gateway.routes.analytics-uri", () -> origin(analytics));
     registry.add("rwms.gateway.routes.assistant-uri", () -> origin(assistant));
@@ -446,6 +452,108 @@ class GatewayRouteIntegrationTest {
       assertThat(request.cookie()).isNull();
     });
 
+    String contractorToken = "contractor-token";
+    String externalTaskId = "10000000-0000-0000-0000-000000000021";
+    String entryId = "10000000-0000-0000-0000-000000000022";
+    String evidenceId = "10000000-0000-0000-0000-000000000023";
+    String mediaId = "10000000-0000-0000-0000-000000000024";
+
+    LOGISTICS_REQUESTS.clear();
+    mvc.perform(
+            publicGet(
+                    "/api/logistics/public/v1/contractor-route-shares/"
+                        + contractorToken)
+                .header(HttpHeaders.COOKIE, "AUTH_SESSION=secret"))
+        .andExpect(status().isOk());
+    assertThat(LOGISTICS_REQUESTS).singleElement().satisfies(request -> {
+      assertThat(request.path())
+          .isEqualTo(
+              "/api/logistics/public/v1/contractor-route-shares/" + contractorToken);
+      assertThat(request.authorization()).isNull();
+      assertThat(request.cookie()).isNull();
+    });
+
+    LOGISTICS_REQUESTS.clear();
+    String contractorActionPath =
+        "/api/logistics/public/v1/contractor-route-shares/"
+            + contractorToken
+            + "/tasks/"
+            + externalTaskId
+            + "/entries/"
+            + entryId
+            + "/actions";
+    mvc.perform(
+            publicPost(contractorActionPath)
+                .header("Idempotency-Key", evidenceId)
+                .contentType("application/json")
+                .content("{\"action\":\"START\",\"expectedVersion\":0,\"evidenceId\":null}")
+                .header(HttpHeaders.COOKIE, "AUTH_SESSION=secret"))
+        .andExpect(status().isOk());
+    assertThat(LOGISTICS_REQUESTS).singleElement().satisfies(request -> {
+      assertThat(request.path()).isEqualTo(contractorActionPath);
+      assertThat(request.authorization()).isNull();
+      assertThat(request.cookie()).isNull();
+    });
+
+    LOGISTICS_REQUESTS.clear();
+    String contractorEvidencePath =
+        "/api/logistics/public/v1/contractor-route-shares/"
+            + contractorToken
+            + "/tasks/"
+            + externalTaskId
+            + "/entries/"
+            + entryId
+            + "/evidence/"
+            + evidenceId;
+    mvc.perform(
+            publicPost(contractorEvidencePath)
+                .header("Idempotency-Key", evidenceId)
+                .header(
+                    "X-Content-SHA256",
+                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+                .header("X-Captured-At", "2026-08-31T09:00:00Z")
+                .contentType("image/jpeg")
+                .content("photo")
+                .header(HttpHeaders.COOKIE, "AUTH_SESSION=secret"))
+        .andExpect(status().isOk());
+    assertThat(LOGISTICS_REQUESTS).singleElement().satisfies(request -> {
+      assertThat(request.path()).isEqualTo(contractorEvidencePath);
+      assertThat(request.authorization()).isNull();
+      assertThat(request.cookie()).isNull();
+      assertThat(request.contentLength()).isNull();
+      assertThat(request.contractorEvidenceLength()).isEqualTo("5");
+    });
+
+    LOGISTICS_REQUESTS.clear();
+    String contractorMediaPath =
+        "/api/logistics/public/v1/contractor-route-shares/"
+            + contractorToken
+            + "/tasks/"
+            + externalTaskId
+            + "/entries/"
+            + entryId
+            + "/media/"
+            + mediaId
+            + "/generations/1/variants/SMALL/content";
+    mvc.perform(
+            publicGet(contractorMediaPath)
+                .header(HttpHeaders.COOKIE, "AUTH_SESSION=secret"))
+        .andExpect(status().isOk());
+    assertThat(LOGISTICS_REQUESTS).singleElement().satisfies(request -> {
+      assertThat(request.path()).isEqualTo(contractorMediaPath);
+      assertThat(request.authorization()).isNull();
+      assertThat(request.cookie()).isNull();
+    });
+
+    LOGISTICS_REQUESTS.clear();
+    mvc.perform(publicPost(
+            "/api/logistics/public/v1/contractor-route-shares/" + contractorToken))
+        .andExpect(status().isUnauthorized());
+    mvc.perform(publicGet(contractorActionPath)).andExpect(status().isUnauthorized());
+    mvc.perform(publicPost(contractorEvidencePath + "/unexpected"))
+        .andExpect(status().isUnauthorized());
+    assertThat(LOGISTICS_REQUESTS).isEmpty();
+
     LOGISTICS_REQUESTS.clear();
     mvc.perform(
             publicPost(
@@ -459,6 +567,35 @@ class GatewayRouteIntegrationTest {
                 "/api/logistics/v1/cabins/10000000-0000-0000-0000-000000000014/photo-presentations"))
         .andExpect(status().isUnauthorized());
     assertThat(LOGISTICS_REQUESTS).isEmpty();
+  }
+
+  @Test
+  void rewritesPlannerAdminCatalogRequestsAndPreservesBearerIdempotencyAndBody()
+      throws Exception {
+    LOGISTICS_PLANNER_REQUESTS.clear();
+
+    mvc.perform(
+            publicPost(
+                    "/api/logistics-planner/v1/admin/warehouses/warehouse-1/trailers?source=panel")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer original-token")
+                .header(HttpHeaders.COOKIE, "AUTH_SESSION=secret")
+                .header("Idempotency-Key", "planner-create-1")
+                .contentType("application/json")
+                .content("{\"name\":\"Trailer\",\"registration_number\":\"P-1\",\"active\":true}")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isOk())
+        .andExpect(
+            jsonPath("$.path").value("/api/admin/warehouses/warehouse-1/trailers"));
+
+    assertThat(LOGISTICS_PLANNER_REQUESTS).singleElement().satisfies(request -> {
+      assertThat(request.path()).isEqualTo("/api/admin/warehouses/warehouse-1/trailers");
+      assertThat(request.query()).isEqualTo("source=panel");
+      assertThat(request.authorization()).isEqualTo("Bearer original-token");
+      assertThat(request.cookie()).isNull();
+      assertThat(request.idempotencyKey()).isEqualTo("planner-create-1");
+      assertThat(request.body())
+          .isEqualTo("{\"name\":\"Trailer\",\"registration_number\":\"P-1\",\"active\":true}");
+    });
   }
 
   @Test
@@ -606,7 +743,12 @@ class GatewayRouteIntegrationTest {
                 .header("X-Forwarded-Host", "evil.example")
                 .header("X-Forwarded-Proto", "http")
                 .header("X-Forwarded-Port", "81")
-                .header("X-Forwarded-Prefix", "/evil"))
+                .header("X-Forwarded-Prefix", "/evil")
+                .header("X-Forwarded-For", "203.0.113.90")
+                .with(request -> {
+                  request.setRemoteAddr("198.51.100.42");
+                  return request;
+                }))
         .andExpect(status().isFound())
         .andExpect(header().string(HttpHeaders.LOCATION, "https://panel.example/auth/authorize"))
         .andExpect(header().string(HttpHeaders.SET_COOKIE, "AUTH_SESSION=session; Path=/auth; HttpOnly"));
@@ -617,6 +759,7 @@ class GatewayRouteIntegrationTest {
       assertThat(request.forwardedProto()).containsExactly("https");
       assertThat(request.forwardedPort()).containsExactly("443");
       assertThat(request.forwardedPrefix()).containsExactly("/auth");
+      assertThat(request.forwardedFor()).containsExactly("198.51.100.42");
     });
   }
 
@@ -903,6 +1046,7 @@ class GatewayRouteIntegrationTest {
         exchange.getRequestURI().getRawQuery(),
         exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION),
         exchange.getRequestHeaders().getOrDefault("Forwarded", List.of()),
+        exchange.getRequestHeaders().getOrDefault("X-Forwarded-For", List.of()),
         exchange.getRequestHeaders().getOrDefault("X-Forwarded-Host", List.of()),
         exchange.getRequestHeaders().getOrDefault("X-Forwarded-Prefix", List.of()),
         exchange.getRequestHeaders().getOrDefault("X-Forwarded-Proto", List.of()),
@@ -912,6 +1056,9 @@ class GatewayRouteIntegrationTest {
         exchange.getRequestHeaders().getFirst("traceparent"),
         exchange.getRequestHeaders().getFirst("tracestate"),
         exchange.getRequestHeaders().getFirst("X-XSRF-TOKEN"),
+        exchange.getRequestHeaders().getFirst(HttpHeaders.CONTENT_LENGTH),
+        exchange.getRequestHeaders().getFirst("X-RWMS-Contractor-Evidence-Length"),
+        exchange.getRequestHeaders().getFirst("Idempotency-Key"),
         readBody(exchange));
   }
 
@@ -968,6 +1115,7 @@ class GatewayRouteIntegrationTest {
       String query,
       String authorization,
       List<String> forwarded,
+      List<String> forwardedFor,
       List<String> forwardedHost,
       List<String> forwardedPrefix,
       List<String> forwardedProto,
@@ -977,5 +1125,8 @@ class GatewayRouteIntegrationTest {
       String traceParent,
       String traceState,
       String xsrfToken,
+      String contentLength,
+      String contractorEvidenceLength,
+      String idempotencyKey,
       String body) {}
 }

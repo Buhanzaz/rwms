@@ -57,9 +57,6 @@ describe("resolveHeaderBreadcrumbs", () => {
 
   it("keeps logistics screens at one breadcrumb level", () => {
     expect(
-      resolveHeaderBreadcrumbs("/logistics/board", "", null, null)
-    ).toEqual([{ title: "Доска логистики" }])
-    expect(
       resolveHeaderBreadcrumbs("/logistics/returns", "", null, null)
     ).toEqual([{ title: "Возврат из аренды" }])
     expect(
@@ -133,18 +130,6 @@ describe("resolveHeaderBreadcrumbs", () => {
     ])
   })
 
-  it("shows the order number for an open order", () => {
-    expect(
-      resolveHeaderBreadcrumbs(
-        "/orders/33333333-3333-4333-8333-333333333333",
-        "",
-        null,
-        null,
-        "ORD-000001"
-      )
-    ).toEqual([{ title: "Заказы", to: "/orders" }, { title: "ORD-000001" }])
-  })
-
   it("keeps the booking continuation under the booking catalog", () => {
     expect(
       resolveHeaderBreadcrumbs("/booking/continue", "", null, null)
@@ -154,17 +139,4 @@ describe("resolveHeaderBreadcrumbs", () => {
     ])
   })
 
-  it("keeps the client grid and detail under the client section", () => {
-    expect(resolveHeaderBreadcrumbs("/clients", "", null, null)).toEqual([
-      { title: "Клиенты", to: "/clients" },
-    ])
-    expect(
-      resolveHeaderBreadcrumbs(
-        "/clients/11111111-1111-4111-8111-111111111111",
-        "",
-        null,
-        null
-      )
-    ).toEqual([{ title: "Клиенты", to: "/clients" }, { title: "Клиент" }])
-  })
 })

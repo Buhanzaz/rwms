@@ -24,15 +24,23 @@ public class AuthEventPayloadPolicy {
 
     private static final Set<String> LEGACY_USER_FIELDS = Set.of(
             "subjectId", "active", "globalRole", "profileRevision", "warehouseAccess");
-    private static final Set<String> USER_FIELDS = Set.of(
+    private static final Set<String> MOBILE_USER_FIELDS = Set.of(
             "subjectId",
             "active",
             "mobileAppAccess",
             "globalRole",
             "profileRevision",
             "warehouseAccess");
-    private static final Set<String> WORKER_FIELDS =
-            Set.of("subjectId", "workerLink", "warehouseId", "active", "credentialStatus");
+    private static final Set<String> USER_FIELDS = Set.of(
+            "subjectId",
+            "active",
+            "mobileAppAccess",
+            "rentalAccess",
+            "globalRole",
+            "profileRevision",
+            "warehouseAccess");
+    private static final Set<String> WORKER_FIELDS = Set.of(
+            "subjectId", "workerLink", "warehouseId", "active", "credentialStatus");
     private static final Set<String> GRANT_FIELDS =
             Set.of("accessId", "warehouseId", "level", "active", "noteRevision");
     private static final Set<String> FORBIDDEN_FIELDS = Set.of(
@@ -92,8 +100,8 @@ public class AuthEventPayloadPolicy {
     /**
      * Validates an already parsed auth fact against its versioned schema and semantic type.
      *
-     * <p>The compatibility allowance for legacy user facts is limited to the absence of
-     * {@code mobileAppAccess}; all other fields remain exact and allow-listed.
+     * <p>Compatibility is limited to the historical user shapes that predate application
+     * entitlements. Current facts carry the complete application-entitlement state.
      *
      * @param eventType supported auth event type
      * @param payload JSON object to validate
@@ -175,7 +183,9 @@ public class AuthEventPayloadPolicy {
         }
         Set<String> actual = new HashSet<>();
         node.properties().forEach(entry -> actual.add(entry.getKey()));
-        if (!actual.equals(USER_FIELDS) && !actual.equals(LEGACY_USER_FIELDS)) {
+        if (!actual.equals(USER_FIELDS)
+                && !actual.equals(MOBILE_USER_FIELDS)
+                && !actual.equals(LEGACY_USER_FIELDS)) {
             throw new IllegalArgumentException(
                     "Auth event payload does not match its exact schema");
         }

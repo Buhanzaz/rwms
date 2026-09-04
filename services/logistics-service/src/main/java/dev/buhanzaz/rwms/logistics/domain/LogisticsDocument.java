@@ -47,6 +47,11 @@ public class LogisticsDocument {
   @Column(name = "document_type", nullable = false, length = 16)
   private LogisticsDocumentType documentType;
 
+  /** Commercial purpose for customer shipments; warehouse returns and transfers keep it absent. */
+  @Enumerated(EnumType.STRING)
+  @Column(name = "customer_delivery_purpose", length = 32)
+  private CustomerDeliveryPurpose customerDeliveryPurpose;
+
   @Enumerated(EnumType.STRING)
   @Column(name = "state", nullable = false, length = 40)
   private LogisticsDocumentState state;
@@ -1056,6 +1061,7 @@ public class LogisticsDocument {
 
   @PrePersist
   void beforeInsert() {
+    validateCustomerDeliveryPurpose();
     OffsetDateTime now = currentTime();
     createdAt = now;
     updatedAt = now;
@@ -1063,6 +1069,7 @@ public class LogisticsDocument {
 
   @PreUpdate
   void beforeUpdate() {
+    validateCustomerDeliveryPurpose();
     touch();
   }
 
@@ -1079,6 +1086,10 @@ public class LogisticsDocument {
     requireId(correlationId, "correlationId");
     LogisticsDocument document = new LogisticsDocument();
     document.documentType = documentType;
+    document.customerDeliveryPurpose =
+        documentType == LogisticsDocumentType.SHIPMENT
+            ? CustomerDeliveryPurpose.RENTAL_DELIVERY
+            : null;
     document.state = LogisticsDocumentState.DRAFT;
     document.warehouseId = warehouseId;
     document.destinationWarehouseId = destinationWarehouseId;
@@ -1087,6 +1098,16 @@ public class LogisticsDocument {
     document.requestedBySubjectId = subjectId;
     document.correlationId = correlationId;
     return document;
+  }
+
+  private void validateCustomerDeliveryPurpose() {
+    if (documentType == LogisticsDocumentType.SHIPMENT && customerDeliveryPurpose == null) {
+      throw new IllegalStateException("A customer shipment requires a delivery purpose");
+    }
+    if (documentType != LogisticsDocumentType.SHIPMENT && customerDeliveryPurpose != null) {
+      throw new IllegalStateException(
+          "Only a customer shipment may have a delivery purpose");
+    }
   }
 
   private void captureInventorySource(

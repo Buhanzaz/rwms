@@ -48,6 +48,9 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
       "spring.jpa.hibernate.ddl-auto=validate",
       "spring.task.scheduling.enabled=false",
       "rwms.platform.kafka.enabled=false",
+      "rwms.logistics.rental-inquiry.booking-retry-initial-delay=1h",
+      "rwms.logistics.customer.booking-reconcile-initial-delay=1h",
+      "rwms.logistics.warehouse-operation-marks.initial-delay=1h",
       "AUTH_ISSUER=http://issuer.invalid",
       "PANEL_ORIGIN=http://localhost:5173"
     })
@@ -69,6 +72,12 @@ class LogisticsRecoveryMetricsIntegrationTest {
           "rwms.logistics.sanitized_dlt.terminal",
           "rwms.logistics.rental_inquiry.outbox.backlog",
           "rwms.logistics.rental_inquiry.outbox.backlog.oldest.age.seconds",
+          "rwms.logistics.presentation_booking.recovery.backlog",
+          "rwms.logistics.presentation_booking.recovery.backlog.oldest.age.seconds",
+          "rwms.logistics.presentation_booking.recovery.quarantined",
+          "rwms.logistics.customer_checkout.recovery.backlog",
+          "rwms.logistics.customer_checkout.recovery.backlog.oldest.age.seconds",
+          "rwms.logistics.customer_checkout.recovery.quarantined",
           "rwms.logistics.warehouse_mark.backlog",
           "rwms.logistics.warehouse_mark.backlog.oldest.age.seconds",
           "rwms.logistics.warehouse_mark.terminal",
@@ -120,6 +129,11 @@ class LogisticsRecoveryMetricsIntegrationTest {
           version_gap_quarantine,
           consumer_aggregate_checkpoint,
           logistics_external_attempt,
+          presentation_booking,
+          customer_rental_session,
+          client_presentation,
+          rental_inquiry,
+          order_client,
           logistics_document
         cascade
         """);
@@ -145,6 +159,25 @@ class LogisticsRecoveryMetricsIntegrationTest {
     assertThat(gauge("rwms.logistics.rental_inquiry.outbox.backlog")).isEqualTo(1.0);
     assertThat(gauge("rwms.logistics.rental_inquiry.outbox.backlog.oldest.age.seconds"))
         .isEqualTo(200.0);
+    assertThat(gauge("rwms.logistics.presentation_booking.recovery.backlog")).isEqualTo(1.0);
+    assertThat(
+            gauge(
+                "rwms.logistics.presentation_booking.recovery.backlog.oldest.age.seconds"))
+        .isEqualTo(175.0);
+    assertThat(gauge("rwms.logistics.presentation_booking.recovery.quarantined"))
+        .isEqualTo(1.0);
+    assertThat(gauge("rwms.logistics.customer_checkout.recovery.backlog")).isEqualTo(1.0);
+    assertThat(
+            gauge("rwms.logistics.customer_checkout.recovery.backlog.oldest.age.seconds"))
+        .isEqualTo(140.0);
+    assertThat(gauge("rwms.logistics.customer_checkout.recovery.quarantined"))
+        .isEqualTo(1.0);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from warehouse_operation_mark_outbox "
+                    + "where state in ('PENDING','RETRY_PENDING','IN_FLIGHT')",
+                Integer.class))
+        .isEqualTo(1);
     assertThat(gauge("rwms.logistics.warehouse_mark.backlog")).isEqualTo(1.0);
     assertThat(gauge("rwms.logistics.warehouse_mark.backlog.oldest.age.seconds"))
         .isEqualTo(150.0);
@@ -190,6 +223,10 @@ class LogisticsRecoveryMetricsIntegrationTest {
     insertSanitizedDlt("PENDING", NOW.minusSeconds(250), "c".repeat(64));
     insertSanitizedDlt("FAILED", NOW.minusSeconds(225), "d".repeat(64));
     insertRentalInquiryOutbox(NOW.minusSeconds(200));
+    insertBookingRecoveryStates();
+    // Rental-inquiry inserts legitimately emit first-operation marks through the V37 trigger.
+    // This fixture observes that queue independently with exact timestamps below.
+    jdbc.update("delete from warehouse_operation_mark_outbox");
     insertWarehouseMark("PENDING", NOW.minusSeconds(150));
     insertWarehouseMark("QUARANTINED", NOW.minusSeconds(125));
     insertInboundGap(NOW.minusSeconds(100));
@@ -247,6 +284,120 @@ class LogisticsRecoveryMetricsIntegrationTest {
         status,
         createdAt,
         createdAt);
+  }
+
+  private void insertBookingRecoveryStates() {
+    UUID clientId = UUID.randomUUID();
+    UUID actorId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into order_client(
+          id,version,client_type,display_name,normalized_name,created_by_subject_id,
+          creation_idempotency_key,creation_request_sha256,created_at,updated_at,phone,
+          normalized_phone,responsible_manager_id)
+        values (?,0,'INDIVIDUAL','Metrics customer','metrics customer',?,?,?, ?,?,
+          '+79990000001','+79990000001',?)
+        """,
+        clientId,
+        actorId,
+        UUID.randomUUID(),
+        REQUEST_DIGEST,
+        NOW.minusSeconds(300),
+        NOW.minusSeconds(300),
+        actorId);
+    insertBookingRecoveryState(
+        clientId, actorId, warehouseId, NOW.minusSeconds(175), false);
+    insertBookingRecoveryState(
+        clientId, actorId, warehouseId, NOW.minusSeconds(160), true);
+  }
+
+  private void insertBookingRecoveryState(
+      UUID clientId,
+      UUID actorId,
+      UUID warehouseId,
+      OffsetDateTime createdAt,
+      boolean quarantined) {
+    UUID inquiryId = UUID.randomUUID();
+    UUID presentationId = UUID.randomUUID();
+    UUID bookingId = UUID.randomUUID();
+    UUID commandKey = UUID.randomUUID();
+    OffsetDateTime nextAttemptAt = quarantined ? null : NOW.minusSeconds(1);
+    OffsetDateTime quarantinedAt = quarantined ? NOW.minusSeconds(1) : null;
+    int attempts = quarantined ? 8 : 1;
+    jdbc.update(
+        """
+        insert into rental_inquiry(
+          id,version,conversation_id,client_id,manager_id,manager_display_name,manager_role,
+          warehouse_id,state,creation_idempotency_key,created_at,updated_at)
+        values (?,0,?,?,?,'Metrics actor','CUSTOMER',?,'ACTIVE',?,?,?)
+        """,
+        inquiryId,
+        UUID.randomUUID(),
+        clientId,
+        actorId,
+        warehouseId,
+        UUID.randomUUID(),
+        createdAt,
+        createdAt);
+    jdbc.update(
+        """
+        insert into client_presentation(
+          id,version,inquiry_id,revision,warehouse_id,state,expires_at,view_until,
+          last_publish_idempotency_key,last_publish_request_sha256,created_at,updated_at)
+        values (?,0,?,1,?,'ACTIVE',?,?,?,?,?,?)
+        """,
+        presentationId,
+        inquiryId,
+        warehouseId,
+        NOW.plusHours(1),
+        NOW.plusHours(2),
+        UUID.randomUUID(),
+        RESPONSE_DIGEST,
+        createdAt,
+        createdAt);
+    jdbc.update(
+        """
+        insert into presentation_booking(
+          id,version,presentation_id,presentation_revision,idempotency_key,
+          selected_item_ids_json,state,attempt_count,last_error_code,created_at,updated_at,
+          recovery_next_attempt_at,recovery_quarantined_at)
+        values (?,0,?,1,?,jsonb_build_array(?::text),'PENDING',?,'DEPENDENCY_TRANSIENT',
+          ?,?,?,?)
+        """,
+        bookingId,
+        presentationId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        attempts,
+        createdAt,
+        NOW.minusSeconds(1),
+        nextAttemptAt,
+        quarantinedAt);
+    jdbc.update(
+        """
+        insert into customer_rental_session(
+          id,version,inquiry_id,customer_subject_id,warehouse_id,state,pending_command_key,
+          pending_command_sha256,booking_id,presentation_token,checkout_command_key,
+          checkout_command_sha256,created_at,updated_at,recovery_attempt_count,
+          recovery_next_attempt_at,recovery_quarantined_at,recovery_last_error_code)
+        values (?,0,?,?,?,'CHECKOUT_PENDING',?,?,?,'metrics-presentation-token',?,?,
+          ?,?,?,?,?,'CUSTOMER_CHECKOUT_DEPENDENCY_PENDING')
+        """,
+        UUID.randomUUID(),
+        inquiryId,
+        actorId,
+        warehouseId,
+        commandKey,
+        REQUEST_DIGEST,
+        bookingId,
+        commandKey,
+        REQUEST_DIGEST,
+        quarantined ? NOW.minusSeconds(130) : NOW.minusSeconds(140),
+        NOW.minusSeconds(1),
+        attempts,
+        nextAttemptAt,
+        quarantinedAt);
   }
 
   private void insertSanitizedDlt(String status, OffsetDateTime createdAt, String messageDigest) {

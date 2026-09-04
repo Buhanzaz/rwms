@@ -26,29 +26,38 @@ timezone changes.
 The service does not own cabins, inventory sessions, repairs, tasks, logistics
 documents, users, warehouse grants, or client-side warehouse selection.
 
-## Representative warehouses and support graph
+## Warehouse classification and support graph
 
-A representative warehouse is the same `Warehouse` aggregate with the independent
-`representative` characteristic. The characteristic defaults to `false` and does not imply a
-lifecycle state, an empty workforce, restricted inventory direction, or disabled ordinary
-delivery. WGS84 `latitude` and `longitude` are an all-or-none pair owned with the warehouse
-metadata; `address` may remain absent when the coordinate pair is present. A warehouse without
-coordinates remains valid in the directory but its logistics projection reports it as not ready
-for routing, so it is not materialized as a new map workspace.
+Every warehouse has independent `production` and `mainWarehouse` classifications; an ordinary
+object may have either or both. A representative has neither classification and exactly one
+same-company `representativeParentWarehouseId` whose object is production or main. The legacy
+`warehouseType`, `productionWarehouseId`, and `representative` fields remain compatibility
+projections; they do not define a lifecycle state, workforce, inventory direction, or delivery
+capability. WGS84
+`latitude` and `longitude` are an all-or-none pair owned with the warehouse
+metadata; `address` may remain absent when the coordinate pair is present. The exact pair `0,0` is
+reserved as an unset placeholder and is rejected by create, replacement and persistence
+normalization, while a point on either zero axis remains valid when the other coordinate is
+non-zero. A warehouse without operational coordinates remains valid in the directory but its
+logistics projection reports it as not ready for routing, so it is not materialized as a new map
+workspace. Existing placeholder rows are not rewritten automatically; downstream logistics
+boundaries treat them as not routable until an operator supplies a real point.
 
-The owner also keeps a directed many-to-many support graph. One active link means that its support
+The organizational representative-parent relationship is independent of the directed many-to-many
+support graph. One active support link means that its support
 warehouse may provide selected capabilities to one representative served warehouse. The policy
 independently controls drivers, vehicles, inventory, direct fulfilment, interwarehouse transfers
 and contractor fallback, plus priority, weekdays, allowed dates, excluded dates and an optional
 daily interval. Self-links and duplicate support warehouses are rejected. The complete collection
-is replaced atomically under the served warehouse's aggregate-version fence; clearing the
-representative characteristic is rejected while links still exist.
+is replaced atomically under the served warehouse's aggregate-version fence; clearing the parent
+of a served representative is rejected while links still exist.
 
-Logistics reads the same warehouse UUID, owner-held coordinates, representative flag and support
-links through the private warehouse boundary. The date-filtered read serves one representative
+Logistics reads the same warehouse UUID, owner-held coordinates, classification and support links
+through the private warehouse boundary. The date-filtered read serves one representative
 warehouse at a supplied instant; the adjacent-network read returns every active incoming or
 outgoing edge so a standalone planner can resolve one non-transitive main-warehouse planning group
-without inventing a parent field. It does not create a second warehouse or map identity. The
+from operational support, independently of its organizational production. It does not create a
+second warehouse or map identity. The
 standalone planner reconciles this directory by warehouse UUID and version; a changed version or
 coordinate pair invalidates its mutable route plans before the updated point is used. See
 [`Warehouse`](src/main/java/dev/buhanzaz/rwms/warehouse/domain/Warehouse.java),
@@ -96,7 +105,7 @@ The public gateway exposes `/api/warehouse/**` unchanged.
 
 | Boundary | Audience | Purpose |
 | --- | --- | --- |
-| `/api/warehouse/v1/warehouses/**` | Authenticated `USER`; writes require exact administrator policy | Global directory, create/replace, draining, inactivation, and timezone scheduling |
+| `/api/warehouse/v1/warehouses/**` | Authenticated `USER`; writes require exact administrator policy | Company directory, create/replace, draining, inactivation, and timezone scheduling |
 | `/api/warehouse/v1/warehouses/{id}/support-links` | Authenticated warehouse manager with grants for every endpoint | Read or atomically replace one representative warehouse's complete support graph |
 | `/api/warehouse/v1/admin/outbox-events/**` | Reviewed administrator recovery | Requeue one immutable terminal/quarantined outbox fact under a review fence |
 | `/api/internal/warehouse/v1/warehouses/{id}/existence` | Exact auth-service credential/scope | Narrow existence validation for warehouse grants |
@@ -112,8 +121,8 @@ The public gateway exposes `/api/warehouse/**` unchanged.
 | `/api/internal/warehouse/v1/warehouses/{id}/time-zone` | Least-privilege service credential | Timezone at an immutable instant |
 | `/api/internal/warehouse/v1/warehouses/{id}/operation-marks` | Contract-defined owner | Idempotent proof of first warehouse operation |
 
-The public directory is intentionally a global authenticated read. Warehouse
-grants do not filter it; write and domain access checks remain separate.
+The public directory is scoped by the signed company identity. Warehouse grants do not further
+filter that company directory; write and domain access checks remain separate.
 
 The logistics identity and directory responses always include the warehouse
 owner's `address` field; it is nullable for warehouses whose address has not
@@ -139,9 +148,9 @@ client ID `task-board-service` with exactly `warehouse.identity.read`, and is ne
 - Inactive warehouses remain resolvable for historical references.
 - Lifecycle readiness is fenced to the exact warehouse version so a late
   confirmation cannot inactivate a newer state.
-- Coordinate, representative and support-collection mutations advance the same aggregate version;
-  support-link replacement additionally advances its owned revision and cannot race endpoint
-  lifecycle changes.
+- Coordinate, classification, representative-parent and support-collection mutations advance the same
+  aggregate version; support-link replacement additionally advances its owned revision and cannot
+  race endpoint lifecycle changes.
 
 ## Persistence and events
 
@@ -152,8 +161,14 @@ schema.
 
 V7 adds the backward-compatible non-null `representative=false` column. V8 adds the coordinate pair,
 the warehouse-owned support revision, directed support-link rows and their weekday/date value
-tables with uniqueness and direction constraints. No representative-warehouse table or
-`parentWarehouseId` exists.
+tables with uniqueness and direction constraints. V9 adds company ownership and the compatibility
+`warehouse_type`/`production_warehouse_id` projections; an existing representative keeps that
+classification only when exactly one eligible parent can be derived from prior support-link
+evidence, otherwise the migration fails closed. V10 adds independent
+`production`/`main_warehouse` flags: existing ordinary warehouses become main objects, while a
+representative has neither flag. Classification and parent consistency are protected by database
+constraints and owner validation. The representative parent is not a replacement for the
+independent support-link graph.
 
 The aggregate transition, append-only domain history, and outbox envelope are
 committed locally. The Kafka relay claims an ordered row with a lease, verifies
@@ -175,6 +190,10 @@ production profile is combined with a local profile, production safety wins.
 ## Security and isolation
 
 - The service is a JWT resource server and validates issuer and audience.
+- The company directory list accepts ordinary `warehouse.read`, exact company-admin
+  `admin.manage`, or the exact dedicated rental-manager credential with `rentalAccess=true` and
+  only `rental.manage`. That manager credential cannot read a warehouse UUID directly, include
+  inactive warehouses, mutate, use support links, or enter private routes.
 - Public writes require the exact user, scope, and global administrator rules
   implemented by `WarehouseAuthorizer`.
 - Private routes require a `SERVICE` principal, an allow-listed `client_id`, and

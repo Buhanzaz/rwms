@@ -24,7 +24,7 @@ export function UserFilters({
   return (
     <section
       aria-label="Фильтры пользователей"
-      className="flex flex-col items-stretch gap-2 rounded-lg border bg-card p-2 sm:flex-row sm:flex-wrap sm:items-center"
+      className="flex flex-col items-stretch gap-2 rounded-lg border bg-muted/65 p-2 sm:flex-row sm:flex-wrap sm:items-center"
     >
       <SearchableMultiSelectFilter
         label="Логин"

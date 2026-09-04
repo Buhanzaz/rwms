@@ -95,6 +95,38 @@ public final class LogisticsRecoveryMetrics {
 
     countGauge(
         registry,
+        "rwms.logistics.presentation_booking.recovery.backlog",
+        observations::countPresentationBookingRecoveryBacklog,
+        "Presentation bookings retained for automatic recovery");
+    ageGauge(
+        registry,
+        "rwms.logistics.presentation_booking.recovery.backlog.oldest.age.seconds",
+        observations::findOldestPresentationBookingRecoveryCreatedAt,
+        "Age of the oldest presentation booking retained for automatic recovery");
+    countGauge(
+        registry,
+        "rwms.logistics.presentation_booking.recovery.quarantined",
+        observations::countQuarantinedPresentationBookings,
+        "Presentation bookings requiring reviewed recovery");
+
+    countGauge(
+        registry,
+        "rwms.logistics.customer_checkout.recovery.backlog",
+        observations::countCustomerCheckoutRecoveryBacklog,
+        "Customer checkout receipts retained for automatic recovery");
+    ageGauge(
+        registry,
+        "rwms.logistics.customer_checkout.recovery.backlog.oldest.age.seconds",
+        observations::findOldestCustomerCheckoutRecoveryCreatedAt,
+        "Age of the oldest customer checkout retained for automatic recovery");
+    countGauge(
+        registry,
+        "rwms.logistics.customer_checkout.recovery.quarantined",
+        observations::countQuarantinedCustomerCheckouts,
+        "Customer checkout receipts requiring reviewed recovery");
+
+    countGauge(
+        registry,
         "rwms.logistics.warehouse_mark.backlog",
         observations::countWarehouseMarkBacklog,
         "Warehouse-operation marks pending, retryable, or currently leased");

@@ -6,9 +6,12 @@ info:
     Canonical API for rental orders, return, shipment, transfer, driver-task,
     and private route-planning integration flows.
     Public operations require a locally validated USER Bearer JWT, the
-    matching rwms scope, and warehouse access. Every retriable mutation uses
-    a subject-bound Idempotency-Key; mutable transitions also require the
-    current document version.
+    matching rwms scope, and warehouse access. The rental client/order subset also
+    accepts only the dedicated rwms-rental-manager-web/android credential with
+    RENTAL_MANAGER, rentalAccess=true and exactly rental.manage as its application
+    scope; operational document endpoints remain on rwms scopes. Every retriable
+    mutation uses a subject-bound Idempotency-Key; mutable transitions also require
+    the current document version.
 servers:
   - url: /
 security:
@@ -17,9 +20,15 @@ paths:
   /api/logistics/v1/returns:
     get:
       operationId: listReturns
-      description: Lists visible return documents. Requires rwms.read and VIEW at the document warehouse.
+      description: >-
+        Lists visible return documents. scheduledDate selects one exact warehouse-local business
+        day; omission is retained only for bounded relationship lookups. Requires rwms.read and VIEW
+        at the document warehouse.
       parameters:
         - $ref: "#/components/parameters/WarehouseIdQuery"
+        - $ref: "#/components/parameters/ScheduledDateQuery"
+        - $ref: "#/components/parameters/PageQuery"
+        - $ref: "#/components/parameters/PageSizeQuery"
       responses:
         "200": { $ref: "#/components/responses/DocumentList" }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -172,8 +181,14 @@ paths:
   /api/logistics/v1/shipments:
     get:
       operationId: listShipments
+      description: >-
+        Lists visible shipment documents. scheduledDate selects one exact warehouse-local business
+        day; omission is retained only for bounded relationship lookups.
       parameters:
         - $ref: "#/components/parameters/WarehouseIdQuery"
+        - $ref: "#/components/parameters/ScheduledDateQuery"
+        - $ref: "#/components/parameters/PageQuery"
+        - $ref: "#/components/parameters/PageSizeQuery"
       responses:
         "200": { $ref: "#/components/responses/DocumentList" }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -309,8 +324,15 @@ paths:
   /api/logistics/v1/transfers:
     get:
       operationId: listTransfers
+      description: >-
+        Lists transfers visible to the selected warehouse. scheduledDate selects both arrivals and
+        departures on one exact warehouse-local business day; omission is retained only for bounded
+        relationship lookups.
       parameters:
         - $ref: "#/components/parameters/WarehouseIdQuery"
+        - $ref: "#/components/parameters/ScheduledDateQuery"
+        - $ref: "#/components/parameters/PageQuery"
+        - $ref: "#/components/parameters/PageSizeQuery"
       responses:
         "200": { $ref: "#/components/responses/DocumentList" }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -459,6 +481,42 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/logistics/v1/transfers/{documentId}/depart:
+    parameters:
+      - $ref: "#/components/parameters/DocumentId"
+      - $ref: "#/components/parameters/ExpectedVersion"
+      - $ref: "#/components/parameters/IdempotencyKey"
+    post:
+      operationId: departTransfer
+      description: >-
+        Starts a confirmed transfer with no physical cabin lines. Resource-only and loose-furniture
+        plans enter IN_TRANSIT through the same durable transfer-plan workflow; a transfer with
+        concrete cabins must use the independently fenced line departure commands.
+      responses:
+        "202": { $ref: "#/components/responses/Document" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/logistics/v1/transfers/{documentId}/arrive:
+    parameters:
+      - $ref: "#/components/parameters/DocumentId"
+      - $ref: "#/components/parameters/ExpectedVersion"
+      - $ref: "#/components/parameters/IdempotencyKey"
+    post:
+      operationId: arriveTransfer
+      description: >-
+        Records factual arrival of a zero-cabin transfer and starts furniture execution plus
+        resource-placement completion. A transfer with concrete cabins must use line arrival so
+        asset location, media, repair continuation, and lease release cannot be bypassed.
+      responses:
+        "202": { $ref: "#/components/responses/Document" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/logistics/v1/transfers/{documentId}/lines/{lineId}/depart:
     parameters:
       - $ref: "#/components/parameters/DocumentId"
@@ -768,6 +826,40 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/internal/logistics/v1/planning/vehicle-assignments:
+    get:
+      operationId: listRoutePlanningVehicleOperationalAssignments
+      description: >-
+        Returns the logistics-owned live assignment closure required to resolve vehicle placement
+        in the bounded half-open interval [windowStart, windowEnd). The closure follows every
+        vehicle whose assignment history has touched the requested warehouse, so a later A-to-B-to-C
+        reposition cannot make that vehicle falsely reappear at A. Terminal COMPLETED and CANCELLED
+        rows are not returned. A TRIP_ONLY assignment reserves the physical vehicle without changing
+        its operational base; TEMPORARY and PERMANENT assignments become destination availability
+        only after factual arrival changes their status to ACTIVE. Requires the exact SERVICE
+        identity logistics-planner, audience rwms-services, and sole scope logistics.planning.
+      parameters:
+        - $ref: "#/components/parameters/WarehouseIdQuery"
+        - name: windowStart
+          in: query
+          required: true
+          schema: { type: string, format: date-time }
+        - name: windowEnd
+          in: query
+          required: true
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: >-
+            Live PLANNED, IN_TRANSIT and ACTIVE vehicle facts used to overlay planner-owned catalog
+            data without mutating the catalog vehicle's home warehouse.
+          content:
+            application/json:
+              schema:
+                { $ref: "#/components/schemas/PlanningVehicleOperationalAssignmentList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
   /api/internal/logistics/v1/planning/requests:
     get:
       operationId: getRoutePlanningRequests
@@ -775,8 +867,9 @@ paths:
         Exports the still-unplanned cabin remainder of SAVED rental orders for one warehouse and
         bounded inclusive date range. Requires the exact SERVICE identity logistics-planner,
         audience rwms-services, and sole scope logistics.planning. Coordinates, when present, are
-        authoritative over the address. The response omits phone numbers, furniture, prices, and
-        all unrelated client facts.
+        authoritative over the address. The response includes only the normalized client legal
+        type and contact facts required for dispatcher actions; furniture and unrelated client
+        facts remain omitted.
       parameters:
         - $ref: "#/components/parameters/WarehouseIdQuery"
         - name: dateFrom
@@ -852,6 +945,295 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/internal/logistics/v1/planning/assignments/{sourcePlanId}:
+    put:
+      operationId: replaceRoutePlanningAssignments
+      description: >-
+        Atomically replaces the complete membership of one still-unstarted published source plan
+        with a strictly newer revision. The logistics owner revalidates order, task, lineage, date,
+        warehouse, queue, and driver-shift fences before delegating one all-or-nothing replacement
+        to task-board. An exact Idempotency-Key replay returns the stored result; a changed payload,
+        started task, stale version, or incomplete membership returns 409 without partial mutation.
+      parameters:
+        - name: sourcePlanId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReplacePlanningAssignmentsRequest" }
+      responses:
+        "200":
+          description: Authoritative owner and task-board fences after application or exact replay.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReplacePlanningAssignmentsResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/internal/logistics/v1/planning/assignments/{sourcePlanId}/withdraw-cancelled:
+    post:
+      operationId: withdrawCancelledRoutePlanningAssignment
+      description: >-
+        Withdraws exactly one assignment only after the logistics owner has authoritatively
+        cancelled its order, shipment document, and driver task. The existing published-plan saga
+        prepares one task-board hold, rechecks owner fences, advances only forward after owner
+        confirmation, retains the removed tombstone, and replaces every remaining member and shift
+        under a strictly newer lineage revision. Exact Idempotency-Key replay returns the stored
+        result; stale membership, started work, or a changed owner state returns 409 without a
+        silent customer commitment change.
+      parameters:
+        - name: sourcePlanId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlanningPublishedAssignmentWithdrawal" }
+      responses:
+        "200":
+          description: Durable removed-member tombstone and the current published lineage version.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlanningPublishedAssignmentWithdrawalResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/internal/logistics/v1/planning/assignments/{externalTaskId}/provisional-eta:
+    put:
+      operationId: replaceRoutePlanningProvisionalEta
+      description: >-
+        Version-fenced refresh or invalidation of the approximate ETA shown only for an unclaimed
+        WAREHOUSE_DRIVERS task on a future warehouse-local day. Claim, assignment, start,
+        cancellation, or a newer route source invalidates the preview. This is not live GPS ETA.
+      parameters:
+        - name: externalTaskId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlanningProvisionalEtaUpdateRequest" }
+      responses:
+        "200":
+          description: Current versioned preview, possibly cleared.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlanningProvisionalEtaResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/internal/logistics/v1/planning/orders/{orderId}/reschedule-options:
+    get:
+      operationId: getRoutePlanningOrderRescheduleOptions
+      description: >-
+        Recalculates all route-feasible replacement offers from the real completed CustomerApp
+        booking. The order fence must still match; the owner resolves and returns the current
+        session fence. The current confirmed slot is never released by this read.
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: expectedOrderVersion
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 0 }
+      responses:
+        "200":
+          description: Current commitment and fresh short-lived route-feasible offers.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlanningOrderRescheduleOptions" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/internal/logistics/v1/planning/orders/{orderId}/reschedule:
+    post:
+      operationId: rescheduleRoutePlanningOrder
+      description: >-
+        Applies one dispatcher-recorded customer agreement through the existing atomic booking
+        slot/order/session transaction. The selected short-lived offer is recalculated under
+        workload, route, order, and session fences; stale or unavailable choices are rejected.
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlanningOrderRescheduleRequest" }
+      responses:
+        "200":
+          description: Resulting authoritative order, session and confirmed-slot fences.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlanningOrderRescheduleResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/internal/logistics/v1/planning/base-tasks:
+    get:
+      operationId: listRoutePlanningBaseTasks
+      description: >-
+        Returns already-existing shared warehouse movement work that may be considered only after
+        external logistics. This read never creates, claims, or duplicates an RWA/task-board task.
+      parameters:
+        - $ref: "#/components/parameters/WarehouseIdQuery"
+        - name: availableAt
+          in: query
+          required: true
+          schema: { type: string, format: date-time }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+      responses:
+        "200":
+          description: Bounded eligible base-work candidates in priority order.
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 100
+                items: { $ref: "#/components/schemas/PlanningBaseTask" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/retention/dry-run:
+    get:
+      operationId: dryRunLogisticsRetention
+      description: Reports terminal online event rows and active legal holds without moving or deleting data.
+      responses:
+        "200":
+          description: Non-destructive policy and candidate report.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlanningRetentionDryRun" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /api/logistics/v1/retention/legal-holds:
+    get:
+      operationId: listLogisticsRetentionLegalHolds
+      responses:
+        "200":
+          description: Active durable deletion fences.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PlanningRetentionLegalHold" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: placeLogisticsRetentionLegalHold
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlacePlanningRetentionLegalHoldRequest" }
+      responses:
+        "200":
+          description: Persisted active hold.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlanningRetentionLegalHold" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /api/logistics/v1/retention/legal-holds/{holdId}/release:
+    post:
+      operationId: releaseLogisticsRetentionLegalHold
+      parameters:
+        - name: holdId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReleasePlanningRetentionLegalHoldRequest" }
+      responses:
+        "200":
+          description: Released hold with preserved placement and release audit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlanningRetentionLegalHold" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/logistics/v1/retention/archive-manifests:
+    post:
+      operationId: recordLogisticsArchiveManifest
+      description: Records an already-created immutable encrypted private archive object; no export or deletion is executed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecordPlanningArchiveManifestRequest" }
+      responses:
+        "200":
+          description: Recorded checksum manifest.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlanningArchiveManifest" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/logistics/v1/retention/archive-manifests/{manifestId}/verify:
+    post:
+      operationId: verifyLogisticsArchiveManifest
+      parameters:
+        - name: manifestId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VerifyPlanningArchiveManifestRequest" }
+      responses:
+        "200":
+          description: Independently verified checksum manifest; deletion remains unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlanningArchiveManifest" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/internal/logistics/v1/planning/capacity-snapshots/{warehouseId}:
     put:
       operationId: replaceRoutePlanningCapacitySnapshot
@@ -1423,6 +1805,12 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "502":
+          description: An owning service returned an invalid reservation response.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ApiProblem" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/orders/{orderId}/save:
     parameters:
       - $ref: "#/components/parameters/OrderId"
@@ -2019,6 +2407,8 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
     put:
       operationId: publishRentalInquiryClientPresentation
       description: >-
@@ -2202,6 +2592,234 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/warehouses/{warehouseId}/contractor-route-shares:
+    parameters:
+      - name: warehouseId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: createContractorRouteShare
+      description: >-
+        Explicitly creates one expiring and revocable public route for an exact active CONTRACTOR
+        worker and one to fifty already assigned logistics externalTaskIds. The caller requires
+        rwms.write plus warehouse EDIT access, and the warehouse must belong to the signed
+        company_id. Logistics re-proves every local
+        DriverLogisticsTask -> LogisticsDocument -> RentalOrder binding and the live exact-worker
+        task-board snapshot before inserting only identities and link lifecycle. Exact
+        subject-scoped Idempotency-Key replay returns the original link; changed reuse conflicts.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateContractorRouteShareRequest" }
+      responses:
+        "200":
+          description: Exact idempotent replay of the original contractor route link.
+          headers:
+            Idempotency-Replayed:
+              required: true
+              schema: { type: string, const: "true" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContractorRouteShare" }
+        "201":
+          description: New contractor route link.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContractorRouteShare" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/warehouses/{warehouseId}/contractor-route-shares/{shareId}/revoke:
+    parameters:
+      - name: warehouseId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: shareId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: revokeContractorRouteShare
+      description: >-
+        Revokes one warehouse-owned capability and rotates its signed token revision under an
+        expectedVersion fence. The caller requires rwms.write plus warehouse EDIT access, and the
+        warehouse must belong to the signed company_id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RevokeContractorRouteShareRequest" }
+      responses:
+        "200":
+          description: Revoked route share.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContractorRouteShare" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/logistics/public/v1/contractor-route-shares/{token}:
+    parameters:
+      - $ref: "#/components/parameters/PublicPresentationToken"
+    get:
+      security: []
+      operationId: getPublicContractorRouteShare
+      description: >-
+        Returns a no-store route only while the HMAC revision, database expiry, revocation and
+        exact active contractor assignment all remain valid. Invalid, expired, revoked,
+        cross-worker and reassigned links return the same 404. Current execution state is read live
+        from task-board; address, coordinates, contact, comment and cargo come only from the exact
+        logistics task/document/order chain. Ordered works, materials, comments, source-media
+        metadata and bounded evidence metadata come from each exact live task-board route entry.
+        Proven source images and READY evidence contain only capability-scoped logistics proxy paths;
+        no general board, private object locator or service credential is exposed.
+      responses:
+        "200":
+          description: Current exact contractor route.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicContractorRouteShare" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/public/v1/contractor-route-shares/{token}/tasks/{externalTaskId}/entries/{entryId}/actions:
+    parameters:
+      - $ref: "#/components/parameters/PublicPresentationToken"
+      - name: externalTaskId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: entryId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      security: []
+      operationId: applyPublicContractorRouteTaskAction
+      description: >-
+        Proxies one exact START or COMPLETE through task-board's existing state machine. The
+        observed route-entry version fences the transition and Idempotency-Key is forwarded as the
+        exact operationId. The public holder receives only typed safe Russian conflicts; service
+        credentials and downstream response bodies never leave logistics-service.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApplyContractorRouteTaskActionRequest" }
+      responses:
+        "200":
+          description: Applied transition or its exact idempotent replay.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicContractorRouteTaskAction" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/public/v1/contractor-route-shares/{token}/tasks/{externalTaskId}/entries/{entryId}/evidence/{evidenceId}:
+    parameters:
+      - $ref: "#/components/parameters/PublicPresentationToken"
+      - name: externalTaskId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: entryId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: evidenceId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      security: []
+      operationId: uploadPublicContractorRouteEvidence
+      description: >-
+        Accepts one bounded JPEG or WebP only for the exact live contractor, task and route entry.
+        Idempotency-Key must equal evidenceId. Logistics verifies the actual body length and
+        X-Content-SHA256, reserves that immutable declaration in task-board, then forwards the same
+        bytes through media-service's private exact-worker ingress. Exact retries reuse the same
+        evidence and media identities; credentials and object-store locations remain private.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: X-Content-SHA256
+          in: header
+          required: true
+          schema: { type: string, pattern: "^[0-9a-f]{64}$" }
+        - name: X-Captured-At
+          in: header
+          required: true
+          schema: { type: string, format: date-time }
+      requestBody:
+        required: true
+        content:
+          image/jpeg:
+            schema: { type: string, format: binary, maxLength: 15728640 }
+          image/webp:
+            schema: { type: string, format: binary, maxLength: 1048576 }
+      responses:
+        "200":
+          description: Current exact upload state; PROCESSING is exposed as UPLOADING for polling.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicContractorEvidenceUpload" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "411": { $ref: "#/components/responses/LengthRequired" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/UnsupportedMedia" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/public/v1/contractor-route-shares/{token}/tasks/{externalTaskId}/entries/{entryId}/media/{mediaId}/generations/{generation}/variants/{variant}/content:
+    parameters:
+      - $ref: "#/components/parameters/PublicPresentationToken"
+      - name: externalTaskId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: entryId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: mediaId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: generation
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+      - name: variant
+        in: path
+        required: true
+        schema: { type: string, enum: [SMALL, MEDIUM, LARGE] }
+    get:
+      security: []
+      operationId: getPublicContractorRouteMedia
+      description: >-
+        Streams one SMALL, MEDIUM or LARGE WebP only after the public capability, exact live
+        worker/task/entry binding and media membership are re-proven. Membership is limited to the
+        logistics task source gallery, that exact task-board entry source gallery, or exact READY
+        evidence. Every identity, generation or assignment mismatch is the same opaque 404.
+      responses:
+        "200":
+          description: Exact immutable no-store derivative.
+          content:
+            image/webp:
+              schema: { type: string, format: binary }
+        "404": { $ref: "#/components/responses/NotFound" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/public/v1/client-presentations/{token}:
     parameters:
@@ -2836,6 +3454,91 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/customer/v1/bookings/{bookingId}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/CustomerBookingId"
+    post:
+      operationId: cancelCustomerBooking
+      description: >-
+        Idempotently cancels only a completed CustomerApp checkout whose SAVED order, shipment
+        draft and furniture preparation have not started. The durable response may remain
+        CANCELLATION_PENDING while existing order/asset release recovery continues. No
+        cancellation fee is calculated by this API.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CancelCustomerBookingRequest" }
+      responses:
+        "200":
+          description: Current durable cancellation outcome or exact idempotent replay.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerBooking" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/customer/v1/bookings/{bookingId}/delivery-slots/search:
+    parameters:
+      - $ref: "#/components/parameters/CustomerBookingId"
+    post:
+      operationId: searchCustomerBookingRescheduleSlots
+      description: >-
+        Recalculates replacement slots from the completed order's exact cabins, address, route
+        profile and current confirmed slot. The original cart and cabin/furniture selection are
+        never reopened or accepted from the client.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SearchCustomerBookingRescheduleRequest" }
+      responses:
+        "200":
+          description: Feasible replacement slot offers with the current slot excluded from workload.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CustomerDeliverySlot" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/customer/v1/bookings/{bookingId}/reschedule:
+    parameters:
+      - $ref: "#/components/parameters/CustomerBookingId"
+    post:
+      operationId: rescheduleCustomerBooking
+      description: >-
+        Idempotently and atomically rechecks a freshly calculated offer, replaces the SAVED
+        order's desired delivery date and confirms the new slot before committing release of the
+        old slot. On any failure the original confirmed slot and order date remain unchanged.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RescheduleCustomerBookingRequest" }
+      responses:
+        "200":
+          description: Rescheduled booking or exact idempotent replay.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerBooking" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/customer/v1/bookings/{bookingId}/cabins/{cabinId}/acceptance:
     parameters:
       - $ref: "#/components/parameters/CustomerBookingId"
@@ -2893,6 +3596,91 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/customer-cabin-problems:
+    get:
+      operationId: listCustomerCabinProblems
+      description: >-
+        Lists only customer cabin problem claims visible to the authenticated company and warehouse
+        actor. The compact context is a current order/client projection; immutable evidence and
+        lifecycle actions remain owned by logistics.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/CustomerCabinProblemClaimStatus" }
+      responses:
+        "200":
+          description: Visible customer cabin problem claims ordered by the resolution deadline.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CustomerCabinProblemClaim" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /api/logistics/v1/customer-cabin-problems/{problemId}:
+    parameters:
+      - $ref: "#/components/parameters/CustomerCabinProblemId"
+    get:
+      operationId: getCustomerCabinProblem
+      responses:
+        "200":
+          description: One visible customer cabin problem claim and its immutable lifecycle history.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerCabinProblemClaim" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/logistics/v1/customer-cabin-problems/{problemId}/start-progress:
+    parameters:
+      - $ref: "#/components/parameters/CustomerCabinProblemId"
+    post:
+      operationId: startCustomerCabinProblem
+      description: >-
+        Moves an OPEN claim to IN_PROGRESS under its explicit optimistic version fence. It records
+        a local immutable lifecycle action and does not silently alter a customer commitment.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StartCustomerCabinProblemRequest" }
+      responses:
+        "200":
+          description: Updated company- and warehouse-fenced claim.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerCabinProblemClaim" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/logistics/v1/customer-cabin-problems/{problemId}/resolve:
+    parameters:
+      - $ref: "#/components/parameters/CustomerCabinProblemId"
+    post:
+      operationId: resolveCustomerCabinProblem
+      description: >-
+        Records a selected remedy for an IN_PROGRESS claim under its explicit optimistic version
+        fence. It records the decision only; execution of a discount, replacement or return stays
+        with its existing owner and cannot be inferred by this endpoint.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResolveCustomerCabinProblemRequest" }
+      responses:
+        "200":
+          description: Resolved company- and warehouse-fenced claim.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerCabinProblemClaim" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/logistics/v1/{documentType}/{documentId}/reconcile:
     parameters:
       - $ref: "#/components/parameters/DocumentTypePath"
@@ -2940,6 +3728,26 @@ components:
       in: query
       required: true
       schema: { type: string, format: uuid }
+    ScheduledDateQuery:
+      name: scheduledDate
+      in: query
+      required: false
+      description: >-
+        Exact business date in the selected warehouse timezone. Active operation pages always
+        provide it; omission remains available for bounded relationship lookups.
+      schema: { type: string, format: date }
+    PageQuery:
+      name: page
+      in: query
+      required: false
+      description: Zero-based document page number.
+      schema: { type: integer, minimum: 0, default: 0 }
+    PageSizeQuery:
+      name: size
+      in: query
+      required: false
+      description: Number of documents returned in one bounded page.
+      schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
     ExpectedVersion:
       name: expectedVersion
       in: query
@@ -2957,6 +3765,11 @@ components:
       schema: { type: string, format: uuid }
     CustomerBookingId:
       name: bookingId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    CustomerCabinProblemId:
+      name: problemId
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -3151,7 +3964,7 @@ components:
         selectionVersion: { type: integer, format: int64, minimum: 0 }
         state:
           type: string
-          enum: [ACTIVE, SELECTION_PENDING, CHECKOUT_PENDING, BOOKED]
+          enum: [ACTIVE, SELECTION_PENDING, CHECKOUT_PENDING, BOOKED, CANCEL_PENDING, CANCELLED]
     CustomerCabinPhoto:
       type: object
       additionalProperties: false
@@ -3451,15 +4264,38 @@ components:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         slotId: { type: string, format: uuid }
         slotVersion: { type: integer, format: int64, minimum: 0 }
+    CancelCustomerBookingRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+    SearchCustomerBookingRescheduleRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+    RescheduleCustomerBookingRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, slotId, slotVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        slotId: { type: string, format: uuid }
+        slotVersion: { type: integer, format: int64, minimum: 0 }
     CustomerBooking:
       type: object
       additionalProperties: false
       required:
-        [bookingId, orderId, status, errorCode, inquiryId, slotId, warehouseId, deliveryAddress, deliveryDate, windowStart, windowEnd, cabins]
+        [bookingId, version, orderId, status, errorCode, inquiryId, slotId, warehouseId, deliveryAddress, deliveryDate, windowStart, windowEnd, cancellationFeeRubles, cabins]
       properties:
         bookingId: { type: [string, "null"], format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
         orderId: { type: [string, "null"], format: uuid }
-        status: { type: string, enum: [PENDING, COMPLETED, REJECTED] }
+        status:
+          type: string
+          enum: [PENDING, COMPLETED, REJECTED, CANCELLATION_PENDING, CANCELLED]
         errorCode: { type: [string, "null"] }
         inquiryId: { type: string, format: uuid }
         slotId: { type: [string, "null"], format: uuid }
@@ -3468,6 +4304,11 @@ components:
         deliveryDate: { type: [string, "null"], format: date }
         windowStart: { type: [string, "null"], format: time }
         windowEnd: { type: [string, "null"], format: time }
+        cancellationFeeRubles:
+          type: [integer, "null"]
+          format: int64
+          minimum: 0
+          description: Always null until a separate authoritative fee policy is introduced.
         cabins:
           type: array
           maxItems: 100
@@ -3576,6 +4417,79 @@ components:
           maxItems: 20
           items: { $ref: "#/components/schemas/CustomerProblemMediaReference" }
         reportedAt: { type: string, format: date-time }
+    CustomerCabinProblemClaimStatus:
+      type: string
+      enum: [OPEN, IN_PROGRESS, RESOLVED]
+    CustomerCabinProblemResolutionKind:
+      type: string
+      enum: [DISCOUNT, REPLACEMENT, RETURN]
+    CustomerCabinProblemActionKind:
+      type: string
+      enum: [STATUS_TRANSITION, RESOLUTION_DECISION]
+    CustomerCabinProblemAction:
+      type: object
+      additionalProperties: false
+      required:
+        [actionId, actionKind, previousStatus, lifecycleStatus, resolutionKind, commentText, occurredAt]
+      properties:
+        actionId: { type: string, format: uuid }
+        actionKind: { $ref: "#/components/schemas/CustomerCabinProblemActionKind" }
+        previousStatus: { $ref: "#/components/schemas/CustomerCabinProblemClaimStatus" }
+        lifecycleStatus: { $ref: "#/components/schemas/CustomerCabinProblemClaimStatus" }
+        resolutionKind:
+          type: [string, "null"]
+          enum: [DISCOUNT, REPLACEMENT, RETURN, null]
+        commentText: { type: [string, "null"], minLength: 1, maxLength: 2000 }
+        occurredAt: { type: string, format: date-time }
+    CustomerCabinProblemClaim:
+      type: object
+      additionalProperties: false
+      required:
+        [problemId, orderId, warehouseId, bookingId, cabinUnitId, orderNumber, category, phase,
+         description, reportedAt, clientDisplayName, clientType, clientPhone, orderContactPhone,
+         deliveryAddress, status, resolutionDeadline, version, resolutionKind, resolutionComment,
+         resolvedAt, actions]
+      properties:
+        problemId: { type: string, format: uuid }
+        orderId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        bookingId: { type: string, format: uuid }
+        cabinUnitId: { type: string, format: uuid }
+        orderNumber: { type: string, minLength: 1, maxLength: 32 }
+        category: { type: string, enum: [MISSING_EQUIPMENT, UNSUITABLE_CABIN, OTHER] }
+        phase: { type: string, enum: [BEFORE_ACCEPTANCE, AFTER_ACCEPTANCE] }
+        description: { type: string, minLength: 1, maxLength: 2000 }
+        reportedAt: { type: string, format: date-time }
+        clientDisplayName: { type: string, minLength: 1, maxLength: 512 }
+        clientType: { $ref: "#/components/schemas/ClientType" }
+        clientPhone: { type: [string, "null"], maxLength: 32 }
+        orderContactPhone: { type: [string, "null"], maxLength: 32 }
+        deliveryAddress: { type: [string, "null"], maxLength: 1000 }
+        status: { $ref: "#/components/schemas/CustomerCabinProblemClaimStatus" }
+        resolutionDeadline: { type: string, format: date-time }
+        version: { type: integer, format: int64, minimum: 0 }
+        resolutionKind:
+          type: [string, "null"]
+          enum: [DISCOUNT, REPLACEMENT, RETURN, null]
+        resolutionComment: { type: [string, "null"], minLength: 1, maxLength: 2000 }
+        resolvedAt: { type: [string, "null"], format: date-time }
+        actions:
+          type: array
+          items: { $ref: "#/components/schemas/CustomerCabinProblemAction" }
+    StartCustomerCabinProblemRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+    ResolveCustomerCabinProblemRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, resolutionKind, resolutionComment]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        resolutionKind: { $ref: "#/components/schemas/CustomerCabinProblemResolutionKind" }
+        resolutionComment: { type: string, minLength: 1, maxLength: 2000 }
     PlanningDateOption:
       type: object
       additionalProperties: false
@@ -3596,11 +4510,24 @@ components:
           type: [integer, "null"]
           minimum: 1
           description: Informational source depot-to-customer truck travel band; exact capacity evaluates the complete route and never rejects solely by band number.
+    PlanningUnitReservation:
+      type: object
+      additionalProperties: false
+      required: [unitId, inventorySourceWarehouseId]
+      properties:
+        unitId:
+          type: string
+          format: uuid
+          description: Concrete cabin reserved for the rental order.
+        inventorySourceWarehouseId:
+          type: string
+          format: uuid
+          description: Warehouse that physically holds this reservation before shipment.
     PlanningRequest:
       type: object
       additionalProperties: false
       required:
-        [orderId, orderVersion, sourceRevision, orderNumber, clientName, address, latitude, longitude, quantity, unitIds, dateOptions, trailerAccessAllowed, deliveryPriceRubles, priceIsochroneMinutes, createdAt]
+        [orderId, orderVersion, sourceRevision, customerDeliveryPurpose, orderNumber, clientName, clientType, contactName, contactPhone, address, latitude, longitude, quantity, unitIds, unitReservations, dateOptions, trailerAccessAllowed, deliveryPriceRubles, priceIsochroneMinutes, createdAt]
       properties:
         orderId: { type: string, format: uuid }
         orderVersion: { type: integer, format: int64, minimum: 0 }
@@ -3608,8 +4535,16 @@ components:
           type: string
           pattern: '^[0-9a-f]{64}$'
           description: Deterministic revision of every exported planning fact; orderVersion remains the rental-order command fence.
+        customerDeliveryPurpose:
+          $ref: "#/components/schemas/CustomerDeliveryPurpose"
         orderNumber: { type: string, minLength: 1 }
         clientName: { type: string, minLength: 1 }
+        clientType: { $ref: "#/components/schemas/ClientType" }
+        contactName: { type: [string, "null"], maxLength: 512 }
+        contactPhone:
+          type: [string, "null"]
+          maxLength: 32
+          description: Normalized order override or historical client phone; null when an old record has no phone.
         address: { type: string, minLength: 1 }
         latitude:
           type: [number, "null"]
@@ -3623,6 +4558,14 @@ components:
           minItems: 1
           uniqueItems: true
           items: { type: string, format: uuid }
+        unitReservations:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          description: >-
+            Complete unit-to-source mapping for unitIds. It does not change the regional
+            service warehouse and lets the planner choose a physically valid source.
+          items: { $ref: "#/components/schemas/PlanningUnitReservation" }
         dateOptions:
           type: array
           minItems: 1
@@ -3653,6 +4596,255 @@ components:
         requests:
           type: array
           items: { $ref: "#/components/schemas/PlanningRequest" }
+    PlanningCustomerContact:
+      type: object
+      additionalProperties: false
+      required: [clientType, clientName, contactName, contactPhone]
+      properties:
+        clientType: { $ref: "#/components/schemas/ClientType" }
+        clientName: { type: string, minLength: 1, maxLength: 512 }
+        contactName: { type: [string, "null"], maxLength: 512 }
+        contactPhone: { type: [string, "null"], maxLength: 32 }
+    PlanningRescheduleSlot:
+      type: object
+      additionalProperties: false
+      required: [slotId, slotVersion, date, kind, windowStart, windowEnd, deliveryPriceRubles, expiresAt]
+      properties:
+        slotId: { type: string, format: uuid }
+        slotVersion: { type: integer, format: int64, minimum: 0 }
+        date: { type: string, format: date }
+        kind: { type: string, enum: [FIXED_WINDOW, DURING_DAY] }
+        windowStart: { type: [string, "null"], format: time }
+        windowEnd: { type: [string, "null"], format: time }
+        deliveryPriceRubles: { type: [integer, "null"], format: int64, minimum: 0 }
+        expiresAt: { type: string, format: date-time }
+    PlanningOrderRescheduleOptions:
+      type: object
+      additionalProperties: false
+      required: [orderId, orderVersion, sessionId, sessionVersion, bookingId, warehouseId, customer, currentSlot, options]
+      properties:
+        orderId: { type: string, format: uuid }
+        orderVersion: { type: integer, format: int64, minimum: 0 }
+        sessionId: { type: string, format: uuid }
+        sessionVersion: { type: integer, format: int64, minimum: 0 }
+        bookingId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        customer: { $ref: "#/components/schemas/PlanningCustomerContact" }
+        currentSlot: { $ref: "#/components/schemas/PlanningRescheduleSlot" }
+        options:
+          type: array
+          items: { $ref: "#/components/schemas/PlanningRescheduleSlot" }
+    PlanningOrderRescheduleRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedOrderVersion, expectedSessionVersion, slotId, slotVersion, decisionCode, decisionActorSubjectId, decisionReason, publishedPlanWithdrawal]
+      properties:
+        expectedOrderVersion: { type: integer, format: int64, minimum: 0 }
+        expectedSessionVersion: { type: integer, format: int64, minimum: 0 }
+        slotId: { type: string, format: uuid }
+        slotVersion: { type: integer, format: int64, minimum: 0 }
+        decisionCode:
+          type: string
+          enum: [CUSTOMER_AGREED_RECOMMENDED, CUSTOMER_AGREED_ALTERNATIVE]
+        decisionActorSubjectId: { type: string, format: uuid }
+        decisionReason: { type: string, minLength: 1, maxLength: 2000 }
+        publishedPlanWithdrawal:
+          description: >-
+            Exact old-day lineage withdrawal used only when the customer commitment was already
+            published. Null keeps the ordinary unassigned-booking reschedule path.
+          oneOf:
+            - $ref: "#/components/schemas/PlanningPublishedAssignmentWithdrawal"
+            - type: "null"
+    PlanningPublishedAssignmentRemoval:
+      type: object
+      additionalProperties: false
+      required: [documentId, externalTaskId, expectedTaskVersion, serviceWarehouseId, scheduledDate, unitIds]
+      properties:
+        documentId: { type: string, format: uuid }
+        externalTaskId: { type: string, format: uuid }
+        expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
+        serviceWarehouseId: { type: string, format: uuid }
+        scheduledDate: { type: string, format: date }
+        unitIds:
+          type: array
+          minItems: 1
+          maxItems: 2
+          uniqueItems: true
+          items: { type: string, format: uuid }
+    PlanningPublishedAssignmentWithdrawal:
+      type: object
+      additionalProperties: false
+      required: [sourcePlanId, expectedSourcePlanVersion, replacementPlanVersion, warehouseId, date, removedAssignment, remainingAssignments, driverShiftPlans]
+      properties:
+        sourcePlanId: { type: string, format: uuid }
+        expectedSourcePlanVersion: { type: integer, format: int64, minimum: 1 }
+        replacementPlanVersion: { type: integer, format: int64, minimum: 2 }
+        warehouseId: { type: string, format: uuid }
+        date: { type: string, format: date }
+        removedAssignment: { $ref: "#/components/schemas/PlanningPublishedAssignmentRemoval" }
+        remainingAssignments:
+          type: array
+          maxItems: 500
+          items: { $ref: "#/components/schemas/PlanningAssignmentReplacement" }
+        driverShiftPlans:
+          type: array
+          maxItems: 500
+          items: { $ref: "#/components/schemas/PlanningDriverShiftPlan" }
+    PlanningPublishedAssignmentWithdrawalResult:
+      type: object
+      additionalProperties: false
+      required: [sourcePlanId, sourcePlanVersion, removedExternalTaskId, removedTaskVersion, state]
+      properties:
+        sourcePlanId: { type: string, format: uuid }
+        sourcePlanVersion: { type: integer, format: int64, minimum: 2 }
+        removedExternalTaskId: { type: string, format: uuid }
+        removedTaskVersion: { type: integer, format: int64, minimum: 0 }
+        state: { type: string, const: COMPLETE }
+    PlanningOrderRescheduleResponse:
+      type: object
+      additionalProperties: false
+      required: [orderId, orderVersion, sessionId, sessionVersion, bookingId, warehouseId, confirmedSlot, publishedPlanWithdrawal]
+      properties:
+        orderId: { type: string, format: uuid }
+        orderVersion: { type: integer, format: int64, minimum: 0 }
+        sessionId: { type: string, format: uuid }
+        sessionVersion: { type: integer, format: int64, minimum: 0 }
+        bookingId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        confirmedSlot: { $ref: "#/components/schemas/PlanningRescheduleSlot" }
+        publishedPlanWithdrawal:
+          oneOf:
+            - $ref: "#/components/schemas/PlanningPublishedAssignmentWithdrawalResult"
+            - type: "null"
+    PlanningBaseTask:
+      type: object
+      additionalProperties: false
+      required: [taskId, externalTaskId, kind, unitNumber, summary, scheduledDate, priority, state]
+      properties:
+        taskId: { type: string, format: uuid }
+        externalTaskId: { type: string, format: uuid }
+        kind:
+          type: string
+          enum: [GENERAL_MOVEMENT, DELIVER_TO_REPAIR, REMOVE_FROM_REPAIR, CAPITAL_TO_PRODUCTION, TRANSFER]
+        unitNumber: { type: string, minLength: 1, maxLength: 64 }
+        summary: { type: string, minLength: 1, maxLength: 2000 }
+        scheduledDate: { type: string, format: date }
+        priority: { type: integer, minimum: 1, maximum: 5 }
+        state: { type: string, const: SCHEDULED }
+    PlanningProvisionalEtaUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedTaskVersion, sourcePlanId, sourcePlanVersion, provisionalEta]
+      properties:
+        expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
+        sourcePlanId: { type: string, format: uuid }
+        sourcePlanVersion: { type: integer, format: int64, minimum: 1 }
+        provisionalEta:
+          type: [string, "null"]
+          format: date-time
+          description: Null invalidates the previous preview without replacing it.
+    PlanningProvisionalEtaResponse:
+      type: object
+      additionalProperties: false
+      required: [taskId, taskVersion, externalTaskId, provisionalEta, sourcePlanId, sourcePlanVersion]
+      properties:
+        taskId: { type: string, format: uuid }
+        taskVersion: { type: integer, format: int64, minimum: 0 }
+        externalTaskId: { type: string, format: uuid }
+        provisionalEta: { type: [string, "null"], format: date-time }
+        sourcePlanId: { type: [string, "null"], format: uuid }
+        sourcePlanVersion: { type: [integer, "null"], format: int64, minimum: 1 }
+    LogisticsRetentionDataset:
+      type: string
+      enum: [BUSINESS_AUDIT_PROOF, EVENT_OUTBOX, EVENT_INBOX, GPS_TELEMETRY]
+    PlanningRetentionCandidateCount:
+      type: object
+      additionalProperties: false
+      required: [dataset, cutoff, rowCount, activeHolds]
+      properties:
+        dataset: { $ref: "#/components/schemas/LogisticsRetentionDataset" }
+        cutoff: { type: string, format: date-time }
+        rowCount: { type: integer, format: int64, minimum: 0 }
+        activeHolds: { type: integer, format: int64, minimum: 0 }
+    PlanningRetentionDryRun:
+      type: object
+      additionalProperties: false
+      required: [generatedAt, businessAuditProofDays, eventOnlineDays, eventArchiveDays, gpsTelemetryDays, deletionEnabled, dualApprovalRequired, candidates]
+      properties:
+        generatedAt: { type: string, format: date-time }
+        businessAuditProofDays: { type: integer, format: int64, minimum: 1 }
+        eventOnlineDays: { type: integer, format: int64, minimum: 1 }
+        eventArchiveDays: { type: integer, format: int64, minimum: 1 }
+        gpsTelemetryDays: { type: integer, format: int64, minimum: 1 }
+        deletionEnabled: { type: boolean, default: false }
+        dualApprovalRequired: { type: boolean, const: true }
+        candidates:
+          type: array
+          items: { $ref: "#/components/schemas/PlanningRetentionCandidateCount" }
+    PlacePlanningRetentionLegalHoldRequest:
+      type: object
+      additionalProperties: false
+      required: [dataset, scopeKey, reason]
+      properties:
+        dataset: { $ref: "#/components/schemas/LogisticsRetentionDataset" }
+        scopeKey: { type: [string, "null"], maxLength: 256 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+    ReleasePlanningRetentionLegalHoldRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reason]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+    PlanningRetentionLegalHold:
+      type: object
+      additionalProperties: false
+      required: [id, version, dataset, scopeKey, reason, placedBySubjectId, placedAt, releasedBySubjectId, releasedAt, releaseReason]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        dataset: { $ref: "#/components/schemas/LogisticsRetentionDataset" }
+        scopeKey: { type: [string, "null"], maxLength: 256 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+        placedBySubjectId: { type: string, format: uuid }
+        placedAt: { type: string, format: date-time }
+        releasedBySubjectId: { type: [string, "null"], format: uuid }
+        releasedAt: { type: [string, "null"], format: date-time }
+        releaseReason: { type: [string, "null"], maxLength: 2000 }
+    RecordPlanningArchiveManifestRequest:
+      type: object
+      additionalProperties: false
+      required: [dataset, periodStart, periodEnd, objectKey, sha256, rowCount]
+      properties:
+        dataset: { $ref: "#/components/schemas/LogisticsRetentionDataset" }
+        periodStart: { type: string, format: date-time }
+        periodEnd: { type: string, format: date-time }
+        objectKey: { type: string, minLength: 1, maxLength: 1000, writeOnly: true }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        rowCount: { type: integer, format: int64, minimum: 0 }
+    VerifyPlanningArchiveManifestRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+    PlanningArchiveManifest:
+      type: object
+      additionalProperties: false
+      required: [id, version, dataset, periodStart, periodEnd, sha256, rowCount, state, createdBySubjectId, createdAt, verifiedBySubjectId, verifiedAt]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        dataset: { $ref: "#/components/schemas/LogisticsRetentionDataset" }
+        periodStart: { type: string, format: date-time }
+        periodEnd: { type: string, format: date-time }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        rowCount: { type: integer, format: int64, minimum: 0 }
+        state: { type: string, enum: [RECORDED, VERIFIED] }
+        createdBySubjectId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        verifiedBySubjectId: { type: [string, "null"], format: uuid }
+        verifiedAt: { type: [string, "null"], format: date-time }
     PlanningWarehouseResource:
       type: object
       additionalProperties: false
@@ -3672,7 +4864,9 @@ components:
         representative: { type: boolean }
         routingReady:
           type: boolean
-          description: True only when the owner-held WGS84 coordinate pair is complete.
+          description: >-
+            True only when the owner-held WGS84 coordinate pair is complete and is not the
+            reserved 0,0 placeholder.
     PlanningWarehouseResourceList:
       type: array
       items: { $ref: "#/components/schemas/PlanningWarehouseResource" }
@@ -3730,6 +4924,43 @@ components:
     PlanningDriverResourceList:
       type: array
       items: { $ref: "#/components/schemas/PlanningDriverResource" }
+    PlanningVehicleOperationalAssignmentMode:
+      type: string
+      enum: [TRIP_ONLY, TEMPORARY, PERMANENT]
+    PlanningVehicleOperationalAssignmentStatus:
+      type: string
+      enum: [PLANNED, IN_TRANSIT, ACTIVE, COMPLETED, CANCELLED]
+      description: >-
+        The shared durable lifecycle enum. The live planning endpoint returns only PLANNED,
+        IN_TRANSIT and ACTIVE; terminal values remain valid persisted history.
+    PlanningVehicleOperationalAssignment:
+      type: object
+      additionalProperties: false
+      required:
+        [assignmentId, version, transferId, vehicleId, sourceWarehouseId, destinationWarehouseId, mode, status, travelStartsAt, effectiveFrom, effectiveUntil, createdAt, updatedAt]
+      properties:
+        assignmentId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        transferId: { type: string, format: uuid }
+        vehicleId: { type: string, format: uuid }
+        sourceWarehouseId: { type: string, format: uuid }
+        destinationWarehouseId: { type: string, format: uuid }
+        mode: { $ref: "#/components/schemas/PlanningVehicleOperationalAssignmentMode" }
+        status: { $ref: "#/components/schemas/PlanningVehicleOperationalAssignmentStatus" }
+        travelStartsAt: { type: string, format: date-time }
+        effectiveFrom: { type: string, format: date-time }
+        effectiveUntil:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            Exclusive end of a temporary placement, the TRIP_ONLY effectiveFrom boundary, or the
+            preserved end of a superseded permanent history row. A live permanent placement is
+            unbounded.
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    PlanningVehicleOperationalAssignmentList:
+      type: array
+      items: { $ref: "#/components/schemas/PlanningVehicleOperationalAssignment" }
     PlanningCapacityJob:
       type: object
       additionalProperties: false
@@ -3770,7 +5001,12 @@ components:
         deliveryDate: { type: string, format: date }
         shiftStart: { type: string, format: time }
         shiftEnd: { type: string, format: time }
-        breakMinutes: { type: integer, minimum: 0, maximum: 720 }
+        breakMinutes:
+          type: integer
+          minimum: 0
+          maximum: 720
+          description: Must be shorter than the same-day interval from shiftStart to shiftEnd.
+          x-rwms-constraint: breakMinutes * 60 < shiftEnd - shiftStart
         cabinCapacity: { type: integer, minimum: 1, maximum: 2 }
     PlanningCapacityIsochroneTariff:
       type: object
@@ -3786,6 +5022,54 @@ components:
           type: integer
           format: int64
           minimum: 0
+    PlanningCapacityPriceZone:
+      type: object
+      additionalProperties: false
+      required:
+        [sourceZoneId, sourceZoneVersion, deliveryPriceRubles, pickupPriceRubles, geometry]
+      properties:
+        sourceZoneId: { type: string, format: uuid }
+        sourceZoneVersion: { type: integer, format: int64, minimum: 0 }
+        deliveryPriceRubles: { type: integer, format: int64, minimum: 0 }
+        pickupPriceRubles: { type: integer, format: int64, minimum: 0 }
+        geometry: { $ref: "#/components/schemas/GeoJsonMultiPolygon" }
+    PlanningCapacityRestrictionZone:
+      type: object
+      additionalProperties: false
+      required: [sourceZoneId, sourceZoneVersion, kind, geometry]
+      properties:
+        sourceZoneId: { type: string, format: uuid }
+        sourceZoneVersion: { type: integer, format: int64, minimum: 0 }
+        kind:
+          type: string
+          enum: [FORBIDDEN, NO_TRAILER]
+          description: FORBIDDEN suppresses delivery offers; NO_TRAILER requires trailer-free routing.
+        geometry: { $ref: "#/components/schemas/GeoJsonMultiPolygon" }
+    GeoJsonPosition:
+      type: array
+      prefixItems:
+        - { type: number, minimum: -180, maximum: 180 }
+        - { type: number, minimum: -90, maximum: 90 }
+      minItems: 2
+      maxItems: 2
+    GeoJsonLinearRing:
+      type: array
+      minItems: 4
+      items: { $ref: "#/components/schemas/GeoJsonPosition" }
+    GeoJsonPolygonCoordinates:
+      type: array
+      minItems: 1
+      items: { $ref: "#/components/schemas/GeoJsonLinearRing" }
+    GeoJsonMultiPolygon:
+      type: object
+      additionalProperties: false
+      required: [type, coordinates]
+      properties:
+        type: { type: string, const: MultiPolygon }
+        coordinates:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/GeoJsonPolygonCoordinates" }
     ReplacePlanningCapacitySnapshotRequest:
       type: object
       additionalProperties: false
@@ -3815,11 +5099,27 @@ components:
           maxItems: 12
           description: Ordered contiguous hourly tiers starting at 60 minutes; the last tier is the delivery boundary.
           items: { $ref: "#/components/schemas/PlanningCapacityIsochroneTariff" }
+        priceZones:
+          type: array
+          maxItems: 500
+          default: []
+          description: >-
+            SPECIAL_PRICE polygons. They can override a tariff only after the road route is
+            proven to remain inside the farthest configured isochrone; they never extend coverage.
+          items: { $ref: "#/components/schemas/PlanningCapacityPriceZone" }
+        restrictionZones:
+          type: array
+          maxItems: 500
+          default: []
+          description: >-
+            Exceptional FORBIDDEN and NO_TRAILER polygons. They are independent from ordinary
+            isochrone coverage and never represent a normal delivery region.
+          items: { $ref: "#/components/schemas/PlanningCapacityRestrictionZone" }
     PlanningCapacitySnapshotResponse:
       type: object
       additionalProperties: false
       required:
-        [warehouseId, sourceGeneration, version, sourceRevision, jobCount, shiftCount, isochroneTariffCount, replayed, updatedAt]
+        [warehouseId, sourceGeneration, version, sourceRevision, jobCount, shiftCount, isochroneTariffCount, priceZoneCount, restrictionZoneCount, replayed, updatedAt]
       properties:
         warehouseId: { type: string, format: uuid }
         sourceGeneration: { type: integer, format: int64, minimum: 1 }
@@ -3830,6 +5130,8 @@ components:
         jobCount: { type: integer, minimum: 0 }
         shiftCount: { type: integer, minimum: 0 }
         isochroneTariffCount: { type: integer, minimum: 1, maximum: 12 }
+        priceZoneCount: { type: integer, minimum: 0, maximum: 500 }
+        restrictionZoneCount: { type: integer, minimum: 0, maximum: 500 }
         replayed: { type: boolean }
         updatedAt: { type: string, format: date-time }
     PlanningAssignment:
@@ -3845,6 +5147,12 @@ components:
             Regional warehouse that owns the order. Omission preserves legacy behavior and uses
             ApplyPlanningAssignmentsRequest.warehouseId. The root warehouse still owns the
             driver shift plan.
+        inventorySourceWarehouseId:
+          type: [string, "null"]
+          format: uuid
+          description: >-
+            Physical source shared by every unitId in this shipment. Omission preserves legacy
+            behavior and lets the order owner use its existing source-selection fallback.
         expectedOrderVersion: { type: integer, format: int64, minimum: 0 }
         scheduledDate: { type: string, format: date }
         assignmentType:
@@ -3871,12 +5179,21 @@ components:
           maxItems: 2
           uniqueItems: true
           items: { type: string, format: uuid }
+        provisionalEta:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            Approximate arrival from this exact feasible plan version. Allowed only for an
+            unclaimed WAREHOUSE_DRIVERS task on the scheduled future day; it is not GPS ETA.
     ApplyPlanningAssignmentsRequest:
       type: object
       additionalProperties: false
       required: [warehouseId, planId, planVersion, assignments]
       properties:
-        warehouseId: { type: string, format: uuid }
+        warehouseId:
+          type: string
+          format: uuid
+          description: Root warehouse of the immutable planner command.
         planId: { type: string, format: uuid }
         planVersion: { type: integer, format: int64, minimum: 1 }
         assignments:
@@ -3905,6 +5222,13 @@ components:
         configurationType:
           type: string
           enum: [TRUCK, TRUCK_WITH_TRAILER, TRUCK_WITH_CRANE]
+        cabinCapacity:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 2
+          description: >-
+            Exact effective cabin capacity for this vehicle/trailer snapshot. Omission preserves
+            pre-capacity producers but cannot authorize transfer-cargo load changes.
         startOdometer: { type: [integer, "null"], format: int64, minimum: 0 }
     PlanningDriverShiftTrailer:
       type: object
@@ -3923,7 +5247,22 @@ components:
         sourceShiftId: { type: string, format: uuid }
         sourcePlanId: { type: string, format: uuid }
         sourcePlanVersion: { type: integer, format: int64, minimum: 1 }
-        warehouseId: { type: string, format: uuid }
+        warehouseId:
+          type: string
+          format: uuid
+          description: Root warehouse of the immutable planner command.
+        routeOriginWarehouseId:
+          type: [string, "null"]
+          format: uuid
+          description: >-
+            Physical warehouse where this driver/vehicle shift starts. Omission preserves
+            legacy local-route behavior and uses warehouseId.
+        supportWarehouseLinkId:
+          type: [string, "null"]
+          format: uuid
+          description: >-
+            Exact directed support link authorizing a cross-warehouse start; null for a local
+            shift. The owner revalidates the link and its calendar before publication.
         driverId: { type: string, format: uuid }
         driverName: { type: string, minLength: 1, maxLength: 256 }
         workDate: { type: string, format: date }
@@ -3937,23 +5276,100 @@ components:
           type: integer
           format: int64
           minimum: 0
-          description: Exact sum of planner route-cycle meters; UI rounding to kilometers is downstream.
+          description: >-
+            Exact sum of planner route-cycle and cross-warehouse positioning meters; UI rounding
+            to kilometers is downstream.
+        operations:
+          type: array
+          maxItems: 1000
+          default: []
+          description: >-
+            Immutable one-based executable route order from this exact plan version. Omission is
+            accepted as an empty list for callers predating route execution snapshots.
+          items: { $ref: "#/components/schemas/PlanningDriverShiftRouteOperation" }
+    PlanningDriverShiftRouteOperation:
+      type: object
+      additionalProperties: false
+      required:
+        [sequence, kind, locationLabel, plannedArrival, plannedDeparture, loadBefore, loadAfter]
+      properties:
+        sequence:
+          type: integer
+          minimum: 1
+          description: Contiguous one-based order across every cycle in the driver workday.
+        kind:
+          type: string
+          enum:
+            [ORIGIN_START, TRANSFER_LOAD, INBOUND_POSITIONING, TRANSFER_UNLOAD, DEPOT_LOAD, DELIVERY, PICKUP, DEPOT_UNLOAD, DEPOT_RETURN, RETURN_POSITIONING]
+        warehouseId:
+          type: [string, "null"]
+          format: uuid
+          description: Warehouse at this operation endpoint; null for a customer location.
+        sourceTaskId:
+          type: [string, "null"]
+          format: uuid
+          description: Standalone planner task identity for a customer operation.
+        sourceTransferId:
+          type: [string, "null"]
+          format: uuid
+          description: >-
+            Canonical logistics transfer identity for a TRANSFER_LOAD or TRANSFER_UNLOAD
+            operation; null for customer, depot and positioning operations.
+        locationLabel: { type: string, minLength: 1, maxLength: 500 }
+        plannedArrival:
+          type: string
+          format: date-time
+          description: Exact stop arrival or positioning destination arrival ETA.
+        plannedDeparture:
+          type: string
+          format: date-time
+          description: Exact stop departure or positioning origin departure ETA.
+        loadBefore: { type: integer, minimum: 0 }
+        loadAfter: { type: integer, minimum: 0 }
     AppliedPlanningAssignment:
       type: object
       additionalProperties: false
-      required: [orderId, documentId, replayed]
+      required: [orderId, orderVersion, documentId, externalTaskId, taskVersion, replayed]
       properties:
         orderId: { type: string, format: uuid }
+        orderVersion:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Current logistics-owned order command fence after the shipment application.
         documentId: { type: string, format: uuid }
+        externalTaskId:
+          type: string
+          format: uuid
+          description: >-
+            Exact durable logistics driver-task identity created by the shipment workflow. It is
+            returned for both first application and replay and is never derived from another ID.
+        taskVersion:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Exact aggregate fence for the first provisional-ETA refresh or invalidation.
         replayed: { type: boolean }
     PlanningAssignmentStatus:
       type: object
       additionalProperties: false
       required:
-        [orderId, documentId, scheduledDate, unitIds, driverAudienceMode, driverWorkerId, driverName, taskState]
+        [orderId, orderVersion, documentId, externalTaskId, taskVersion, sourcePlanId, sourcePlanVersion, scheduledDate, unitIds, driverAudienceMode, driverWorkerId, driverName, taskState]
       properties:
         orderId: { type: string, format: uuid }
+        orderVersion: { type: integer, format: int64, minimum: 0 }
         documentId: { type: string, format: uuid }
+        externalTaskId: { type: string, format: uuid }
+        taskVersion: { type: integer, format: int64, minimum: 0 }
+        sourcePlanId:
+          type: [string, "null"]
+          format: uuid
+          description: Durable planner lineage; null only for pre-lineage historical projections.
+        sourcePlanVersion:
+          type: [integer, "null"]
+          format: int64
+          minimum: 1
+          description: Current or tombstoning revision visible to the planner.
         scheduledDate: { type: string, format: date }
         unitIds:
           type: array
@@ -3998,6 +5414,97 @@ components:
         rejected:
           type: array
           items: { $ref: "#/components/schemas/RejectedPlanningAssignment" }
+    PlanningAssignmentReplacement:
+      type: object
+      additionalProperties: false
+      required:
+        [orderId, expectedOrderVersion, documentId, externalTaskId, expectedTaskVersion, serviceWarehouseId, scheduledDate, unitIds, driverAudienceMode, driverWorkerId, driverName, targetQueuePosition, provisionalEta]
+      properties:
+        orderId: { type: string, format: uuid }
+        expectedOrderVersion: { type: integer, format: int64, minimum: 0 }
+        documentId: { type: string, format: uuid }
+        externalTaskId: { type: string, format: uuid }
+        expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
+        serviceWarehouseId: { type: string, format: uuid }
+        scheduledDate: { type: string, format: date }
+        unitIds:
+          type: array
+          minItems: 1
+          maxItems: 2
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        driverAudienceMode:
+          type: string
+          enum: [ASSIGNED_DRIVER, WAREHOUSE_DRIVERS]
+        driverWorkerId: { type: [string, "null"], format: uuid }
+        driverName: { type: [string, "null"], maxLength: 512 }
+        targetQueuePosition: { type: integer, minimum: 0 }
+        provisionalEta: { type: [string, "null"], format: date-time }
+    ReplacePlanningAssignmentsRequest:
+      type: object
+      additionalProperties: false
+      required:
+        [warehouseId, date, expectedSourcePlanVersion, replacementPlanVersion, assignments, driverShiftPlans]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        date: { type: string, format: date }
+        expectedSourcePlanVersion: { type: integer, format: int64, minimum: 1 }
+        replacementPlanVersion: { type: integer, format: int64, minimum: 2 }
+        assignments:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items: { $ref: "#/components/schemas/PlanningAssignmentReplacement" }
+        driverShiftPlans:
+          type: array
+          maxItems: 500
+          items: { $ref: "#/components/schemas/PlanningDriverShiftPlan" }
+    PlanningReplacementOutcome:
+      type: string
+      enum: [APPLIED, REPLAYED]
+    ReplacedPlanningAssignment:
+      type: object
+      additionalProperties: false
+      required:
+        [orderId, orderVersion, documentId, externalTaskId, taskVersion, taskBoardTaskVersion, taskBoardEntryId, taskBoardEntryVersion, queuePosition]
+      properties:
+        orderId: { type: string, format: uuid }
+        orderVersion: { type: integer, format: int64, minimum: 0 }
+        documentId: { type: string, format: uuid }
+        externalTaskId: { type: string, format: uuid }
+        taskVersion: { type: integer, format: int64, minimum: 0 }
+        taskBoardTaskVersion: { type: integer, format: int64, minimum: 0 }
+        taskBoardEntryId: { type: string, format: uuid }
+        taskBoardEntryVersion: { type: integer, format: int64, minimum: 0 }
+        queuePosition: { type: integer, minimum: 0 }
+    ReplacedPlanningDriverShift:
+      type: object
+      additionalProperties: false
+      required: [sourceShiftId, taskBoardShiftPlanVersion, sourcePlanVersion]
+      properties:
+        sourceShiftId: { type: string, format: uuid }
+        taskBoardShiftPlanVersion: { type: integer, format: int64, minimum: 0 }
+        sourcePlanVersion: { type: integer, format: int64, minimum: 1 }
+    ReplacePlanningAssignmentsResponse:
+      type: object
+      additionalProperties: false
+      required:
+        [outcome, sourcePlanId, sourcePlanVersion, warehouseId, date, assignments, driverShiftPlans]
+      properties:
+        outcome: { $ref: "#/components/schemas/PlanningReplacementOutcome" }
+        sourcePlanId: { type: string, format: uuid }
+        sourcePlanVersion: { type: integer, format: int64, minimum: 2 }
+        warehouseId: { type: string, format: uuid }
+        date: { type: string, format: date }
+        assignments:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items: { $ref: "#/components/schemas/ReplacedPlanningAssignment" }
+        driverShiftPlans:
+          type: array
+          maxItems: 500
+          items: { $ref: "#/components/schemas/ReplacedPlanningDriverShift" }
     MaintenanceReturnArrival:
       type: object
       additionalProperties: false
@@ -4157,11 +5664,14 @@ components:
     LogisticsDocument:
       type: object
       additionalProperties: false
+      allOf:
+        - $ref: "#/components/schemas/LogisticsDocumentDeliveryPurposeInvariant"
       required:
         [
           id,
           version,
           documentType,
+          customerDeliveryPurpose,
           state,
           warehouseId,
           destinationWarehouseId,
@@ -4186,6 +5696,10 @@ components:
         id: { type: string, format: uuid }
         version: { type: integer, minimum: 0 }
         documentType: { type: string, enum: [RETURN, SHIPMENT, TRANSFER] }
+        customerDeliveryPurpose:
+          anyOf:
+            - { $ref: "#/components/schemas/CustomerDeliveryPurpose" }
+            - { type: "null" }
         state: { $ref: "#/components/schemas/LogisticsDocumentState" }
         warehouseId: { type: string, format: uuid }
         destinationWarehouseId: { type: [string, "null"], format: uuid }
@@ -4265,6 +5779,25 @@ components:
           items: { $ref: "#/components/schemas/LogisticsLine" }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    CustomerDeliveryPurpose:
+      type: string
+      enum: [RENTAL_DELIVERY, SALE_DELIVERY, CUSTOMER_RELOCATION]
+      description: >-
+        Customer-facing commercial purpose of a SHIPMENT. It is independent from the physical
+        document type; warehouse-to-warehouse work remains TRANSFER.
+    LogisticsDocumentDeliveryPurposeInvariant:
+      type: object
+      oneOf:
+        - title: Customer shipment
+          required: [documentType, customerDeliveryPurpose]
+          properties:
+            documentType: { type: string, const: SHIPMENT }
+            customerDeliveryPurpose: { $ref: "#/components/schemas/CustomerDeliveryPurpose" }
+        - title: Return or warehouse transfer
+          required: [documentType, customerDeliveryPurpose]
+          properties:
+            documentType: { type: string, enum: [RETURN, TRANSFER] }
+            customerDeliveryPurpose: { type: "null" }
     LogisticsLine:
       type: object
       additionalProperties: false
@@ -4628,12 +6161,17 @@ components:
       type: object
       additionalProperties: false
       required:
-        [taskNumber, tripNumber, operationType, clientName, address, latitude, longitude, primaryContactName, primaryContactPhone, additionalContacts, comment, desiredDeliveryWindows, scheduledDate, cabins]
+        [taskNumber, tripNumber, operationType, customerDeliveryPurpose, clientName, clientType, address, latitude, longitude, primaryContactName, primaryContactPhone, additionalContacts, comment, desiredDeliveryWindows, scheduledDate, provisionalEta, provisionalEtaApproximate, provisionalEtaSourcePlanId, provisionalEtaSourcePlanVersion, cabins]
       properties:
         taskNumber: { type: string, minLength: 1, maxLength: 64 }
         tripNumber: { type: integer, minimum: 1 }
         operationType: { type: string }
+        customerDeliveryPurpose:
+          anyOf:
+            - { $ref: "#/components/schemas/CustomerDeliveryPurpose" }
+            - { type: "null" }
         clientName: { type: string, minLength: 1, maxLength: 512 }
+        clientType: { $ref: "#/components/schemas/ClientType" }
         address: { type: [string, "null"], maxLength: 1000 }
         latitude: { type: [number, "null"], format: double, minimum: -90, maximum: 90 }
         longitude: { type: [number, "null"], format: double, minimum: -180, maximum: 180 }
@@ -4650,6 +6188,16 @@ components:
           type: array
           items: { $ref: "#/components/schemas/DesiredDeliveryWindow" }
         scheduledDate: { type: string, format: date }
+        provisionalEta:
+          type: [string, "null"]
+          format: date-time
+          description: Approximate future preview from the exact feasible planner source, never GPS ETA.
+        provisionalEtaApproximate: { type: boolean }
+        provisionalEtaSourcePlanId: { type: [string, "null"], format: uuid }
+        provisionalEtaSourcePlanVersion:
+          type: [integer, "null"]
+          format: int64
+          minimum: 1
         cabins:
           type: array
           minItems: 1
@@ -4932,7 +6480,7 @@ components:
       type: object
       additionalProperties: false
       required:
-        [warehouseId, currentDate, queueId, queueVersion, repairPlaceCount, usedRepairPlaceCount, occupiedRepairPlaceCount, availableRepairPlaceCount, inboundRepairPlaceAvailable, automaticRefillDelayMinutes, repairPlacesOverCapacity, repairPlaces, current, dates, capitalRepairs]
+        [warehouseId, currentDate, queueId, queueVersion, repairPlaceCount, usedRepairPlaceCount, occupiedRepairPlaceCount, availableRepairPlaceCount, inboundRepairPlaceAvailable, repairPlacesOverCapacity, repairPlaces, current, dates, capitalRepairs]
       properties:
         warehouseId: { type: string, format: uuid }
         currentDate:
@@ -4959,11 +6507,6 @@ components:
         inboundRepairPlaceAvailable:
           type: boolean
           description: True when a delivery can use a free place or pair with a ready removal.
-        automaticRefillDelayMinutes:
-          type: integer
-          minimum: 1
-          maximum: 1440
-          description: Maintenance-owned delay before a manually opened CURRENT hole may be refilled automatically.
         repairPlacesOverCapacity: { type: boolean }
         repairPlaces:
           type: array
@@ -5686,7 +7229,7 @@ components:
         reason: { type: string, minLength: 1, maxLength: 500 }
     ClientType:
       type: string
-      enum: [INDIVIDUAL, LEGAL_ENTITY]
+      enum: [INDIVIDUAL, SOLE_PROPRIETOR, LEGAL_ENTITY]
     AdditionalContactInput:
       type: object
       additionalProperties: false
@@ -5749,7 +7292,7 @@ components:
       allOf:
         - if:
             properties:
-              clientType: { enum: [LEGAL_ENTITY] }
+              clientType: { enum: [SOLE_PROPRIETOR, LEGAL_ENTITY] }
             required: [clientType]
           then:
             required: [contactPerson]
@@ -5778,7 +7321,7 @@ components:
       allOf:
         - if:
             properties:
-              clientType: { enum: [LEGAL_ENTITY] }
+              clientType: { enum: [SOLE_PROPRIETOR, LEGAL_ENTITY] }
             required: [clientType]
           then:
             required: [contactPerson]
@@ -5954,6 +7497,7 @@ components:
           version,
           number,
           status,
+          customerDeliveryPurpose,
           client,
           managerId,
           managerDisplayName,
@@ -5977,6 +7521,9 @@ components:
         number: { type: string }
         status:
           { type: string, enum: [DRAFT, SAVED, FULFILLED, CLOSED, CANCELLED] }
+        customerDeliveryPurpose:
+          type: string
+          const: RENTAL_DELIVERY
         client: { $ref: "#/components/schemas/OrderClient" }
         managerId: { type: string, format: uuid }
         managerDisplayName: { type: string }
@@ -6141,6 +7688,7 @@ components:
           version,
           number,
           status,
+          customerDeliveryPurpose,
           client,
           managerId,
           managerDisplayName,
@@ -6167,6 +7715,9 @@ components:
         number: { type: string }
         status:
           { type: string, enum: [DRAFT, SAVED, FULFILLED, CLOSED, CANCELLED] }
+        customerDeliveryPurpose:
+          type: string
+          const: RENTAL_DELIVERY
         client: { $ref: "#/components/schemas/OrderClient" }
         managerId: { type: string, format: uuid }
         managerDisplayName: { type: string }
@@ -6217,6 +7768,7 @@ components:
         [
           documentId,
           documentType,
+          customerDeliveryPurpose,
           state,
           scheduledDate,
           actualAt,
@@ -6228,6 +7780,10 @@ components:
       properties:
         documentId: { type: string, format: uuid }
         documentType: { type: string, enum: [SHIPMENT, RETURN] }
+        customerDeliveryPurpose:
+          anyOf:
+            - { $ref: "#/components/schemas/CustomerDeliveryPurpose" }
+            - { type: "null" }
         state: { type: string }
         scheduledDate:
           type: [string, "null"]
@@ -6749,6 +8305,269 @@ components:
           minItems: 1
           maxItems: 100
           items: { $ref: "#/components/schemas/CabinPhotoPresentationPhoto" }
+    CreateContractorRouteShareRequest:
+      type: object
+      additionalProperties: false
+      required: [contractorWorkerId, expiresAt, externalTaskIds]
+      properties:
+        contractorWorkerId: { type: string, format: uuid }
+        expiresAt:
+          type: string
+          format: date-time
+          description: Explicit expiry between one minute and thirty days after creation.
+        externalTaskIds:
+          type: array
+          minItems: 1
+          maxItems: 50
+          uniqueItems: true
+          items: { type: string, format: uuid }
+    RevokeContractorRouteShareRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+    ContractorRouteShare:
+      type: object
+      additionalProperties: false
+      required:
+        [id, version, warehouseId, contractorWorkerId, expiresAt, revokedAt, createdAt, publicPath, externalTaskIds]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        warehouseId: { type: string, format: uuid }
+        contractorWorkerId: { type: string, format: uuid }
+        expiresAt: { type: string, format: date-time }
+        revokedAt: { type: [string, "null"], format: date-time }
+        createdAt: { type: string, format: date-time }
+        publicPath:
+          type: [string, "null"]
+          maxLength: 1024
+          pattern: ^/contractor-routes/
+          description: >-
+            Same-origin Panel route `/contractor-routes/{signed-token}` suitable for copying to the
+            contractor. The anonymous JSON API remains under `/api/logistics/public/**`. Null after
+            revocation.
+        externalTaskIds:
+          type: array
+          minItems: 1
+          maxItems: 50
+          uniqueItems: true
+          items: { type: string, format: uuid }
+    ApplyContractorRouteTaskActionRequest:
+      type: object
+      additionalProperties: false
+      required: [action, expectedVersion, evidenceId]
+      properties:
+        action: { type: string, enum: [START, COMPLETE] }
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        evidenceId:
+          description: Required ready result evidence for COMPLETE; null for START.
+          oneOf: [{ type: string, format: uuid }, { type: "null" }]
+    PublicContractorCargoItem:
+      type: object
+      additionalProperties: false
+      required: [kind, name, quantity, unit, comment]
+      properties:
+        kind: { type: string, enum: [WORK, MATERIAL] }
+        name: { type: string, minLength: 1, maxLength: 1000 }
+        quantity: { type: number, format: double, minimum: 0 }
+        unit: { type: [string, "null"], maxLength: 32 }
+        comment: { type: [string, "null"], maxLength: 2000 }
+    PublicContractorSourceMedia:
+      type: object
+      additionalProperties: false
+      required: [mediaId, generation, contentType, capturedAt, recordedAt, contentPath, thumbnailPath]
+      properties:
+        mediaId: { type: string, format: uuid }
+        generation: { type: integer, format: int64, minimum: 1 }
+        contentType: { type: [string, "null"], maxLength: 128 }
+        capturedAt: { type: [string, "null"], format: date-time }
+        recordedAt: { type: string, format: date-time }
+        contentPath:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          pattern: ^/api/logistics/public/v1/contractor-route-shares/
+          description: Capability-scoped same-origin LARGE derivative path.
+        thumbnailPath:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          pattern: ^/api/logistics/public/v1/contractor-route-shares/
+          description: Capability-scoped same-origin SMALL derivative path.
+    PublicContractorWork:
+      type: object
+      additionalProperties: false
+      required: [id, name, quantity, unit, durationMinutes, comment, sourceMediaIds]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 1000 }
+        quantity: { type: number, format: double, minimum: 0 }
+        unit: { type: [string, "null"], maxLength: 32 }
+        durationMinutes: { type: [integer, "null"], minimum: 0 }
+        comment: { type: [string, "null"], maxLength: 2000 }
+        sourceMediaIds:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+    PublicContractorMaterial:
+      type: object
+      additionalProperties: false
+      required: [id, name, quantity, unit]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 1000 }
+        quantity: { type: number, format: double, minimum: 0 }
+        unit: { type: [string, "null"], maxLength: 32 }
+    PublicContractorComment:
+      type: object
+      additionalProperties: false
+      required: [id, text, authorDisplayName, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        text: { type: string, minLength: 1, maxLength: 2000 }
+        authorDisplayName: { type: [string, "null"], maxLength: 256 }
+        createdAt: { type: string, format: date-time }
+    PublicContractorEvidence:
+      type: object
+      additionalProperties: false
+      description: >-
+        Bounded task-board evidence metadata for the exact contractor and entry. Only READY evidence
+        receives capability-scoped logistics proxy paths. No review note, upload credential or
+        object-store address is exposed.
+      required:
+        [evidenceId, version, capturedAt, recordedAt, state, mediaId, mediaGeneration, contentType, contentPath, thumbnailPath]
+      properties:
+        evidenceId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        capturedAt: { type: string, format: date-time }
+        recordedAt: { type: string, format: date-time }
+        state:
+          type: string
+          enum: [RESERVED, UPLOADING, READY, REVIEW_REQUIRED, REJECTED]
+        mediaId: { type: [string, "null"], format: uuid }
+        mediaGeneration: { type: [integer, "null"], format: int64, minimum: 1 }
+        contentType: { type: string, enum: [image/jpeg, image/webp] }
+        contentPath:
+          type: [string, "null"]
+          maxLength: 4096
+          pattern: ^/api/logistics/public/v1/contractor-route-shares/
+        thumbnailPath:
+          type: [string, "null"]
+          maxLength: 4096
+          pattern: ^/api/logistics/public/v1/contractor-route-shares/
+    PublicContractorRouteEntry:
+      type: object
+      additionalProperties: false
+      required:
+        [entryId, version, routeIndex, routeStepIndex, routeStepCount, queueName, taskText, status, plannedDurationMinutes, works, materials, comments, sourceMedia, resultPhotoMinCount, evidence, completionAllowed]
+      properties:
+        entryId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        routeIndex: { type: integer, minimum: 0 }
+        routeStepIndex: { type: integer, minimum: 0 }
+        routeStepCount: { type: integer, minimum: 1 }
+        queueName: { type: string, minLength: 1 }
+        taskText: { type: [string, "null"], maxLength: 2000 }
+        status: { type: string, enum: [WAITING, IN_PROGRESS, PAUSED, DONE, CANCELLED] }
+        plannedDurationMinutes: { type: [integer, "null"], minimum: 0 }
+        works:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/PublicContractorWork" }
+        materials:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/PublicContractorMaterial" }
+        comments:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/PublicContractorComment" }
+        sourceMedia:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/PublicContractorSourceMedia" }
+        resultPhotoMinCount: { type: integer, minimum: 0 }
+        evidence:
+          type: array
+          maxItems: 100
+          description: Newest evidence first; exact READY evidenceId is used for COMPLETE.
+          items: { $ref: "#/components/schemas/PublicContractorEvidence" }
+        completionAllowed: { type: boolean }
+    PublicContractorRouteTask:
+      type: object
+      additionalProperties: false
+      required:
+        [externalTaskId, taskId, taskVersion, title, description, unitNumber, scheduledDate, deadlineAt, priority, status, address, latitude, longitude, contactPhone, logisticsComment, cargo, sourceMedia, route]
+      properties:
+        externalTaskId: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        taskVersion: { type: integer, format: int64, minimum: 0 }
+        title: { type: string, minLength: 1, maxLength: 256 }
+        description: { type: [string, "null"], maxLength: 2000 }
+        unitNumber: { type: [string, "null"], maxLength: 64 }
+        scheduledDate: { type: string, format: date }
+        deadlineAt: { type: [string, "null"], format: date-time }
+        priority: { type: integer, minimum: 1, maximum: 5 }
+        status: { type: string, enum: [ACTIVE, DONE, CANCELLED] }
+        address: { type: [string, "null"], maxLength: 1000 }
+        latitude: { type: [number, "null"], minimum: -90, maximum: 90 }
+        longitude: { type: [number, "null"], minimum: -180, maximum: 180 }
+        contactPhone: { type: [string, "null"], maxLength: 32 }
+        logisticsComment: { type: [string, "null"], maxLength: 2000 }
+        cargo:
+          type: array
+          maxItems: 200
+          items: { $ref: "#/components/schemas/PublicContractorCargoItem" }
+        sourceMedia:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/PublicContractorSourceMedia" }
+        route:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/PublicContractorRouteEntry" }
+    PublicContractorRouteShare:
+      type: object
+      additionalProperties: false
+      required: [id, expiresAt, tasks]
+      properties:
+        id: { type: string, format: uuid }
+        expiresAt: { type: string, format: date-time }
+        tasks:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: { $ref: "#/components/schemas/PublicContractorRouteTask" }
+    PublicContractorRouteTaskAction:
+      type: object
+      additionalProperties: false
+      required: [currentVersion, task]
+      properties:
+        currentVersion: { type: integer, format: int64, minimum: 0 }
+        task: { $ref: "#/components/schemas/PublicContractorRouteTask" }
+    PublicContractorEvidenceUpload:
+      type: object
+      additionalProperties: false
+      required:
+        [evidenceId, version, state, mediaId, mediaGeneration, contentType, contentPath, thumbnailPath]
+      properties:
+        evidenceId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        state: { type: string, enum: [UPLOADING, READY] }
+        mediaId: { type: string, format: uuid }
+        mediaGeneration: { type: [integer, "null"], format: int64, minimum: 1 }
+        contentType: { type: string, enum: [image/jpeg, image/webp] }
+        contentPath:
+          type: [string, "null"]
+          maxLength: 4096
+          pattern: ^/api/logistics/public/v1/contractor-route-shares/
+        thumbnailPath:
+          type: [string, "null"]
+          maxLength: 4096
+          pattern: ^/api/logistics/public/v1/contractor-route-shares/
     ClientPresentation:
       type: object
       additionalProperties: false
@@ -7143,7 +8962,23 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/LogisticsDocument" }
     DocumentList:
-      description: Visible documents.
+      description: One bounded page of visible documents; the JSON body remains an array.
+      headers:
+        X-RWMS-Page:
+          required: true
+          schema: { type: integer, minimum: 0 }
+        X-RWMS-Page-Size:
+          required: true
+          schema: { type: integer, minimum: 1, maximum: 100 }
+        X-RWMS-Total-Elements:
+          required: true
+          schema: { type: integer, format: int64, minimum: 0 }
+        X-RWMS-Total-Pages:
+          required: true
+          schema: { type: integer, minimum: 0 }
+        X-RWMS-Has-Next:
+          required: true
+          schema: { type: boolean }
       content:
         application/json:
           schema:
@@ -7210,6 +9045,27 @@ components:
         }
     Unprocessable:
       description: Semantic request error such as an impossible contents delta or unsupported correction capability.
+      content:
+        {
+          application/problem+json:
+            { schema: { $ref: "#/components/schemas/ApiProblem" } },
+        }
+    LengthRequired:
+      description: Contractor evidence must declare one nonnegative Content-Length and cannot use chunked transfer encoding.
+      content:
+        {
+          application/problem+json:
+            { schema: { $ref: "#/components/schemas/ApiProblem" } },
+        }
+    PayloadTooLarge:
+      description: Contractor evidence exceeds the byte limit of its declared JPEG or WebP representation.
+      content:
+        {
+          application/problem+json:
+            { schema: { $ref: "#/components/schemas/ApiProblem" } },
+        }
+    UnsupportedMedia:
+      description: Contractor evidence content type is not JPEG or WebP.
       content:
         {
           application/problem+json:

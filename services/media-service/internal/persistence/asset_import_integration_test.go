@@ -52,7 +52,6 @@ func TestAssetImportCreatesDurableMediaAggregateAndProcessingOutboxIntegration(t
 	}}); err != nil {
 		t.Fatalf("CompleteAssetImportPreflight() error = %v", err)
 	}
-
 	job, replayed, err = repository.ActivateAssetImport(ctx, assetimport.ActivateCommand{
 		JobID: jobID, IdempotencyKey: uuid.New(),
 		RequestSHA256: assetimport.CanonicalActivationSHA(jobID, []assetimport.ActivationBinding{{SourceRowID: sourceRowID, CabinID: cabinID}}),
@@ -103,7 +102,8 @@ func TestAssetImportCreatesDurableMediaAggregateAndProcessingOutboxIntegration(t
 	if err := database.Pool.QueryRow(ctx, `select processing_status,source_version_id,current_generation,pending_generation
 		from media_asset where media_id=$1`, mediaID).Scan(&status, &sourceVersion, &currentGeneration, &pendingGeneration); err != nil ||
 		status != "PROCESSING" || sourceVersion != "first-version" || currentGeneration != 0 || pendingGeneration != 1 {
-		t.Fatalf("imported media aggregate = status:%s source:%s current:%d pending:%d error=%v", status, sourceVersion, currentGeneration, pendingGeneration, err)
+		t.Fatalf("imported media aggregate = status:%s source:%s current:%d pending:%d error=%v",
+			status, sourceVersion, currentGeneration, pendingGeneration, err)
 	}
 	var processingJobs, facts, processingRequests int
 	if err := database.Pool.QueryRow(ctx, `select count(*) from media_processing_job where media_id=$1`, mediaID).Scan(&processingJobs); err != nil {

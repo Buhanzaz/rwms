@@ -56,6 +56,7 @@ public class AuthEventFactFactory {
                 subject.getId(),
                 subject.isActive(),
                 subject.isMobileAppAccess(),
+                subject.isRentalAccess(),
                 subject.getGlobalRole(),
                 profile.revision(),
                 grants);

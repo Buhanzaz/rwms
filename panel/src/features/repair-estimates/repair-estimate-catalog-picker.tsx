@@ -81,7 +81,6 @@ type CatalogBreadcrumb = {
 type RepairEstimateCatalogPickerProps = {
   lines: RepairEstimateLineDto[]
   readOnly: boolean
-  warehouseId?: string | null
   onChange: (lines: RepairEstimateLineDto[]) => void
   onPagerChange?: (pager: RepairEstimateCatalogPager | null) => void
   excludeFurniture?: boolean
@@ -121,7 +120,7 @@ function readableCatalogForeground(color: string) {
   )
   const luminance = 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
 
-  return luminance > 0.42 ? "#111827" : "#FFFFFF"
+  return luminance > 0.42 ? "#413620" : "#FAFCFC"
 }
 
 function catalogNodeColorStyle(
@@ -194,7 +193,6 @@ function catalogNavigationNodes(
 export function RepairEstimateCatalogPicker({
   lines,
   readOnly,
-  warehouseId = null,
   onChange,
   onPagerChange,
   excludeFurniture = false,
@@ -203,11 +201,8 @@ export function RepairEstimateCatalogPicker({
   ensureMediaOwner,
 }: RepairEstimateCatalogPickerProps) {
   const catalogQuery = useQuery({
-    queryKey: [...REPAIR_ESTIMATE_CATALOG_QUERY_KEY, warehouseId ?? "selected"],
-    queryFn: () =>
-      warehouseId
-        ? getOperationalRepairEstimateCatalog(warehouseId)
-        : getOperationalRepairEstimateCatalog(),
+    queryKey: REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
+    queryFn: getOperationalRepairEstimateCatalog,
   })
   const catalog = useMemo(
     () =>

@@ -115,7 +115,7 @@ function UsageRows({
         <div>Тип</div>
         <div>Статус</div>
         <div>Количество</div>
-        {canMoveToStock ? <div>Действие</div> : null}
+        {canMoveToStock ? <div aria-hidden="true" /> : null}
       </div>
 
       {item.usages.map((usage) => {
@@ -171,10 +171,8 @@ function UsageRows({
             </div>
 
             {canMoveToStock ? (
-              <div className="min-w-0">
-                <div className="text-[0.625rem] font-medium text-muted-foreground lg:hidden">
-                  Действие
-                </div>
+              <div className="flex min-w-0 flex-col items-end">
+                <div aria-hidden="true" className="min-h-3 lg:hidden" />
                 {canMoveUsageToStock ? (
                   <Button
                     size="sm"

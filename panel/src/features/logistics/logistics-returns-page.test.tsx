@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { MemoryRouter } from "react-router-dom"
+import { MemoryRouter, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type {
@@ -160,6 +160,11 @@ vi.mock("@/features/auth/use-auth", () => ({
 vi.mock("@/hooks/use-warehouse", () => ({
   useWarehouse: () => ({
     selectedWarehouseId: "11111111-1111-4111-8111-111111111111",
+    selectedWarehouse: {
+      id: "11111111-1111-4111-8111-111111111111",
+      name: "Склад обслуживания",
+      timeZone: "Europe/Moscow",
+    },
   }),
 }))
 
@@ -206,6 +211,7 @@ function returnDocument(
     id,
     version,
     documentType: "RETURN",
+    customerDeliveryPurpose: null,
     state,
     warehouseId: WAREHOUSE_ID,
     destinationWarehouseId: null,
@@ -223,7 +229,14 @@ function returnDocument(
   }
 }
 
-function renderPage() {
+function LocationProbe() {
+  const location = useLocation()
+  return (
+    <output data-testid="current-location">{`${location.pathname}${location.search}`}</output>
+  )
+}
+
+function renderPage(initialEntry = "/") {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -231,8 +244,9 @@ function renderPage() {
     },
   })
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <QueryClientProvider client={queryClient}>
+        <LocationProbe />
         <LogisticsReturnsPage />
       </QueryClientProvider>
     </MemoryRouter>
@@ -286,6 +300,7 @@ beforeEach(() => {
     id: ORDER_ID,
     number: ORDER_NUMBER,
     status: "SAVED",
+    customerDeliveryPurpose: "RENTAL_DELIVERY",
     client: {
       id: CLIENT_ID,
       displayName: "ООО Тест",
@@ -350,6 +365,21 @@ afterEach(() => {
 })
 
 describe("LogisticsReturnsPage", () => {
+  it("loads returns for the day restored from the URL", async () => {
+    renderPage("/logistics/returns?date=2026-07-22")
+
+    await waitFor(() =>
+      expect(returnApi.listReturns).toHaveBeenCalledWith(
+        "return-token",
+        WAREHOUSE_ID,
+        "2026-07-22"
+      )
+    )
+    expect(screen.getByTestId("current-location").textContent).toBe(
+      "/logistics/returns?date=2026-07-22"
+    )
+  })
+
   it("shows cabin and order numbers in the return composition", async () => {
     const user = userEvent.setup()
     renderPage()
@@ -433,7 +463,8 @@ describe("LogisticsReturnsPage", () => {
     await screen.findAllByText("Требуется осмотр")
     expect(returnApi.listReturns).toHaveBeenCalledWith(
       "return-token",
-      WAREHOUSE_ID
+      WAREHOUSE_ID,
+      expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/)
     )
     expect(screen.queryByRole("button", { name: "Создать вывоз" })).toBeNull()
     expect(
@@ -454,8 +485,12 @@ describe("LogisticsReturnsPage", () => {
     expect(
       screen.getAllByRole("button", { name: "Водитель" })
     ).not.toHaveLength(0)
-    expect(screen.getByLabelText("Вывоз с")).toBeTruthy()
-    expect(screen.getByLabelText("Вывоз по")).toBeTruthy()
+    expect(screen.getByText("День возвратов")).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: /^День возвратов:/ })
+    ).toBeTruthy()
+    expect(screen.queryByLabelText("Вывоз с")).toBeNull()
+    expect(screen.queryByLabelText("Вывоз по")).toBeNull()
     expect(screen.queryByText("Дата", { exact: true })).toBeNull()
     expect(screen.queryByRole("button", { name: "Обновить" })).toBeNull()
     expect(

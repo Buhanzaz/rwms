@@ -8,15 +8,25 @@ export type WarehouseFormValues = {
   longitude: string
   timeZone: string
   sortOrder: string
+  production: boolean
+  mainWarehouse: boolean
   representative: boolean
+  representativeParentWarehouseId: string
 }
 
 type WarehouseFormResult =
   { input: WarehouseWriteInput; error: null } | { input: null; error: string }
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export function createWarehouseFormValues(
   warehouse: WarehouseInfo | null
 ): WarehouseFormValues {
+  const representativeParentWarehouseId =
+    warehouse?.representativeParentWarehouseId ?? ""
+  const representative = warehouse?.representative ?? false
+
   return {
     name: warehouse?.name ?? "",
     city: warehouse?.city ?? "",
@@ -34,7 +44,16 @@ export function createWarehouseFormValues(
       warehouse?.sortOrder === null || warehouse?.sortOrder === undefined
         ? ""
         : String(warehouse.sortOrder),
-    representative: warehouse?.representative ?? false,
+    production: representative
+      ? false
+      : warehouse === null
+        ? true
+        : warehouse.production,
+    mainWarehouse: representative ? false : warehouse?.mainWarehouse ?? false,
+    representative,
+    representativeParentWarehouseId: representative
+      ? representativeParentWarehouseId
+      : "",
   }
 }
 
@@ -60,6 +79,8 @@ export function parseWarehouseForm(
   const timeZone = values.timeZone.trim()
   const sortOrderText = values.sortOrder.trim()
   const sortOrder = sortOrderText === "" ? null : Number(sortOrderText)
+  const representativeParentWarehouseId =
+    values.representativeParentWarehouseId.trim()
 
   if (!name || name.length > 255 || !city || city.length > 255) {
     return {
@@ -88,10 +109,18 @@ export function parseWarehouseForm(
     return { input: null, error: "Укажите корректные координаты WGS84." }
   }
 
+  if (latitude === 0 && longitude === 0) {
+    return {
+      input: null,
+      error:
+        "Координаты 0, 0 не определяют местоположение объекта. Укажите фактические координаты или оставьте оба поля пустыми.",
+    }
+  }
+
   if (!timeZone || timeZone.length > 64 || !isIanaTimeZone(timeZone)) {
     return {
       input: null,
-      error: "Укажите корректную временную зону IANA, например Europe/Moscow.",
+      error: "Выберите корректную временную зону, например Europe/Moscow · +3.",
     }
   }
 
@@ -99,6 +128,21 @@ export function parseWarehouseForm(
     return {
       input: null,
       error: "Порядок должен быть целым неотрицательным числом.",
+    }
+  }
+
+  if (values.representative) {
+    if (!UUID_PATTERN.test(representativeParentWarehouseId)) {
+      return {
+        input: null,
+        error:
+          "Выберите объект с производством или основным складом для представительского объекта.",
+      }
+    }
+  } else if (!values.production && !values.mainWarehouse) {
+    return {
+      input: null,
+      error: "Выберите производство или основной склад.",
     }
   }
 
@@ -111,6 +155,11 @@ export function parseWarehouseForm(
       longitude,
       timeZone,
       sortOrder,
+      production: values.representative ? false : values.production,
+      mainWarehouse: values.representative ? false : values.mainWarehouse,
+      representativeParentWarehouseId: values.representative
+        ? representativeParentWarehouseId
+        : null,
       representative: values.representative,
     },
     error: null,

@@ -67,7 +67,8 @@ public interface CustomerDeliverySlotRepository
   @Query(
       """
       select slot from CustomerDeliverySlot slot
-      where slot.inquiryId = :inquiryId and slot.state = :state
+      where slot.inquiryId = :inquiryId
+        and slot.state = :state
       order by slot.createdAt desc, slot.id desc
       """)
   List<CustomerDeliverySlot> findHeldForUpdate(

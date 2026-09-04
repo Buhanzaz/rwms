@@ -105,15 +105,19 @@ API gateway: проверка host/headers, CORS, JWT, route policy, observabili
 | `/api/maintenance/**` | `maintenance-service`, путь без изменений | Internal-пути запрещены. |
 | `/api/media/**` | `media-service`, путь без изменений | Internal- и private-пути запрещены. Source/variant upload content и SSE используют отдельные handlers. |
 | `/api/inventory/**` | `inventory-service`, путь без изменений | Internal- и private-пути запрещены. Пересчёт завершённого результата использует отдельный handler с тайм-аутом 60 секунд; все остальные inventory-запросы сохраняют обычный тайм-аут. |
-| `/api/logistics/**` | `logistics-service`, путь без изменений | Internal- и private-пути запрещены; явно публичный client-presentation — исключение из обычной аутентификации. CustomerApp routes остаются аутентифицированными, а logistics проверяет точную комбинацию CUSTOMER/client/scope. |
+| `/api/logistics/**` | `logistics-service`, путь без изменений | Internal- и private-пути запрещены. Только точные подписанные операции client-presentation, cabin-photo-presentation и contractor-route capability являются анонимными исключениями; CustomerApp routes остаются аутентифицированными, а logistics проверяет точную комбинацию CUSTOMER/client/scope. |
 | `/api/assistant/**` | `assistant-service`, путь без изменений | Internal- и private-пути запрещены. Turns диалога использует отдельный streaming handler. |
 | `/api/dossier/**` | `dossier-service`, путь без изменений | Только `GET`: dossier является read-проекцией и не имеет публичного command route. |
 | `/api/analytics/v1/**` | `analytics-service`; внешний префикс меняется на downstream `/api/v1/**` | Только аутентифицированный `GET`. |
 
-Gateway остаётся stateless и не хранит source-address rate-limit state.
-Production ingress должен ограничивать анонимный customer-registration surface:
-CSRF-защита предотвращает cross-site submission, но не является abuse
-throttling.
+Gateway остаётся stateless и не хранит source-address rate-limit state. Он
+удаляет forwarding headers вызывающей стороны и передаёт auth-service
+канонический адрес непосредственного TCP peer; долговечные per-source и
+глобальный budgets регистрации принадлежат auth-service. Throttling на
+production ingress остаётся дополнительным слоем защиты. При появлении reverse
+proxy его trusted-peer boundary необходимо настроить явно, иначе пользователи
+за ним намеренно разделят один immediate-peer budget. CSRF-защита предотвращает
+cross-site submission, но не является abuse throttling.
 
 Специальные маршруты намеренно имеют приоритет над общими маршрутами сервиса:
 
@@ -133,6 +137,16 @@ throttling.
 - `POST /api/assistant/v1/conversations/*/turns` использует streaming proxy
   ассистента, поэтому корректный потоковый ответ не наследует обычный read
   deadline.
+- Точные contractor-route capability paths анонимно разрешают чтение маршрута,
+  команды этапов, ограниченную загрузку evidence и scoped-чтение изображений.
+  Они удаляют cookies и authorization, сохраняют idempotency, checksum и время
+  съёмки evidence и не открывают более широкое поддерево
+  `/api/logistics/public/**`. До проксирования evidence bytes точный servlet
+  boundary требует объявленный размер и принимает только JPEG до 15 МиБ или
+  WebP до 1 МиБ. Поскольку MVC proxy использует downstream chunked transfer,
+  gateway заменяет любое присланное клиентом private relay-значение своим
+  проверенным размером; logistics требует это утверждение и повторяет проверку
+  фактического тела и checksum.
 
 Endpoint добавляется в эту таблицу только после того, как определены его
 публичный контракт и сервис-владелец. Нельзя открыть `/internal/**` или
@@ -149,8 +163,8 @@ Endpoint добавляется в эту таблицу только после
 - Локально проверяются timestamp, issuer и audience JWT. JWKS берётся с
   приватного target `auth-service`, а не через видимый браузеру gateway route.
 - По умолчанию `/api/**` требует аутентификацию. Приватные маршруты явно
-  запрещены; публичные OIDC, health, Android App Links и документированный
-  public client-presentation — узкие исключения.
+  запрещены; публичные OIDC, health, Android App Links и документированные
+  подписанные logistics capability operations — узкие исключения.
 - Namespace WorkerApp требует ровно `SCOPE_worker.tasks`, а namespace DriverApp —
   ровно `SCOPE_driver.tasks`; токен одного native-клиента не проходит в поверхность
   другого. Доменные сервисы всё равно принимают собственные решения авторизации.
@@ -241,8 +255,8 @@ target, public issuer/base URI и разрешённый panel origin.
 специализированных SSE/upload/import/inventory-recalculation/assistant routes, однозначное исключение
 команды пересчёта из общего inventory-маршрута, нулевую маршрутизацию каждой канонической
 internal-операции и зарезервированного private/internal alias, а также реальную edge security
-classification. Все публичные domain-операции требуют Bearer-аутентификацию, кроме четырёх явно
-анонимных logistics client-presentation операций. Отдельный auth-раздел проверяет и Bearer, и
+classification. Все публичные domain-операции требуют Bearer-аутентификацию, кроме явно
+классифицированных подписанных logistics capability operations. Отдельный auth-раздел проверяет и Bearer, и
 точное OpenAPI-требование `csrfCookie + csrfHeader`; CSRF остаётся проверкой auth-service и не
 дублирует state в gateway.
 

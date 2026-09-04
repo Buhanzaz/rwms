@@ -11,10 +11,11 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityShift;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityJob;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityTaskType;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityJobRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityShiftRepository;
 import dev.buhanzaz.rwms.logistics.customer.config.CustomerDeliveryProperties;
-import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotKind;
 import dev.buhanzaz.rwms.logistics.customer.routing.CustomerRouteCapacityPlanner;
 import dev.buhanzaz.rwms.logistics.customer.routing.CustomerRouteCapacityPlanner.CapacityDecision;
 import dev.buhanzaz.rwms.logistics.customer.routing.CustomerTravelTimeMatrix;
@@ -72,13 +73,11 @@ class CustomerDeliveryEstimateServiceTest {
                 "Europe/Moscow",
                 false));
     when(slots.workload(eq(WAREHOUSE), any(), any())).thenReturn(List.of());
-    when(jobs.findCapacityWorkload(eq(WAREHOUSE), any())).thenReturn(List.of());
+    List<WarehouseCapacityJob> publishedJobs = capacityJobs(31);
+    when(jobs.findCapacityWorkload(eq(WAREHOUSE), any())).thenReturn(publishedJobs);
     when(shifts.findCapacityShifts(eq(WAREHOUSE), any())).thenReturn(List.of(shift));
     when(driverTasks.countWholeDayDeliveryReservations(eq(WAREHOUSE), any())).thenReturn(1L);
-    CustomerTravelTimeMatrix matrix =
-        new CustomerTravelTimeMatrix(
-            List.of(new GeoPoint(55.75, 37.61), new GeoPoint(55.75, 37.61)),
-            List.of(List.of(0L, 0L), List.of(0L, 0L)));
+    CustomerTravelTimeMatrix matrix = matrix(33);
     when(travelTimes.matrix(
             anyList(),
             any(),
@@ -117,7 +116,7 @@ class CustomerDeliveryEstimateServiceTest {
   }
 
   @Test
-  void representativeGuidanceKeepsOnlySupportCalendarDaysWithoutLocalShifts() {
+  void representativeGuidanceKeepsOnlyDaysWithConfirmedLocalCapacity() {
     LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
     CustomerDeliverySlotStore slots = mock(CustomerDeliverySlotStore.class);
     WarehouseCapacityJobRepository jobs = mock(WarehouseCapacityJobRepository.class);
@@ -126,8 +125,13 @@ class CustomerDeliveryEstimateServiceTest {
         mock(ValhallaCustomerTravelTimeClient.class);
     CustomerRouteCapacityPlanner capacity = mock(CustomerRouteCapacityPlanner.class);
     RepresentativeDeliverySlotPolicy representativePolicy =
-        mock(RepresentativeDeliverySlotPolicy.class);
+        new RepresentativeDeliverySlotPolicy();
     DriverLogisticsTaskRepository driverTasks = mock(DriverLogisticsTaskRepository.class);
+    WarehouseCapacityShift shift = mock(WarehouseCapacityShift.class);
+    when(shift.getShiftStart()).thenReturn(LocalTime.of(8, 0));
+    when(shift.getShiftEnd()).thenReturn(LocalTime.of(20, 0));
+    when(shift.getBreakMinutes()).thenReturn(30);
+    when(shift.getCabinCapacity()).thenReturn(1);
     WarehouseIdentity representative =
         new WarehouseIdentity(
             WAREHOUSE,
@@ -143,22 +147,22 @@ class CustomerDeliveryEstimateServiceTest {
     when(dependencies.readWarehouseIdentity(WAREHOUSE)).thenReturn(representative);
     when(slots.workload(eq(WAREHOUSE), any(), any())).thenReturn(List.of());
     when(jobs.findCapacityWorkload(eq(WAREHOUSE), any())).thenReturn(List.of());
-    when(shifts.findCapacityShifts(eq(WAREHOUSE), any())).thenReturn(List.of());
-    when(representativePolicy.evaluate(
-            same(representative),
+    when(shifts.findCapacityShifts(eq(WAREHOUSE), any())).thenReturn(List.of(shift));
+    CustomerTravelTimeMatrix matrix = matrix(2);
+    when(travelTimes.matrix(
+            anyList(),
             any(),
-            eq(CustomerDeliverySlotKind.DURING_DAY),
             any(),
-            any(),
-            eq(false)))
-        .thenAnswer(
-            invocation -> {
-              LocalDate date = invocation.getArgument(1);
-              boolean supported =
-                  date.equals(LocalDate.of(2026, 8, 28))
-                      || date.equals(LocalDate.of(2026, 8, 31));
-              return new RepresentativeDeliverySlotPolicy.Decision(supported, supported);
-            });
+            any(CustomerDeliveryProperties.Validated.class),
+            any(CustomerVehicleRouteProfile.class)))
+        .thenReturn(matrix);
+    when(capacity.evaluate(same(matrix), anyList(), any(), anyList(), anyInt()))
+        .thenReturn(
+            new CapacityDecision(false, 0),
+            new CapacityDecision(true, 0),
+            new CapacityDecision(false, 0),
+            new CapacityDecision(false, 0),
+            new CapacityDecision(true, 0));
     CustomerDeliveryEstimateService service =
         new CustomerDeliveryEstimateService(
             properties(),
@@ -221,5 +225,46 @@ class CustomerDeliveryEstimateServiceTest {
         20.0,
         8.0,
         3);
+  }
+
+  private static List<WarehouseCapacityJob> capacityJobs(int count) {
+    return java.util.stream.IntStream.range(0, count)
+        .mapToObj(
+            index -> {
+              WarehouseCapacityJob job = mock(WarehouseCapacityJob.class);
+              when(job.getSourceJobId())
+                  .thenReturn(new UUID(0L, Integer.toUnsignedLong(index + 1)));
+              when(job.getTaskType()).thenReturn(WarehouseCapacityTaskType.DELIVERY);
+              when(job.getDeliveryDate()).thenReturn(LocalDate.of(2026, 8, 27));
+              when(job.getLatitude())
+                  .thenReturn(BigDecimal.valueOf(55.70 + index / 10_000.0));
+              when(job.getLongitude())
+                  .thenReturn(BigDecimal.valueOf(37.60 + index / 10_000.0));
+              when(job.getCabinCount()).thenReturn(1);
+              when(job.getWindowStart()).thenReturn(LocalTime.of(9, 0));
+              when(job.getWindowEnd()).thenReturn(LocalTime.of(18, 0));
+              when(job.getServiceMinutes()).thenReturn(30);
+              when(job.isTrailerAccessAllowed()).thenReturn(true);
+              when(job.getPriority()).thenReturn(index);
+              when(job.isMandatory()).thenReturn(true);
+              return job;
+            })
+        .toList();
+  }
+
+  private static CustomerTravelTimeMatrix matrix(int pointCount) {
+    List<GeoPoint> points =
+        java.util.stream.IntStream.range(0, pointCount)
+            .mapToObj(index -> new GeoPoint(55.70 + index / 10_000.0, 37.60))
+            .toList();
+    List<List<Long>> seconds =
+        java.util.stream.IntStream.range(0, pointCount)
+            .mapToObj(
+                from ->
+                    java.util.stream.IntStream.range(0, pointCount)
+                        .mapToObj(to -> from == to ? 0L : 1_800L)
+                        .toList())
+            .toList();
+    return new CustomerTravelTimeMatrix(points, seconds);
   }
 }

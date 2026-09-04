@@ -57,6 +57,7 @@ class AuthAssetServiceClientDisabledIntegrationTest {
                         "warehouse.operation.mark",
                         "warehouse.lifecycle.read",
                         "warehouse.lifecycle.confirm",
+                        "media.asset",
                         "media.asset-import");
         assertThat(configuredClients.findByClientId("asset-service")).isNull();
         assertThat(jdbc.queryForObject(

@@ -2,7 +2,6 @@ package dev.buhanzaz.rwms.logistics.integration;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskAudienceMode;
-import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskWorkerContent;
 import java.math.BigDecimal;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
@@ -112,10 +111,71 @@ public interface LogisticsDependencyGateway
       String manufacturer,
       String model,
       String configurationType,
-      Long startOdometer) {}
+      Integer cabinCapacity,
+      Long startOdometer) {
+    /** Preserves source compatibility for plans produced before cabin capacity. */
+    public DriverShiftPlanVehicle(
+        UUID id,
+        String name,
+        String registrationNumber,
+        String vehicleType,
+        String manufacturer,
+        String model,
+        String configurationType,
+        Long startOdometer) {
+      this(
+          id,
+          name,
+          registrationNumber,
+          vehicleType,
+          manufacturer,
+          model,
+          configurationType,
+          null,
+          startOdometer);
+    }
+  }
 
   /** Optional immutable planned trailer identity sent to the task-board shift owner. */
   record DriverShiftPlanTrailer(UUID id, String name, String registrationNumber) {}
+
+  /** Exact executable route operation transported without reinterpreting planner semantics. */
+  @JsonInclude(JsonInclude.Include.NON_NULL)
+  record DriverShiftRouteOperation(
+      int sequence,
+      String kind,
+      UUID warehouseId,
+      UUID sourceTaskId,
+      UUID sourceTransferId,
+      String locationLabel,
+      OffsetDateTime plannedArrival,
+      OffsetDateTime plannedDeparture,
+      int loadBefore,
+      int loadAfter) {
+    /** Preserves source compatibility for operations created before transfer cargo identity. */
+    public DriverShiftRouteOperation(
+        int sequence,
+        String kind,
+        UUID warehouseId,
+        UUID sourceTaskId,
+        String locationLabel,
+        OffsetDateTime plannedArrival,
+        OffsetDateTime plannedDeparture,
+        int loadBefore,
+        int loadAfter) {
+      this(
+          sequence,
+          kind,
+          warehouseId,
+          sourceTaskId,
+          null,
+          locationLabel,
+          plannedArrival,
+          plannedDeparture,
+          loadBefore,
+          loadAfter);
+    }
+  }
 
   /**
    * Exact plan-version snapshot used by task-board to prepare one driver workday idempotently;
@@ -132,7 +192,38 @@ public interface LogisticsDependencyGateway
       DriverShiftPlanVehicle vehicle,
       DriverShiftPlanTrailer trailer,
       int tripCount,
-      long routeDistanceMeters) {}
+      long routeDistanceMeters,
+      List<DriverShiftRouteOperation> operations) {
+    /** Preserves source compatibility for callers predating executable route operations. */
+    public DriverShiftPlanSnapshot(
+        UUID sourcePlanId,
+        long sourcePlanVersion,
+        UUID warehouseId,
+        UUID driverId,
+        String driverName,
+        LocalDate workDate,
+        DriverShiftPlanVehicle vehicle,
+        DriverShiftPlanTrailer trailer,
+        int tripCount,
+        long routeDistanceMeters) {
+      this(
+          sourcePlanId,
+          sourcePlanVersion,
+          warehouseId,
+          driverId,
+          driverName,
+          workDate,
+          vehicle,
+          trailer,
+          tripCount,
+          routeDistanceMeters,
+          List.of());
+    }
+
+    public DriverShiftPlanSnapshot {
+      operations = operations == null ? List.of() : List.copyOf(operations);
+    }
+  }
 
   /** Task-board-owned operational placement history linked to one logistics transfer. */
   record WorkerOperationalAssignment(
@@ -489,6 +580,101 @@ public interface LogisticsDependencyGateway
   /** Task-board audience transported without introducing a worker aggregate in logistics. */
   record DriverTaskAudience(DriverTaskAudienceMode mode, UUID workerId, String workerName) {}
 
+  /** Stable planner lineage attached only to newly published planner-owned driver work. */
+  record DriverTaskPlannerLineage(
+      UUID sourcePlanId,
+      long sourcePlanVersion,
+      UUID sourcePlanWarehouseId,
+      LocalDate sourcePlanDate) {}
+
+  /** One task-board-fenced task inside a complete planner revision replacement. */
+  record PlanningReplacementTask(
+      UUID externalTaskId,
+      UUID sourceTaskId,
+      UUID taskWarehouseId,
+      LocalDate scheduledDate,
+      long expectedTaskVersion,
+      long expectedEntryVersion,
+      int targetQueuePosition,
+      DriverTaskAudience driverAudience) {}
+
+  /** One stable shift identity and its complete newer snapshot. */
+  record PlanningReplacementShift(UUID sourceShiftId, DriverShiftPlanSnapshot plan) {}
+
+  /** Complete task-board owner command for one same-lineage revision. */
+  record PlanningReplacementSnapshot(
+      UUID warehouseId,
+      LocalDate date,
+      long expectedSourcePlanVersion,
+      long replacementPlanVersion,
+      List<PlanningReplacementTask> assignments,
+      List<PlanningReplacementShift> driverShiftPlans) {}
+
+  /** Authoritative task-board task and entry fences after replacement. */
+  record PlanningReplacementTaskResult(
+      UUID externalTaskId,
+      long taskVersion,
+      UUID entryId,
+      long entryVersion,
+      int queuePosition) {}
+
+  /** Authoritative task-board shift aggregate and source revisions after replacement. */
+  record PlanningReplacementShiftResult(
+      UUID sourceShiftId, long shiftPlanVersion, long sourcePlanVersion) {}
+
+  /** Complete task-board atomic replacement result. */
+  record PlanningReplacementResult(
+      String outcome,
+      UUID sourcePlanId,
+      long sourcePlanVersion,
+      UUID warehouseId,
+      LocalDate date,
+      List<PlanningReplacementTaskResult> assignments,
+      List<PlanningReplacementShiftResult> driverShiftPlans) {}
+
+  /** Exact old-day task fence removed only after the customer commitment owner changes. */
+  record PlanningReplanRemovedTask(
+      UUID externalTaskId,
+      UUID sourceTaskId,
+      UUID taskWarehouseId,
+      LocalDate scheduledDate,
+      long expectedTaskVersion,
+      long expectedEntryVersion) {}
+
+  /** Complete source-plan snapshot held before an owner-approved cross-date reschedule. */
+  record PlanningReplanPrepareSnapshot(
+      UUID warehouseId,
+      LocalDate date,
+      long expectedSourcePlanVersion,
+      long replacementPlanVersion,
+      PlanningReplanRemovedTask removedAssignment,
+      List<PlanningReplacementTask> remainingAssignments,
+      List<PlanningReplacementShift> driverShiftPlans) {}
+
+  /** Task-board PREPARE receipt that blocks claim/start for the exact source lineage. */
+  record PlanningReplanPrepareResult(
+      String outcome,
+      UUID holdId,
+      UUID sourcePlanId,
+      long sourcePlanVersion,
+      UUID removedExternalTaskId) {}
+
+  /** Authoritative terminal task-board tombstone for the removed old-day assignment. */
+  record PlanningReplanRemovedTaskResult(UUID externalTaskId, long taskVersion, String status) {}
+
+  /** Task-board COMMIT receipt used for deterministic logistics-local convergence. */
+  record PlanningReplanCommitResult(
+      String outcome,
+      UUID holdId,
+      UUID sourcePlanId,
+      long sourcePlanVersion,
+      PlanningReplanRemovedTaskResult removedAssignment,
+      List<PlanningReplacementTaskResult> remainingAssignments,
+      List<PlanningReplacementShiftResult> driverShiftPlans) {}
+
+  /** Task-board proof that a pre-owner hold was released without changing the source plan. */
+  record PlanningReplanReleaseResult(String outcome, UUID holdId, UUID sourcePlanId) {}
+
   record DriverBoardTask(
       UUID taskId,
       long taskVersion,
@@ -572,6 +758,119 @@ public interface LogisticsDependencyGateway
       List<DriverBoardTask> current,
       List<DriverBoardDateColumn> dates) {}
 
+  /** Immutable task-board source identity proving that the task originated in logistics. */
+  record ContractorTaskSource(String type, UUID sourceId) {}
+
+  /** One immutable worker-visible operation carried by an exact contractor route entry. */
+  record ContractorTaskWork(
+      UUID id,
+      String name,
+      double quantity,
+      String unit,
+      Integer durationMinutes,
+      String comment,
+      List<UUID> sourceMediaIds) {
+    public ContractorTaskWork {
+      sourceMediaIds = sourceMediaIds == null ? List.of() : List.copyOf(sourceMediaIds);
+    }
+  }
+
+  /** One immutable material or cargo row carried by an exact contractor route entry. */
+  record ContractorTaskMaterial(UUID id, String name, double quantity, String unit) {}
+
+  /** One immutable source comment already approved for worker presentation. */
+  record ContractorTaskComment(
+      UUID id, String text, String authorDisplayName, OffsetDateTime createdAt) {}
+
+  /** Source photo identity without a bearer URL or object-store location. */
+  record ContractorTaskSourceMedia(
+      UUID mediaId,
+      long generation,
+      String contentType,
+      OffsetDateTime capturedAt,
+      OffsetDateTime recordedAt) {}
+
+  /** Task-result evidence metadata attributed by task-board to the exact contractor. */
+  record ContractorTaskEvidence(
+      UUID evidenceId,
+      long version,
+      OffsetDateTime capturedAt,
+      OffsetDateTime recordedAt,
+      String state,
+      UUID mediaId,
+      Long mediaGeneration,
+      String reviewReason,
+      String contentType) {}
+
+  /** One current task-board route entry exposed through the contractor execution boundary. */
+  record ContractorTaskRouteEntry(
+      UUID entryId,
+      long version,
+      int routeIndex,
+      int routeStepIndex,
+      int routeStepCount,
+      String queueName,
+      String taskText,
+      String status,
+      Integer plannedDurationMinutes,
+      List<ContractorTaskWork> works,
+      List<ContractorTaskMaterial> materials,
+      List<ContractorTaskComment> comments,
+      List<ContractorTaskSourceMedia> sourceMedia,
+      int resultPhotoMinCount,
+      List<ContractorTaskEvidence> evidence,
+      boolean completionAllowed) {
+    public ContractorTaskRouteEntry {
+      works = works == null ? List.of() : List.copyOf(works);
+      materials = materials == null ? List.of() : List.copyOf(materials);
+      comments = comments == null ? List.of() : List.copyOf(comments);
+      sourceMedia = sourceMedia == null ? List.of() : List.copyOf(sourceMedia);
+      evidence = evidence == null ? List.of() : List.copyOf(evidence);
+    }
+  }
+
+  /** Live exact-worker task-board snapshot used by the public contractor capability. */
+  record ContractorTaskExecution(
+      UUID workerId,
+      UUID externalTaskId,
+      UUID taskId,
+      long taskVersion,
+      UUID warehouseId,
+      String title,
+      String description,
+      String unitNumber,
+      LocalDate scheduledDate,
+      OffsetDateTime deadlineAt,
+      int priority,
+      String status,
+      ContractorTaskSource source,
+      List<ContractorTaskRouteEntry> route) {
+    public ContractorTaskExecution {
+      route = route == null ? List.of() : List.copyOf(route);
+    }
+  }
+
+  /** Applied exact entry transition and the refreshed authoritative contractor task. */
+  record ContractorTaskActionResult(long currentVersion, ContractorTaskExecution task) {}
+
+  /** Exact task-board evidence reservation and immutable upload declaration. */
+  record ContractorEvidenceReservation(
+      UUID evidenceId,
+      long version,
+      String state,
+      UUID entryId,
+      String ownerType,
+      UUID ownerId,
+      UUID warehouseId,
+      UUID clientReferenceId,
+      OffsetDateTime capturedAt,
+      String contentType,
+      long sizeBytes,
+      String sha256) {}
+
+  /** Opaque media-service result for one exact idempotent contractor evidence upload. */
+  record ContractorEvidenceMediaReceipt(UUID mediaId, long generation, String status) {}
+
   record RepairComplexitySnapshot(
       String type, String name, String color, String plannedMinutes, boolean forcedCapital) {}
 
@@ -612,7 +911,6 @@ public interface LogisticsDependencyGateway
   record RepairPlaceProjection(
       UUID warehouseId,
       int repairPlaceCount,
-      int automaticRefillDelayMinutes,
       long reservedCount,
       long occupiedCount,
       long readyToReleaseCount,

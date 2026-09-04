@@ -369,6 +369,8 @@ private fun AuthenticatedManagerNavGraph(
             TransferDetailScreen(
                 uiState = uiState,
                 onBack = close,
+                onDepartTransfer = viewModel::departTransfer,
+                onArriveTransfer = viewModel::arriveTransfer,
                 onDepart = viewModel::departTransferLine,
                 onStartArrival = { lineId ->
                     viewModel.startTransferArrival(lineId) {

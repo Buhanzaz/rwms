@@ -18,6 +18,7 @@ const document: ReturnDocument = {
   id: DOCUMENT_ID,
   version: 4,
   documentType: "RETURN",
+  customerDeliveryPurpose: null,
   state: "INSPECTION_REQUIRED",
   warehouseId: WAREHOUSE_ID,
   destinationWarehouseId: null,
@@ -45,9 +46,18 @@ const document: ReturnDocument = {
 }
 
 function json(value: unknown, status = 200) {
+  const paginationHeaders: Record<string, string> = Array.isArray(value)
+    ? {
+        "X-RWMS-Page": "0",
+        "X-RWMS-Page-Size": "100",
+        "X-RWMS-Total-Elements": String(value.length),
+        "X-RWMS-Total-Pages": value.length === 0 ? "0" : "1",
+        "X-RWMS-Has-Next": "false",
+      }
+    : {}
   return new Response(JSON.stringify(value), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...paginationHeaders },
   })
 }
 
@@ -62,9 +72,9 @@ describe("HttpReturnClient", () => {
     vi.stubGlobal("fetch", fetchMock)
     const client = new HttpReturnClient()
 
-    await expect(client.list("return-token", WAREHOUSE_ID)).resolves.toEqual([
-      document,
-    ])
+    await expect(
+      client.list("return-token", WAREHOUSE_ID, "2026-07-22")
+    ).resolves.toEqual([document])
     await expect(client.get("return-token", DOCUMENT_ID)).resolves.toEqual(
       document
     )
@@ -74,6 +84,9 @@ describe("HttpReturnClient", () => {
     expect(listUrl.origin).toBe(window.location.origin)
     expect(listUrl.pathname).toBe("/api/logistics/v1/returns")
     expect(listUrl.searchParams.get("warehouseId")).toBe(WAREHOUSE_ID)
+    expect(listUrl.searchParams.get("scheduledDate")).toBe("2026-07-22")
+    expect(listUrl.searchParams.get("page")).toBe("0")
+    expect(listUrl.searchParams.get("size")).toBe("100")
     expect(detailUrl.pathname).toBe(`/api/logistics/v1/returns/${DOCUMENT_ID}`)
     for (const call of fetchMock.mock.calls) {
       expect(new Headers(call[1].headers).get("Authorization")).toBe(
@@ -290,6 +303,12 @@ describe("HttpReturnClient", () => {
       .fn()
       .mockResolvedValueOnce(json([{ ...document, documentType: "SHIPMENT" }]))
       .mockResolvedValueOnce(json([{ ...document, version: "4" }]))
+      .mockResolvedValueOnce(
+        json([{ ...document, customerDeliveryPurpose: "RENTAL_DELIVERY" }])
+      )
+      .mockResolvedValueOnce(
+        json([{ ...document, customerDeliveryPurpose: undefined }])
+      )
       .mockResolvedValueOnce(json([{ ...document, lines: [] }]))
       .mockResolvedValueOnce(
         json([
@@ -302,6 +321,12 @@ describe("HttpReturnClient", () => {
     vi.stubGlobal("fetch", fetchMock)
     const client = new HttpReturnClient()
 
+    await expect(client.list("return-token", WAREHOUSE_ID)).rejects.toThrow(
+      "Сервис логистики вернул некорректный ответ"
+    )
+    await expect(client.list("return-token", WAREHOUSE_ID)).rejects.toThrow(
+      "Сервис логистики вернул некорректный ответ"
+    )
     await expect(client.list("return-token", WAREHOUSE_ID)).rejects.toThrow(
       "Сервис логистики вернул некорректный ответ"
     )

@@ -89,6 +89,21 @@ final class AssetRentalItemService {
     if (replay.isPresent()) {
       return new AssetService.CreateResult<>(json.read(replay.get(), RentalItemResponse.class), true);
     }
+    RentalItemResponse response = createInteractive(request);
+    idempotency.store(subjectId, "rental-item.create", key, hash, 201, response);
+    return new AssetService.CreateResult<>(response, false);
+  }
+
+  /**
+   * Persists the same strict interactive cabin aggregate without opening a second idempotency
+   * scope. The photo-intent owner calls this inside its own atomic command transaction.
+   */
+  RentalItemResponse createForPhotoIntent(CreateRentalItemRequest request) {
+    warehouses.requireIncoming(request.warehouseId());
+    return createInteractive(request);
+  }
+
+  private RentalItemResponse createInteractive(CreateRentalItemRequest request) {
     CabinCompositionService.CabinSelection selection =
         cabinComposition.requireSelection(
             request.rentalTypeId(),
@@ -122,9 +137,7 @@ final class AssetRentalItemService {
         AssetEventType.RENTAL_ITEM_CREATED,
         projections.fact(persisted),
         projections.snapshot(persisted));
-    RentalItemResponse response = projections.response(persisted);
-    idempotency.store(subjectId, "rental-item.create", key, hash, 201, response);
-    return new AssetService.CreateResult<>(response, false);
+    return projections.response(persisted);
   }
 
   /**
@@ -424,7 +437,10 @@ final class AssetRentalItemService {
   }
 
   private RentalItemResponse changeStatus(
-      UUID id, Long expectedVersion, RentalItemStatus status, boolean fenced) {
+      UUID id,
+      Long expectedVersion,
+      RentalItemStatus status,
+      boolean fenced) {
     leases.lockRentalItem(id);
     if (!fenced) {
       leases.assertNoActive(id);
@@ -478,4 +494,5 @@ final class AssetRentalItemService {
 
   /** Canonical resource-and-payload envelope used to hash idempotent rental-item commands. */
   private record ResourceCommand<T>(UUID resourceId, T request) {}
+
 }

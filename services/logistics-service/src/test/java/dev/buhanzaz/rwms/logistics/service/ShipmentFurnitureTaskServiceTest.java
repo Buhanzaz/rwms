@@ -21,6 +21,9 @@ import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderEquipmentRequirement;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderEquipmentRequirementRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
+import dev.buhanzaz.rwms.logistics.order.domain.recovery.RentalOrderMutationCommand.State;
+import dev.buhanzaz.rwms.logistics.order.recovery.RentalOrderMutationCommandRepository;
+import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.repository.ShipmentFurnitureMovementTaskRepository;
@@ -28,6 +31,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -40,6 +44,56 @@ class ShipmentFurnitureTaskServiceTest {
   private static final UUID UNIT_2 = UUID.fromString("00000000-0000-0000-0000-000000009212");
   private static final UUID UNIT_3 = UUID.fromString("00000000-0000-0000-0000-000000009213");
   private static final UUID EQUIPMENT_ID = UUID.fromString("00000000-0000-0000-0000-000000009221");
+
+  @Test
+  void replacementCheckpointRejectsOpenOrderMutationAfterLockingOrder() {
+    RentalOrderRepository orders = mock(RentalOrderRepository.class);
+    RentalOrderMutationCommandRepository orderMutations =
+        mock(RentalOrderMutationCommandRepository.class);
+    RentalOrder order = mock(RentalOrder.class);
+    when(orders.findForUpdate(ORDER_ID)).thenReturn(Optional.of(order));
+    when(orderMutations.existsByOrder_IdAndStateIn(
+            ORDER_ID, Set.of(State.PENDING, State.QUARANTINED)))
+        .thenReturn(true);
+    ShipmentFurnitureMovementTaskRepository taskLinks =
+        mock(ShipmentFurnitureMovementTaskRepository.class);
+    ShipmentFurnitureTaskService service =
+        new ShipmentFurnitureTaskService(
+            mock(LogisticsDocumentRepository.class),
+            mock(LogisticsDocumentLineRepository.class),
+            orders,
+            orderMutations,
+            mock(RentalOrderEquipmentRequirementRepository.class),
+            taskLinks,
+            mock(LogisticsDependencyGateway.class),
+            mock(EquipmentMovementTaskService.class),
+            mock(LogisticsWarehouseLifecycle.class),
+            mock(ShipmentFurnitureTaskResponseMapper.class));
+    ShipmentFurnitureTaskService.ReplacementCheckpointCommand command =
+        new ShipmentFurnitureTaskService.ReplacementCheckpointCommand(
+            ORDER_ID,
+            1,
+            WAREHOUSE_ID,
+            UNIT_1,
+            UNIT_2,
+            "replacement",
+            UUID.randomUUID(),
+            "WAREHOUSE_MANAGER",
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            0,
+            "a".repeat(64),
+            null);
+
+    assertThatThrownBy(() -> service.checkpointReplacement(command, null))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            problem -> assertThat(problem.code()).isEqualTo("ORDER_MUTATION_PENDING"));
+    verify(orders).findForUpdate(ORDER_ID);
+    verify(orderMutations)
+        .existsByOrder_IdAndStateIn(ORDER_ID, Set.of(State.PENDING, State.QUARANTINED));
+    verifyNoInteractions(taskLinks);
+  }
 
   @Test
   void skipsFurniturePlanningWhenSavedOrderHasNoFurnitureRequirements() {
@@ -82,6 +136,7 @@ class ShipmentFurnitureTaskServiceTest {
             documents,
             documentLines,
             orders,
+            mock(RentalOrderMutationCommandRepository.class),
             requirements,
             taskLinks,
             dependencies,
@@ -116,6 +171,7 @@ class ShipmentFurnitureTaskServiceTest {
             documents,
             documentLines,
             orders,
+            mock(RentalOrderMutationCommandRepository.class),
             requirements,
             taskLinks,
             dependencies,
@@ -207,6 +263,7 @@ class ShipmentFurnitureTaskServiceTest {
             documents,
             documentLines,
             orders,
+            mock(RentalOrderMutationCommandRepository.class),
             requirements,
             taskLinks,
             dependencies,
@@ -269,6 +326,7 @@ class ShipmentFurnitureTaskServiceTest {
             documents,
             documentLines,
             orders,
+            mock(RentalOrderMutationCommandRepository.class),
             requirements,
             taskLinks,
             dependencies,
@@ -348,6 +406,7 @@ class ShipmentFurnitureTaskServiceTest {
             documents,
             documentLines,
             orders,
+            mock(RentalOrderMutationCommandRepository.class),
             requirements,
             taskLinks,
             dependencies,

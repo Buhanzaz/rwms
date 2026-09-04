@@ -4,6 +4,7 @@ import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 import static dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.*;
 
 import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
+import dev.buhanzaz.rwms.taskboard.api.ContractorTaskExecutionApiModels.ContractorEvidenceReservationRequest;
 import dev.buhanzaz.rwms.taskboard.api.KpiSettingsApiModels.KpiPaletteDto;
 import dev.buhanzaz.rwms.taskboard.domain.GroupOperationalStatus;
 import dev.buhanzaz.rwms.taskboard.domain.ParticipationPolicy;
@@ -27,6 +28,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Supplier;
 import org.slf4j.MDC;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -39,9 +41,11 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 /**
  * Builds worker-scoped task views and applies replay-safe worker commands.
  *
- * <p>All reads and mutations are bounded by the authenticated worker and warehouse. Offline work
- * uses a short-lived lease, a client operation ID and the observed entry version so reconnecting a
- * device cannot silently replay a stale action against a changed task.
+ * <p>All reads and mutations are bounded by the authenticated worker and JWT home warehouse. An
+ * exact DriverApp assignment may execute at another physical warehouse, which is always resolved
+ * from the server-owned entry rather than client input. Offline work uses a short-lived home
+ * warehouse lease, a client operation ID and the observed entry version so reconnecting a device
+ * cannot silently replay a stale action against a changed task.
  */
 @Service
 public class WorkerTaskBoardService {
@@ -65,11 +69,12 @@ public class WorkerTaskBoardService {
   private final WorkerOfflineLeaseCodec leases;
   private final WorkerInvalidationHub invalidations;
   private final TaskBoardEntryOwnerProofService ownerProofs;
-  private final KpiSettingsService kpiSettings;
+  private final KpiPaletteService kpiPalettes;
   private final MobileTaskSurfacePolicy surfacePolicy;
   private final WorkerPushOutbox pushOutbox;
   private final WorkerFeedRevisionStore feedRevisions;
   private final WorkerActionReceiptStore actionReceipts;
+  private final TaskBoardCompletionEvidenceService completionEvidence;
 
   public WorkerTaskBoardService(
       TaskBoardService taskBoard,
@@ -82,11 +87,12 @@ public class WorkerTaskBoardService {
       WorkerOfflineLeaseCodec leases,
       WorkerInvalidationHub invalidations,
       TaskBoardEntryOwnerProofService ownerProofs,
-      KpiSettingsService kpiSettings,
+      KpiPaletteService kpiPalettes,
       MobileTaskSurfacePolicy surfacePolicy,
       WorkerPushOutbox pushOutbox,
       WorkerFeedRevisionStore feedRevisions,
-      WorkerActionReceiptStore actionReceipts) {
+      WorkerActionReceiptStore actionReceipts,
+      TaskBoardCompletionEvidenceService completionEvidence) {
     this.taskBoard = taskBoard;
     this.feedCounts = feedCounts;
     this.workforce = workforce;
@@ -97,11 +103,12 @@ public class WorkerTaskBoardService {
     this.leases = leases;
     this.invalidations = invalidations;
     this.ownerProofs = ownerProofs;
-    this.kpiSettings = kpiSettings;
+    this.kpiPalettes = kpiPalettes;
     this.surfacePolicy = surfacePolicy;
     this.pushOutbox = pushOutbox;
     this.feedRevisions = feedRevisions;
     this.actionReceipts = actionReceipts;
+    this.completionEvidence = completionEvidence;
   }
 
   /** Returns the WorkerApp-compatible access context. */
@@ -115,8 +122,10 @@ public class WorkerTaskBoardService {
   public WorkerContext context(
       MobileTaskSurface surface, UUID workerId, UUID warehouseId) {
     WorkerAccess access = access(surface, workerId, warehouseId);
+    List<WorkQueueDto> visibleCategories =
+        visibleCategories(surface, workerId, warehouseId, access);
     OffsetDateTime now = now();
-    long revision = revision(warehouseId);
+    long revision = revision(surface, warehouseId);
     WorkerDto worker = access.worker();
     return new WorkerContext(
         new WorkerIdentity(
@@ -149,8 +158,8 @@ public class WorkerTaskBoardService {
                         qualification.workerClass().id(),
                         qualification.workerClass().name()))
             .toList(),
-        access.categories().stream().map(queue -> category(surface, queue, access)).toList(),
-        workerKpiPalette(warehouseId),
+        visibleCategories.stream().map(queue -> category(surface, queue, access)).toList(),
+        workerKpiPalette(),
         now,
         revision,
         leases.issue(workerId, warehouseId, revision, now));
@@ -182,7 +191,7 @@ public class WorkerTaskBoardService {
       int requestedLimit) {
     int limit = Math.max(1, Math.min(MAX_LIMIT, requestedLimit));
     WorkerAccess access = access(surface, workerId, warehouseId);
-    long currentRevision = revision(warehouseId);
+    long currentRevision = revision(surface, warehouseId);
     Cursor cursor =
         encodedCursor == null
             ? new Cursor(currentRevision, 0, now().toInstant().toEpochMilli())
@@ -192,20 +201,33 @@ public class WorkerTaskBoardService {
     }
 
     Map<UUID, WorkerCategory> categories = new LinkedHashMap<>();
-    access
-        .categories()
-        .forEach(queue -> categories.put(queue.id(), category(surface, queue, access)));
+    Map<UUID, WorkQueueDto> queuesById = new LinkedHashMap<>();
+    visibleCategories(surface, workerId, warehouseId, access)
+        .forEach(
+            queue -> {
+              queuesById.put(queue.id(), queue);
+              categories.put(queue.id(), category(surface, queue, access));
+            });
     TaskBoardSnapshot snapshot = taskBoard.workerSnapshot(surface, warehouseId, workerId);
     List<VisibleEntry> visible = new ArrayList<>();
     for (BoardColumnDto column : snapshot.columns()) {
       WorkerCategory workerCategory = categories.get(column.queueId());
+      WorkQueueDto queue = queuesById.get(column.queueId());
+      if (workerCategory == null && surface == MobileTaskSurface.DRIVER) {
+        queue = driverQueue(column.queueId(), access);
+        if (queue != null) {
+          workerCategory = category(surface, queue, access);
+          if (!workerCategory.audienceModes().isEmpty()) {
+            queuesById.put(queue.id(), queue);
+            categories.put(queue.id(), workerCategory);
+          } else {
+            workerCategory = null;
+          }
+        }
+      }
       if (workerCategory == null) continue;
       for (BoardEntryDto entry : column.entries()) {
-        WorkQueueDto queue =
-            access.categories().stream()
-                .filter(candidate -> candidate.id().equals(column.queueId()))
-                .findFirst()
-                .orElseThrow();
+        if (queue == null) throw new IllegalStateException("Очередь ленты не найдена");
         if (!surfacePolicy.includesFeedEntry(surface, queue, entry)) continue;
         visible.add(new VisibleEntry(workerCategory, entry));
       }
@@ -270,14 +292,12 @@ public class WorkerTaskBoardService {
   public WorkerTaskDetail detail(
       MobileTaskSurface surface, UUID workerId, UUID warehouseId, UUID entryId) {
     WorkerAccess access = access(surface, workerId, warehouseId);
-    BoardEntryDto entry = taskBoard.workerEntry(surface, warehouseId, entryId, workerId);
-    WorkQueueDto queue =
-        access.categories().stream()
-            .filter(candidate -> candidate.id().equals(entry.queueId()))
-            .findFirst()
-            .orElseThrow(() -> new NotFoundException("Задание не найдено"));
+    TaskLocation location = taskLocation(entryId);
+    BoardEntryDto entry =
+        taskBoard.workerEntry(surface, location.warehouseId(), entryId, workerId);
+    WorkQueueDto queue = visibleQueue(surface, access, location);
     surfacePolicy.requireDetailVisible(surface, queue, entry, workerId);
-    BoardTaskRegistrationDto task = registration(warehouseId, entry);
+    BoardTaskRegistrationDto task = registration(location.warehouseId(), entry);
     WorkerFeedCountProjection.Counts routeCoordinates = routeCoordinates(entry);
     int photoMinimum = surfacePolicy.resultPhotoMinimum(queue);
     List<WorkerRelatedStep> related =
@@ -300,12 +320,14 @@ public class WorkerTaskBoardService {
     List<RegisteredRouteStepDto> packageSteps = executionPackages.detailSteps(entry, task);
     Map<UUID, TaskWorkerContentDto> contentByEntry = new LinkedHashMap<>();
     if (packageSteps.isEmpty()) {
-      contentByEntry.put(entry.id(), taskBoard.workerContent(warehouseId, entry.id()));
+      contentByEntry.put(
+          entry.id(), taskBoard.workerContent(location.warehouseId(), entry.id()));
     } else {
       packageSteps.forEach(
           step ->
               contentByEntry.put(
-                  step.entryId(), taskBoard.workerContent(warehouseId, step.entryId())));
+                  step.entryId(),
+                  taskBoard.workerContent(location.warehouseId(), step.entryId())));
     }
 
     Map<UUID, WorkerWork> workById = new LinkedHashMap<>();
@@ -368,13 +390,13 @@ public class WorkerTaskBoardService {
                       mediaReadPath(
                           reference.mediaId(),
                           contentEntryId,
-                          warehouseId,
+                          location.warehouseId(),
                           reference.generation(),
                           null),
                       mediaReadPath(
                           reference.mediaId(),
                           contentEntryId,
-                          warehouseId,
+                          location.warehouseId(),
                           reference.generation(),
                           "SMALL"),
                       reference.capturedAt(),
@@ -480,7 +502,9 @@ public class WorkerTaskBoardService {
       String idempotencyKey,
       EvidenceReservationRequest request) {
     requireIdempotencyKey(idempotencyKey, request.operationId());
-    requireSupportedEvidenceDeclaration(request);
+    EvidenceDeclaration declaration = evidenceDeclaration(request);
+    requireSupportedEvidenceDeclaration(declaration);
+    TaskLocation location = taskLocation(entryId);
     WorkerTaskDetail current = detail(surface, workerId, warehouseId, entryId);
     if (request.routeIndex() != current.routeIndex()) {
       throw new ConflictException("Фотография относится к другому шагу задания");
@@ -493,95 +517,120 @@ public class WorkerTaskBoardService {
           request.offlineLeaseId(), workerId, warehouseId, request.capturedAt(), now());
     }
 
-    jdbc.queryForObject(
-        "select id from queue_entry where id=? for update", UUID.class, entryId);
-    List<EvidenceRow> existing =
-        jdbc.query(
-            """
-            select *
-              from worker_task_evidence
-             where evidence_id=? or operation_id=?
-             order by evidence_id
-            """,
-            this::evidenceRow,
-            request.evidenceId(),
-            request.operationId());
-    if (!existing.isEmpty()) {
-      if (existing.size() != 1) {
-        throw new ConflictException("Идентификаторы фотографии уже использованы");
-      }
-      requireSameReservation(
-          existing.getFirst(), workerId, warehouseId, entryId, request);
-      ownerProofs.publish(warehouseId, entryId, true);
-      return existing.getFirst().dto();
+    EvidenceReservationResult result =
+        reserveEvidenceRecord(
+            workerId,
+            location.warehouseId(),
+            entryId,
+            declaration,
+            false,
+            () -> {
+              if (!"IN_PROGRESS".equals(current.status())) {
+                throw new ConflictException(
+                    "Добавить новую фотографию можно только к заданию в работе");
+              }
+              BoardEntryDto entry =
+                  taskBoard.workerEntry(surface, location.warehouseId(), entryId, workerId);
+              surfacePolicy.requireActiveParticipant(
+                  surface, entry.queuePurpose(), workerId, current.assignments());
+              UUID workerGroupId =
+                  current.assignments().stream()
+                      .filter(assignment -> workerId.equals(assignment.workerId()))
+                      .filter(
+                          assignment ->
+                              "ACTIVE".equals(assignment.status())
+                                  || "PAUSED".equals(assignment.status()))
+                      .map(WorkerAssignmentSnapshot::workerGroupId)
+                      .filter(java.util.Objects::nonNull)
+                      .findFirst()
+                      .orElse(null);
+              String sourceType =
+                  entry.source() == null ? null : entry.source().type().name();
+              UUID sourceId = entry.source() == null ? null : entry.source().sourceId();
+              return new EvidenceReservationTarget(
+                  entry.taskId(), entry.routeIndex(), workerGroupId, sourceType, sourceId);
+            });
+    if (result.created()) {
+      long changedRevision = revision(surface, warehouseId);
+      afterCommit(
+          () ->
+              invalidations.actionApplied(
+                  warehouseId, surface, workerId, entryId, changedRevision));
     }
-    if (!"IN_PROGRESS".equals(current.status())) {
-      throw new ConflictException(
-          "Добавить новую фотографию можно только к заданию в работе");
-    }
+    return result.evidence();
+  }
 
-    BoardEntryDto entry = taskBoard.workerEntry(surface, warehouseId, entryId, workerId);
-    surfacePolicy.requireActiveParticipant(
-        surface, entry.queuePurpose(), workerId, current.assignments());
-    UUID workerGroupId =
-        current.assignments().stream()
-            .filter(assignment -> workerId.equals(assignment.workerId()))
-            .filter(
-                assignment ->
-                    "ACTIVE".equals(assignment.status())
-                        || "PAUSED".equals(assignment.status()))
-            .map(WorkerAssignmentSnapshot::workerGroupId)
-            .filter(java.util.Objects::nonNull)
-            .findFirst()
-            .orElse(null);
-    OffsetDateTime recordedAt = databaseNow();
-    String sourceType = entry.source() == null ? null : entry.source().type().name();
-    UUID sourceId = entry.source() == null ? null : entry.source().sourceId();
-    try {
-      jdbc.update(
-          """
-          insert into worker_task_evidence(
-              evidence_id,version,operation_id,entry_id,task_id,route_index,
-              warehouse_id,worker_id,worker_group_id,captured_at,recorded_at,state,
-              media_id,media_generation,review_reason,content_type,size_bytes,sha256,
-              source_type,source_id,updated_at)
-          values (?,0,?,?,?,?,?,?,?,?,?,'RESERVED',null,null,null,?,?,?,?,?,?)
-          """,
-          request.evidenceId(),
-          request.operationId(),
-          entryId,
-          entry.taskId(),
-          entry.routeIndex(),
-          warehouseId,
-          workerId,
-          workerGroupId,
-          request.capturedAt().truncatedTo(ChronoUnit.MICROS),
-          recordedAt,
-          request.contentType().toLowerCase(Locale.ROOT),
-          request.sizeBytes(),
-          request.sha256(),
-          sourceType,
-          sourceId,
-          recordedAt);
-    } catch (DuplicateKeyException exception) {
-      EvidenceRow replay =
-          findEvidence(request.evidenceId(), request.operationId())
-              .orElseThrow(() -> exception);
-      requireSameReservation(replay, workerId, warehouseId, entryId, request);
-      ownerProofs.publish(warehouseId, entryId, true);
-      return replay.dto();
+  /**
+   * Reserves exact-contractor evidence without issuing or accepting a native offline lease.
+   *
+   * <p>The caller has already proven the immutable logistics source and exact active contractor
+   * audience under the external-task fence. This method locks the route entry and independently
+   * requires its server-derived task, route index, IN_PROGRESS state and exact live worker
+   * assignment before both a first reservation and an idempotent replay.
+   */
+  @Transactional
+  TaskEvidence reserveContractorEvidence(
+      UUID workerId,
+      UUID warehouseId,
+      UUID taskId,
+      UUID entryId,
+      int routeIndex,
+      String sourceType,
+      UUID sourceId,
+      UUID idempotencyKey,
+      ContractorEvidenceReservationRequest request) {
+    requireIdempotencyKey(idempotencyKey.toString(), request.operationId());
+    EvidenceDeclaration declaration =
+        new EvidenceDeclaration(
+            request.operationId(),
+            request.evidenceId(),
+            routeIndex,
+            request.capturedAt(),
+            request.contentType(),
+            request.sizeBytes(),
+            request.sha256());
+    requireSupportedEvidenceDeclaration(declaration);
+    if (request.capturedAt().toInstant().isAfter(databaseNow().toInstant())) {
+      throw new IllegalArgumentException("Время съёмки фотографии не может быть в будущем");
     }
-    ownerProofs.publish(warehouseId, entryId, true);
-    TaskEvidence reserved =
-        findEvidence(request.evidenceId(), request.operationId())
-            .orElseThrow(() -> new IllegalStateException("Резервирование фотографии не сохранено"))
-            .dto();
-    long changedRevision = revision(warehouseId);
-    afterCommit(
-        () ->
-            invalidations.actionApplied(
-                warehouseId, surface, workerId, entryId, changedRevision));
-    return reserved;
+    return reserveEvidenceRecord(
+            workerId,
+            warehouseId,
+            entryId,
+            declaration,
+            true,
+            () -> {
+              Boolean exactActiveAssignment =
+                  jdbc.queryForObject(
+                      """
+                      select exists(
+                        select 1
+                          from queue_entry entry
+                          join board_task task on task.id=entry.task_id
+                          join task_assignment assignment on assignment.queue_entry_id=entry.id
+                         where entry.id=?
+                           and task.id=?
+                           and task.warehouse_id=?
+                           and entry.route_index=?
+                           and entry.status='IN_PROGRESS'
+                           and assignment.worker_id=?
+                           and assignment.status in ('ACTIVE','PAUSED')
+                      )
+                      """,
+                      Boolean.class,
+                      entryId,
+                      taskId,
+                      warehouseId,
+                      routeIndex,
+                      workerId);
+              if (!Boolean.TRUE.equals(exactActiveAssignment)) {
+                throw new ConflictException(
+                    "Фотографию можно добавить только к текущему этапу наёмного водителя");
+              }
+              return new EvidenceReservationTarget(
+                  taskId, routeIndex, null, sourceType, sourceId);
+            })
+        .evidence();
   }
 
   /** Registers one WorkerApp installation for backward-compatible callers. */
@@ -754,13 +803,14 @@ public class WorkerTaskBoardService {
         actionReceipts.lockAndReplay(
             surface, workerId, warehouseId, entryId, request);
     if (replay.isPresent()) return replay.get();
+    TaskLocation location = taskLocation(entryId);
     WorkerTaskDetail current = detail(surface, workerId, warehouseId, entryId);
     boolean primaryTakeTriggersNotification =
         request.action() == WorkerAction.TAKE && "WAITING".equals(current.status());
     WorkerAccess access = access(surface, workerId, warehouseId);
     UUID currentGroupId = access.worker().currentGroupId();
     BoardEntryDto commandEntry =
-        taskBoard.workerEntry(surface, warehouseId, entryId, workerId);
+        taskBoard.workerEntry(surface, location.warehouseId(), entryId, workerId);
     boolean individualLogistics =
         commandEntry.queuePurpose() == QueuePurpose.LOGISTICS_DRIVER;
     surfacePolicy.requireActionAllowed(surface, commandEntry.queuePurpose(), request.action());
@@ -812,7 +862,7 @@ public class WorkerTaskBoardService {
         case TAKE, JOIN ->
             taskBoard.takeFromMobile(
                 surface,
-                warehouseId,
+                location.warehouseId(),
                 entryId,
                 new TakeEntryRequest(
                     request.expectedVersion(),
@@ -825,29 +875,24 @@ public class WorkerTaskBoardService {
                 workerId);
         case PAUSE ->
             taskBoard.pause(
-                warehouseId,
+                location.warehouseId(),
                 entryId,
                 new PauseEntryRequest(request.expectedVersion(), null),
                 workerId);
         case RESUME ->
             taskBoard.resume(
-                warehouseId,
+                location.warehouseId(),
                 entryId,
                 new VersionCommand(request.expectedVersion()),
                 workerId);
         case COMPLETE -> {
-          long readyEvidence =
-              current.evidence().stream()
-                  .filter(item -> "READY".equals(item.state()))
-                  .count();
-          if (current.resultPhotoMinCount() > readyEvidence) {
-            throw new ConflictException("Для завершения не хватает готовых фотографий");
-          }
-          if (commandEntry.queuePurpose() == QueuePurpose.LOGISTICS_DRIVER) {
-            selectCompletionEvidence(entryId, request.evidenceId());
-          }
+          completionEvidence.requireAndSelect(
+              entryId,
+              current.resultPhotoMinCount(),
+              commandEntry.queuePurpose() == QueuePurpose.LOGISTICS_DRIVER,
+              request.evidenceId());
           taskBoard.complete(
-              warehouseId,
+              location.warehouseId(),
               entryId,
               new VersionCommand(request.expectedVersion()),
               workerId);
@@ -861,13 +906,13 @@ public class WorkerTaskBoardService {
       }
     }
     WorkerTaskDetail changed = detail(surface, workerId, warehouseId, entryId);
-    long changedRevision = revision(warehouseId);
+    long changedRevision = revision(surface, warehouseId);
     Set<UUID> notifiedWorkerIds =
         primaryTakeTriggersNotification
-            ? notifiedWorkerIds(warehouseId, commandEntry.queueId(), workerId)
+            ? notifiedWorkerIds(location.warehouseId(), commandEntry.queueId(), workerId)
             : Set.of();
     pushOutbox.enqueueJoinAvailable(
-        notifiedWorkerIds, warehouseId, entryId, changedRevision);
+        notifiedWorkerIds, location.warehouseId(), entryId, changedRevision);
     WorkerActionAppliedResult response =
         actionReceipts.save(
             surface,
@@ -891,6 +936,140 @@ public class WorkerTaskBoardService {
   /** Returns one warehouse's current worker-feed revision for pagination and invalidations. */
   public long revision(UUID warehouseId) {
     return feedRevisions.current(warehouseId);
+  }
+
+  /**
+   * Returns the opaque feed fence for one native audience.
+   *
+   * <p>The existing SSE contract carries only one home warehouse and cannot signal an externally
+   * assigned task that is added to, removed from or reassigned at another warehouse. DriverApp
+   * therefore uses the global task-board revision as a conservative REST-polling fence. This may
+   * trigger an extra refresh for unrelated warehouse work, but it cannot leak that work and it
+   * guarantees convergence without changing the native contract.
+   */
+  private long revision(MobileTaskSurface surface, UUID warehouseId) {
+    if (surface != MobileTaskSurface.DRIVER) return revision(warehouseId);
+    Long value =
+        jdbc.queryForObject(
+            """
+            select coalesce(max(revision),0)
+              from worker_feed_revision
+            """,
+            Long.class);
+    return value == null ? 0 : value;
+  }
+
+  /** Resolves an entry's physical task warehouse and queue only from authoritative rows. */
+  private TaskLocation taskLocation(UUID entryId) {
+    List<TaskLocation> values =
+        jdbc.query(
+            """
+            select task.warehouse_id,entry.queue_id
+              from queue_entry entry
+              join board_task task on task.id=entry.task_id
+             where entry.id=?
+            """,
+            (result, row) ->
+                new TaskLocation(
+                    result.getObject("warehouse_id", UUID.class),
+                    result.getObject("queue_id", UUID.class)),
+            entryId);
+    if (values.size() != 1 || values.getFirst().queueId() == null) {
+      throw new NotFoundException("Задание не найдено");
+    }
+    return values.getFirst();
+  }
+
+  /** Resolves the queue capability used by an already audience-authorized entry detail. */
+  private WorkQueueDto visibleQueue(
+      MobileTaskSurface surface, WorkerAccess access, TaskLocation location) {
+    WorkQueueDto queue =
+        access.categories().stream()
+            .filter(candidate -> candidate.id().equals(location.queueId()))
+            .findFirst()
+            .orElse(null);
+    if (queue == null && surface == MobileTaskSurface.DRIVER) {
+      queue = driverQueue(location.queueId(), access);
+    }
+    if (queue == null || category(surface, queue, access).audienceModes().isEmpty()) {
+      throw new NotFoundException("Задание не найдено");
+    }
+    return queue;
+  }
+
+  /** Resolves an active remote driver queue while retaining the home worker's qualifications. */
+  private WorkQueueDto driverQueue(UUID queueId, WorkerAccess access) {
+    List<UUID> warehouses =
+        jdbc.query(
+            "select warehouse_id from work_queue where id=?",
+            (result, row) -> result.getObject("warehouse_id", UUID.class),
+            queueId);
+    if (warehouses.size() != 1) return null;
+    return registry.listQueues(warehouses.getFirst()).stream()
+        .filter(queue -> queue.id().equals(queueId))
+        .filter(WorkQueueDto::active)
+        .filter(queue -> !queue.hidden())
+        .filter(queue -> queue.purpose() == QueuePurpose.LOGISTICS_DRIVER)
+        .filter(queue -> !category(MobileTaskSurface.DRIVER, queue, access).audienceModes().isEmpty())
+        .findFirst()
+        .orElse(null);
+  }
+
+  /**
+   * Returns home queue capabilities plus remote queues that currently contain exact driver work.
+   *
+   * <p>The remote lookup never exposes an identity-free pool task. It exists so DriverApp context
+   * and feed publish the same queue capabilities while the worker identity and offline lease stay
+   * anchored to the JWT home warehouse.
+   */
+  private List<WorkQueueDto> visibleCategories(
+      MobileTaskSurface surface,
+      UUID workerId,
+      UUID homeWarehouseId,
+      WorkerAccess access) {
+    Map<UUID, WorkQueueDto> result = new LinkedHashMap<>();
+    access.categories().forEach(queue -> result.put(queue.id(), queue));
+    if (surface != MobileTaskSurface.DRIVER) return List.copyOf(result.values());
+    List<UUID> remoteQueueIds =
+        jdbc.query(
+            """
+            select distinct queue.id
+              from queue_entry entry
+              join board_task task on task.id=entry.task_id
+              join work_queue queue on queue.id=entry.queue_id
+              join queue_definition definition on definition.id=queue.definition_id
+             where task.warehouse_id<>?
+               and task.status='ACTIVE'
+               and entry.status in ('WAITING','IN_PROGRESS','PAUSED')
+               and entry.entry_type='REAL'
+               and queue.warehouse_id=task.warehouse_id
+               and queue.active
+               and not queue.hidden
+               and definition.active
+               and definition.queue_purpose='LOGISTICS_DRIVER'
+               and (
+                 (task.driver_audience_mode='ASSIGNED_DRIVER'
+                  and task.planned_driver_worker_id=?)
+                 or exists (
+                   select 1
+                     from task_assignment assignment
+                    where assignment.queue_entry_id=entry.id
+                      and assignment.worker_id=?
+                      and assignment.status in ('ACTIVE','PAUSED')
+                 )
+               )
+             order by queue.id
+            """,
+            (queryResult, row) -> queryResult.getObject("id", UUID.class),
+            homeWarehouseId,
+            workerId,
+            workerId);
+    remoteQueueIds.forEach(
+        queueId -> {
+          WorkQueueDto queue = driverQueue(queueId, access);
+          if (queue != null) result.putIfAbsent(queue.id(), queue);
+        });
+    return List.copyOf(result.values());
   }
 
   private WorkerAccess access(
@@ -979,8 +1158,8 @@ public class WorkerTaskBoardService {
     return surfacePolicy.bindings(surface, queue, workerClassIds);
   }
 
-  private WorkerKpiPalette workerKpiPalette(UUID warehouseId) {
-    KpiPaletteDto palette = kpiSettings.get(warehouseId).palette();
+  private WorkerKpiPalette workerKpiPalette() {
+    KpiPaletteDto palette = kpiPalettes.get().palette();
     if (palette == null) return null;
     return new WorkerKpiPalette(
         palette.ranges().stream()
@@ -1136,37 +1315,6 @@ public class WorkerTaskBoardService {
     return Set.copyOf(result);
   }
 
-  private void selectCompletionEvidence(UUID entryId, UUID evidenceId) {
-    if (evidenceId == null) {
-      throw new ConflictException(
-          "Для завершения логистического задания выберите фотографию результата");
-    }
-    Integer ready =
-        jdbc.queryForObject(
-            """
-            select count(*)::integer
-              from worker_task_evidence
-             where entry_id=? and evidence_id=? and state='READY' and media_id is not null
-            """,
-            Integer.class,
-            entryId,
-            evidenceId);
-    if (ready == null || ready != 1) {
-      throw new ConflictException("Выбранная фотография результата ещё не готова");
-    }
-    jdbc.update(
-        "update worker_task_evidence set selected_for_completion=false where entry_id=?",
-        entryId);
-    jdbc.update(
-        """
-        update worker_task_evidence
-           set selected_for_completion=true, updated_at=clock_timestamp()
-         where entry_id=? and evidence_id=?
-        """,
-        entryId,
-        evidenceId);
-  }
-
   private List<TaskEvidence> evidence(UUID entryId) {
     return jdbc.query(
         """
@@ -1177,6 +1325,88 @@ public class WorkerTaskBoardService {
         """,
         (result, row) -> evidenceRow(result, row).dto(),
         entryId);
+  }
+
+  /**
+   * Persists or exactly replays one reservation after its native or contractor access gate.
+   *
+   * <p>The route-entry lock serializes both evidence identity checks and execution-state checks.
+   * Native reconnects preserve their established replay-after-completion behavior, while the
+   * private contractor boundary deliberately repeats its live-assignment gate before replay.
+   */
+  private EvidenceReservationResult reserveEvidenceRecord(
+      UUID workerId,
+      UUID warehouseId,
+      UUID entryId,
+      EvidenceDeclaration request,
+      boolean requireTargetBeforeReplay,
+      Supplier<EvidenceReservationTarget> targetSupplier) {
+    jdbc.queryForObject(
+        "select id from queue_entry where id=? for update", UUID.class, entryId);
+    EvidenceReservationTarget target =
+        requireTargetBeforeReplay ? targetSupplier.get() : null;
+    List<EvidenceRow> existing =
+        jdbc.query(
+            """
+            select *
+              from worker_task_evidence
+             where evidence_id=? or operation_id=?
+             order by evidence_id
+            """,
+            this::evidenceRow,
+            request.evidenceId(),
+            request.operationId());
+    if (!existing.isEmpty()) {
+      if (existing.size() != 1) {
+        throw new ConflictException("Идентификаторы фотографии уже использованы");
+      }
+      requireSameReservation(existing.getFirst(), workerId, warehouseId, entryId, request);
+      ownerProofs.publish(warehouseId, entryId, true);
+      return new EvidenceReservationResult(existing.getFirst().dto(), false);
+    }
+    if (target == null) target = targetSupplier.get();
+
+    OffsetDateTime recordedAt = databaseNow();
+    try {
+      jdbc.update(
+          """
+          insert into worker_task_evidence(
+              evidence_id,version,operation_id,entry_id,task_id,route_index,
+              warehouse_id,worker_id,worker_group_id,captured_at,recorded_at,state,
+              media_id,media_generation,review_reason,content_type,size_bytes,sha256,
+              source_type,source_id,updated_at)
+          values (?,0,?,?,?,?,?,?,?,?,?,'RESERVED',null,null,null,?,?,?,?,?,?)
+          """,
+          request.evidenceId(),
+          request.operationId(),
+          entryId,
+          target.taskId(),
+          target.routeIndex(),
+          warehouseId,
+          workerId,
+          target.workerGroupId(),
+          request.capturedAt().truncatedTo(ChronoUnit.MICROS),
+          recordedAt,
+          request.contentType().toLowerCase(Locale.ROOT),
+          request.sizeBytes(),
+          request.sha256(),
+          target.sourceType(),
+          target.sourceId(),
+          recordedAt);
+    } catch (DuplicateKeyException exception) {
+      EvidenceRow replay =
+          findEvidence(request.evidenceId(), request.operationId())
+              .orElseThrow(() -> exception);
+      requireSameReservation(replay, workerId, warehouseId, entryId, request);
+      ownerProofs.publish(warehouseId, entryId, true);
+      return new EvidenceReservationResult(replay.dto(), false);
+    }
+    ownerProofs.publish(warehouseId, entryId, true);
+    TaskEvidence reserved =
+        findEvidence(request.evidenceId(), request.operationId())
+            .orElseThrow(() -> new IllegalStateException("Резервирование фотографии не сохранено"))
+            .dto();
+    return new EvidenceReservationResult(reserved, true);
   }
 
   private Optional<EvidenceRow> findEvidence(UUID evidenceId, UUID operationId) {
@@ -1243,7 +1473,7 @@ public class WorkerTaskBoardService {
       UUID workerId,
       UUID warehouseId,
       UUID entryId,
-      EvidenceReservationRequest request) {
+      EvidenceDeclaration request) {
     TaskEvidence evidence = existing.dto();
     boolean same =
         evidence.evidenceId().equals(request.evidenceId())
@@ -1267,7 +1497,7 @@ public class WorkerTaskBoardService {
   }
 
   /** Enforces the media declaration limits before any evidence reservation is persisted. */
-  private void requireSupportedEvidenceDeclaration(EvidenceReservationRequest request) {
+  private void requireSupportedEvidenceDeclaration(EvidenceDeclaration request) {
     long maximumBytes;
     if (LEGACY_EVIDENCE_CONTENT_TYPE.equalsIgnoreCase(request.contentType())) {
       maximumBytes = LEGACY_EVIDENCE_MAX_BYTES;
@@ -1291,6 +1521,17 @@ public class WorkerTaskBoardService {
     OffsetDateTime value =
         jdbc.queryForObject("select clock_timestamp()", OffsetDateTime.class);
     return value == null ? now() : value;
+  }
+
+  private EvidenceDeclaration evidenceDeclaration(EvidenceReservationRequest request) {
+    return new EvidenceDeclaration(
+        request.operationId(),
+        request.evidenceId(),
+        request.routeIndex(),
+        request.capturedAt(),
+        request.contentType(),
+        request.sizeBytes(),
+        request.sha256());
   }
 
   private String mediaReadPath(
@@ -1433,6 +1674,30 @@ public class WorkerTaskBoardService {
       String contentType,
       long sizeBytes,
       String sha256) {}
+
+  /** Server-derived immutable facts persisted with one new evidence reservation. */
+  private record EvidenceReservationTarget(
+      UUID taskId,
+      int routeIndex,
+      UUID workerGroupId,
+      String sourceType,
+      UUID sourceId) {}
+
+  /** Surface-neutral evidence declaration after any native lease proof has been completed. */
+  private record EvidenceDeclaration(
+      UUID operationId,
+      UUID evidenceId,
+      int routeIndex,
+      OffsetDateTime capturedAt,
+      String contentType,
+      long sizeBytes,
+      String sha256) {}
+
+  /** Exact reservation or replay plus whether this transaction created the row. */
+  private record EvidenceReservationResult(TaskEvidence evidence, boolean created) {}
+
+  /** Server-owned physical location of one route entry. */
+  private record TaskLocation(UUID warehouseId, UUID queueId) {}
 
   /** Persisted owner and native surface fence for one registered installation. */
   private record DeviceOwner(UUID workerId, UUID warehouseId, String appSurface) {}

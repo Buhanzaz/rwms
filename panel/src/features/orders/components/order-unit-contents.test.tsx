@@ -48,6 +48,7 @@ const order: OrderDetail = {
   version: 7,
   number: "ORD-000001",
   status: "DRAFT",
+  customerDeliveryPurpose: "RENTAL_DELIVERY",
   client: {
     id: CLIENT_ID,
     version: 1,

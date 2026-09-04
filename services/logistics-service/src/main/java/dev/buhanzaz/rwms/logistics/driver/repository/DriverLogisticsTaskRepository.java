@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.logistics.driver.repository;
 
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskAudienceMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import jakarta.persistence.LockModeType;
@@ -123,6 +124,33 @@ public interface DriverLogisticsTaskRepository extends JpaRepository<DriverLogis
   Optional<DriverLogisticsTask> findForUpdateByExternalTaskId(
       @Param("externalTaskId") UUID externalTaskId);
 
+  /** Locks an exact bounded replacement membership by its stable external identities. */
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @EntityGraph(attributePaths = "members")
+  @Query(
+      """
+      select task
+      from DriverLogisticsTask task
+      where task.externalTaskId in :externalTaskIds
+      order by task.externalTaskId
+      """)
+  List<DriverLogisticsTask> findAllForUpdateByExternalTaskIdIn(
+      @Param("externalTaskIds") Collection<UUID> externalTaskIds);
+
+  /** Locks the complete current local membership for one planner lineage. */
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @EntityGraph(attributePaths = "members")
+  @Query(
+      """
+      select task
+      from DriverLogisticsTask task
+      where task.sourcePlanId = :sourcePlanId
+        and task.plannerMembershipState = dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskPlannerMembershipState.ACTIVE
+      order by task.externalTaskId
+      """)
+  List<DriverLogisticsTask> findAllForUpdateBySourcePlanId(
+      @Param("sourcePlanId") UUID sourcePlanId);
+
   @EntityGraph(attributePaths = "members")
   List<DriverLogisticsTask> findAllByWarehouseIdOrderByCreatedAtAscIdAsc(UUID warehouseId);
 
@@ -230,6 +258,28 @@ public interface DriverLogisticsTaskRepository extends JpaRepository<DriverLogis
       """)
   List<DriverLogisticsTask> findRecentByWarehouseAndState(
       @Param("warehouseId") UUID warehouseId, @Param("state") DriverTaskState state);
+
+  /** Returns only already-published shared base work eligible no later than the requested day. */
+  @Query(
+      """
+      select task
+      from DriverLogisticsTask task
+      where task.warehouseId = :warehouseId
+        and task.driverAudienceMode = :audience
+        and task.kind in :kinds
+        and task.state = :state
+        and task.externalTaskId is not null
+        and task.taskBoardEntryStatus = 'WAITING'
+        and task.scheduledDate <= :availableDate
+      order by task.priority desc, task.scheduledDate asc, task.createdAt asc, task.id asc
+      """)
+  List<DriverLogisticsTask> findPlanningBaseTaskCandidates(
+      @Param("warehouseId") UUID warehouseId,
+      @Param("availableDate") LocalDate availableDate,
+      @Param("audience") DriverTaskAudienceMode audience,
+      @Param("kinds") Collection<DriverTaskKind> kinds,
+      @Param("state") DriverTaskState state,
+      Pageable page);
 
   @EntityGraph(attributePaths = "members")
   @Lock(LockModeType.PESSIMISTIC_WRITE)

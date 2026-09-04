@@ -1,7 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import {
   cleanup,
-  fireEvent,
   render,
   screen,
   waitFor,
@@ -141,6 +140,15 @@ const DESTINATION_WAREHOUSE_ID = "22222222-2222-4222-8222-222222222222"
 vi.mock("@/hooks/use-warehouse", () => ({
   useWarehouse: () => ({
     selectedWarehouseId: SOURCE_WAREHOUSE_ID,
+    selectedWarehouse: {
+      id: SOURCE_WAREHOUSE_ID,
+      name: "Москва",
+      city: "Москва",
+      address: null,
+      timeZone: "Europe/Moscow",
+      active: true,
+      sortOrder: 1,
+    },
     setSelectedWarehouseId,
     warehouses: [
       {
@@ -180,6 +188,7 @@ const FURNITURE_TASK_ID = "78777777-7777-4777-8777-777777777777"
 const EXTERNAL_FURNITURE_TASK_ID = "79777777-7777-4777-8777-777777777777"
 const OTHER_ASSET_ID = "89888888-8888-4888-8888-888888888888"
 const IDEMPOTENCY_KEY = "99999999-9999-4999-8999-999999999999"
+const DRIVER_WORKER_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab"
 const TRANSFER_CABIN = {
   id: ASSET_ID,
   version: 8,
@@ -242,17 +251,23 @@ function transferDocument(
     id,
     version,
     documentType: "TRANSFER",
+    customerDeliveryPurpose: null,
     state,
     warehouseId: SOURCE_WAREHOUSE_ID,
     destinationWarehouseId: DESTINATION_WAREHOUSE_ID,
+    linkedReturnTransferId: null,
     partySnapshot: null,
     driverSnapshot: null,
     driverWorkerId: null,
     clientId: null,
+    historicalRentalImport: false,
     equipmentMovementTaskId: EQUIPMENT_TASK_ID,
     scheduledDate: "2026-07-19",
     rentalOrderId: null,
     rentalShipmentId: null,
+    inventorySourceId: null,
+    inventorySourceFindingId: null,
+    inventorySourceDispositionKind: null,
     lines: [
       {
         id: LINE_ID,
@@ -263,6 +278,8 @@ function transferDocument(
         state: lineState,
         tenantSnapshot: null,
         rentalOrderId: null,
+        inventorySourceWarehouseId: SOURCE_WAREHOUSE_ID,
+        inventoryShipmentFurniture: null,
       },
     ],
     createdAt: "2026-07-18T08:00:00Z",
@@ -303,6 +320,15 @@ async function renderTransferFilters() {
     ...transferDocument(TRANSIT_DOCUMENT_ID, "IN_TRANSIT", 9, "DEPARTED"),
     warehouseId: DESTINATION_WAREHOUSE_ID,
     destinationWarehouseId: SOURCE_WAREHOUSE_ID,
+    driverSnapshot: "Иванов Иван",
+    driverWorkerId: DRIVER_WORKER_ID,
+    lines: [
+      {
+        ...transferDocument(TRANSIT_DOCUMENT_ID, "IN_TRANSIT", 9, "DEPARTED")
+          .lines[0],
+        inventorySourceWarehouseId: DESTINATION_WAREHOUSE_ID,
+      },
+    ],
     scheduledDate: "2026-07-22",
   }
   transferApi.listWarehouseTransfers.mockResolvedValue([draft, transit])
@@ -436,13 +462,17 @@ afterEach(() => {
 })
 
 describe("WarehouseTransfersPage", () => {
-  it("exposes transfer-specific route, status, and planned-date filters", async () => {
+  it("exposes the operation day with transfer-specific route and status filters", async () => {
     const table = await renderTransferFilters()
     expect(
       screen.getByRole("textbox", { name: "Поиск по маршруту" })
     ).toBeTruthy()
-    expect(screen.getByLabelText("Перемещение с")).toBeTruthy()
-    expect(screen.getByLabelText("Перемещение по")).toBeTruthy()
+    expect(screen.getByText("День перемещений")).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: /^День перемещений:/ })
+    ).toBeTruthy()
+    expect(screen.queryByLabelText("Перемещение с")).toBeNull()
+    expect(screen.queryByLabelText("Перемещение по")).toBeNull()
     expect(screen.queryByRole("combobox", { name: "Наличие даты" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Обновить" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Показать все" })).toBeNull()
@@ -453,9 +483,18 @@ describe("WarehouseTransfersPage", () => {
       document.querySelectorAll<HTMLButtonElement>(
         '[data-slot="popover-trigger"]'
       )
-    ).toHaveLength(2)
+    ).toHaveLength(3)
     expect(within(table).getByText(SOURCE_ROUTE)).toBeTruthy()
     expect(within(table).getByText(DESTINATION_ROUTE)).toBeTruthy()
+    expect(within(table).getByText("Перемещение со склада")).toBeTruthy()
+    expect(within(table).getByText("Перемещение на склад")).toBeTruthy()
+    expect(screen.getAllByText("Перемещение со склада")).toHaveLength(2)
+    expect(screen.getAllByText("Перемещение на склад")).toHaveLength(2)
+    expect(screen.getByText("Иванов Иван")).toBeTruthy()
+    expect(screen.getByText("Не назначен")).toBeTruthy()
+    expect(screen.getByText("Водитель: Иванов Иван")).toBeTruthy()
+    expect(screen.getByText("Водитель: Не назначен")).toBeTruthy()
+    expect(screen.queryByText(DRIVER_WORKER_ID)).toBeNull()
   })
 
   it("filters transfers by a readable route", async () => {
@@ -492,13 +531,19 @@ describe("WarehouseTransfersPage", () => {
     await expectOnlyRoute(table, DESTINATION_ROUTE, SOURCE_ROUTE)
   })
 
-  it("filters transfers by planned date", async () => {
-    const table = await renderTransferFilters()
+  it("loads transfers for the day restored from the URL", async () => {
+    renderPage("/logistics/transfers?date=2026-07-22")
 
-    fireEvent.change(screen.getByLabelText("Перемещение с"), {
-      target: { value: "2026-07-22" },
-    })
-    await expectOnlyRoute(table, DESTINATION_ROUTE, SOURCE_ROUTE)
+    await waitFor(() =>
+      expect(transferApi.listWarehouseTransfers).toHaveBeenCalledWith(
+        "transfer-token",
+        SOURCE_WAREHOUSE_ID,
+        "2026-07-22"
+      )
+    )
+    expect(screen.getByTestId("current-location").textContent).toBe(
+      "/logistics/transfers?date=2026-07-22"
+    )
   })
 
   it("requests furniture readiness only for pending departure documents", async () => {
@@ -568,6 +613,21 @@ describe("WarehouseTransfersPage", () => {
         `/logistics/transfers?destinationWarehouseId=${DESTINATION_WAREHOUSE_ID}`
       )
     )
+  })
+
+  it("passes the selected operation day into a new transfer plan", async () => {
+    renderPage(
+      `/logistics/transfers?date=2026-07-22&destinationWarehouseId=${DESTINATION_WAREHOUSE_ID}`
+    )
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Создать межскладское перемещение",
+      })
+    ).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: "Дата: 22 июля 2026 г." })
+    ).toBeTruthy()
   })
 
   it("switches to the requested support source before opening a useful-cargo transfer", async () => {
@@ -755,7 +815,8 @@ describe("WarehouseTransfersPage", () => {
     await screen.findAllByText("Черновик")
     expect(transferApi.listWarehouseTransfers).toHaveBeenCalledWith(
       "transfer-token",
-      SOURCE_WAREHOUSE_ID
+      SOURCE_WAREHOUSE_ID,
+      expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/)
     )
     expect(
       screen.queryByRole("button", { name: "Создать перемещение" })
@@ -779,7 +840,10 @@ describe("WarehouseTransfersPage", () => {
     ).toBeTruthy()
     expect(screen.getByText("Бытовки и наполнение")).toBeTruthy()
     expect(screen.queryByRole("combobox", { name: "Водитель" })).toBeNull()
-    expect(screen.getByLabelText("Дата задания")).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: /^Дата задания:/ })
+    ).toBeTruthy()
+    expect(document.querySelector('input[type="date"]')).toBeNull()
     expect(screen.queryByText("Мебель")).toBeNull()
     expect(screen.queryByLabelText("Asset UUID")).toBeNull()
 
@@ -832,7 +896,7 @@ describe("WarehouseTransfersPage", () => {
     transferApi.createWarehouseTransfer.mockResolvedValue(
       transferDocument(DOCUMENT_ID, "DRAFT", 4)
     )
-    renderPage()
+    renderPage(`/logistics/transfers?date=${scheduledDate}`)
 
     await openLegacyCreateDialog(user)
     const dialog = screen.getByRole("dialog")
@@ -842,9 +906,9 @@ describe("WarehouseTransfersPage", () => {
     await user.click(
       await screen.findByRole("option", { name: "Петербург · Санкт-Петербург" })
     )
-    fireEvent.change(within(dialog).getByLabelText("Дата задания"), {
-      target: { value: scheduledDate },
-    })
+    expect(
+      within(dialog).getByRole("button", { name: /^Дата задания:/ })
+    ).toBeTruthy()
     expect(
       within(dialog).queryByLabelText("Фактическое время задания")
     ).toBeNull()

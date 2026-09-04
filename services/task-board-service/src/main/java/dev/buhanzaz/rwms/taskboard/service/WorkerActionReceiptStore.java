@@ -1,5 +1,8 @@
 package dev.buhanzaz.rwms.taskboard.service;
 
+import dev.buhanzaz.rwms.taskboard.api.ContractorTaskExecutionApiModels.ContractorTaskAction;
+import dev.buhanzaz.rwms.taskboard.api.ContractorTaskExecutionApiModels.ContractorTaskActionRequest;
+import dev.buhanzaz.rwms.taskboard.api.ContractorTaskExecutionApiModels.ContractorTaskActionResult;
 import dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerActionAppliedResult;
 import dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.WorkerActionRequest;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventStore;
@@ -17,12 +20,13 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Owns immutable, concurrency-safe receipts for native worker actions.
+ * Owns immutable, concurrency-safe receipts for native worker and exact-contractor actions.
  *
  * <p>The operation advisory lock is acquired before any live task read. An exact replay therefore
  * returns the original frozen response even if the task later changes or leaves the caller's live
- * feed. A pre-receipt legacy event is rejected because its original response and full request
- * cannot be reconstructed safely.
+ * feed. Contractor commands add their service channel and external task to the canonical request
+ * after exact assignment proof. A pre-receipt legacy event is rejected because its original
+ * response and full request cannot be reconstructed safely.
  */
 @Component
 public class WorkerActionReceiptStore {
@@ -46,10 +50,36 @@ public class WorkerActionReceiptStore {
       UUID entryId,
       WorkerActionRequest request) {
     String requestBody = requestBody(surface, workerId, warehouseId, entryId, request);
+    return lockAndReplay(
+        request.operationId(), requestBody, WorkerActionAppliedResult.class);
+  }
+
+  /**
+   * Serializes one private contractor command and returns its frozen exact replay, if present.
+   *
+   * <p>The caller must prove the exact active contractor assignment before entering this method.
+   * The receipt payload retains that proof's task and worker identities, so a divergent use of the
+   * same operation key conflicts with native or other service commands.
+   */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public Optional<ContractorTaskActionResult> lockAndReplayContractor(
+      UUID workerId,
+      UUID warehouseId,
+      UUID externalTaskId,
+      UUID entryId,
+      ContractorTaskActionRequest request) {
+    String requestBody =
+        contractorRequestBody(workerId, warehouseId, externalTaskId, entryId, request);
+    return lockAndReplay(
+        request.operationId(), requestBody, ContractorTaskActionResult.class);
+  }
+
+  private <T> Optional<T> lockAndReplay(
+      UUID operationId, String requestBody, Class<T> responseType) {
     jdbc.queryForObject(
         "select pg_advisory_xact_lock(hashtextextended(?, 0))",
         Object.class,
-        "worker-action:" + request.operationId());
+        "worker-action:" + operationId);
     List<ReceiptRow> receipts =
         jdbc.query(
             """
@@ -63,7 +93,7 @@ public class WorkerActionReceiptStore {
                     result.getString("request_sha256"),
                     result.getString("response_body"),
                     result.getString("response_sha256")),
-            request.operationId());
+            operationId);
     if (!receipts.isEmpty()) {
       ReceiptRow receipt = receipts.getFirst();
       String requestHash = sha256(requestBody);
@@ -72,13 +102,13 @@ public class WorkerActionReceiptStore {
         throw new ConflictException("operationId уже использован другой командой");
       }
       requireChecksum(receipt.responseBody(), receipt.responseSha256());
-      return Optional.of(readResponse(receipt.responseBody()));
+      return Optional.of(readResponse(receipt.responseBody(), responseType));
     }
     Boolean legacyOperation =
         jdbc.queryForObject(
             "select exists(select 1 from domain_event where correlation_id=?)",
             Boolean.class,
-            request.operationId());
+            operationId);
     if (Boolean.TRUE.equals(legacyOperation)) {
       throw new ConflictException(
           "operationId относится к legacy-команде без сохранённого ответа; используйте новый operationId");
@@ -117,6 +147,40 @@ public class WorkerActionReceiptStore {
     return readResponse(responseBody);
   }
 
+  /** Persists and rehydrates the first private contractor response as an immutable replay. */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public ContractorTaskActionResult saveContractor(
+      UUID workerId,
+      UUID warehouseId,
+      UUID externalTaskId,
+      UUID entryId,
+      ContractorTaskActionRequest request,
+      ContractorTaskActionResult response) {
+    String requestBody =
+        contractorRequestBody(workerId, warehouseId, externalTaskId, entryId, request);
+    String responseBody = canonicalJson(write(response));
+    jdbc.update(
+        """
+        insert into worker_action_receipt(
+            operation_id,app_surface,worker_id,warehouse_id,entry_id,action,
+            request_body,request_sha256,response_body,response_sha256,created_at)
+        values (?,?,?,?,?,?,?,?,?,?,clock_timestamp())
+        """,
+        request.operationId(),
+        MobileTaskSurface.DRIVER.name(),
+        workerId,
+        warehouseId,
+        entryId,
+        request.action() == ContractorTaskAction.START
+            ? "TAKE"
+            : "COMPLETE",
+        requestBody,
+        sha256(requestBody),
+        responseBody,
+        sha256(responseBody));
+    return readResponse(responseBody, ContractorTaskActionResult.class);
+  }
+
   private String requestBody(
       MobileTaskSurface surface,
       UUID workerId,
@@ -127,6 +191,22 @@ public class WorkerActionReceiptStore {
     body.put("surface", surface.name());
     body.put("workerId", workerId);
     body.put("warehouseId", warehouseId);
+    body.put("entryId", entryId);
+    body.put("request", request);
+    return canonicalJson(write(body));
+  }
+
+  private String contractorRequestBody(
+      UUID workerId,
+      UUID warehouseId,
+      UUID externalTaskId,
+      UUID entryId,
+      ContractorTaskActionRequest request) {
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("channel", "SERVICE_CONTRACTOR");
+    body.put("workerId", workerId);
+    body.put("warehouseId", warehouseId);
+    body.put("externalTaskId", externalTaskId);
     body.put("entryId", entryId);
     body.put("request", request);
     return canonicalJson(write(body));
@@ -149,8 +229,12 @@ public class WorkerActionReceiptStore {
   }
 
   private WorkerActionAppliedResult readResponse(String value) {
+    return readResponse(value, WorkerActionAppliedResult.class);
+  }
+
+  private <T> T readResponse(String value, Class<T> responseType) {
     try {
-      return objectMapper.readValue(value, WorkerActionAppliedResult.class);
+      return objectMapper.readValue(value, responseType);
     } catch (JacksonException exception) {
       throw new IllegalStateException("Worker action receipt cannot be read", exception);
     }

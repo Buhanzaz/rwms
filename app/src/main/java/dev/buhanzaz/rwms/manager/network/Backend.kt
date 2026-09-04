@@ -19,6 +19,57 @@ import retrofit2.HttpException
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 
+private val MANAGER_CYRILLIC_USER_TEXT = Regex("[А-Яа-яЁё]")
+private val MANAGER_TECHNICAL_ERROR_TEXT = Regex(
+    pattern = """(?i)(https?://|\bhttp\s*\d{3}\b|exception|traceback|stack\s+trace|sqlstate|""" +
+        """\b(select|insert|update|delete)\s+.+\b(from|into|set)\b|java\.|org\.|dev\.|""" +
+        """service\s+returned|manual\s+change\s+invalid|rms\s+logistics|\{\s*\"|<html|/api/)""",
+)
+
+/** Maps Problem Details to actionable copy without exposing transport or implementation text. */
+internal fun managerProblemMessage(
+    status: Int,
+    problem: ProblemDetailsDto?,
+): String {
+    managerProblemCodeMessage(problem?.code)?.let { return it }
+    val detail = problem?.detail?.trim()
+    if (detail != null &&
+        detail.length <= 512 &&
+        MANAGER_CYRILLIC_USER_TEXT.containsMatchIn(detail) &&
+        !MANAGER_TECHNICAL_ERROR_TEXT.containsMatchIn(detail)
+    ) {
+        return if (status == 409 && !detail.contains("обнов", ignoreCase = true)) {
+            "$detail Обновите данные и повторите действие."
+        } else {
+            detail
+        }
+    }
+    return managerStatusFallback(status)
+}
+
+private fun managerProblemCodeMessage(code: String?): String? = when (code) {
+    "UNAUTHORIZED", "AUTHENTICATION_REQUIRED", "INVALID_TOKEN" ->
+        "Сессия завершена. Войдите снова."
+    "FORBIDDEN", "ACCESS_DENIED" ->
+        "Недостаточно прав для операции. Обратитесь к администратору."
+    "VERSION_CONFLICT", "OPTIMISTIC_LOCK_CONFLICT" ->
+        "Данные уже изменились. Обновите экран и повторите действие."
+    "VALIDATION_FAILED" ->
+        "Проверьте заполненные данные и повторите действие."
+    else -> null
+}
+
+private fun managerStatusFallback(status: Int): String = when (status) {
+    401 -> "Сессия завершена. Войдите снова."
+    403 -> "Недостаточно прав для операции. Обратитесь к администратору."
+    404 -> "Данные не найдены. Обновите экран и повторите действие."
+    409 -> "Данные уже изменились. Обновите экран и повторите действие."
+    422 -> "Проверьте заполненные данные и повторите действие."
+    429 -> "Слишком много запросов. Подождите и повторите действие."
+    in 500..599 -> "Сервис временно недоступен. Повторите попытку позже."
+    else -> "Не удалось выполнить операцию. Проверьте данные и повторите действие."
+}
+
 /**
  * Encapsulates the manager public-gateway transport boundary; it is not a backend domain or persistence type.
  */
@@ -85,26 +136,12 @@ class RwmsBackend(
 
     fun problemMessage(exception: HttpException): String {
         val raw = runCatching { exception.response()?.errorBody()?.string() }.getOrNull()
-        val detail = raw?.let {
+        val problem = raw?.let {
             runCatching {
-                moshi.adapter(ProblemDetailsDto::class.java).fromJson(it)?.detail
+                moshi.adapter(ProblemDetailsDto::class.java).fromJson(it)
             }.getOrNull()
         }
-        val message = detail?.takeIf(String::isNotBlank)
-            ?: when (exception.code()) {
-                401 -> "Сессия завершена. Войдите снова"
-                403 -> "Недостаточно прав для этой операции"
-                404 -> "Данные не найдены"
-                409 -> "Данные уже изменились"
-                422 -> "Данные не прошли проверку"
-                503 -> "Сервис временно недоступен"
-                else -> "Ошибка сервера (${exception.code()})"
-            }
-        return if (exception.code() == 409) {
-            "$message. Обновите данные и повторите действие"
-        } else {
-            message
-        }
+        return managerProblemMessage(exception.code(), problem)
     }
 }
 

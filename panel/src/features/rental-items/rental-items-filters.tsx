@@ -14,6 +14,7 @@ import type {
   RentalItemsFilterOptionSet,
   RentalItemsFiltersState,
 } from "@/features/rental-items/model/rental-item"
+import { cn } from "@/lib/utils"
 
 type RentalItemsFiltersProps = {
   options: RentalItemsFilterOptionSet[]
@@ -56,6 +57,7 @@ function FilterButton({
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState("")
   const [draftValues, setDraftValues] = useState<string[]>(selectedValues)
+  const hasSelectedValues = selectedValues.length > 0
 
   const filteredValues = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase()
@@ -103,12 +105,16 @@ function FilterButton({
     >
       <PopoverTrigger asChild>
         <Button
-          variant={selectedValues.length ? "secondary" : "outline"}
-          className="h-9 w-full justify-start gap-2 sm:w-auto"
+          variant="outline"
+          className={cn(
+            "h-9 w-full justify-start gap-2 sm:w-auto",
+            hasSelectedValues && "rwms-button-light"
+          )}
+          aria-pressed={hasSelectedValues}
         >
           <span>{definition.label}</span>
-          {selectedValues.length > 0 && (
-            <span className="rounded bg-background px-1 text-xs">
+          {hasSelectedValues && (
+            <span className="text-xs text-current">
               {selectedValues.length}
             </span>
           )}

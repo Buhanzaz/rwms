@@ -35,9 +35,11 @@ import dev.buhanzaz.rwms.manager.network.RentalItemDto
 import dev.buhanzaz.rwms.manager.ui.ManagerUiState
 import dev.buhanzaz.rwms.manager.ui.TransferEditorState
 import dev.buhanzaz.rwms.manager.ui.WarehouseAccessPolicy
+import dev.buhanzaz.rwms.manager.ui.WholeTransferCommand
 import dev.buhanzaz.rwms.manager.ui.shipmentFurnitureIsReady
 import dev.buhanzaz.rwms.manager.ui.shipmentPlanRequiresFurnitureReadiness
 import dev.buhanzaz.rwms.manager.ui.transferFurnitureIsReady
+import dev.buhanzaz.rwms.manager.ui.wholeTransferAction
 import dev.buhanzaz.rwms.manager.ui.components.EmptyState
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPanel
 import dev.buhanzaz.rwms.manager.ui.components.ManagerScreenScaffold
@@ -490,6 +492,8 @@ private fun TransferCabinEditor(
 fun TransferDetailScreen(
     uiState: ManagerUiState,
     onBack: () -> Unit,
+    onDepartTransfer: () -> Unit,
+    onArriveTransfer: () -> Unit,
     onDepart: (String) -> Unit,
     onStartArrival: (String) -> Unit,
     onOpenArrivalPhotos: () -> Unit,
@@ -513,6 +517,12 @@ fun TransferDetailScreen(
                 WarehouseAccessPolicy.hasAccess(user, destinationId, "MANAGE")
             } == true
     } == true
+    val documentAction = wholeTransferAction(
+        document = document,
+        canManage = canManage,
+        busy = uiState.busy,
+        furnitureReady = furnitureReady,
+    )
 
     ManagerScreenScaffold(title = "Перемещение", onBack = onBack) { padding ->
         LazyColumn(
@@ -529,6 +539,26 @@ fun TransferDetailScreen(
                         readiness.tasks.forEach { task ->
                             Text("${task.unitNumber}: ${taskBoardStateLabel(task.taskState)}")
                         }
+                    }
+                }
+            }
+            if (documentAction != null) {
+                item {
+                    Button(
+                        onClick = when (documentAction.command) {
+                            WholeTransferCommand.DEPART -> onDepartTransfer
+                            WholeTransferCommand.ARRIVE -> onArriveTransfer
+                        },
+                        enabled = documentAction.enabled,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(documentAction.label)
+                    }
+                    documentAction.blockingMessage?.let { message ->
+                        Text(
+                            message,
+                            color = MaterialTheme.colorScheme.error,
+                        )
                     }
                 }
             }

@@ -11,7 +11,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/** Versioned set of warehouse KPI display thresholds and the overdue color. */
+/** Versioned installation-wide KPI display thresholds and the overdue color. */
 @Entity
 @Table(name = "kpi_palette")
 public class KpiPalette extends AbstractVersionedEntity {
@@ -31,8 +31,15 @@ public class KpiPalette extends AbstractVersionedEntity {
 
   public void replace(String overdueColor, List<KpiPaletteRange> ranges) {
     this.overdueColor = overdueColor;
-    this.ranges.clear();
+    clearRanges();
     this.ranges.addAll(ranges);
+  }
+
+  /**
+   * Removes every current range before a replacement is flushed under the range uniqueness fence.
+   */
+  public void clearRanges() {
+    ranges.clear();
   }
 
   public String getOverdueColor() {

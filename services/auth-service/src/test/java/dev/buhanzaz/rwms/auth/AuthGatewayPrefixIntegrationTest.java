@@ -84,8 +84,9 @@ class AuthGatewayPrefixIntegrationTest {
         assertThat(script)
                 .contains("api/auth/csrf")
                 .contains("action:\"login\"")
-                .contains("src:\"wms-login-cover.png\"")
+                .contains("src:\"assets/background.webm\"")
+                .contains("src:\"assets/block-box-logo.svg\"")
                 .contains("RWMS Рабочий")
-                .contains("настроек доски");
+                .contains("Восстановление пароля пока недоступно");
     }
 }

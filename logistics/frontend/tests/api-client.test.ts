@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, api, getWarehouseWorkspace } from '../src/api/client';
+import {
+  ApiError,
+  api,
+  getWarehouseWorkspace,
+  setSimulatorAccessTokenProvider,
+  startOptimizationEventStream,
+  type OptimizationStreamEvent,
+} from '../src/api/client';
 import { normalizeRoutePlan } from '../src/api/mappers';
 import { requestFixture, warehouseFixture, workspaceFixture } from './fixtures';
 
@@ -45,7 +52,50 @@ beforeEach(() => {
 });
 
 describe('warehouse workspace transport', () => {
-  it('loads and normalizes the workspace through the automatically refreshing endpoint', async () => {
+  it('uses a fresh panel USER bearer for each operational request', async () => {
+    const tokenProvider = vi.fn()
+      .mockResolvedValueOnce('panel-token-1')
+      .mockResolvedValueOnce('panel-token-2');
+    setSimulatorAccessTokenProvider(tokenProvider);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse([]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.listWarehouses();
+    await api.listWarehouses();
+
+    expect(tokenProvider).toHaveBeenCalledTimes(2);
+    expect(new Headers((fetchMock.mock.calls[0]?.[1] as RequestInit).headers).get('Authorization'))
+      .toBe('Bearer panel-token-1');
+    expect(new Headers((fetchMock.mock.calls[1]?.[1] as RequestInit).headers).get('Authorization'))
+      .toBe('Bearer panel-token-2');
+  });
+
+  it('fails explicitly before transport when the panel session is missing', async () => {
+    setSimulatorAccessTokenProvider(() => Promise.resolve(null));
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const error = await api.listWarehouses().catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 401, code: 'AUTHENTICATION_REQUIRED' });
+    expect((error as Error).message).toContain('Войдите в RWMS');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the health probe public', async () => {
+    setSimulatorAccessTokenProvider(() => Promise.resolve(null));
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ status: 'ok' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.health()).resolves.toEqual({ status: 'ok' });
+
+    expect(new Headers((fetchMock.mock.calls[0]?.[1] as RequestInit).headers).has('Authorization')).toBe(false);
+  });
+
+  it('loads and normalizes a bounded planning-date workspace without refreshing RWMS', async () => {
     const workspace = workspaceFixture({
       requests: [{
         ...requestFixture({ delivery_price_rubles: 28_500, price_isochrone_minutes: 180 }),
@@ -56,10 +106,10 @@ describe('warehouse workspace transport', () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(workspace));
     vi.stubGlobal('fetch', fetchMock);
 
-    const result = await getWarehouseWorkspace('warehouse-1');
+    const result = await getWarehouseWorkspace('warehouse-1', { planningDate: '2026-08-30' });
 
     expect(fetchMock.mock.calls.map(([url]) => requestUrl(url))).toEqual([
-      '/api/warehouses/warehouse-1/workspace',
+      '/api/warehouses/warehouse-1/workspace?planning_date=2026-08-30&request_limit=250',
     ]);
     expect(result.warehouse.address).toContain('Шоссе Революции');
     expect(result.requests[0]).toMatchObject({ mandatory: false });
@@ -67,23 +117,17 @@ describe('warehouse workspace transport', () => {
     expect(result.requests[0]?.tasks?.[0]).toMatchObject({ mandatory: false });
   });
 
-  it('keeps saved demand visible when automatic refresh reports a partial failure', async () => {
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(jsonResponse({
-        title: 'Синхронизация неполная',
-        code: 'RWMS_WORKSPACE_SYNC_INCOMPLETE',
-        failures: [{ id: 'request-2' }, { id: 'request-3' }],
-      }, 422))
-      .mockResolvedValueOnce(jsonResponse(workspaceFixture()));
+  it('never retries a failed projection read through the mutating refresh path', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({
+      title: 'Проекция временно недоступна',
+      code: 'WORKSPACE_UNAVAILABLE',
+    }, 503));
     vi.stubGlobal('fetch', fetchMock);
 
-    const result = await getWarehouseWorkspace('warehouse-1');
+    await expect(getWarehouseWorkspace('warehouse-1', { planningDate: '2026-08-30' })).rejects.toBeInstanceOf(ApiError);
 
-    expect(result.requests).toHaveLength(1);
-    expect(result.rwms_refresh_warning).toContain('2');
     expect(fetchMock.mock.calls.map(([url]) => requestUrl(url))).toEqual([
-      '/api/warehouses/warehouse-1/workspace',
-      '/api/warehouses/warehouse-1/workspace?refresh_rwms=false',
+      '/api/warehouses/warehouse-1/workspace?planning_date=2026-08-30&request_limit=250',
     ]);
   });
 
@@ -112,7 +156,7 @@ describe('warehouse-owned catalogs', () => {
       rwms_assignment_mode: 'WAREHOUSE_DRIVERS',
       active: true,
       notes: '',
-    });
+    }, 'driver-intent');
     await api.createShift('warehouse-1', {
       driver_id: 'driver-1',
       vehicle_id: 'vehicle-1',
@@ -122,7 +166,7 @@ describe('warehouse-owned catalogs', () => {
       end_time: '20:00',
       break_minutes: 60,
       active: true,
-    });
+    }, 'shift-intent');
     await api.createRequest('warehouse-1', {
       type: 'DELIVERY',
       name: 'Обязательная доставка',
@@ -137,11 +181,10 @@ describe('warehouse-owned catalogs', () => {
       service_minutes: 30,
       priority: 10,
       mandatory: true,
-      status: 'READY',
       split_allowed: true,
       notes: '',
       date_options: [{ date: '2026-08-30', priority: 1, window_start: '12:00', window_end: '15:00', is_hard: true }],
-    });
+    }, 'request-intent');
 
     expect(fetchMock.mock.calls.map(([url]) => requestUrl(url))).toEqual([
       '/api/warehouses/warehouse-1/drivers',
@@ -150,6 +193,79 @@ describe('warehouse-owned catalogs', () => {
     ]);
     expect(bodyAt(fetchMock, 1)).toMatchObject({ date_from: '2026-08-01', date_to: '2026-08-31' });
     expect(bodyAt(fetchMock, 2)).toMatchObject({ type: 'DELIVERY', mandatory: true });
+    expect(fetchMock.mock.calls.map(([, init]) => new Headers((init as RequestInit).headers).get('Idempotency-Key')))
+      .toEqual(['driver-intent', 'shift-intent', 'request-intent']);
+  });
+
+  it('reuses one caller-owned idempotency key after an uncertain create result', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ title: 'Временно недоступно' }, 503))
+      .mockResolvedValueOnce(jsonResponse({ id: 'driver-1' }, 201));
+    vi.stubGlobal('fetch', fetchMock);
+    const input = {
+      external_worker_id: null,
+      rwms_assignment_mode: 'WAREHOUSE_DRIVERS' as const,
+      active: true,
+      notes: '',
+    };
+
+    await expect(api.createDriver('warehouse-1', input, 'stable-driver-intent')).rejects.toBeInstanceOf(ApiError);
+    await api.createDriver('warehouse-1', input, 'stable-driver-intent');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.map(([, init]) => new Headers((init as RequestInit).headers).get('Idempotency-Key')))
+      .toEqual(['stable-driver-intent', 'stable-driver-intent']);
+  });
+
+  it('sends the authoritative version fence with catalog updates', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ id: 'driver-1', version: 8 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.updateDriver('driver-1', { active: false }, 7);
+
+    expect(bodyAt(fetchMock, 0)).toEqual({ active: false, expected_version: 7 });
+  });
+
+  it('fences request actions, date-option updates, splits and every catalog delete', async () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => Promise.resolve(
+      init?.method === 'DELETE' ? new Response(null, { status: 204 }) : jsonResponse({}),
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    const planningDetails = {
+      date: '2026-08-30',
+      window_start: '12:00',
+      window_end: '15:00',
+      is_hard: true,
+      mandatory: true,
+      trailer_access_allowed: false,
+      include_driver_passport_in_notification: false,
+      contact_name: 'Диспетчер',
+      contact_phone: '+70000000000',
+    };
+
+    await api.updateRequestDateOption('option-1', { priority: 2 }, 13);
+    await api.scheduleRequest('request-1', { date: '2026-08-30', add_if_missing: true }, 13);
+    await api.saveRequestPlanningDetails('request-1', planningDetails, 13);
+    await api.splitRequest('request-1', [1, 1], 13);
+    await api.deleteDriver('driver-1', 3);
+    await api.deleteVehicle('vehicle-1', 4);
+    await api.deleteTrailer('trailer-1', 5);
+    await api.deleteShift('shift-1', 6);
+    await api.deleteRequest('request-1', 13);
+    await api.deleteRequestDateOption('option-1', 13);
+
+    expect(bodyAt(fetchMock, 0)).toEqual({ priority: 2, expected_version: 13 });
+    expect(bodyAt(fetchMock, 1)).toEqual({ date: '2026-08-30', add_if_missing: true, expected_version: 13 });
+    expect(bodyAt(fetchMock, 2)).toEqual({ ...planningDetails, expected_version: 13 });
+    expect(bodyAt(fetchMock, 3)).toEqual({ expected_version: 13, part_quantities: [1, 1] });
+    expect(fetchMock.mock.calls.slice(4).map(([url]) => requestUrl(url))).toEqual([
+      '/api/drivers/driver-1?expected_version=3',
+      '/api/vehicles/vehicle-1?expected_version=4',
+      '/api/trailers/trailer-1?expected_version=5',
+      '/api/shifts/shift-1?expected_version=6',
+      '/api/requests/request-1?expected_version=13',
+      '/api/request-date-options/option-1?expected_version=13',
+    ]);
   });
 });
 
@@ -211,11 +327,6 @@ describe('planning lifecycle', () => {
       deliveries_per_day: 4,
       pickups_per_day: 4,
       alternative_dates_count: 1,
-      cargo_length_mm: 6000,
-      cargo_width_mm: 2400,
-      cargo_height_mm: 2400,
-      cargo_weight_kg: 1200,
-      seed: 42,
     });
     await api.closePlanningDay('warehouse-1', '2026-08-30');
 
@@ -243,6 +354,38 @@ describe('planning lifecycle', () => {
     ]);
     expect(bodyAt(fetchMock, 0)).toEqual({ expected_version: 4, accept_warnings: true });
     expect(bodyAt(fetchMock, 1)).toEqual({ expected_version: 5 });
+  });
+
+  it('does not let the browser choose the audit actor for a manual plan change', async () => {
+    const workspace = workspaceFixture();
+    const currentPlan = normalizeRoutePlan(rawPlan() as never, workspace);
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({
+      valid: true,
+      version: 5,
+      errors: [],
+      warnings: [],
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.manualChange('plan-1', {
+      expected_version: 4,
+      change_type: 'MOVE_TASK',
+      task_id: 'task-1',
+      target_cycle_id: 'cycle-2',
+      target_sequence: 1,
+      reason: 'Ручное перемещение',
+    }, workspace, currentPlan);
+
+    expect(bodyAt(fetchMock, 0)).toEqual({
+      expected_version: 4,
+      change_type: 'MOVE_TASK',
+      payload: {
+        task_id: 'task-1',
+        target_cycle_id: 'cycle-2',
+        target_sequence: 1,
+      },
+      reason: 'Ручное перемещение',
+    });
   });
 
   it('sends an explicit empty-positioning reason when a support route is approved', async () => {
@@ -437,6 +580,98 @@ describe('planning lifecycle', () => {
   });
 });
 
+describe('existing delivery reschedule transport', () => {
+  it('calculates by selected date and applies the exact owner fences with idempotency', async () => {
+    setSimulatorAccessTokenProvider(() => Promise.resolve('panel-token'));
+    const options = {
+      request_id: 'request-1',
+      request_version: 7,
+      source_plan_id: '11111111-1111-4111-8111-111111111111',
+      source_plan_version: 13,
+      order_id: 'order-1',
+      order_version: 11,
+      session_id: 'session-1',
+      session_version: 5,
+      current_slot: {
+        slot_id: 'slot-current',
+        slot_version: 2,
+        date: '2026-09-01',
+        kind: 'FIXED_WINDOW',
+        window_start: '12:00:00',
+        window_end: '15:00:00',
+        delivery_price_rubles: 22_000,
+        expires_at: '2026-09-01T18:30:00+03:00',
+      },
+      options: [],
+    };
+    const result = {
+      ...options,
+      request_version: 8,
+      order_version: 12,
+      session_version: 6,
+      scheduled_date: '2026-09-02',
+      confirmed_slot: {
+        slot_id: 'slot-1',
+        slot_version: 3,
+        date: '2026-09-02',
+        kind: 'FIXED_WINDOW',
+        window_start: '09:00:00',
+        window_end: '12:00:00',
+        delivery_price_rubles: 24_000,
+        expires_at: '2026-09-01T18:30:00+03:00',
+      },
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(options))
+      .mockResolvedValueOnce(jsonResponse(result))
+      .mockResolvedValueOnce(jsonResponse(result));
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+
+    await api.getRequestRescheduleOptions('request-1', {
+      expected_request_version: 6,
+      date: '2026-09-02',
+    }, controller.signal);
+    await api.rescheduleRequest('request-1', {
+      expected_request_version: 7,
+      source_plan_id: '11111111-1111-4111-8111-111111111111',
+      source_plan_version: 13,
+      expected_order_version: 11,
+      expected_session_version: 5,
+      slot_id: 'slot-1',
+      slot_version: 3,
+    }, 'intent-1');
+    await api.retryRequestReschedule('request-1', {
+      hold_id: '22222222-2222-4222-8222-222222222222',
+      expected_quarantine_count: 2,
+    }, 'retry-intent-1');
+
+    expect(fetchMock.mock.calls.map(([url]) => requestUrl(url))).toEqual([
+      '/api/requests/request-1/reschedule-options',
+      '/api/requests/request-1/reschedule',
+      '/api/requests/request-1/reschedule-retry',
+    ]);
+    expect(bodyAt(fetchMock, 0)).toEqual({ expected_request_version: 6, date: '2026-09-02' });
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).signal).toBe(controller.signal);
+    expect(bodyAt(fetchMock, 1)).toEqual({
+      expected_request_version: 7,
+      source_plan_id: '11111111-1111-4111-8111-111111111111',
+      source_plan_version: 13,
+      expected_order_version: 11,
+      expected_session_version: 5,
+      slot_id: 'slot-1',
+      slot_version: 3,
+    });
+    expect(new Headers((fetchMock.mock.calls[1]?.[1] as RequestInit).headers).get('Idempotency-Key')).toBe('intent-1');
+    expect((fetchMock.mock.calls[2]?.[1] as RequestInit).method).toBe('POST');
+    expect(bodyAt(fetchMock, 2)).toEqual({
+      hold_id: '22222222-2222-4222-8222-222222222222',
+      expected_quarantine_count: 2,
+    });
+    expect(new Headers((fetchMock.mock.calls[2]?.[1] as RequestInit).headers).get('Idempotency-Key')).toBe('retry-intent-1');
+  });
+});
+
 describe('transport errors', () => {
   it('preserves Problem Details status, code and detail', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
@@ -445,12 +680,53 @@ describe('transport errors', () => {
       code: 'RWMS_WAREHOUSE_NOT_FOUND',
     }, 422)));
 
-    const error = await api.updateWarehouse('warehouse-1', { loading_minutes: 30 })
+    const error = await api.updateWarehouse('warehouse-1', { loading_minutes: 30 }, 1)
       .catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toMatchObject({ status: 422, code: 'RWMS_WAREHOUSE_NOT_FOUND' });
     expect((error as Error).message).toContain('справочнике RWMS');
+  });
+
+  it('keeps FastAPI validation diagnostics without exposing them through the error message', async () => {
+    setSimulatorAccessTokenProvider(() => Promise.resolve('panel-token'));
+    const rawDetail = [{
+      type: 'greater_than',
+      loc: ['body', 'loading_minutes'],
+      msg: 'Input should be greater than 0',
+      input: -1,
+    }];
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      title: 'Validation Error',
+      detail: rawDetail,
+      code: 'INVALID_REQUEST',
+      trace_id: 'internal-trace',
+    }, 422)));
+
+    const error = await api.updateWarehouse('warehouse-1', { loading_minutes: -1 }, 1)
+      .catch((caught: unknown) => caught) as ApiError;
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 422, code: 'INVALID_REQUEST' });
+    expect(error.problem?.detail).toEqual(rawDetail);
+    expect(error.message).toContain('Проверьте введённые данные');
+    expect(error.message).not.toMatch(/Validation|greater_than|loading_minutes|HTTP|trace/iu);
+  });
+
+  it('retains an upstream diagnostic only in Problem Details and returns actionable Russian copy', async () => {
+    setSimulatorAccessTokenProvider(() => Promise.resolve('panel-token'));
+    const rawDetail = 'RMS Logistics Service returned HTTP 400: {"internal":"trace"}';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      detail: rawDetail,
+      code: 'RWMS_REQUEST_FAILED',
+    }, 400)));
+
+    const error = await api.updateWarehouse('warehouse-1', { loading_minutes: 30 }, 1)
+      .catch((caught: unknown) => caught) as ApiError;
+
+    expect(error.problem?.detail).toBe(rawDetail);
+    expect(error.message).toContain('Проверьте введённые данные');
+    expect(error.message).not.toMatch(/RMS Logistics Service|HTTP 400|internal|trace|\{/iu);
   });
 
   it('ensures the automatic plan through the active warehouse endpoint', async () => {
@@ -463,5 +739,99 @@ describe('transport errors', () => {
     expect(plan?.warehouse_id).toBe('warehouse-1');
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/warehouses/warehouse-1/plans/ensure?date=2026-08-30');
     expect((fetchMock.mock.calls[0]?.[1] as RequestInit).method).toBe('POST');
+  });
+});
+
+describe('optimization event transport', () => {
+  it('streams custom and terminal events with a bearer header and no token in the URL', async () => {
+    setSimulatorAccessTokenProvider(() => Promise.resolve('stream-token'));
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          'id: 7\nevent: phase_started\ndata: {"event_type":"phase_started","sequence":7',
+        ));
+        controller.enqueue(new TextEncoder().encode('}\n\nevent: run_terminal\ndata: {"status":"COMPLETED"}\n\n'));
+        controller.close();
+      },
+    });
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(stream, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const events: OptimizationStreamEvent[] = [];
+
+    await new Promise<void>((resolve, reject) => {
+      startOptimizationEventStream('run-1', {
+        onEvent: (event) => {
+          events.push(event);
+          if (event.event === 'run_terminal') resolve();
+        },
+        onError: reject,
+      });
+    });
+
+    expect(events).toEqual([
+      {
+        id: '7',
+        event: 'phase_started',
+        data: '{"event_type":"phase_started","sequence":7}',
+      },
+      {
+        id: null,
+        event: 'run_terminal',
+        data: '{"status":"COMPLETED"}',
+      },
+    ]);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/optimization-runs/run-1/stream');
+    expect(url).not.toContain('stream-token');
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer stream-token');
+    expect(new Headers(init.headers).get('Accept')).toBe('text/event-stream');
+  });
+
+  it('reconnects an interrupted stream from the last persisted event id', async () => {
+    vi.useFakeTimers();
+    try {
+      const tokenProvider = vi.fn()
+        .mockResolvedValueOnce('stream-token-1')
+        .mockResolvedValueOnce('stream-token-2');
+      setSimulatorAccessTokenProvider(tokenProvider);
+      const interrupted = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('id: 11\nevent: trace\ndata: {"sequence":11}\n\n'));
+          controller.close();
+        },
+      });
+      const terminal = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('event: run_terminal\ndata: {"status":"COMPLETED"}\n\n'));
+          controller.close();
+        },
+      });
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(new Response(interrupted, { status: 200 }))
+        .mockResolvedValueOnce(new Response(terminal, { status: 200 }));
+      vi.stubGlobal('fetch', fetchMock);
+      const terminalReceived = new Promise<void>((resolve) => {
+        startOptimizationEventStream('run-2', {
+          onEvent: (event) => {
+            if (event.event === 'run_terminal') resolve();
+          },
+        });
+      });
+
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(1_000);
+      await terminalReceived;
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const [, reconnectInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+      const reconnectHeaders = new Headers(reconnectInit.headers);
+      expect(reconnectHeaders.get('Authorization')).toBe('Bearer stream-token-2');
+      expect(reconnectHeaders.get('Last-Event-ID')).toBe('11');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

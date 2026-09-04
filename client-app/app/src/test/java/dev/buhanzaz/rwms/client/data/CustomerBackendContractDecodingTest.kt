@@ -45,7 +45,55 @@ class CustomerBackendContractDecodingTest {
 
         assertThat(failure.status).isEqualTo(409)
         assertThat(failure.code).isEqualTo("INQUIRY_ARCHIVED")
-        assertThat(failure.message).isEqualTo("Диалог уже завершён")
+        assertThat(failure.message).isEqualTo("Этот заказ уже завершён. Начните новый заказ.")
+    }
+
+    @Test
+    fun `technical backend detail is never exposed to the customer`() {
+        val body = """{"status":400,"code":"UNKNOWN","detail":"RMS Logistics Service returned HTTP 400: {\"trace\":\"java.lang.IllegalStateException\"}"}"""
+            .toResponseBody("application/problem+json".toMediaType())
+
+        val failure = HttpException(Response.error<Unit>(400, body)).toCustomerApiException(json)
+
+        assertThat(failure.message)
+            .isEqualTo("Не удалось выполнить запрос. Проверьте данные и повторите действие.")
+        assertThat(failure.message).doesNotContain("HTTP")
+        assertThat(failure.message).doesNotContain("Exception")
+    }
+
+    @Test
+    fun `unknown safe Russian domain detail stays actionable`() {
+        val body = """{"status":422,"code":"NEW_CUSTOMER_RULE","detail":"Укажите контактный телефон и повторите действие."}"""
+            .toResponseBody("application/problem+json".toMediaType())
+
+        val failure = HttpException(Response.error<Unit>(422, body)).toCustomerApiException(json)
+
+        assertThat(failure.message).isEqualTo("Укажите контактный телефон и повторите действие.")
+        assertThat(failure.code).isEqualTo("NEW_CUSTOMER_RULE")
+    }
+
+    @Test
+    fun `known route code has Russian recovery action even with English detail`() {
+        val body = """{"status":503,"code":"CUSTOMER_ROUTING_UNAVAILABLE","detail":"Valhalla timeout"}"""
+            .toResponseBody("application/problem+json".toMediaType())
+
+        val failure = HttpException(Response.error<Unit>(503, body)).toCustomerApiException(json)
+
+        assertThat(failure.message)
+            .isEqualTo("Расчёт маршрута временно недоступен. Повторите попытку позже.")
+    }
+
+    @Test
+    fun `booking lifecycle conflict codes have Russian customer actions`() {
+        val body = """{"status":409,"code":"CUSTOMER_DELIVERY_SLOT_TAKEN","detail":"capacity race"}"""
+            .toResponseBody("application/problem+json".toMediaType())
+
+        val failure = HttpException(Response.error<Unit>(409, body)).toCustomerApiException(json)
+
+        assertThat(failure.code).isEqualTo("CUSTOMER_DELIVERY_SLOT_TAKEN")
+        assertThat(failure.message)
+            .isEqualTo("Выбранное время уже занято. Рассчитайте доступные варианты заново.")
+        assertThat(failure.message).doesNotContain("capacity")
     }
 
     @Test
@@ -140,15 +188,18 @@ class CustomerBackendContractDecodingTest {
     @Test
     fun `booking cabin decodes arrival acceptance problems and shipment media owner`() {
         val booking = json.decodeFromString<CustomerBooking>(
-            """{"bookingId":"booking-a","orderId":"order-a","status":"COMPLETED","errorCode":null,
+            """{"bookingId":"booking-a","version":14,"orderId":"order-a","status":"COMPLETED","errorCode":null,
               "inquiryId":"inquiry-a","slotId":"slot-a","warehouseId":"warehouse-a",
               "deliveryAddress":"Невский, 1","deliveryDate":"2026-09-01","windowStart":"09:00:00",
-              "windowEnd":"12:00:00","cabins":[{"cabinUnitId":"cabin-a","accountingNo":"БК-1",
+              "windowEnd":"12:00:00","cancellationFeeRubles":null,
+              "cabins":[{"cabinUnitId":"cabin-a","accountingNo":"БК-1",
               "rentalMonths":3,"deliveryState":"ARRIVED","arrivalEligible":true,
               "mediaOwner":{"ownerType":"LOGISTICS_SHIPMENT","documentId":"document-a","lineId":"line-a",
               "warehouseId":"warehouse-a","context":"SHIPMENT"},"acceptance":null,"problems":[]}]}""",
         )
 
+        assertThat(booking.version).isEqualTo(14)
+        assertThat(booking.cancellationFeeRubles).isNull()
         assertThat(booking.cabins.single().arrivalEligible).isTrue()
         assertThat(booking.cabins.single().mediaOwner?.lineId).isEqualTo("line-a")
     }
@@ -182,5 +233,25 @@ class CustomerBackendContractDecodingTest {
         assertThat(hold).contains("\"privateSiteAccessConfirmed\":true")
         assertThat(hold).contains("\"failedTripChargeAcknowledged\":true")
         assertThat(hold).contains("\"siteCabinCapacity\":2")
+    }
+
+    @Test
+    fun `booking reschedule requests contain only server booking and slot fences`() {
+        val search = json.encodeToString(
+            SearchCustomerBookingRescheduleRequest(expectedVersion = 14),
+        )
+        val confirmation = json.encodeToString(
+            RescheduleCustomerBookingRequest(
+                expectedVersion = 14,
+                slotId = "slot-new",
+                slotVersion = 6,
+            ),
+        )
+
+        assertThat(search).isEqualTo("{\"expectedVersion\":14}")
+        assertThat(confirmation)
+            .isEqualTo("{\"expectedVersion\":14,\"slotId\":\"slot-new\",\"slotVersion\":6}")
+        assertThat(confirmation).doesNotContain("cabin")
+        assertThat(confirmation).doesNotContain("equipment")
     }
 }

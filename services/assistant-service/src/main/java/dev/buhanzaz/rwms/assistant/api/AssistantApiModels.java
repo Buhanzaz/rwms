@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.assistant.api;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Email;
@@ -217,6 +218,7 @@ public final class AssistantApiModels {
    * Stable SSE envelope. The event name is also emitted as the SSE event field so clients can use
    * either EventSource listeners or the JSON body.
    */
+  @JsonInclude(JsonInclude.Include.NON_NULL)
   public record TurnEvent(
       @NotBlank String event,
       UUID conversationId,

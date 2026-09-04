@@ -30,7 +30,6 @@ public class RepairCapacitySettingsService {
             warehouseId,
             0,
             RepairCapacitySettings.DEFAULT_REPAIR_PLACE_COUNT,
-            RepairCapacitySettings.DEFAULT_AUTOMATIC_REFILL_DELAY_MINUTES,
             null,
             null));
   }
@@ -47,14 +46,14 @@ public class RepairCapacitySettingsService {
       settings = RepairCapacitySettings.create(
           warehouseId,
           request.repairPlaceCount(),
-          request.automaticRefillDelayMinutes());
+          RepairCapacitySettings.DEFAULT_AUTOMATIC_REFILL_DELAY_MINUTES);
     } else {
       if (settings.getVersion() != expectedVersion) {
         throw versionConflict(warehouseId, expectedVersion, settings.getVersion());
       }
       settings.replace(
           request.repairPlaceCount(),
-          request.automaticRefillDelayMinutes());
+          settings.getAutomaticRefillDelayMinutes());
     }
     return mapper.toResponse(repository.saveAndFlush(settings));
   }

@@ -10,64 +10,27 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
-/** Regression coverage for persisted manual and battery-aware customer appearance decisions. */
+/** Regression coverage for persisted explicit light and dark customer appearance decisions. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
 class CustomerThemeTest {
     @Test
-    fun `manual and system modes ignore unrelated battery state`() {
-        assertThat(
-            resolveCustomerDarkTheme(
-                mode = CustomerAppearanceMode.SYSTEM,
-                systemDark = true,
-                batteryLevelPercent = 90,
-                powerSaveMode = false,
-            ),
-        ).isTrue()
-        assertThat(
-            resolveCustomerDarkTheme(
-                mode = CustomerAppearanceMode.LIGHT,
-                systemDark = true,
-                batteryLevelPercent = 5,
-                powerSaveMode = true,
-            ),
-        ).isFalse()
-        assertThat(
-            resolveCustomerDarkTheme(
-                mode = CustomerAppearanceMode.DARK,
-                systemDark = false,
-                batteryLevelPercent = 100,
-                powerSaveMode = false,
-            ),
-        ).isTrue()
+    fun `only explicit light and dark modes resolve and toggle`() {
+        assertThat(CustomerAppearanceMode.entries)
+            .containsExactly(CustomerAppearanceMode.LIGHT, CustomerAppearanceMode.DARK)
+            .inOrder()
+        assertThat(resolveCustomerDarkTheme(CustomerAppearanceMode.LIGHT)).isFalse()
+        assertThat(resolveCustomerDarkTheme(CustomerAppearanceMode.DARK)).isTrue()
+        assertThat(CustomerAppearanceMode.LIGHT.toggle()).isEqualTo(CustomerAppearanceMode.DARK)
+        assertThat(CustomerAppearanceMode.DARK.toggle()).isEqualTo(CustomerAppearanceMode.LIGHT)
     }
 
     @Test
-    fun `battery mode becomes dark at threshold or during power saving`() {
-        assertThat(
-            resolveCustomerDarkTheme(
-                mode = CustomerAppearanceMode.BATTERY,
-                systemDark = true,
-                batteryLevelPercent = 21,
-                powerSaveMode = false,
-            ),
-        ).isFalse()
-        assertThat(
-            resolveCustomerDarkTheme(
-                mode = CustomerAppearanceMode.BATTERY,
-                systemDark = false,
-                batteryLevelPercent = 20,
-                powerSaveMode = false,
-            ),
-        ).isTrue()
-        assertThat(
-            resolveCustomerDarkTheme(
-                mode = CustomerAppearanceMode.BATTERY,
-                systemDark = false,
-                batteryLevelPercent = 80,
-                powerSaveMode = true,
-            ),
-        ).isTrue()
+    fun `removed automatic preference values safely become light`() {
+        assertThat(customerAppearanceModeFromStoredValue(null)).isEqualTo(CustomerAppearanceMode.LIGHT)
+        assertThat(customerAppearanceModeFromStoredValue("SYSTEM")).isEqualTo(CustomerAppearanceMode.LIGHT)
+        assertThat(customerAppearanceModeFromStoredValue("BATTERY")).isEqualTo(CustomerAppearanceMode.LIGHT)
+        assertThat(customerAppearanceModeFromStoredValue("unsupported")).isEqualTo(CustomerAppearanceMode.LIGHT)
     }
 
     @Test
@@ -77,7 +40,7 @@ class CustomerThemeTest {
         store.setMode(CustomerAppearanceMode.DARK)
         assertThat(store.mode.first()).isEqualTo(CustomerAppearanceMode.DARK)
 
-        store.setMode(CustomerAppearanceMode.SYSTEM)
-        assertThat(store.mode.first()).isEqualTo(CustomerAppearanceMode.SYSTEM)
+        store.setMode(CustomerAppearanceMode.LIGHT)
+        assertThat(store.mode.first()).isEqualTo(CustomerAppearanceMode.LIGHT)
     }
 }

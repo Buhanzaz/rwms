@@ -12,9 +12,6 @@ import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
  */
 public interface OrderClientRepository
     extends JpaRepository<OrderClient, UUID>, JpaSpecificationExecutor<OrderClient> {
-  Optional<OrderClient> findByClientTypeAndNormalizedName(
-      ClientType clientType, String normalizedName);
-
   Optional<OrderClient> findByClientTypeAndNormalizedPhone(
       ClientType clientType, String normalizedPhone);
 

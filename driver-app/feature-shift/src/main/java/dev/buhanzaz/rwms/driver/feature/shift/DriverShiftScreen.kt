@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.DirectionsCar
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.filled.LocalShipping
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Traffic
+import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -35,11 +37,14 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -69,6 +74,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.yandex.mapkit.map.MapWindow
 import com.yandex.mapkit.mapview.MapView
+import dev.buhanzaz.rwms.driver.core.network.DriverShiftRouteOperationDto
 import dev.buhanzaz.rwms.driver.core.network.DriverVehicleInspectionItemDto
 import dev.buhanzaz.rwms.driver.core.network.TodayDriverShiftDto
 import dev.buhanzaz.rwms.driver.core.ui.DriverScreenScaffold
@@ -102,7 +108,11 @@ fun DriverShiftHost(
             message = "Не удалось восстановить состояние смены",
             onRefresh = viewModel::refresh,
         )
-        !today.enabled || today.nextRequiredAction == "SHOW_TASKS" -> activeTasks(today.enabled)
+        !today.enabled -> activeTasks(false)
+        today.nextRequiredAction == "SHOW_TASKS" -> ActiveTasksWithRouteTimeline(
+            today = today,
+            activeTasks = activeTasks,
+        )
         today.nextRequiredAction == "SHIFT_NOT_AVAILABLE" -> DriverShiftUnavailableScreen(
             state = state,
             message = today.nextAvailableAt?.let { "Новая смена будет доступна ${formatDateTime(it)}" }
@@ -173,6 +183,57 @@ fun DriverShiftHost(
             message = "RWMS вернул неизвестный следующий шаг: ${today.nextRequiredAction}",
             onRefresh = viewModel::refresh,
         )
+    }
+}
+
+/** Keeps active task navigation primary while exposing the cached immutable route on demand. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ActiveTasksWithRouteTimeline(
+    today: TodayDriverShiftDto,
+    activeTasks: @Composable (shiftLifecycleEnabled: Boolean) -> Unit,
+) {
+    if (!shouldExposeActiveRouteTimeline(today)) {
+        activeTasks(true)
+        return
+    }
+    var routeTimelineOpen by rememberSaveable { mutableStateOf(false) }
+    Box(Modifier.fillMaxSize()) {
+        activeTasks(true)
+        ExtendedFloatingActionButton(
+            text = { Text("Маршрут") },
+            icon = { Icon(Icons.Filled.Traffic, contentDescription = null) },
+            onClick = { routeTimelineOpen = true },
+            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+        )
+    }
+    if (routeTimelineOpen) {
+        ModalBottomSheet(onDismissRequest = { routeTimelineOpen = false }) {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    start = 16.dp,
+                    end = 16.dp,
+                    bottom = 32.dp,
+                ),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                item {
+                    RouteTimeline(
+                        operations = today.operations,
+                        timeZone = routeTimelineTimeZone(today),
+                    )
+                }
+                item {
+                    TextButton(
+                        onClick = { routeTimelineOpen = false },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Закрыть")
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -624,6 +685,14 @@ private fun ReadyToStartScreen(
         vehicle.trailer?.let { trailer ->
             item { SuccessRow("Прицеп ${trailer.registrationNumber}", "Осмотрен · ${formatTime(shift.vehicleInspectionCompletedAt)}") }
         }
+        if (today.operations.isNotEmpty()) {
+            item {
+                RouteTimeline(
+                    operations = today.operations,
+                    timeZone = routeTimelineTimeZone(today),
+                )
+            }
+        }
         item {
             PrimaryAction(
                 label = if (ACTION_START in state.pendingActions) "Запуск ожидает подтверждения RWMS" else "НАЧАТЬ СМЕНУ",
@@ -664,6 +733,14 @@ private fun TasksCompletedScreen(
                 }
             }
         }
+        if (today.operations.isNotEmpty()) {
+            item {
+                RouteTimeline(
+                    operations = today.operations,
+                    timeZone = routeTimelineTimeZone(today),
+                )
+            }
+        }
         item {
             Text(
                 "Смена ещё не закрыта. Вернитесь на склад и выполните финальную проверку автомобиля.",
@@ -691,6 +768,14 @@ private fun WarehouseReturnScreen(
 ) {
     ShiftListScaffold("Завершение смены", state, onClearError) {
         item { StepHeader("Шаг 1", "Вернулись на склад?") }
+        if (today.operations.isNotEmpty()) {
+            item {
+                RouteTimeline(
+                    operations = today.operations,
+                    timeZone = routeTimelineTimeZone(today),
+                )
+            }
+        }
         item {
             StatusCard(
                 Icons.Filled.LocalShipping,
@@ -708,6 +793,81 @@ private fun WarehouseReturnScreen(
                 onClick = onConfirm,
                 enabled = !state.submitting && ACTION_WAREHOUSE_RETURN !in state.pendingActions,
             )
+        }
+    }
+}
+
+@Composable
+private fun RouteTimeline(
+    operations: List<DriverShiftRouteOperationDto>,
+    timeZone: String?,
+) {
+    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp)) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                "Маршрут на смену",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                "ETA и загрузка по плану",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            orderedRouteOperations(operations).forEachIndexed { index, operation ->
+                if (index > 0) HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        shape = CircleShape,
+                        modifier = Modifier.size(34.dp),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(operation.sequence.toString(), fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    Column(
+                        Modifier.weight(1f).padding(start = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(
+                            "ETA ${routeOperationEta(operation, timeZone)}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            routeOperationIcon(operation.kind)?.let { icon ->
+                                Icon(
+                                    icon,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                            Text(
+                                routeOperationTitle(operation.kind),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        Text(
+                            operation.locationLabel,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            routeOperationLoad(operation),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -962,6 +1122,9 @@ internal fun VehicleCard(today: TodayDriverShiftDto) {
                 Text(vehicle.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 10.dp))
             }
             Text(vehicle.registrationNumber, style = MaterialTheme.typography.headlineSmall)
+            vehicleCabinCapacityLabel(vehicle.cabinCapacity)?.let { capacity ->
+                Text(capacity, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             vehicle.trailer?.let {
                 HorizontalDivider(Modifier.padding(vertical = 6.dp))
                 Text("Прицеп", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1043,9 +1206,28 @@ private fun Metric(value: String, label: String) {
     }
 }
 
+private val defaultGreetingZone = ZoneId.of("Europe/Moscow")
+private val compactTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+
+internal fun shouldExposeActiveRouteTimeline(today: TodayDriverShiftDto): Boolean =
+    today.enabled && today.nextRequiredAction == "SHOW_TASKS" && today.operations.isNotEmpty()
+
+/** Selects the warehouse-local route clock, falling back to the shift snapshot when needed. */
+internal fun routeTimelineTimeZone(today: TodayDriverShiftDto): String? =
+    sequenceOf(today.warehouse?.timeZone, today.shift?.timeZone)
+        .mapNotNull(::routeZoneId)
+        .firstOrNull()
+        ?.id
+
+private fun routeZoneId(zoneId: String?): ZoneId? = zoneId
+    ?.takeIf(String::isNotBlank)
+    ?.let { runCatching { ZoneId.of(it) }.getOrNull() }
+
+private fun greetingZoneId(zoneId: String?): ZoneId =
+    routeZoneId(zoneId) ?: defaultGreetingZone
+
 internal fun greetingAt(now: Instant, zoneId: String?): String {
-    val zone = runCatching { ZoneId.of(zoneId ?: "Europe/Moscow") }.getOrDefault(ZoneId.of("Europe/Moscow"))
-    return when (now.atZone(zone).hour) {
+    return when (now.atZone(greetingZoneId(zoneId)).hour) {
         in 5..11 -> "Доброе утро"
         in 12..17 -> "Добрый день"
         else -> "Добрый вечер"
@@ -1064,8 +1246,76 @@ private fun formatTemperatureRange(min: Double?, max: Double?): String =
 private fun formatDecimal(value: Double): String = if (value % 1.0 == 0.0) value.roundToInt().toString() else "%.1f".format(value)
 
 internal fun formatTime(value: String?): String = value?.let {
-    runCatching { OffsetDateTime.parse(it).format(DateTimeFormatter.ofPattern("HH:mm")) }.getOrNull()
+    runCatching { OffsetDateTime.parse(it).format(compactTimeFormatter) }.getOrNull()
 } ?: "—"
+
+/** Converts route ETA into a valid warehouse clock, preserving its offset when none exists. */
+internal fun formatRouteTime(value: String?, timeZone: String?): String = value?.let {
+    runCatching {
+        val parsed = OffsetDateTime.parse(it)
+        routeZoneId(timeZone)
+            ?.let(parsed::atZoneSameInstant)
+            ?.format(compactTimeFormatter)
+            ?: parsed.format(compactTimeFormatter)
+    }.getOrNull()
+} ?: "—"
+
+internal fun orderedRouteOperations(
+    operations: List<DriverShiftRouteOperationDto>,
+): List<DriverShiftRouteOperationDto> = operations.sortedBy(DriverShiftRouteOperationDto::sequence)
+
+internal fun routeOperationTitle(kind: String): String = when (kind) {
+    "ORIGIN_START" -> "Старт со склада"
+    "TRANSFER_LOAD" -> "Загрузить межскладской груз"
+    "INBOUND_POSITIONING" -> "Переезд на обслуживаемый склад"
+    "TRANSFER_UNLOAD" -> "Выгрузить межскладской груз"
+    "DEPOT_LOAD" -> "Погрузка на складе"
+    "DELIVERY" -> "Доставка клиенту"
+    "PICKUP" -> "Забор у клиента"
+    "DEPOT_UNLOAD" -> "Разгрузка на складе"
+    "DEPOT_RETURN" -> "Возврат на склад"
+    "RETURN_POSITIONING" -> "Возвращение на исходный склад"
+    else -> kind.replace('_', ' ').lowercase().replaceFirstChar { it.titlecase() }
+}
+
+internal fun routeOperationIcon(kind: String): ImageVector? = when (kind) {
+    "TRANSFER_LOAD" -> Icons.Filled.Archive
+    "TRANSFER_UNLOAD" -> Icons.Filled.Unarchive
+    else -> null
+}
+
+internal fun routeOperationEta(
+    operation: DriverShiftRouteOperationDto,
+    timeZone: String?,
+): String {
+    val arrival = formatRouteTime(operation.plannedArrival, timeZone)
+    val departure = formatRouteTime(operation.plannedDeparture, timeZone)
+    return when {
+        operation.kind == "INBOUND_POSITIONING" || operation.kind == "RETURN_POSITIONING" ->
+            "$departure → $arrival"
+        arrival == departure -> arrival
+        else -> "$arrival → $departure"
+    }
+}
+
+internal fun routeOperationLoad(operation: DriverShiftRouteOperationDto): String =
+    if (operation.loadBefore == operation.loadAfter) {
+        "Груз: ${operation.loadAfter}"
+    } else {
+        "Груз: ${operation.loadBefore} → ${operation.loadAfter}"
+    }
+
+/** Describes known effective vehicle capacity while keeping legacy snapshots visually unchanged. */
+internal fun vehicleCabinCapacityLabel(cabinCapacity: Int?): String? = cabinCapacity?.let { capacity ->
+    "Вместимость: $capacity ${cabinsLabel(capacity)}"
+}
+
+private fun cabinsLabel(count: Int): String = when {
+    count % 100 in 11..14 -> "бытовок"
+    count % 10 == 1 -> "бытовка"
+    count % 10 in 2..4 -> "бытовки"
+    else -> "бытовок"
+}
 
 private fun formatDateTime(value: String): String = runCatching {
     OffsetDateTime.parse(value).format(DateTimeFormatter.ofPattern("dd.MM · HH:mm"))

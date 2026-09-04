@@ -42,7 +42,6 @@ const linkId = "00000000-0000-4000-8000-000000000006"
 
 const request: RepairEstimateCatalogRequest = {
   accessToken: "catalog-token",
-  warehouseId,
   catalogVersionId: versionId,
 }
 
@@ -207,7 +206,6 @@ describe("maintenance-backed repair catalog store", () => {
 
     expect(http.replaceMaintenanceCatalogNodes).toHaveBeenCalledWith(
       "catalog-token",
-      warehouseId,
       versionId,
       7,
       [
@@ -245,7 +243,6 @@ describe("maintenance-backed repair catalog store", () => {
     expect(snapshot.nodes[0]?.comment).toBeNull()
     expect(http.replaceMaintenanceCatalogNodes).toHaveBeenCalledWith(
       "catalog-token",
-      warehouseId,
       versionId,
       7,
       [expect.objectContaining({ nodeType: "MATERIAL", comment: null })]
@@ -266,7 +263,6 @@ describe("maintenance-backed repair catalog store", () => {
 
     expect(http.replaceMaintenanceCatalogNodes).toHaveBeenCalledWith(
       "catalog-token",
-      warehouseId,
       versionId,
       7,
       [
@@ -286,7 +282,6 @@ describe("maintenance-backed repair catalog store", () => {
 
     expect(http.replaceMaintenanceCatalogNodes).toHaveBeenCalledWith(
       "catalog-token",
-      warehouseId,
       versionId,
       7,
       [
@@ -306,7 +301,6 @@ describe("maintenance-backed repair catalog store", () => {
 
     expect(http.replaceMaintenanceCatalogNodes).toHaveBeenCalledWith(
       "catalog-token",
-      warehouseId,
       versionId,
       7,
       [expect.objectContaining({ id: nodeId, canvasX: 333, canvasY: 445 })]
@@ -344,7 +338,6 @@ describe("maintenance-backed repair catalog store", () => {
 
     expect(http.replaceMaintenanceCatalogLinks).toHaveBeenCalledWith(
       "catalog-token",
-      warehouseId,
       versionId,
       7,
       [
@@ -396,7 +389,6 @@ describe("maintenance-backed repair catalog store", () => {
 
     expect(http.replaceMaintenanceCatalog).toHaveBeenCalledWith(
       "catalog-token",
-      warehouseId,
       versionId,
       7,
       expect.arrayContaining([
@@ -587,7 +579,6 @@ describe("maintenance-backed repair catalog store", () => {
 
     expect(http.replaceMaintenanceCatalogNodes).toHaveBeenCalledWith(
       "catalog-token",
-      warehouseId,
       versionId,
       7,
       expect.arrayContaining([
@@ -643,7 +634,6 @@ describe("maintenance-backed repair catalog store", () => {
 
     expect(http.replaceMaintenanceCatalogNodes).toHaveBeenCalledWith(
       "catalog-token",
-      warehouseId,
       versionId,
       7,
       expect.arrayContaining([
@@ -670,15 +660,11 @@ describe("maintenance-backed repair catalog store", () => {
       version: 1,
     })
 
-    const result = await createRepairEstimateCatalog(
-      "catalog-token",
-      warehouseId
-    )
+    const result = await createRepairEstimateCatalog("catalog-token", commandId)
 
     expect(http.createMaintenanceCatalog).toHaveBeenCalledWith(
       "catalog-token",
-      commandId,
-      { warehouseId }
+      commandId
     )
     expect(result).toMatchObject({
       id: versionId,

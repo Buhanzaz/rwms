@@ -26,6 +26,9 @@ class WorkerGatewayClient @Inject constructor(
 ) {
     suspend fun context(): WorkerContextDto = api.workerContext().bodyOrProblem(json)
 
+    suspend fun prepareWorkerProfileAvatarScope(): WorkerProfileAvatarScopeDto =
+        api.prepareWorkerProfileAvatarScope().bodyOrProblem(json)
+
     suspend fun feed(cursor: String? = null, etag: String? = null): WorkerFeedResponse {
         val response = api.workerFeed(cursor = cursor, ifNoneMatch = etag)
         return if (response.code() == 304) {
@@ -55,6 +58,14 @@ class WorkerGatewayClient @Inject constructor(
         idempotencyKey: String,
         request: CreateUploadSessionRequestDto,
     ): UploadSessionDto = api.createUploadSession(idempotencyKey, request).bodyOrProblem(json)
+
+    suspend fun mediaAssets(scope: WorkerProfileAvatarScopeDto): MediaAssetPageDto =
+        api.mediaAssets(
+            ownerType = scope.ownerType,
+            ownerId = scope.ownerId,
+            warehouseId = scope.warehouseId,
+            context = scope.context,
+        ).bodyOrProblem(json)
 
     suspend fun uploadMediaContent(
         sameOriginContentPath: String,

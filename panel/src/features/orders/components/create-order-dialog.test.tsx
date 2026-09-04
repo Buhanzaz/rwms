@@ -60,6 +60,7 @@ const order = {
   version: 0,
   number: "ORD-000001",
   status: "DRAFT" as const,
+  customerDeliveryPurpose: "RENTAL_DELIVERY" as const,
   client: {
     id: CLIENT_ID,
     type: "LEGAL_ENTITY" as const,

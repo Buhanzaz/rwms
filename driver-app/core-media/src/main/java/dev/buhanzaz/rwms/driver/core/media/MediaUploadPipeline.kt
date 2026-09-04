@@ -5,6 +5,7 @@ import dev.buhanzaz.rwms.driver.core.database.DriverDatabase
 import dev.buhanzaz.rwms.driver.core.network.CreateUploadSessionRequestDto
 import dev.buhanzaz.rwms.driver.core.network.FinalizeUploadRequestDto
 import dev.buhanzaz.rwms.driver.core.network.DriverGatewayClient
+import dev.buhanzaz.rwms.driver.core.network.toDriverUserMessage
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -117,7 +118,9 @@ class MediaUploadPipeline @Inject constructor(
         } catch (error: Throwable) {
             database.evidenceDao().updateUploadError(
                 evidence.evidenceId,
-                error.message ?: "Не удалось загрузить фотографию",
+                error.toDriverUserMessage(
+                    "Не удалось отправить фотографию. Запустите синхронизацию ещё раз.",
+                ),
                 System.currentTimeMillis(),
             )
             throw error

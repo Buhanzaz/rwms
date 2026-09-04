@@ -13,6 +13,7 @@ import dev.buhanzaz.rwms.asset.repository.OperationLeaseRepository;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +33,9 @@ import org.springframework.stereotype.Service;
  */
 @Service
 final class AssetLeaseService {
+  static final String CABIN_CREATION_OWNER_TYPE = "CABIN_CREATION";
+  private static final OffsetDateTime DURABLE_CREATION_EXPIRY =
+      OffsetDateTime.of(9999, 12, 31, 23, 59, 59, 0, ZoneOffset.UTC);
   private final OperationLeaseRepository operationLeases;
   private final JdbcTemplate jdbc;
   private final AssetEventStore events;
@@ -218,7 +222,8 @@ final class AssetLeaseService {
    */
   List<UUID> releaseForCompletedInventory(UUID rentalItemId, Set<String> retainedOwnerTypes) {
     Set<String> retained =
-        Set.copyOf(Objects.requireNonNull(retainedOwnerTypes, "retainedOwnerTypes"));
+        new HashSet<>(Objects.requireNonNull(retainedOwnerTypes, "retainedOwnerTypes"));
+    retained.add(CABIN_CREATION_OWNER_TYPE);
     lockRentalItemAndLease(rentalItemId);
     OffsetDateTime releasedAt = now();
     expire(rentalItemId, releasedAt);
@@ -244,8 +249,68 @@ final class AssetLeaseService {
 
   OperationLeaseResponse acquire(
       UUID rentalItemId, String ownerType, String ownerId, UUID key) {
-    long next = Math.addExact(operationLeases.maximumFencingToken(rentalItemId), 1);
     OffsetDateTime acquiredAt = now();
+    return acquire(rentalItemId, ownerType, ownerId, key, acquiredAt, acquiredAt.plus(leaseTtl));
+  }
+
+  /**
+   * Acquires the asset-owned creation hold. Its distant expiry prevents a background TTL sweep
+   * from making an incomplete cabin rentable; only explicit completion or abandonment releases it.
+   */
+  OperationLeaseResponse acquireCreationHold(
+      UUID rentalItemId, UUID creationIntentId, UUID key) {
+    if (creationIntentId == null) {
+      throw new IllegalArgumentException("creationIntentId is required");
+    }
+    lockRentalItemAndLease(rentalItemId);
+    expire(rentalItemId);
+    if (!activeForUpdate(rentalItemId).isEmpty()) {
+      throw new AssetConflictException("New rental item already has an active operation lease");
+    }
+    OffsetDateTime acquiredAt = now();
+    return acquire(
+        rentalItemId,
+        CABIN_CREATION_OWNER_TYPE,
+        creationIntentId.toString(),
+        key,
+        acquiredAt,
+        DURABLE_CREATION_EXPIRY);
+  }
+
+  /** Releases only the exact creation hold named by the immutable intent. */
+  OperationLeaseResponse releaseCreationHold(
+      UUID rentalItemId,
+      UUID leaseId,
+      long fencingToken,
+      UUID creationIntentId) {
+    OperationLease current = validate(rentalItemId, leaseId, fencingToken);
+    if (creationIntentId == null
+        || !current.isOwnedBy(
+            CABIN_CREATION_OWNER_TYPE, creationIntentId.toString())) {
+      throw new AssetConflictException("Creation hold identity does not match the intent");
+    }
+    long expectedVersion = current.getVersion();
+    OffsetDateTime releasedAt = now();
+    current.release(releasedAt);
+    OperationLeaseResponse updated = response(operationLeases.saveAndFlush(current));
+    events.append(
+        AssetAggregateType.OPERATION_LEASE,
+        current.getId(),
+        expectedVersion,
+        AssetEventType.OPERATION_LEASE_RELEASED,
+        fact(updated),
+        snapshot(updated));
+    return updated;
+  }
+
+  private OperationLeaseResponse acquire(
+      UUID rentalItemId,
+      String ownerType,
+      String ownerId,
+      UUID key,
+      OffsetDateTime acquiredAt,
+      OffsetDateTime expiresAt) {
+    long next = Math.addExact(operationLeases.maximumFencingToken(rentalItemId), 1);
     OperationLease persisted =
         operationLeases.saveAndFlush(
             OperationLease.acquire(
@@ -255,7 +320,7 @@ final class AssetLeaseService {
                 next,
                 key,
                 acquiredAt,
-                acquiredAt.plus(leaseTtl)));
+                expiresAt));
     OperationLeaseResponse response = response(persisted);
     events.initialize(
         AssetAggregateType.OPERATION_LEASE,

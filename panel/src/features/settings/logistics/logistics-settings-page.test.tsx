@@ -36,6 +36,10 @@ const mocks = vi.hoisted(() => ({
   listWorkers: vi.fn(),
   createWorker: vi.fn(),
   updateWorker: vi.fn(),
+  resetWorkerCredentials: vi.fn(),
+  disableWorkerCredentials: vi.fn(),
+  enableWorkerCredentials: vi.fn(),
+  deleteWorker: vi.fn(),
   updateDriverQueue: vi.fn(),
 }))
 
@@ -55,15 +59,6 @@ vi.mock("@/hooks/use-warehouse", () => ({
     selectedWarehouse: { id: WAREHOUSE_ID, name: "Тестовый склад" },
   }),
 }))
-
-vi.mock("@/features/settings/logistics/repair-capacity-settings-card", () => ({
-  RepairCapacitySettingsCard: () => null,
-}))
-
-vi.mock(
-  "@/features/settings/logistics/inventory-planning-settings-card",
-  () => ({ InventoryPlanningSettingsCard: () => null })
-)
 
 vi.mock("@/features/settings/logistics/shipment-task-settings-card", () => ({
   ShipmentTaskSettingsCard: ({
@@ -86,6 +81,10 @@ vi.mock("@/features/settings/task-board/api/task-board-settings-api", () => ({
     listWorkers: mocks.listWorkers,
     createWorker: mocks.createWorker,
     updateWorker: mocks.updateWorker,
+    resetWorkerCredentials: mocks.resetWorkerCredentials,
+    disableWorkerCredentials: mocks.disableWorkerCredentials,
+    enableWorkerCredentials: mocks.enableWorkerCredentials,
+    deleteWorker: mocks.deleteWorker,
     updateDriverQueue: mocks.updateDriverQueue,
   },
   taskBoardSettingsKeys: {
@@ -262,6 +261,10 @@ beforeEach(() => {
   mocks.listWorkers.mockResolvedValue([driverWorker()])
   mocks.createWorker.mockResolvedValue(driverWorker())
   mocks.updateWorker.mockResolvedValue(driverWorker())
+  mocks.resetWorkerCredentials.mockResolvedValue(driverWorker())
+  mocks.disableWorkerCredentials.mockResolvedValue(driverWorker())
+  mocks.enableWorkerCredentials.mockResolvedValue(driverWorker())
+  mocks.deleteWorker.mockResolvedValue(undefined)
   mocks.updateDriverQueue.mockResolvedValue(driverQueue())
 })
 
@@ -277,9 +280,14 @@ describe("LogisticsSettingsPage", () => {
     expect(await screen.findByText("Алексей Водитель")).toBeTruthy()
     expect(screen.getByText("driver.alexey")).toBeTruthy()
     expect(screen.getAllByText("Водители").length).toBeGreaterThan(0)
+    expect(screen.getByRole("columnheader", { name: "Водитель" })).toBeTruthy()
     expect(
-      screen.getByText(/Для водителей бригада не требуется\./)
+      screen.getByRole("columnheader", { name: "Учётные данные" })
     ).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Изменить" })).toBeTruthy()
+    expect(
+      screen.queryByText(/Для водителей бригада не требуется\./)
+    ).toBeNull()
   })
 
   it("creates a driver without exposing qualification fields", async () => {
@@ -341,7 +349,7 @@ describe("LogisticsSettingsPage", () => {
       credentialError: "AUTH_SERVICE_UNAVAILABLE",
     }
     mocks.listWorkers.mockResolvedValue([failedDriver])
-    mocks.updateWorker.mockResolvedValue({
+    mocks.resetWorkerCredentials.mockResolvedValue({
       ...failedDriver,
       version: 5,
       credentialStatus: "ACTIVE",
@@ -351,11 +359,11 @@ describe("LogisticsSettingsPage", () => {
 
     expect(
       await screen.findByText(
-        "Доступ в приложение не настроен. Нажмите «Редактировать», проверьте логин и укажите пароль ещё раз."
+        "Доступ в приложение не настроен. Нажмите «Изменить», проверьте логин и укажите пароль ещё раз."
       )
     ).toBeTruthy()
 
-    await user.click(screen.getByRole("button", { name: "Редактировать" }))
+    await user.click(screen.getByRole("button", { name: "Изменить" }))
 
     const dialog = await screen.findByRole("dialog")
     expect(within(dialog).getByText("Редактировать водителя")).toBeTruthy()
@@ -369,41 +377,30 @@ describe("LogisticsSettingsPage", () => {
     ).toBe(failedDriver.appLogin)
     expect(
       within(dialog).getByText(
-        "Доступ в приложение не настроен. Проверьте логин и укажите пароль ещё раз."
+        "Доступ в приложение не настроен. Используйте «Сменить пароль», чтобы повторить настройку."
       )
     ).toBeTruthy()
 
+    await user.click(
+      within(dialog).getByRole("button", { name: "Сменить пароль" })
+    )
+
+    const passwordDialog = await screen.findByRole("dialog")
     await user.type(
-      within(dialog).getByLabelText("Новый пароль (необязательно)"),
+      within(passwordDialog).getByLabelText("Новый пароль"),
       "password123"
     )
     await user.click(
-      within(dialog).getByRole("button", { name: "Сохранить изменения" })
+      within(passwordDialog).getByRole("button", { name: "Сохранить" })
     )
 
     await waitFor(() =>
-      expect(mocks.updateWorker).toHaveBeenCalledWith(
+      expect(mocks.resetWorkerCredentials).toHaveBeenCalledWith(
         "logistics-settings-token",
         WAREHOUSE_ID,
         failedDriver.id,
-        {
-          version: failedDriver.version,
-          displayName: failedDriver.displayName,
-          firstName: failedDriver.firstName,
-          lastName: failedDriver.lastName,
-          middleName: failedDriver.middleName,
-          active: failedDriver.active,
-          comment: failedDriver.comment,
-          appLogin: failedDriver.appLogin,
-          password: "password123",
-          qualifications: [
-            {
-              workerClassId: DRIVER_CLASS_ID,
-              active: true,
-              comment: null,
-            },
-          ],
-        }
+        failedDriver.version,
+        "password123"
       )
     )
   })
@@ -487,9 +484,7 @@ describe("LogisticsSettingsPage", () => {
 
     renderPage()
 
-    expect(
-      await screen.findByText("Подключить очередь перемещений")
-    ).toBeTruthy()
+    expect(await screen.findByText("Подключить водителей")).toBeTruthy()
     expect(screen.getByTestId("shipment-task-settings-card").textContent).toBe(
       `${WAREHOUSE_ID}:Тестовый склад`
     )

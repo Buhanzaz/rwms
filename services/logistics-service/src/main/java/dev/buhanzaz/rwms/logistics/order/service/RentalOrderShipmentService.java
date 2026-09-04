@@ -84,7 +84,7 @@ class RentalOrderShipmentService {
     }
 
     String checksum = rentalShipmentChecksum(orderId, request);
-    RentalOrder order = store.lockedOrder(orderId);
+    RentalOrder order = store.lockedOrder(actor, orderId);
     access.requireRentalShipmentCreation(actor, order);
     try {
       order.requireFulfillmentDetails();

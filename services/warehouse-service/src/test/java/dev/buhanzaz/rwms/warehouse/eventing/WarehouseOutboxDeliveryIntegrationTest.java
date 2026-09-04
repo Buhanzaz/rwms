@@ -73,7 +73,17 @@ class WarehouseOutboxDeliveryIntegrationTest {
         service.replace(
             created.id(),
             new ReplaceWarehouseRequest(
-                created.version(), "Changed name", "Москва", "hidden address", "Europe/Moscow", 3));
+                created.version(),
+                "Changed name",
+                "Москва",
+                "hidden address",
+                null,
+                null,
+                "Europe/Moscow",
+                3,
+                false,
+                true,
+                null));
     RwmsKafkaOutboundEventPublisher publisher = mock(RwmsKafkaOutboundEventPublisher.class);
     WarehouseKafkaOutboxRelay relay = new WarehouseKafkaOutboxRelay(store, properties, publisher);
 
@@ -127,7 +137,17 @@ class WarehouseOutboxDeliveryIntegrationTest {
         .create(
             UUID.randomUUID(),
             UUID.randomUUID(),
-            new CreateWarehouseRequest(name, "Москва", "hidden address", "Europe/Moscow", null))
+            new CreateWarehouseRequest(
+                name,
+                "Москва",
+                "hidden address",
+                null,
+                null,
+                "Europe/Moscow",
+                null,
+                false,
+                true,
+                null))
         .response();
   }
 

@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.inquiry.service;
 
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -62,7 +63,8 @@ class RentalInquiryCabinSelectionServiceTest {
     when(inquiry.getManagerId()).thenReturn(MANAGER);
     when(inquiry.getState()).thenReturn(RentalInquiryState.ACTIVE);
     when(inquiry.getWarehouseId()).thenReturn(WAREHOUSE);
-    when(receipts.findByPublicKeyForUpdate(MANAGER, INQUIRY)).thenReturn(Optional.empty());
+    when(receipts.findByPublicKeyForUpdate(MANAGER, INQUIRY))
+        .thenReturn(Optional.empty());
     when(receipts.findByInquiryAndStateForUpdate(
             INQUIRY, RentalInquirySelectionReceiptState.PREPARED))
         .thenReturn(Optional.empty());

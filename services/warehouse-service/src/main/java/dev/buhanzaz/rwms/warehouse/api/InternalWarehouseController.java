@@ -48,7 +48,7 @@ public class InternalWarehouseController {
   }
 
   /**
-   * Returns the separate legacy incoming-admission projection required by {@code asset-service}.
+   * Returns the incoming-admission projection required by {@code asset-service}.
    *
    * @param jwt authenticated asset-service credential
    * @param id stable warehouse identity
@@ -68,4 +68,5 @@ public class InternalWarehouseController {
     access.requireInternalTaskBoardIdentityReader(jwt);
     return service.internalIdentity(id);
   }
+
 }

@@ -21,8 +21,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.order.service.RentalOrderMutationRecoveryService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsExternalAttemptClaimService;
 import dev.buhanzaz.rwms.logistics.service.ShipmentProcessor;
 import java.time.LocalDate;
@@ -50,6 +52,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -64,6 +67,8 @@ import tools.jackson.databind.ObjectMapper;
       "rwms.logistics.return-completion.relay-enabled=false",
       "rwms.logistics.shipment.relay-enabled=false",
       "rwms.logistics.transfer.relay-enabled=false",
+      "rwms.logistics.order-mutation-reconcile-delay=1h",
+      "rwms.logistics.order-mutation-reconcile-initial-delay=1h",
       "AUTH_ISSUER=http://auth.test",
       "PANEL_ORIGIN=http://panel.test"
     })
@@ -75,6 +80,8 @@ class OrderApiIntegrationTest {
   private static final UUID MANAGER_1 = UUID.fromString("00000000-0000-0000-0000-000000009101");
   private static final UUID MANAGER_2 = UUID.fromString("00000000-0000-0000-0000-000000009102");
   private static final UUID ADMIN = UUID.fromString("00000000-0000-0000-0000-000000009103");
+  private static final String RENTAL_MANAGER_WEB_CLIENT_ID = "rwms-rental-manager-web";
+  private static final String RENTAL_MANAGER_ANDROID_CLIENT_ID = "rwms-rental-manager-android";
   private static final UUID WAREHOUSE_1 = UUID.fromString("00000000-0000-0000-0000-000000009201");
   private static final UUID WAREHOUSE_2 = UUID.fromString("00000000-0000-0000-0000-000000009202");
   private static final UUID UNIT_1 = UUID.fromString("00000000-0000-0000-0000-000000009301");
@@ -94,6 +101,7 @@ class OrderApiIntegrationTest {
   @Autowired JdbcTemplate jdbc;
   @Autowired LogisticsExternalAttemptClaimService externalAttemptClaims;
   @Autowired ShipmentProcessor shipmentProcessor;
+  @Autowired RentalOrderMutationRecoveryService orderMutationRecovery;
   @MockitoBean LogisticsDependencyGateway dependencies;
 
   private final Map<UUID, LinkedHashMap<UUID, LogisticsDependencyGateway.OrderUnitReservation>>
@@ -199,6 +207,107 @@ class OrderApiIntegrationTest {
   }
 
   @Test
+  void logisticsDocumentListsReturnBoundedArrayPagesForEveryDocumentType() throws Exception {
+    LocalDate scheduledDate = LocalDate.of(2026, 9, 2);
+    for (LogisticsDocumentType type : LogisticsDocumentType.values()) {
+      List<UUID> documentIds = seedPagedDocuments(type, 55, scheduledDate);
+      String path = "/api/logistics/v1/" + type.name().toLowerCase() + "s";
+
+      mvc.perform(
+              get(path)
+                  .param("warehouseId", WAREHOUSE_1.toString())
+                  .param("scheduledDate", scheduledDate.toString())
+                  .with(admin()))
+          .andExpect(status().isOk())
+          .andExpect(header().string("X-RWMS-Page", "0"))
+          .andExpect(header().string("X-RWMS-Page-Size", "50"))
+          .andExpect(header().string("X-RWMS-Total-Elements", "55"))
+          .andExpect(header().string("X-RWMS-Total-Pages", "2"))
+          .andExpect(header().string("X-RWMS-Has-Next", "true"))
+          .andExpect(jsonPath("$.length()").value(50))
+          .andExpect(jsonPath("$[0].id").value(documentIds.get(54).toString()))
+          .andExpect(jsonPath("$[49].id").value(documentIds.get(5).toString()))
+          .andExpect(jsonPath("$[0].lines.length()").value(1));
+
+      mvc.perform(
+              get(path)
+                  .param("warehouseId", WAREHOUSE_1.toString())
+                  .param("scheduledDate", scheduledDate.toString())
+                  .param("page", "1")
+                  .param("size", "10")
+                  .with(admin()))
+          .andExpect(status().isOk())
+          .andExpect(header().string("X-RWMS-Page", "1"))
+          .andExpect(header().string("X-RWMS-Page-Size", "10"))
+          .andExpect(header().string("X-RWMS-Total-Elements", "55"))
+          .andExpect(header().string("X-RWMS-Total-Pages", "6"))
+          .andExpect(header().string("X-RWMS-Has-Next", "true"))
+          .andExpect(jsonPath("$.length()").value(10))
+          .andExpect(jsonPath("$[0].id").value(documentIds.get(44).toString()))
+          .andExpect(jsonPath("$[9].id").value(documentIds.get(35).toString()));
+
+      mvc.perform(
+              get(path)
+                  .param("warehouseId", WAREHOUSE_1.toString())
+                  .param("scheduledDate", scheduledDate.toString())
+                  .param("page", "5")
+                  .param("size", "10")
+                  .with(admin()))
+          .andExpect(status().isOk())
+          .andExpect(header().string("X-RWMS-Page", "5"))
+          .andExpect(header().string("X-RWMS-Page-Size", "10"))
+          .andExpect(header().string("X-RWMS-Has-Next", "false"))
+          .andExpect(jsonPath("$.length()").value(5))
+          .andExpect(jsonPath("$[0].id").value(documentIds.get(4).toString()))
+          .andExpect(jsonPath("$[4].id").value(documentIds.get(0).toString()));
+    }
+  }
+
+  @Test
+  void logisticsDocumentListsRejectInvalidPageBounds() throws Exception {
+    for (Map.Entry<String, String> invalid :
+        Map.of("page", "-1", "zeroSize", "0", "oversize", "101").entrySet()) {
+      var request =
+          get("/api/logistics/v1/returns")
+              .param("warehouseId", WAREHOUSE_1.toString())
+              .param("scheduledDate", "2026-09-02")
+              .with(admin());
+      if ("page".equals(invalid.getKey())) {
+        request.param("page", invalid.getValue());
+      } else {
+        request.param("size", invalid.getValue());
+      }
+      mvc.perform(request).andExpect(status().isBadRequest());
+    }
+  }
+
+  @Test
+  void transferListIncludesBothWarehouseDirectionsOnlyForTheSelectedDay() throws Exception {
+    LocalDate scheduledDate = LocalDate.of(2026, 9, 3);
+    OffsetDateTime createdAt = OffsetDateTime.parse("2026-09-01T10:00:00Z");
+    UUID outgoing = UUID.fromString("18000000-0000-0000-0000-000000000101");
+    UUID incoming = UUID.fromString("18000000-0000-0000-0000-000000000102");
+    UUID anotherDay = UUID.fromString("18000000-0000-0000-0000-000000000103");
+    seedListedDocument(
+        outgoing, WAREHOUSE_1, WAREHOUSE_2, scheduledDate, createdAt);
+    seedListedDocument(
+        incoming, WAREHOUSE_2, WAREHOUSE_1, scheduledDate, createdAt.plusSeconds(1));
+    seedListedDocument(
+        anotherDay, WAREHOUSE_1, WAREHOUSE_2, scheduledDate.plusDays(1), createdAt.plusSeconds(2));
+
+    mvc.perform(
+            get("/api/logistics/v1/transfers")
+                .param("warehouseId", WAREHOUSE_1.toString())
+                .param("scheduledDate", scheduledDate.toString())
+                .with(admin()))
+        .andExpect(status().isOk())
+        .andExpect(header().string("X-RWMS-Total-Elements", "2"))
+        .andExpect(jsonPath("$.length()").value(2))
+        .andExpect(jsonPath("$[0].id").value(incoming.toString()))
+        .andExpect(jsonPath("$[1].id").value(outgoing.toString()));
+  }
+
+  @Test
   void managersSeeOnlyOwnOrdersAndCannotUseDirectReadOrMutationWhileAdminSeesBoth()
       throws Exception {
     UUID first = createOrder(MANAGER_1, "manager-one", "Клиент один");
@@ -233,6 +342,99 @@ class OrderApiIntegrationTest {
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.managerDisplayName").value("manager-one"))
         .andExpect(jsonPath("$.createdBy").value(MANAGER_1.toString()));
+  }
+
+  @Test
+  void dedicatedManagerWebAndAndroidTokensCanUseCompanyScopedClientAndOrderApis()
+      throws Exception {
+    MvcResult clientResult =
+        mvc.perform(
+                post("/api/logistics/v1/clients")
+                    .header("Idempotency-Key", UUID.randomUUID())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(
+                        """
+                        {
+                          "clientType":"LEGAL_ENTITY",
+                          "displayName":"ООО Dedicated Manager",
+                          "phone":"+79990006666",
+                          "contactPerson":"Менеджер"
+                        }
+                        """)
+                    .with(manager(MANAGER_1, "manager-one")))
+            .andExpect(status().isCreated())
+            .andReturn();
+    UUID clientId = UUID.fromString(json(clientResult).get("id").stringValue());
+
+    MvcResult orderResult =
+        mvc.perform(
+                post("/api/logistics/v1/orders")
+                    .header("Idempotency-Key", UUID.randomUUID())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"clientId\":\"%s\"}".formatted(clientId))
+                    .with(manager(MANAGER_1, "manager-one")))
+            .andExpect(status().isCreated())
+            .andReturn();
+    UUID orderId = UUID.fromString(json(orderResult).get("id").stringValue());
+
+    mvc.perform(
+            get("/api/logistics/v1/clients/{clientId}", clientId)
+                .with(androidManager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.id").value(clientId.toString()));
+    mvc.perform(
+            get("/api/logistics/v1/orders/{orderId}", orderId)
+                .with(androidManager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.id").value(orderId.toString()))
+        .andExpect(jsonPath("$.managerId").value(MANAGER_1.toString()));
+
+    mvc.perform(
+            get("/api/logistics/v1/returns")
+                .param("warehouseId", WAREHOUSE_1.toString())
+                .param("scheduledDate", "2026-09-02")
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isForbidden());
+  }
+
+  @Test
+  void orderApisRejectLegacyUnknownAndWrongRoleDedicatedManagerTokens() throws Exception {
+    mvc.perform(
+            get("/api/logistics/v1/clients")
+                .with(
+                    applicationUser(
+                        MANAGER_1,
+                        "RENTAL_MANAGER",
+                        "manager-one",
+                        "rwms-panel",
+                        "rwms.read rwms.write",
+                        true,
+                        List.of())))
+        .andExpect(status().isForbidden());
+    mvc.perform(
+            get("/api/logistics/v1/orders")
+                .with(
+                    applicationUser(
+                        MANAGER_1,
+                        "RENTAL_MANAGER",
+                        "manager-one",
+                        "unknown-manager-client",
+                        "rental.manage",
+                        true,
+                        List.of())))
+        .andExpect(status().isForbidden());
+    mvc.perform(
+            get("/api/logistics/v1/orders")
+                .with(
+                    applicationUser(
+                        ADMIN,
+                        "SYSTEM_ADMIN",
+                        "admin",
+                        RENTAL_MANAGER_WEB_CLIENT_ID,
+                        "rental.manage",
+                        true,
+                        List.of())))
+        .andExpect(status().isForbidden());
   }
 
   @Test
@@ -942,7 +1144,8 @@ class OrderApiIntegrationTest {
     mvc.perform(
             get("/api/logistics/v1/shipments")
                 .param("warehouseId", WAREHOUSE_1.toString())
-                .with(manager(MANAGER_1, "manager-one")))
+                .param("scheduledDate", shipmentDate)
+                .with(panelRentalManager(MANAGER_1, "manager-one")))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.length()").value(1))
         .andExpect(jsonPath("$[0].state").value("DRAFT"))
@@ -1105,7 +1308,7 @@ class OrderApiIntegrationTest {
                     {"driverSnapshot":"Водитель","scheduledDate":"%s"}
                     """
                         .formatted(shipmentDate))
-                .with(manager(MANAGER_1, "manager-one")))
+                .with(panelRentalManager(MANAGER_1, "manager-one")))
         .andExpect(status().isAccepted())
         .andExpect(jsonPath("$.state").value("PREPARING"));
 
@@ -1239,7 +1442,7 @@ class OrderApiIntegrationTest {
         .andExpect(jsonPath("$.permissions.canExtendRentalTerms").value(true));
     mvc.perform(
             get("/api/logistics/v1/orders/{orderId}", orderId)
-                .with(readOnlyManager(MANAGER_1, "manager-one")))
+                .with(readOnlyViewer(MANAGER_1, "manager-one")))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.permissions.canExtendRentalTerms").value(false));
     mvc.perform(
@@ -1467,14 +1670,14 @@ class OrderApiIntegrationTest {
 
     mvc.perform(
             get("/api/logistics/v1/warehouses/{warehouseId}/shipment-task-settings", WAREHOUSE_1)
-                .with(manager(MANAGER_1, "manager-one")))
+                .with(panelRentalManager(MANAGER_1, "manager-one")))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.maxCabinsPerShipmentTask").value(3));
     mvc.perform(
             put("/api/logistics/v1/warehouses/{warehouseId}/shipment-task-settings", WAREHOUSE_1)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"expectedVersion\":1,\"maxCabinsPerShipmentTask\":4}")
-                .with(manager(MANAGER_1, "manager-one")))
+                .with(panelRentalManager(MANAGER_1, "manager-one")))
         .andExpect(status().isForbidden());
     mvc.perform(
             put("/api/logistics/v1/warehouses/{warehouseId}/shipment-task-settings", WAREHOUSE_1)
@@ -1492,7 +1695,7 @@ class OrderApiIntegrationTest {
   }
 
   @Test
-  void removedSoleProprietorClientTypeIsRejectedBeforeMutation() throws Exception {
+  void soleProprietorClientTypeIsPersistedAndReturned() throws Exception {
     mvc.perform(
             post("/api/logistics/v1/clients")
                 .header("Idempotency-Key", UUID.randomUUID())
@@ -1507,8 +1710,18 @@ class OrderApiIntegrationTest {
                     }
                     """)
                 .with(manager(MANAGER_1, "manager-one")))
-        .andExpect(status().isBadRequest());
-    assertThat(jdbc.queryForObject("select count(*) from order_client", Long.class)).isZero();
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.type").value("SOLE_PROPRIETOR"))
+        .andExpect(jsonPath("$.displayName").value("ИП Петров"))
+        .andExpect(jsonPath("$.phone").value("+79990000001"))
+        .andExpect(jsonPath("$.contactPerson").value("Пётр Петров"));
+    assertThat(
+            jdbc.queryForMap(
+                "select client_type,display_name,phone,contact_person from order_client"))
+        .containsEntry("client_type", "SOLE_PROPRIETOR")
+        .containsEntry("display_name", "ИП Петров")
+        .containsEntry("phone", "+79990000001")
+        .containsEntry("contact_person", "Пётр Петров");
   }
 
   @Test
@@ -2051,7 +2264,8 @@ class OrderApiIntegrationTest {
   }
 
   @Test
-  void removeRetryRecoversMissingAddAndReleaseEvidenceAfterUnknownOutcome() throws Exception {
+  void removeUnitRecoversAutonomouslyAfterUnknownOutcomeAndJoinsDuplicateApiRetry()
+      throws Exception {
     UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент remove recovery");
     selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
     reserveRemotely(orderId, WAREHOUSE_1, UNIT_1, MANAGER_1, "RENTAL_MANAGER");
@@ -2059,6 +2273,7 @@ class OrderApiIntegrationTest {
     AtomicBoolean failAfterEffect = new AtomicBoolean(true);
     doAnswer(
             invocation -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
               LogisticsDependencyGateway.OrderUnitReservation released =
                   releaseRemotely(
                       invocation.getArgument(0),
@@ -2086,10 +2301,33 @@ class OrderApiIntegrationTest {
                 .param("expectedVersion", "1")
                 .header("Idempotency-Key", key)
                 .with(admin()))
+        .andExpect(status().isServiceUnavailable())
+        .andExpect(jsonPath("$.code").value("ORDER_MUTATION_PENDING"));
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from rental_order_mutation_command where order_id=?",
+                Long.class,
+                orderId))
+        .isEqualTo(1L);
+    verify(dependencies, times(1)).releaseOrderUnit(any(), any(), any(), any(), anyString());
+
+    recoverOrderMutation(orderId);
+
+    mvc.perform(
+            delete("/api/logistics/v1/orders/{orderId}/units/{unitId}", orderId, UNIT_1)
+                .param("expectedVersion", "1")
+                .header("Idempotency-Key", key)
+                .with(admin()))
         .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
         .andExpect(jsonPath("$.version").value(3))
         .andExpect(jsonPath("$.unitCount").value(0));
     verify(dependencies, times(2)).releaseOrderUnit(any(), any(), any(), any(), anyString());
+    ArgumentCaptor<UUID> stepKeys = ArgumentCaptor.forClass(UUID.class);
+    verify(dependencies, times(2))
+        .releaseOrderUnit(stepKeys.capture(), any(), any(), any(), anyString());
+    assertThat(stepKeys.getAllValues()).containsOnly(stepKeys.getAllValues().getFirst());
+    assertThat(stepKeys.getAllValues().getFirst()).isNotEqualTo(key);
     assertAuditCount(orderId, "UNIT_ADDED", 1);
     assertAuditCount(orderId, "RESERVATION_CREATED", 1);
     assertAuditCount(orderId, "UNIT_REMOVED", 1);
@@ -2125,7 +2363,8 @@ class OrderApiIntegrationTest {
   }
 
   @Test
-  void cancelRetryUsesReleaseAllReplayAfterUnknownOutcome() throws Exception {
+  void cancelRecoversAutonomouslyAfterUnknownOutcomeAndFencesCompetingMutation()
+      throws Exception {
     UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент cancel recovery");
     selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
     addUnit(orderId, MANAGER_1, UNIT_1, 1);
@@ -2133,6 +2372,7 @@ class OrderApiIntegrationTest {
     AtomicBoolean failAfterEffect = new AtomicBoolean(true);
     doAnswer(
             invocation -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
               List<LogisticsDependencyGateway.OrderUnitReservation> released =
                   releaseAllRemotely(invocation.getArgument(0), invocation.getArgument(1));
               if (failAfterEffect.getAndSet(false)) throw transientDependencyFailure();
@@ -2159,14 +2399,106 @@ class OrderApiIntegrationTest {
                 .param("expectedVersion", "2")
                 .header("Idempotency-Key", key)
                 .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isServiceUnavailable())
+        .andExpect(jsonPath("$.code").value("ORDER_MUTATION_PENDING"));
+    mvc.perform(
+            put("/api/logistics/v1/orders/{orderId}", orderId)
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(updateOrderBody(2, orderClientId(orderId)))
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("ORDER_MUTATION_PENDING"));
+    verify(dependencies, times(1)).releaseAllOrderUnits(any(), any(), any(), anyString());
+
+    recoverOrderMutation(orderId);
+
+    mvc.perform(
+            delete("/api/logistics/v1/orders/{orderId}", orderId)
+                .param("expectedVersion", "2")
+                .header("Idempotency-Key", key)
+                .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
         .andExpect(jsonPath("$.version").value(3))
         .andExpect(jsonPath("$.status").value("CANCELLED"))
         .andExpect(jsonPath("$.unitCount").value(0));
     verify(dependencies, times(2)).releaseAllOrderUnits(any(), any(), any(), anyString());
+    ArgumentCaptor<UUID> stepKeys = ArgumentCaptor.forClass(UUID.class);
+    verify(dependencies, times(2))
+        .releaseAllOrderUnits(stepKeys.capture(), any(), any(), anyString());
+    assertThat(stepKeys.getAllValues()).containsOnly(stepKeys.getAllValues().getFirst());
+    assertThat(stepKeys.getAllValues().getFirst()).isNotEqualTo(key);
     assertAuditCount(orderId, "UNIT_REMOVED", 1);
     assertAuditCount(orderId, "RESERVATION_RELEASED", 1);
     assertAuditCount(orderId, "ORDER_CANCELLED", 1);
+  }
+
+  @Test
+  void cancelRecoveryResumesAtEquipmentAfterCommittedUnitReleaseReceipt() throws Exception {
+    UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент equipment recovery");
+    selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
+    addUnit(orderId, MANAGER_1, UNIT_1, 1);
+    UUID key = UUID.randomUUID();
+    AtomicBoolean failEquipmentAfterEffect = new AtomicBoolean(true);
+    doAnswer(
+            invocation -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+              List<LogisticsDependencyGateway.OrderEquipmentReservation> receipt =
+                  replaceEquipmentReservationsRemotely(
+                      invocation.getArgument(1), invocation.getArgument(5));
+              if (failEquipmentAfterEffect.getAndSet(false)) throw transientDependencyFailure();
+              return receipt;
+            })
+        .when(dependencies)
+        .replaceOrderEquipmentReservations(any(), any(), any(), any(), anyString(), any());
+
+    mvc.perform(
+            delete("/api/logistics/v1/orders/{orderId}", orderId)
+                .param("expectedVersion", "2")
+                .header("Idempotency-Key", key)
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isServiceUnavailable())
+        .andExpect(jsonPath("$.code").value("ORDER_ASSET_SERVICE_UNAVAILABLE"));
+    Map<String, Object> deferred =
+        jdbc.queryForMap(
+            "select step, released_units_receipt_json, equipment_receipt_json, attempt_count"
+                + " from rental_order_mutation_command where order_id=?",
+            orderId);
+    assertThat(deferred.get("step")).isEqualTo("RELEASE_EQUIPMENT");
+    assertThat(deferred.get("released_units_receipt_json")).isNotNull();
+    assertThat(deferred.get("equipment_receipt_json")).isNull();
+    assertThat(deferred.get("attempt_count")).isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "select status from rental_order where id=?", String.class, orderId))
+        .isEqualTo("DRAFT");
+    verify(dependencies, times(1)).releaseAllOrderUnits(any(), any(), any(), anyString());
+    verify(dependencies, times(1))
+        .replaceOrderEquipmentReservations(any(), any(), any(), any(), anyString(), any());
+
+    recoverOrderMutation(orderId);
+
+    verify(dependencies, times(1)).releaseAllOrderUnits(any(), any(), any(), anyString());
+    verify(dependencies, times(2))
+        .replaceOrderEquipmentReservations(any(), any(), any(), any(), anyString(), any());
+    ArgumentCaptor<UUID> equipmentKeys = ArgumentCaptor.forClass(UUID.class);
+    verify(dependencies, times(2))
+        .replaceOrderEquipmentReservations(
+            equipmentKeys.capture(), any(), any(), any(), anyString(), any());
+    assertThat(equipmentKeys.getAllValues())
+        .containsOnly(equipmentKeys.getAllValues().getFirst());
+    assertThat(equipmentKeys.getAllValues().getFirst()).isNotEqualTo(key);
+
+    mvc.perform(
+            delete("/api/logistics/v1/orders/{orderId}", orderId)
+                .param("expectedVersion", "2")
+                .header("Idempotency-Key", key)
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.version").value(3))
+        .andExpect(jsonPath("$.status").value("CANCELLED"));
   }
 
   @Test
@@ -2298,6 +2630,22 @@ class OrderApiIntegrationTest {
   private UUID orderClientId(UUID orderId) {
     return jdbc.queryForObject(
         "select client_id from rental_order where id=?", UUID.class, orderId);
+  }
+
+  private void recoverOrderMutation(UUID orderId) {
+    assertThat(
+            jdbc.update(
+                "update rental_order_mutation_command set next_attempt_at=clock_timestamp()"
+                    + " where order_id=? and state='PENDING' and lease_token is null",
+                orderId))
+        .isEqualTo(1);
+    orderMutationRecovery.recoverPending();
+    assertThat(
+            jdbc.queryForObject(
+                "select state from rental_order_mutation_command where order_id=?",
+                String.class,
+                orderId))
+        .isEqualTo("COMPLETED");
   }
 
   private static String updateOrderBody(long expectedVersion, UUID clientId) {
@@ -2510,10 +2858,17 @@ class OrderApiIntegrationTest {
         orderId,
         null,
         "{\"changedField\":\"warehouseId\",\"version\":%d}".formatted(expectedVersion + 1));
+    JwtRequestPostProcessor actor =
+        "RENTAL_MANAGER".equals(role)
+            ? dedicatedManager(
+                subjectId,
+                subjectId.toString(),
+                RENTAL_MANAGER_WEB_CLIENT_ID,
+                grants)
+            : user(subjectId, role, subjectId.toString(), grants);
     MvcResult result =
         mvc.perform(
-                get("/api/logistics/v1/orders/{orderId}", orderId)
-                    .with(user(subjectId, role, subjectId.toString(), grants)))
+                get("/api/logistics/v1/orders/{orderId}", orderId).with(actor))
             .andExpect(status().isOk())
             .andReturn();
     return json(result);
@@ -2621,33 +2976,52 @@ class OrderApiIntegrationTest {
   }
 
   private static JwtRequestPostProcessor manager(UUID subjectId, String username) {
-    return user(
+    return dedicatedManager(
         subjectId,
-        "RENTAL_MANAGER",
         username,
+        RENTAL_MANAGER_WEB_CLIENT_ID,
+        List.of(
+            Map.of("warehouseId", WAREHOUSE_1.toString(), "level", "EDIT"),
+            Map.of("warehouseId", WAREHOUSE_2.toString(), "level", "EDIT")));
+  }
+
+  private static JwtRequestPostProcessor androidManager(UUID subjectId, String username) {
+    return dedicatedManager(
+        subjectId,
+        username,
+        RENTAL_MANAGER_ANDROID_CLIENT_ID,
         List.of(
             Map.of("warehouseId", WAREHOUSE_1.toString(), "level", "EDIT"),
             Map.of("warehouseId", WAREHOUSE_2.toString(), "level", "EDIT")));
   }
 
   private static JwtRequestPostProcessor managerWithoutWarehouse(UUID subjectId, String username) {
-    return user(subjectId, "RENTAL_MANAGER", username, List.of());
+    return dedicatedManager(
+        subjectId, username, RENTAL_MANAGER_WEB_CLIENT_ID, List.of());
   }
 
-  private static JwtRequestPostProcessor readOnlyManager(UUID subjectId, String username) {
-    return jwt()
-        .jwt(
-            token ->
-                token
-                    .subject(subjectId.toString())
-                    .claim("principal_type", "USER")
-                    .claim("scope", "rwms.read")
-                    .claim("global_role", "RENTAL_MANAGER")
-                    .claim("preferred_username", username)
-                    .claim("rentalAccess", true)
-                    .claim(
-                        "warehouse_access",
-                        List.of(Map.of("warehouseId", WAREHOUSE_1.toString(), "level", "EDIT"))));
+  private static JwtRequestPostProcessor readOnlyViewer(UUID subjectId, String username) {
+    return applicationUser(
+        subjectId,
+        "VIEWER",
+        username,
+        null,
+        "rwms.read",
+        true,
+        List.of(Map.of("warehouseId", WAREHOUSE_1.toString(), "level", "EDIT")));
+  }
+
+  private static JwtRequestPostProcessor panelRentalManager(UUID subjectId, String username) {
+    return applicationUser(
+        subjectId,
+        "RENTAL_MANAGER",
+        username,
+        "rwms-panel",
+        "rwms.read rwms.write",
+        true,
+        List.of(
+            Map.of("warehouseId", WAREHOUSE_1.toString(), "level", "EDIT"),
+            Map.of("warehouseId", WAREHOUSE_2.toString(), "level", "EDIT")));
   }
 
   private static JwtRequestPostProcessor admin() {
@@ -2655,18 +3029,56 @@ class OrderApiIntegrationTest {
   }
 
   private static JwtRequestPostProcessor user(
-      UUID subjectId, String role, String username, List<Map<String, String>> warehouseAccess) {
+      UUID subjectId,
+      String role,
+      String username,
+      List<Map<String, String>> warehouseAccess) {
+    return applicationUser(
+        subjectId,
+        role,
+        username,
+        null,
+        "rwms.read rwms.write",
+        true,
+        warehouseAccess);
+  }
+
+  private static JwtRequestPostProcessor dedicatedManager(
+      UUID subjectId,
+      String username,
+      String clientId,
+      List<Map<String, String>> warehouseAccess) {
+    return applicationUser(
+        subjectId,
+        "RENTAL_MANAGER",
+        username,
+        clientId,
+        "rental.manage",
+        true,
+        warehouseAccess);
+  }
+
+  private static JwtRequestPostProcessor applicationUser(
+      UUID subjectId,
+      String role,
+      String username,
+      String clientId,
+      String scope,
+      boolean rentalAccess,
+      List<Map<String, String>> warehouseAccess) {
     return jwt()
         .jwt(
-            token ->
-                token
-                    .subject(subjectId.toString())
-                    .claim("principal_type", "USER")
-                    .claim("scope", "rwms.read rwms.write")
-                    .claim("global_role", role)
-                    .claim("preferred_username", username)
-                    .claim("rentalAccess", true)
-                    .claim("warehouse_access", warehouseAccess));
+            token -> {
+              token
+                  .subject(subjectId.toString())
+                  .claim("principal_type", "USER")
+                  .claim("scope", scope)
+                  .claim("global_role", role)
+                  .claim("preferred_username", username)
+                  .claim("rentalAccess", rentalAccess)
+                  .claim("warehouse_access", warehouseAccess);
+              if (clientId != null) token.claim("client_id", clientId);
+            });
   }
 
   private LogisticsDependencyGateway.OrderUnitReservation reserveRemotely(
@@ -2743,6 +3155,75 @@ class OrderApiIntegrationTest {
               requirement.getKey(), "Стул", requirement.getValue(), 10));
     }
     return List.copyOf(current.values());
+  }
+
+  private List<UUID> seedPagedDocuments(
+      LogisticsDocumentType type, int count, LocalDate scheduledDate) {
+    List<UUID> documentIds = new java.util.ArrayList<>();
+    OffsetDateTime base = OffsetDateTime.parse("2026-08-01T00:00:00Z");
+    for (int index = 0; index < count; index++) {
+      UUID documentId = new UUID(0x1800000000000000L + type.ordinal(), index + 1L);
+      UUID lineId = new UUID(0x1900000000000000L + type.ordinal(), index + 1L);
+      UUID assetId = new UUID(0x1A00000000000000L + type.ordinal(), index + 1L);
+      OffsetDateTime createdAt = base.plusSeconds(index);
+      jdbc.update(
+          """
+          insert into logistics_document(
+            id, version, document_type, state, warehouse_id, destination_warehouse_id,
+            party_snapshot, driver_snapshot, scheduled_date, requested_by_subject_id,
+            correlation_id, created_at, updated_at
+          ) values (?, 0, ?, 'DRAFT', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          """,
+          documentId,
+          type.name(),
+          WAREHOUSE_1,
+          type == LogisticsDocumentType.TRANSFER ? WAREHOUSE_2 : null,
+          "Клиент " + index,
+          type == LogisticsDocumentType.TRANSFER ? null : "Водитель " + index,
+          scheduledDate,
+          ADMIN,
+          UUID.randomUUID(),
+          createdAt,
+          createdAt);
+      jdbc.update(
+          """
+          insert into logistics_document_line(
+            id, version, document_id, line_number, asset_id, asset_version, state,
+            tenant_snapshot, created_at, updated_at
+          ) values (?, 0, ?, 1, ?, 0, 'PENDING', ?, ?, ?)
+          """,
+          lineId,
+          documentId,
+          assetId,
+          "Клиент " + index,
+          createdAt,
+          createdAt);
+      documentIds.add(documentId);
+    }
+    return List.copyOf(documentIds);
+  }
+
+  private void seedListedDocument(
+      UUID documentId,
+      UUID warehouseId,
+      UUID destinationWarehouseId,
+      LocalDate scheduledDate,
+      OffsetDateTime createdAt) {
+    jdbc.update(
+        """
+        insert into logistics_document(
+          id, version, document_type, state, warehouse_id, destination_warehouse_id,
+          scheduled_date, requested_by_subject_id, correlation_id, created_at, updated_at
+        ) values (?, 0, 'TRANSFER', 'DRAFT', ?, ?, ?, ?, ?, ?, ?)
+        """,
+        documentId,
+        warehouseId,
+        destinationWarehouseId,
+        scheduledDate,
+        ADMIN,
+        UUID.randomUUID(),
+        createdAt,
+        createdAt);
   }
 
   private static LogisticsDependencyGateway.OrderUnitReservation reservation(

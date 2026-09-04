@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from hashlib import sha256
 from math import ceil
 from uuid import UUID
@@ -62,6 +62,11 @@ class RoutedSupportResource:
     """One support resource whose inbound work and mandatory return fit its shift."""
 
     fact: SupportResourceFact
+    inbound_departure_at: datetime
+    inbound_raw_arrival_at: datetime
+    inbound_arrival_at: datetime
+    inbound_travel_seconds: int
+    return_travel_seconds: int
     available_at_served: datetime
     latest_served_finish: datetime
     inbound_travel_minutes: int
@@ -201,10 +206,11 @@ async def load_support_resource_facts(
                 )
 
         served_zone = ZoneInfo(link.served_warehouse.timezone)
-        link_available_from = datetime.combine(
+        link_available_from, link_available_until = _local_interval(
             planning_date,
             link.service_start or time.min,
-            tzinfo=served_zone,
+            link.service_end,
+            served_zone,
         )
         for shift in support.shifts:
             if not (
@@ -226,15 +232,7 @@ async def load_support_resource_facts(
                     shift=shift,
                     identity=identity,
                     eligible_from=link_available_from,
-                    eligible_until=(
-                        datetime.combine(
-                            planning_date,
-                            link.service_end,
-                            tzinfo=served_zone,
-                        )
-                        if link.service_end is not None
-                        else None
-                    ),
+                    eligible_until=link_available_until,
                     planning_date=planning_date,
                 )
                 facts.append(fact)
@@ -334,16 +332,13 @@ async def route_support_resource_facts(
             continue
         shift = fact.shift
         zone = ZoneInfo(fact.support_warehouse.timezone)
-        shift_start = datetime.combine(
+        shift_start, shift_end = _local_interval(
             fact.planning_date,
             shift.start_time,
-            tzinfo=zone,
-        )
-        shift_end = datetime.combine(
-            fact.planning_date,
             shift.end_time,
-            tzinfo=zone,
+            zone,
         )
+        assert shift_end is not None
         departure = max(
             shift_start,
             fact.eligible_from,
@@ -430,6 +425,12 @@ async def route_support_resource_facts(
         routed.append(
             RoutedSupportResource(
                 fact=fact,
+                inbound_departure_at=departure,
+                inbound_raw_arrival_at=departure
+                + timedelta(seconds=inbound.travel_seconds),
+                inbound_arrival_at=arrival,
+                inbound_travel_seconds=inbound_seconds,
+                return_travel_seconds=reverse_seconds,
                 available_at_served=available,
                 latest_served_finish=latest_finish,
                 inbound_travel_minutes=ceil(inbound_seconds / 60),
@@ -444,25 +445,85 @@ async def route_support_resource_facts(
                 reason_codes=tuple(candidate_reasons),
             )
         )
+    routed = list(deduplicate_routed_support_resources(routed))
     resolution_reasons: list[PlanningReason] = []
     if shift_limited:
         resolution_reasons.append(PlanningReason.SHIFT_LIMIT_EXCEEDED)
     if not routed and facts.contractor_fallback_allowed:
         resolution_reasons.append(PlanningReason.CONTRACTOR_REQUIRED)
     return SupportResourceResolution(
-        candidates=tuple(
-            sorted(
-                routed,
-                key=lambda item: (
-                    item.available_at_served,
-                    item.inbound_travel_minutes + item.return_travel_minutes,
-                    item.fact.link.priority,
-                    str(item.fact.shift.id),
-                ),
-            )
-        ),
+        candidates=tuple(routed),
         reasons=tuple(resolution_reasons),
     )
+
+
+def deduplicate_routed_support_resources(
+    candidates: Iterable[RoutedSupportResource],
+) -> tuple[RoutedSupportResource, ...]:
+    """Keep the best exact-road variant for each physical driver shift and vehicle.
+
+    One worker can be visible through several incoming support links or repeated
+    planning instants.  Every link is routed first so an unavailable high-priority
+    edge cannot hide a feasible lower-priority edge; only then is the physical
+    resource collapsed to one deterministic candidate per served warehouse. A
+    physical shift that can serve different demand members stays as distinct
+    demand-aware route options until the planner chooses a cycle.
+    """
+
+    best_by_resource: dict[
+        tuple[UUID, UUID, UUID, UUID, UUID],
+        RoutedSupportResource,
+    ] = {}
+    for candidate in candidates:
+        fact = candidate.fact
+        key = (
+            fact.shift.id,
+            fact.shift.driver_id,
+            fact.shift.vehicle_id,
+            fact.identity.worker_id,
+            fact.link.served_warehouse.warehouse_id,
+        )
+        previous = best_by_resource.get(key)
+        if previous is None or _routed_candidate_rank(candidate) < _routed_candidate_rank(
+            previous
+        ):
+            best_by_resource[key] = candidate
+    return tuple(
+        sorted(
+            best_by_resource.values(),
+            key=_routed_candidate_rank,
+        )
+    )
+
+
+def _routed_candidate_rank(candidate: RoutedSupportResource) -> tuple[object, ...]:
+    """Rank already routed variants by usable time, directed road work, and link tie-breaks."""
+
+    return (
+        candidate.available_at_served,
+        candidate.inbound_travel_minutes + candidate.return_travel_minutes,
+        candidate.positioning_distance_meters,
+        candidate.fact.link.priority,
+        str(candidate.fact.link.support_link_id),
+        str(candidate.fact.shift.id),
+    )
+
+
+def _local_interval(
+    planning_date: date,
+    start: time,
+    end: time | None,
+    zone: ZoneInfo,
+) -> tuple[datetime, datetime | None]:
+    """Resolve warehouse-local clock bounds, carrying an overnight end to the next day."""
+
+    start_at = datetime.combine(planning_date, start, tzinfo=zone)
+    if end is None:
+        return start_at, None
+    if end == start:
+        raise ValueError("local interval must have a non-zero duration")
+    end_date = planning_date + timedelta(days=1) if end < start else planning_date
+    return start_at, datetime.combine(end_date, end, tzinfo=zone)
 
 
 def _confirmed_identity(identity: RwmsDriverIdentity) -> bool:
@@ -478,9 +539,15 @@ def _confirmed_identity(identity: RwmsDriverIdentity) -> bool:
 def _identity_rank(identity: RwmsDriverIdentity) -> tuple[object, ...]:
     """Prefer a current home/assignment fact over a later incoming duplicate."""
 
+    available_from = (
+        identity.available_from.astimezone(UTC)
+        if identity.available_from is not None
+        else datetime.min.replace(tzinfo=UTC)
+    )
     return (
         {"HOME": 0, "ACTIVE_ASSIGNMENT": 1, "INCOMING": 2}[identity.availability_kind],
-        identity.available_from or datetime.min.replace(tzinfo=ZoneInfo("UTC")),
+        identity.available_from is not None,
+        available_from,
     )
 
 

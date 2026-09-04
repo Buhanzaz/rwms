@@ -2,6 +2,8 @@ package dev.buhanzaz.rwms.logistics.customer.service;
 
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityIsochroneTariff;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityJob;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityPriceZone;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityRestrictionZone;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityShift;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacitySnapshot;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlot;
@@ -33,6 +35,14 @@ final class CustomerCapacityWorkloadFingerprint {
         .toList();
   }
 
+  /** Excludes the booking's current confirmed slot while evaluating an atomic replacement. */
+  static List<CustomerDeliverySlot> capacitySlots(
+      List<CustomerDeliverySlot> slots, UUID excludedSlotId) {
+    return slots.stream()
+        .filter(slot -> !slot.getId().equals(excludedSlotId))
+        .toList();
+  }
+
   /** Returns a stable SHA-256 over exact slots, simulator jobs and whole-day driver reservations. */
   static String sha256(
       List<CustomerDeliverySlot> slots,
@@ -40,6 +50,8 @@ final class CustomerCapacityWorkloadFingerprint {
       List<WarehouseCapacityShift> shifts,
       WarehouseCapacitySnapshot snapshot,
       List<WarehouseCapacityIsochroneTariff> isochroneTariffs,
+      List<WarehouseCapacityPriceZone> priceZones,
+      List<WarehouseCapacityRestrictionZone> restrictionZones,
       long wholeDayDriverReservations) {
     StringBuilder value = new StringBuilder("drivers\u001f").append(wholeDayDriverReservations);
     if (snapshot == null) {
@@ -82,6 +94,8 @@ final class CustomerCapacityWorkloadFingerprint {
                     .append(slot.getSiteCabinCapacity())
                     .append('\u001f')
                     .append(slot.getDeliveryPriceRubles())
+                    .append('\u001f')
+                    .append(slot.getPriceZoneId())
                     .append('\u001f')
                     .append(slot.getPriceIsochroneMinutes())
                     .append('\u001f')
@@ -141,6 +155,34 @@ final class CustomerCapacityWorkloadFingerprint {
                     .append(tariff.getTravelMinutes())
                     .append('\u001f')
                     .append(tariff.getPriceRubles()));
+    priceZones.stream()
+        .sorted(Comparator.comparing(WarehouseCapacityPriceZone::getSourceZoneId))
+        .forEach(
+            zone ->
+                value
+                    .append("\nprice-zone\u001f")
+                    .append(zone.getSourceZoneId())
+                    .append('\u001f')
+                    .append(zone.getSourceZoneVersion())
+                    .append('\u001f')
+                    .append(zone.getDeliveryPriceRubles())
+                    .append('\u001f')
+                    .append(zone.getPickupPriceRubles())
+                    .append('\u001f')
+                    .append(zone.getGeometryJson()));
+    restrictionZones.stream()
+        .sorted(Comparator.comparing(WarehouseCapacityRestrictionZone::getSourceZoneId))
+        .forEach(
+            zone ->
+                value
+                    .append("\nrestriction-zone\u001f")
+                    .append(zone.getSourceZoneId())
+                    .append('\u001f')
+                    .append(zone.getSourceZoneVersion())
+                    .append('\u001f')
+                    .append(zone.getKind())
+                    .append('\u001f')
+                    .append(zone.getGeometryJson()));
     try {
       return HexFormat.of()
           .formatHex(
@@ -149,6 +191,25 @@ final class CustomerCapacityWorkloadFingerprint {
     } catch (NoSuchAlgorithmException exception) {
       throw new IllegalStateException("SHA-256 is unavailable", exception);
     }
+  }
+
+  /** Preserves callers that predate exceptional delivery policy zones. */
+  static String sha256(
+      List<CustomerDeliverySlot> slots,
+      List<WarehouseCapacityJob> generatedJobs,
+      List<WarehouseCapacityShift> shifts,
+      WarehouseCapacitySnapshot snapshot,
+      List<WarehouseCapacityIsochroneTariff> isochroneTariffs,
+      long wholeDayDriverReservations) {
+    return sha256(
+        slots,
+        generatedJobs,
+        shifts,
+        snapshot,
+        isochroneTariffs,
+        List.of(),
+        List.of(),
+        wholeDayDriverReservations);
   }
 
   private static String decimal(java.math.BigDecimal value) {

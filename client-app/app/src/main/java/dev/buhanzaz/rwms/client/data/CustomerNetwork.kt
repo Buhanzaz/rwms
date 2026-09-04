@@ -77,28 +77,111 @@ class CustomerApiException(
     val code: String? = null,
 ) : RuntimeException(message)
 
+private val CYRILLIC_USER_TEXT = Regex("[А-Яа-яЁё]")
+private val TECHNICAL_ERROR_TEXT = Regex(
+    pattern = """(?i)(https?://|\bhttp\s*\d{3}\b|exception|traceback|stack\s+trace|sqlstate|""" +
+        """\b(select|insert|update|delete)\s+.+\b(from|into|set)\b|java\.|org\.|dev\.|""" +
+        """service\s+returned|manual\s+change\s+invalid|rms\s+logistics|\{\s*\"|<html|/api/)""",
+)
+
+/** Returns actionable Russian copy while retaining raw Problem Details only for control flow. */
+internal fun customerProblemMessage(
+    status: Int?,
+    problem: ProblemDetails?,
+    fallback: String = customerStatusFallback(status),
+): String {
+    customerProblemCodeMessage(problem?.code)?.let { return it }
+    val detail = problem?.detail?.trim()
+    if (detail != null &&
+        detail.length <= 512 &&
+        CYRILLIC_USER_TEXT.containsMatchIn(detail) &&
+        !TECHNICAL_ERROR_TEXT.containsMatchIn(detail)
+    ) {
+        return detail
+    }
+    return fallback
+}
+
+private fun customerProblemCodeMessage(code: String?): String? = when (code) {
+    "INQUIRY_ARCHIVED" -> "Этот заказ уже завершён. Начните новый заказ."
+    "CUSTOMER_CART_BUSY" -> "Заказ уже обрабатывается. Обновите экран перед повторным действием."
+    "CUSTOMER_CART_VERSION_CONFLICT" ->
+        "Состав заказа изменился. Обновите экран и повторите действие."
+    "CUSTOMER_CABINS_REQUIRED" -> "Добавьте хотя бы одну бытовку перед выбором доставки."
+    "CUSTOMER_DELIVERY_SLOT_EXPIRED" ->
+        "Выбранное время уже недоступно. Выберите другой слот."
+    "CUSTOMER_DELIVERY_SITE_CAPACITY_CHANGED" ->
+        "Условия разгрузки изменились. Рассчитайте доступное время заново."
+    "CUSTOMER_ROUTE_ATTESTATIONS_REQUIRED" ->
+        "Подтвердите условия проезда на участок и повторите действие."
+    "CUSTOMER_DELIVERY_ROUTE_NOT_FOUND" ->
+        "Безопасный маршрут до адреса не найден. Проверьте точку доставки или выберите другой адрес."
+    "CUSTOMER_ROUTING_UNAVAILABLE" ->
+        "Расчёт маршрута временно недоступен. Повторите попытку позже."
+    "CUSTOMER_BOOKING_NOT_EDITABLE" ->
+        "Заказ уже передан в работу. Отменить или перенести доставку больше нельзя."
+    "CUSTOMER_BOOKING_VERSION_CONFLICT" ->
+        "Заказ изменился. Обновите его и повторите действие."
+    "CUSTOMER_BOOKING_CANCELLATION_PENDING" ->
+        "Отмена заказа уже выполняется. Обновите статус немного позже."
+    "ORDER_MUTATION_PENDING" ->
+        "Изменение заказа уже выполняется. Обновите статус немного позже."
+    "CUSTOMER_BOOKING_RECONCILIATION_REQUIRED" ->
+        "Отмена требует проверки сотрудником RWMS. Текущий статус сохранён."
+    "ORDER_MUTATION_RECONCILIATION_REQUIRED" ->
+        "Изменение заказа требует проверки сотрудником RWMS. Текущий статус сохранён."
+    "CUSTOMER_BOOKING_CANCELLATION_FAILED" ->
+        "Не удалось завершить отмену. Обновите статус или повторите попытку позже."
+    "CUSTOMER_BOOKING_MUTATION_FAILED", "ORDER_MUTATION_RECOVERY_FAILED",
+    "ORDER_MUTATION_LOCAL_RECONCILIATION_FAILED" ->
+        "Не удалось завершить изменение заказа. Обновите статус и повторите действие позже."
+    "CUSTOMER_BOOKING_NOT_FOUND" ->
+        "Заказ не найден. Обновите список заказов."
+    "CUSTOMER_DELIVERY_SLOT_NOT_FOUND" ->
+        "Выбранное время уже недоступно. Рассчитайте варианты доставки заново."
+    "CUSTOMER_DELIVERY_SLOT_TAKEN" ->
+        "Выбранное время уже занято. Рассчитайте доступные варианты заново."
+    "IDEMPOTENCY_KEY_REUSED" ->
+        "Повтор команды не совпадает с исходным действием. Обновите заказ и повторите попытку."
+    "UNAUTHORIZED", "AUTHENTICATION_REQUIRED", "INVALID_TOKEN" ->
+        "Сессия завершена. Войдите снова."
+    "FORBIDDEN", "ACCESS_DENIED" ->
+        "Недостаточно прав для действия. Обратитесь к администратору."
+    else -> null
+}
+
+private fun customerStatusFallback(status: Int?): String = when (status) {
+    401 -> "Сессия завершена. Войдите снова."
+    403 -> "Недостаточно прав для действия. Обратитесь к администратору."
+    404 -> "Данные не найдены. Обновите экран и повторите действие."
+    409 -> "Данные изменились. Обновите экран и повторите действие."
+    422 -> "Проверьте заполненные данные и повторите действие."
+    429 -> "Слишком много запросов. Подождите и повторите действие."
+    else -> if (status != null && status in 500..599) {
+        "Сервис временно недоступен. Повторите попытку позже."
+    } else {
+        "Не удалось выполнить запрос. Проверьте данные и повторите действие."
+    }
+}
+
 /** Converts Retrofit/transport exceptions into localized, non-fabricated UI failures. */
 fun Throwable.toCustomerApiException(json: Json): CustomerApiException = when (this) {
     is CustomerApiException -> this
     is HttpException -> {
         val raw = response()?.errorBody()?.string().orEmpty().take(16_384)
         val problem = runCatching { json.decodeFromString<ProblemDetails>(raw) }.getOrNull()
-        val fallback = when (code()) {
-            401 -> "Сессия завершена. Войдите снова"
-            403 -> "Недостаточно прав для действия"
-            404 -> "Данные не найдены"
-            409 -> "Данные изменились. Обновите экран и повторите действие"
-            422 -> "Проверьте заполненные данные"
-            429 -> "Слишком много запросов. Повторите позже"
-            in 500..599 -> "Сервис временно недоступен"
-            else -> "Не удалось выполнить запрос"
-        }
         CustomerApiException(
             status = code(),
-            message = problem?.detail?.takeIf(String::isNotBlank) ?: fallback,
+            message = customerProblemMessage(code(), problem),
             code = problem?.code?.takeIf(String::isNotBlank),
         )
     }
-    is IOException -> CustomerApiException(null, "Нет соединения с RWMS")
-    else -> CustomerApiException(null, "Не удалось выполнить запрос")
+    is IOException -> CustomerApiException(
+        null,
+        "Нет соединения. Проверьте интернет и повторите действие.",
+    )
+    else -> CustomerApiException(
+        null,
+        "Не удалось выполнить запрос. Проверьте данные и повторите действие.",
+    )
 }

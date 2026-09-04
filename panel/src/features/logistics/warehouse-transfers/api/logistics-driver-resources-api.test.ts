@@ -67,15 +67,13 @@ describe("public logistics driver resources", () => {
     ).toEqual({ workerId: DRIVER_ID, displayName: "Штатный водитель" })
   })
 
-  it("creates a bounded contractor without credential fields", async () => {
+  it("creates a reusable contractor with the exact canonical profile", async () => {
     const contractor = {
       workerId: DRIVER_ID,
       version: 0,
       homeWarehouseId: WAREHOUSE_ID,
       displayName: "Наёмный водитель",
       phone: "+79990000000",
-      availableFrom: AT,
-      availableUntil: "2026-09-02T17:30:00Z",
       comment: "Собственный автомобиль",
       active: true,
       employmentType: "CONTRACTOR",
@@ -91,8 +89,6 @@ describe("public logistics driver resources", () => {
           contractorId: DRIVER_ID,
           displayName: contractor.displayName,
           phone: contractor.phone,
-          availableFrom: contractor.availableFrom,
-          availableUntil: contractor.availableUntil,
           comment: contractor.comment,
         },
       })
@@ -106,11 +102,42 @@ describe("public logistics driver resources", () => {
       contractorId: DRIVER_ID,
       displayName: contractor.displayName,
       phone: contractor.phone,
-      availableFrom: contractor.availableFrom,
-      availableUntil: contractor.availableUntil,
       comment: contractor.comment,
     })
     expect(JSON.parse(init.body)).not.toHaveProperty("password")
+  })
+
+  it("rejects obsolete availability fields in a contractor response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      json(
+        {
+          workerId: DRIVER_ID,
+          version: 0,
+          homeWarehouseId: WAREHOUSE_ID,
+          displayName: "Наёмный водитель",
+          phone: "+79990000000",
+          availableFrom: AT,
+          comment: null,
+          active: true,
+          employmentType: "CONTRACTOR",
+        },
+        201
+      )
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      createContractorDriver({
+        accessToken: "task-board-token",
+        warehouseId: WAREHOUSE_ID,
+        contractor: {
+          contractorId: DRIVER_ID,
+          displayName: "Наёмный водитель",
+          phone: "+79990000000",
+          comment: null,
+        },
+      })
+    ).rejects.toThrow("Сервис задач вернул некорректный ресурс водителя")
   })
 
   it("rejects malformed or overprivileged driver projections", () => {

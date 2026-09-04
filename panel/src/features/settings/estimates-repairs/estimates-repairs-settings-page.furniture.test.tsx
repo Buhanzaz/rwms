@@ -26,10 +26,6 @@ vi.mock("@/features/auth/use-auth", () => ({
   }),
 }))
 
-vi.mock("@/hooks/use-warehouse", () => ({
-  useWarehouse: () => ({ selectedWarehouseId: WAREHOUSE_ID }),
-}))
-
 vi.mock(
   "@/features/settings/estimates-repairs/estimate-creation-window-settings-card",
   () => ({ EstimateCreationWindowSettingsCard: () => null })
@@ -84,7 +80,7 @@ const currentUser: CurrentUser = {
   lastName: null,
   email: null,
   principalType: "USER",
-  globalRole: "WAREHOUSE_MANAGER",
+  globalRole: "WMS_ADMIN",
   rentalAccess: false,
   warehouseAccessAll: false,
   warehouseAccesses: [{ warehouseId: WAREHOUSE_ID, level: "MANAGE" }],
@@ -185,7 +181,7 @@ function renderPage() {
 }
 
 async function openFurnitureEditor(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(await screen.findByRole("radio", { name: "Мебель" }))
+  await user.click(await screen.findByRole("tab", { name: "Мебель" }))
   await user.click(
     await screen.findByRole("button", { name: /^Мебельная группа/ })
   )
@@ -252,7 +248,6 @@ describe("automatic furniture equipment link", () => {
       expect(mocks.saveFurniture).toHaveBeenCalledWith(
         expect.objectContaining({
           accessToken: "maintenance-token",
-          warehouseId: WAREHOUSE_ID,
           catalogVersionId: VERSION_ID,
         }),
         expect.objectContaining({
@@ -287,7 +282,7 @@ describe("automatic furniture equipment link", () => {
     })
     renderPage()
 
-    await user.click(await screen.findByRole("radio", { name: "Мебель" }))
+    await user.click(await screen.findByRole("tab", { name: "Мебель" }))
     await user.click(
       await screen.findByRole("button", { name: /^Мебельная группа/ })
     )

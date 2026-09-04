@@ -22,6 +22,7 @@ from app.db import get_session
 from app.main import create_app
 from app.models import OsmRestrictionImport, OsmTruckRestriction
 from app.services.osm_restriction_indexer import _import_atomically
+from tests.auth import admin_access_token_verifier
 
 pytestmark = [
     pytest.mark.integration,
@@ -40,7 +41,7 @@ def _restriction_app(
 ) -> FastAPI:
     """Build an application whose request session shares the rollback fixture."""
 
-    application = create_app()
+    application = create_app(access_token_verifier=admin_access_token_verifier())
 
     async def session_override() -> AsyncIterator[AsyncSession]:
         """Yield the integration-test transaction to the endpoint."""

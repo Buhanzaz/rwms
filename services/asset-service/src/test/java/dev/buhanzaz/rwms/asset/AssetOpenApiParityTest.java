@@ -47,6 +47,10 @@ class AssetOpenApiParityTest {
         "/api/asset/v1/rental-items/available",
         "/api/asset/v1/rental-items/availability",
         "/api/asset/v1/rental-items/{id}/manual-notes",
+        "/api/asset/v1/rental-item-creation-intents",
+        "/api/asset/v1/rental-item-creation-intents/{intentId}",
+        "/api/asset/v1/rental-item-creation-intents/{intentId}/complete",
+        "/api/asset/v1/rental-item-creation-intents/{intentId}/abandon",
         "/api/asset/v1/equipment/transfers",
         "/api/asset/v1/administrative-corrections",
         "/api/asset/v1/operations/outbox/{eventId}/requeue",
@@ -122,6 +126,32 @@ class AssetOpenApiParityTest {
         .contains("warehouseId", "number", "linoleum");
     assertThat(child(child(createRentalItem, "properties"), "linoleum"))
         .containsEntry("type", "boolean");
+    Map<String, Object> createWithPhotos =
+        child(schemas, "CreateRentalItemWithPhotoIntentRequest");
+    assertThat(list(createWithPhotos.get("required")))
+        .containsExactly("rentalItem", "photoManifest");
+    assertThat(child(child(createWithPhotos, "properties"), "photoManifest"))
+        .containsEntry("minItems", 1)
+        .containsEntry("maxItems", 20);
+    assertThat(
+            list(
+                child(schemas, "RentalItemCreationPhotoManifestInput")
+                    .get("required")))
+        .containsExactly(
+            "photoIndex", "checksumSha256", "contentType", "contentLength");
+    assertThat(list(child(schemas, "RentalItemCreationIntentState").get("enum")))
+        .containsExactly("PENDING", "COMPLETED", "ABANDONED");
+    assertThat(list(child(schemas, "RentalItemCreationIntent").get("required")))
+        .contains(
+            "rentalItemId",
+            "warehouseId",
+            "expectedPhotoCount",
+            "mediaFolderId",
+            "mediaCommandId",
+            "photoManifestSha256",
+            "photoManifest",
+            "coverMediaId",
+            "mediaProofSha256");
     Map<String, Object> inventorySourceAsset =
         child(schemas, "InventorySourceAssetRequest");
     assertThat(list(inventorySourceAsset.get("required")))

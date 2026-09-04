@@ -1,6 +1,5 @@
 /* eslint-disable react-hooks/incompatible-library -- TanStack Virtual returns imperative helpers that React Compiler intentionally skips. */
 import {
-  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -40,8 +39,6 @@ const DEFAULT_GRID_WIDTH = 1200
 const DEFAULT_GRID_HEIGHT = 640
 const MIN_CARD_HEIGHT = 48
 const MIN_ADAPTIVE_CARD_WIDTH = 150
-const MIN_ADAPTIVE_CARD_HEIGHT = 176
-const CARD_PHOTO_RATIO = 0.75
 
 function RentalItemCardPhoto({
   item,
@@ -139,7 +136,8 @@ function limitCountBySize(
 function getAutoGridHeight(
   rowCount: number,
   requestedVisibleRowCount: number,
-  gap: number
+  gap: number,
+  cardHeight: number
 ) {
   const visibleRowCount = Math.max(
     1,
@@ -148,8 +146,8 @@ function getAutoGridHeight(
   return Math.min(
     DEFAULT_GRID_HEIGHT,
     Math.max(
-      MIN_ADAPTIVE_CARD_HEIGHT,
-      visibleRowCount * MIN_ADAPTIVE_CARD_HEIGHT + (visibleRowCount - 1) * gap
+      cardHeight,
+      visibleRowCount * cardHeight + (visibleRowCount - 1) * gap
     )
   )
 }
@@ -172,19 +170,31 @@ export function RentalItemsGridView({
     height: DEFAULT_GRID_HEIGHT,
   })
 
-  useEffect(() => {
-    if (!parentRef.current) {
+  useLayoutEffect(() => {
+    const element = parentRef.current
+
+    if (!element) {
       return
     }
 
-    const observer = new ResizeObserver(([entry]) => {
-      setDimensions({
-        width: entry.contentRect.width,
-        height: entry.contentRect.height,
-      })
-    })
+    const updateDimensions = () => {
+      const width = element.clientWidth
+      const height = element.clientHeight
 
-    observer.observe(parentRef.current)
+      setDimensions((current) => {
+        if (current.width === width && current.height === height) {
+          return current
+        }
+
+        return { width, height }
+      })
+    }
+
+    updateDimensions()
+
+    const observer = new ResizeObserver(updateDimensions)
+
+    observer.observe(element)
 
     return () => observer.disconnect()
   }, [])
@@ -200,16 +210,57 @@ export function RentalItemsGridView({
     MIN_ADAPTIVE_CARD_WIDTH,
     gridGap
   )
+  const getCardMetrics = (
+    nextColumnCount: number,
+    nextGap: number,
+    visibleRows: number
+  ) => {
+    const columnWidth = Math.max(
+      0,
+      (dimensions.width - nextGap * (nextColumnCount - 1)) / nextColumnCount
+    )
+    const compactness = Math.max(nextColumnCount, visibleRows)
+    const detailedDescription = columnWidth >= 220 && compactness <= 3
+    const minimumDescriptionHeight = detailedDescription
+      ? 92
+      : columnWidth >= 176
+        ? 48
+        : 32
+    const photoHeight = Math.ceil(columnWidth)
+    const rowHeight = Math.max(
+      MIN_CARD_HEIGHT,
+      photoHeight + minimumDescriptionHeight
+    )
+
+    return {
+      columnWidth,
+      compactness,
+      detailedDescription,
+      photoHeight,
+      rowHeight,
+    }
+  }
+
   let rowCount = Math.ceil(items.length / columnCount)
+  let cardMetrics = getCardMetrics(
+    columnCount,
+    gridGap,
+    requestedVisibleRowCount
+  )
   let gridHeight = autoHeight
-    ? getAutoGridHeight(rowCount, requestedVisibleRowCount, gridGap)
+    ? getAutoGridHeight(
+        rowCount,
+        requestedVisibleRowCount,
+        gridGap,
+        cardMetrics.rowHeight
+      )
     : dimensions.height
   let visibleRowCount = limitCountBySize(
     autoHeight
       ? Math.min(Math.max(rowCount, 1), requestedVisibleRowCount)
       : requestedVisibleRowCount,
     gridHeight,
-    MIN_ADAPTIVE_CARD_HEIGHT,
+    cardMetrics.rowHeight,
     gridGap
   )
   gridGap = getGridGap(Math.max(columnCount, visibleRowCount))
@@ -220,37 +271,32 @@ export function RentalItemsGridView({
     gridGap
   )
   rowCount = Math.ceil(items.length / columnCount)
+  cardMetrics = getCardMetrics(columnCount, gridGap, visibleRowCount)
   gridHeight = autoHeight
-    ? getAutoGridHeight(rowCount, requestedVisibleRowCount, gridGap)
+    ? getAutoGridHeight(
+        rowCount,
+        requestedVisibleRowCount,
+        gridGap,
+        cardMetrics.rowHeight
+      )
     : dimensions.height
   visibleRowCount = limitCountBySize(
     autoHeight
       ? Math.min(Math.max(rowCount, 1), requestedVisibleRowCount)
       : requestedVisibleRowCount,
     gridHeight,
-    MIN_ADAPTIVE_CARD_HEIGHT,
+    cardMetrics.rowHeight,
     gridGap
   )
-  const compactness = Math.max(columnCount, visibleRowCount)
-  const columnWidth = dimensions.width / columnCount
-  const rowHeight = Math.max(
-    MIN_CARD_HEIGHT,
-    Math.floor((gridHeight - gridGap * (visibleRowCount - 1)) / visibleRowCount)
-  )
+  cardMetrics = getCardMetrics(columnCount, gridGap, visibleRowCount)
+  const {
+    columnWidth,
+    compactness,
+    detailedDescription,
+    photoHeight,
+    rowHeight,
+  } = cardMetrics
   const virtualRowHeight = rowHeight + gridGap
-  const detailedDescription = columnWidth >= 220 && compactness <= 3
-  const minimumDescriptionHeight = detailedDescription
-    ? 92
-    : columnWidth >= 176
-      ? 48
-      : 32
-  const photoHeight = Math.max(
-    0,
-    Math.min(
-      Math.floor(rowHeight * CARD_PHOTO_RATIO),
-      rowHeight - minimumDescriptionHeight
-    )
-  )
   const descriptionHeight = rowHeight - photoHeight
   const showStatus = descriptionHeight >= 44 && columnWidth >= 176
   const showDescription = descriptionHeight >= 32
@@ -273,7 +319,7 @@ export function RentalItemsGridView({
       ref={parentRef}
       data-grid-format={`${columnCount}x${visibleRowCount}`}
       className={cn(
-        "min-w-0 overflow-auto",
+        "min-w-0 overflow-auto [scrollbar-gutter:stable]",
         autoHeight ? "" : "min-h-0 flex-1"
       )}
       style={autoHeight ? { height: `${gridHeight}px` } : undefined}
@@ -306,10 +352,7 @@ export function RentalItemsGridView({
                     key={item.id}
                     className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border bg-card"
                   >
-                    <div
-                      className="relative shrink-0 overflow-hidden"
-                      style={{ height: `${photoHeight}px` }}
-                    >
+                    <div className="relative aspect-square w-full shrink-0 overflow-hidden">
                       <RentalItemCardPhoto
                         item={item}
                         accessToken={accessToken}

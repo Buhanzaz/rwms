@@ -19,6 +19,7 @@ const document: ShipmentDocument = {
   id: DOCUMENT_ID,
   version: 4,
   documentType: "SHIPMENT",
+  customerDeliveryPurpose: "RENTAL_DELIVERY",
   state: "DRAFT",
   warehouseId: WAREHOUSE_ID,
   destinationWarehouseId: null,
@@ -63,9 +64,18 @@ const planLines = [
 ]
 
 function json(value: unknown, status = 200) {
+  const paginationHeaders: Record<string, string> = Array.isArray(value)
+    ? {
+        "X-RWMS-Page": "0",
+        "X-RWMS-Page-Size": "100",
+        "X-RWMS-Total-Elements": String(value.length),
+        "X-RWMS-Total-Pages": value.length === 0 ? "0" : "1",
+        "X-RWMS-Has-Next": "false",
+      }
+    : {}
   return new Response(JSON.stringify(value), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...paginationHeaders },
   })
 }
 
@@ -80,9 +90,9 @@ describe("HttpShipmentClient", () => {
     vi.stubGlobal("fetch", fetchMock)
     const client = new HttpShipmentClient()
 
-    await expect(client.list("shipment-token", WAREHOUSE_ID)).resolves.toEqual([
-      document,
-    ])
+    await expect(
+      client.list("shipment-token", WAREHOUSE_ID, "2026-07-18")
+    ).resolves.toEqual([document])
     await expect(client.get("shipment-token", DOCUMENT_ID)).resolves.toEqual(
       document
     )
@@ -92,6 +102,9 @@ describe("HttpShipmentClient", () => {
     expect(listUrl.origin).toBe(window.location.origin)
     expect(listUrl.pathname).toBe("/api/logistics/v1/shipments")
     expect(listUrl.searchParams.get("warehouseId")).toBe(WAREHOUSE_ID)
+    expect(listUrl.searchParams.get("scheduledDate")).toBe("2026-07-18")
+    expect(listUrl.searchParams.get("page")).toBe("0")
+    expect(listUrl.searchParams.get("size")).toBe("100")
     expect(detailUrl.pathname).toBe(
       `/api/logistics/v1/shipments/${DOCUMENT_ID}`
     )
@@ -379,6 +392,15 @@ describe("HttpShipmentClient", () => {
       .mockResolvedValueOnce(json([{ ...document, documentType: "RETURN" }]))
       .mockResolvedValueOnce(json([{ ...document, partySnapshot: null }]))
       .mockResolvedValueOnce(json([{ ...document, state: "FINALIZING" }]))
+      .mockResolvedValueOnce(
+        json([{ ...document, customerDeliveryPurpose: null }])
+      )
+      .mockResolvedValueOnce(
+        json([{ ...document, customerDeliveryPurpose: "TRANSFER" }])
+      )
+      .mockResolvedValueOnce(
+        json([{ ...document, customerDeliveryPurpose: undefined }])
+      )
       .mockResolvedValueOnce(json([{ ...document, lines: [] }]))
       .mockResolvedValueOnce(
         json([
@@ -409,7 +431,7 @@ describe("HttpShipmentClient", () => {
     vi.stubGlobal("fetch", fetchMock)
     const client = new HttpShipmentClient()
 
-    for (let index = 0; index < 6; index += 1) {
+    for (let index = 0; index < 9; index += 1) {
       await expect(client.list("shipment-token", WAREHOUSE_ID)).rejects.toThrow(
         "Сервис логистики вернул некорректную отгрузку"
       )

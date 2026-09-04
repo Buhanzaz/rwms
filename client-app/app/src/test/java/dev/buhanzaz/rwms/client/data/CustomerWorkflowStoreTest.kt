@@ -58,6 +58,21 @@ class CustomerWorkflowStoreTest {
     }
 
     @Test
+    fun `pending operation ledger is bounded without evicting unresolved keys`() = runTest {
+        val first = store.beginIdempotentOperation("operation-0")
+        repeat(MAX_PENDING_CUSTOMER_IDEMPOTENCY_OPERATIONS - 1) { index ->
+            store.beginIdempotentOperation("operation-${index + 1}")
+        }
+
+        val rejected = runCatching {
+            store.beginIdempotentOperation("operation-overflow")
+        }.exceptionOrNull()
+
+        assertThat(rejected).isInstanceOf(CustomerApiException::class.java)
+        assertThat(store.beginIdempotentOperation("operation-0")).isEqualTo(first)
+    }
+
+    @Test
     fun `terminal inquiry restart preserves warehouse preference and rotates create identity`() = runTest {
         val warehouseId = UUID.randomUUID().toString()
         val firstInquiryId = UUID.randomUUID().toString()

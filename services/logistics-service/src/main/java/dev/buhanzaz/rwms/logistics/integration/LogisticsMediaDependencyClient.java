@@ -345,6 +345,110 @@ final class LogisticsMediaDependencyClient {
     }
   }
 
+  ContractorEvidenceMediaReceipt uploadContractorTaskEvidence(
+      UUID warehouseId,
+      UUID workerId,
+      UUID entryId,
+      UUID evidenceId,
+      String contentType,
+      String sha256,
+      byte[] bytes) {
+    if (warehouseId == null
+        || workerId == null
+        || entryId == null
+        || evidenceId == null
+        || !("image/jpeg".equals(contentType) || "image/webp".equals(contentType))
+        || bytes == null
+        || bytes.length == 0
+        || bytes.length > ("image/jpeg".equals(contentType) ? 15_728_640 : 1_048_576)
+        || sha256 == null
+        || !sha256.matches("^[0-9a-f]{64}$")) {
+      throw new IllegalArgumentException("Contractor evidence media upload is invalid");
+    }
+    String uri =
+        UriComponentsBuilder.fromUriString(
+                mediaBase
+                    + "/logistics/contractor-task-executions/"
+                    + entryId
+                    + "/workers/"
+                    + workerId
+                    + "/evidence/"
+                    + evidenceId)
+            .queryParam("warehouseId", warehouseId)
+            .build()
+            .encode()
+            .toUriString();
+    ContractorTaskEvidenceReceipt response =
+        transport.postBytes(
+            uri,
+            evidenceId,
+            sha256,
+            contentType,
+            bytes,
+            ContractorTaskEvidenceReceipt.class,
+            MEDIA_CLIENT,
+            MEDIA_SCOPE,
+            "Media-service returned an empty contractor evidence receipt",
+            DEFAULT);
+    if (response == null
+        || response.mediaId() == null
+        || response.generation() < 0
+        || !Set.of("PROCESSING", "READY", "FAILED").contains(response.status())
+        || ("PROCESSING".equals(response.status()) && response.generation() != 0)
+        || ("READY".equals(response.status()) && response.generation() < 1)) {
+      throw malformed("Media-service returned an invalid contractor evidence receipt");
+    }
+    return new ContractorEvidenceMediaReceipt(
+        response.mediaId(), response.generation(), response.status());
+  }
+
+  MediaContent readContractorTaskMedia(
+      UUID warehouseId,
+      UUID workerId,
+      UUID entryId,
+      UUID mediaId,
+      long generation,
+      String variant) {
+    if (warehouseId == null
+        || workerId == null
+        || entryId == null
+        || mediaId == null
+        || generation < 1
+        || !Set.of("SMALL", "MEDIUM", "LARGE").contains(variant)) {
+      throw new IllegalArgumentException("Contractor task media identity is invalid");
+    }
+    String uri =
+        UriComponentsBuilder.fromUriString(
+                mediaBase
+                    + "/logistics/contractor-task-executions/"
+                    + entryId
+                    + "/workers/"
+                    + workerId
+                    + "/assets/"
+                    + mediaId
+                    + "/generations/"
+                    + generation
+                    + "/variants/"
+                    + variant
+                    + "/content")
+            .queryParam("warehouseId", warehouseId)
+            .build()
+            .encode()
+            .toUriString();
+    try {
+      ResponseEntity<byte[]> response = transport.getBytes(uri, MEDIA_CLIENT, MEDIA_SCOPE, DEFAULT);
+      if (response.getBody() == null
+          || response.getBody().length == 0
+          || response.getHeaders().getContentType() == null
+          || !"image/webp".equals(response.getHeaders().getContentType().toString())) {
+        throw malformed("Media-service returned invalid contractor task media content");
+      }
+      return new MediaContent(response.getBody(), "image/webp");
+    } catch (RuntimeException exception) {
+      throw defaultFailure(exception);
+    }
+  }
+
   /** Media identifier pinned to the exact generation that logistics intends to consume. */
   private record MediaReferenceRequest(UUID mediaId, long generation) {}
 
@@ -469,4 +573,8 @@ final class LogisticsMediaDependencyClient {
 
   /** Batch wrapper for cabin media snapshots returned by media-service. */
   private record CabinMediaSnapshotsResponse(List<CabinMediaSnapshotResponse> items) {}
+
+  /** Opaque media-service outcome for one exact contractor evidence byte stream. */
+  private record ContractorTaskEvidenceReceipt(
+      UUID mediaId, long generation, String status) {}
 }

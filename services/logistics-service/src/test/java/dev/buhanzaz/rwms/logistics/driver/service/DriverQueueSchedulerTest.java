@@ -1,10 +1,10 @@
 package dev.buhanzaz.rwms.logistics.driver.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -19,6 +19,7 @@ import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
+import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -271,11 +272,6 @@ class DriverQueueSchedulerTest {
     LogisticsDependencyGateway.DriverBoardTask unpinnedCurrent =
         current(boardTask(unpinnedTask, today, 1), 1, false);
     when(tasks.findById(returned.getId())).thenReturn(Optional.of(returned));
-    when(
-            tasks
-                .findAllByWarehouseIdAndStateAndManualPromotionHoldUntilAfterOrderByManualPromotionHoldUntilAscIdAsc(
-                    eq(warehouseId), eq(DriverTaskState.SCHEDULED), any(OffsetDateTime.class)))
-        .thenReturn(List.of());
     when(dependencies.readRepairPlaces(warehouseId)).thenReturn(repairPlaces(0));
     when(dependencies.readDriverTask(returned.getExternalTaskId()))
         .thenReturn(returnedScheduled, returnedScheduled);
@@ -429,96 +425,47 @@ class DriverQueueSchedulerTest {
   }
 
   @Test
-  void manualRemovalHoldPreventsRelayFromImmediatelyRefillingCurrentLane() {
+  void legacyReleaseMarkerDoesNotDelayAutomaticRefill() {
     DriverLogisticsTask inbound = scheduledTask(DriverTaskKind.DELIVER_TO_REPAIR);
     LogisticsDependencyGateway.DriverBoardTask inboundBoard = boardTask(inbound, today, 0);
     configureBoard(List.of(inboundBoard));
     configureLocal(inbound);
     when(dependencies.readRepairPlaces(warehouseId)).thenReturn(repairPlaces(1));
+    LogisticsDependencyGateway.RepairPlaceAllocation reservation =
+        allocation(inbound, "RESERVED", 0);
+    when(dependencies.transitionRepairPlace(
+            any(), eq(warehouseId), eq(inbound.getRepairId()), eq(0L), eq("reserve")))
+        .thenReturn(reservation);
+    when(dependencies.setDriverTaskLane(
+            inbound.getExternalTaskId(), inboundBoard.taskVersion(), "CURRENT"))
+        .thenReturn(current(inboundBoard));
     when(tasks.existsByWarehouseIdAndStateAndManualPromotionHoldUntilAfter(
             eq(warehouseId), eq(DriverTaskState.SCHEDULED), any(OffsetDateTime.class)))
         .thenReturn(true);
 
     scheduler.reconcileAndPromote(warehouseId);
 
-    verify(dependencies, never()).setDriverTaskLane(any(), any(Long.class), any());
-    verify(dependencies, never())
-        .moveDriverTask(any(), any(Long.class), any(Long.class), any(), any(), anyInt());
-    verify(dependencies, never())
-        .transitionRepairPlace(any(), any(), any(), any(Long.class), any());
+    verify(dependencies)
+        .setDriverTaskLane(
+            inbound.getExternalTaskId(), inboundBoard.taskVersion(), "CURRENT");
+    verify(tasks, never())
+        .existsByWarehouseIdAndStateAndManualPromotionHoldUntilAfter(
+            eq(warehouseId), eq(DriverTaskState.SCHEDULED), any(OffsetDateTime.class));
   }
 
   @Test
-  void explicitPromotionReleasesExactlyOneManualHoldBeforeUsingTheFreedPlace() {
-    DriverLogisticsTask held = scheduledTask(DriverTaskKind.DELIVER_TO_REPAIR);
-    UUID heldAllocationId = UUID.randomUUID();
-    held.reserveRepairPlace(heldAllocationId, 0);
-    held.moveToCurrent(1, held.getTaskBoardEntryId(), "WAITING");
-    held.observeBoardTask(
-        held.getTaskBoardTaskId(),
-        2,
-        held.getTaskBoardEntryId(),
-        "WAITING",
-        today.plusDays(1),
-        "SCHEDULED",
-        "ACTIVE",
-        null);
-    held.markManualPromotionHold(5);
+  void pendingReservationReleaseMustFinishBeforeThatTaskCanBePromotedAgain() {
+    DriverLogisticsTask task = scheduledTask(DriverTaskKind.DELIVER_TO_REPAIR);
+    task.reserveRepairPlace(UUID.randomUUID(), 0);
+    task.markRepairPlaceReleasePending();
+    when(tasks.findById(task.getId())).thenReturn(Optional.of(task));
 
-    DriverLogisticsTask secondHeld = scheduledTask(DriverTaskKind.REMOVE_FROM_REPAIR);
-    secondHeld.moveToCurrent(1, secondHeld.getTaskBoardEntryId(), "WAITING");
-    secondHeld.observeBoardTask(
-        secondHeld.getTaskBoardTaskId(),
-        2,
-        secondHeld.getTaskBoardEntryId(),
-        "WAITING",
-        today.plusDays(1),
-        "SCHEDULED",
-        "ACTIVE",
-        null);
-    secondHeld.markManualPromotionHold(5);
+    assertThatThrownBy(() -> scheduler.promoteRequested(task.getId()))
+        .isInstanceOf(LogisticsConflictException.class)
+        .hasMessageContaining("еще не подтверждено");
 
-    DriverLogisticsTask replacement = scheduledTask(DriverTaskKind.DELIVER_TO_REPAIR);
-    LogisticsDependencyGateway.DriverBoardTask replacementBoard =
-        boardTask(replacement, today, 0);
-    configureBoard(List.of(replacementBoard));
-    configureLocal(held, replacement);
-    when(tasks.findById(held.getId())).thenReturn(Optional.of(held));
-    when(tasks.findById(replacement.getId())).thenReturn(Optional.of(replacement));
-    when(tasks
-            .findAllByWarehouseIdAndStateAndManualPromotionHoldUntilAfterOrderByManualPromotionHoldUntilAscIdAsc(
-                eq(warehouseId), eq(DriverTaskState.SCHEDULED), any(OffsetDateTime.class)))
-        .thenReturn(List.of(held, secondHeld));
-    doAnswer(
-            invocation -> {
-              UUID processed = invocation.getArgument(0);
-              if (held.getId().equals(processed)) {
-                held.releaseRepairPlaceReservation(heldAllocationId, 1);
-              }
-              return 1;
-            })
-        .when(processor)
-        .processUntilIdle(any());
-
-    LogisticsDependencyGateway.RepairPlaceProjection places = repairPlaces(1);
-    LogisticsDependencyGateway.RepairPlaceAllocation replacementReservation =
-        allocation(replacement, "RESERVED", 0);
-    when(dependencies.readRepairPlaces(warehouseId)).thenReturn(places);
-    when(dependencies.transitionRepairPlace(
-            any(), eq(warehouseId), eq(replacement.getRepairId()), eq(0L), eq("reserve")))
-        .thenReturn(replacementReservation);
-    when(dependencies.setDriverTaskLane(
-            replacement.getExternalTaskId(), replacementBoard.taskVersion(), "CURRENT"))
-        .thenReturn(current(replacementBoard));
-
-    scheduler.promoteRequested(replacement.getId());
-
-    assertThat(held.hasManualPromotionHold()).isFalse();
-    assertThat(secondHeld.hasManualPromotionHold()).isTrue();
-    verify(tasks).saveAndFlush(held);
-    verify(dependencies)
-        .setDriverTaskLane(
-            replacement.getExternalTaskId(), replacementBoard.taskVersion(), "CURRENT");
+    verify(dependencies, never()).readRepairPlaces(warehouseId);
+    verify(dependencies, never()).readDriverTask(task.getExternalTaskId());
   }
 
   private DriverLogisticsTask scheduledTask(DriverTaskKind kind) {
@@ -653,7 +600,6 @@ class DriverQueueSchedulerTest {
     return new LogisticsDependencyGateway.RepairPlaceProjection(
         warehouseId,
         capacity,
-        5,
         reserved,
         occupied,
         ready,

@@ -93,13 +93,15 @@ Link receiver. Both client IDs select the worker credential login surface.
 ClientApp first obtains a CSRF cookie/header pair from `GET /api/auth/csrf` and
 submits `POST /api/customer/v1/registrations`. Registration creates one active
 `CUSTOMER` user, its private encoded credential, initial authorization fact,
-and outbox row atomically. The account has no warehouse grants, manager-mobile
+and outbox row atomically. Before password hashing, auth-service consumes both
+a durable per-source and a durable global fixed-window registration budget.
+The account has no warehouse grants, manager-mobile
 access, or rental-manager entitlement. It can use only `rwms-customer-android`,
 whose query-free HTTPS callback is `/auth/customer/callback` and whose only
 business scope is `customer.rental`; other users cannot use that client.
 
 User access and ID tokens include the canonical claims `sub`,
-`preferred_username`, `principal_type=USER`, `global_role`, and camel-case
+`preferred_username`, `principal_type=USER`, immutable `company_id`, `global_role`, and camel-case
 `rentalAccess`, plus the managed `client_id` that minted the token. The public
 contract, not this README, is authoritative for the exact claim and endpoint
 shape.
@@ -115,6 +117,10 @@ authorization endpoints are standards-based.
 | --- | --- | --- |
 | `GET /api/auth/csrf` | Bootstrap the registration CSRF cookie/header pair | Anonymous read. |
 | `POST /api/customer/v1/registrations` | Create a customer-only credential and authorization stream | Anonymous with the exact CSRF cookie/header pair; login 3–64 portable characters, password 8–128 characters, and matching confirmation. |
+| `GET /api/admin/companies` | List visible companies | `SYSTEM_ADMIN` sees all companies; `WMS_ADMIN` sees only its own company. |
+| `POST /api/admin/companies` | Create a company boundary | `SYSTEM_ADMIN` only. |
+| `GET /api/admin/companies/{id}` | Read one visible company | `SYSTEM_ADMIN`, or a `WMS_ADMIN` from that company. |
+| `PUT /api/admin/companies/{id}` | Version-fenced company update | Same visibility rule; `expectedVersion` is required. |
 | `GET /api/admin/users` | List administrable users | USER JWT with `SYSTEM_ADMIN` or `WMS_ADMIN`. |
 | `POST /api/admin/users` | Create an administrable user | Same role; only `SYSTEM_ADMIN` may create a `SYSTEM_ADMIN` account. |
 | `GET /api/admin/users/{id}` | Read one administrative user projection | USER JWT with `SYSTEM_ADMIN` or `WMS_ADMIN`. |
@@ -122,7 +128,9 @@ authorization endpoints are standards-based.
 | `GET /api/users/me` | Read the active caller's current access projection | USER Bearer JWT. |
 
 The service returns shared Problem Details for invalid, unauthenticated,
-forbidden, not-found, and conflict cases. Administrative user profile, password,
+forbidden, not-found, conflict, and registration-rate-limit cases. A registration
+`429` includes `Retry-After`; a missing throttle database fails closed instead
+of spending password-hash capacity. Administrative user profile, password,
 and warehouse-access mutations use optimistic concurrency. A `409` means the
 caller must refresh authoritative state before retrying its command.
 
@@ -153,11 +161,18 @@ update preserves its current persisted value.
 - Incoming names cannot collide with reserved OAuth client identifiers.
 - Case-insensitive self-registration of one login is serialized with a
   transaction-scoped advisory lock before password hashing and unique writes.
-  The stateless gateway does not implement source-address rate limiting;
-  production ingress must provide abuse throttling before anonymous
-  registration is enabled.
+  Independently, auth-service atomically enforces configurable per-source and
+  global fixed-window budgets before hashing. It stores only a SHA-256 source
+  key, expires old counters, returns Russian Problem Details with `Retry-After`
+  on `429`, and records rejection/unavailable metrics. Production ingress rate
+  limiting remains defence in depth rather than the only protection.
 - `CUSTOMER` users and `rwms-customer-android` are mutually exclusive with all
   other user clients during authorization-code and refresh-token exchange.
+- `RENTAL_MANAGER` users can mint interactive tokens only through
+  `rwms-rental-manager-web` or `rwms-rental-manager-android`. Both clients have
+  only `rental.manage`; they cannot mint panel, logistics, or administration
+  tokens. `rwms-admin-web` is restricted to `SYSTEM_ADMIN` and `WMS_ADMIN` and
+  has only `admin.manage`.
 
 These rules put durable access invariants where the credential and token owner
 can enforce them transactionally, rather than relying on UI checks or every
@@ -181,12 +196,14 @@ This is preferable to recreating clients at every startup: stable client IDs
 preserve valid state, while a deliberate revision makes security changes
 reviewable and prevents accidental reactivation after a deployment rollback.
 
-The managed mobile inventory includes the USER-only manager client, the
-CUSTOMER-only ClientApp client, and the two WORKER-only WorkerApp/DriverApp
-clients above. The customer client requires S256 PKCE, a five-minute access
-token and a rotating 30-day refresh token. Changing a callback, scope, or
-principal type requires its own revision and coordinated client release; one
-mobile client's refresh token cannot be exchanged through another client ID.
+The managed interactive inventory keeps the existing operations-manager client,
+the dedicated rental-manager web and Android clients, the administration web
+client, the CUSTOMER-only ClientApp client, and the two WORKER-only
+WorkerApp/DriverApp clients separate. Dedicated clients require S256 PKCE, a
+five-minute access token and a rotating 30-day refresh token. Changing a
+callback, scope, or principal type requires its own revision and coordinated
+client release; one client's refresh token cannot be exchanged through another
+client ID.
 
 The managed `inventory-service` machine client requests exactly one downstream
 scope per token. Revision 5 added `media.inventory` for the completed-inventory
@@ -194,6 +211,12 @@ cabin-photo hand-off; revision 6 adds only `logistics.inventory` for authoritati
 plan-wide supersession of logistics work. Every token keeps subject and `client_id`
 equal to `inventory-service` and the `rwms-services` audience. Asset, maintenance,
 media, logistics and warehouse scopes remain separate token requests.
+
+The managed `asset-service` machine client revision 5 adds the existing
+`media.asset` scope for an exact private READY-photo proof used by durable cabin
+creation. It retains the separate `media.asset-import` scope for HTML-import
+media; each downstream call still requests exactly one scope and keeps
+`asset-service` as both subject and `client_id`.
 
 The managed `task-board-service` machine client revision 4 adds only
 `warehouse.identity.read` so the Driver Up shift owner can resolve the current warehouse name,

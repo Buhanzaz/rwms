@@ -15,6 +15,8 @@ import dev.buhanzaz.rwms.driver.core.database.DriverTaskEntity
 import dev.buhanzaz.rwms.driver.core.network.AuthenticatedGatewayMonitor
 import dev.buhanzaz.rwms.driver.core.network.DriverKpiPaletteDto
 import dev.buhanzaz.rwms.driver.core.sync.DriverSyncScheduler
+import dev.buhanzaz.rwms.driver.core.sync.DriverWarehouseClock
+import java.time.LocalDate
 import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -42,6 +44,8 @@ data class TasksUiState(
     val progress: DriverSyncProgressEntity? = null,
     val online: Boolean = false,
     val kpiPalette: DriverKpiPaletteDto? = null,
+    /** Server-anchored date in the assigned warehouse timezone; null keeps dated work closed. */
+    val warehouseDate: LocalDate? = null,
 )
 
 /** Groups the authorization-filtered Room streams used by the board projection. */
@@ -65,6 +69,7 @@ private data class BoardOwnershipProjection(
 private data class TaskProjection(
     val visible: VisibleTaskProjection,
     val progress: DriverSyncProgressEntity?,
+    val warehouseDate: LocalDate? = null,
 )
 
 @HiltViewModel
@@ -75,6 +80,7 @@ private data class TaskProjection(
 class TasksViewModel @Inject constructor(
     private val localStore: DriverLocalStore,
     private val scheduler: DriverSyncScheduler,
+    private val warehouseClock: DriverWarehouseClock,
     private val gatewayMonitor: AuthenticatedGatewayMonitor,
     private val json: Json,
 ) : ViewModel() {
@@ -106,6 +112,8 @@ class TasksViewModel @Inject constructor(
             visible.copy(groups = ownership.groups, assignments = ownership.assignments)
         }.combine(localStore.observeProgress(id)) { visible, progress ->
             TaskProjection(visible, progress)
+        }.combine(warehouseClock.observeDate(id)) { projection, warehouseDate ->
+            projection.copy(warehouseDate = warehouseDate)
         }.combine(gatewayMonitor.state) { projection, gateway ->
             TasksUiState(
                 session = projection.visible.session,
@@ -120,6 +128,7 @@ class TasksViewModel @Inject constructor(
                 kpiPalette = projection.visible.session?.kpiPaletteJson?.let { encoded ->
                     runCatching { json.decodeFromString<DriverKpiPaletteDto>(encoded) }.getOrNull()
                 },
+                warehouseDate = projection.warehouseDate,
             )
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TasksUiState())

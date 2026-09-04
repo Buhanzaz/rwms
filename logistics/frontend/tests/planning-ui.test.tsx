@@ -1,7 +1,9 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type * as ApiClientModule from '../src/api/client';
 import { EMPTY_METRICS } from '../src/domain/defaults';
 import type { RoutePlan, SimulationDerivedState, WarehouseWorkspace } from '../src/domain/types';
 import { PlanPanel } from '../src/features/planning/PlanPanel';
@@ -10,7 +12,43 @@ import { Inspector } from '../src/app/Inspector';
 import { Sidebar } from '../src/app/Sidebar';
 import { EmptyPositioningConfirmDialog } from '../src/components/EntityDialogs';
 import { useUiStore } from '../src/stores/ui-store';
-import { requestFixture, workspaceFixture as baseWorkspaceFixture } from './fixtures';
+import { App } from '../src/app/App';
+import { requestFixture, warehouseFixture, workspaceFixture as baseWorkspaceFixture } from './fixtures';
+
+const appApiMocks = vi.hoisted(() => ({
+  ensureAutomaticPlan: vi.fn(),
+  getPlanningDayStatus: vi.fn(),
+  getWarehouseWorkspace: vi.fn(),
+  listAvailableWarehouses: vi.fn(),
+  listWarehouses: vi.fn(),
+}));
+
+vi.mock('../src/api/client', async () => {
+  const actual = await vi.importActual<typeof ApiClientModule>('../src/api/client');
+  return {
+    ...actual,
+    getWarehouseWorkspace: appApiMocks.getWarehouseWorkspace,
+    api: {
+      ...actual.api,
+      ensureAutomaticPlan: appApiMocks.ensureAutomaticPlan,
+      getPlanningDayStatus: appApiMocks.getPlanningDayStatus,
+      listAvailableWarehouses: appApiMocks.listAvailableWarehouses,
+      listWarehouses: appApiMocks.listWarehouses,
+    },
+  };
+});
+
+vi.mock('../src/map/MapCanvas', () => ({
+  MapCanvas: () => <div data-testid="map-canvas" />,
+}));
+
+vi.mock('../src/features/operations/OperationsPanel', () => ({
+  OperationsPanel: () => (
+    <section aria-label="Динамические операции дня">
+      <h2>Операции дня</h2>
+    </section>
+  ),
+}));
 
 function planFixture(): RoutePlan {
   return {
@@ -63,6 +101,7 @@ function inspectorProps(plan: RoutePlan, simulation: SimulationDerivedState): Co
     onSaveSettings: () => Promise.resolve(),
     onCreateTransfer: () => undefined,
     onAssignContractor: () => undefined,
+    onRescheduleUnassigned: () => undefined,
     onDispatchContractor: () => Promise.resolve(),
     onConfirmPlan: () => undefined,
     onResetManualChanges: () => undefined,
@@ -71,16 +110,68 @@ function inspectorProps(plan: RoutePlan, simulation: SimulationDerivedState): Co
     onPlanningDateChange: () => undefined,
     onSaveRequestPlanning: () => Promise.resolve(),
     onSplitRequest: () => Promise.resolve(),
+    loadingMoreRequests: false,
+    onLoadMoreRequests: () => Promise.resolve(),
     inspectorWidth: 420,
     onInspectorWidthChange: () => undefined,
   };
 }
 
 afterEach(() => {
-  useUiStore.setState({ mode: 'PLAN_DAY', section: 'WAREHOUSE' });
+  useUiStore.setState({ mode: 'PLAN_DAY', section: 'WAREHOUSE', shiftVisibility: 'ACTIVE' });
+  window.localStorage.removeItem('rwms:logistics:presentation:v1');
+  vi.useRealTimers();
+  vi.clearAllMocks();
 });
 
 describe('application shell', () => {
+  it('waits for the warehouse-local date before loading or creating a plan', async () => {
+    vi.setSystemTime('2026-08-31T20:30:00Z');
+    const warehouse = warehouseFixture({ timezone: 'Asia/Novosibirsk' });
+    const workspace = baseWorkspaceFixture({
+      warehouse,
+      warehouses: [warehouse],
+      planning_date: '2026-09-01',
+      requests: [],
+    });
+    appApiMocks.listWarehouses.mockResolvedValue([warehouse]);
+    appApiMocks.listAvailableWarehouses.mockResolvedValue([]);
+    appApiMocks.getWarehouseWorkspace.mockResolvedValue(workspace);
+    appApiMocks.ensureAutomaticPlan.mockResolvedValue(null);
+    appApiMocks.getPlanningDayStatus.mockResolvedValue({
+      warehouse_id: warehouse.id,
+      date: '2026-09-01',
+      accepting_requests: true,
+      closed_at: null,
+      closed_by: null,
+      plan_id: null,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(appApiMocks.ensureAutomaticPlan).toHaveBeenCalled());
+    expect(appApiMocks.getWarehouseWorkspace).toHaveBeenCalledWith(
+      warehouse.id,
+      expect.objectContaining({ planningDate: '2026-09-01' }),
+    );
+    expect(appApiMocks.getWarehouseWorkspace).not.toHaveBeenCalledWith(
+      warehouse.id,
+      expect.objectContaining({ planningDate: '2026-08-31' }),
+    );
+    expect(
+      appApiMocks.ensureAutomaticPlan.mock.calls.every(
+        (call) => call[1] === '2026-09-01',
+      ),
+    ).toBe(true);
+  });
+
   it('keeps implementation-provider text out of the working sidebar', () => {
     render(<Sidebar workspace={workspaceFixture()} plan={null} />);
 
@@ -90,6 +181,26 @@ describe('application shell', () => {
     expect(screen.queryByRole('button', { name: /Маршруты/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Свернуть|Развернуть/ })).not.toBeInTheDocument();
     expect(screen.queryByText('Рабочая область')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Операции дня' })).not.toBeInTheDocument();
+  });
+
+  it('embeds dynamic operations into the existing planning-day section', () => {
+    const simulation: SimulationDerivedState = {
+      timestamp: '2026-08-25T05:45:00Z',
+      vehicles: [],
+      events: [],
+      completed_stop_ids: [],
+      active_stop_ids: [],
+      affected_task_ids: [],
+      warnings: [],
+    };
+    useUiStore.setState({ mode: 'PLAN_DAY', section: 'PLAN_DAY' });
+
+    render(<Inspector {...inspectorProps(planFixture(), simulation)} />);
+
+    expect(screen.getByRole('heading', { name: /План на/u })).toBeVisible();
+    expect(screen.getByRole('region', { name: 'Динамические операции дня' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Операции дня' })).toBeVisible();
   });
 
   it('keeps only the supported warehouse actions in one equal row', () => {
@@ -123,11 +234,9 @@ describe('application shell', () => {
     const view = render(<Inspector {...props} />);
 
     act(() => useUiStore.setState({ section: 'VEHICLES' }));
-    expect(screen.getByText('Машины не созданы')).toBeVisible();
-    expect(screen.getByText('Прицепы не созданы')).toBeVisible();
-    const trailerDescription = screen.getByText(/Прицеп не исчезает после разгрузки/);
-    const trailerButton = screen.getByRole('button', { name: 'Добавить прицеп' });
-    expect(trailerDescription.compareDocumentPosition(trailerButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText('Транспорт не добавлен')).toBeVisible();
+    expect(screen.getByText('Прицепы не добавлены')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Добавить прицеп' })).toBeVisible();
 
     act(() => useUiStore.setState({ section: 'SHIFTS' }));
     expect(screen.getByText('Смены не добавлены')).toBeVisible();
@@ -140,7 +249,8 @@ describe('application shell', () => {
     expect(screen.getByText('Нераспределённых заданий нет')).toBeVisible();
   });
 
-  it('shows four truthful shift states for the selected planning date', () => {
+  it('groups shifts into active, completed, and archived tabs', async () => {
+    const user = userEvent.setup();
     const simulation: SimulationDerivedState = { timestamp: '2026-08-25T05:45:00Z', vehicles: [], events: [], completed_stop_ids: [], active_stop_ids: [], affected_task_ids: [], warnings: [] };
     const props = inspectorProps(planFixture(), simulation);
     const shift = props.workspace.shifts[0]!;
@@ -155,24 +265,109 @@ describe('application shell', () => {
 
     expect(screen.getByText('активна')).toBeVisible();
     expect(screen.getByText('запланирована')).toBeVisible();
+    expect(screen.queryByText('завершена')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Завершённые' }));
     expect(screen.getByText('завершена')).toBeVisible();
-    expect(screen.getByText('неактивна')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Архив' }));
+    expect(screen.getByText('в архиве')).toBeVisible();
   });
 
-  it('opens the existing request editor when an unassigned time window can change that day', async () => {
+  it('filters active and archived shifts and persists the selected filter', async () => {
+    const user = userEvent.setup();
+    const simulation: SimulationDerivedState = { timestamp: '2026-08-25T05:45:00Z', vehicles: [], events: [], completed_stop_ids: [], active_stop_ids: [], affected_task_ids: [], warnings: [] };
+    const props = inspectorProps(planFixture(), simulation);
+    const shift = props.workspace.shifts[0]!;
+    props.workspace = baseWorkspaceFixture({ shifts: [
+      { ...shift, id: 'shift-active', active: true },
+      { ...shift, id: 'shift-disabled', active: false },
+    ] });
+    act(() => useUiStore.setState({ section: 'SHIFTS', shiftVisibility: 'ACTIVE' }));
+    render(<Inspector {...props} />);
+
+    await user.click(screen.getByRole('button', { name: 'Архив' }));
+    expect(screen.getByText('в архиве')).toBeVisible();
+    expect(screen.queryByText('активна')).not.toBeInTheDocument();
+    expect(JSON.parse(window.localStorage.getItem('rwms:logistics:presentation:v1') ?? '{}')).toMatchObject({ shiftVisibility: 'ARCHIVED' });
+
+    await user.click(screen.getByRole('button', { name: 'Активные' }));
+    expect(screen.getByText('активна')).toBeVisible();
+    expect(screen.queryByText('в архиве')).not.toBeInTheDocument();
+  });
+
+  it('shows the actual next-day endpoint for an overnight cross-month shift', () => {
+    const simulation: SimulationDerivedState = { timestamp: '2026-08-31T20:00:00Z', vehicles: [], events: [], completed_stop_ids: [], active_stop_ids: [], affected_task_ids: [], warnings: [] };
+    const props = inspectorProps(planFixture(), simulation);
+    const shift = props.workspace.shifts[0]!;
+    props.workspace = baseWorkspaceFixture({ shifts: [{
+      ...shift,
+      date_from: '2026-08-31',
+      date_to: '2026-08-31',
+      start_time: '22:00',
+      end_time: '06:00',
+      active: true,
+    }] });
+    props.planningDate = '2026-08-31';
+    act(() => useUiStore.setState({ section: 'SHIFTS' }));
+
+    render(<Inspector {...props} />);
+
+    expect(screen.getByText(/31 августа 2026.*22:00.*01 сентября 2026.*06:00/u)).toBeVisible();
+    expect(screen.getByText(/окончание на следующий день/u)).toBeVisible();
+    expect(screen.getByText('активна')).toBeVisible();
+  });
+
+  it('separates selected, planning-root and member resources while keeping representative-local resources visible', () => {
+    const simulation: SimulationDerivedState = { timestamp: '2026-08-31T20:00:00Z', vehicles: [], events: [], completed_stop_ids: [], active_stop_ids: [], affected_task_ids: [], warnings: [] };
+    const props = inspectorProps(planFixture(), simulation);
+    const representative = { ...props.workspace.warehouse, id: 'warehouse-local', name: 'Региональный склад', representative: true };
+    const root = { ...props.workspace.warehouse, id: 'warehouse-root', name: 'Опорный склад' };
+    const member = { ...props.workspace.warehouse, id: 'warehouse-member', name: 'Склад поддержки' };
+    const driver = props.workspace.drivers[0]!;
+    props.workspace = baseWorkspaceFixture({
+      warehouse: representative,
+      planning_root_warehouse_id: root.id,
+      planning_group_warehouse_ids: [root.id, representative.id, member.id],
+      warehouses: [root, representative, member],
+      drivers: [
+        { ...driver, id: 'driver-local', warehouse_id: representative.id, name: 'Локальный водитель' },
+        { ...driver, id: 'driver-root', warehouse_id: root.id, name: 'Водитель корня' },
+        { ...driver, id: 'driver-member', warehouse_id: member.id, name: 'Водитель поддержки' },
+      ],
+      requests: [],
+    });
+    const onCreate = vi.fn();
+    props.onCreate = onCreate;
+    act(() => useUiStore.setState({ section: 'DRIVERS' }));
+
+    render(<Inspector {...props} />);
+
+    const localRegion = screen.getByRole('region', { name: 'Представительский склад Региональный склад / Санкт-Петербург: Региональный склад' });
+    expect(within(localRegion).getByText('Локальный водитель')).toBeVisible();
+    expect(within(screen.getByRole('region', { name: 'Склад Санкт-Петербург: Опорный склад' })).getByText('Водитель корня')).toBeVisible();
+    expect(within(screen.getByRole('region', { name: 'Склад поддержки: Склад поддержки' })).getByText('Водитель поддержки')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Добавить' })).not.toBeInTheDocument();
+    expect(within(localRegion).queryByRole('button', { name: 'Изменить' })).not.toBeInTheDocument();
+    expect(within(localRegion).queryByRole('button', { name: 'Удалить' })).not.toBeInTheDocument();
+    expect(onCreate).not.toHaveBeenCalled();
+  });
+
+  it('routes an unassigned time-window change to the slot-based reschedule flow', async () => {
     const user = userEvent.setup();
     const simulation: SimulationDerivedState = { timestamp: '2026-08-25T05:45:00Z', vehicles: [], events: [], completed_stop_ids: [], active_stop_ids: [], affected_task_ids: [], warnings: [] };
     const request = requestFixture({ id: 'request-5' });
     const props = inspectorProps(planFixture(), simulation);
     const onEdit = vi.fn();
+    const onRescheduleUnassigned = vi.fn();
     props.workspace = baseWorkspaceFixture({ requests: [request] });
     props.onEdit = onEdit;
+    props.onRescheduleUnassigned = onRescheduleUnassigned;
     act(() => useUiStore.setState({ section: 'UNASSIGNED' }));
     render(<Inspector {...props} />);
 
     await user.click(screen.getByRole('button', { name: 'Сменить временное окно' }));
 
-    expect(onEdit).toHaveBeenCalledWith('request', request);
+    expect(onRescheduleUnassigned).toHaveBeenCalledWith(request.id);
+    expect(onEdit).not.toHaveBeenCalled();
   });
 });
 

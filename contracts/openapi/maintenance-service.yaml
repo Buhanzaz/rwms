@@ -10,8 +10,8 @@ info:
     estimates, primary/direct repairs, reworks, acceptance, maintenance
     write-off decisions and warehouse repair-capacity settings. Estimates and
     repairs are warehouse-scoped, while one global versioned catalog owns all
-    categories, works and materials. A catalog version's warehouseId is immutable
-    creation/audit context only. Business text is service-local and
+    categories, works and materials. The public catalog boundary has no warehouse
+    selector; a retained warehouseId is immutable internal audit context only. Business text is service-local and
     is never copied to Kafka facts. Locally committed
     commands return 200 with delivery state even while downstream delivery is
     pending; they never return 202 and are never rolled back for broker outage.
@@ -32,10 +32,9 @@ paths:
       tags: [Catalog]
       operationId: listCatalogVersions
       description: >-
-        Returns the single global catalog history. warehouseId is authorization context only;
-        it never filters or clones catalog data. Requires USER, rwms.read and VIEW access.
+        Returns the single global catalog history without a warehouse selector. Requires USER
+        and rwms.read; the result never filters or clones catalog data by warehouse.
       parameters:
-        - { $ref: '#/components/parameters/WarehouseIdQuery' }
         - { $ref: '#/components/parameters/Page' }
         - { $ref: '#/components/parameters/Size' }
         - name: lifecycle
@@ -51,13 +50,12 @@ paths:
       tags: [Catalog]
       operationId: createCatalogVersion
       description: >-
-        Requires USER, rwms.write and warehouse MANAGE access. Creates the first empty global
-        ACTIVE catalog-builder version. If a global active version already exists, that same
-        version is returned idempotently for every authorized warehouse; no catalog is copied
-        for a new warehouse and no packaged or browser-owned legacy data is imported.
+        Requires a SYSTEM_ADMIN/WMS_ADMIN USER with rwms.write. Creates the first empty global
+        ACTIVE catalog-builder version without accepting a warehouse. If a global active version
+        already exists, that same version is returned idempotently; no catalog is copied and no
+        packaged or browser-owned legacy data is imported.
       parameters:
         - { $ref: '#/components/parameters/IdempotencyKey' }
-      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateCatalogRequest' } } } }
       responses:
         '201': { description: Created or replayed catalog version., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogVersion' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -67,14 +65,12 @@ paths:
   /api/maintenance/v1/catalog/versions/{id}:
     parameters:
       - { $ref: '#/components/parameters/CatalogVersionId' }
-      - { $ref: '#/components/parameters/WarehouseIdQuery' }
     put:
       tags: [Catalog]
       operationId: replaceCatalog
       description: >-
-        Atomically replaces nodes and links in the global catalog. warehouseId authorizes the
-        caller but does not select a catalog copy. Requires USER, rwms.write and warehouse EDIT
-        access. The current ACTIVE catalog and historical DRAFT versions may change
+        Atomically replaces nodes and links in the global catalog without a warehouse selector.
+        Requires a SYSTEM_ADMIN/WMS_ADMIN USER with rwms.write. The current ACTIVE catalog and historical DRAFT versions may change
         with optimistic locking; SUPERSEDED versions are immutable.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceCatalogRequest' } } } }
       responses:
@@ -89,11 +85,10 @@ paths:
   /api/maintenance/v1/catalog/versions/{id}/nodes:
     parameters:
       - { $ref: '#/components/parameters/CatalogVersionId' }
-      - { $ref: '#/components/parameters/WarehouseIdQuery' }
     get:
       tags: [Catalog]
       operationId: listCatalogNodes
-      description: Requires USER, rwms.read and warehouse VIEW access.
+      description: Requires USER and rwms.read; no warehouse selector is accepted.
       responses:
         '200':
           description: Nodes in the selected catalog version.
@@ -106,7 +101,7 @@ paths:
       tags: [Catalog]
       operationId: replaceCatalogNodes
       description: >-
-        Requires USER, rwms.write and warehouse EDIT access. The current ACTIVE catalog and
+        Requires a SYSTEM_ADMIN/WMS_ADMIN USER with rwms.write. The current ACTIVE catalog and
         historical DRAFT versions may change with optimistic locking; SUPERSEDED versions are
         immutable.
         A MATERIAL below a furnitureCategory may omit furnitureEquipment: maintenance-service then
@@ -127,11 +122,10 @@ paths:
   /api/maintenance/v1/catalog/versions/{id}/links:
     parameters:
       - { $ref: '#/components/parameters/CatalogVersionId' }
-      - { $ref: '#/components/parameters/WarehouseIdQuery' }
     get:
       tags: [Catalog]
       operationId: listCatalogLinks
-      description: Requires USER, rwms.read and warehouse VIEW access.
+      description: Requires USER and rwms.read; no warehouse selector is accepted.
       responses:
         '200':
           description: Links in the selected catalog version.
@@ -144,7 +138,7 @@ paths:
       tags: [Catalog]
       operationId: replaceCatalogLinks
       description: >-
-        Requires USER, rwms.write and warehouse EDIT access. The current ACTIVE catalog and
+        Requires a SYSTEM_ADMIN/WMS_ADMIN USER with rwms.write. The current ACTIVE catalog and
         historical DRAFT versions may change with optimistic locking; SUPERSEDED versions are
         immutable.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceCatalogLinksRequest' } } } }
@@ -159,13 +153,12 @@ paths:
   /api/maintenance/v1/catalog/versions/{id}/fork:
     parameters:
       - { $ref: '#/components/parameters/CatalogVersionId' }
-      - { $ref: '#/components/parameters/WarehouseIdQuery' }
       - { $ref: '#/components/parameters/IdempotencyKey' }
     post:
       tags: [Catalog]
       operationId: forkCatalogVersion
       description: >-
-        Requires USER, rwms.write and warehouse MANAGE access. Copies the exact immutable
+        Requires a SYSTEM_ADMIN/WMS_ADMIN USER with rwms.write. Copies the exact immutable
         catalog-builder snapshot of an ACTIVE or SUPERSEDED version into a new DRAFT using
         optimistic source expectedVersion; published source rows remain immutable.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ExpectedVersionRequest' } } } }
@@ -183,11 +176,10 @@ paths:
       operationId: listFurnitureEquipmentLinks
       description: >-
         SYSTEM_ADMIN/WMS_ADMIN only. Lists durable maintenance-owned auto-link intent,
-        retry, confirmed and reviewed terminal truth for the selected warehouse. A node UUID is
+        retry, confirmed and reviewed terminal truth globally. A node UUID is
         the permanent asset-service external reference; confirmed mappings do not depend on the
         generic idempotency retention window.
       parameters:
-        - { $ref: '#/components/parameters/WarehouseIdQuery' }
         - { $ref: '#/components/parameters/Page' }
         - { $ref: '#/components/parameters/Size' }
         - name: state
@@ -205,7 +197,6 @@ paths:
         required: true
         description: Stable maintenance catalog node UUID and asset external reference.
         schema: { type: string, format: uuid }
-      - { $ref: '#/components/parameters/WarehouseIdQuery' }
     post:
       tags: [Catalog]
       operationId: reviewFurnitureEquipmentLink
@@ -235,13 +226,12 @@ paths:
   /api/maintenance/v1/catalog/versions/{id}/activate:
     parameters:
       - { $ref: '#/components/parameters/CatalogVersionId' }
-      - { $ref: '#/components/parameters/WarehouseIdQuery' }
       - { $ref: '#/components/parameters/IdempotencyKey' }
     post:
       tags: [Catalog]
       operationId: activateCatalogVersion
       description: >-
-        Requires USER, rwms.write and warehouse MANAGE access. Before any local mutation,
+        Requires a SYSTEM_ADMIN/WMS_ADMIN USER with rwms.write. Before any local mutation,
         maintenance-service verifies global queue-definition ID/type snapshots through the
         private task-board preflight. Activation uses a global CAS, supersedes the single
         previous active version
@@ -1262,9 +1252,10 @@ paths:
       operationId: getRepairCapacitySettings
       description: >-
         Returns the warehouse repair-capacity setting. An absent setting is represented as
-        version 0 with repairPlaceCount 6, automaticRefillDelayMinutes 5 and null lifecycle
-        timestamps without persisting a row.
-        Requires USER, rwms.write and warehouse MANAGE access.
+        version 0 with repairPlaceCount 6 and null lifecycle timestamps without persisting a row.
+        Requires either USER with rwms.write and warehouse MANAGE access, or USER from the
+        dedicated rwms-admin-web client with SYSTEM_ADMIN/WMS_ADMIN and exactly one application
+        scope admin.manage after protocol scopes.
       responses:
         '200': { description: Repair-capacity setting or its non-persisted default., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairCapacitySettings' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -1274,8 +1265,10 @@ paths:
       operationId: replaceRepairCapacitySettings
       description: >-
         Creates or replaces the warehouse repair-capacity setting with strict optimistic CAS.
-        Creation is allowed only with expectedVersion 0. Requires USER, rwms.write and warehouse
-        MANAGE access.
+        Creation is allowed only with expectedVersion 0. Requires either USER with rwms.write
+        and warehouse MANAGE access, or USER from the dedicated rwms-admin-web client with
+        SYSTEM_ADMIN/WMS_ADMIN and exactly one application scope admin.manage after protocol
+        scopes.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceRepairCapacitySettingsRequest' } } } }
       responses:
         '200': { description: Persisted repair-capacity setting., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairCapacitySettings' } } } }
@@ -1295,7 +1288,9 @@ paths:
       description: >-
         Returns the warehouse-local window for opening a new estimate after physical return.
         An absent row is represented as version 0, days 7, and null timestamps. Requires USER,
-        rwms.write and warehouse MANAGE access.
+        rwms.write and warehouse MANAGE access, or USER from the dedicated rwms-admin-web client
+        with SYSTEM_ADMIN/WMS_ADMIN and exactly one application scope admin.manage after protocol
+        scopes.
       responses:
         '200': { description: Estimate-creation window or its non-persisted default., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/EstimateCreationWindowSettings' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -1305,7 +1300,9 @@ paths:
       operationId: replaceEstimateCreationWindowSettings
       description: >-
         Creates or replaces the setting with strict optimistic CAS. Creation requires
-        expectedVersion 0. Requires USER, rwms.write and warehouse MANAGE access.
+        expectedVersion 0. Requires either USER with rwms.write and warehouse MANAGE access, or
+        USER from the dedicated rwms-admin-web client with SYSTEM_ADMIN/WMS_ADMIN and exactly one
+        application scope admin.manage after protocol scopes.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceEstimateCreationWindowSettingsRequest' } } } }
       responses:
         '200': { description: Persisted estimate-creation window., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/EstimateCreationWindowSettings' } } } }
@@ -1322,7 +1319,11 @@ paths:
     get:
       tags: [Settings]
       operationId: getRepairComplexitySettings
-      description: Returns canonical per-warehouse integer-minute boundaries.
+      description: >-
+        Returns canonical per-warehouse integer-minute boundaries. Requires either USER with
+        rwms.write and warehouse MANAGE access, or USER from the dedicated rwms-admin-web client
+        with SYSTEM_ADMIN/WMS_ADMIN and exactly one application scope admin.manage after protocol
+        scopes.
       responses:
         '200': { description: Repair-complexity settings or defaults 60/180/360., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairComplexitySettings' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -1330,7 +1331,11 @@ paths:
     put:
       tags: [Settings]
       operationId: replaceRepairComplexitySettings
-      description: Replaces strictly increasing boundaries with optimistic CAS and recalculates active repairs.
+      description: >-
+        Replaces strictly increasing boundaries with optimistic CAS and recalculates active
+        repairs. Requires either USER with rwms.write and warehouse MANAGE access, or USER from
+        the dedicated rwms-admin-web client with SYSTEM_ADMIN/WMS_ADMIN and exactly one
+        application scope admin.manage after protocol scopes.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceRepairComplexitySettingsRequest' } } } }
       responses:
         '200': { description: Persisted repair-complexity settings., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairComplexitySettings' } } } }
@@ -1371,14 +1376,12 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /api/maintenance/v1/settings/repair-complexity-colors:
-    parameters:
-      - { $ref: '#/components/parameters/WarehouseIdQuery' }
     get:
       tags: [Settings]
       operationId: getRepairComplexityColors
       description: >-
-        Returns the single global estimate-catalog color palette. warehouseId is authorization
-        context only; colors are not copied or overridden per warehouse.
+        Returns the single global estimate-catalog color palette without a warehouse selector.
+        Colors are not copied or overridden per warehouse. Requires USER and rwms.read.
       responses:
         '200': { description: Global repair-complexity color palette., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairComplexityColors' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -1388,7 +1391,8 @@ paths:
       operationId: replaceRepairComplexityColors
       description: >-
         Replaces the one global palette with optimistic CAS. The configured color for a repair
-        type is reused everywhere that calculated type is displayed.
+        type is reused everywhere that calculated type is displayed. Requires a
+        SYSTEM_ADMIN/WMS_ADMIN USER with rwms.write.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceRepairComplexityColorsRequest' } } } }
       responses:
         '200': { description: Updated global repair-complexity color palette., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairComplexityColors' } } } }
@@ -1403,17 +1407,18 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: >-
-        Public reads require a USER token with rwms.read and warehouse VIEW;
-        writes require rwms.write and EDIT. Catalog import/activation and
-        maintenance write-off, repair-capacity and estimate-creation-window settings additionally require
-        warehouse MANAGE.
+        Warehouse-scoped public reads require a USER token with rwms.read and warehouse VIEW;
+        warehouse-scoped writes require rwms.write and EDIT. Global catalog and repair-color reads
+        require USER with rwms.read and accept no warehouse selector; their writes require
+        SYSTEM_ADMIN/WMS_ADMIN with rwms.write. Maintenance write-off, repair-capacity and
+        estimate-creation-window settings additionally require warehouse MANAGE.
   parameters:
     WarehouseIdQuery:
       name: warehouseId
       in: query
       required: true
       description: >-
-        Warehouse authorization and catalog scope.
+        Warehouse authorization and scope for warehouse-owned maintenance resources.
       schema: { type: string, format: uuid }
     IdempotencyKey:
       name: Idempotency-Key
@@ -1657,20 +1662,18 @@ components:
     ReplaceRepairCapacitySettingsRequest:
       type: object
       additionalProperties: false
-      required: [expectedVersion, repairPlaceCount, automaticRefillDelayMinutes]
+      required: [expectedVersion, repairPlaceCount]
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         repairPlaceCount: { type: integer, minimum: 1 }
-        automaticRefillDelayMinutes: { type: integer, minimum: 1, maximum: 1440 }
     RepairCapacitySettings:
       type: object
       additionalProperties: false
-      required: [warehouseId, version, repairPlaceCount, automaticRefillDelayMinutes, createdAt, updatedAt]
+      required: [warehouseId, version, repairPlaceCount, createdAt, updatedAt]
       properties:
         warehouseId: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         repairPlaceCount: { type: integer, minimum: 1 }
-        automaticRefillDelayMinutes: { type: integer, minimum: 1, maximum: 1440 }
         createdAt:
           oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
         updatedAt:
@@ -1819,9 +1822,11 @@ components:
         repairPlaceCount: { type: integer, minimum: 1 }
         automaticRefillDelayMinutes:
           type: integer
-          minimum: 1
-          maximum: 1440
-          description: Delay before a manually opened current logistics lane may be refilled automatically.
+          const: 0
+          deprecated: true
+          description: >-
+            Compatibility marker fixed at zero. Automatic refill is eligible immediately;
+            the delay is no longer configurable.
         reservedCount: { type: integer, format: int64, minimum: 0 }
         occupiedCount: { type: integer, format: int64, minimum: 0 }
         readyToReleaseCount: { type: integer, format: int64, minimum: 0 }
@@ -2332,17 +2337,6 @@ components:
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         links: { type: array, maxItems: 20000, items: { $ref: '#/components/schemas/CatalogLinkInput' } }
-    CreateCatalogRequest:
-      type: object
-      additionalProperties: false
-      required: [warehouseId]
-      properties:
-        warehouseId:
-          description: >-
-            Warehouse authorization and immutable creation/audit context. Creating from a new
-            warehouse returns the existing global active catalog instead of cloning it.
-          type: string
-          format: uuid
     CatalogNodeSnapshot:
       type: object
       additionalProperties: false

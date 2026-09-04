@@ -34,23 +34,20 @@ public class FurnitureEquipmentLinkController {
   @GetMapping
   public PageResponse<FurnitureEquipmentLinkResponse> list(
       @AuthenticationPrincipal Jwt jwt,
-      @RequestParam UUID warehouseId,
       @RequestParam(defaultValue = "0") @Min(0) int page,
       @RequestParam(defaultValue = "50") @Min(1) @Max(200) int size,
       @RequestParam(required = false) FurnitureEquipmentLinkState state) {
-    access.requireFurnitureEquipmentLinkAdministrator(jwt, warehouseId);
-    return review.list(warehouseId, state, page, size);
+    access.requireGlobalManage(jwt);
+    return review.list(state, page, size);
   }
 
   @PostMapping("/{nodeId}/review")
   public ResponseEntity<FurnitureEquipmentLinkResponse> review(
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID nodeId,
-      @RequestParam UUID warehouseId,
       @Valid @RequestBody FurnitureEquipmentLinkReviewRequest request) {
-    access.requireFurnitureEquipmentLinkAdministrator(jwt, warehouseId);
+    access.requireGlobalManage(jwt);
     FurnitureEquipmentLinkReviewService.ReviewedLink result = review.review(
-        warehouseId,
         nodeId,
         request.expectedReviewVersion(),
         request.action(),

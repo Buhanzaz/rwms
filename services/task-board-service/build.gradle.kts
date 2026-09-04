@@ -50,4 +50,8 @@ sourceSets {
 
 tasks.test {
     systemProperty("rwms.contracts.dir", rootProject.file("contracts").absolutePath)
+    // Keep the shared PostgreSQL container and JVM within one explicit full-suite budget.
+    maxParallelForks = 1
+    maxHeapSize = "768m"
+    systemProperty("spring.test.context.cache.maxSize", "1")
 }

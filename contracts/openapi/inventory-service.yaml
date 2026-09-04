@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Inventory Service API
-  version: 1.6.0
+  version: 1.7.0
   x-rwms-owner: inventory-service
   x-rwms-stability: approved-stage-7
   description: >-
@@ -221,11 +221,14 @@ paths:
       tags: [Planning]
       operationId: getInventoryPlanningSettings
       description: >-
-        Requires USER, rwms.write and warehouse MANAGE. Settings are warehouse-local and
-        derive only future final-plan versions; they do not change frozen plan evidence.
+        Requires USER, rwms.write and warehouse MANAGE, or the isolated rwms-admin-web
+        application token with its exact admin.manage scope and a SYSTEM_ADMIN or WMS_ADMIN
+        global role. Settings are inventory-owned holiday exceptions only; task-board owns the
+        effective object work schedule. They derive only future final-plan versions and do not
+        change frozen plan evidence.
       responses:
         '200':
-          description: Current planning calendar and independent daily capacities.
+          description: Current inventory holiday exceptions and their optimistic revision.
           headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
           content: { application/json: { schema: { $ref: '#/components/schemas/PlanningSettings' } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -234,8 +237,10 @@ paths:
       tags: [Planning]
       operationId: updateInventoryPlanningSettings
       description: >-
-        Requires USER, rwms.write and warehouse MANAGE. A matching settingsRevision is required;
-        changing the calendar marks the active session's draft final plan stale.
+        Requires USER, rwms.write and warehouse MANAGE, or the isolated rwms-admin-web
+        application token with its exact admin.manage scope and a SYSTEM_ADMIN or WMS_ADMIN
+        global role. A matching settingsRevision is required; changing inventory holiday
+        exceptions marks the active session's draft final plan stale.
       requestBody:
         required: true
         content:
@@ -259,8 +264,11 @@ paths:
       operationId: prepareInventoryFinalPlan
       description: >-
         Requires USER, rwms.write and warehouse MANAGE. The server creates one immutable ordered
-        final-plan version for every active finding, derives independent movement and repair
-        calendars, and preflights maintenance reconciliation candidates.
+        final-plan version for every active finding, combines task-board's effective object work
+        calendar with inventory holidays, and preflights maintenance reconciliation candidates.
+        AUTO uses the earliest common working date without a daily capacity; MANUAL validates that
+        calendar and movement-before-repair ordering. The task-board calendar snapshot/version and
+        fingerprint fence this plan generation.
       requestBody:
         required: true
         content:
@@ -297,7 +305,9 @@ paths:
         - { $ref: '#/components/parameters/IdempotencyKey' }
       description: >-
         Requires USER, rwms.write and warehouse MANAGE. The request contains every active
-        finding in exact order. It always creates a new immutable final-plan version.
+        finding in exact order. It always creates a new immutable final-plan version using the
+        common task-board object calendar plus inventory holidays, with no per-day capacity
+        throttle; MANUAL dates must be common working dates and preserve movement-before-repair.
       requestBody:
         required: true
         content:
@@ -1343,17 +1353,9 @@ components:
     PlanningSettingsUpdateRequest:
       type: object
       additionalProperties: false
-      required: [expectedSettingsRevision, movementDailyCapacity, repairDailyCapacity, workingWeekdays, holidays]
+      required: [expectedSettingsRevision, holidays]
       properties:
         expectedSettingsRevision: { type: integer, format: int64, minimum: 0 }
-        movementDailyCapacity: { type: integer, minimum: 1, maximum: 1000 }
-        repairDailyCapacity: { type: integer, minimum: 1, maximum: 1000 }
-        workingWeekdays:
-          type: array
-          minItems: 1
-          maxItems: 7
-          uniqueItems: true
-          items: { $ref: '#/components/schemas/WorkingWeekday' }
         holidays:
           type: array
           maxItems: 3660
@@ -1362,26 +1364,16 @@ components:
     PlanningSettings:
       type: object
       additionalProperties: false
-      required: [warehouseId, settingsRevision, movementDailyCapacity, repairDailyCapacity, workingWeekdays, holidays]
+      required: [warehouseId, settingsRevision, updatedAt, holidays]
       properties:
         warehouseId: { type: string, format: uuid }
         settingsRevision: { type: integer, format: int64, minimum: 0 }
-        movementDailyCapacity: { type: integer, minimum: 1, maximum: 1000 }
-        repairDailyCapacity: { type: integer, minimum: 1, maximum: 1000 }
-        workingWeekdays:
-          type: array
-          minItems: 1
-          maxItems: 7
-          uniqueItems: true
-          items: { $ref: '#/components/schemas/WorkingWeekday' }
+        updatedAt: { type: [string, 'null'], format: date-time }
         holidays:
           type: array
           maxItems: 3660
           uniqueItems: true
           items: { type: string, format: date }
-    WorkingWeekday:
-      type: string
-      enum: [MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY, SATURDAY, SUNDAY]
     FinalPlanScheduleMode: { type: string, enum: [AUTO, MANUAL] }
     FinalPlanState: { type: string, enum: [DRAFT, STALE, COMPLETED] }
     FinalPlanTargetKind: { type: string, enum: [ESTIMATE, REPAIR] }

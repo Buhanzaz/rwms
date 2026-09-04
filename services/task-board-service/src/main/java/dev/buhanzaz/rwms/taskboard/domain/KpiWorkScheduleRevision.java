@@ -12,17 +12,11 @@ import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.UUID;
 
-/**
- * Effective-dated warehouse work schedule revision used for deterministic KPI time accounting.
- */
+/** Effective-dated shared work-schedule revision used for deterministic KPI time accounting. */
 @Entity
 @Table(name = "kpi_work_schedule")
 public class KpiWorkScheduleRevision extends AbstractVersionedEntity {
-  @Column(name = "warehouse_id", nullable = false)
-  private UUID warehouseId;
-
   @Column(name = "effective_from", nullable = false)
   private LocalDate effectiveFrom;
 
@@ -46,13 +40,11 @@ public class KpiWorkScheduleRevision extends AbstractVersionedEntity {
   protected KpiWorkScheduleRevision() {}
 
   public KpiWorkScheduleRevision(
-      UUID warehouseId,
       LocalDate effectiveFrom,
       LocalTime shiftStart,
       LocalTime shiftEnd,
       List<Integer> daysOff,
       List<KpiWorkBreakInterval> breaks) {
-    this.warehouseId = warehouseId;
     this.effectiveFrom = effectiveFrom;
     this.shiftStart = shiftStart;
     this.shiftEnd = shiftEnd;
@@ -66,10 +58,6 @@ public class KpiWorkScheduleRevision extends AbstractVersionedEntity {
 
   public void unschedule() {
     scheduled = false;
-  }
-
-  public UUID getWarehouseId() {
-    return warehouseId;
   }
 
   public LocalDate getEffectiveFrom() {

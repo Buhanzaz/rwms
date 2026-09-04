@@ -1,30 +1,23 @@
 package dev.buhanzaz.rwms.logistics.customer.service;
 
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotKind;
-import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
-import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseIdentity;
-import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseSupportLink;
 import java.time.LocalDate;
 import java.time.LocalTime;
-import java.util.UUID;
-import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 /**
  * Decides whether a CustomerApp slot may be exposed after local route-capacity evaluation.
- * Representative warehouses never promise a fixed arrival window. Their full-day offer may fall
- * back to an eligible incoming support edge, but that fallback creates neither a driver shift nor
- * an external resource reservation.
+ * Representative warehouses never promise a fixed arrival window. Their full-day offer requires
+ * the same confirmed feasible route and capacity fact as an ordinary warehouse; support-network
+ * topology is not a capacity reservation and is therefore never used to create a customer promise.
  */
 @Component
-@RequiredArgsConstructor
 class RepresentativeDeliverySlotPolicy {
-  private final LogisticsDependencyGateway dependencies;
-
   /**
-   * Applies warehouse kind, local capacity and current owner-held support topology to one candidate.
-   * Dependency failure is fail-closed because an unverified edge cannot support a customer promise.
+   * Applies warehouse kind and the caller's confirmed route-capacity result to one slot candidate.
+   * Date and window remain part of the shared policy boundary, but support calendars do not override
+   * an infeasible capacity result.
    */
   Decision evaluate(
       WarehouseIdentity warehouse,
@@ -42,51 +35,12 @@ class RepresentativeDeliverySlotPolicy {
     if (localCapacityFeasible) {
       return new Decision(true, false);
     }
-    try {
-      boolean supported =
-          dependencies.listWarehouseSupportNetwork(warehouse.id()).stream()
-              .anyMatch(
-                  link ->
-                      isDirectIncoming(link, warehouse.id())
-                          && permitsResources(link)
-                          && permitsDate(link, deliveryDate)
-                          && overlaps(link, windowStart, windowEnd));
-      return new Decision(supported, supported);
-    } catch (LogisticsDependencyException exception) {
-      return Decision.rejected();
-    }
-  }
-
-  private static boolean isDirectIncoming(WarehouseSupportLink link, UUID servedWarehouseId) {
-    return link != null
-        && link.supportWarehouse() != null
-        && link.servedWarehouse() != null
-        && link.supportWarehouse().active()
-        && link.servedWarehouse().active()
-        && servedWarehouseId.equals(link.servedWarehouse().id())
-        && !servedWarehouseId.equals(link.supportWarehouse().id());
-  }
-
-  private static boolean permitsResources(WarehouseSupportLink link) {
-    return (link.allowDrivers() && link.allowVehicles()) || link.allowContractorFallback();
-  }
-
-  private static boolean permitsDate(WarehouseSupportLink link, LocalDate deliveryDate) {
-    if (link.excludedDates().contains(deliveryDate)) return false;
-    return link.allowedDates().contains(deliveryDate)
-        || link.allowedWeekdays().isEmpty()
-        || link.allowedWeekdays().contains(deliveryDate.getDayOfWeek());
-  }
-
-  private static boolean overlaps(
-      WarehouseSupportLink link, LocalTime windowStart, LocalTime windowEnd) {
-    if (link.serviceStart() == null) return true;
-    return link.serviceStart().isBefore(windowEnd) && windowStart.isBefore(link.serviceEnd());
+    return Decision.rejected();
   }
 
   /**
-   * Immutable outcome that distinguishes ordinary local capacity from a flexible support-backed
-   * full-day candidate. The distinction prevents reporting speculative remaining local capacity.
+   * Immutable outcome of the customer-slot policy. {@code flexibleSupport} remains false until a
+   * durable confirmed external-resource flow can provide a real capacity token.
    */
   record Decision(boolean allowed, boolean flexibleSupport) {
     private static Decision rejected() {

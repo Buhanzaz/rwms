@@ -18,6 +18,10 @@ import {
   isPanelUser,
 } from "@/features/auth/oidc-client"
 import {
+  PANEL_AUTH_CONFIG,
+  type AuthApplicationConfig,
+} from "@/features/auth/auth-config"
+import {
   ProtectedClientState,
   type ProtectedClientSnapshot,
   type ProtectedPrincipalGrant,
@@ -26,7 +30,7 @@ import {
 const MISSING_OIDC_STATE_MESSAGE = "No matching state found in storage"
 
 type CallbackCompletion = {
-  callbackUrl: string
+  callbackKey: string
   promise: Promise<string>
 }
 
@@ -45,9 +49,9 @@ function isAlreadyConsumedCallbackError(error: unknown) {
   return error instanceof Error && error.message === MISSING_OIDC_STATE_MESSAGE
 }
 
-class PanelPrincipalError extends Error {
+class InteractiveUserPrincipalError extends Error {
   constructor() {
-    super("Панель доступна только учётным записям пользователей.")
+    super("Приложение доступно только учётным записям пользователей.")
   }
 }
 
@@ -78,12 +82,24 @@ function protectedPrincipalGrant(
   }
 }
 
-export function AuthProvider({ children }: { children: ReactNode }) {
-  return <OidcAuthProvider>{children}</OidcAuthProvider>
+export function AuthProvider({
+  children,
+  runtime = PANEL_AUTH_CONFIG,
+}: {
+  children: ReactNode
+  runtime?: AuthApplicationConfig
+}) {
+  return <OidcAuthProvider runtime={runtime}>{children}</OidcAuthProvider>
 }
 
-function OidcAuthProvider({ children }: { children: ReactNode }) {
-  const [manager] = useState(() => getUserManager())
+function OidcAuthProvider({
+  children,
+  runtime,
+}: {
+  children: ReactNode
+  runtime: AuthApplicationConfig
+}) {
+  const [manager] = useState(() => getUserManager(runtime))
   const [protectedClientState] = useState(() => new ProtectedClientState())
   const [protectedClientSnapshot, setProtectedClientSnapshot] =
     useState<ProtectedClientSnapshot>(() => protectedClientState.snapshot)
@@ -138,7 +154,7 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
         await manager.removeUser()
         if (!isCurrentAuthenticationAttempt(attempt)) return
         await resetToUnauthenticated(attempt)
-        throw new PanelPrincipalError()
+        throw new InteractiveUserPrincipalError()
       }
 
       // Sessions issued before refresh-token support cannot be renewed. Replace
@@ -162,7 +178,7 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
         await manager.removeUser()
         if (!isCurrentAuthenticationAttempt(attempt)) return
         await resetToUnauthenticated(attempt)
-        throw new PanelPrincipalError()
+        throw new InteractiveUserPrincipalError()
       }
 
       const nextSnapshot = await protectedClientState.activate(
@@ -206,7 +222,7 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
       const attempt = ++authenticationAttempt.current
       void acceptUser(user, attempt).catch((renewError) => {
         if (!isCurrentAuthenticationAttempt(attempt)) return
-        if (renewError instanceof PanelPrincipalError) {
+        if (renewError instanceof InteractiveUserPrincipalError) {
           setError(getErrorMessage(renewError))
           return
         }
@@ -246,18 +262,19 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
       setError(null)
       try {
         await manager.signinRedirect({
-          state: { returnTo: getSafeReturnTo(returnTo) },
+          state: { returnTo: getSafeReturnTo(returnTo, runtime) },
         })
       } catch (loginError) {
         setError(getErrorMessage(loginError))
       }
     },
-    [manager]
+    [manager, runtime]
   )
 
   const completeLogin = useCallback(() => {
     const callbackUrl = window.location.href
-    if (callbackCompletion?.callbackUrl === callbackUrl) {
+    const callbackKey = `${runtime.clientId}|${callbackUrl}`
+    if (callbackCompletion?.callbackKey === callbackKey) {
       return callbackCompletion.promise
     }
 
@@ -271,7 +288,7 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
         await acceptUser(user, attempt)
 
         const state = user.state as { returnTo?: unknown } | undefined
-        return getSafeReturnTo(state?.returnTo)
+        return getSafeReturnTo(state?.returnTo, runtime)
       } catch (callbackError) {
         /*
          * A first callback may have already exchanged the code and saved the user before a
@@ -288,7 +305,7 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
               hasRenewablePanelSession(existingUser)
             ) {
               await acceptUser(existingUser, attempt)
-              return "/"
+              return runtime.postLogoutPath
             }
           } catch {
             // Continue to the fail-closed branch below.
@@ -307,9 +324,9 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
       }
     })()
 
-    callbackCompletion = { callbackUrl, promise: completion }
+    callbackCompletion = { callbackKey, promise: completion }
     return completion
-  }, [acceptUser, manager, resetToUnauthenticated])
+  }, [acceptUser, manager, resetToUnauthenticated, runtime])
 
   const logout = useCallback(async () => {
     const attempt = ++authenticationAttempt.current
@@ -353,7 +370,7 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
       completeLogin,
       logout,
     }),
-    [beginLogin, completeLogin, currentUser, error, logout, oidcUser, status]
+    [beginLogin, completeLogin, error, logout, oidcUser, status]
   )
 
   return (

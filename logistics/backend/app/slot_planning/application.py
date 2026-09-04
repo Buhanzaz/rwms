@@ -18,11 +18,18 @@ from sqlalchemy.orm import selectinload
 from app.config import Settings
 from app.db import utc_now
 from app.errors import ApiError, not_found
+from app.geo.policy_classification import (
+    PolicyZoneClassification,
+    classify_policy_point,
+    classify_policy_points,
+)
 from app.integrations.rwms import RwmsPlanningClient, get_rwms_planning_client
 from app.models import (
     DriverShift,
     LogisticsRequest,
     PlanningDayClosure,
+    PlanningDayMode,
+    PlanningDayPolicy,
     PlanningTask,
     RequestDateOption,
     RouteCycle,
@@ -31,6 +38,7 @@ from app.models import (
     SlotHold,
     Vehicle,
     Warehouse,
+    WarehousePolicyZone,
 )
 from app.models.domain import PlanStatus, RequestStatus, RequestType, TaskStatus
 from app.routing import GeoPoint
@@ -45,6 +53,7 @@ from app.schemas.slot_planning import (
     SlotHoldRead,
     SlotTimelineStopRead,
 )
+from app.services.planning_group import resolve_planning_warehouse_group
 from app.services.support_resource_candidates import (
     SupportResourceFacts,
     load_support_resource_facts,
@@ -83,6 +92,7 @@ _ACTIVE_REQUEST_STATUSES = {
     RequestStatus.IN_PROGRESS,
     RequestStatus.UNASSIGNED,
 }
+_POLICY_CLASSIFICATION_BATCH_SIZE = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +108,8 @@ class SlotPlanningContext:
     price_isochrone_minutes: int | None
     trailer_access_allowed: bool
     support_facts: SupportResourceFacts | None
+    policy_zones: tuple[WarehousePolicyZone, ...] = ()
+    special_price_zone: WarehousePolicyZone | None = None
 
 
 class SlotPlanningApplication:
@@ -389,6 +401,59 @@ class SlotPlanningApplication:
         )
         if warehouse is None:
             raise not_found("warehouse", command.warehouse_id)
+        planning_group = await resolve_planning_warehouse_group(
+            session,
+            self._rwms_client if self._settings.rwms_sync_enabled else None,
+            warehouse,
+            planning_date=command.date,
+        )
+        day_policy = await session.scalar(
+            select(PlanningDayPolicy).where(
+                PlanningDayPolicy.warehouse_id == planning_group.root.id,
+                PlanningDayPolicy.date == command.date,
+            )
+        )
+        day_mode = (
+            PlanningDayMode(day_policy.mode)
+            if day_policy is not None
+            else PlanningDayMode.DELIVERIES_AND_PICKUPS
+        )
+        if day_mode == PlanningDayMode.PICKUPS_ONLY:
+            raise ApiError(
+                409,
+                "DELIVERY_DISABLED_BY_DAY_MODE",
+                "В выбранный день склад принимает только вывозы.",  # noqa: RUF001
+                extra={
+                    "planning_root_warehouse_id": str(planning_group.root.id),
+                    "planning_day_mode": day_mode.value,
+                    "planning_day_mode_version": (
+                        day_policy.version if day_policy is not None else 0
+                    ),
+                },
+            )
+        policy_zones = tuple(
+            await session.scalars(
+                select(WarehousePolicyZone)
+                .where(WarehousePolicyZone.warehouse_id == warehouse.id)
+                .order_by(WarehousePolicyZone.id)
+            )
+        )
+        policies = await classify_policy_point(
+            session,
+            warehouse.id,
+            command.latitude,
+            command.longitude,
+        )
+        if policies.forbidden is not None:
+            raise ApiError(
+                422,
+                "DELIVERY_FORBIDDEN_ZONE",
+                "Delivery is prohibited for this address",
+                extra={
+                    "zone_id": str(policies.forbidden.id),
+                    "zone_name": policies.forbidden.name,
+                },
+            )
         closure_id = await session.scalar(
             select(PlanningDayClosure.id).where(
                 PlanningDayClosure.warehouse_id == warehouse.id,
@@ -420,14 +485,60 @@ class SlotPlanningApplication:
                 .order_by(SlotHold.created_at, SlotHold.id)
             )
         )
+        active_requests = [
+            request
+            for request in warehouse.requests
+            if request.status in _ACTIVE_REQUEST_STATUSES
+            and (
+                request.scheduled_date == command.date
+                or (
+                    request.scheduled_date is None
+                    and any(option.date == command.date for option in request.date_options)
+                )
+            )
+        ]
+        request_policies = await self._classify_policy_points_in_batches(
+            session,
+            tuple(
+                (
+                    request.id,
+                    warehouse.id,
+                    request.latitude,
+                    request.longitude,
+                )
+                for request in active_requests
+            ),
+        )
+        hold_policies = await self._classify_policy_points_in_batches(
+            session,
+            tuple(
+                (
+                    hold.id,
+                    warehouse.id,
+                    float(hold.request_snapshot["latitude"]),
+                    float(hold.request_snapshot["longitude"]),
+                )
+                for hold in active_holds
+            ),
+        )
         day_plan, equipment = self._build_day_plan(
             warehouse,
             command.date,
             configuration,
             active_holds,
+            requests=active_requests,
+            request_policies=request_policies,
+            hold_policies=hold_policies,
         )
         support_facts: SupportResourceFacts | None = None
-        revision = self._source_revision(warehouse, command.date)
+        revision = self._source_revision(
+            warehouse,
+            command.date,
+            policy_zones,
+            planning_root_warehouse_id=planning_group.root.id,
+            planning_day_mode=day_mode,
+            planning_day_mode_version=(day_policy.version if day_policy is not None else 0),
+        )
         if self._settings.rwms_sync_enabled:
             zone = ZoneInfo(warehouse.timezone)
             support_facts = await load_support_resource_facts(
@@ -453,8 +564,10 @@ class SlotPlanningApplication:
             source_revision=revision,
             delivery_price_rubles=None,
             price_isochrone_minutes=None,
-            trailer_access_allowed=True,
+            trailer_access_allowed=policies.no_trailer is None,
             support_facts=support_facts,
+            policy_zones=policy_zones,
+            special_price_zone=policies.special_price,
         )
 
     def _build_day_plan(
@@ -463,8 +576,12 @@ class SlotPlanningApplication:
         planning_date: date,
         configuration: WarehouseSlotConfiguration,
         holds: list[SlotHold],
+        *,
+        requests: list[LogisticsRequest],
+        request_policies: Mapping[UUID, PolicyZoneClassification],
+        hold_policies: Mapping[UUID, PolicyZoneClassification],
     ) -> tuple[DayPlan, dict[str, VehicleEquipmentSnapshot]]:
-        """Translate persistence rows into immutable planner inputs without zone policies."""
+        """Translate current persistence and policy facts into immutable planner inputs."""
 
         zone = ZoneInfo(warehouse.timezone)
         shifts = [
@@ -476,20 +593,18 @@ class SlotPlanningApplication:
             and item.vehicle.active
         ]
         shifts.sort(key=lambda item: (item.start_time, item.driver_id, item.id))
+        latest_plan = self._latest_plan(warehouse.plans, warehouse.id, planning_date)
+        confirmed_task_ids = {
+            stop.task_id
+            for cycle in (latest_plan.cycles if latest_plan is not None else ())
+            for stop in cycle.stops
+            if latest_plan is not None
+            and latest_plan.status == PlanStatus.CONFIRMED
+            and stop.task_id is not None
+        }
         tasks_by_uuid: dict[UUID, SlotTask] = {}
-        requests = [
-            request
-            for request in warehouse.requests
-            if request.status in _ACTIVE_REQUEST_STATUSES
-            and (
-                request.scheduled_date == planning_date
-                or (
-                    request.scheduled_date is None
-                    and any(option.date == planning_date for option in request.date_options)
-                )
-            )
-        ]
         for request in requests:
+            policy = request_policies.get(request.id)
             option = self._selected_option(request, planning_date, zone)
             if option is None:
                 continue
@@ -497,6 +612,13 @@ class SlotPlanningApplication:
             if not stored_tasks:
                 continue
             for task in stored_tasks:
+                confirmed_workload = task.id in confirmed_task_ids
+                if (
+                    not confirmed_workload
+                    and policy is not None
+                    and policy.forbidden is not None
+                ):
+                    continue
                 task_type = SlotTaskType(task.type)
                 mandatory = task.mandatory
                 default_minutes = (
@@ -514,10 +636,16 @@ class SlotPlanningApplication:
                     priority=task.priority,
                     address=request.address_label,
                     mandatory=mandatory,
-                    trailer_access_allowed=request.trailer_access_allowed is not False,
+                    trailer_access_allowed=(
+                        request.trailer_access_allowed is not False
+                        and (
+                            confirmed_workload
+                            or policy is None
+                            or policy.no_trailer is None
+                        )
+                    ),
                 )
 
-        latest_plan = self._latest_plan(warehouse.plans, warehouse.id, planning_date)
         assigned: set[UUID] = set()
         trips_by_shift: dict[UUID, list[TripPlan]] = {shift.id: [] for shift in shifts}
         shift_by_id = {shift.id: shift for shift in shifts}
@@ -571,6 +699,9 @@ class SlotPlanningApplication:
             if task_id not in assigned and task.task_type is SlotTaskType.PICKUP
         ]
         for hold in holds:
+            policy = hold_policies.get(hold.id)
+            if policy is not None and policy.forbidden is not None:
+                continue
             snapshot = hold.request_snapshot
             slot_start = time.fromisoformat(str(snapshot["slot_start"]))
             slot_end = time.fromisoformat(str(snapshot["slot_end"]))
@@ -599,7 +730,10 @@ class SlotPlanningApplication:
                     priority=20_000,
                     address=str(snapshot["address"]),
                     mandatory=True,
-                    trailer_access_allowed=int(snapshot["site_cabin_capacity"]) == 2,
+                    trailer_access_allowed=(
+                        int(snapshot["site_cabin_capacity"]) == 2
+                        and (policy is None or policy.no_trailer is None)
+                    ),
                     assigned_driver_id=str(hold.candidate_snapshot["driver_id"]),
                 )
                 for part_number, quantity in enumerate(part_quantities, start=1)
@@ -655,6 +789,23 @@ class SlotPlanningApplication:
             ),
             equipment,
         )
+
+    @staticmethod
+    async def _classify_policy_points_in_batches(
+        session: AsyncSession,
+        points: tuple[tuple[UUID, UUID, float, float], ...],
+    ) -> dict[UUID, PolicyZoneClassification]:
+        """Classify a day snapshot in bounded bulk statements instead of N+1 queries."""
+
+        classifications: dict[UUID, PolicyZoneClassification] = {}
+        for offset in range(0, len(points), _POLICY_CLASSIFICATION_BATCH_SIZE):
+            classifications.update(
+                await classify_policy_points(
+                    session,
+                    points[offset : offset + _POLICY_CLASSIFICATION_BATCH_SIZE],
+                )
+            )
+        return classifications
 
     async def _activate_support_resources(
         self,
@@ -819,7 +970,7 @@ class SlotPlanningApplication:
         provider: CachedTruckTravelTimeProvider,
         destination: GeoPoint,
     ) -> SlotPlanningContext:
-        """Price direct travel by the first configured tier that covers road time."""
+        """Prove normal reach first, then apply an optional special-price override."""
         travel_seconds: list[int] = []
         seen_vehicles: set[str] = set()
         for driver in context.day_plan.drivers:
@@ -850,15 +1001,27 @@ class SlotPlanningApplication:
                 "DELIVERY_OUTSIDE_ISOCHRONE",
                 "Road travel time exceeds the warehouse's maximum configured tariff tier",
             )
-        price = next(
-            tariff.price_rubles
-            for tariff in context.warehouse.isochrone_tariffs
-            if tariff.travel_minutes == tier
-        )
+        special_price = context.special_price_zone
+        if special_price is not None:
+            if special_price.delivery_price_rubles is None:
+                raise ApiError(
+                    422,
+                    "POLICY_ZONE_VALUES_INVALID",
+                    "A SPECIAL_PRICE policy requires a delivery price",
+                )
+            price = special_price.delivery_price_rubles
+            price_isochrone_minutes = None
+        else:
+            price = next(
+                tariff.price_rubles
+                for tariff in context.warehouse.isochrone_tariffs
+                if tariff.travel_minutes == tier
+            )
+            price_isochrone_minutes = tier
         return replace(
             context,
             delivery_price_rubles=price,
-            price_isochrone_minutes=tier,
+            price_isochrone_minutes=price_isochrone_minutes,
         )
 
     @staticmethod
@@ -1281,6 +1444,11 @@ class SlotPlanningApplication:
     def _source_revision(
         warehouse: Warehouse,
         planning_date: date,
+        policy_zones: tuple[WarehousePolicyZone, ...] = (),
+        *,
+        planning_root_warehouse_id: UUID | None = None,
+        planning_day_mode: PlanningDayMode = PlanningDayMode.DELIVERIES_AND_PICKUPS,
+        planning_day_mode_version: int = 0,
     ) -> str:
         """Hash every durable day fact that can change exact slot feasibility."""
 
@@ -1297,8 +1465,17 @@ class SlotPlanningApplication:
                     (tariff.travel_minutes, tariff.price_rubles)
                     for tariff in warehouse.isochrone_tariffs
                 ],
+                "policy_zones": [
+                    (str(zone.id), zone.version, zone.kind)
+                    for zone in policy_zones
+                ],
             },
             "date": planning_date.isoformat(),
+            "planning_day_policy": {
+                "root_warehouse_id": str(planning_root_warehouse_id or warehouse.id),
+                "mode": planning_day_mode.value,
+                "version": planning_day_mode_version,
+            },
             "settings": warehouse.settings,
             "shifts": [
                 (

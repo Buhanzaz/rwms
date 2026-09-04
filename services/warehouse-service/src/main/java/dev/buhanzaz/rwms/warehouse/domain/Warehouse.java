@@ -34,7 +34,9 @@ import org.hibernate.proxy.HibernateProxy;
 @Table(
     name = "warehouse",
     uniqueConstraints =
-        @UniqueConstraint(name = "uk_warehouse_normalized_name", columnNames = "normalized_name"))
+        @UniqueConstraint(
+            name = "uk_warehouse_normalized_name",
+            columnNames = "normalized_name"))
 public class Warehouse {
   private static final Pattern DISPLAY_NAME_WHITESPACE =
       Pattern.compile("\\s+", Pattern.UNICODE_CHARACTER_CLASS);
@@ -103,9 +105,17 @@ public class Warehouse {
   @Column(name = "active", nullable = false)
   private boolean active = true;
 
-  /** Additional warehouse characteristic; it does not change lifecycle or operation admission. */
-  @Column(name = "representative", nullable = false)
-  private boolean representative;
+  /** Marks an object that must be exposed to the future manufacture management system. */
+  @Column(name = "production", nullable = false)
+  private boolean production;
+
+  /** Marks an object that must be exposed as a primary RWMS warehouse. */
+  @Column(name = "main_warehouse", nullable = false)
+  private boolean mainWarehouse;
+
+  /** Parent selected for a representative warehouse. */
+  @Column(name = "representative_parent_warehouse_id")
+  private UUID representativeParentWarehouseId;
 
   /** Forces aggregate-version increments when the owned support-link collection changes. */
   @Column(name = "support_link_revision", nullable = false)
@@ -125,8 +135,7 @@ public class Warehouse {
   protected Warehouse() {}
 
   /**
-   * Creates an ordinary warehouse for source-compatible callers that predate the representative
-   * characteristic.
+   * Creates a primary RWMS warehouse without optional coordinates.
    *
    * @param name display name
    * @param city human-readable city
@@ -141,42 +150,15 @@ public class Warehouse {
       String address,
       ZoneId timeZone,
       Integer sortOrder) {
-    return create(name, city, address, timeZone, sortOrder, false);
+    return create(name, city, address, null, null, timeZone, sortOrder, false, true, null);
   }
 
   /**
-   * Creates a warehouse with its independently managed representative characteristic.
+   * Creates an object with its independent production and primary-RWMS classifications.
    *
-   * @param name display name
-   * @param city human-readable city
-   * @param address optional human-readable address
-   * @param timeZone canonical IANA timezone
-   * @param sortOrder optional non-negative directory ordering value
-   * @param representative whether the warehouse is representative
-   * @return new warehouse aggregate
-   */
-  public static Warehouse create(
-      String name,
-      String city,
-      String address,
-      ZoneId timeZone,
-      Integer sortOrder,
-      boolean representative) {
-    return create(name, city, address, null, null, timeZone, sortOrder, representative);
-  }
-
-  /**
-   * Creates a warehouse with optional logistics coordinates and its representative characteristic.
-   *
-   * @param name display name
-   * @param city human-readable city
-   * @param address optional human-readable address
-   * @param latitude optional WGS84 latitude; requires longitude
-   * @param longitude optional WGS84 longitude; requires latitude
-   * @param timeZone canonical IANA timezone
-   * @param sortOrder optional non-negative directory ordering value
-   * @param representative whether the warehouse is representative
-   * @return new warehouse aggregate
+   * <p>A representative object has neither classification and references exactly one object that
+   * has at least one of them. Parent eligibility is checked by the application service under its
+   * lock; this aggregate enforces the local shape only.
    */
   public static Warehouse create(
       String name,
@@ -186,54 +168,25 @@ public class Warehouse {
       BigDecimal longitude,
       ZoneId timeZone,
       Integer sortOrder,
-      boolean representative) {
+      boolean production,
+      boolean mainWarehouse,
+      UUID representativeParentWarehouseId) {
     Warehouse warehouse = new Warehouse();
     warehouse.assign(
-        name, city, address, latitude, longitude, timeZone, sortOrder, representative);
+        name,
+        city,
+        address,
+        latitude,
+        longitude,
+        timeZone,
+        sortOrder,
+        production,
+        mainWarehouse,
+        representativeParentWarehouseId);
     return warehouse;
   }
 
-  /**
-   * Fully replaces mutable metadata for source-compatible callers that predate the representative
-   * characteristic.
-   *
-   * @param name display name
-   * @param city human-readable city
-   * @param address optional human-readable address
-   * @param sortOrder optional non-negative directory ordering value
-   * @return whether aggregate state changed
-   */
-  public Mutation replace(String name, String city, String address, Integer sortOrder) {
-    return replace(name, city, address, sortOrder, false);
-  }
-
-  /**
-   * Fully replaces mutable metadata, including the representative characteristic.
-   *
-   * @param name display name
-   * @param city human-readable city
-   * @param address optional human-readable address
-   * @param sortOrder optional non-negative directory ordering value
-   * @param representative whether the warehouse is representative
-   * @return whether aggregate state changed
-   */
-  public Mutation replace(
-      String name, String city, String address, Integer sortOrder, boolean representative) {
-    return replace(name, city, address, null, null, sortOrder, representative);
-  }
-
-  /**
-   * Fully replaces mutable metadata, including coordinates and representative characteristic.
-   *
-   * @param name display name
-   * @param city human-readable city
-   * @param address optional human-readable address
-   * @param latitude optional WGS84 latitude; requires longitude
-   * @param longitude optional WGS84 longitude; requires latitude
-   * @param sortOrder optional non-negative directory ordering value
-   * @param representative whether the warehouse is representative
-   * @return whether aggregate state changed
-   */
+  /** Fully replaces mutable metadata and the independent object classifications. */
   public Mutation replace(
       String name,
       String city,
@@ -241,12 +194,15 @@ public class Warehouse {
       BigDecimal latitude,
       BigDecimal longitude,
       Integer sortOrder,
-      boolean representative) {
+      boolean production,
+      boolean mainWarehouse,
+      UUID representativeParentWarehouseId) {
     CanonicalName canonicalName = canonicalName(name);
     String normalizedCity = normalizeRequired(city, "city", 255);
     String normalizedAddress = normalizeOptional(address, 1000);
     Coordinates coordinates = coordinates(latitude, longitude);
     validateSortOrder(sortOrder);
+    validateClassification(production, mainWarehouse, representativeParentWarehouseId, id);
     boolean changed =
         !Objects.equals(this.name, canonicalName.displayName())
             || !Objects.equals(this.normalizedName, canonicalName.normalizedName())
@@ -254,7 +210,9 @@ public class Warehouse {
             || !Objects.equals(this.address, normalizedAddress)
             || !Objects.equals(this.latitude, coordinates.latitude())
             || !Objects.equals(this.longitude, coordinates.longitude())
-            || this.representative != representative
+            || this.production != production
+            || this.mainWarehouse != mainWarehouse
+            || !Objects.equals(this.representativeParentWarehouseId, representativeParentWarehouseId)
             || !Objects.equals(this.sortOrder, sortOrder);
     if (!changed) return Mutation.NONE;
     this.name = canonicalName.displayName();
@@ -263,7 +221,9 @@ public class Warehouse {
     this.address = normalizedAddress;
     this.latitude = coordinates.latitude();
     this.longitude = coordinates.longitude();
-    this.representative = representative;
+    this.production = production;
+    this.mainWarehouse = mainWarehouse;
+    this.representativeParentWarehouseId = representativeParentWarehouseId;
     this.sortOrder = sortOrder;
     return Mutation.CHANGED;
   }
@@ -343,7 +303,9 @@ public class Warehouse {
       BigDecimal longitude,
       ZoneId timeZone,
       Integer sortOrder,
-      boolean representative) {
+      boolean production,
+      boolean mainWarehouse,
+      UUID representativeParentWarehouseId) {
     CanonicalName canonicalName = canonicalName(name);
     this.name = canonicalName.displayName();
     this.normalizedName = canonicalName.normalizedName();
@@ -357,7 +319,10 @@ public class Warehouse {
     this.lifecycleState = WarehouseLifecycleState.ACTIVE;
     this.lifecycleRevision = 0;
     this.active = true;
-    this.representative = representative;
+    validateClassification(production, mainWarehouse, representativeParentWarehouseId, id);
+    this.production = production;
+    this.mainWarehouse = mainWarehouse;
+    this.representativeParentWarehouseId = representativeParentWarehouseId;
     this.sortOrder = sortOrder;
   }
 
@@ -377,7 +342,27 @@ public class Warehouse {
     if (supportLinkRevision < 0) {
       throw new IllegalArgumentException("supportLinkRevision must not be negative");
     }
+    validateClassification(production, mainWarehouse, representativeParentWarehouseId, id);
     active = lifecycleState == WarehouseLifecycleState.ACTIVE;
+  }
+
+  private static void validateClassification(
+      boolean production,
+      boolean mainWarehouse,
+      UUID representativeParentWarehouseId,
+      UUID warehouseId) {
+    if (representativeParentWarehouseId == null && !production && !mainWarehouse) {
+      throw new IllegalArgumentException(
+          "An object must be production, a main warehouse, or a representative");
+    }
+    if (representativeParentWarehouseId != null && (production || mainWarehouse)) {
+      throw new IllegalArgumentException(
+          "A representative object cannot also be production or a main warehouse");
+    }
+    if (warehouseId != null && warehouseId.equals(representativeParentWarehouseId)) {
+      throw new IllegalArgumentException(
+          "An object cannot be its own representative parent");
+    }
   }
 
   private static String normalizeTimeZone(ZoneId value) {
@@ -438,6 +423,9 @@ public class Warehouse {
     if (latitude == null) return new Coordinates(null, null);
     BigDecimal normalizedLatitude = normalizeCoordinate(latitude, "latitude", 90);
     BigDecimal normalizedLongitude = normalizeCoordinate(longitude, "longitude", 180);
+    if (normalizedLatitude.signum() == 0 && normalizedLongitude.signum() == 0) {
+      throw new IllegalArgumentException("latitude and longitude must not both be zero");
+    }
     return new Coordinates(normalizedLatitude, normalizedLongitude);
   }
 
@@ -508,9 +496,24 @@ public class Warehouse {
     return lifecycleState == WarehouseLifecycleState.ACTIVE;
   }
 
-  /** Returns the independent representative characteristic without inferring lifecycle state. */
+  /** Returns whether this warehouse references a responsible parent as a representative. */
   public boolean isRepresentative() {
-    return representative;
+    return representativeParentWarehouseId != null;
+  }
+
+  /** Returns whether the object is exposed to the future manufacture management system. */
+  public boolean isProduction() {
+    return production;
+  }
+
+  /** Returns whether the object is exposed as a primary RWMS warehouse. */
+  public boolean isMainWarehouse() {
+    return mainWarehouse;
+  }
+
+  /** Returns the parent selected for a representative object. */
+  public UUID getRepresentativeParentWarehouseId() {
+    return representativeParentWarehouseId;
   }
 
   public long getSupportLinkRevision() {
@@ -560,6 +563,6 @@ public class Warehouse {
 
   private record CanonicalName(String displayName, String normalizedName) {}
 
-  /** Canonical all-or-none coordinate pair used only inside the aggregate. */
+  /** Canonical all-or-none coordinate pair that excludes the {@code 0,0} unset placeholder. */
   private record Coordinates(BigDecimal latitude, BigDecimal longitude) {}
 }

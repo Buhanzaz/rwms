@@ -19,6 +19,10 @@ class RegistrationValidatorTest {
     @Test
     fun `unsafe username characters are rejected`() {
         assertThat(RegistrationValidator.validate("client name", "password-123", "password-123"))
-            .contains("разрешены")
+            .contains("латинские")
+        assertThat(RegistrationValidator.validate(".client", "password-123", "password-123"))
+            .contains("начинаться")
+        assertThat(RegistrationValidator.validate("клиент", "password-123", "password-123"))
+            .contains("латинские")
     }
 }

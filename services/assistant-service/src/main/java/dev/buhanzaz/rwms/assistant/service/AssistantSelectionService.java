@@ -38,6 +38,7 @@ public class AssistantSelectionService {
       UUID rentalInquiryId, String bearerToken) {
     LogisticsClient.CabinSelection selection =
         logistics.readCabinSelection(rentalInquiryId, bearerToken);
+    validateAuthoritativeSelection(rentalInquiryId, selection);
     return selection.rentalItemIds().isEmpty() ? null : response(selection);
   }
 
@@ -56,7 +57,21 @@ public class AssistantSelectionService {
     LogisticsClient.CabinSelection selection =
         logistics.replaceCabinSelection(
             rentalInquiryId, idempotencyKey, request.warehouseId(), ids, bearerToken);
-    if (!request.warehouseId().equals(selection.warehouseId())) {
+    validateAuthoritativeSelection(rentalInquiryId, selection);
+    boolean requestedEmpty = ids.isEmpty();
+    boolean returnedEmpty = selection.rentalItemIds().isEmpty();
+    if (requestedEmpty) {
+      if (!returnedEmpty
+          || !selection.items().isEmpty()
+          || selection.warehouseId() != null
+          || selection.expiresAt() != null) {
+        throw new AssistantUpstreamException("Logistics returned another cabin selection");
+      }
+    } else if (returnedEmpty) {
+      throw new AssistantUpstreamException("Logistics returned another cabin selection");
+    } else if (!ids.equals(selection.rentalItemIds())) {
+      throw new AssistantUpstreamException("Logistics returned another cabin selection");
+    } else if (!request.warehouseId().equals(selection.warehouseId())) {
       throw new AssistantUpstreamException("Logistics returned another selection warehouse");
     }
     return response(selection);
@@ -189,6 +204,67 @@ public class AssistantSelectionService {
         selection.expiresAt(),
         selection.rentalItemIds(),
         selection.items());
+  }
+
+  private static void validateAuthoritativeSelection(
+      UUID requestedInquiryId, LogisticsClient.CabinSelection selection) {
+    if (requestedInquiryId == null
+        || selection == null
+        || !requestedInquiryId.equals(selection.inquiryId())) {
+      throw invalidSelection();
+    }
+    List<UUID> ids = selection.rentalItemIds();
+    List<JsonNode> items = selection.items();
+    if (ids == null || items == null || ids.size() != items.size()) {
+      throw invalidSelection();
+    }
+    UUID warehouseId = selection.warehouseId();
+    if (ids.isEmpty()) {
+      if (warehouseId != null || selection.expiresAt() != null) {
+        throw invalidSelection();
+      }
+      return;
+    }
+    if (warehouseId == null) {
+      throw invalidSelection();
+    }
+    Set<UUID> uniqueIds = new LinkedHashSet<>();
+    for (int index = 0; index < ids.size(); index++) {
+      UUID expectedId = ids.get(index);
+      JsonNode item = items.get(index);
+      if (expectedId == null
+          || !uniqueIds.add(expectedId)
+          || !expectedId.equals(selectionItemUuid(item, "id"))) {
+        throw invalidSelection();
+      }
+      if (!warehouseId.equals(selectionItemUuid(item, "warehouseId"))) {
+        throw invalidSelection();
+      }
+    }
+  }
+
+  private static UUID selectionItemUuid(JsonNode item, String field) {
+    if (item == null || !item.isObject()) {
+      throw invalidSelection();
+    }
+    JsonNode value = item.get(field);
+    if (value == null || !value.isTextual()) {
+      throw invalidSelection();
+    }
+    String raw = value.asText(null);
+    if (raw == null) {
+      throw invalidSelection();
+    }
+    try {
+      return UUID.fromString(raw);
+    } catch (IllegalArgumentException invalid) {
+      throw new AssistantUpstreamException(
+          "Logistics returned an invalid cabin selection", invalid);
+    }
+  }
+
+  private static AssistantUpstreamException invalidSelection() {
+    return new AssistantUpstreamException("Logistics returned an invalid cabin selection");
   }
 
   private static List<UUID> uniqueIds(List<UUID> values) {

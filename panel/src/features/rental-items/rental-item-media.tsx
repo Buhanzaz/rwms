@@ -398,6 +398,7 @@ function MultiValueFilterChip({
 }) {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState(selected)
+  const hasSelectedValues = selected.length > 0
 
   return (
     <Popover
@@ -411,13 +412,16 @@ function MultiValueFilterChip({
         <Button
           type="button"
           size="sm"
-          variant={selected.length ? "secondary" : "outline"}
-          className="w-full justify-between lg:w-auto"
-          aria-pressed={selected.length > 0}
+          variant="outline"
+          className={cn(
+            "w-full justify-between lg:w-auto",
+            hasSelectedValues && "rwms-button-light"
+          )}
+          aria-pressed={hasSelectedValues}
         >
           {label}
-          {selected.length ? (
-            <Badge variant="outline">{selected.length}</Badge>
+          {hasSelectedValues ? (
+            <span className="text-xs text-current">{selected.length}</span>
           ) : null}
           <HugeiconsIcon icon={FilterIcon} data-icon="inline-end" />
         </Button>

@@ -72,15 +72,29 @@ export function getWarehouseStatusOptions() {
   return warehouseStatusOptions
 }
 
-function matchesSearch(warehouse: WarehouseInfo, search: string) {
+function matchesSearch(
+  warehouse: WarehouseInfo,
+  warehousesById: ReadonlyMap<string, WarehouseInfo>,
+  search: string
+) {
   if (search === "") return true
+
+  const representativeParentWarehouseId = warehouse.representativeParentWarehouseId
+  const representativeParentName = representativeParentWarehouseId
+    ? warehousesById.get(representativeParentWarehouseId)?.name
+    : undefined
+  const production = warehouse.production
 
   return [
     warehouse.name,
     warehouse.city,
     warehouse.timeZone,
     warehouseStatusSearchText[warehouse.lifecycleState],
-  ].some((value) => value.toLocaleLowerCase("ru").includes(search))
+    production ? "производство" : "",
+    warehouse.mainWarehouse ? "основной склад" : "",
+    representativeParentWarehouseId ? "представительский склад" : "",
+    representativeParentName,
+  ].some((value) => value?.toLocaleLowerCase("ru").includes(search) === true)
 }
 
 function matchesSelected(values: string[], value: string) {
@@ -93,10 +107,13 @@ export function filterWarehouses(
   filters: WarehouseFiltersState
 ) {
   const normalizedSearch = search.trim().toLocaleLowerCase("ru")
+  const warehousesById = new Map(
+    warehouses.map((warehouse) => [warehouse.id, warehouse])
+  )
 
   return warehouses.filter((warehouse) => {
     return (
-      matchesSearch(warehouse, normalizedSearch) &&
+      matchesSearch(warehouse, warehousesById, normalizedSearch) &&
       matchesSelected(filters.names, warehouse.name) &&
       matchesSelected(filters.cities, warehouse.city) &&
       matchesSelected(filters.timeZones, warehouse.timeZone) &&

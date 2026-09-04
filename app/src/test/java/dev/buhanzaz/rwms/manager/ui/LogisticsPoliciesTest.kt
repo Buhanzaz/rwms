@@ -93,6 +93,118 @@ class LogisticsPoliciesTest {
     }
 
     @Test
+    fun `zero cabin draft loads furniture readiness and exposes one departure action`() {
+        val transfer = document(
+            documentType = "TRANSFER",
+            state = "DRAFT",
+            rentalOrderId = null,
+            lineState = "PENDING",
+        ).copy(lines = emptyList())
+
+        assertThat(transfer.needsTransferFurnitureReadiness()).isTrue()
+        assertThat(transferFurnitureIsReady(transfer, null)).isFalse()
+        assertThat(
+            transferFurnitureIsReady(
+                transfer,
+                TransferFurnitureReadinessDto(
+                    transferId = transfer.id,
+                    transferVersion = transfer.version,
+                    state = "NOT_REQUIRED",
+                    tasks = emptyList(),
+                ),
+            ),
+        ).isTrue()
+
+        val action = wholeTransferAction(
+            document = transfer,
+            canManage = true,
+            busy = false,
+            furnitureReady = true,
+        )
+
+        assertThat(action?.command).isEqualTo(WholeTransferCommand.DEPART)
+        assertThat(action?.label).isEqualTo("Начать перемещение")
+        assertThat(action?.enabled).isTrue()
+        assertThat(action?.blockingMessage).isNull()
+    }
+
+    @Test
+    fun `zero cabin departure action fails closed for access busy and furniture`() {
+        val transfer = document(
+            documentType = "TRANSFER",
+            state = "DRAFT",
+            rentalOrderId = null,
+            lineState = "PENDING",
+        ).copy(lines = emptyList())
+
+        assertThat(
+            wholeTransferAction(
+                document = transfer,
+                canManage = false,
+                busy = false,
+                furnitureReady = true,
+            ),
+        ).isNull()
+        assertThat(
+            wholeTransferAction(
+                document = transfer,
+                canManage = true,
+                busy = true,
+                furnitureReady = true,
+            )?.enabled,
+        ).isFalse()
+        val furnitureBlocked = wholeTransferAction(
+            document = transfer,
+            canManage = true,
+            busy = false,
+            furnitureReady = false,
+        )
+        assertThat(furnitureBlocked?.enabled).isFalse()
+        assertThat(furnitureBlocked?.blockingMessage)
+            .isEqualTo("Сначала завершите задания по мебели.")
+    }
+
+    @Test
+    fun `zero cabin arrival is available only for exact in transit state`() {
+        val transferWithCabin = document(
+            documentType = "TRANSFER",
+            state = "IN_TRANSIT",
+            rentalOrderId = null,
+            lineState = "DEPARTED",
+        )
+        val transfer = transferWithCabin.copy(lines = emptyList())
+
+        val action = wholeTransferAction(
+            document = transfer,
+            canManage = true,
+            busy = false,
+            furnitureReady = false,
+        )
+
+        assertThat(action?.command).isEqualTo(WholeTransferCommand.ARRIVE)
+        assertThat(action?.label).isEqualTo("Подтвердить прибытие")
+        assertThat(action?.enabled).isTrue()
+        listOf("DEPARTING", "ARRIVING", "COMPLETED", "CANCELLED").forEach { state ->
+            assertThat(
+                wholeTransferAction(
+                    document = transfer.copy(state = state),
+                    canManage = true,
+                    busy = false,
+                    furnitureReady = true,
+                ),
+            ).isNull()
+        }
+        assertThat(
+            wholeTransferAction(
+                document = transferWithCabin,
+                canManage = true,
+                busy = false,
+                furnitureReady = true,
+            ),
+        ).isNull()
+    }
+
+    @Test
     fun `late return media response cannot overwrite another opened return`() {
         val first = document(
             documentType = "RETURN",

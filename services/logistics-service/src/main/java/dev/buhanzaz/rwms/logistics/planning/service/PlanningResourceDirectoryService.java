@@ -234,7 +234,14 @@ public class PlanningResourceDirectoryService {
         warehouse.longitude(),
         warehouse.timeZone(),
         warehouse.representative(),
-        warehouse.latitude() != null);
+        routingReady(warehouse.latitude(), warehouse.longitude()));
+  }
+
+  /** Treats 0,0 as a display-only placeholder rather than an operational routing origin. */
+  private static boolean routingReady(BigDecimal latitude, BigDecimal longitude) {
+    return latitude != null
+        && longitude != null
+        && (latitude.signum() != 0 || longitude.signum() != 0);
   }
 
   private static void requireActiveWarehouse(WarehouseIdentity warehouse, UUID expectedId) {

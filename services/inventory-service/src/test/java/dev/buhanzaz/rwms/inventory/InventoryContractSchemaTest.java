@@ -144,6 +144,41 @@ class InventoryContractSchemaTest {
   }
 
   @Test
+  void planningSettingsAreHolidayOnlyAndRetainTheRevisionFence() throws Exception {
+    Map<String, Object> document = yaml("openapi/inventory-service.yaml");
+    Map<String, Object> schemas = child(child(document, "components"), "schemas");
+    Map<String, Object> request = child(schemas, "PlanningSettingsUpdateRequest");
+    Map<String, Object> response = child(schemas, "PlanningSettings");
+
+    assertThat(required(schemas, "PlanningSettingsUpdateRequest"))
+        .containsExactly("expectedSettingsRevision", "holidays");
+    assertThat(child(request, "properties").keySet())
+        .containsExactly("expectedSettingsRevision", "holidays");
+    assertThat(required(schemas, "PlanningSettings"))
+        .containsExactly("warehouseId", "settingsRevision", "updatedAt", "holidays");
+    assertThat(child(response, "properties").keySet())
+        .containsExactly("warehouseId", "settingsRevision", "updatedAt", "holidays");
+    assertThat(child(response, "properties"))
+        .doesNotContainKeys("movementDailyCapacity", "repairDailyCapacity", "workingWeekdays");
+
+    JsonSchema update = openApiSchema("PlanningSettingsUpdateRequest");
+    assertThat(update.validate(JSON.readTree("{\"expectedSettingsRevision\":0,\"holidays\":[]}")))
+        .isEmpty();
+    assertThat(
+            update.validate(
+                JSON.readTree(
+                    "{\"expectedSettingsRevision\":0,\"holidays\":[],\"workingWeekdays\":[\"MONDAY\"]}")))
+        .isNotEmpty();
+
+    JsonSchema settings = openApiSchema("PlanningSettings");
+    assertThat(
+            settings.validate(
+                JSON.readTree(
+                    "{\"warehouseId\":\"00000000-0000-0000-0000-000000000701\",\"settingsRevision\":0,\"updatedAt\":null,\"holidays\":[]}")))
+        .isEmpty();
+  }
+
+  @Test
   void activeSessionContractSupportsConditionalReadsForBothStates() throws Exception {
     Map<String, Object> document = yaml("openapi/inventory-service.yaml");
     Map<String, Object> active =

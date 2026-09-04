@@ -22,6 +22,7 @@ from app.slot_planning.models import (
     TravelTimeUnavailable,
     VehicleLegState,
 )
+from tests.auth import admin_access_token_verifier
 
 
 class SequentialScalarSession:
@@ -137,7 +138,7 @@ def _payload(
 def _client(session: SequentialScalarSession, settings: Settings) -> TestClient:
     """Create an HTTP client whose reads stay inside the prepared session double."""
 
-    application = create_app()
+    application = create_app(access_token_verifier=admin_access_token_verifier())
 
     async def session_override() -> AsyncIterator[SequentialScalarSession]:
         """Yield the read-only sequential test session."""

@@ -35,6 +35,7 @@ public interface RentalOrderResponseMapper {
   @Mapping(source = "order.version", target = "version")
   @Mapping(source = "order.orderNumber", target = "number")
   @Mapping(source = "order.status", target = "status")
+  @Mapping(target = "customerDeliveryPurpose", constant = "RENTAL_DELIVERY")
   @Mapping(source = "order.client", target = "client")
   @Mapping(source = "order.managerId", target = "managerId")
   @Mapping(source = "order.managerDisplayName", target = "managerDisplayName")

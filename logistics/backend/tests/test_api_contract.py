@@ -16,6 +16,8 @@ from app.schemas.domain import (
     DriverCreate,
     LogisticsRequestCreate,
     PlanningSettings,
+    RwmsAppliedAssignment,
+    RwmsPlanningCapacityShift,
     ShiftCreate,
     VehicleCreate,
     WarehouseCreate,
@@ -47,6 +49,11 @@ def test_openapi_exposes_only_warehouse_rooted_product_operations() -> None:
     assert "/api/warehouses/{warehouse_id}/contractor-dispatches" in paths
     assert "/api/planning/slot-availability" in paths
     assert "/api/warehouses/{warehouse_id}/plans/generate" not in paths
+    assert document["components"]["securitySchemes"] == {
+        "HTTPBearer": {"type": "http", "scheme": "bearer"}
+    }
+    assert "security" not in paths["/api/health"]["get"]
+    assert paths["/api/warehouses"]["get"]["security"] == [{"HTTPBearer": []}]
     assert "get" not in paths["/api/warehouses/{warehouse_id}/drivers"]
     assert "get" not in paths["/api/warehouses/{warehouse_id}/shifts"]
     assert "get" not in paths["/api/warehouses/{warehouse_id}/requests"]
@@ -60,6 +67,7 @@ def test_openapi_exposes_only_warehouse_rooted_product_operations() -> None:
     assert "planning_group_warehouse_ids" in workspace["properties"]
     assert set(workspace["required"]) == {
         "warehouse",
+        "planning_date",
         "planning_root_warehouse_id",
         "planning_group_warehouse_ids",
         "warehouses",
@@ -68,7 +76,36 @@ def test_openapi_exposes_only_warehouse_rooted_product_operations() -> None:
         "trailers",
         "shifts",
         "requests",
+        "request_total",
     }
+    workspace_parameters = {
+        parameter["name"]: parameter
+        for parameter in paths["/api/warehouses/{warehouse_id}/workspace"]["get"][
+            "parameters"
+        ]
+    }
+    assert {"planning_date", "request_limit", "request_cursor"} <= workspace_parameters.keys()
+    assert "refresh_rwms" not in workspace_parameters
+    assert workspace_parameters["request_limit"]["schema"]["default"] == 250
+    assert workspace_parameters["request_limit"]["schema"]["maximum"] == 1000
+    trailer_create_parameters = paths["/api/warehouses/{warehouse_id}/trailers"][
+        "post"
+    ]["parameters"]
+    assert any(
+        parameter["name"] == "Idempotency-Key"
+        and parameter["in"] == "header"
+        and parameter["required"] is True
+        for parameter in trailer_create_parameters
+    )
+    trailer_delete_parameters = paths["/api/trailers/{trailer_id}"]["delete"][
+        "parameters"
+    ]
+    assert any(
+        parameter["name"] == "expected_version"
+        and parameter["in"] == "query"
+        and parameter["required"] is True
+        for parameter in trailer_delete_parameters
+    )
     vehicle = document["components"]["schemas"]["VehicleRead"]
     assert "load_profiles" in vehicle["required"]
     profile = document["components"]["schemas"]["VehicleLoadProfileCreate"]
@@ -86,6 +123,9 @@ def test_openapi_exposes_only_warehouse_rooted_product_operations() -> None:
     assert "delivery_price_rubles" in request["properties"]
     assert "price_isochrone_minutes" in request["properties"]
     assert "assignment_type" in request["properties"]
+    assert request["properties"]["customer_delivery_purpose"]["anyOf"][0]["$ref"].endswith(
+        "/CustomerDeliveryPurpose"
+    )
     assert {
         "delivery_price_rubles",
         "price_isochrone_minutes",
@@ -95,6 +135,10 @@ def test_openapi_exposes_only_warehouse_rooted_product_operations() -> None:
         "assigned_contractor_phone",
         "assigned_at",
         "assigned_by",
+        "contractor_handoff_command_id",
+        "contractor_handoff_sequence",
+        "external_task_ids",
+        "customer_delivery_purpose",
     }.issubset(request["required"])
     contractor = document["components"]["schemas"]["ContractorAssignmentCreate"]
     assert set(contractor["required"]) == {"contractor_worker_id"}
@@ -105,6 +149,15 @@ def test_openapi_exposes_only_warehouse_rooted_product_operations() -> None:
         "mode",
     }
     assert "request_ids" in dispatch["properties"]
+    dispatch_read = document["components"]["schemas"]["ContractorDispatchRead"]
+    assert {
+        "contractor_handoff_command_id",
+        "external_task_ids",
+    }.issubset(dispatch_read["required"])
+    manual_change = document["components"]["schemas"]["ManualChangeRequest"]
+    assert "changed_by" not in manual_change["properties"]
+    confirm_plan = document["components"]["schemas"]["ConfirmPlanRequest"]
+    assert "confirmed_by" not in confirm_plan["properties"]
     with TestClient(create_app()) as client:
         response = client.get("/api/openapi.json")
     assert response.status_code == 200
@@ -142,6 +195,52 @@ def test_contractor_dispatch_contract_uses_header_date_and_server_owned_selectio
             mode="MANUAL",
             request_ids=[request_id, request_id],
         )
+
+
+def test_rwms_applied_assignment_requires_exact_external_task_identity() -> None:
+    """The strict upstream model rejects a success that omits its canonical task UUID."""
+
+    task_id = uuid4()
+    result = RwmsAppliedAssignment.model_validate(
+        {
+            "orderId": str(uuid4()),
+            "orderVersion": 11,
+            "documentId": str(uuid4()),
+            "externalTaskId": str(task_id),
+            "taskVersion": 7,
+            "replayed": False,
+        }
+    )
+    assert result.external_task_id == task_id
+    assert result.task_version == 7
+    with pytest.raises(ValidationError, match="externalTaskId"):
+        RwmsAppliedAssignment.model_validate(
+            {
+                "orderId": str(uuid4()),
+                "orderVersion": 11,
+                "documentId": str(uuid4()),
+                "taskVersion": 7,
+                "replayed": False,
+            }
+        )
+
+
+def test_contractor_task_identity_migration_extends_current_alembic_head() -> None:
+    """Migration 0030 adds exact task IDs and backfills confirmed command ordering."""
+
+    migration = (
+        Path(__file__).parents[1]
+        / "migrations/versions/20260901_0030_contractor_route_task_identities.py"
+    ).read_text(encoding="utf-8")
+    assert 'revision: str = "20260901_0030"' in migration
+    assert 'down_revision: str | None = "20260831_0029"' in migration
+    assert '"contractor_external_task_ids"' in migration
+    assert '"contractor_handoff_sequence"' in migration
+    assert "jsonb_array_elements_text(command.request_ids)" in migration
+    assert "command.status = 'SUCCEEDED'" in migration
+    assert "contractor_handoff_sequence >= 0" in migration
+    assert "nullable=False" in migration
+    assert "'[]'::jsonb" in migration
 
 
 def test_slot_planning_openapi_exposes_dynamic_isochrone_tariff() -> None:
@@ -217,8 +316,8 @@ def test_warehouse_contract_uses_contiguous_dynamic_isochrone_tariffs() -> None:
     assert "ZoneRead" not in schemas
 
 
-def test_monthly_shift_requires_one_bounded_calendar_range() -> None:
-    """Runtime shift input contains only inclusive dates and daily local times."""
+def test_shift_accepts_bounded_cross_month_and_overnight_ranges() -> None:
+    """Runtime shifts span up to 31 start dates and only earlier ends cross midnight."""
 
     valid = ShiftCreate(
         driver_id=uuid4(),
@@ -229,14 +328,32 @@ def test_monthly_shift_requires_one_bounded_calendar_range() -> None:
         end_time=time(20),
     )
     assert valid.date_to == date(2026, 8, 31)
-    with pytest.raises(ValidationError, match="calendar month"):
+    cross_month = ShiftCreate(
+        driver_id=uuid4(),
+        vehicle_id=uuid4(),
+        date_from=date(2026, 8, 31),
+        date_to=date(2026, 9, 1),
+        start_time=time(22),
+        end_time=time(6),
+    )
+    assert cross_month.end_time < cross_month.start_time
+    with pytest.raises(ValidationError, match="31 inclusive days"):
         ShiftCreate(
             driver_id=uuid4(),
             vehicle_id=uuid4(),
             date_from=date(2026, 8, 31),
-            date_to=date(2026, 9, 1),
+            date_to=date(2026, 10, 1),
             start_time=time(8),
             end_time=time(20),
+        )
+    with pytest.raises(ValidationError, match="non-zero shift"):
+        ShiftCreate(
+            driver_id=uuid4(),
+            vehicle_id=uuid4(),
+            date_from=date(2026, 8, 31),
+            date_to=date(2026, 8, 31),
+            start_time=time(8),
+            end_time=time(8),
         )
     with pytest.raises(ValidationError, match="date"):
         ShiftCreate.model_validate(
@@ -247,6 +364,30 @@ def test_monthly_shift_requires_one_bounded_calendar_range() -> None:
                 "start_at": "2026-08-30T08:00:00+03:00",
                 "end_at": "2026-08-30T20:00:00+03:00",
             }
+        )
+    with pytest.raises(ValidationError, match="shorter than the shift duration"):
+        ShiftCreate(
+            driver_id=uuid4(),
+            vehicle_id=uuid4(),
+            date_from=date(2026, 8, 31),
+            date_to=date(2026, 8, 31),
+            start_time=time(8),
+            end_time=time(8, 30),
+            break_minutes=30,
+        )
+
+
+def test_capacity_shift_reuses_the_positive_usable_interval_invariant() -> None:
+    """Producer rejects a snapshot that the canonical capacity owner cannot consume."""
+
+    with pytest.raises(ValidationError, match="shorter than the shift duration"):
+        RwmsPlanningCapacityShift(
+            sourceShiftId=uuid4(),
+            deliveryDate=date(2026, 8, 31),
+            shiftStart=time(8),
+            shiftEnd=time(8, 30),
+            breakMinutes=30,
+            cabinCapacity=1,
         )
 
 
@@ -277,6 +418,13 @@ def test_driver_audience_mode_never_invents_a_worker_identity() -> None:
 def test_plain_compose_environment_aliases_are_supported(monkeypatch: pytest.MonkeyPatch) -> None:
     """Root runtime variable names bind without a second application prefix."""
 
+    for name in (
+        "LOGISTICS_DATABASE_URL",
+        "LOGISTICS_ROUTING_PROVIDER",
+        "LOGISTICS_DEFAULT_WAREHOUSE_TIMEZONE",
+        "LOGISTICS_PLANNER_DEFAULT_SEED",
+    ):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://u:p@db:5432/test")
     monkeypatch.setenv("ROUTING_PROVIDER", "mock")
     monkeypatch.setenv("DEFAULT_WAREHOUSE_TIMEZONE", "Asia/Yekaterinburg")
@@ -297,7 +445,6 @@ def test_workload_generator_contract_keeps_alternatives_inside_horizon() -> None
         deliveries_per_day=2,
         pickups_per_day=1,
         alternative_dates_count=3,
-        seed=42,
     )
     assert payload.alternative_dates_count == 3
     with pytest.raises(ValidationError, match="smaller than days"):
@@ -307,7 +454,6 @@ def test_workload_generator_contract_keeps_alternatives_inside_horizon() -> None
             deliveries_per_day=0,
             pickups_per_day=1,
             alternative_dates_count=2,
-            seed=42,
         )
 
 

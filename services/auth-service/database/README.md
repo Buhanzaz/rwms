@@ -9,6 +9,13 @@ database is adopted only after `flyway/verify-version-2.sql` succeeds and an
 operator explicitly baselines it at version `2`; see `flyway/README.md`.
 Automatic baseline adoption is disabled.
 
+Additive migrations through
+`src/main/resources/db/migration/V7__customer_registration_throttle.sql`
+install event sourcing, native clients and access entitlements, then add the
+durable fixed-window registration counter. The counter stores a SHA-256 source
+key rather than a raw address, has a global bucket, and is indexed for bounded
+expiry cleanup.
+
 `baseline/schema.sql`, immutable directories under `releases/`, the
 repository-level `Apply-SchemaReleases.ps1` runner and `rwms_schema_history`
 are historical read-only evidence. They no longer form the active production

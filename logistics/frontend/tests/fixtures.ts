@@ -9,6 +9,7 @@ import type {
 export function warehouseFixture(overrides: Partial<Warehouse> = {}): Warehouse {
   return {
     id: 'warehouse-1',
+    version: 1,
     external_warehouse_id: '11111111-1111-4111-8111-111111111111',
     external_warehouse_version: 1,
     name: 'Склад СПб',
@@ -23,6 +24,11 @@ export function warehouseFixture(overrides: Partial<Warehouse> = {}): Warehouse 
     seed: 42,
     settings: { ...DEFAULT_PLANNING_SETTINGS },
     capacity_generation: 1,
+    capacity_published_generation: 1,
+    capacity_publish_status: 'PUBLISHED',
+    capacity_publish_attempts: 0,
+    capacity_publish_error_code: null,
+    capacity_publish_next_attempt_at: null,
     loading_minutes: 30,
     unloading_minutes: 20,
     turnaround_minutes: 20,
@@ -43,6 +49,7 @@ export function warehouseFixture(overrides: Partial<Warehouse> = {}): Warehouse 
 export function requestFixture(overrides: Partial<LogisticsRequest> = {}): LogisticsRequest {
   return {
     id: 'request-1',
+    version: 1,
     warehouse_id: 'warehouse-1',
     source_system: null,
     external_id: null,
@@ -92,11 +99,14 @@ export function requestFixture(overrides: Partial<LogisticsRequest> = {}): Logis
 
 export function workspaceFixture(overrides: Partial<WarehouseWorkspace> = {}): WarehouseWorkspace {
   const warehouse = overrides.warehouse ?? warehouseFixture();
+  const requests = overrides.requests ?? [requestFixture({ warehouse_id: warehouse.id })];
   return {
     warehouse,
+    planning_date: warehouse.default_planning_date ?? '2026-08-30',
     warehouses: [warehouse],
     drivers: [{
       id: 'driver-1',
+      version: 1,
       warehouse_id: warehouse.id,
       external_worker_id: null,
       name: 'Водители склада',
@@ -107,6 +117,7 @@ export function workspaceFixture(overrides: Partial<WarehouseWorkspace> = {}): W
     }],
     vehicles: [{
       id: 'vehicle-1',
+      version: 1,
       warehouse_id: warehouse.id,
       name: 'МАЗ',
       registration_number: 'А123БВ',
@@ -119,6 +130,7 @@ export function workspaceFixture(overrides: Partial<WarehouseWorkspace> = {}): W
     trailers: [],
     shifts: [{
       id: 'shift-1',
+      version: 1,
       warehouse_id: warehouse.id,
       driver_id: 'driver-1',
       vehicle_id: 'vehicle-1',
@@ -129,7 +141,9 @@ export function workspaceFixture(overrides: Partial<WarehouseWorkspace> = {}): W
       break_minutes: 60,
       active: true,
     }],
-    requests: [requestFixture({ warehouse_id: warehouse.id })],
+    requests,
+    request_total: overrides.request_total ?? requests.length,
+    request_next_cursor: null,
     plans: [],
     ...overrides,
   };

@@ -48,9 +48,17 @@ vi.mock("@/features/booking", () => ({
   BookingContinuePage: () => null,
   BookingSelectionProvider: ({ children }: { children: ReactNode }) => children,
 }))
-vi.mock("@/features/logistics/driver-board", () => ({
-  DriverBoardPage: () => <div data-testid="movement-board-route" />,
-  LogisticsBoardPage: () => <div data-testid="logistics-board-route" />,
+vi.mock("@/features/logistics/logistics-shipments-page", () => ({
+  LogisticsShipmentsPage: () => <div data-testid="shipments-route" />,
+}))
+vi.mock(
+  "@/features/logistics/warehouse-transfers/warehouse-transfers-page",
+  () => ({
+    WarehouseTransfersPage: () => <div data-testid="transfers-route" />,
+  })
+)
+vi.mock("@/features/home/home-page", () => ({
+  HomePage: () => <div data-testid="home-route" />,
 }))
 
 const WAREHOUSE_ID = "00000000-0000-4000-8000-000000000001"
@@ -93,7 +101,16 @@ afterEach(() => {
 })
 
 describe("logistics navigation", () => {
-  it("links the Logistics sidebar group to the dedicated board route", async () => {
+  it.each([
+    ["/logistics/board", "shipments-route"],
+    ["/logistics/order-tasks", "shipments-route"],
+    ["/logistics/tasks", "transfers-route"],
+    ["/assistant", "home-route"],
+    ["/clients", "home-route"],
+    ["/orders", "home-route"],
+    ["/settings", "home-route"],
+    ["/settings/logistics", "home-route"],
+  ])("redirects the removed RWMS route %s", async (initialPath, targetTestId) => {
     mocks.useAuth.mockReturnValue({
       accessToken: "panel-token",
       currentUser,
@@ -127,7 +144,7 @@ describe("logistics navigation", () => {
     mocks.getActiveInventory.mockResolvedValue(null)
 
     render(
-      <MemoryRouter initialEntries={["/logistics/board"]}>
+      <MemoryRouter initialEntries={[initialPath]}>
         <QueryClientProvider
           client={
             new QueryClient({
@@ -140,14 +157,18 @@ describe("logistics navigation", () => {
       </MemoryRouter>
     )
 
-    await screen.findByTestId("logistics-board-route")
+    await screen.findByTestId(targetTestId)
     const sidebar = document.querySelector<HTMLElement>('[data-slot="sidebar"]')
     expect(sidebar).not.toBeNull()
-    const boardLink = within(sidebar!).getByRole("link", {
-      name: "Доска логистики",
-    })
-    expect(boardLink.getAttribute("href")).toBe("/logistics/board")
-    expect(screen.getByTestId("logistics-board-route")).toBeTruthy()
-    expect(screen.queryByTestId("movement-board-route")).toBeNull()
+    expect(
+      within(sidebar!).queryByRole("link", { name: "Доска логистики" })
+    ).toBeNull()
+    expect(
+      within(sidebar!).queryByRole("link", { name: "Задания" })
+    ).toBeNull()
+    expect(
+      within(sidebar!).queryByRole("button", { name: "Настройки" })
+    ).toBeNull()
+    expect(screen.getByTestId(targetTestId)).toBeTruthy()
   })
 })

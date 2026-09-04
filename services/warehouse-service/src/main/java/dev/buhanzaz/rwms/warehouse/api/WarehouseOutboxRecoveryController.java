@@ -59,10 +59,14 @@ public class WarehouseOutboxRecoveryController {
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID eventId,
       @Valid @RequestBody WarehouseOutboxRecoveryRequest request) {
-    UUID reviewedBySubjectId = access.requireRecoveryAdministrator(jwt);
+    WarehouseOutboxRecoveryAccessAuthorizer.RecoveryPrincipal principal =
+        access.requireRecoveryAdministrator(jwt);
     WarehouseOutboxRecoveryStore.RecoveryResult result =
         recovery.recover(
-            eventId, request.expectedReviewVersion(), reviewedBySubjectId, request.reason());
+            eventId,
+            request.expectedReviewVersion(),
+            principal.subjectId(),
+            request.reason());
     ResponseEntity.BodyBuilder response = ResponseEntity.ok();
     if (result.replayed()) response.header("Idempotency-Replayed", "true");
     return response.body(

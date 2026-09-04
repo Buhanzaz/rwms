@@ -23,6 +23,9 @@ interface WorkerGatewayApi {
     @GET("/api/task-board/worker/v1/context")
     suspend fun workerContext(): Response<WorkerContextDto>
 
+    @POST("/api/task-board/worker/v1/profile/avatar-scope")
+    suspend fun prepareWorkerProfileAvatarScope(): Response<WorkerProfileAvatarScopeDto>
+
     @GET("/api/task-board/worker/v1/feed")
     suspend fun workerFeed(
         @Query("cursor") cursor: String? = null,
@@ -61,6 +64,15 @@ interface WorkerGatewayApi {
         @Header("Idempotency-Key") idempotencyKey: String,
         @Body request: CreateUploadSessionRequestDto,
     ): Response<UploadSessionDto>
+
+    @GET("/api/media/v1/assets")
+    suspend fun mediaAssets(
+        @Query("ownerType") ownerType: String,
+        @Query("ownerId") ownerId: String,
+        @Query("warehouseId") warehouseId: String,
+        @Query("context") context: String,
+        @Query("limit") limit: Int = 100,
+    ): Response<MediaAssetPageDto>
 
     @PUT
     suspend fun uploadMediaContent(

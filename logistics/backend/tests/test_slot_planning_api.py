@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import date
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -15,8 +16,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings, get_settings
 from app.db import get_session
 from app.main import create_app
-from app.models import PlanningTask, Warehouse, WarehouseIsochroneTariff
+from app.models import (
+    PlanningDayMode,
+    PlanningTask,
+    SlotDayPlan,
+    Warehouse,
+    WarehouseIsochroneTariff,
+)
+from app.services.dynamic_operations import DynamicLogisticsService
 from app.slot_planning.application import SlotPlanningApplication
+from tests.auth import admin_access_token_verifier
 from tests.factories import (
     make_driver,
     make_routable_vehicle,
@@ -49,7 +58,7 @@ async def _slot_workspace(session: AsyncSession) -> Warehouse:
 def _application(session: AsyncSession) -> FastAPI:
     """Bind endpoint requests to the rollback fixture and deterministic truck router."""
 
-    application = create_app()
+    application = create_app(access_token_verifier=admin_access_token_verifier())
 
     async def session_override() -> AsyncIterator[AsyncSession]:
         """Share the current integration transaction with endpoint dependencies."""
@@ -181,7 +190,66 @@ async def test_hold_confirmation_is_versioned_and_idempotent(
             json={"confirmation_key": str(confirmation_key)},
         )
         assert replay.status_code == 200
-        assert replay.json() == {**confirmed.json(), "replayed": True}
+    assert replay.json() == {**confirmed.json(), "replayed": True}
+
+
+@pytest.mark.asyncio
+async def test_pickups_only_mode_blocks_delivery_slots_and_invalidates_live_hold(
+    db_session: AsyncSession,
+) -> None:
+    """A root day-mode fence blocks calculate/hold and a concurrent old hold confirmation."""
+
+    warehouse = await _slot_workspace(db_session)
+    hold_payload = {
+        **_availability_payload(warehouse.id),
+        "slot_start": "09:00:00",
+        "slot_end": "12:00:00",
+        "client_session_id": "mode-fenced-hold",
+    }
+    application = _application(db_session)
+    async with AsyncClient(
+        transport=ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        held = await client.post("/api/planning/slot-holds", json=hold_payload)
+        assert held.status_code == 201, held.text
+        fence = await db_session.scalar(
+            select(SlotDayPlan).where(
+                SlotDayPlan.warehouse_id == warehouse.id,
+                SlotDayPlan.date == PLANNING_DATE,
+            )
+        )
+        assert fence is not None
+        previous_fence_version = fence.version
+        previous_generation = warehouse.capacity_generation
+        await DynamicLogisticsService(AsyncMock(), None).set_day_mode(
+            db_session,
+            warehouse.id,
+            PLANNING_DATE,
+            expected_version=0,
+            plan_id=None,
+            expected_plan_version=None,
+            mode=PlanningDayMode.PICKUPS_ONLY,
+            actor="dispatcher",
+            idempotency_key="slot-pickups-only",
+        )
+        await db_session.flush()
+
+        confirmed = await client.post(
+            f"/api/planning/slot-holds/{held.json()['hold_id']}/confirm",
+            json={"confirmation_key": str(uuid4())},
+        )
+        availability = await client.post(
+            "/api/planning/slot-availability",
+            json=_availability_payload(warehouse.id),
+        )
+        another_hold = await client.post("/api/planning/slot-holds", json=hold_payload)
+
+    assert fence.version == previous_fence_version + 1
+    assert warehouse.capacity_generation > previous_generation
+    for response in (confirmed, availability, another_hold):
+        assert response.status_code == 409
+        assert response.json()["code"] == "DELIVERY_DISABLED_BY_DAY_MODE"
 
 
 @pytest.mark.asyncio

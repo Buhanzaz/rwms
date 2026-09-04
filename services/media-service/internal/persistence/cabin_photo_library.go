@@ -706,3 +706,66 @@ func (repository *Repository) ReadCabinPhotoVariant(
 	}
 	return tx.Commit(ctx)
 }
+
+// ReadCabinPresentationVariant reads one exact immutable SMALL or LARGE
+// generation through its retained CABIN association. Unlike an ordinary CABIN
+// gallery read, a presentation read intentionally survives a later generation
+// advance, owner-proof revocation, or soft deletion. The association and its
+// retained highest generation fence cabin, warehouse, media, and generation
+// identity, while media_variant supplies the immutable MinIO object version.
+// The trusted logistics presentation-membership boundary guarantees that the
+// requested generation was previously issued by a current snapshot; therefore
+// the association's generation being at least the requested generation is the
+// historical-retention predicate. All tuple mismatches remain indistinguishable
+// from a missing row.
+func (repository *Repository) ReadCabinPresentationVariant(
+	ctx context.Context,
+	cabinID, warehouseID, mediaID uuid.UUID,
+	generation int,
+	requestedVariant media.Variant,
+	consume func(VariantRecord) error,
+) error {
+	if cabinID == uuid.Nil || warehouseID == uuid.Nil || mediaID == uuid.Nil ||
+		generation <= 0 || consume == nil {
+		return ErrConflict
+	}
+	if requestedVariant != media.VariantSmall && requestedVariant != media.VariantLarge {
+		return ErrConflict
+	}
+	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var variant VariantRecord
+	var variantName string
+	err = tx.QueryRow(ctx, `/* media_logistics_retained_cabin_presentation_variant */
+		select variant.variant,variant.object_key,variant.object_version_id,
+			variant.content_type,variant.size_bytes,variant.width,variant.height,
+			variant.checksum_sha256
+		from media_cabin_photo photo
+		join media_asset asset on asset.media_id=photo.media_id
+			and asset.media_kind='IMAGE'
+			and asset.warehouse_id=$2
+		join media_variant variant on variant.media_id=photo.media_id
+			and variant.generation=$4 and variant.variant=$5
+			and variant.object_version_id<>''
+		where photo.cabin_id=$1 and photo.warehouse_id=$2 and photo.media_id=$3
+			and photo.media_generation>=$4
+		for share of photo`, cabinID, warehouseID, mediaID, generation,
+		requestedVariant).Scan(
+		&variantName, &variant.ObjectKey, &variant.ObjectVersionID,
+		&variant.ContentType, &variant.SizeBytes, &variant.Width, &variant.Height,
+		&variant.Checksum)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	variant.Variant = media.Variant(variantName)
+	if err := consume(variant); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}

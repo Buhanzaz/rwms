@@ -1,38 +1,86 @@
 package dev.buhanzaz.rwms.logistics.order.service;
 
+import dev.buhanzaz.rwms.logistics.customer.domain.CustomerBookingMutationOperation;
+import dev.buhanzaz.rwms.logistics.customer.domain.CustomerBookingMutationState;
+import dev.buhanzaz.rwms.logistics.customer.repository.CustomerBookingMutationRepository;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderCommandReceipt;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import dev.buhanzaz.rwms.logistics.order.repository.OrderCommandReceiptRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
+import dev.buhanzaz.rwms.logistics.order.domain.recovery.RentalOrderMutationCommand.State;
+import dev.buhanzaz.rwms.logistics.order.recovery.RentalOrderMutationCommandRepository;
 import dev.buhanzaz.rwms.logistics.order.security.OrderActor;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 /**
  * Serializes logistics-local rental-order commands through the existing order-row and receipt
- * advisory locks. It returns only exact loaded aggregates or receipts and never exposes a general
- * repository API.
+ * advisory locks. Mutable command admission also checks the customer cancellation checkpoint under
+ * that same order-row lock, while the owning recovery path deliberately bypasses only this
+ * admission check. The store returns only exact loaded aggregates or receipts and never exposes a
+ * general repository API.
  */
 @Service
 @RequiredArgsConstructor
 class RentalOrderCommandStore {
+  private static final Set<State> OPEN_MUTATION_STATES = Set.of(State.PENDING, State.QUARANTINED);
+  private static final Set<CustomerBookingMutationState> OPEN_CUSTOMER_CANCELLATION_STATES =
+      Set.of(CustomerBookingMutationState.PENDING, CustomerBookingMutationState.QUARANTINED);
+
   private final RentalOrderRepository orders;
   private final OrderCommandReceiptRepository receipts;
+  private final RentalOrderMutationCommandRepository mutationCommands;
+  private final CustomerBookingMutationRepository customerBookingMutations;
   private final LogisticsTransactionLock transactionLock;
 
   RentalOrder requiredOrder(UUID orderId) {
     return orders.findWithClientById(orderId).orElseThrow(RentalOrderProblems::notFound);
   }
 
+  RentalOrder lockedOrder(OrderActor actor, UUID orderId) {
+    return requireNoOpenMutation(recoveryOrder(actor, orderId), orderId);
+  }
+
   RentalOrder lockedOrder(UUID orderId) {
+    return requireNoOpenMutation(recoveryOrder(orderId), orderId);
+  }
+
+  private RentalOrder requireNoOpenMutation(RentalOrder order, UUID orderId) {
+    if (customerBookingMutations.existsByOrderIdAndOperationAndStateIn(
+        orderId, CustomerBookingMutationOperation.CANCEL, OPEN_CUSTOMER_CANCELLATION_STATES)) {
+      throw RentalOrderProblems.conflict(
+          "CUSTOMER_BOOKING_CANCELLATION_PENDING",
+          "Бронирование уже отменяется; новые операции заказа временно недоступны");
+    }
+    if (mutationCommands.existsByOrder_IdAndStateIn(orderId, OPEN_MUTATION_STATES)) {
+      throw RentalOrderProblems.conflict(
+          "ORDER_MUTATION_PENDING", "Операция заказа ещё восстанавливается");
+    }
+    return order;
+  }
+
+  RentalOrder recoveryOrder(OrderActor actor, UUID orderId) {
+    RentalOrder order = recoveryOrder(orderId);
+    if (actor == null) {
+      throw RentalOrderProblems.notFound();
+    }
+    return order;
+  }
+
+  /** Locks an order only for the owning recovery preparation/finalization transaction. */
+  RentalOrder recoveryOrder(UUID orderId) {
     return orders.findForUpdate(orderId).orElseThrow(RentalOrderProblems::notFound);
   }
 
   void lockCreation(OrderActor actor, UUID scopedKey) {
     transactionLock.acquire(
-        "rental-order:idempotency:" + actor.subjectId() + ":" + scopedKey);
+        "rental-order:idempotency:"
+            + actor.subjectId()
+            + ":"
+            + scopedKey);
   }
 
   RentalOrder creationReplay(OrderActor actor, UUID scopedKey) {
@@ -58,7 +106,12 @@ class RentalOrderCommandStore {
       throw new IllegalArgumentException("Order actor and Idempotency-Key are required");
     }
     transactionLock.acquire(
-        "rental-order:command:" + actor.subjectId() + ":" + operation + ":" + key);
+        "rental-order:command:"
+            + actor.subjectId()
+            + ":"
+            + operation
+            + ":"
+            + key);
     OrderCommandReceipt receipt =
         receipts
             .findByActorSubjectIdAndOperationNameAndIdempotencyKey(
@@ -78,7 +131,13 @@ class RentalOrderCommandStore {
 
   void remember(
       OrderActor actor, String operation, UUID key, String checksum, RentalOrder order) {
+    remember(actor.subjectId(), operation, key, checksum, order);
+  }
+
+  /** Completes a recovered command for the actor that was authorized before remote effects. */
+  void remember(
+      UUID actorSubjectId, String operation, UUID key, String checksum, RentalOrder order) {
     receipts.save(
-        OrderCommandReceipt.complete(order, actor.subjectId(), operation, key, checksum));
+        OrderCommandReceipt.complete(order, actorSubjectId, operation, key, checksum));
   }
 }

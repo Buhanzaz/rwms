@@ -1,6 +1,8 @@
 package dev.buhanzaz.rwms.taskboard.service;
 
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
+import static dev.buhanzaz.rwms.taskboard.api.PlanningReplacementApiModels.PlanningReplacementTaskRequest;
+import static dev.buhanzaz.rwms.taskboard.api.PlanningReplacementApiModels.PlanningReplacementTaskResult;
 import static dev.buhanzaz.rwms.taskboard.service.RegistryService.checkVersion;
 
 import dev.buhanzaz.rwms.taskboard.domain.*;
@@ -63,6 +65,7 @@ class TaskBoardExternalMutationService {
   private final DriverTaskAudienceService driverAudiences;
   private final WorkerInvalidationHub workerInvalidations;
   private final WorkerFeedRevisionStore workerFeedRevisions;
+  private final TaskAssignmentRepository assignments;
 
   TaskBoardExternalMutationService(
       BoardTaskRepository tasks,
@@ -81,7 +84,8 @@ class TaskBoardExternalMutationService {
       TaskBoardQueuePositionCoordinator queuePositions,
       DriverTaskAudienceService driverAudiences,
       WorkerInvalidationHub workerInvalidations,
-      WorkerFeedRevisionStore workerFeedRevisions) {
+      WorkerFeedRevisionStore workerFeedRevisions,
+      TaskAssignmentRepository assignments) {
     this.tasks = tasks;
     this.entries = entries;
     this.queues = queues;
@@ -99,6 +103,138 @@ class TaskBoardExternalMutationService {
     this.driverAudiences = driverAudiences;
     this.workerInvalidations = workerInvalidations;
     this.workerFeedRevisions = workerFeedRevisions;
+    this.assignments = assignments;
+  }
+
+  /**
+   * Reorders and reassigns a complete, already validated planner membership inside the caller's
+   * transaction. Every source fence is checked before the first mutation; later per-entry versions
+   * are read from the locked persistence context because earlier moves may legitimately renumber
+   * sibling entries in the same queue.
+   */
+  List<PlanningReplacementTaskResult> replacePlannerTasks(
+      LocalDate sourcePlanDate, List<PlanningReplacementTaskRequest> requested) {
+    return replacePlannerTasks(sourcePlanDate, requested, false);
+  }
+
+  /**
+   * Replaces the remaining task order after a sibling cancellation already renumbered the locked
+   * queue. PREPARE and COMMIT validate the caller's original entry fences before cancellation, so
+   * only that expected entry-version comparison may drift inside the same transaction.
+   */
+  List<PlanningReplacementTaskResult> replacePlannerTasksAfterSiblingRemoval(
+      LocalDate sourcePlanDate, List<PlanningReplacementTaskRequest> requested) {
+    return replacePlannerTasks(sourcePlanDate, requested, true);
+  }
+
+  private List<PlanningReplacementTaskResult> replacePlannerTasks(
+      LocalDate sourcePlanDate,
+      List<PlanningReplacementTaskRequest> requested,
+      boolean allowLockedEntryVersionDrift) {
+    List<UUID> externalTaskIds =
+        requested.stream()
+            .map(PlanningReplacementTaskRequest::externalTaskId)
+            .sorted()
+            .toList();
+    if (externalTaskIds.stream().distinct().count() != requested.size()) {
+      throw new IllegalArgumentException("Planner replacement contains duplicate tasks");
+    }
+    List<BoardTask> lockedTasks = tasks.findAllByExternalTaskIdInForUpdate(externalTaskIds);
+    if (lockedTasks.size() != requested.size()) {
+      throw new ConflictException("Planner replacement task membership changed");
+    }
+    Map<UUID, BoardTask> tasksByExternalId =
+        lockedTasks.stream()
+            .collect(
+                java.util.stream.Collectors.toMap(
+                    BoardTask::getExternalTaskId, java.util.function.Function.identity()));
+    List<QueueEntry> lockedEntries =
+        entries.findAllByTaskIdInForUpdate(lockedTasks.stream().map(BoardTask::getId).toList());
+    Map<UUID, List<QueueEntry>> entriesByTask =
+        lockedEntries.stream()
+            .collect(java.util.stream.Collectors.groupingBy(entry -> entry.getTask().getId()));
+    if (assignments.existsByQueueEntryIdIn(
+        lockedEntries.stream().map(QueueEntry::getId).toList())) {
+      throw new ConflictException("Claimed or assigned driver work cannot be replanned");
+    }
+
+    Set<String> targetPositions = new HashSet<>();
+    for (PlanningReplacementTaskRequest item : requested) {
+      BoardTask task = tasksByExternalId.get(item.externalTaskId());
+      List<QueueEntry> route = entriesByTask.getOrDefault(task.getId(), List.of());
+      if (task.getVersion() != item.expectedTaskVersion()
+          || task.getStatus() != TaskStatus.ACTIVE
+          || task.getLane() != TaskLane.SCHEDULED
+          || !task.getWarehouseId().equals(item.taskWarehouseId())
+          || !task.getScheduledDate().equals(sourcePlanDate)
+          || !task.getScheduledDate().equals(item.scheduledDate())
+          || route.size() != 1) {
+        throw new ConflictException("Planner replacement task fence changed");
+      }
+      QueueEntry entry = route.getFirst();
+      if ((!allowLockedEntryVersionDrift && entry.getVersion() != item.expectedEntryVersion())
+          || entry.getEntryType() != EntryType.REAL
+          || entry.getQueue() == null
+          || entry.getQueue().getPurpose() != QueuePurpose.LOGISTICS_DRIVER
+          || entry.getStatus() != EntryStatus.WAITING
+          || entry.getActiveStartedAt() != null
+          || entry.getPausedAt() != null
+          || entry.getDoneAt() != null
+          || entry.getActiveWorkSeconds() != 0) {
+        throw new ConflictException("Planner replacement route has already advanced");
+      }
+      String positionKey =
+          task.getWarehouseId()
+              + ":"
+              + entry.getQueue().getId()
+              + ":"
+              + item.targetQueuePosition();
+      if (!targetPositions.add(positionKey)) {
+        throw new IllegalArgumentException("Planner replacement queue positions must be unique");
+      }
+    }
+
+    List<PlanningReplacementTaskRequest> ordered =
+        requested.stream()
+            .sorted(
+                Comparator.comparing(
+                        PlanningReplacementTaskRequest::taskWarehouseId,
+                        Comparator.comparing(UUID::toString))
+                    .thenComparing(PlanningReplacementTaskRequest::targetQueuePosition)
+                    .thenComparing(item -> item.externalTaskId().toString()))
+            .toList();
+    for (PlanningReplacementTaskRequest item : ordered) {
+      BoardTask task = tasksByExternalId.get(item.externalTaskId());
+      QueueEntry entry = entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId()).getFirst();
+      moveExternalLogisticsTask(
+          item.externalTaskId(),
+          new MoveExternalLogisticsTaskRequest(
+              task.getVersion(),
+              entry.getVersion(),
+              TaskLane.SCHEDULED,
+              sourcePlanDate,
+              item.targetQueuePosition(),
+              item.driverAudience()));
+    }
+
+    List<PlanningReplacementTaskResult> result = new ArrayList<>(requested.size());
+    for (PlanningReplacementTaskRequest item : requested) {
+      BoardTask task =
+          tasks.findByExternalTaskId(item.externalTaskId()).orElseThrow();
+      QueueEntry entry = entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId()).getFirst();
+      if (entry.getQueuePosition() != item.targetQueuePosition()
+          || !Objects.equals(driverAudiences.dto(task), item.driverAudience())) {
+        throw new ConflictException("Planner replacement did not converge to the requested order");
+      }
+      result.add(
+          new PlanningReplacementTaskResult(
+              item.externalTaskId(),
+              task.getVersion(),
+              entry.getId(),
+              entry.getVersion(),
+              entry.getQueuePosition()));
+    }
+    return List.copyOf(result);
   }
 
   BoardTask requireOwnedExternalTask(String sourceClientId, UUID externalTaskId) {

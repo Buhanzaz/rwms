@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from typing import Protocol
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -30,13 +30,14 @@ from app.models import (
     RouteStop,
     UnassignedTask,
     Vehicle,
+    Warehouse,
 )
-from app.models.domain import OptimizationStatus, PlanStatus
+from app.models.domain import OptimizationStatus, PlanStatus, RequestStatus, TaskStatus
 from app.repositories import get_required
 from app.schemas.domain import (
     CyclePatch,
     GeneratePlanRequest,
-    ManualChangeRequest,
+    ManualChangeCommand,
     PlanNotificationLogRead,
     RouteCycleRead,
     RoutePlanRead,
@@ -44,8 +45,18 @@ from app.schemas.domain import (
     RouteStopRead,
     UnassignedTaskRead,
 )
+from app.services.dynamic_manual_history import append_manual_change_history
+from app.services.request_reschedule_fence import (
+    fence_plan_request_reschedules as fence_plan_request_reschedules,
+)
+from app.services.request_reschedule_fence import reject_active_request_reschedules
 
 PENDING_REQUEST_REFRESH_METRIC = "pending_request_metadata_refresh"
+MUTABLE_PLAN_STATUSES = (
+    PlanStatus.DRAFT,
+    PlanStatus.GENERATED,
+    PlanStatus.VALIDATED,
+)
 
 
 class PlannerFacade(Protocol):
@@ -76,7 +87,7 @@ class PlannerFacade(Protocol):
         self,
         session: AsyncSession,
         plan_id: UUID,
-        command: ManualChangeRequest,
+        command: ManualChangeCommand,
     ) -> OptimizationRun:
         """Start optimization of unlocked remaining work."""
 
@@ -86,6 +97,7 @@ class PlannerFacade(Protocol):
         plan_id: UUID,
         cycle_id: UUID,
         command: CyclePatch,
+        changed_by: str,
     ) -> RoutePlan:
         """Apply and fully validate an explicit route-cycle edit."""
 
@@ -93,7 +105,7 @@ class PlannerFacade(Protocol):
         self,
         session: AsyncSession,
         plan_id: UUID,
-        command: ManualChangeRequest,
+        command: ManualChangeCommand,
     ) -> RoutePlan:
         """Apply and fully validate a drag-and-drop or structural plan edit."""
 
@@ -109,17 +121,43 @@ class PlannerFacade(Protocol):
         self,
         session: AsyncSession,
         plan_id: UUID,
-        command: ManualChangeRequest,
-    ) -> RoutePlan:
+        command: ManualChangeCommand,
+    ) -> RoutePlanRead:
         """Persist or derive a non-destructive delay override result."""
 
     async def replan_simulation(
         self,
         session: AsyncSession,
         plan_id: UUID,
-        command: ManualChangeRequest,
+        command: ManualChangeCommand,
     ) -> OptimizationRun:
         """Replan only unfinished, unlocked work from fixed simulation state."""
+
+    async def reoptimize_recovery(
+        self,
+        session: AsyncSession,
+        plan_id: UUID,
+        command: ManualChangeCommand,
+    ) -> OptimizationRun:
+        """Create a recovery revision while preserving the confirmed source as history."""
+
+    async def preview_feasible_request_dates(
+        self,
+        session: AsyncSession,
+        request_id: UUID,
+        candidate_dates: tuple[date, ...],
+    ) -> tuple[date, ...]:
+        """Check candidate dates through the production routing and optimizer without writes."""
+
+    async def preview_delay_task_etas(
+        self,
+        session: AsyncSession,
+        plan_id: UUID,
+        vehicle_id: UUID,
+        effective_at: datetime,
+        delay_minutes: int,
+    ) -> dict[UUID, datetime]:
+        """Propagate one delay through future stops without mutating the source plan."""
 
 
 @dataclass(slots=True)
@@ -176,7 +214,7 @@ class UnavailablePlannerFacade:
         self,
         session: AsyncSession,
         plan_id: UUID,
-        command: ManualChangeRequest,
+        command: ManualChangeCommand,
     ) -> OptimizationRun:
         """Reject reoptimization until the real planner is attached."""
 
@@ -188,6 +226,7 @@ class UnavailablePlannerFacade:
         plan_id: UUID,
         cycle_id: UUID,
         command: CyclePatch,
+        changed_by: str,
     ) -> RoutePlan:
         """Reject semantic route edits until full validation is attached."""
 
@@ -197,7 +236,7 @@ class UnavailablePlannerFacade:
         self,
         session: AsyncSession,
         plan_id: UUID,
-        command: ManualChangeRequest,
+        command: ManualChangeCommand,
     ) -> RoutePlan:
         """Reject manual mutation until full validation is attached."""
 
@@ -217,8 +256,8 @@ class UnavailablePlannerFacade:
         self,
         session: AsyncSession,
         plan_id: UUID,
-        command: ManualChangeRequest,
-    ) -> RoutePlan:
+        command: ManualChangeCommand,
+    ) -> RoutePlanRead:
         """Reject delay commands until the planning engine is attached."""
 
         raise self._unavailable()
@@ -227,14 +266,52 @@ class UnavailablePlannerFacade:
         self,
         session: AsyncSession,
         plan_id: UUID,
-        command: ManualChangeRequest,
+        command: ManualChangeCommand,
     ) -> OptimizationRun:
         """Reject remaining-day replanning until the planning engine is attached."""
 
         raise self._unavailable()
 
+    async def reoptimize_recovery(
+        self,
+        session: AsyncSession,
+        plan_id: UUID,
+        command: ManualChangeCommand,
+    ) -> OptimizationRun:
+        """Reject operational recovery until the real planner is attached."""
 
-async def get_plan(session: AsyncSession, plan_id: UUID, *, for_update: bool = False) -> RoutePlan:
+        raise self._unavailable()
+
+    async def preview_feasible_request_dates(
+        self,
+        session: AsyncSession,
+        request_id: UUID,
+        candidate_dates: tuple[date, ...],
+    ) -> tuple[date, ...]:
+        """Reject recovery-date previews until the real planner is attached."""
+
+        raise self._unavailable()
+
+    async def preview_delay_task_etas(
+        self,
+        session: AsyncSession,
+        plan_id: UUID,
+        vehicle_id: UUID,
+        effective_at: datetime,
+        delay_minutes: int,
+    ) -> dict[UUID, datetime]:
+        """Reject delay propagation until the real planner is attached."""
+
+        raise self._unavailable()
+
+
+async def get_plan(
+    session: AsyncSession,
+    plan_id: UUID,
+    *,
+    for_update: bool = False,
+    populate_existing: bool = False,
+) -> RoutePlan:
     """Load a complete saved plan graph, optionally locking its version row."""
 
     cycles = selectinload(RoutePlan.cycles)
@@ -257,6 +334,8 @@ async def get_plan(session: AsyncSession, plan_id: UUID, *, for_update: bool = F
             selectinload(RoutePlan.notification_logs),
         )
     )
+    if populate_existing:
+        statement = statement.execution_options(populate_existing=True)
     if for_update:
         statement = statement.with_for_update()
     plan = await session.scalar(statement)
@@ -269,6 +348,8 @@ async def get_latest_plan_for_date(
     session: AsyncSession,
     warehouse_id: UUID,
     planning_date: date,
+    *,
+    for_update: bool = False,
 ) -> RoutePlan | None:
     """Load the newest non-archived plan for one warehouse day and its full graph."""
 
@@ -282,7 +363,7 @@ async def get_latest_plan_for_date(
         .order_by(RoutePlan.updated_at.desc(), RoutePlan.id.desc())
         .limit(1)
     )
-    return await get_plan(session, plan_id) if plan_id is not None else None
+    return await get_plan(session, plan_id, for_update=for_update) if plan_id is not None else None
 
 
 def _segment_read(segment: RouteSegment) -> RouteSegmentRead:
@@ -315,6 +396,7 @@ def plan_read(plan: RoutePlan) -> RoutePlanRead:
     return RoutePlanRead(
         id=plan.id,
         warehouse_id=plan.warehouse_id,
+        supersedes_plan_id=plan.supersedes_plan_id,
         date=plan.date,
         name=plan.name,
         version=plan.version,
@@ -377,7 +459,489 @@ async def assert_plan_version(
             "The route plan changed after it was loaded",
             extra={"expected_version": expected_version, "actual_version": plan.version},
         )
+    await fence_plan_request_reschedules(session, plan.id)
     return plan
+
+
+async def archive_mutable_plans_for_dates(
+    session: AsyncSession,
+    warehouse_id: UUID,
+    dates: set[date],
+    *,
+    exclude_request_reschedule_hold_id: UUID | None = None,
+) -> tuple[UUID, ...]:
+    """Archive recomputable plan heads while preserving confirmed and historical revisions."""
+
+    if not dates:
+        return ()
+    plan_ids = tuple(
+        await session.scalars(
+            select(RoutePlan.id)
+            .where(
+                RoutePlan.warehouse_id == warehouse_id,
+                RoutePlan.date.in_(dates),
+                RoutePlan.status.in_(MUTABLE_PLAN_STATUSES),
+            )
+            .order_by(RoutePlan.id)
+            .with_for_update()
+        )
+    )
+    for plan_id in plan_ids:
+        await fence_plan_request_reschedules(
+            session,
+            plan_id,
+            exclude_hold_id=exclude_request_reschedule_hold_id,
+        )
+    if not plan_ids:
+        return ()
+    result = await session.execute(
+        update(RoutePlan)
+        .where(
+            RoutePlan.id.in_(plan_ids),
+        )
+        .values(status=PlanStatus.ARCHIVED, version=RoutePlan.version + 1)
+        .returning(RoutePlan.id)
+    )
+    archived_ids = tuple(result.scalars())
+    await session.flush()
+    return archived_ids
+
+
+async def archive_plan_head_for_replacement(
+    session: AsyncSession,
+    warehouse_id: UUID,
+    planning_date: date,
+    supersedes_plan_id: UUID | None,
+    *,
+    allow_confirmed: bool = False,
+) -> RoutePlan | None:
+    """Serialize an atomic active-head swap and archive only the expected mutable predecessor."""
+
+    warehouse = await session.scalar(
+        select(Warehouse).where(Warehouse.id == warehouse_id).with_for_update()
+    )
+    if warehouse is None:
+        raise not_found("warehouse", warehouse_id)
+    active = await session.scalar(
+        select(RoutePlan)
+        .where(
+            RoutePlan.warehouse_id == warehouse_id,
+            RoutePlan.date == planning_date,
+            RoutePlan.status != PlanStatus.ARCHIVED,
+        )
+        .with_for_update()
+    )
+    if supersedes_plan_id is None:
+        if active is not None:
+            raise ApiError(
+                409,
+                "ACTIVE_PLAN_EXISTS",
+                "Archive or refresh the active plan before generating another revision",
+                extra={"plan_id": str(active.id)},
+            )
+        return None
+    if active is None or active.id != supersedes_plan_id:
+        raise ApiError(
+            409,
+            "PLAN_HEAD_CHANGED",
+            "The active route-plan revision changed before the replacement was saved",
+            extra={
+                "expected_plan_id": str(supersedes_plan_id),
+                "actual_plan_id": str(active.id) if active is not None else None,
+            },
+        )
+    if active.status == PlanStatus.CONFIRMED and not allow_confirmed:
+        raise ApiError(
+            409,
+            "PLAN_ALREADY_CONFIRMED",
+            "A confirmed plan cannot be replaced",
+        )
+    await fence_plan_request_reschedules(session, active.id)
+    active.status = PlanStatus.ARCHIVED
+    active.version += 1
+    await session.flush()
+    return active
+
+
+async def assert_plan_head_for_recovery_stage(
+    session: AsyncSession,
+    warehouse_id: UUID,
+    planning_date: date,
+    source_plan_id: UUID,
+    expected_source_version: int,
+) -> RoutePlan:
+    """Lock and fence the still-active source before persisting a hidden recovery revision."""
+
+    warehouse = await session.scalar(
+        select(Warehouse).where(Warehouse.id == warehouse_id).with_for_update()
+    )
+    if warehouse is None:
+        raise not_found("warehouse", warehouse_id)
+    active = await session.scalar(
+        select(RoutePlan)
+        .where(
+            RoutePlan.warehouse_id == warehouse_id,
+            RoutePlan.date == planning_date,
+            RoutePlan.status != PlanStatus.ARCHIVED,
+        )
+        .with_for_update()
+    )
+    if active is None or active.id != source_plan_id:
+        raise ApiError(
+            409,
+            "PLAN_HEAD_CHANGED",
+            "The active route-plan revision changed before recovery was staged",
+            extra={
+                "expected_plan_id": str(source_plan_id),
+                "actual_plan_id": str(active.id) if active is not None else None,
+            },
+        )
+    if active.version != expected_source_version:
+        raise ApiError(
+            409,
+            "PLAN_VERSION_CONFLICT",
+            "The source plan changed while recovery was being calculated",
+            extra={
+                "expected_version": expected_source_version,
+                "actual_version": active.version,
+            },
+        )
+    await fence_plan_request_reschedules(session, active.id)
+    return active
+
+
+async def activate_staged_recovery_plan(
+    session: AsyncSession,
+    *,
+    source_plan_id: UUID,
+    expected_source_version: int,
+    result_plan_id: UUID,
+    expected_result_version: int,
+) -> RoutePlan:
+    """Atomically expose one staged recovery after its owner-side effects have converged.
+
+    A replay after the swap returns the already-active result. The method never restores an old
+    source or displaces an unrelated active plan head.
+    """
+
+    identities = (
+        await session.execute(
+            select(
+                RoutePlan.id,
+                RoutePlan.warehouse_id,
+                RoutePlan.date,
+            ).where(RoutePlan.id.in_((source_plan_id, result_plan_id)))
+        )
+    ).all()
+    identity_by_id = {row.id: row for row in identities}
+    source_identity = identity_by_id.get(source_plan_id)
+    result_identity = identity_by_id.get(result_plan_id)
+    if source_identity is None:
+        raise not_found("route_plan", source_plan_id)
+    if result_identity is None:
+        raise not_found("route_plan", result_plan_id)
+    if (
+        source_identity.warehouse_id != result_identity.warehouse_id
+        or source_identity.date != result_identity.date
+    ):
+        raise ApiError(
+            409,
+            "RECOVERY_PLAN_SCOPE_CHANGED",
+            "The staged recovery no longer belongs to the source planning day",
+        )
+
+    warehouse = await session.scalar(
+        select(Warehouse).where(Warehouse.id == source_identity.warehouse_id).with_for_update()
+    )
+    if warehouse is None:
+        raise not_found("warehouse", source_identity.warehouse_id)
+    plans = tuple(
+        await session.scalars(
+            select(RoutePlan)
+            .where(RoutePlan.id.in_((source_plan_id, result_plan_id)))
+            .order_by(RoutePlan.id)
+            .with_for_update()
+        )
+    )
+    plan_by_id = {plan.id: plan for plan in plans}
+    source = plan_by_id.get(source_plan_id)
+    result = plan_by_id.get(result_plan_id)
+    if source is None:
+        raise not_found("route_plan", source_plan_id)
+    if result is None:
+        raise not_found("route_plan", result_plan_id)
+    if result.supersedes_plan_id != source.id:
+        raise ApiError(
+            409,
+            "RECOVERY_PLAN_LINEAGE_CHANGED",
+            "The staged recovery no longer supersedes the expected source",
+        )
+
+    active = await session.scalar(
+        select(RoutePlan)
+        .where(
+            RoutePlan.warehouse_id == source.warehouse_id,
+            RoutePlan.date == source.date,
+            RoutePlan.status != PlanStatus.ARCHIVED,
+        )
+        .with_for_update()
+    )
+    if active is not None and active.id == result.id:
+        if source.status != PlanStatus.ARCHIVED:
+            raise ApiError(
+                409,
+                "RECOVERY_PLAN_ACTIVATION_INCOMPLETE",
+                "The recovery head is active while its source is not archived",
+            )
+        return result
+    if active is None or active.id != source.id:
+        raise ApiError(
+            409,
+            "PLAN_HEAD_CHANGED",
+            "Another route-plan revision became active before recovery activation",
+            extra={
+                "expected_plan_id": str(source.id),
+                "actual_plan_id": str(active.id) if active is not None else None,
+            },
+        )
+    if source.version != expected_source_version:
+        raise ApiError(
+            409,
+            "PLAN_VERSION_CONFLICT",
+            "The source plan changed before recovery activation",
+            extra={
+                "expected_version": expected_source_version,
+                "actual_version": source.version,
+            },
+        )
+    if result.status != PlanStatus.ARCHIVED or result.version != expected_result_version:
+        raise ApiError(
+            409,
+            "RECOVERY_PLAN_STAGE_CHANGED",
+            "The prepared recovery revision changed before activation",
+        )
+    await fence_plan_request_reschedules(session, source.id)
+    await fence_plan_request_reschedules(session, result.id)
+    source.status = PlanStatus.ARCHIVED
+    source.version += 1
+    await session.flush((source,))
+    result.status = PlanStatus.GENERATED
+    result.version += 1
+    await session.flush((result,))
+    return result
+
+
+async def _plan_assigned_task_ids(
+    session: AsyncSession,
+    plan_id: UUID,
+) -> tuple[UUID, ...]:
+    """Return stable task identities physically assigned to cycles in one plan."""
+
+    return tuple(
+        await session.scalars(
+            select(RouteStop.task_id)
+            .join(RouteCycle, RouteCycle.id == RouteStop.route_cycle_id)
+            .where(
+                RouteCycle.route_plan_id == plan_id,
+                RouteStop.task_id.is_not(None),
+            )
+            .order_by(RouteStop.task_id)
+        )
+    )
+
+
+async def _plan_referenced_request_ids(
+    session: AsyncSession,
+    plan_id: UUID,
+) -> tuple[UUID, ...]:
+    """Snapshot every request referenced by assigned or unassigned plan membership."""
+
+    assigned = (
+        select(PlanningTask.request_id)
+        .join(RouteStop, RouteStop.task_id == PlanningTask.id)
+        .join(RouteCycle, RouteCycle.id == RouteStop.route_cycle_id)
+        .where(RouteCycle.route_plan_id == plan_id)
+    )
+    unassigned = (
+        select(PlanningTask.request_id)
+        .join(UnassignedTask, UnassignedTask.task_id == PlanningTask.id)
+        .where(UnassignedTask.route_plan_id == plan_id)
+    )
+    return tuple(
+        sorted(
+            set(await session.scalars(assigned.union(unassigned))),
+            key=str,
+        )
+    )
+
+
+async def lock_plan_for_request_mutation(
+    session: AsyncSession,
+    plan_id: UUID,
+) -> RoutePlan:
+    """Lock referenced requests before their plan and reject an active owner-slot hold."""
+
+    request_ids = await _plan_referenced_request_ids(session, plan_id)
+    if request_ids:
+        locked_request_ids = tuple(
+            await session.scalars(
+                select(LogisticsRequest.id)
+                .where(LogisticsRequest.id.in_(request_ids))
+                .order_by(LogisticsRequest.id)
+                .with_for_update()
+            )
+        )
+        if locked_request_ids != request_ids:
+            raise ApiError(
+                409,
+                "PLAN_REQUEST_MISSING",
+                "A request referenced by the plan no longer exists",
+            )
+    plan = await get_plan(
+        session,
+        plan_id,
+        for_update=True,
+        populate_existing=True,
+    )
+    if await _plan_referenced_request_ids(session, plan_id) != request_ids:
+        raise ApiError(
+            409,
+            "PLAN_MEMBERSHIP_CHANGED",
+            "The plan membership changed before its requests could be locked",
+        )
+    await fence_plan_request_reschedules(session, plan.id)
+    return plan
+
+
+async def _reserve_plan_requests(
+    session: AsyncSession,
+    plan: RoutePlan,
+) -> None:
+    """Atomically claim assigned flexible requests and invalidate competing draft revisions."""
+
+    assigned_task_ids = await _plan_assigned_task_ids(session, plan.id)
+    unassigned_task_ids = tuple(
+        await session.scalars(
+            select(UnassignedTask.task_id)
+            .where(UnassignedTask.route_plan_id == plan.id)
+            .order_by(UnassignedTask.task_id)
+        )
+    )
+    referenced_task_ids = tuple(dict.fromkeys((*assigned_task_ids, *unassigned_task_ids)))
+    if not referenced_task_ids:
+        return
+    referenced_request_ids = tuple(
+        await session.scalars(
+            select(PlanningTask.request_id)
+            .where(PlanningTask.id.in_(referenced_task_ids))
+            .distinct()
+            .order_by(PlanningTask.request_id)
+        )
+    )
+    requests = tuple(
+        await session.scalars(
+            select(LogisticsRequest)
+            .where(LogisticsRequest.id.in_(referenced_request_ids))
+            .order_by(LogisticsRequest.id)
+            .with_for_update()
+            .options(selectinload(LogisticsRequest.tasks))
+        )
+    )
+    if len(requests) != len(referenced_request_ids):
+        raise ApiError(
+            409,
+            "PLAN_REQUEST_MISSING",
+            "A request assigned to the plan no longer exists",
+        )
+    await reject_active_request_reschedules(
+        session,
+        tuple(request.id for request in requests),
+    )
+    if not assigned_task_ids:
+        return
+    assigned_request_ids = tuple(
+        await session.scalars(
+            select(PlanningTask.request_id)
+            .where(PlanningTask.id.in_(assigned_task_ids))
+            .distinct()
+            .order_by(PlanningTask.request_id)
+        )
+    )
+    requests = tuple(request for request in requests if request.id in assigned_request_ids)
+
+    assigned_plan_refs = (
+        select(RoutePlan.id, RoutePlan.status)
+        .join(RouteCycle, RouteCycle.route_plan_id == RoutePlan.id)
+        .join(RouteStop, RouteStop.route_cycle_id == RouteCycle.id)
+        .join(PlanningTask, PlanningTask.id == RouteStop.task_id)
+        .where(
+            PlanningTask.request_id.in_(assigned_request_ids),
+            RoutePlan.id != plan.id,
+            RoutePlan.status != PlanStatus.ARCHIVED,
+        )
+    )
+    unassigned_plan_refs = (
+        select(RoutePlan.id, RoutePlan.status)
+        .join(UnassignedTask, UnassignedTask.route_plan_id == RoutePlan.id)
+        .join(PlanningTask, PlanningTask.id == UnassignedTask.task_id)
+        .where(
+            PlanningTask.request_id.in_(assigned_request_ids),
+            RoutePlan.id != plan.id,
+            RoutePlan.status != PlanStatus.ARCHIVED,
+        )
+    )
+    competing_rows = tuple(
+        (await session.execute(assigned_plan_refs.union(unassigned_plan_refs))).all()
+    )
+    confirmed_conflicts = sorted(
+        {row.id for row in competing_rows if row.status == PlanStatus.CONFIRMED},
+        key=str,
+    )
+    if confirmed_conflicts:
+        raise ApiError(
+            409,
+            "REQUEST_ALREADY_ALLOCATED",
+            "A request in this plan is already allocated by another confirmed plan",
+            extra={"plan_ids": [str(plan_id) for plan_id in confirmed_conflicts]},
+        )
+    mutable_competing_ids = {
+        row.id for row in competing_rows if row.status in MUTABLE_PLAN_STATUSES
+    }
+    if mutable_competing_ids:
+        locked_competing_ids = tuple(
+            await session.scalars(
+                select(RoutePlan.id)
+                .where(RoutePlan.id.in_(mutable_competing_ids))
+                .order_by(RoutePlan.id)
+                .with_for_update()
+            )
+        )
+        for competing_plan_id in locked_competing_ids:
+            await fence_plan_request_reschedules(session, competing_plan_id)
+        await session.execute(
+            update(RoutePlan)
+            .where(RoutePlan.id.in_(mutable_competing_ids))
+            .values(status=PlanStatus.ARCHIVED, version=RoutePlan.version + 1)
+        )
+
+    assigned_set = set(assigned_task_ids)
+    unassigned_set = {item.task_id for item in plan.unassigned_tasks}
+    for request in requests:
+        if request.status not in (RequestStatus.READY, RequestStatus.UNASSIGNED):
+            raise ApiError(
+                409,
+                "REQUEST_NOT_AVAILABLE",
+                "A request assigned to the plan is no longer available",
+                extra={"request_id": str(request.id), "status": request.status},
+            )
+        request.scheduled_date = plan.date
+        request.status = RequestStatus.PLANNED
+        for task in request.tasks:
+            if task.id in assigned_set:
+                task.status = TaskStatus.PLANNED
+            elif task.id in unassigned_set:
+                task.status = TaskStatus.UNASSIGNED
+    await session.flush()
 
 
 async def mark_plans_for_request_refresh(
@@ -398,6 +962,7 @@ async def mark_plans_for_request_refresh(
                 RoutePlan.date.in_(dates),
                 RoutePlan.status != PlanStatus.ARCHIVED,
             )
+            .order_by(RoutePlan.id)
             .with_for_update()
         )
     )
@@ -409,13 +974,12 @@ async def mark_plans_for_request_refresh(
         )
     request_id_value = str(request_id)
     for plan in plans:
+        await fence_plan_request_reschedules(session, plan.id)
         marker = plan.metrics.get(PENDING_REQUEST_REFRESH_METRIC)
         marked_request_ids: set[str] = set()
         if isinstance(marker, dict):
             marked_request_ids.update(
-                value
-                for value in marker.get("request_ids", [])
-                if isinstance(value, str)
+                value for value in marker.get("request_ids", []) if isinstance(value, str)
             )
         marked_request_ids.add(request_id_value)
         plan.version += 1
@@ -434,7 +998,7 @@ async def mark_plans_for_request_refresh(
 async def record_manual_change(
     session: AsyncSession,
     plan: RoutePlan,
-    command: ManualChangeRequest,
+    command: ManualChangeCommand,
     *,
     previous_value: dict[str, object] | None,
     new_value: dict[str, object] | None,
@@ -464,6 +1028,8 @@ async def record_manual_change(
     )
     session.add(audit)
     await session.flush()
+    await append_manual_change_history(session, plan, audit, command)
+    await session.flush()
     return audit
 
 
@@ -473,21 +1039,53 @@ async def confirm_plan(
     expected_version: int,
     *,
     accept_warnings: bool,
-    empty_positioning_reason: str | None = None,
-    confirmed_by: str = "local-admin",
+    empty_positioning_reason: str | None,
+    confirmed_by: str,
 ) -> RoutePlan:
     """Confirm a valid plan and audit an explicitly accepted empty support leg."""
 
+    plan_identity = (
+        await session.execute(
+            select(RoutePlan.warehouse_id, RoutePlan.date).where(RoutePlan.id == plan_id)
+        )
+    ).one_or_none()
+    if plan_identity is None:
+        raise not_found("route_plan", plan_id)
+    referenced_request_ids = await _plan_referenced_request_ids(session, plan_id)
+    if referenced_request_ids:
+        locked_request_ids = tuple(
+            await session.scalars(
+                select(LogisticsRequest.id)
+                .where(LogisticsRequest.id.in_(referenced_request_ids))
+                .order_by(LogisticsRequest.id)
+                .with_for_update()
+            )
+        )
+        if locked_request_ids != referenced_request_ids:
+            raise ApiError(
+                409,
+                "PLAN_REQUEST_MISSING",
+                "A request referenced by the plan no longer exists",
+            )
+    warehouse = await session.scalar(
+        select(Warehouse).where(Warehouse.id == plan_identity.warehouse_id).with_for_update()
+    )
+    if warehouse is None:
+        raise not_found("warehouse", plan_identity.warehouse_id)
     plan = await assert_plan_version(session, plan_id, expected_version)
+    if await _plan_referenced_request_ids(session, plan_id) != referenced_request_ids:
+        raise ApiError(
+            409,
+            "PLAN_MEMBERSHIP_CHANGED",
+            "The plan membership changed before its requests could be reserved",
+        )
     if PENDING_REQUEST_REFRESH_METRIC in plan.metrics:
         raise ApiError(
             409,
             "PLAN_REFRESH_REQUIRED",
             "Refresh routes after changing request planning metadata",
         )
-    mandatory_unassigned = [
-        item.task_id for item in plan.unassigned_tasks if item.task.mandatory
-    ]
+    mandatory_unassigned = [item.task_id for item in plan.unassigned_tasks if item.task.mandatory]
     if mandatory_unassigned:
         raise ApiError(
             409,
@@ -512,9 +1110,7 @@ async def confirm_plan(
     if plan.status == PlanStatus.CONFIRMED:
         return plan
     positioning_distance = plan.metrics.get("support_positioning_distance_meters", 0)
-    empty_positioning = (
-        isinstance(positioning_distance, (int, float)) and positioning_distance > 0
-    )
+    empty_positioning = isinstance(positioning_distance, (int, float)) and positioning_distance > 0
     normalized_reason = (empty_positioning_reason or "").strip()
     if empty_positioning and not normalized_reason:
         raise ApiError(
@@ -523,6 +1119,7 @@ async def confirm_plan(
             "Confirming an empty cross-warehouse positioning leg requires a reason",
         )
     version_before = plan.version
+    await _reserve_plan_requests(session, plan)
     await _create_simulated_notification_logs(session, plan)
     plan.status = PlanStatus.CONFIRMED
     plan.version += 1

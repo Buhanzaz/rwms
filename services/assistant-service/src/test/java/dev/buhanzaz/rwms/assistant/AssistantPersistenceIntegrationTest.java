@@ -167,6 +167,48 @@ class AssistantPersistenceIntegrationTest {
   }
 
   @Test
+  void ownerBoundaryScopesConversationListsReadsAndMutations() {
+    UUID ownerA = UUID.randomUUID();
+    UUID ownerB = UUID.randomUUID();
+    AssistantConversation conversationA =
+        conversations.saveAndFlush(
+            AssistantConversation.create(
+                UUID.randomUUID(),
+                ownerA,
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                null,
+                "PERSON",
+                "Owner A client"));
+    AssistantConversation conversationB =
+        conversations.saveAndFlush(
+            AssistantConversation.create(
+                UUID.randomUUID(),
+                ownerB,
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                null,
+                "PERSON",
+                "Owner B client"));
+
+    assertThat(liveConversationService.list(ownerA))
+        .extracting(AssistantApiModels.ConversationResponse::id)
+        .containsExactly(conversationA.getId());
+    assertThatThrownBy(
+            () -> liveConversationService.detail(ownerA, conversationB.getId(), null))
+        .isInstanceOf(AssistantNotFoundException.class);
+    assertThatThrownBy(() -> liveConversationService.archive(ownerA, conversationB.getId()))
+        .isInstanceOf(AssistantNotFoundException.class);
+    assertThatThrownBy(
+            () ->
+                liveConversationService.beginTurn(
+                    ownerA,
+                    conversationB.getId(),
+                    new AssistantApiModels.TurnRequest("Cross-owner message")))
+        .isInstanceOf(AssistantNotFoundException.class);
+  }
+
+  @Test
   @Transactional(propagation = Propagation.NOT_SUPPORTED)
   void concurrentConversationCreationKeepsRemoteCallsOutsideTransactionsAndCreatesOneLocalRow() {
     UUID owner = UUID.randomUUID();

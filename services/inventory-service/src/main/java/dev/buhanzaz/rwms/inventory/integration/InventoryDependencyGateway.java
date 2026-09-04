@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.inventory.integration;
 
 import java.time.OffsetDateTime;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -19,6 +20,14 @@ public interface InventoryDependencyGateway {
 
   WarehouseAdmission warehouseAdmission(
       UUID warehouseId, WarehouseOperationDirection direction);
+
+  /**
+   * Reads task-board's effective-dated object work calendar for inventory planning evidence.
+   *
+   * <p>Inventory combines these authoritative work days only with its own holiday exceptions; it
+   * never derives weekdays or shifts itself.
+   */
+  WorkCalendarSnapshot workCalendarSnapshot(UUID warehouseId, LocalDate from, LocalDate through);
 
   WarehouseLifecycleReadinessWorkPage warehouseLifecycleReadinessWork(
       UUID after, int limit);
@@ -108,6 +117,22 @@ public interface InventoryDependencyGateway {
       String lifecycleState,
       WarehouseOperationDirection direction,
       boolean admitted) {}
+
+  record WorkCalendarSnapshot(
+      UUID warehouseId,
+      LocalDate from,
+      LocalDate through,
+      String calendarFingerprint,
+      List<WorkCalendarDate> dates) {}
+
+  record WorkCalendarDate(
+      LocalDate date,
+      boolean working,
+      String timeZone,
+      OffsetDateTime timeZoneEffectiveFrom,
+      UUID scheduleId,
+      Long scheduleVersion,
+      LocalDate scheduleEffectiveFrom) {}
 
   record WarehouseLifecycleReadinessWork(
       UUID warehouseId, long warehouseVersion, String lifecycleState) {}

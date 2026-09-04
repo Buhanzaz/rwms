@@ -141,7 +141,7 @@ public class CustomerDeliverySlot {
   @Column(name = "updated_at", nullable = false)
   private OffsetDateTime updatedAt;
 
-  /** Creates a short-lived offer after route-capacity validation, before customer attestations. */
+  /** Preserves ordinary isochrone-priced offer creation for callers without a special zone. */
   public static CustomerDeliverySlot offer(
       UUID customerSubjectId,
       UUID inquiryId,
@@ -159,6 +159,68 @@ public class CustomerDeliverySlot {
       int capacityRemaining,
       int siteCabinCapacity,
       Long deliveryPriceRubles,
+      Integer priceIsochroneMinutes,
+      boolean privateSiteAccessConfirmed,
+      boolean failedTripChargeAcknowledged,
+      double routeHeightMeters,
+      double routeWidthMeters,
+      double routeLengthMeters,
+      double routeWeightTons,
+      double routeAxleLoadTons,
+      int routeAxleCount,
+      OffsetDateTime expiresAt) {
+    return offer(
+        customerSubjectId,
+        inquiryId,
+        warehouseId,
+        deliveryDate,
+        kind,
+        windowStart,
+        windowEnd,
+        deliveryAddress,
+        latitude,
+        longitude,
+        cabinCount,
+        oneWayTravelSeconds,
+        travelZoneHours,
+        capacityRemaining,
+        siteCabinCapacity,
+        deliveryPriceRubles,
+        null,
+        priceIsochroneMinutes,
+        privateSiteAccessConfirmed,
+        failedTripChargeAcknowledged,
+        routeHeightMeters,
+        routeWidthMeters,
+        routeLengthMeters,
+        routeWeightTons,
+        routeAxleLoadTons,
+        routeAxleCount,
+        expiresAt);
+  }
+
+  /**
+   * Creates a short-lived route-feasible offer with exactly one ordinary tier or special-price
+   * provenance before customer attestations.
+   */
+  public static CustomerDeliverySlot offer(
+      UUID customerSubjectId,
+      UUID inquiryId,
+      UUID warehouseId,
+      LocalDate deliveryDate,
+      CustomerDeliverySlotKind kind,
+      LocalTime windowStart,
+      LocalTime windowEnd,
+      String deliveryAddress,
+      BigDecimal latitude,
+      BigDecimal longitude,
+      int cabinCount,
+      long oneWayTravelSeconds,
+      int travelZoneHours,
+      int capacityRemaining,
+      int siteCabinCapacity,
+      Long deliveryPriceRubles,
+      UUID priceZoneId,
       Integer priceIsochroneMinutes,
       boolean privateSiteAccessConfirmed,
       boolean failedTripChargeAcknowledged,
@@ -189,10 +251,11 @@ public class CustomerDeliverySlot {
         || siteCabinCapacity > 2
         || deliveryPriceRubles == null
         || deliveryPriceRubles < 0
-        || priceIsochroneMinutes == null
-        || priceIsochroneMinutes < 60
-        || priceIsochroneMinutes > 720
-        || priceIsochroneMinutes % 60 != 0
+        || (priceZoneId == null) == (priceIsochroneMinutes == null)
+        || (priceIsochroneMinutes != null
+            && (priceIsochroneMinutes < 60
+                || priceIsochroneMinutes > 720
+                || priceIsochroneMinutes % 60 != 0))
         || routeHeightMeters <= 0
         || routeWidthMeters <= 0
         || routeLengthMeters <= 0
@@ -207,7 +270,7 @@ public class CustomerDeliverySlot {
     slot.capacityRemaining = capacityRemaining;
     slot.siteCabinCapacity = siteCabinCapacity;
     slot.deliveryPriceRubles = deliveryPriceRubles;
-    slot.priceZoneId = null;
+    slot.priceZoneId = priceZoneId;
     slot.priceIsochroneMinutes = priceIsochroneMinutes;
     slot.roadRouteConfirmed = true;
     slot.privateSiteAccessConfirmed = privateSiteAccessConfirmed;
@@ -313,6 +376,42 @@ public class CustomerDeliverySlot {
     this.orderId = Objects.requireNonNull(orderId, "orderId");
     state = CustomerDeliverySlotState.CONFIRMED;
     expiresAt = OffsetDateTime.of(deliveryDate.plusDays(1), LocalTime.MIDNIGHT, ZoneOffset.UTC);
+    updatedAt = now();
+  }
+
+  /**
+   * Confirms a freshly recalculated offer as the replacement for this booking's former slot. The
+   * caller must hold both slot rows and the warehouse/day capacity fence in one transaction.
+   */
+  public void confirmReschedule(UUID bookingId, UUID orderId, int remainingCapacity) {
+    if (state != CustomerDeliverySlotState.OFFERED || !expiresAt.isAfter(now())) {
+      throw new IllegalStateException("Delivery slot is no longer available for rescheduling");
+    }
+    if (remainingCapacity < 0) {
+      throw new IllegalArgumentException("remainingCapacity is invalid");
+    }
+    requireRouteAttestations();
+    this.bookingId = Objects.requireNonNull(bookingId, "bookingId");
+    this.orderId = Objects.requireNonNull(orderId, "orderId");
+    capacityRemaining = remainingCapacity;
+    state = CustomerDeliverySlotState.CONFIRMED;
+    expiresAt = OffsetDateTime.of(deliveryDate.plusDays(1), LocalTime.MIDNIGHT, ZoneOffset.UTC);
+    updatedAt = now();
+  }
+
+  /** Releases confirmed workload while retaining its booking/order identity as immutable audit. */
+  public void releaseConfirmed(UUID expectedBookingId, UUID expectedOrderId) {
+    if (state == CustomerDeliverySlotState.RELEASED
+        && Objects.equals(bookingId, expectedBookingId)
+        && Objects.equals(orderId, expectedOrderId)) {
+      return;
+    }
+    if (state != CustomerDeliverySlotState.CONFIRMED
+        || !Objects.equals(bookingId, expectedBookingId)
+        || !Objects.equals(orderId, expectedOrderId)) {
+      throw new IllegalStateException("Confirmed delivery slot belongs to another booking");
+    }
+    state = CustomerDeliverySlotState.RELEASED;
     updatedAt = now();
   }
 

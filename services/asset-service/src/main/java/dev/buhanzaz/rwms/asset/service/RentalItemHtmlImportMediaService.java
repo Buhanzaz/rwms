@@ -84,7 +84,8 @@ public class RentalItemHtmlImportMediaService {
     }
     MediaAssetImportJob job =
         mediaImports.retry(
-            prepared.mediaJobId(), codec.stableKey("media-retry", id, idempotencyKey.toString()));
+            prepared.mediaJobId(),
+            codec.stableKey("media-retry", id, idempotencyKey.toString()));
     return inTransaction(() -> finishRetryMedia(id, prepared.mediaJobId(), job, command));
   }
 

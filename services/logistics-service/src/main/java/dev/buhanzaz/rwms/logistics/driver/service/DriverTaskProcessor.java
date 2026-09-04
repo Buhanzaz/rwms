@@ -21,6 +21,7 @@ public class DriverTaskProcessor {
 
   private final DriverTaskWorkflowStore store;
   private final LogisticsDependencyGateway dependencies;
+  private final DriverTransferExecutionService transferExecution;
 
   /**
    * Performs a bounded sequence of due work for one task. Remote effects are confirmed through
@@ -78,7 +79,8 @@ public class DriverTaskProcessor {
                 value.scheduledDate(),
                 value.priority(),
                 value.driverAudience(),
-                value.workerContent()));
+                value.workerContent(),
+                value.plannerLineage()));
         return;
       }
       if (work instanceof DriverTaskWorkflowStore.StatusWork value) {
@@ -90,6 +92,14 @@ public class DriverTaskProcessor {
         store.confirmEvidence(
             value.taskId(),
             dependencies.readDriverCompletionEvidence(value.externalTaskId()));
+        return;
+      }
+      if (work instanceof DriverTaskWorkflowStore.TransferDepartureWork value) {
+        transferExecution.depart(value);
+        return;
+      }
+      if (work instanceof DriverTaskWorkflowStore.TransferArrivalWork value) {
+        transferExecution.arrive(value);
         return;
       }
       if (work instanceof DriverTaskWorkflowStore.CoverWork value) {
@@ -113,8 +123,8 @@ public class DriverTaskProcessor {
                 value.transition()));
         return;
       }
-      if (work instanceof DriverTaskWorkflowStore.ManualReservationReleaseWork value) {
-        store.confirmManualReservationRelease(
+      if (work instanceof DriverTaskWorkflowStore.ReservationReleaseWork value) {
+        store.confirmReservationRelease(
             value.taskId(),
             dependencies.transitionRepairPlace(
                 derivedKey(
@@ -146,9 +156,11 @@ public class DriverTaskProcessor {
       case DriverTaskWorkflowStore.RegisterWork value -> value.taskId();
       case DriverTaskWorkflowStore.StatusWork value -> value.taskId();
       case DriverTaskWorkflowStore.EvidenceWork value -> value.taskId();
+      case DriverTaskWorkflowStore.TransferDepartureWork value -> value.taskId();
+      case DriverTaskWorkflowStore.TransferArrivalWork value -> value.taskId();
       case DriverTaskWorkflowStore.CoverWork value -> value.taskId();
       case DriverTaskWorkflowStore.RepairPlaceEffectWork value -> value.taskId();
-      case DriverTaskWorkflowStore.ManualReservationReleaseWork value -> value.taskId();
+      case DriverTaskWorkflowStore.ReservationReleaseWork value -> value.taskId();
     };
   }
 

@@ -17,7 +17,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -27,9 +27,8 @@ import org.springframework.stereotype.Service;
  * version of an already completed inventory plan.
  *
  * <p>Every prior entry, manager routing choice and operational date is copied unchanged. Only the
- * restored findings are appended and capacity-scheduled. The corrected successor is derived only
- * from inventory-owned immutable evidence and performs no remote I/O while its transaction holds
- * database locks.
+ * restored findings are appended on the same common object calendar as future plans. Calendar
+ * evidence is fetched before this service receives database locks, then fenced again locally.
  */
 @Service
 final class CompletedInventoryPlanCorrectionService {
@@ -59,6 +58,39 @@ final class CompletedInventoryPlanCorrectionService {
   }
 
   /**
+   * Fetches calendar evidence only when a completed head appears to need restored observations.
+   * The locked correction repeats the omitted-observation check and verifies the local settings
+   * revision before it can use this preloaded evidence.
+   */
+  Optional<CorrectionCalendar> prepareCalendarIfCorrectionLikely(InventorySession session) {
+    InventoryFinalPlan plan = finalPlans.findById(session.getId()).orElse(null);
+    if (plan == null || plan.getState() != FinalPlanState.COMPLETED) {
+      return Optional.empty();
+    }
+    Set<UUID> entryIds = new LinkedHashSet<>();
+    finalPlanEntries
+        .findByInventoryIdAndFinalPlanVersionOrderByOrderAscFindingIdAsc(
+            session.getId(), plan.getFinalPlanVersion())
+        .forEach(entry -> entryIds.add(entry.getFindingId()));
+    boolean omitted =
+        findings.findAllByInventoryIdOrderById(session.getId()).stream()
+            .anyMatch(
+                finding ->
+                    !finding.isMembershipActive()
+                        && finding.isExplicitObservation()
+                        && !entryIds.contains(finding.getId()));
+    if (!omitted) {
+      return Optional.empty();
+    }
+    InventoryPlanningService.PlanningSpecification settings =
+        planning.planningSpecification(session.getWarehouseId());
+    InventoryPlanningCalendar calendar = planning.calendarFor(session);
+    // With no daily throttle, every appended automatic item uses this first valid common date.
+    planning.reserveAutomaticDate(planning.planningDate(session), settings, calendar);
+    return Optional.of(new CorrectionCalendar(settings, calendar));
+  }
+
+  /**
    * Returns the existing completed head when it already covers every explicit observation, or
    * persists and returns its strictly newer corrected successor.
    */
@@ -66,6 +98,7 @@ final class CompletedInventoryPlanCorrectionService {
       InventorySession session,
       InventoryFinalPlan plan,
       List<InventoryFinalPlanEntry> currentEntries,
+      CorrectionCalendar preparedCalendar,
       OpaqueActorReference actor) {
     if (session.getLifecycle() != SessionLifecycle.COMPLETED
         || plan.getState() != FinalPlanState.COMPLETED
@@ -105,9 +138,12 @@ final class CompletedInventoryPlanCorrectionService {
 
     List<InventoryPlanningService.FinalPlanDraft> retained =
         planning.completionFinalPlanDrafts(session, plan, currentEntries);
-    InventoryPlanningService.PlanningSpecification settings =
-        planning.planningSpecification(session.getWarehouseId());
-    if (settings.revision() != plan.getPlanningSettingsRevision()) {
+    if (preparedCalendar == null) {
+      throw InventoryException.conflict(
+          "Completed inventory calendar evidence must be prepared again before observation recovery");
+    }
+    InventoryPlanningService.PlanningSpecification settings = preparedCalendar.settings();
+    if (planning.planningSpecification(session.getWarehouseId()).revision() != settings.revision()) {
       throw InventoryException.conflict(
           "Completed inventory planning settings changed before observation recovery");
     }
@@ -132,16 +168,19 @@ final class CompletedInventoryPlanCorrectionService {
         scheduleAppended(
             session,
             settings,
+            preparedCalendar.calendar(),
             retained,
             omitted.stream()
                 .map(value -> planning.finalPlanDraft(value, null, null, null, null))
                 .toList());
     long nextVersion = Math.addExact(plan.getFinalPlanVersion(), 1);
     List<InventoryPlanningService.FinalPlanDraft> combined = combine(retained, appended);
+    InventoryPlanningCalendar.Evidence calendarEvidence = preparedCalendar.calendar().evidence();
     String finalSha =
         planning.finalPlanSha256(
             session,
             settings,
+            planning.calendarFence(calendarEvidence),
             nextVersion,
             plan.getMovementScheduleMode(),
             plan.getRepairScheduleMode(),
@@ -150,6 +189,10 @@ final class CompletedInventoryPlanCorrectionService {
     plan.nextVersion(
         session.getRevision(),
         settings.revision(),
+        calendarEvidence.from(),
+        calendarEvidence.through(),
+        calendarEvidence.fingerprint(),
+        planning.calendarSnapshot(calendarEvidence),
         finalSha,
         plan.getMovementScheduleMode(),
         plan.getRepairScheduleMode());
@@ -182,11 +225,7 @@ final class CompletedInventoryPlanCorrectionService {
       throw InventoryException.conflict("Completed inventory plan advance is unavailable");
     }
     InventoryPlanningService.PlanningSpecification settings =
-        planning.planningSpecification(session.getWarehouseId());
-    if (settings.revision() != plan.getPlanningSettingsRevision()) {
-      throw InventoryException.conflict(
-          "Completed inventory planning settings changed before outcome recovery");
-    }
+        planning.historicalPlanningSpecification(plan.getPlanningSettingsRevision());
     List<InventoryPlanningService.FinalPlanDraft> exact =
         planning.completionFinalPlanDrafts(session, plan, currentEntries);
     long nextVersion = Math.addExact(plan.getFinalPlanVersion(), 1);
@@ -194,6 +233,7 @@ final class CompletedInventoryPlanCorrectionService {
         planning.finalPlanSha256(
             session,
             settings,
+            planning.calendarFenceOrNull(plan),
             nextVersion,
             plan.getMovementScheduleMode(),
             plan.getRepairScheduleMode(),
@@ -201,6 +241,10 @@ final class CompletedInventoryPlanCorrectionService {
     plan.nextVersion(
         session.getRevision(),
         settings.revision(),
+        plan.getTaskBoardCalendarFrom(),
+        plan.getTaskBoardCalendarThrough(),
+        plan.getTaskBoardCalendarFingerprint(),
+        plan.getTaskBoardCalendarSnapshot(),
         nextSha,
         plan.getMovementScheduleMode(),
         plan.getRepairScheduleMode());
@@ -214,18 +258,12 @@ final class CompletedInventoryPlanCorrectionService {
     return new CorrectionResult(advanced, copied, 0);
   }
 
-  private List<InventoryPlanningService.FinalPlanDraft> scheduleAppended(
+  List<InventoryPlanningService.FinalPlanDraft> scheduleAppended(
       InventorySession session,
       InventoryPlanningService.PlanningSpecification settings,
+      InventoryPlanningCalendar calendar,
       List<InventoryPlanningService.FinalPlanDraft> retained,
       List<InventoryPlanningService.FinalPlanDraft> omitted) {
-    Map<LocalDate, Integer> movementUsed = new LinkedHashMap<>();
-    Map<LocalDate, Integer> repairUsed = new LinkedHashMap<>();
-    retained.forEach(
-        value -> {
-          account(movementUsed, value.movementScheduledDate());
-          account(repairUsed, value.repairScheduledDate());
-        });
     LocalDate planningDate = planning.planningDate(session);
     List<InventoryPlanningService.FinalPlanDraft> result = new ArrayList<>();
     for (int index = 0; index < omitted.size(); index++) {
@@ -234,14 +272,12 @@ final class CompletedInventoryPlanCorrectionService {
         LocalDate movement = null;
         if (entry.movementToRepair()) {
           movement =
-              planning.reserveAutomaticDate(
-                  planningDate, settings, movementUsed, settings.movementDailyCapacity());
+              planning.reserveAutomaticDate(planningDate, settings, calendar);
         }
         LocalDate earliest =
             movement != null && movement.isAfter(planningDate) ? movement : planningDate;
         LocalDate repair =
-            planning.reserveAutomaticDate(
-                earliest, settings, repairUsed, settings.repairDailyCapacity());
+            planning.reserveAutomaticDate(earliest, settings, calendar);
         entry = entry.withDates(movement, repair);
       }
       result.add(entry.withOrder(retained.size() + index));
@@ -257,11 +293,11 @@ final class CompletedInventoryPlanCorrectionService {
     return List.copyOf(combined);
   }
 
-  private static void account(Map<LocalDate, Integer> used, LocalDate date) {
-    if (date != null) used.merge(date, 1, Math::addExact);
-  }
-
   /** Corrected completed-plan head, its exact entries and the restored observation count. */
   record CorrectionResult(
       InventoryFinalPlan plan, List<InventoryFinalPlanEntry> entries, int restoredCount) {}
+
+  /** Calendar and settings fetched before the recovery transaction acquires row locks. */
+  record CorrectionCalendar(
+      InventoryPlanningService.PlanningSpecification settings, InventoryPlanningCalendar calendar) {}
 }

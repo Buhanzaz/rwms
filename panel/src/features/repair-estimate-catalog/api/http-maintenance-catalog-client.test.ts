@@ -6,7 +6,6 @@ import {
   listMaintenanceCatalogVersions,
   replaceMaintenanceCatalog,
   replaceMaintenanceCatalogNodes,
-  type MaintenanceCreateCatalogRequest,
 } from "@/features/repair-estimate-catalog/api/http-maintenance-catalog-client"
 import type { ApiError } from "@/lib/api-client"
 
@@ -49,14 +48,13 @@ describe("maintenance catalog HTTP client", () => {
       )
     vi.stubGlobal("fetch", fetchMock)
 
-    await listMaintenanceCatalogVersions("catalog-token", warehouseId, "ACTIVE")
+    await listMaintenanceCatalogVersions("catalog-token", "ACTIVE")
 
     const [input, init] = fetchMock.mock.calls[0] as [URL, RequestInit]
     const endpoint = new URL(String(input))
     expect(endpoint.origin).toBe(window.location.origin)
     expect(endpoint.pathname).toBe("/api/maintenance/v1/catalog/versions")
     expect(Object.fromEntries(endpoint.searchParams)).toEqual({
-      warehouseId,
       page: "0",
       size: "200",
       lifecycle: "ACTIVE",
@@ -92,7 +90,6 @@ describe("maintenance catalog HTTP client", () => {
 
     const result = await listMaintenanceCatalogNodes(
       "catalog-token",
-      warehouseId,
       versionId
     )
 
@@ -108,18 +105,16 @@ describe("maintenance catalog HTTP client", () => {
     expect(endpoint.pathname).toBe(
       `/api/maintenance/v1/catalog/versions/${versionId}/nodes`
     )
-    expect(endpoint.searchParams.get("warehouseId")).toBe(warehouseId)
+    expect(endpoint.searchParams.has("warehouseId")).toBe(false)
   })
 
   it("sends CAS and idempotency headers for catalog commands", async () => {
     const fetchMock = vi.fn().mockImplementation(async () => json(version))
     vi.stubGlobal("fetch", fetchMock)
 
-    await replaceMaintenanceCatalogNodes("token", warehouseId, versionId, 4, [])
-    await replaceMaintenanceCatalog("token", warehouseId, versionId, 5, [], [])
-    await createMaintenanceCatalog("token", commandId, {
-      warehouseId,
-    } satisfies MaintenanceCreateCatalogRequest)
+    await replaceMaintenanceCatalogNodes("token", versionId, 4, [])
+    await replaceMaintenanceCatalog("token", versionId, 5, [], [])
+    await createMaintenanceCatalog("token", commandId)
     expect(JSON.parse(String(fetchMock.mock.calls[0]![1]?.body))).toEqual({
       expectedVersion: 4,
       nodes: [],
@@ -138,9 +133,7 @@ describe("maintenance catalog HTTP client", () => {
     expect(new URL(String(fetchMock.mock.calls[2]![0])).pathname).toBe(
       "/api/maintenance/v1/catalog/versions"
     )
-    expect(JSON.parse(String(fetchMock.mock.calls[2]![1]?.body))).toEqual({
-      warehouseId,
-    })
+    expect(fetchMock.mock.calls[2]![1]?.body).toBeUndefined()
   })
 
   it.each([
@@ -150,7 +143,7 @@ describe("maintenance catalog HTTP client", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({ detail }, status)))
 
     await expect(
-      listMaintenanceCatalogVersions("token", warehouseId)
+      listMaintenanceCatalogVersions("token")
     ).rejects.toMatchObject({
       name: "ApiError",
       status,

@@ -30,7 +30,6 @@ class FurnitureEquipmentLinkControllerTest {
     when(access.subjectId(jwt)).thenReturn(reviewer);
     FurnitureEquipmentLinkResponse response = response(warehouseId, nodeId, reviewer);
     when(review.review(
-            warehouseId,
             nodeId,
             2,
             FurnitureEquipmentLinkReviewAction.RETRY,
@@ -41,11 +40,10 @@ class FurnitureEquipmentLinkControllerTest {
     var result = controller.review(
         jwt,
         nodeId,
-        warehouseId,
         new FurnitureEquipmentLinkReviewRequest(
             2L, FurnitureEquipmentLinkReviewAction.RETRY, "reviewed"));
 
-    verify(access).requireFurnitureEquipmentLinkAdministrator(jwt, warehouseId);
+    verify(access).requireGlobalManage(jwt);
     assertThat(result.getHeaders().getFirst("Idempotency-Replayed")).isEqualTo("true");
     assertThat(result.getBody()).isEqualTo(response);
   }
@@ -53,18 +51,16 @@ class FurnitureEquipmentLinkControllerTest {
   @Test
   void deniedCallerCannotListOrReviewFurnitureLinks() {
     Jwt jwt = mock(Jwt.class);
-    UUID warehouseId = UUID.randomUUID();
     UUID nodeId = UUID.randomUUID();
     doThrow(new AccessDeniedException("denied"))
         .when(access)
-        .requireFurnitureEquipmentLinkAdministrator(jwt, warehouseId);
+        .requireGlobalManage(jwt);
 
-    assertThatThrownBy(() -> controller.list(jwt, warehouseId, 0, 50, null))
+    assertThatThrownBy(() -> controller.list(jwt, 0, 50, null))
         .isInstanceOf(AccessDeniedException.class);
     assertThatThrownBy(() -> controller.review(
         jwt,
         nodeId,
-        warehouseId,
         new FurnitureEquipmentLinkReviewRequest(
             0L, FurnitureEquipmentLinkReviewAction.ABANDON, "reviewed")))
         .isInstanceOf(AccessDeniedException.class);

@@ -1,16 +1,25 @@
 """REST endpoints for warehouse workspaces, resources, and requests."""
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Annotated
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, Header, Query, Response, status
 from sqlalchemy import select
 
+from app.api.authorization import (
+    filter_authorized_warehouses,
+    require_external_warehouse_access,
+    require_local_warehouse_access,
+    require_local_warehouse_set_access,
+    require_owned_entity_access,
+    require_request_date_option_access,
+)
 from app.api.dependencies import (
     CapacityRwmsClientDep,
+    CurrentUserDep,
     PlannerDep,
     RoadSnapperDep,
     SessionDep,
@@ -19,10 +28,7 @@ from app.api.dependencies import (
 from app.api.geocoding import GeocodingClientDep
 from app.api.serializers import request_read
 from app.errors import ApiError
-from app.integrations.rwms_sync import (
-    refresh_warehouse_directory,
-    sync_warehouse_requests,
-)
+from app.integrations.rwms_sync import warehouse_geocoding_query
 from app.models import (
     Driver,
     DriverShift,
@@ -32,7 +38,6 @@ from app.models import (
     Vehicle,
     Warehouse,
 )
-from app.repositories import get_required
 from app.schemas.domain import (
     AvailableDriverRead,
     AvailableWarehouseRead,
@@ -51,9 +56,6 @@ from app.schemas.domain import (
     RequestPlanningDetailsInput,
     RequestScheduleInput,
     RequestTaskSplitInput,
-    RwmsSyncRequest,
-    RwmsSyncResult,
-    RwmsWarehouseIdentity,
     ShiftCreate,
     ShiftRead,
     ShiftUpdate,
@@ -72,18 +74,25 @@ from app.schemas.domain import (
     WorkloadGenerationResult,
     WorkloadGeneratorInput,
 )
+from app.security import WarehouseAccessLevel
 from app.services import catalog as service
-from app.services.auto_planning import (
-    generate_missing_draft_plans,
-    invalidate_mutable_group_root_plans,
-)
+from app.services.auto_planning import generate_missing_draft_plans
 from app.services.capacity_mutations import publish_capacity_after_mutation
 from app.services.capacity_projection import publish_warehouse_capacity
+from app.services.catalog_command_idempotency import execute_idempotent_create
 from app.services.contractor_assignment import (
     assign_request_to_contractor,
     dispatch_requests_to_contractor,
 )
 from app.services.planning_group import resolve_planning_warehouse_group
+from app.services.vehicle_availability import (
+    VehicleAssignmentDataError,
+    VehicleAvailabilityPolicy,
+    covering_window,
+    load_vehicle_availability,
+    local_shift_interval,
+    recurring_shift_intervals,
+)
 from app.services.workload_generator import (
     GENERATOR_SOURCE_SYSTEM,
     delete_generated_workload,
@@ -92,6 +101,68 @@ from app.services.workload_generator import (
 
 router = APIRouter(tags=["catalog"])
 logger = logging.getLogger(__name__)
+IdempotencyKey = Annotated[
+    str,
+    Header(
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=200,
+        pattern=r"^[\x21-\x7e]+$",
+    ),
+]
+
+
+async def _load_vehicle_policy(
+    client: CapacityRwmsClientDep,
+    warehouse_ids: tuple[UUID, ...],
+    intervals: tuple[tuple[datetime, datetime], ...],
+) -> VehicleAvailabilityPolicy:
+    """Load a bounded operational snapshot and normalize merge conflicts as upstream errors."""
+
+    window_start, window_end = covering_window(intervals)
+    try:
+        return await load_vehicle_availability(
+            client,
+            warehouse_ids,
+            window_start=window_start,
+            window_end=window_end,
+        )
+    except VehicleAssignmentDataError as exc:
+        raise ApiError(
+            502,
+            "RWMS_VEHICLE_ASSIGNMENT_RESPONSE_INVALID",
+            "RWMS logistics-service vehicle assignment response is invalid",
+        ) from exc
+
+
+async def _load_shift_vehicle_policy(
+    session: SessionDep,
+    settings: SettingsDep,
+    client: CapacityRwmsClientDep,
+    warehouse_id: UUID,
+    *,
+    date_from: date,
+    date_to: date,
+    start_time: time,
+    end_time: time,
+) -> VehicleAvailabilityPolicy | None:
+    """Read assignment facts covering every occurrence of one shift command."""
+
+    if not settings.rwms_sync_enabled:
+        return None
+    warehouse = await service.require_warehouse(session, warehouse_id)
+    intervals = recurring_shift_intervals(
+        date_from,
+        date_to,
+        start_time,
+        end_time,
+        ZoneInfo(warehouse.timezone),
+    )
+    return await _load_vehicle_policy(
+        client,
+        (warehouse.external_warehouse_id,),
+        intervals,
+    )
 
 
 async def _publish_anonymous_test_capacity(
@@ -117,22 +188,6 @@ async def _publish_anonymous_test_capacity(
             ),
         )
     return "PUBLISHED", None
-
-
-def _warehouse_geocoding_query(identity: RwmsWarehouseIdentity) -> str:
-    """Qualify a canonical warehouse address with its city for forward geocoding."""
-
-    address = (identity.address or "").strip()
-    if not address:
-        raise ApiError(
-            422,
-            "WAREHOUSE_COORDINATES_REQUIRED",
-            "Не заданы координаты для использования склада в логистике",  # noqa: RUF001
-        )
-    city = identity.city.strip()
-    if city and city.casefold() not in address.casefold():
-        return f"{city}, {address}"
-    return address
 
 
 async def _publish_resource_capacity(
@@ -161,32 +216,29 @@ async def _publish_generated_request_capacity(
 @router.get("/warehouses", response_model=list[WarehouseRead])
 async def list_warehouses(
     session: SessionDep,
-    client: CapacityRwmsClientDep,
-    geocoder: GeocodingClientDep,
+    principal: CurrentUserDep,
 ) -> list[Warehouse]:
-    """Reconcile and list routing-ready canonical RWMS warehouse workspaces."""
+    """List persisted routing-ready workspaces without reconciling external state."""
 
-    return await refresh_warehouse_directory(
-        session,
-        client,
-        lambda identity: geocoder.forward(_warehouse_geocoding_query(identity)),
+    warehouses = list(
+        await session.scalars(
+            select(Warehouse)
+            .where(Warehouse.routing_ready.is_(True))
+            .order_by(Warehouse.name, Warehouse.id)
+        )
     )
+    return filter_authorized_warehouses(principal, warehouses)
 
 
 @router.get("/warehouses/available", response_model=list[AvailableWarehouseRead])
 async def list_available_warehouses(
     session: SessionDep,
     client: CapacityRwmsClientDep,
-    geocoder: GeocodingClientDep,
+    principal: CurrentUserDep,
 ) -> list[AvailableWarehouseRead]:
-    """List authoritative RWMS warehouse candidates and their local binding state."""
+    """Join authoritative candidates to persisted bindings without mutating either source."""
 
     identities = await client.list_warehouses()
-    await service.reconcile_warehouse_directory(
-        session,
-        identities,
-        lambda identity: geocoder.forward(_warehouse_geocoding_query(identity)),
-    )
     local_by_external = {
         warehouse.external_warehouse_id: warehouse
         for warehouse in await session.scalars(select(Warehouse))
@@ -233,6 +285,7 @@ async def list_available_warehouses(
             ),
         )
         for identity in identities
+        if principal.can_access(identity.warehouse_id, WarehouseAccessLevel.VIEW)
     ]
 
 
@@ -247,26 +300,48 @@ async def create_warehouse(
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
     geocoder: GeocodingClientDep,
+    principal: CurrentUserDep,
+    idempotency_key: IdempotencyKey,
 ) -> Warehouse:
     """Bind one RWMS identity, resolving its canonical address when coordinates are absent."""
 
-    identity = next(
-        (
-            candidate
-            for candidate in await client.list_warehouses()
-            if candidate.warehouse_id == payload.external_warehouse_id
-        ),
-        None,
+    require_external_warehouse_access(
+        principal,
+        payload.external_warehouse_id,
+        WarehouseAccessLevel.MANAGE,
     )
-    if identity is None:
-        raise ApiError(422, "RWMS_WAREHOUSE_NOT_FOUND", "RWMS warehouse is not available")
-    resolved = None
-    if not identity.routing_ready:
-        resolved = await geocoder.forward(_warehouse_geocoding_query(identity))
-    entity = await service.create_warehouse(session, payload, identity, resolved)
-    await _publish_resource_capacity(session, entity.id, settings, client)
-    await session.refresh(entity)
-    return entity
+    async def create() -> Warehouse:
+        """Resolve the authoritative identity only for the first command execution."""
+
+        identity = next(
+            (
+                candidate
+                for candidate in await client.list_warehouses()
+                if candidate.warehouse_id == payload.external_warehouse_id
+            ),
+            None,
+        )
+        if identity is None:
+            raise ApiError(422, "RWMS_WAREHOUSE_NOT_FOUND", "RWMS warehouse is not available")
+        resolved = None
+        if not identity.routing_ready:
+            resolved = await geocoder.forward(warehouse_geocoding_query(identity))
+        return await service.create_warehouse(session, payload, identity, resolved)
+
+    outcome = await execute_idempotent_create(
+        session,
+        operation="create_warehouse",
+        actor_id=principal.subject_id,
+        idempotency_key=idempotency_key,
+        payload={"payload": payload.model_dump(mode="json")},
+        resource_type="warehouse",
+        create=create,
+        load=lambda resource_id: session.get(Warehouse, resource_id),
+    )
+    if not outcome.replayed:
+        await _publish_resource_capacity(session, outcome.resource.id, settings, client)
+    await session.refresh(outcome.resource)
+    return outcome.resource
 
 
 @router.post(
@@ -282,9 +357,13 @@ async def generate_workload(
     planner: PlannerDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
 ) -> WorkloadGenerationResult:
-    """Replace deterministic load for one warehouse and rebuild missing draft plans."""
+    """Replace random test load for one warehouse and rebuild missing draft plans."""
 
+    await require_local_warehouse_access(
+        session, principal, warehouse_id, WarehouseAccessLevel.EDIT
+    )
     result = await generate_warehouse_workload(session, warehouse_id, payload, snapper)
     runs = await generate_missing_draft_plans(
         session,
@@ -324,9 +403,13 @@ async def delete_workload(
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
 ) -> WorkloadDeletionResult:
     """Delete generated workload and plans for one exact warehouse date."""
 
+    await require_local_warehouse_access(
+        session, principal, warehouse_id, WarehouseAccessLevel.EDIT
+    )
     result = await delete_generated_workload(session, warehouse_id, target_date)
     if settings.rwms_capacity_publish_enabled and result.deleted_requests > 0:
         await session.commit()
@@ -345,97 +428,79 @@ async def delete_workload(
 
 
 @router.get("/warehouses/{warehouse_id}", response_model=WarehouseRead)
-async def get_warehouse(warehouse_id: UUID, session: SessionDep) -> Warehouse:
+async def get_warehouse(
+    warehouse_id: UUID, session: SessionDep, principal: CurrentUserDep
+) -> Warehouse:
     """Read a depot by UUID."""
 
-    return await get_required(session, Warehouse, warehouse_id, "warehouse")
+    return await require_local_warehouse_access(
+        session, principal, warehouse_id, WarehouseAccessLevel.VIEW
+    )
 
 
 @router.get("/warehouses/{warehouse_id}/workspace", response_model=WarehouseWorkspaceRead)
 async def get_warehouse_workspace(
     warehouse_id: UUID,
     session: SessionDep,
-    planner: PlannerDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
-    refresh_rwms: Annotated[bool, Query()] = True,
+    principal: CurrentUserDep,
+    planning_date: Annotated[date | None, Query()] = None,
+    request_limit: Annotated[int, Query(ge=1, le=1000)] = 250,
+    request_cursor: Annotated[UUID | None, Query()] = None,
 ) -> WarehouseWorkspaceRead:
-    """Refresh RWMS demand by default, or read persisted state for explicit recovery."""
+    """Read one bounded persisted planning-date projection without synchronizing demand."""
 
-    warehouse = await service.require_warehouse(session, warehouse_id)
-    date_from = datetime.now(ZoneInfo(warehouse.timezone)).date()
-    if refresh_rwms and settings.rwms_sync_enabled:
-        await refresh_warehouse_directory(session, client)
-        warehouse = await service.require_warehouse(session, warehouse_id)
-        planning_group = await resolve_planning_warehouse_group(
-            session,
-            client,
-            warehouse,
-        )
-        planning_dates = tuple(date_from + timedelta(days=offset) for offset in range(31))
-        refresh_results: list[tuple[UUID, RwmsSyncResult]] = []
-        for member in planning_group.members:
-            result = await sync_warehouse_requests(
-                session,
-                member.id,
-                RwmsSyncRequest(
-                    warehouse_id=member.external_warehouse_id,
-                    date_from=date_from,
-                    date_to=date_from + timedelta(days=30),
-                ),
-                client,
-                None,
-            )
-            refresh_results.append(
-                (
-                    member.external_warehouse_id,
-                    result,
-                )
-            )
-        failures = [
-            {
-                "warehouse_id": str(external_warehouse_id),
-                **failure.model_dump(mode="json"),
-            }
-            for external_warehouse_id, result in refresh_results
-            for failure in result.failures
-        ]
-        if failures:
-            await session.commit()
-            raise ApiError(
-                422,
-                "RWMS_WORKSPACE_SYNC_INCOMPLETE",
-                "RWMS workspace refresh contains orders that could not be synchronized",
-                extra={
-                    "date_from": date_from.isoformat(),
-                    "date_to": (date_from + timedelta(days=30)).isoformat(),
-                    "failures": failures,
-                },
-            )
-        if len(planning_group.members) > 1 and any(
-            result.imported > 0 or result.updated > 0
-            for _, result in refresh_results
-        ):
-            await invalidate_mutable_group_root_plans(
-                session,
-                planning_group.root.id,
-                planning_dates,
-            )
-        await generate_missing_draft_plans(
-            session,
-            planner,
-            planning_group.root.id,
-            planning_dates,
-            request_warehouse_ids=(
-                member.id for member in planning_group.members
-            ),
-        )
-        warehouse = await service.require_warehouse(session, warehouse_id)
+    warehouse = await require_local_warehouse_access(
+        session, principal, warehouse_id, WarehouseAccessLevel.VIEW
+    )
+    effective_planning_date = planning_date or datetime.now(
+        ZoneInfo(warehouse.timezone)
+    ).date()
     planning_group = await resolve_planning_warehouse_group(
         session,
         client if settings.rwms_sync_enabled else None,
         warehouse,
+        planning_date=effective_planning_date,
     )
+    member_ids = tuple(member.id for member in planning_group.members)
+    await require_local_warehouse_set_access(
+        session,
+        principal,
+        member_ids,
+        WarehouseAccessLevel.VIEW,
+    )
+    member_by_id = {member.id: member for member in planning_group.members}
+    member_by_external_id = {
+        member.external_warehouse_id: member for member in planning_group.members
+    }
+    vehicle_policy: VehicleAvailabilityPolicy | None = None
+    projection_at = datetime.combine(
+        effective_planning_date,
+        warehouse.working_day_start,
+        tzinfo=ZoneInfo(warehouse.timezone),
+    )
+    if settings.rwms_sync_enabled:
+        day_intervals = tuple(
+            (
+                datetime.combine(
+                    effective_planning_date,
+                    time.min,
+                    tzinfo=ZoneInfo(member.timezone),
+                ),
+                datetime.combine(
+                    effective_planning_date + timedelta(days=1),
+                    time.min,
+                    tzinfo=ZoneInfo(member.timezone),
+                ),
+            )
+            for member in planning_group.members
+        )
+        vehicle_policy = await _load_vehicle_policy(
+            client,
+            tuple(member.external_warehouse_id for member in planning_group.members),
+            day_intervals,
+        )
     warehouses = list(
         await session.scalars(
             select(Warehouse)
@@ -443,46 +508,116 @@ async def get_warehouse_workspace(
             .order_by(Warehouse.name)
         )
     )
-    request_entities = [
-        request
-        for member in planning_group.members
-        for request in await service.list_requests(session, member.id)
-    ]
-    requests = sorted(request_entities, key=lambda item: (item.created_at, item.id))
+    warehouses = filter_authorized_warehouses(principal, warehouses)
+    requests, request_total, request_next_cursor = await service.list_requests_page(
+        session,
+        member_ids,
+        effective_planning_date,
+        limit=request_limit,
+        cursor=request_cursor,
+    )
+    vehicle_entities = await service.list_vehicles_for_warehouses(
+        session,
+        member_ids,
+        additional_vehicle_ids=(
+            tuple(vehicle_policy.vehicle_ids) if vehicle_policy is not None else ()
+        ),
+    )
+    home_warehouse_ids = tuple(
+        dict.fromkeys(item.warehouse_id for item in vehicle_entities)
+    )
+    home_external_by_local_id = {
+        item.id: item.external_warehouse_id
+        for item in await session.scalars(
+            select(Warehouse).where(Warehouse.id.in_(home_warehouse_ids))
+        )
+    }
+    workspace_vehicles: list[VehicleRead] = []
+    for vehicle in vehicle_entities:
+        vehicle_read = VehicleRead.model_validate(vehicle)
+        if vehicle_policy is not None:
+            home_external_id = home_external_by_local_id.get(vehicle.warehouse_id)
+            if home_external_id is None:
+                continue
+            placement = vehicle_policy.placement_at(
+                vehicle.id,
+                home_external_id,
+                projection_at,
+            )
+            if placement.warehouse_id is None:
+                continue
+            effective_warehouse = member_by_external_id.get(placement.warehouse_id)
+            if effective_warehouse is None:
+                continue
+            vehicle_read = vehicle_read.model_copy(
+                update={"warehouse_id": effective_warehouse.id}
+            )
+        workspace_vehicles.append(vehicle_read)
+
+    shift_entities = await service.list_catalog_for_warehouses(
+        session,
+        DriverShift,
+        member_ids,
+    )
+    vehicle_by_id = {item.id: item for item in vehicle_entities}
+    workspace_shifts: list[ShiftRead] = []
+    for shift in shift_entities:
+        if (
+            vehicle_policy is not None
+            and shift.active
+            and shift.date_from <= effective_planning_date <= shift.date_to
+        ):
+            target = member_by_id.get(shift.warehouse_id)
+            shift_vehicle = vehicle_by_id.get(shift.vehicle_id)
+            home_external_id = (
+                home_external_by_local_id.get(shift_vehicle.warehouse_id)
+                if shift_vehicle is not None
+                else None
+            )
+            if target is None or shift_vehicle is None or home_external_id is None:
+                continue
+            shift_start, shift_end = local_shift_interval(
+                effective_planning_date,
+                shift.start_time,
+                shift.end_time,
+                ZoneInfo(target.timezone),
+            )
+            if not vehicle_policy.available_for_interval(
+                shift.vehicle_id,
+                home_external_id,
+                target.external_warehouse_id,
+                shift_start,
+                shift_end,
+            ):
+                continue
+        workspace_shifts.append(ShiftRead.model_validate(shift))
     return WarehouseWorkspaceRead(
         warehouse=WarehouseRead.model_validate(warehouse),
+        planning_date=effective_planning_date,
         planning_root_warehouse_id=planning_group.root.id,
-        planning_group_warehouse_ids=[member.id for member in planning_group.members],
+        planning_group_warehouse_ids=list(member_ids),
         warehouses=[WarehouseRead.model_validate(item) for item in warehouses],
         drivers=[
             DriverRead.model_validate(item)
-            for item in await service.list_catalog(
+            for item in await service.list_catalog_for_warehouses(
                 session,
                 Driver,
-                planning_group.root.id,
+                member_ids,
             )
         ],
-        vehicles=[
-            VehicleRead.model_validate(item)
-            for item in await service.list_vehicles(session, planning_group.root.id)
-        ],
+        vehicles=workspace_vehicles,
         trailers=[
             TrailerRead.model_validate(item)
-            for item in await service.list_catalog(
+            for item in await service.list_catalog_for_warehouses(
                 session,
                 Trailer,
-                planning_group.root.id,
+                member_ids,
             )
         ],
-        shifts=[
-            ShiftRead.model_validate(item)
-            for item in await service.list_catalog(
-                session,
-                DriverShift,
-                planning_group.root.id,
-            )
-        ],
+        shifts=workspace_shifts,
         requests=[await request_read(session, item) for item in requests],
+        request_total=request_total,
+        request_next_cursor=request_next_cursor,
     )
 
 
@@ -493,9 +628,13 @@ async def update_warehouse(
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
 ) -> Warehouse:
     """Update a depot."""
 
+    await require_local_warehouse_access(
+        session, principal, warehouse_id, WarehouseAccessLevel.MANAGE
+    )
     entity = await service.update_warehouse(session, warehouse_id, payload)
     await _publish_resource_capacity(session, entity.id, settings, client)
     return entity
@@ -509,13 +648,17 @@ async def list_available_drivers(
     warehouse_id: UUID,
     session: SessionDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
 ) -> list[AvailableDriverRead]:
     """List canonical RWMS workers eligible for exact-driver assignment."""
 
-    warehouse = await service.require_warehouse(session, warehouse_id)
+    warehouse = await require_local_warehouse_access(
+        session, principal, warehouse_id, WarehouseAccessLevel.VIEW
+    )
     return [
         AvailableDriverRead(worker_id=item.worker_id, display_name=item.display_name)
         for item in await client.list_drivers(warehouse.external_warehouse_id)
+        if item.employment_type == "STAFF"
     ]
 
 
@@ -526,23 +669,45 @@ async def create_driver(
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
+    idempotency_key: IdempotencyKey,
 ) -> Driver:
     """Create a warehouse driver."""
 
-    warehouse = await service.require_warehouse(session, warehouse_id)
-    identity = None
-    if payload.external_worker_id is not None:
-        identity = next(
-            (
-                item
-                for item in await client.list_drivers(warehouse.external_warehouse_id)
-                if item.worker_id == payload.external_worker_id
-            ),
-            None,
-        )
-    entity = await service.create_driver(session, warehouse_id, payload, identity)
-    await _publish_resource_capacity(session, warehouse_id, settings, client)
-    return entity
+    warehouse = await require_local_warehouse_access(
+        session, principal, warehouse_id, WarehouseAccessLevel.EDIT
+    )
+    async def create() -> Driver:
+        """Resolve an exact RWMS worker only when this command owns the receipt."""
+
+        identity = None
+        if payload.external_worker_id is not None:
+            identity = next(
+                (
+                    item
+                    for item in await client.list_drivers(warehouse.external_warehouse_id)
+                    if item.worker_id == payload.external_worker_id
+                ),
+                None,
+            )
+        return await service.create_driver(session, warehouse_id, payload, identity)
+
+    outcome = await execute_idempotent_create(
+        session,
+        operation="create_driver",
+        actor_id=principal.subject_id,
+        idempotency_key=idempotency_key,
+        payload={
+            "warehouse_id": str(warehouse_id),
+            "payload": payload.model_dump(mode="json"),
+        },
+        resource_type="driver",
+        create=create,
+        load=lambda resource_id: session.get(Driver, resource_id),
+    )
+    if not outcome.replayed:
+        await _publish_resource_capacity(session, warehouse_id, settings, client)
+    return outcome.resource
 
 
 @router.patch("/drivers/{driver_id}", response_model=DriverRead)
@@ -552,10 +717,13 @@ async def update_driver(
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
 ) -> Driver:
     """Update a driver."""
 
-    driver = await get_required(session, Driver, driver_id, "driver")
+    driver = await require_owned_entity_access(
+        session, principal, Driver, driver_id, "driver", WarehouseAccessLevel.EDIT
+    )
     mode = payload.rwms_assignment_mode or driver.rwms_assignment_mode
     worker_id = (
         payload.external_worker_id
@@ -581,15 +749,25 @@ async def update_driver(
 @router.delete("/drivers/{driver_id}", status_code=204)
 async def delete_driver(
     driver_id: UUID,
+    expected_version: Annotated[int, Query(ge=1)],
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
 ) -> Response:
     """Delete a driver not retained by plan history."""
 
-    entity = await get_required(session, Driver, driver_id, "driver")
+    entity = await require_owned_entity_access(
+        session, principal, Driver, driver_id, "driver", WarehouseAccessLevel.EDIT
+    )
     warehouse_id = entity.warehouse_id
-    await service.delete_catalog_entity(session, Driver, driver_id, "driver")
+    await service.delete_catalog_entity(
+        session,
+        Driver,
+        driver_id,
+        "driver",
+        expected_version,
+    )
     await _publish_resource_capacity(session, warehouse_id, settings, client)
     return Response(status_code=204)
 
@@ -605,12 +783,31 @@ async def create_vehicle_configuration(
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
+    idempotency_key: IdempotencyKey,
 ) -> Vehicle:
     """Atomically create a vehicle and its operational axle-load profiles."""
 
-    entity = await service.create_vehicle_configuration(session, warehouse_id, payload)
-    await _publish_resource_capacity(session, warehouse_id, settings, client)
-    return entity
+    await require_local_warehouse_access(
+        session, principal, warehouse_id, WarehouseAccessLevel.EDIT
+    )
+
+    outcome = await execute_idempotent_create(
+        session,
+        operation="create_vehicle_configuration",
+        actor_id=principal.subject_id,
+        idempotency_key=idempotency_key,
+        payload={
+            "warehouse_id": str(warehouse_id),
+            "payload": payload.model_dump(mode="json"),
+        },
+        resource_type="vehicle",
+        create=lambda: service.create_vehicle_configuration(session, warehouse_id, payload),
+        load=lambda resource_id: service.get_vehicle(session, resource_id),
+    )
+    if not outcome.replayed:
+        await _publish_resource_capacity(session, warehouse_id, settings, client)
+    return outcome.resource
 
 
 @router.patch("/vehicles/{vehicle_id}", response_model=VehicleRead)
@@ -620,9 +817,13 @@ async def update_vehicle(
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
 ) -> Vehicle:
     """Update a vehicle."""
 
+    await require_owned_entity_access(
+        session, principal, Vehicle, vehicle_id, "vehicle", WarehouseAccessLevel.EDIT
+    )
     entity = await service.update_vehicle(session, vehicle_id, payload)
     await _publish_resource_capacity(session, entity.warehouse_id, settings, client)
     return entity
@@ -635,9 +836,13 @@ async def update_vehicle_configuration(
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
 ) -> Vehicle:
     """Atomically replace vehicle fields and its complete axle-profile set."""
 
+    await require_owned_entity_access(
+        session, principal, Vehicle, vehicle_id, "vehicle", WarehouseAccessLevel.EDIT
+    )
     entity = await service.update_vehicle_configuration(session, vehicle_id, payload)
     await _publish_resource_capacity(session, entity.warehouse_id, settings, client)
     return entity
@@ -646,15 +851,19 @@ async def update_vehicle_configuration(
 @router.delete("/vehicles/{vehicle_id}", status_code=204)
 async def delete_vehicle(
     vehicle_id: UUID,
+    expected_version: Annotated[int, Query(ge=1)],
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
 ) -> Response:
-    """Delete a vehicle not retained by plan history."""
+    """Delete a vehicle only when no driver shift retains it."""
 
-    entity = await get_required(session, Vehicle, vehicle_id, "vehicle")
+    entity = await require_owned_entity_access(
+        session, principal, Vehicle, vehicle_id, "vehicle", WarehouseAccessLevel.EDIT
+    )
     warehouse_id = entity.warehouse_id
-    await service.delete_catalog_entity(session, Vehicle, vehicle_id, "vehicle")
+    await service.delete_vehicle(session, vehicle_id, expected_version)
     await _publish_resource_capacity(session, warehouse_id, settings, client)
     return Response(status_code=204)
 
@@ -670,12 +879,31 @@ async def create_trailer(
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
+    idempotency_key: IdempotencyKey,
 ) -> Trailer:
     """Create a warehouse-owned trailer."""
 
-    entity = await service.create_trailer(session, warehouse_id, payload)
-    await _publish_resource_capacity(session, warehouse_id, settings, client)
-    return entity
+    await require_local_warehouse_access(
+        session, principal, warehouse_id, WarehouseAccessLevel.EDIT
+    )
+
+    outcome = await execute_idempotent_create(
+        session,
+        operation="create_trailer",
+        actor_id=principal.subject_id,
+        idempotency_key=idempotency_key,
+        payload={
+            "warehouse_id": str(warehouse_id),
+            "payload": payload.model_dump(mode="json"),
+        },
+        resource_type="trailer",
+        create=lambda: service.create_trailer(session, warehouse_id, payload),
+        load=lambda resource_id: session.get(Trailer, resource_id),
+    )
+    if not outcome.replayed:
+        await _publish_resource_capacity(session, warehouse_id, settings, client)
+    return outcome.resource
 
 
 @router.patch("/trailers/{trailer_id}", response_model=TrailerRead)
@@ -685,9 +913,13 @@ async def update_trailer(
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
 ) -> Trailer:
     """Update a trailer's label, availability, or physical limits."""
 
+    await require_owned_entity_access(
+        session, principal, Trailer, trailer_id, "trailer", WarehouseAccessLevel.EDIT
+    )
     entity = await service.update_trailer(session, trailer_id, payload)
     await _publish_resource_capacity(session, entity.warehouse_id, settings, client)
     return entity
@@ -696,15 +928,19 @@ async def update_trailer(
 @router.delete("/trailers/{trailer_id}", status_code=204)
 async def delete_trailer(
     trailer_id: UUID,
+    expected_version: Annotated[int, Query(ge=1)],
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
 ) -> Response:
-    """Delete a trailer while vehicle defaults are cleared by the database."""
+    """Delete a trailer only when no vehicle selects it as default."""
 
-    entity = await get_required(session, Trailer, trailer_id, "trailer")
+    entity = await require_owned_entity_access(
+        session, principal, Trailer, trailer_id, "trailer", WarehouseAccessLevel.EDIT
+    )
     warehouse_id = entity.warehouse_id
-    await service.delete_catalog_entity(session, Trailer, trailer_id, "trailer")
+    await service.delete_trailer(session, trailer_id, expected_version)
     await _publish_resource_capacity(session, warehouse_id, settings, client)
     return Response(status_code=204)
 
@@ -716,12 +952,51 @@ async def create_shift(
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
+    idempotency_key: IdempotencyKey,
 ) -> DriverShift:
     """Create a non-overlapping warehouse shift."""
 
-    entity = await service.create_shift(session, warehouse_id, payload)
-    await _publish_resource_capacity(session, warehouse_id, settings, client)
-    return entity
+    await require_local_warehouse_access(
+        session, principal, warehouse_id, WarehouseAccessLevel.EDIT
+    )
+
+    async def create_resource() -> DriverShift:
+        """Resolve current operational placement before persisting the idempotent shift."""
+
+        vehicle_policy = await _load_shift_vehicle_policy(
+            session,
+            settings,
+            client,
+            warehouse_id,
+            date_from=payload.date_from,
+            date_to=payload.date_to,
+            start_time=payload.start_time,
+            end_time=payload.end_time,
+        )
+        return await service.create_shift(
+            session,
+            warehouse_id,
+            payload,
+            vehicle_availability=vehicle_policy,
+        )
+
+    outcome = await execute_idempotent_create(
+        session,
+        operation="create_shift",
+        actor_id=principal.subject_id,
+        idempotency_key=idempotency_key,
+        payload={
+            "warehouse_id": str(warehouse_id),
+            "payload": payload.model_dump(mode="json"),
+        },
+        resource_type="shift",
+        create=create_resource,
+        load=lambda resource_id: session.get(DriverShift, resource_id),
+    )
+    if not outcome.replayed:
+        await _publish_resource_capacity(session, warehouse_id, settings, client)
+    return outcome.resource
 
 
 @router.patch("/shifts/{shift_id}", response_model=ShiftRead)
@@ -731,10 +1006,30 @@ async def update_shift(
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
 ) -> DriverShift:
     """Update a shift with repeated overlap validation."""
 
-    entity = await service.update_shift(session, shift_id, payload)
+    current = await require_owned_entity_access(
+        session, principal, DriverShift, shift_id, "shift", WarehouseAccessLevel.EDIT
+    )
+    values = payload.model_dump(exclude_unset=True, exclude={"expected_version"})
+    vehicle_policy = await _load_shift_vehicle_policy(
+        session,
+        settings,
+        client,
+        current.warehouse_id,
+        date_from=values.get("date_from", current.date_from),
+        date_to=values.get("date_to", current.date_to),
+        start_time=values.get("start_time", current.start_time),
+        end_time=values.get("end_time", current.end_time),
+    )
+    entity = await service.update_shift(
+        session,
+        shift_id,
+        payload,
+        vehicle_availability=vehicle_policy,
+    )
     await _publish_resource_capacity(session, entity.warehouse_id, settings, client)
     return entity
 
@@ -742,15 +1037,25 @@ async def update_shift(
 @router.delete("/shifts/{shift_id}", status_code=204)
 async def delete_shift(
     shift_id: UUID,
+    expected_version: Annotated[int, Query(ge=1)],
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
 ) -> Response:
     """Delete a shift not retained by plan history."""
 
-    entity = await get_required(session, DriverShift, shift_id, "shift")
+    entity = await require_owned_entity_access(
+        session, principal, DriverShift, shift_id, "shift", WarehouseAccessLevel.EDIT
+    )
     warehouse_id = entity.warehouse_id
-    await service.delete_catalog_entity(session, DriverShift, shift_id, "shift")
+    await service.delete_catalog_entity(
+        session,
+        DriverShift,
+        shift_id,
+        "shift",
+        expected_version,
+    )
     await _publish_resource_capacity(session, warehouse_id, settings, client)
     return Response(status_code=204)
 
@@ -761,19 +1066,43 @@ async def delete_shift(
     status_code=201,
 )
 async def create_request(
-    warehouse_id: UUID, payload: LogisticsRequestCreate, session: SessionDep
+    warehouse_id: UUID,
+    payload: LogisticsRequestCreate,
+    session: SessionDep,
+    principal: CurrentUserDep,
+    idempotency_key: IdempotencyKey,
 ) -> LogisticsRequestRead:
     """Create, server-classify, and split a delivery or pickup request."""
 
-    entity = await service.create_request(session, warehouse_id, payload)
-    return await request_read(session, entity)
+    await require_local_warehouse_access(
+        session, principal, warehouse_id, WarehouseAccessLevel.EDIT
+    )
+    outcome = await execute_idempotent_create(
+        session,
+        operation="create_request",
+        actor_id=principal.subject_id,
+        idempotency_key=idempotency_key,
+        payload={
+            "warehouse_id": str(warehouse_id),
+            "payload": payload.model_dump(mode="json"),
+        },
+        resource_type="request",
+        create=lambda: service.create_request(session, warehouse_id, payload),
+        load=lambda resource_id: service.get_request(session, resource_id),
+    )
+    return await request_read(session, outcome.resource)
 
 
 @router.get("/requests/{request_id}", response_model=LogisticsRequestRead)
-async def get_request(request_id: UUID, session: SessionDep) -> LogisticsRequestRead:
+async def get_request(
+    request_id: UUID, session: SessionDep, principal: CurrentUserDep
+) -> LogisticsRequestRead:
     """Read one logistics request."""
 
-    return await request_read(session, await service.get_request(session, request_id))
+    entity = await require_owned_entity_access(
+        session, principal, LogisticsRequest, request_id, "request", WarehouseAccessLevel.VIEW
+    )
+    return await request_read(session, entity)
 
 
 @router.post(
@@ -785,10 +1114,20 @@ async def assign_contractor(
     payload: ContractorAssignmentCreate,
     session: SessionDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
 ) -> LogisticsRequestRead:
     """Hand one complete delivery to a contractor without an internal route cycle."""
 
-    entity = await assign_request_to_contractor(session, request_id, payload, client)
+    await require_owned_entity_access(
+        session, principal, LogisticsRequest, request_id, "request", WarehouseAccessLevel.EDIT
+    )
+    entity = await assign_request_to_contractor(
+        session,
+        request_id,
+        payload,
+        client,
+        assigned_by=principal.audit_actor,
+    )
     return await request_read(session, entity)
 
 
@@ -801,10 +1140,20 @@ async def dispatch_contractor_requests(
     payload: ContractorDispatchCreate,
     session: SessionDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
 ) -> ContractorDispatchRead:
     """Assign selected-day unplanned requests without contractor route optimization."""
 
-    return await dispatch_requests_to_contractor(session, warehouse_id, payload, client)
+    await require_local_warehouse_access(
+        session, principal, warehouse_id, WarehouseAccessLevel.EDIT
+    )
+    return await dispatch_requests_to_contractor(
+        session,
+        warehouse_id,
+        payload,
+        client,
+        assigned_by=principal.audit_actor,
+    )
 
 
 @router.patch("/requests/{request_id}", response_model=LogisticsRequestRead)
@@ -814,9 +1163,13 @@ async def update_request(
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
 ) -> LogisticsRequestRead:
     """Update a request and reclassify coordinate changes on the backend."""
 
+    await require_owned_entity_access(
+        session, principal, LogisticsRequest, request_id, "request", WarehouseAccessLevel.EDIT
+    )
     entity = await service.update_request(session, request_id, payload)
     await _publish_generated_request_capacity(session, entity, settings, client)
     return await request_read(session, entity)
@@ -825,14 +1178,18 @@ async def update_request(
 @router.delete("/requests/{request_id}", status_code=204)
 async def delete_request(
     request_id: UUID,
+    expected_version: Annotated[int, Query(ge=1)],
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
 ) -> Response:
     """Delete one request when no saved plan references its tasks."""
 
-    entity = await service.get_request(session, request_id)
-    await service.delete_request(session, request_id)
+    entity = await require_owned_entity_access(
+        session, principal, LogisticsRequest, request_id, "request", WarehouseAccessLevel.EDIT
+    )
+    await service.delete_request(session, request_id, expected_version)
     await _publish_generated_request_capacity(session, entity, settings, client)
     return Response(status_code=204)
 
@@ -844,9 +1201,13 @@ async def set_request_planning_details(
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
 ) -> LogisticsRequestRead:
     """Store dispatcher-owned obligation, date, window, access, and contact details."""
 
+    await require_owned_entity_access(
+        session, principal, LogisticsRequest, request_id, "request", WarehouseAccessLevel.EDIT
+    )
     entity = await service.set_request_planning_details(
         session,
         request_id,
@@ -859,15 +1220,23 @@ async def set_request_planning_details(
 @router.post("/requests/{request_id}/split", response_model=LogisticsRequestRead)
 async def split_request(
     request_id: UUID,
+    payload: RequestTaskSplitInput,
     session: SessionDep,
-    payload: RequestTaskSplitInput | None = None,
+    principal: CurrentUserDep,
 ) -> LogisticsRequestRead:
     """Regenerate automatic or explicitly-sized transport parts."""
 
-    quantities = payload.part_quantities if payload is not None else None
+    await require_owned_entity_access(
+        session, principal, LogisticsRequest, request_id, "request", WarehouseAccessLevel.EDIT
+    )
     return await request_read(
         session,
-        await service.split_request(session, request_id, quantities),
+        await service.split_request(
+            session,
+            request_id,
+            payload.expected_version,
+            payload.part_quantities,
+        ),
     )
 
 
@@ -878,9 +1247,13 @@ async def schedule_request(
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
 ) -> LogisticsRequestRead:
     """Assign the request to one accepted or explicitly agreed date."""
 
+    await require_owned_entity_access(
+        session, principal, LogisticsRequest, request_id, "request", WarehouseAccessLevel.EDIT
+    )
     entity = await service.schedule_request(session, request_id, payload)
     await _publish_generated_request_capacity(session, entity, settings, client)
     return await request_read(session, entity)
@@ -897,13 +1270,31 @@ async def create_date_option(
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
+    idempotency_key: IdempotencyKey,
 ) -> RequestDateOption:
     """Add one acceptable date option."""
 
-    entity = await service.create_date_option(session, request_id, payload)
+    await require_owned_entity_access(
+        session, principal, LogisticsRequest, request_id, "request", WarehouseAccessLevel.EDIT
+    )
+    outcome = await execute_idempotent_create(
+        session,
+        operation="create_request_date_option",
+        actor_id=principal.subject_id,
+        idempotency_key=idempotency_key,
+        payload={
+            "request_id": str(request_id),
+            "payload": payload.model_dump(mode="json"),
+        },
+        resource_type="request_date_option",
+        create=lambda: service.create_date_option(session, request_id, payload),
+        load=lambda resource_id: session.get(RequestDateOption, resource_id),
+    )
     request = await service.get_request(session, request_id)
-    await _publish_generated_request_capacity(session, request, settings, client)
-    return entity
+    if not outcome.replayed:
+        await _publish_generated_request_capacity(session, request, settings, client)
+    return outcome.resource
 
 
 @router.patch("/request-date-options/{option_id}", response_model=RequestDateOptionRead)
@@ -913,9 +1304,13 @@ async def update_date_option(
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
 ) -> RequestDateOption:
     """Update one acceptable request date and window."""
 
+    await require_request_date_option_access(
+        session, principal, option_id, WarehouseAccessLevel.EDIT
+    )
     entity = await service.update_date_option(session, option_id, payload)
     request = await service.get_request(session, entity.request_id)
     await _publish_generated_request_capacity(session, request, settings, client)
@@ -925,14 +1320,18 @@ async def update_date_option(
 @router.delete("/request-date-options/{option_id}", status_code=204)
 async def delete_date_option(
     option_id: UUID,
+    expected_version: Annotated[int, Query(ge=1)],
     session: SessionDep,
     settings: SettingsDep,
     client: CapacityRwmsClientDep,
+    principal: CurrentUserDep,
 ) -> Response:
     """Delete one acceptable request date."""
 
-    entity = await get_required(session, RequestDateOption, option_id, "request_date_option")
+    entity = await require_request_date_option_access(
+        session, principal, option_id, WarehouseAccessLevel.EDIT
+    )
     request = await service.get_request(session, entity.request_id)
-    await service.delete_date_option(session, option_id)
+    await service.delete_date_option(session, option_id, expected_version)
     await _publish_generated_request_capacity(session, request, settings, client)
     return Response(status_code=204)

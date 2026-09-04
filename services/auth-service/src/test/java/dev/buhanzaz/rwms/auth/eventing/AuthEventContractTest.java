@@ -82,8 +82,14 @@ class AuthEventContractTest {
                 .containsExactlyInAnyOrder("VALIDATION_REJECTED", "PROCESSING_FAILED");
         assertThat(schema.at("/$defs/sanitizedDltBody/properties/messageSha256/pattern").stringValue())
                 .isEqualTo("^[0-9a-f]{64}$");
+        assertThat(schema.at("/$defs/userAuthorization/properties/companyId").isMissingNode())
+                .isTrue();
+        assertThat(schema.at("/$defs/workerAccess/properties/companyId").isMissingNode())
+                .isTrue();
         String contract = Files.readString(contractPath()).toLowerCase(java.util.Locale.ROOT);
-        assertThat(contract).doesNotContain("passwordhash", "externalworkerid", "commenttext");
+        assertThat(contract)
+                .doesNotContain(
+                        "passwordhash", "externalworkerid", "commenttext", "companyid", "company_id");
     }
 
     private Set<String> strings(JsonNode array) {

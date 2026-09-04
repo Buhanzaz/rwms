@@ -93,14 +93,16 @@ Link receiver. Оба client ID выбирают login surface для worker cre
 ClientApp сначала получает CSRF cookie/header pair через `GET /api/auth/csrf`,
 а затем вызывает `POST /api/customer/v1/registrations`. Регистрация атомарно
 создаёт активного пользователя `CUSTOMER`, его private encoded credential,
-начальный authorization fact и outbox row. Учётная запись не имеет warehouse
+начальный authorization fact и outbox row. До password hashing auth-service
+атомарно расходует долговечные per-source и глобальный fixed-window budgets
+регистрации. Учётная запись не имеет warehouse
 grants, manager-mobile access или rental-manager entitlement. Она может
 использовать только `rwms-customer-android` с query-free HTTPS callback
 `/auth/customer/callback` и единственным бизнес-scope `customer.rental`; другие
 пользователи не могут применять этот client.
 
 User access и ID tokens содержат канонические claims `sub`,
-`preferred_username`, `principal_type=USER`, `global_role` и camel-case
+`preferred_username`, `principal_type=USER`, immutable `company_id`, `global_role` и camel-case
 `rentalAccess`, а также managed `client_id`, выпустивший токен. Источником истины
 для точной формы claims и endpoint остаётся публичный контракт, а не этот
 README.
@@ -116,6 +118,10 @@ authorization endpoints остаются standards-based.
 | --- | --- | --- |
 | `GET /api/auth/csrf` | Получение CSRF cookie/header pair для регистрации | Анонимное чтение. |
 | `POST /api/customer/v1/registrations` | Создание customer-only credential и authorization stream | Анонимно с точной CSRF cookie/header pair; логин из 3–64 portable символов, пароль из 8–128 символов и совпадающее подтверждение. |
+| `GET /api/admin/companies` | Список видимых компаний | `SYSTEM_ADMIN` видит все компании; `WMS_ADMIN` — только свою. |
+| `POST /api/admin/companies` | Создание границы компании | Только `SYSTEM_ADMIN`. |
+| `GET /api/admin/companies/{id}` | Чтение одной видимой компании | `SYSTEM_ADMIN` либо `WMS_ADMIN` этой компании. |
+| `PUT /api/admin/companies/{id}` | Version-fenced изменение компании | То же правило видимости; обязателен `expectedVersion`. |
 | `GET /api/admin/users` | Список администрируемых пользователей | USER JWT с `SYSTEM_ADMIN` или `WMS_ADMIN`. |
 | `POST /api/admin/users` | Создание администрируемого пользователя | Та же роль; только `SYSTEM_ADMIN` может создать `SYSTEM_ADMIN` account. |
 | `GET /api/admin/users/{id}` | Чтение administrative user projection | USER JWT с `SYSTEM_ADMIN` или `WMS_ADMIN`. |
@@ -123,7 +129,9 @@ authorization endpoints остаются standards-based.
 | `GET /api/users/me` | Текущая access projection активного пользователя | USER Bearer JWT. |
 
 Сервис возвращает единые Problem Details для invalid, unauthenticated,
-forbidden, not-found и conflict случаев. Изменения admin profile, password и
+forbidden, not-found, conflict и registration-rate-limit случаев. Ответ `429`
+регистрации содержит `Retry-After`; недоступная БД throttle приводит к
+fail-closed отказу до расходования password-hash capacity. Изменения admin profile, password и
 warehouse accesses используют optimistic concurrency. `409` означает, что
 клиент должен обновить authoritative state перед повтором команды.
 
@@ -152,10 +160,19 @@ warehouse accesses используют optimistic concurrency. `409` означ
 - Имя пользователя не может конфликтовать с зарезервированным OAuth client ID.
 - Case-insensitive self-registration одного логина сериализуется
   transaction-scoped advisory lock до password hashing и unique writes.
-  Stateless gateway не реализует source-address rate limiting; до включения
-  анонимной регистрации production ingress обязан обеспечить abuse throttling.
+  Независимо от этого auth-service атомарно обеспечивает настраиваемые
+  per-source и глобальный fixed-window budgets до hashing. Он хранит только
+  SHA-256 source key, удаляет истёкшие counters, возвращает русские Problem
+  Details с `Retry-After` при `429` и пишет rejection/unavailable metrics.
+  Production ingress rate limiting остаётся дополнительным слоем защиты, а не
+  единственным механизмом.
 - Пользователи `CUSTOMER` и `rwms-customer-android` взаимно изолированы от всех
   остальных user clients при authorization-code и refresh-token exchange.
+- Пользователь `RENTAL_MANAGER` получает interactive token только через
+  `rwms-rental-manager-web` или `rwms-rental-manager-android`. Оба client имеют
+  только `rental.manage` и не могут выпустить panel, logistics или admin token.
+  `rwms-admin-web` доступен только `SYSTEM_ADMIN` и `WMS_ADMIN` и имеет только
+  `admin.manage`.
 
 Так durable access invariants находятся там, где владелец credentials и токенов
 может обеспечить их в транзакции, а не зависят от UI-проверки или дублирования
@@ -178,12 +195,13 @@ Security-relevant изменение конфигурации или секре�
 сохраняют корректное состояние, а осмысленная revision делает security change
 проверяемым и не позволяет случайно реактивировать client при rollback деплоя.
 
-Managed mobile inventory включает USER-only manager client, CUSTOMER-only
-ClientApp client и два указанных WORKER-only WorkerApp/DriverApp clients.
-Customer client требует S256 PKCE, access token на пять минут и rotating refresh
-token на 30 дней. Изменение callback, scope или principal type требует
+Managed interactive inventory раздельно хранит существующий client руководителя
+склада, отдельные web/Android clients менеджера аренды, admin web client,
+CUSTOMER-only ClientApp client и два WORKER-only WorkerApp/DriverApp clients.
+Dedicated clients требуют S256 PKCE, access token на пять минут и rotating
+refresh token на 30 дней. Изменение callback, scope или principal type требует
 собственной revision и согласованного client release; refresh token одного
-mobile client нельзя обменять через client ID другого.
+client нельзя обменять через client ID другого.
 
 Managed machine client `inventory-service` запрашивает ровно один downstream
 scope на токен. Revision 5 добавила `media.inventory` для передачи фотографий
@@ -192,6 +210,12 @@ scope на токен. Revision 5 добавила `media.inventory` для пе
 итоговому плану. Subject и `client_id` каждого токена остаются равны
 `inventory-service`, audience — `rwms-services`. Asset, maintenance, media,
 logistics и warehouse scopes по-прежнему запрашиваются отдельными токенами.
+
+Revision 5 managed machine client `asset-service` добавляет существующий scope
+`media.asset` для точного private-подтверждения READY-фотографий при durable
+создании бытовки. Отдельный `media.asset-import` для media HTML-импорта
+сохраняется; каждый downstream-вызов по-прежнему запрашивает ровно один scope,
+а subject и `client_id` остаются равны `asset-service`.
 
 Revision 4 managed machine client `task-board-service` добавляет только
 `warehouse.identity.read`, чтобы владелец смены Driver Up получал актуальные название, город,

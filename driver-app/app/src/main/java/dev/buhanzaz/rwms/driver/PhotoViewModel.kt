@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.buhanzaz.rwms.driver.core.network.DriverGatewayClient
+import dev.buhanzaz.rwms.driver.core.network.toDriverUserMessage
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,7 +47,13 @@ class PhotoViewModel @Inject constructor(
                         requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size)) { "RWMS вернул не изображение" }
                     }
                 }.onSuccess { bitmap -> fetched[path] = bitmap }
-                    .onFailure { error -> mutableState.value = mutableState.value.copy(error = error.message ?: "Не удалось открыть фото") }
+                    .onFailure { error ->
+                        mutableState.value = mutableState.value.copy(
+                            error = error.toDriverUserMessage(
+                                "Не удалось открыть фотографию. Обновите данные и повторите.",
+                            ),
+                        )
+                    }
             }
             mutableState.value = mutableState.value.copy(bitmaps = fetched)
         }

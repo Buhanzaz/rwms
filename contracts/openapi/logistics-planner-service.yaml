@@ -1,0 +1,778 @@
+openapi: 3.1.0
+info:
+  title: RWMS Logistics Planner Administration API
+  version: 1.0.0
+  x-rwms-owner: logistics-planner-service
+  x-rwms-stability: admin-catalog-v1
+  description: >-
+    Canonical API for the logistics planner's catalog-home vehicles and trailers.
+    Browser traffic enters only through the same-origin gateway prefix
+    /api/logistics-planner/v1/admin; the gateway rewrites that prefix to the
+    planner's private FastAPI implementation path /api/admin. This contract does
+    not expose the Spring logistics-service operational vehicle-assignment API.
+servers:
+  - url: /api/logistics-planner/v1
+security:
+  - bearerJwt: []
+tags:
+  - name: Planner administration catalog
+    description: SYSTEM_ADMIN-only permanent catalog-home administration.
+paths:
+  /admin/warehouses/{warehouse_id}/vehicles:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminListVehicles
+      summary: List catalog-home vehicles for one eligible warehouse
+      description: >-
+        Returns only vehicles whose permanent catalog home is warehouse_id. The
+        warehouse UUID is the canonical warehouse-service UUID, never a
+        planner-local database UUID.
+      responses:
+        '200':
+          description: Complete administrative vehicle representations.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/AdminVehicle'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+  /admin/warehouses/{warehouse_id}/vehicle-configurations:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    post:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminCreateVehicleConfiguration
+      summary: Create a vehicle and its complete axle-load profile set
+      description: >-
+        Requires Idempotency-Key. A replay is accepted only for the exact same
+        authenticated actor, operation, canonical warehouse UUID and request
+        payload; it returns the originally created vehicle and never creates a
+        second catalog row.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/VehicleConfigurationCreate'}
+      responses:
+        '201':
+          description: Vehicle configuration created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminVehicle'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+  /admin/vehicles/{vehicle_id}:
+    parameters:
+      - $ref: '#/components/parameters/VehicleId'
+    patch:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminUpdateVehicle
+      summary: Optimistically update a catalog-home vehicle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/VehiclePatch'}
+      responses:
+        '200':
+          description: Updated vehicle with incremented version.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminVehicle'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+    delete:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminDeleteVehicle
+      summary: Delete an unused catalog-home vehicle
+      description: >-
+        expected_version is mandatory. The planner takes the vehicle's driver
+        shift advisory lock and rejects deletion for every DriverShift, whether
+        active or retained history. It never cascades away shift history or a
+        route cycle.
+      parameters:
+        - $ref: '#/components/parameters/ExpectedVersion'
+      responses:
+        '204': {description: Vehicle deleted.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/VehicleDeleteConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+  /admin/vehicles/{vehicle_id}/configuration:
+    parameters:
+      - $ref: '#/components/parameters/VehicleId'
+    put:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminReplaceVehicleConfiguration
+      summary: Atomically replace a vehicle and its axle-load profile set
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/VehicleConfigurationUpdate'}
+      responses:
+        '200':
+          description: Replaced vehicle configuration with incremented version.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminVehicle'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+  /admin/vehicles/{vehicle_id}/relocate:
+    parameters:
+      - $ref: '#/components/parameters/VehicleId'
+    post:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminRehomeVehicle
+      summary: Permanently rehome a vehicle's catalog base
+      description: >-
+        This is a permanent catalog-home rehome to target_warehouse_id. It is
+        not a physical move, transport task, reservation, or operational
+        assignment. The command takes the vehicle's shift advisory lock and
+        rejects active DriverShift records and an attached default trailer.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CatalogRehomeRequest'}
+      responses:
+        '200':
+          description: Vehicle catalog home changed and version incremented.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminVehicle'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+  /admin/warehouses/{warehouse_id}/trailers:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminListTrailers
+      summary: List catalog-home trailers for one eligible warehouse
+      responses:
+        '200':
+          description: Complete administrative trailer representations.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/AdminTrailer'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+    post:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminCreateTrailer
+      summary: Create a catalog-home trailer
+      description: >-
+        Requires Idempotency-Key. A replay is accepted only for the exact same
+        authenticated actor, operation, canonical warehouse UUID and request
+        payload; it returns the originally created trailer without another write.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TrailerCreate'}
+      responses:
+        '201':
+          description: Trailer created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminTrailer'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+  /admin/trailers/{trailer_id}:
+    parameters:
+      - $ref: '#/components/parameters/TrailerId'
+    patch:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminUpdateTrailer
+      summary: Optimistically update a catalog-home trailer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TrailerPatch'}
+      responses:
+        '200':
+          description: Updated trailer with incremented version.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminTrailer'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+    delete:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminDeleteTrailer
+      summary: Delete an unassigned catalog-home trailer
+      description: >-
+        expected_version is mandatory. The planner takes the trailer-assignment
+        advisory lock and rejects a trailer selected as any vehicle's default;
+        it never relies on the database SET NULL action for this command.
+      parameters:
+        - $ref: '#/components/parameters/ExpectedVersion'
+      responses:
+        '204': {description: Trailer deleted.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/TrailerDeleteConflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+  /admin/trailers/{trailer_id}/relocate:
+    parameters:
+      - $ref: '#/components/parameters/TrailerId'
+    post:
+      tags: [Planner administration catalog]
+      operationId: plannerAdminRehomeTrailer
+      summary: Permanently rehome a trailer's catalog base
+      description: >-
+        This is a permanent catalog-home rehome, not a physical operational
+        relocation. The trailer-assignment advisory lock rejects a trailer that
+        remains any vehicle's default.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CatalogRehomeRequest'}
+      responses:
+        '200':
+          description: Trailer catalog home changed and version incremented.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminTrailer'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/DependencyFailure'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+components:
+  securitySchemes:
+    bearerJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        Only an interactive USER token with client_id rwms-admin-web,
+        global_role SYSTEM_ADMIN, audience rwms-services, and exactly the
+        business scope admin.manage after removing openid, profile and
+        offline_access is authorized. WMS_ADMIN is explicitly rejected.
+  parameters:
+    WarehouseId:
+      name: warehouse_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Uuid'}
+    VehicleId:
+      name: vehicle_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Uuid'}
+    TrailerId:
+      name: trailer_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Uuid'}
+    ExpectedVersion:
+      name: expected_version
+      in: query
+      required: true
+      schema: {$ref: '#/components/schemas/ExpectedVersion'}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 200
+        pattern: '^[\x21-\x7e]+$'
+  responses:
+    Unauthorized:
+      description: Missing, malformed, expired, or invalid Bearer token (AUTHENTICATION_REQUIRED).
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    Forbidden:
+      description: >-
+        ACCESS_DENIED: the caller is not rwms-admin-web SYSTEM_ADMIN, has a
+        business scope other than exactly admin.manage, or is WMS_ADMIN.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    NotFound:
+      description: >-
+        CATALOG resource, canonical warehouse, or local planner warehouse is
+        absent (for example VEHICLE_NOT_FOUND, TRAILER_NOT_FOUND,
+        CANONICAL_WAREHOUSE_NOT_FOUND, WAREHOUSE_NOT_CONFIGURED_FOR_LOGISTICS).
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    Conflict:
+      description: >-
+        A stable domain conflict such as CATALOG_VERSION_CONFLICT, duplicate
+        registration, idempotency payload mismatch,
+        CATALOG_RELOCATION_TARGET_UNCHANGED,
+        VEHICLE_HAS_ACTIVE_SHIFTS, VEHICLE_HAS_DEFAULT_TRAILER, or
+        TRAILER_IS_DEFAULT_FOR_VEHICLE.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    VehicleDeleteConflict:
+      description: >-
+        CATALOG_VERSION_CONFLICT, VEHICLE_HAS_ACTIVE_SHIFTS (with shift_id), or
+        VEHICLE_HAS_LINKED_SHIFTS (with shift_id). The latter covers inactive,
+        historical, and route-cycle-retained shifts.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    TrailerDeleteConflict:
+      description: >-
+        CATALOG_VERSION_CONFLICT or TRAILER_IS_DEFAULT_FOR_VEHICLE (with
+        vehicle_id).
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    ValidationFailed:
+      description: >-
+        Request schema validation uses FastAPI's application/json validation
+        body; domain validation uses an RFC 9457 Problem Details body.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/RequestValidationError'}
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    DependencyFailure:
+      description: A required canonical RWMS dependency failed (5xx Problem Details).
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    DependencyUnavailable:
+      description: A required planner dependency is unavailable (5xx Problem Details).
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+  schemas:
+    Uuid:
+      type: string
+      format: uuid
+    ExpectedVersion:
+      type: integer
+      minimum: 1
+    NonBlankString:
+      type: string
+      minLength: 1
+    NullablePositiveInteger:
+      type: [integer, 'null']
+      minimum: 1
+    NullableString:
+      type: [string, 'null']
+    NullableBoolean:
+      type: [boolean, 'null']
+    VehicleLoadProfile:
+      type: object
+      additionalProperties: false
+      required: [configuration_type, max_actual_axle_load_kg]
+      properties:
+        configuration_type:
+          type: string
+          enum:
+            - EMPTY_TRUCK
+            - CARGO_ON_TRUCK
+            - EMPTY_COMBINATION
+            - CARGO_ON_TRUCK_WITH_TRAILER
+            - CARGO_ON_TRAILER_WITH_TRAILER
+            - TWO_CARGO_SPLIT
+        max_actual_axle_load_kg: {type: integer, minimum: 1}
+    VehicleCreate:
+      type: object
+      additionalProperties: false
+      required: [name, registration_number]
+      properties:
+        name: {$ref: '#/components/schemas/NonBlankString'}
+        registration_number: {$ref: '#/components/schemas/NonBlankString'}
+        capacity: {type: integer, minimum: 1, maximum: 2, default: 2}
+        active: {type: boolean, default: true}
+        average_speed_city: {type: number, exclusiveMinimum: 0, default: 35}
+        average_speed_region: {type: number, exclusiveMinimum: 0, default: 65}
+        vehicle_type: {$ref: '#/components/schemas/NullableString'}
+        manufacturer: {$ref: '#/components/schemas/NullableString'}
+        model: {$ref: '#/components/schemas/NullableString'}
+        is_hgv: {$ref: '#/components/schemas/NullableBoolean'}
+        tare_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_gross_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        axle_count: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_axle_load_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        payload_capacity_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_height_from_ground_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_platform_payload_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        can_use_trailer: {$ref: '#/components/schemas/NullableBoolean'}
+        default_trailer_id:
+          type: [string, 'null']
+          format: uuid
+        combined_length_with_trailer_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        coupling_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        height_safety_margin_mm: {type: integer, minimum: 0, default: 0}
+        width_safety_margin_mm: {type: integer, minimum: 0, default: 0}
+        weight_safety_margin_kg: {type: integer, minimum: 0, default: 0}
+        notes: {type: string, default: ''}
+    VehiclePatch:
+      type: object
+      additionalProperties: false
+      required: [expected_version]
+      properties:
+        expected_version: {$ref: '#/components/schemas/ExpectedVersion'}
+        name:
+          type: [string, 'null']
+          minLength: 1
+        registration_number:
+          type: [string, 'null']
+          minLength: 1
+        capacity:
+          type: [integer, 'null']
+          minimum: 1
+          maximum: 2
+        active: {$ref: '#/components/schemas/NullableBoolean'}
+        average_speed_city:
+          type: [number, 'null']
+          exclusiveMinimum: 0
+        average_speed_region:
+          type: [number, 'null']
+          exclusiveMinimum: 0
+        vehicle_type: {$ref: '#/components/schemas/NullableString'}
+        manufacturer: {$ref: '#/components/schemas/NullableString'}
+        model: {$ref: '#/components/schemas/NullableString'}
+        is_hgv: {$ref: '#/components/schemas/NullableBoolean'}
+        tare_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_gross_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        axle_count: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_axle_load_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        payload_capacity_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_height_from_ground_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_platform_payload_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        can_use_trailer: {$ref: '#/components/schemas/NullableBoolean'}
+        default_trailer_id:
+          type: [string, 'null']
+          format: uuid
+        combined_length_with_trailer_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        coupling_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        height_safety_margin_mm:
+          type: [integer, 'null']
+          minimum: 0
+        width_safety_margin_mm:
+          type: [integer, 'null']
+          minimum: 0
+        weight_safety_margin_kg:
+          type: [integer, 'null']
+          minimum: 0
+        notes: {$ref: '#/components/schemas/NullableString'}
+    VehicleConfigurationCreate:
+      type: object
+      additionalProperties: false
+      required: [vehicle]
+      properties:
+        vehicle: {$ref: '#/components/schemas/VehicleCreate'}
+        load_profiles:
+          type: array
+          default: []
+          items: {$ref: '#/components/schemas/VehicleLoadProfile'}
+    VehicleConfigurationUpdate:
+      type: object
+      additionalProperties: false
+      required: [vehicle, load_profiles]
+      properties:
+        vehicle: {$ref: '#/components/schemas/VehiclePatch'}
+        load_profiles:
+          type: array
+          items: {$ref: '#/components/schemas/VehicleLoadProfile'}
+    TrailerCreate:
+      type: object
+      additionalProperties: false
+      required: [name, registration_number]
+      properties:
+        name: {$ref: '#/components/schemas/NonBlankString'}
+        registration_number: {$ref: '#/components/schemas/NonBlankString'}
+        active: {type: boolean, default: true}
+        tare_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_gross_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_height_from_ground_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_platform_payload_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        payload_capacity_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        axle_count: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_axle_load_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        notes: {type: string, default: ''}
+    TrailerPatch:
+      type: object
+      additionalProperties: false
+      required: [expected_version]
+      properties:
+        expected_version: {$ref: '#/components/schemas/ExpectedVersion'}
+        name:
+          type: [string, 'null']
+          minLength: 1
+        registration_number:
+          type: [string, 'null']
+          minLength: 1
+        active: {$ref: '#/components/schemas/NullableBoolean'}
+        tare_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_gross_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_height_from_ground_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_platform_payload_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        payload_capacity_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        axle_count: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_axle_load_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        notes: {$ref: '#/components/schemas/NullableString'}
+    CatalogRehomeRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_version, target_warehouse_id]
+      properties:
+        expected_version: {$ref: '#/components/schemas/ExpectedVersion'}
+        target_warehouse_id: {$ref: '#/components/schemas/Uuid'}
+    AdminVehicle:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - version
+        - warehouse_id
+        - name
+        - registration_number
+        - capacity
+        - active
+        - average_speed_city
+        - average_speed_region
+        - vehicle_type
+        - manufacturer
+        - model
+        - is_hgv
+        - tare_weight_kg
+        - max_gross_weight_kg
+        - length_mm
+        - width_mm
+        - height_mm
+        - axle_count
+        - max_axle_load_kg
+        - payload_capacity_kg
+        - platform_length_mm
+        - platform_width_mm
+        - platform_height_from_ground_mm
+        - max_platform_payload_kg
+        - max_cargo_length_mm
+        - max_cargo_width_mm
+        - max_cargo_height_mm
+        - max_cargo_weight_kg
+        - can_use_trailer
+        - default_trailer_id
+        - combined_length_with_trailer_mm
+        - coupling_length_mm
+        - height_safety_margin_mm
+        - width_safety_margin_mm
+        - weight_safety_margin_kg
+        - notes
+        - load_profiles
+      properties:
+        id: {$ref: '#/components/schemas/Uuid'}
+        version: {$ref: '#/components/schemas/ExpectedVersion'}
+        warehouse_id: {$ref: '#/components/schemas/Uuid'}
+        name: {$ref: '#/components/schemas/NonBlankString'}
+        registration_number: {$ref: '#/components/schemas/NonBlankString'}
+        capacity: {type: integer, minimum: 1, maximum: 2}
+        active: {type: boolean}
+        average_speed_city: {type: number, exclusiveMinimum: 0}
+        average_speed_region: {type: number, exclusiveMinimum: 0}
+        vehicle_type: {$ref: '#/components/schemas/NullableString'}
+        manufacturer: {$ref: '#/components/schemas/NullableString'}
+        model: {$ref: '#/components/schemas/NullableString'}
+        is_hgv: {$ref: '#/components/schemas/NullableBoolean'}
+        tare_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_gross_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        axle_count: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_axle_load_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        payload_capacity_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_height_from_ground_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_platform_payload_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        can_use_trailer: {$ref: '#/components/schemas/NullableBoolean'}
+        default_trailer_id:
+          type: [string, 'null']
+          format: uuid
+        combined_length_with_trailer_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        coupling_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        height_safety_margin_mm: {type: integer, minimum: 0}
+        width_safety_margin_mm: {type: integer, minimum: 0}
+        weight_safety_margin_kg: {type: integer, minimum: 0}
+        notes: {type: string}
+        load_profiles:
+          type: array
+          items: {$ref: '#/components/schemas/VehicleLoadProfile'}
+    AdminTrailer:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - version
+        - warehouse_id
+        - name
+        - registration_number
+        - active
+        - tare_weight_kg
+        - max_gross_weight_kg
+        - length_mm
+        - width_mm
+        - height_mm
+        - platform_length_mm
+        - platform_width_mm
+        - platform_height_from_ground_mm
+        - max_platform_payload_kg
+        - payload_capacity_kg
+        - axle_count
+        - max_axle_load_kg
+        - max_cargo_length_mm
+        - max_cargo_width_mm
+        - max_cargo_height_mm
+        - max_cargo_weight_kg
+        - notes
+      properties:
+        id: {$ref: '#/components/schemas/Uuid'}
+        version: {$ref: '#/components/schemas/ExpectedVersion'}
+        warehouse_id: {$ref: '#/components/schemas/Uuid'}
+        name: {$ref: '#/components/schemas/NonBlankString'}
+        registration_number: {$ref: '#/components/schemas/NonBlankString'}
+        active: {type: boolean}
+        tare_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_gross_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        platform_height_from_ground_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_platform_payload_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        payload_capacity_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        axle_count: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_axle_load_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_length_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_width_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_height_mm: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        max_cargo_weight_kg: {$ref: '#/components/schemas/NullablePositiveInteger'}
+        notes: {type: string}
+    Problem:
+      type: object
+      additionalProperties: true
+      required: [type, title, status, detail, instance, code]
+      properties:
+        type: {type: string, format: uri-reference}
+        title: {type: string}
+        status: {type: integer}
+        detail: {type: string}
+        instance: {type: string, format: uri-reference}
+        code: {type: string}
+        shift_id: {$ref: '#/components/schemas/Uuid'}
+        vehicle_id: {$ref: '#/components/schemas/Uuid'}
+        warehouse_id: {$ref: '#/components/schemas/Uuid'}
+    RequestValidationError:
+      type: object
+      additionalProperties: false
+      required: [detail]
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            additionalProperties: true

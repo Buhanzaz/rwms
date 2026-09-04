@@ -89,9 +89,14 @@ class CustomerCheckoutStore {
   /** Releases the protected slot and makes a rejected cart correctable atomically. */
   @Transactional
   CustomerRentalSession rejectBooking(
-      UUID subjectId, UUID inquiryId, UUID slotId, UUID bookingId) {
+      UUID subjectId,
+      UUID inquiryId,
+      UUID slotId,
+      UUID bookingId,
+      UUID recoveryLeaseToken) {
     slots.release(subjectId, inquiryId, slotId);
-    return sessions.rejectBooking(subjectId, inquiryId, bookingId);
+    return sessions.rejectBooking(
+        subjectId, inquiryId, bookingId, recoveryLeaseToken);
   }
 
   private OffsetDateTime now() {

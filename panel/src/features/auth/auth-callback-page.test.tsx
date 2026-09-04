@@ -3,9 +3,16 @@ import { MemoryRouter, Route, Routes } from "react-router-dom"
 import { render, waitFor } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
-import { navigateAfterLogin } from "@/features/auth/auth-callback-navigation"
+import {
+  navigateAfterLogin,
+  toApplicationRouterPath,
+  toExternalApplicationPath,
+} from "@/features/auth/auth-callback-navigation"
 import { AuthCallbackPage } from "@/features/auth/auth-callback-page"
-import { AuthContext, type AuthContextValue } from "@/features/auth/auth-context"
+import {
+  AuthContext,
+  type AuthContextValue,
+} from "@/features/auth/auth-context"
 
 function renderCallback(value: AuthContextValue) {
   return render(
@@ -43,11 +50,9 @@ describe("AuthCallbackPage", () => {
     const navigate = vi.fn()
     const assign = vi.fn()
 
-    navigateAfterLogin("/logistics-simulator/?warehouse=spb", navigate, assign)
+    navigateAfterLogin("/logistics-panel/?warehouse=spb", navigate, assign)
 
-    expect(assign).toHaveBeenCalledWith(
-      "/logistics-simulator/?warehouse=spb"
-    )
+    expect(assign).toHaveBeenCalledWith("/logistics-panel/?warehouse=spb")
     expect(navigate).not.toHaveBeenCalled()
   })
 
@@ -61,5 +66,15 @@ describe("AuthCallbackPage", () => {
       replace: true,
     })
     expect(assign).not.toHaveBeenCalled()
+  })
+
+  it("maps between a basename router location and its external manager URL", () => {
+    expect(toExternalApplicationPath("/orders?status=draft", "/manager")).toBe(
+      "/manager/orders?status=draft"
+    )
+    expect(
+      toApplicationRouterPath("/manager/orders?status=draft", "/manager")
+    ).toBe("/orders?status=draft")
+    expect(toApplicationRouterPath("/orders", "/manager")).toBe("/")
   })
 })

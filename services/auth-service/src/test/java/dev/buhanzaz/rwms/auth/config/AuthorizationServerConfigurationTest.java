@@ -45,24 +45,84 @@ class AuthorizationServerConfigurationTest {
 
     @Test
     void customerRoleAndCustomerClientAreMutuallyExclusiveWithOtherUserClients() {
-        assertThatCode(() -> configuration.validateCustomerClientRole(
+        assertThatCode(() -> configuration.validateInteractiveClientRole(
                         OAuthClientProperties.CUSTOMER_ANDROID_CLIENT_ID,
                         UserGlobalRole.CUSTOMER))
                 .doesNotThrowAnyException();
-        assertThatCode(() -> configuration.validateCustomerClientRole(
+        assertThatCode(() -> configuration.validateInteractiveClientRole(
                         OAuthClientProperties.MANAGER_ANDROID_CLIENT_ID,
                         UserGlobalRole.WMS_ADMIN))
                 .doesNotThrowAnyException();
-        assertThatThrownBy(() -> configuration.validateCustomerClientRole(
+        assertThatThrownBy(() -> configuration.validateInteractiveClientRole(
                         OAuthClientProperties.CUSTOMER_ANDROID_CLIENT_ID,
                         UserGlobalRole.WMS_ADMIN))
                 .isInstanceOf(OAuth2AuthenticationException.class)
                 .hasMessageContaining("isolated");
-        assertThatThrownBy(() -> configuration.validateCustomerClientRole(
+        assertThatThrownBy(() -> configuration.validateInteractiveClientRole(
                         "rwms-panel",
                         UserGlobalRole.CUSTOMER))
                 .isInstanceOf(OAuth2AuthenticationException.class)
                 .hasMessageContaining("isolated");
+    }
+
+    @Test
+    void rentalManagerAndAdministrationClientsEnforceRoleBoundaries() {
+        assertThatCode(() -> configuration.validateInteractiveClientRole(
+                        OAuthClientProperties.RENTAL_MANAGER_WEB_CLIENT_ID,
+                        UserGlobalRole.RENTAL_MANAGER))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> configuration.validateInteractiveClientRole(
+                        OAuthClientProperties.RENTAL_MANAGER_ANDROID_CLIENT_ID,
+                        UserGlobalRole.RENTAL_MANAGER))
+                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> configuration.validateInteractiveClientRole(
+                        OAuthClientProperties.PANEL_CLIENT_ID,
+                        UserGlobalRole.RENTAL_MANAGER))
+                .isInstanceOf(OAuth2AuthenticationException.class)
+                .hasMessageContaining("only the dedicated manager applications");
+        assertThatThrownBy(() -> configuration.validateInteractiveClientRole(
+                        OAuthClientProperties.ADMIN_WEB_CLIENT_ID,
+                        UserGlobalRole.RENTAL_MANAGER))
+                .isInstanceOf(OAuth2AuthenticationException.class)
+                .hasMessageContaining("only the dedicated manager applications");
+        assertThatThrownBy(() -> configuration.validateInteractiveClientRole(
+                        OAuthClientProperties.ADMIN_WEB_CLIENT_ID,
+                        UserGlobalRole.WAREHOUSE_MANAGER))
+                .isInstanceOf(OAuth2AuthenticationException.class)
+                .hasMessageContaining("Administration application access is not allowed");
+        assertThatThrownBy(() -> configuration.validateInteractiveClientRole(
+                        OAuthClientProperties.RENTAL_MANAGER_WEB_CLIENT_ID,
+                        UserGlobalRole.WMS_ADMIN))
+                .isInstanceOf(OAuth2AuthenticationException.class)
+                .hasMessageContaining("only the dedicated manager applications");
+        assertThatCode(() -> configuration.validateInteractiveClientRole(
+                        OAuthClientProperties.ADMIN_WEB_CLIENT_ID,
+                        UserGlobalRole.SYSTEM_ADMIN))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> configuration.validateInteractiveClientRole(
+                        OAuthClientProperties.ADMIN_WEB_CLIENT_ID,
+                        UserGlobalRole.WMS_ADMIN))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void revokedRentalAccessCannotObtainDedicatedManagerApplicationToken() {
+        assertThatCode(() -> configuration.validateInteractiveClientAccess(
+                        OAuthClientProperties.RENTAL_MANAGER_WEB_CLIENT_ID,
+                        UserGlobalRole.RENTAL_MANAGER,
+                        true))
+                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> configuration.validateInteractiveClientAccess(
+                        OAuthClientProperties.RENTAL_MANAGER_WEB_CLIENT_ID,
+                        UserGlobalRole.RENTAL_MANAGER,
+                        false))
+                .isInstanceOf(OAuth2AuthenticationException.class)
+                .hasMessageContaining("revoked");
+        assertThatCode(() -> configuration.validateInteractiveClientAccess(
+                        OAuthClientProperties.PANEL_CLIENT_ID,
+                        UserGlobalRole.WMS_ADMIN,
+                        false))
+                .doesNotThrowAnyException();
     }
 
     @Test

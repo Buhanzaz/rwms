@@ -23,6 +23,7 @@ import {
   type TransferResourceReposition,
   type TransferResourceRepositionMode,
 } from "@/features/logistics/warehouse-transfers/model/warehouse-transfer"
+import { listAllLogisticsDocumentPages } from "@/features/logistics/document-list-pagination"
 import type {
   TransferArrivalCommand,
   TransferCreateCommand,
@@ -43,17 +44,23 @@ const DOCUMENT_KEYS = [
   "id",
   "version",
   "documentType",
+  "customerDeliveryPurpose",
   "state",
   "warehouseId",
   "destinationWarehouseId",
+  "linkedReturnTransferId",
   "partySnapshot",
   "driverSnapshot",
   "driverWorkerId",
   "clientId",
+  "historicalRentalImport",
   "equipmentMovementTaskId",
   "scheduledDate",
   "rentalOrderId",
   "rentalShipmentId",
+  "inventorySourceId",
+  "inventorySourceFindingId",
+  "inventorySourceDispositionKind",
   "lines",
   "createdAt",
   "updatedAt",
@@ -67,6 +74,8 @@ const LINE_KEYS = [
   "state",
   "tenantSnapshot",
   "rentalOrderId",
+  "inventorySourceWarehouseId",
+  "inventoryShipmentFurniture",
 ] as const
 const FURNITURE_READINESS_KEYS = [
   "transferId",
@@ -185,6 +194,13 @@ function nullableText(value: unknown): string | null {
   return value === null ? null : text(value)
 }
 
+function nullableSnapshot(value: unknown): string | null {
+  if (value === null) return null
+  const candidate = nonBlankText(value)
+  if (candidate.length > 512) invalidResponse()
+  return candidate
+}
+
 function nullableUuid(value: unknown): string | null {
   return value === null ? null : uuid(value)
 }
@@ -262,6 +278,11 @@ function transferLine(value: unknown): TransferLine {
     tenantSnapshot: nullableText(source.tenantSnapshot),
     rentalOrderId: (() => {
       if (nullableUuid(source.rentalOrderId) !== null) invalidResponse()
+      return null
+    })(),
+    inventorySourceWarehouseId: uuid(source.inventorySourceWarehouseId),
+    inventoryShipmentFurniture: (() => {
+      if (source.inventoryShipmentFurniture !== null) invalidResponse()
       return null
     })(),
   }
@@ -494,14 +515,30 @@ export function parseTransferDocument(value: unknown): TransferDocument {
   const warehouseId = uuid(source.warehouseId)
   const destinationWarehouseId = uuid(source.destinationWarehouseId)
   const lines = list(source.lines).map(transferLine)
+  const linkedReturnTransferId = nullableUuid(source.linkedReturnTransferId)
+  const driverSnapshot = nullableSnapshot(source.driverSnapshot)
+  const driverWorkerId = nullableUuid(source.driverWorkerId)
   if (
     source.documentType !== "TRANSFER" ||
+    source.customerDeliveryPurpose !== null ||
     source.partySnapshot !== null ||
-    source.driverSnapshot !== null ||
-    source.driverWorkerId !== null ||
     nullableUuid(source.clientId) !== null ||
+    flag(source.historicalRentalImport) ||
     source.rentalShipmentId !== null ||
+    nullableUuid(source.inventorySourceId) !== null ||
+    nullableUuid(source.inventorySourceFindingId) !== null ||
+    source.inventorySourceDispositionKind !== null ||
     warehouseId === destinationWarehouseId
+  ) {
+    invalidResponse()
+  }
+  if (
+    (driverSnapshot === null) !== (driverWorkerId === null) ||
+    lines.some(
+      (line) =>
+        line.inventorySourceWarehouseId !== warehouseId ||
+        line.inventoryShipmentFurniture !== null
+    )
   ) {
     invalidResponse()
   }
@@ -510,13 +547,16 @@ export function parseTransferDocument(value: unknown): TransferDocument {
     id: uuid(source.id),
     version: integer(source.version),
     documentType: "TRANSFER",
+    customerDeliveryPurpose: null,
     state: oneOf<TransferDocumentState>(source.state, TRANSFER_DOCUMENT_STATES),
     warehouseId,
     destinationWarehouseId,
+    linkedReturnTransferId,
     partySnapshot: null,
-    driverSnapshot: null,
-    driverWorkerId: null,
+    driverSnapshot,
+    driverWorkerId,
     clientId: null,
+    historicalRentalImport: false,
     equipmentMovementTaskId: nullableUuid(source.equipmentMovementTaskId),
     scheduledDate: (() => {
       return calendarDate(source.scheduledDate)
@@ -526,6 +566,9 @@ export function parseTransferDocument(value: unknown): TransferDocument {
       return null
     })(),
     rentalShipmentId: null,
+    inventorySourceId: null,
+    inventorySourceFindingId: null,
+    inventorySourceDispositionKind: null,
     lines,
     createdAt: timestamp(source.createdAt),
     updatedAt: timestamp(source.updatedAt),
@@ -563,11 +606,20 @@ function lineCommandPath(
 }
 
 export class HttpWarehouseTransferClient implements WarehouseTransferClient {
-  async list(accessToken: string, warehouseId: string) {
-    const response = await bearerRequest<unknown>(
-      accessToken,
-      transfersEndpoint(`?warehouseId=${encodeURIComponent(warehouseId)}`)
-    )
+  async list(
+    accessToken: string,
+    warehouseId: string,
+    scheduledDate?: string
+  ) {
+    const search = new URLSearchParams({ warehouseId })
+    if (scheduledDate) search.set("scheduledDate", scheduledDate)
+    const endpoint = transfersEndpoint(`?${search.toString()}`)
+    if (scheduledDate) {
+      return listAllLogisticsDocumentPages(accessToken, endpoint, (response) =>
+        list(response).map(parseTransferDocument)
+      )
+    }
+    const response = await bearerRequest<unknown>(accessToken, endpoint)
     return list(response).map(parseTransferDocument)
   }
 

@@ -101,11 +101,9 @@ public class DriverTaskBoardController {
         MobileTaskSurface.DRIVER, principal.workerId(), principal.warehouseId(), entryId);
   }
 
-  /** Opens the driver's invalidation-only SSE stream. */
+  /** Opens the driver's invalidation-only SSE stream; reconnects have no replay cursor contract. */
   @GetMapping(path = "/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-  public SseEmitter events(
-      @AuthenticationPrincipal Jwt jwt,
-      @RequestHeader(name = "Last-Event-ID", required = false) String lastEventId) {
+  public SseEmitter events(@AuthenticationPrincipal Jwt jwt) {
     DriverPrincipal principal = principal(jwt, false);
     return invalidations.subscribe(
         principal.warehouseId(),

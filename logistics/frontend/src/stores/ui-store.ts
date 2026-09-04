@@ -3,6 +3,8 @@ import type { MapClickDraft, MapSelection, OptimizationTraceEvent, SimulationOve
 
 export type AppMode = 'PLAN_DAY' | 'SIMULATION';
 export type ThemeMode = 'light' | 'dark';
+export type ShiftVisibility = 'ACTIVE' | 'COMPLETED' | 'ARCHIVED';
+export type SettingsView = 'ALGORITHM' | 'JOURNAL';
 export type LeftSection =
   | 'WAREHOUSE'
   | 'DRIVERS'
@@ -49,11 +51,16 @@ export interface NotificationMessage {
   };
 }
 
+type NotificationInput = Omit<NotificationMessage, 'id' | 'createdAt' | 'visible' | 'read'>
+  & Partial<Pick<NotificationMessage, 'createdAt' | 'visible' | 'read'>>;
+
 interface UiState {
   theme: ThemeMode;
   mode: AppMode;
   section: LeftSection;
   mapTool: MapTool;
+  shiftVisibility: ShiftVisibility;
+  settingsView: SettingsView;
   selected: MapSelection;
   mapClickDraft: MapClickDraft | null;
   layers: LayerVisibility;
@@ -68,10 +75,12 @@ interface UiState {
   setMode: (mode: AppMode) => void;
   setSection: (section: LeftSection) => void;
   setMapTool: (tool: MapTool) => void;
+  setShiftVisibility: (visibility: ShiftVisibility) => void;
+  setSettingsView: (view: SettingsView) => void;
   setSelected: (selected: MapSelection) => void;
   setMapClickDraft: (draft: MapClickDraft | null) => void;
   toggleLayer: (layer: keyof LayerVisibility) => void;
-  toast: (toast: Omit<NotificationMessage, 'id' | 'createdAt' | 'visible' | 'read'>) => void;
+  toast: (toast: NotificationInput) => void;
   dismissToast: (id: string) => void;
   clearNotifications: () => void;
   markNotificationsRead: () => void;
@@ -105,6 +114,66 @@ const initialLayers: LayerVisibility = {
 
 const NOTIFICATION_DURATION_KEY = 'rwms-logistics-notification-duration-seconds';
 const THEME_KEY = 'rwms-logistics-theme';
+const PRESENTATION_KEY = 'rwms:logistics:presentation:v1';
+
+/** Browser-only presentation preferences; operational and planning state stays server-owned. */
+interface PresentationPreferences {
+  mode: AppMode;
+  section: LeftSection;
+  mapTool: MapTool;
+  shiftVisibility: ShiftVisibility;
+  settingsView: SettingsView;
+  layers: LayerVisibility;
+}
+
+const APP_MODES: readonly AppMode[] = ['PLAN_DAY', 'SIMULATION'];
+const LEFT_SECTIONS: readonly LeftSection[] = ['WAREHOUSE', 'DRIVERS', 'CONTRACTORS', 'VEHICLES', 'SHIFTS', 'REQUESTS', 'PLAN_DAY', 'UNASSIGNED', 'SETTINGS'];
+const MAP_TOOLS: readonly MapTool[] = ['SELECT', 'ADD_DELIVERY', 'ADD_PICKUP'];
+const SHIFT_VISIBILITIES: readonly ShiftVisibility[] = ['ACTIVE', 'COMPLETED', 'ARCHIVED'];
+
+function readPresentationPreferences(): PresentationPreferences {
+  const fallback: PresentationPreferences = {
+    mode: 'PLAN_DAY',
+    section: 'WAREHOUSE',
+    mapTool: 'SELECT',
+    shiftVisibility: 'ACTIVE',
+    settingsView: 'ALGORITHM',
+    layers: initialLayers,
+  };
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(PRESENTATION_KEY) ?? 'null') as unknown;
+    if (!parsed || typeof parsed !== 'object') return fallback;
+    const stored = parsed as Partial<PresentationPreferences>;
+    const storedLayers = stored.layers && typeof stored.layers === 'object' ? stored.layers : {};
+    return {
+      mode: APP_MODES.includes(stored.mode as AppMode) ? stored.mode as AppMode : fallback.mode,
+      section: LEFT_SECTIONS.includes(stored.section as LeftSection) ? stored.section as LeftSection : fallback.section,
+      mapTool: MAP_TOOLS.includes(stored.mapTool as MapTool) ? stored.mapTool as MapTool : fallback.mapTool,
+      shiftVisibility: SHIFT_VISIBILITIES.includes(stored.shiftVisibility as ShiftVisibility)
+        ? stored.shiftVisibility as ShiftVisibility
+        : fallback.shiftVisibility,
+      settingsView: stored.settingsView === 'JOURNAL' ? 'JOURNAL' : 'ALGORITHM',
+      layers: Object.fromEntries(Object.entries(initialLayers).map(([key, defaultValue]) => [
+        key,
+        typeof (storedLayers as Record<string, unknown>)[key] === 'boolean'
+          ? (storedLayers as Record<string, boolean>)[key]
+          : defaultValue,
+      ])) as unknown as LayerVisibility,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function writePresentationPreferences(preferences: PresentationPreferences): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(PRESENTATION_KEY, JSON.stringify(preferences));
+  } catch {
+    // UI preferences remain in memory when browser storage is unavailable.
+  }
+}
 
 function readTheme(): ThemeMode {
   if (typeof window === 'undefined') return 'dark';
@@ -134,6 +203,7 @@ function writeTheme(theme: ThemeMode): void {
 }
 
 const initialTheme = readTheme();
+const initialPresentation = readPresentationPreferences();
 applyTheme(initialTheme);
 
 function readNotificationDuration(): number {
@@ -157,12 +227,14 @@ function writeNotificationDuration(seconds: number): void {
 
 export const useUiStore = create<UiState>((set) => ({
   theme: initialTheme,
-  mode: 'PLAN_DAY',
-  section: 'WAREHOUSE',
-  mapTool: 'SELECT',
+  mode: initialPresentation.mode,
+  section: initialPresentation.section,
+  mapTool: initialPresentation.mapTool,
+  shiftVisibility: initialPresentation.shiftVisibility,
+  settingsView: initialPresentation.settingsView,
   selected: null,
   mapClickDraft: null,
-  layers: initialLayers,
+  layers: initialPresentation.layers,
   notifications: [],
   notificationDurationSeconds: readNotificationDuration(),
   simulationTimestamp: null,
@@ -174,24 +246,44 @@ export const useUiStore = create<UiState>((set) => ({
     writeTheme(theme);
     set({ theme });
   },
-  setMode: (mode) => set({ mode }),
-  setSection: (section) => set({ section }),
-  setMapTool: (mapTool) => set({ mapTool }),
+  setMode: (mode) => set((state) => {
+    writePresentationPreferences({ mode, section: state.section, mapTool: state.mapTool, shiftVisibility: state.shiftVisibility, settingsView: state.settingsView, layers: state.layers });
+    return { mode };
+  }),
+  setSection: (section) => set((state) => {
+    writePresentationPreferences({ mode: state.mode, section, mapTool: state.mapTool, shiftVisibility: state.shiftVisibility, settingsView: state.settingsView, layers: state.layers });
+    return { section };
+  }),
+  setMapTool: (mapTool) => set((state) => {
+    writePresentationPreferences({ mode: state.mode, section: state.section, mapTool, shiftVisibility: state.shiftVisibility, settingsView: state.settingsView, layers: state.layers });
+    return { mapTool };
+  }),
+  setShiftVisibility: (shiftVisibility) => set((state) => {
+    writePresentationPreferences({ mode: state.mode, section: state.section, mapTool: state.mapTool, shiftVisibility, settingsView: state.settingsView, layers: state.layers });
+    return { shiftVisibility };
+  }),
+  setSettingsView: (settingsView) => set((state) => {
+    writePresentationPreferences({ mode: state.mode, section: state.section, mapTool: state.mapTool, shiftVisibility: state.shiftVisibility, settingsView, layers: state.layers });
+    return { settingsView };
+  }),
   setSelected: (selected) => set({ selected }),
   setMapClickDraft: (mapClickDraft) => set({ mapClickDraft }),
-  toggleLayer: (layer) => set((state) => ({ layers: { ...state.layers, [layer]: !state.layers[layer] } })),
+  toggleLayer: (layer) => set((state) => {
+    const layers = { ...state.layers, [layer]: !state.layers[layer] };
+    writePresentationPreferences({ mode: state.mode, section: state.section, mapTool: state.mapTool, shiftVisibility: state.shiftVisibility, settingsView: state.settingsView, layers });
+    return { layers };
+  }),
   toast: (toast) =>
     set((state) => {
-      const createdAt = new Date().toISOString();
       const existing = toast.replacementKey
         ? state.notifications.find((current) => current.replacementKey === toast.replacementKey)
         : undefined;
       const notification: NotificationMessage = {
         ...toast,
         id: existing?.id ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        createdAt,
-        visible: true,
-        read: false,
+        createdAt: toast.createdAt ?? new Date().toISOString(),
+        visible: toast.visible ?? true,
+        read: toast.read ?? false,
       };
       const retained = existing
         ? state.notifications.filter((current) => current.id !== existing.id)

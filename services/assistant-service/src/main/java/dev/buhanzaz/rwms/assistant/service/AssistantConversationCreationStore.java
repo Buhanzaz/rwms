@@ -32,10 +32,10 @@ public class AssistantConversationCreationStore {
   @Transactional(readOnly = true)
   public AssistantConversation activeForOrder(UUID rentalOrderId, UUID ownerSubjectId) {
     if (rentalOrderId == null) return null;
-    AssistantConversation existing =
+    AssistantConversation current =
         conversations.findByRentalOrderIdAndArchivedFalse(rentalOrderId).orElse(null);
-    if (existing != null) requireOwner(existing, ownerSubjectId);
-    return existing;
+    if (current != null) requireOwner(current, ownerSubjectId);
+    return current;
   }
 
   /**
@@ -98,9 +98,7 @@ public class AssistantConversationCreationStore {
     AssistantConversation existingForOrder =
         requestedRentalOrderId == null
             ? null
-            : conversations
-                .findByRentalOrderIdAndArchivedFalse(requestedRentalOrderId)
-                .orElse(null);
+            : conversations.findByRentalOrderIdAndArchivedFalse(requestedRentalOrderId).orElse(null);
     if (existingForOrder != null) {
       requireOwner(existingForOrder, ownerSubjectId);
       requireImmutableLinks(existingForOrder, requestedClientId, requestedRentalOrderId);

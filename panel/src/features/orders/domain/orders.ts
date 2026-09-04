@@ -12,6 +12,9 @@ import {
   type AdditionalContact,
   type RentalClient,
 } from "@/features/clients/domain/clients"
+import type {
+  CustomerDeliveryPurpose,
+} from "@/features/logistics/customer-delivery-purpose"
 
 export const ORDER_CLIENT_TYPES = CLIENT_TYPES
 
@@ -99,6 +102,8 @@ export type OrderSummary = {
   version: number
   number: string
   status: OrderStatus
+  /** Current rental-order read boundary is always a rental delivery. */
+  customerDeliveryPurpose: "RENTAL_DELIVERY"
   client: OrderClient
   managerId: string
   managerDisplayName: string
@@ -132,6 +137,8 @@ export type OrderMovementCabin = {
 export type OrderMovement = {
   documentId: string
   documentType: "SHIPMENT" | "RETURN"
+  /** Present on the wire; only customer-facing shipments have a value. */
+  customerDeliveryPurpose: CustomerDeliveryPurpose | null
   state: string
   /** Null while an automatically created return has not been planned yet. */
   scheduledDate: string | null

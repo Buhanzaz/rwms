@@ -412,11 +412,13 @@ data class DriverTripCabinDto(
  * The public driver payload deliberately exposes client preferences and the assigned trip
  * as dates only; it does not expose time-of-day fields.
  */
-@Serializable
+@Serializable(with = DriverTripDetailsDtoSerializer::class)
 data class DriverTripDetailsDto(
     val taskNumber: String,
     val tripNumber: Int,
     val operationType: String,
+    /** Required JSON key; normally null for a non-customer operation. */
+    val customerDeliveryPurpose: String?,
     val clientName: String,
     val address: String?,
     val latitude: Double?,

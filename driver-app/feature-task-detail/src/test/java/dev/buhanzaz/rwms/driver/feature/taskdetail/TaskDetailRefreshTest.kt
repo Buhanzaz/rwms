@@ -219,6 +219,7 @@ class TaskDetailRefreshTest {
         taskNumber = "123",
         tripNumber = 1,
         operationType = "SHIPMENT",
+        customerDeliveryPurpose = "RENTAL_DELIVERY",
         clientName = "ООО Стройка",
         address = "Санкт-Петербург",
         latitude = 59.9,

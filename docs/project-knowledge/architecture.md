@@ -40,8 +40,12 @@ The gateway is a stateless transport edge. It does not aggregate business
 responses or own workflow state. Each downstream service validates its token
 and owns its commands. Anonymous customer registration is forwarded through
 the same edge, but auth-service owns its cookie/header CSRF check. The gateway
-deliberately keeps no source-address rate-limit store; production ingress must
-throttle that anonymous surface before enabling it publicly.
+deliberately keeps no source-address rate-limit store: it removes untrusted
+forwarding headers and supplies the immediate TCP peer address. Auth-service
+owns durable per-source and global fixed-window registration budgets before
+password hashing, while production-ingress throttling remains an independent
+defence-in-depth control. A future reverse-proxy trust boundary must be explicit;
+otherwise callers behind that proxy share its immediate-peer budget.
 
 Long-lived SSE routes remain transport-only. The gateway bounds their
 concurrency, relays the producer's bytes with Servlet asynchronous I/O, flushes
@@ -53,6 +57,8 @@ state.
 Evidence:
 [`gateway registration boundary`](../../services/api-gateway-service/README.md),
 [`auth registration owner`](../../services/auth-service/src/main/java/dev/buhanzaz/rwms/auth/service/CustomerRegistrationService.java),
+[`registration throttle owner`](../../services/auth-service/src/main/java/dev/buhanzaz/rwms/auth/service/CustomerRegistrationThrottle.java),
+[`canonical forwarded address`](../../services/api-gateway-service/src/main/java/dev/buhanzaz/rwms/gateway/web/CanonicalAuthForwardedHeadersFilter.java),
 [`SseProxyHandler.java`](../../services/api-gateway-service/src/main/java/dev/buhanzaz/rwms/gateway/config/SseProxyHandler.java),
 [`GatewaySseConcurrencyIntegrationTest.java`](../../services/api-gateway-service/src/test/java/dev/buhanzaz/rwms/gateway/GatewaySseConcurrencyIntegrationTest.java).
 
@@ -82,7 +88,12 @@ markers for other routable warehouses remain available for comparison.
 A private Valhalla truck graph is built from a source-manifested Central plus
 Northwestern Federal District OpenStreetMap PBF set. A one-shot Osmium importer
 derives a same-version diagnostic PostGIS restriction overlay; exact per-leg
-Valhalla costing remains the route-safety authority. Visual depot/request
+Valhalla costing remains the route-safety authority. Customer slot routing
+identifies that graph with an explicit operator-supplied data version, combines
+it with endpoint, truck profile and departure bucket in a bounded 512-entry LRU
+matrix cache, and expires each entry under a positive at-most-24-hour TTL.
+Changing tiles or restrictions requires advancing the version; no URL change
+or process restart is treated as a substitute. Visual depot/request
 isochrones are optional display layers and never replace exact directed route
 matrices.
 
@@ -90,16 +101,30 @@ The planner never reads an RWMS database. When enabled, it authenticates as the
 dedicated `logistics-planner` client with sole scope `logistics.planning`, reads
 canonical warehouses and warehouse-qualified drivers, refreshes the selected
 warehouse's 31-day demand horizon before returning its workspace, and
-automatically applies assigned RWMS deliveries when request acceptance closes.
-An authoritative request revision invalidates and rebuilds only affected
-dates. RWMS remains the owner of warehouses, orders, shipments, worker identity
-and assignment validation.
+closes request acceptance without publishing an unconfirmed plan. An
+authoritative request revision archives only mutable heads for the affected
+dates; confirmed revisions and their audit history are immutable. RWMS remains
+the owner of warehouses, orders, shipments, worker identity and assignment
+validation.
+
+One non-archived `RoutePlan` revision may exist for one warehouse-local date.
+Every replacement names the exact predecessor, archives it under a warehouse
+row lock and creates a linked successor; confirmed revisions cannot be
+replaced. Confirmation atomically claims the involved requests, fixes the date
+of flexible demand and archives competing mutable date candidates. Publication
+to RWMS is a separate, version-fenced command and accepts only a confirmed
+revision. Test workload generation can replace only plans whose complete
+request set is generator-owned; real, mixed and confirmed plans fail closed.
 
 Plan apply also carries one exact driver-shift snapshot per assigned
 driver/work date. Logistics validates and relays those snapshots with stable keys to task-board
-before applying individual RWMS shipment assignments; task-board, not the planner or logistics,
-owns the resulting daily shift. The snapshot retains vehicle/trailer, start odometer, trip count
-and unrounded `routeDistanceMeters`. Generated and manual simulator jobs are not transferred.
+only after every route assignment for that driver/date was applied or replayed without rejection;
+task-board, not the planner or logistics, owns the resulting daily shift. The snapshot retains the
+physical route origin, exact support-link evidence, vehicle/trailer, start odometer, trip count,
+unrounded `routeDistanceMeters`, and one ordered executable operation list. Task-board persists the
+operation list under the replaceable-until-frozen plan, and DriverApp renders its planned
+arrival/departure and load transitions from the server snapshot. Generated and manual simulator
+jobs are not transferred.
 An explicit contractor handoff is the separate exception: task-board owns the
 reusable on-demand contractor profile, the simulator never includes it in staff
 route optimization, and logistics applies concrete assignments for the planning
@@ -148,14 +173,26 @@ release records and links only to their immutable versioned APK URLs. The
 aggregate page never copies an APK between application-owned roots. Nginx
 serves the Manager, Customer, Driver and Worker artefacts from separate filesystem roots;
 each release record supplies the exact public URL, package identity, version
-and SHA-256 before its card can render.
+and SHA-256 before its card can render. Each application build fails closed for
+release artifacts without a complete readable external signing configuration.
+Each application-owned download surface additionally validates a checked-in
+channel policy, immutable manifest provenance and the exact APK package,
+version, SHA-256 and single signing certificate. A certificate is accepted only
+when pinned for `PRODUCTION` or `INTERNAL_TEST`; rotation is an explicit policy
+change. ManagerApp and DriverApp currently have no production signer allowlist,
+so their production publication remains blocked rather than falling back to a
+debug key.
 
 Evidence:
 [`aggregate builder`](../../downloads-site/scripts/build-site.mjs),
+[`ManagerApp trust policy`](../../manager-download-site/release-trust-policy.json),
 [`CustomerApp release record`](../../client-download-site/release.json),
+[`CustomerApp trust policy`](../../client-download-site/release-trust-policy.json),
 [`DriverApp release record`](../../driver-download-site/release.json),
-[`ManagerApp release record`](../../manager-download-site/release.json), and
-[`WorkerApp release record`](../../worker-download-site/release.json).
+[`DriverApp trust policy`](../../driver-download-site/release-trust-policy.json),
+[`ManagerApp release record`](../../manager-download-site/release.json),
+[`WorkerApp release record`](../../worker-download-site/release.json), and
+[`WorkerApp trust policy`](../../worker-download-site/release-trust-policy.json).
 
 ## Deployables And Ownership
 
@@ -165,11 +202,11 @@ Evidence:
 | `api-gateway-service` | Stateless Spring           | Public routing and edge transport policy                                   | Downstream contracts                                                           |
 | `warehouse-service`   | Stateful Spring            | Warehouse identity, metadata and timezone                                  | [`warehouse-service.yaml`](../../contracts/openapi/warehouse-service.yaml)     |
 | `asset-service`       | Stateful Spring            | Cabins, status, equipment, balances, holds and leases                      | [`asset-service.yaml`](../../contracts/openapi/asset-service.yaml)             |
-| `task-board-service`  | Stateful Spring            | Queues, workforce, task execution and the Driver Up daily-shift state machine | [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml) |
+| `task-board-service`  | Stateful Spring            | Queues, workforce, task execution, contractor execution and the Driver Up daily-shift state machine | [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml) |
 | `maintenance-service` | Stateful Spring            | Catalog, estimates, repairs, acceptance and write-off decisions            | [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml) |
 | `inventory-service`   | Stateful Spring            | Sessions, findings, completion and publication                             | [`inventory-service.yaml`](../../contracts/openapi/inventory-service.yaml)     |
-| `logistics-service`   | Stateful Spring            | Rental counterparties, inquiries, orders, returns, shipments and transfers | [`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml)     |
-| `media-service`       | Stateful Go                | Media metadata, private upload/read, originals and transformations         | [`media-service.yaml`](../../contracts/openapi/media-service.yaml)             |
+| `logistics-service`   | Stateful Spring            | Rental counterparties, inquiries, orders, returns, shipments, transfers and scoped contractor route capabilities | [`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml)     |
+| `media-service`       | Stateful Go                | Media metadata, private upload/read, originals and transformations, including contractor task evidence | [`media-service.yaml`](../../contracts/openapi/media-service.yaml)             |
 | `dossier-service`     | Stateful Spring read model | Cross-domain cabin activity projection                                     | [`dossier-service.yaml`](../../contracts/openapi/dossier-service.yaml)         |
 | `analytics-service`   | Stateful Spring read model | KPI and dashboard projections                                              | [`analytics-service.yaml`](../../contracts/openapi/analytics-service.yaml)     |
 | `assistant-service`   | Stateful Spring            | Assistant conversations, messages, clarifications and tool-call history    | [`assistant-service.yaml`](../../contracts/openapi/assistant-service.yaml)     |
@@ -177,6 +214,15 @@ Evidence:
 `assistant-service` does not own cabin availability or rental inquiries; those
 remain logistics-owned. Read models do not issue commands for producer-owned
 aggregates.
+
+An external contractor route is not a second route aggregate or a contractor
+account. Standalone planning selects and durably hands off exact real work;
+logistics-service owns the expiring/revocable capability and its immutable task
+bindings; task-board owns ordered entry transitions and evidence readiness;
+media-service owns private bytes and variants. The stateless gateway exposes
+only the exact anonymous capability routes, strips ambient credentials and
+enforces the binary ingress limit before proxying. No browser or gateway owns
+workflow state.
 
 `dossier-service` scopes `PARTIAL` to the requested cabin and active projection
 generation. Hidden activity/media and unresolved unlinked or DLT evidence can
@@ -205,12 +251,18 @@ Evidence:
 
 - `panel/`, `app/`, `client-app/`, `worker-app/` and `driver-app/` use the public gateway.
 - The standalone logistics planner uses its same-origin FastAPI for planning.
+  That browser boundary is not anonymous: it reuses the renewable `rwms-panel`
+  `USER` session, sends Bearer authorization on every operational request and
+  planning-event stream, and FastAPI independently verifies RS256/JWKS,
+  issuer, audience, expiry, panel client, `rwms.read` and warehouse grants.
+  Only health and generated API documentation are public. The authenticated
+  subject, not a browser field, supplies the audit actor for mutable commands.
   Its transfer-draft and contractor-catalog dialogs are explicit
   interactive-gateway clients:
   it reuses the renewable `rwms-panel` `USER` session and calls the canonical
   public logistics transfer-create or task-board contractor-catalog operation.
   The panel OIDC callback performs
-  a full-page return to `/logistics-simulator/**`; no transfer aggregate or
+  a full-page return to `/logistics-panel/**`; no transfer aggregate or
   command is duplicated in FastAPI.
 - Browser requests are same-origin `/auth/**` and `/api/**` only.
 - Clients do not call `/api/internal/**` or direct service database/storage
@@ -320,7 +372,54 @@ Evidence:
 [`ProtectedClientState`](../../panel/src/features/auth/protected-client-state.ts),
 [`media preview cache`](../../panel/src/features/media/media-preview-cache.ts).
 
-### Manager durable client state boundary
+### Rental-manager Android boundary
+
+`rental-manager-app/` is the native Android consumer for the dedicated
+`rwms-rental-manager-android` OAuth client. It uses only the public gateway and
+the exact `rental.manage` application scope. Before exposing client or order
+data it validates the authoritative `USER`/`RENTAL_MANAGER` subject,
+`rentalAccess=true`, the signed company identity and live same-company
+warehouses present in explicit active `EDIT`/`MANAGE` grants. Server
+`permissions.canEdit`, document versions and idempotency receipts remain
+authoritative; the app retains only encrypted OAuth state and a hashed command
+fingerprint scoped to the verified manager subject. Its adaptive Navigation 3
+shell exposes Clients, Orders and the existing assistant-service Chat, but no
+RWMS, logistics or administrative route. The chat retains a stable create
+identity across an explicit retry, validates bounded typed SSE events, never
+replays a non-idempotent turn POST, and rereads authoritative conversation
+history after completion, conflict or interruption. The same chat projection
+renders structured search shortages and the logistics-owned current selection;
+an exact complete-set mutation can only release currently held cabins. Public
+client-presentation publication delegates to logistics-service, keeps a stable
+actor-scoped idempotency key through an uncertain outcome, rereads authoritative
+state after conflict, and exposes explicit copy/share actions without claiming
+that the link was sent. An editable order card enters that same workflow by
+opening the single assistant conversation linked to its exact order and client;
+the server reuses the active conversation on repeated entry. The order detail
+also consumes the existing logistics `OrderDetail.units` projection directly,
+showing selected cabins, requested equipment and rental terms without copying
+their ownership or exposing transport identities. The draft-readiness card is
+projection-only: contact, client-confirmed address and dates, warehouse, cabin
+selection and every rental term must be present before Android enables the
+existing version-fenced save command, and only its server response advances the
+displayed state. Cancelling an editable draft
+uses the existing version-fenced logistics command only after explicit Android
+confirmation; the client retains the actor-scoped idempotency identity until
+the server returns the cancelled projection, and never releases reservations
+locally. Claims are absent until an owning aggregate and canonical lifecycle
+contract exist.
+
+Evidence:
+[`rental-manager auth`](../../rental-manager-app/src/main/java/dev/buhanzaz/rwms/rentalmanager/auth/RentalManagerAuth.kt),
+[`rental-manager repository`](../../rental-manager-app/src/main/java/dev/buhanzaz/rwms/rentalmanager/data/RentalManagerRepository.kt),
+[`rental-manager chat repository`](../../rental-manager-app/src/main/java/dev/buhanzaz/rwms/rentalmanager/data/AssistantRepository.kt),
+[`rental-manager presentation boundary`](../../rental-manager-app/src/main/java/dev/buhanzaz/rwms/rentalmanager/data/RentalPresentationRepository.kt),
+[`rental-manager chat state`](../../rental-manager-app/src/main/java/dev/buhanzaz/rwms/rentalmanager/ui/RentalManagerChatViewModel.kt),
+[`rental-manager navigation`](../../rental-manager-app/src/main/java/dev/buhanzaz/rwms/rentalmanager/ui/RentalManagerApp.kt),
+and
+[`rental-manager manifest`](../../rental-manager-app/src/main/AndroidManifest.xml).
+
+### Warehouse ManagerApp durable client state boundary
 
 The manager app resolves the authoritative `/me` account and its live warehouse
 grants before exposing a durable upload queue or catalog snapshot. Every upload
@@ -406,6 +505,13 @@ completed before confirmation. Weather from task-board's cached MET Norway adapt
 from the replaceable Yandex MapKit provider fail open without changing shift business state.
 Driver-shift photos reuse the existing encrypted CameraX/media pipeline under the dedicated
 `DRIVER_SHIFT/SHIFT_EVIDENCE` media proof.
+
+DriverApp authentication remains anchored to the worker's immutable home warehouse. Task-board is
+the operational execution-scope owner: it resolves an active temporary or completed permanent
+assignment before creating a shift at the destination warehouse, uses that warehouse's IANA
+timezone, and resumes the exact unfinished shift even after the assignment interval ends. This
+keeps token issuance independent from resource movement while preventing a home claim from being
+used as an arbitrary warehouse selector.
 
 The same stateful task-board owner keeps local plan changes and same-queue card
 reordering in narrow collaborators rather than in the panel or gateway:

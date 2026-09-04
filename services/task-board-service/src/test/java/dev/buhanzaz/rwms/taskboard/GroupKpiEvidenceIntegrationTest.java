@@ -4,33 +4,30 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import dev.buhanzaz.rwms.taskboard.domain.AssignmentStatus;
 import dev.buhanzaz.rwms.taskboard.domain.BoardTask;
+import dev.buhanzaz.rwms.taskboard.domain.KpiSettings;
 import dev.buhanzaz.rwms.taskboard.domain.EntryStatus;
 import dev.buhanzaz.rwms.taskboard.domain.EntryType;
 import dev.buhanzaz.rwms.taskboard.domain.GroupKpiDayState;
 import dev.buhanzaz.rwms.taskboard.domain.GroupKpiOpenState;
 import dev.buhanzaz.rwms.taskboard.domain.GroupKpiSegmentOutcome;
-import dev.buhanzaz.rwms.taskboard.domain.KpiPalette;
-import dev.buhanzaz.rwms.taskboard.domain.KpiPaletteRange;
 import dev.buhanzaz.rwms.taskboard.domain.KpiWorkBreakInterval;
 import dev.buhanzaz.rwms.taskboard.domain.KpiWorkScheduleRevision;
 import dev.buhanzaz.rwms.taskboard.domain.QueueEntry;
 import dev.buhanzaz.rwms.taskboard.domain.QueueDefinition;
 import dev.buhanzaz.rwms.taskboard.domain.TaskAssignment;
-import dev.buhanzaz.rwms.taskboard.domain.WarehouseKpiSettings;
 import dev.buhanzaz.rwms.taskboard.domain.WorkQueue;
 import dev.buhanzaz.rwms.taskboard.domain.WorkQueueClassBinding;
 import dev.buhanzaz.rwms.taskboard.domain.Worker;
 import dev.buhanzaz.rwms.taskboard.domain.WorkerClass;
 import dev.buhanzaz.rwms.taskboard.domain.WorkerGroup;
 import dev.buhanzaz.rwms.taskboard.repository.BoardTaskRepository;
+import dev.buhanzaz.rwms.taskboard.repository.KpiSettingsRepository;
 import dev.buhanzaz.rwms.taskboard.repository.GroupKpiDayStateRepository;
 import dev.buhanzaz.rwms.taskboard.repository.GroupKpiResponsibilitySegmentRepository;
-import dev.buhanzaz.rwms.taskboard.repository.KpiPaletteRepository;
 import dev.buhanzaz.rwms.taskboard.repository.KpiWorkScheduleRepository;
 import dev.buhanzaz.rwms.taskboard.repository.QueueEntryRepository;
 import dev.buhanzaz.rwms.taskboard.repository.QueueDefinitionRepository;
 import dev.buhanzaz.rwms.taskboard.repository.TaskAssignmentRepository;
-import dev.buhanzaz.rwms.taskboard.repository.WarehouseKpiSettingsRepository;
 import dev.buhanzaz.rwms.taskboard.repository.WorkQueueClassBindingRepository;
 import dev.buhanzaz.rwms.taskboard.repository.WorkQueueRepository;
 import dev.buhanzaz.rwms.taskboard.repository.WorkerClassRepository;
@@ -63,9 +60,8 @@ class GroupKpiEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
   @Autowired GroupKpiEvidenceService evidence;
   @Autowired GroupKpiDayStateRepository days;
   @Autowired GroupKpiResponsibilitySegmentRepository segments;
-  @Autowired WarehouseKpiSettingsRepository settings;
+  @Autowired KpiSettingsRepository settings;
   @Autowired KpiWorkScheduleRepository schedules;
-  @Autowired KpiPaletteRepository palettes;
   @Autowired WorkerClassRepository workerClasses;
   @Autowired WorkerGroupRepository groups;
   @Autowired WorkerRepository workers;
@@ -313,14 +309,8 @@ class GroupKpiEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   private void configureSchedule(List<KpiWorkBreakInterval> workBreaks) {
-    KpiPalette palette =
-        palettes.saveAndFlush(
-            new KpiPalette(
-                "#7F1D1D",
-                List.of(new KpiPaletteRange(0, 100, "#16A34A"))));
     KpiWorkScheduleRevision schedule =
         new KpiWorkScheduleRevision(
-            WAREHOUSE_ID,
             WORK_DATE,
             LocalTime.of(8, 0),
             LocalTime.of(17, 0),
@@ -329,13 +319,11 @@ class GroupKpiEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
     schedule.schedule();
     schedule = schedules.saveAndFlush(schedule);
 
-    WarehouseKpiSettings warehouseSettings =
-        WarehouseKpiSettings.create(WAREHOUSE_ID, "UTC");
-    warehouseSettings.setPalette(palette);
-    warehouseSettings.setPendingSchedule(schedule);
-    warehouseSettings.activatePendingSchedule();
-    assertThat(warehouseSettings.promoteSchedule(WORK_DATE)).isTrue();
-    settings.saveAndFlush(warehouseSettings);
+    KpiSettings globalSettings = KpiSettings.create();
+    globalSettings.setPendingSchedule(schedule);
+    globalSettings.activatePendingSchedule();
+    assertThat(globalSettings.promoteSchedule(WORK_DATE)).isTrue();
+    settings.saveAndFlush(globalSettings);
   }
 
   private GroupKpiDayState day(WorkerGroup group) {

@@ -336,7 +336,11 @@ describe("assistant API", () => {
         controller.close()
       },
     })
-    const fetchMock = vi.fn().mockResolvedValue(new Response(stream))
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(stream, {
+        headers: { "Content-Type": "text/event-stream" },
+      })
+    )
     vi.stubGlobal("fetch", fetchMock)
     const events: AssistantTurnEvent[] = []
 
@@ -483,7 +487,14 @@ describe("assistant API", () => {
           warehouseId: WAREHOUSE_ID,
           rentalItemIds: response.rentalItemIds,
         })
-      ).rejects.toThrow("некорректную текущую выборку")
+      ).rejects.toMatchObject({
+        status: 502,
+        code: "INVALID_API_RESPONSE",
+        message:
+          "Сервис вернул некорректные данные. Обновите страницу или повторите попытку позже.",
+        diagnosticMessage:
+          "Сервис чата вернул некорректную текущую выборку.",
+      })
     }
   )
 
@@ -565,7 +576,13 @@ describe("assistant API", () => {
 
     await expect(
       getAssistantConversation("access-token", CONVERSATION_ID)
-    ).rejects.toThrow("некорректный диалог")
+    ).rejects.toMatchObject({
+      status: 502,
+      code: "INVALID_API_RESPONSE",
+      message:
+        "Сервис вернул некорректные данные. Обновите страницу или повторите попытку позже.",
+      diagnosticMessage: "Сервис чата вернул некорректный диалог.",
+    })
   })
 
   it("maps turn Problem Details through the shared status-bearing error", async () => {
@@ -635,7 +652,145 @@ describe("assistant API", () => {
     expect(failure).toMatchObject({
       status: 503,
       code: null,
-      message: "Запрос завершился с ошибкой 503",
+      message: "Сервис временно недоступен. Повторите попытку позже.",
+    })
+  })
+
+  it("maps a turn transport failure without exposing the raw browser error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockRejectedValue(new TypeError("Failed to fetch assistant.internal"))
+    )
+
+    await expect(
+      streamAssistantTurn({
+        accessToken: "access-token",
+        conversationId: CONVERSATION_ID,
+        message: "Покажи БК-1",
+        onEvent: vi.fn(),
+      })
+    ).rejects.toMatchObject({
+      status: 0,
+      code: "NETWORK_ERROR",
+      message:
+        "Не удалось связаться с сервером. Проверьте подключение и повторите попытку.",
+      diagnosticMessage: "Failed to fetch assistant.internal",
+    })
+  })
+
+  it("maps an aborted turn request to safe copy while retaining its diagnostic", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockRejectedValue(
+          new DOMException("assistant request aborted by user", "AbortError")
+        )
+    )
+
+    await expect(
+      streamAssistantTurn({
+        accessToken: "access-token",
+        conversationId: CONVERSATION_ID,
+        message: "Покажи БК-1",
+        onEvent: vi.fn(),
+      })
+    ).rejects.toMatchObject({
+      status: 0,
+      code: "REQUEST_ABORTED",
+      message: "Запрос отменён. Повторите действие при необходимости.",
+      diagnosticMessage: "assistant request aborted by user",
+    })
+  })
+
+  it("recognizes an AbortError-shaped rejection from another realm", async () => {
+    const crossRealmAbort = Object.assign(Object.create(null), {
+      name: "AbortError",
+      message: "cross-realm assistant request aborted",
+    })
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(crossRealmAbort))
+
+    await expect(
+      streamAssistantTurn({
+        accessToken: "access-token",
+        conversationId: CONVERSATION_ID,
+        message: "Покажи БК-1",
+        onEvent: vi.fn(),
+      })
+    ).rejects.toMatchObject({
+      status: 0,
+      code: "REQUEST_ABORTED",
+      message: "Запрос отменён. Повторите действие при необходимости.",
+      diagnosticMessage: "cross-realm assistant request aborted",
+    })
+  })
+
+  it("maps malformed successful SSE data to a typed safe response error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response('data: {"event":\n\n', {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        })
+      )
+    )
+
+    let failure: unknown
+    try {
+      await streamAssistantTurn({
+        accessToken: "access-token",
+        conversationId: CONVERSATION_ID,
+        message: "Покажи БК-1",
+        onEvent: vi.fn(),
+      })
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).toBeInstanceOf(ApiError)
+    expect(failure).toMatchObject({
+      status: 502,
+      code: "INVALID_API_RESPONSE",
+      message:
+        "Сервис вернул некорректные данные. Обновите страницу или повторите попытку позже.",
+    })
+    expect((failure as ApiError).diagnosticMessage).not.toBe(
+      (failure as ApiError).message
+    )
+  })
+
+  it("maps an interrupted successful SSE body read to a safe network error", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      pull() {
+        throw new Error("assistant SSE socket reset by peer")
+      },
+    })
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(stream, {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        })
+      )
+    )
+
+    await expect(
+      streamAssistantTurn({
+        accessToken: "access-token",
+        conversationId: CONVERSATION_ID,
+        message: "Покажи БК-1",
+        onEvent: vi.fn(),
+      })
+    ).rejects.toMatchObject({
+      status: 0,
+      code: "NETWORK_ERROR",
+      message:
+        "Не удалось связаться с сервером. Проверьте подключение и повторите попытку.",
+      diagnosticMessage: "assistant SSE socket reset by peer",
     })
   })
 

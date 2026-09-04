@@ -22,8 +22,8 @@ export function getPanelUserManager() {
       automaticSilentRenew: true,
       monitorSession: false,
       loadUserInfo: false,
-      userStore: sessionStore('rwms.oidc.user:'),
-      stateStore: sessionStore('rwms.oidc.state:'),
+      userStore: sessionStore('rwms.panel.oidc.user:'),
+      stateStore: sessionStore('rwms.panel.oidc.state:'),
     });
   }
   return userManager;
@@ -62,7 +62,7 @@ export async function restorePanelUser(): Promise<User | null> {
 }
 
 function safeReturnTo(value: string) {
-  if (!value.startsWith('/') || value.startsWith('//') || value.startsWith('/auth/callback')) return '/logistics-simulator/';
+  if (!value.startsWith('/') || value.startsWith('//') || value.startsWith('/auth/callback')) return '/logistics-panel/';
   return value;
 }
 

@@ -48,7 +48,8 @@ class LastSystemAdminConcurrencyIntegrationTest {
 
     @Test
     void concurrentDisableCommandsLeaveExactlyOneActiveSystemAdmin() throws Exception {
-        var adminOne = users.listUsers().stream()
+        var bootstrapActor = authentication("admin");
+        var adminOne = users.listUsers(bootstrapActor).stream()
                 .filter(user -> user.globalRole() == UserGlobalRole.SYSTEM_ADMIN)
                 .findFirst()
                 .orElseThrow();

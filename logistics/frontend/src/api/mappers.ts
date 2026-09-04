@@ -25,6 +25,11 @@ import type { components } from './schema';
 /** Generated warehouse payload with the canonical dynamic tariff collection. */
 export type RawWarehouse = components['schemas']['WarehouseRead'] & {
   isochrone_tariffs?: Warehouse['isochrone_tariffs'];
+  capacity_published_generation?: number;
+  capacity_publish_status?: Warehouse['capacity_publish_status'];
+  capacity_publish_attempts?: number;
+  capacity_publish_error_code?: string | null;
+  capacity_publish_next_attempt_at?: string | null;
 };
 
 const DEFAULT_ISOCHRONE_TARIFFS: Warehouse['isochrone_tariffs'] = [
@@ -52,6 +57,11 @@ export function normalizeWarehouse(raw: RawWarehouse | Warehouse): Warehouse {
       ? raw.isochrone_tariffs.map((tariff) => ({ ...tariff }))
       : DEFAULT_ISOCHRONE_TARIFFS.map((tariff) => ({ ...tariff })),
     default_planning_date: raw.default_planning_date ?? null,
+    capacity_published_generation: raw.capacity_published_generation ?? raw.capacity_generation,
+    capacity_publish_status: raw.capacity_publish_status ?? 'NOT_REQUESTED',
+    capacity_publish_attempts: raw.capacity_publish_attempts ?? 0,
+    capacity_publish_error_code: raw.capacity_publish_error_code ?? null,
+    capacity_publish_next_attempt_at: raw.capacity_publish_next_attempt_at ?? null,
     settings: normalizePlanningSettings(raw.settings as unknown as Record<string, unknown>),
   };
 }
@@ -433,6 +443,9 @@ export function normalizeRoutePlan(raw: RawRoutePlan, workspace: WarehouseWorksp
   return {
     id: raw.id,
     warehouse_id: raw.warehouse_id,
+    ...(raw.supersedes_plan_id !== undefined
+      ? { supersedes_plan_id: raw.supersedes_plan_id }
+      : {}),
     date: raw.date,
     version: raw.version,
     status: raw.status,
@@ -491,6 +504,11 @@ export function normalizeWorkspace(workspace: WarehouseWorkspace): WarehouseWork
   return {
     ...workspace,
     warehouse: normalizeWarehouse(workspace.warehouse),
+    planning_date: workspace.planning_date
+      ?? workspace.warehouse.default_planning_date
+      ?? workspace.requests[0]?.scheduled_date
+      ?? workspace.requests[0]?.date_options[0]?.date
+      ?? '',
     warehouses: workspace.warehouses.map((warehouse) => normalizeWarehouse(warehouse)),
     drivers: workspace.drivers.map((driver) => ({
       ...driver,
@@ -501,6 +519,7 @@ export function normalizeWorkspace(workspace: WarehouseWorkspace): WarehouseWork
       mandatory: request.mandatory ?? false,
       scheduled_date: request.scheduled_date ?? null,
       trailer_access_allowed: request.trailer_access_allowed ?? null,
+      customer_delivery_purpose: request.customer_delivery_purpose ?? null,
       include_driver_passport_in_notification: request.include_driver_passport_in_notification ?? false,
       contact_name: request.contact_name ?? '',
       contact_phone: request.contact_phone ?? '',
@@ -512,8 +531,13 @@ export function normalizeWorkspace(workspace: WarehouseWorkspace): WarehouseWork
       assigned_contractor_phone: request.assigned_contractor_phone ?? null,
       assigned_at: request.assigned_at ?? null,
       assigned_by: request.assigned_by ?? null,
+      contractor_handoff_command_id: request.contractor_handoff_command_id ?? null,
+      contractor_handoff_sequence: request.contractor_handoff_sequence ?? null,
+      external_task_ids: request.external_task_ids ?? [],
       date_options: request.date_options ?? [],
       tasks: (request.tasks ?? []).map((task) => ({ ...task, mandatory: task.mandatory ?? request.mandatory ?? false })),
     })),
+    request_total: workspace.request_total ?? workspace.requests.length,
+    request_next_cursor: workspace.request_next_cursor ?? null,
   };
 }

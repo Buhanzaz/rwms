@@ -186,6 +186,12 @@ spring:
             client-secret: ${TASK_BOARD_CLIENT_SECRET}
             authorization-grant-type: client_credentials
             scope: warehouse.identity.read
+          worker-profile-media:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: ${TASK_BOARD_CLIENT_SECRET}
+            authorization-grant-type: client_credentials
+            scope: media.task-board
         provider:
           auth-service:
             token-uri: ${AUTH_TOKEN_URI}
@@ -244,6 +250,8 @@ rwms:
     connect-timeout: ${AUTH_CONNECT_TIMEOUT:2s}
     read-timeout: ${AUTH_READ_TIMEOUT:5s}
     credential-operation-timeout: ${AUTH_CREDENTIAL_OPERATION_TIMEOUT:15m}
+  media:
+    base-url: ${MEDIA_SERVICE_INTERNAL_BASE_URL:http://127.0.0.1:8085}
   warehouse:
     lifecycle:
       base-url: ${WAREHOUSE_SERVICE_INTERNAL_BASE_URL:}

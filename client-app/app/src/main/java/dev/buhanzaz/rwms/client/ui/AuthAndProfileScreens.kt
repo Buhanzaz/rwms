@@ -13,29 +13,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Checkbox
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Apartment
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Warehouse
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -48,136 +34,20 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import dev.buhanzaz.rwms.client.BuildConfig
-import dev.buhanzaz.rwms.client.auth.RegistrationValidator
 import dev.buhanzaz.rwms.client.data.CustomerEntityType
 import dev.buhanzaz.rwms.client.data.CustomerProfile
 import dev.buhanzaz.rwms.client.data.CustomerWarehouse
-
-/** Shared centered authentication frame that remains readable on tablets and with the IME open. */
-@Composable
-private fun AuthFrame(title: String, message: String?, content: @Composable () -> Unit) {
-    Box(
-        modifier = Modifier.fillMaxSize().imePadding().padding(24.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().widthIn(max = 460.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            Icon(Icons.Default.Warehouse, contentDescription = null, modifier = Modifier.size(48.dp))
-            Text("RWMS Клиент", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-            Text(title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
-            message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            content()
-        }
-    }
-}
-
-/** Native username/password entry; credentials are handed directly to the ephemeral PKCE exchange. */
-@Composable
-fun LoginScreen(
-    message: String?,
-    submitting: Boolean,
-    onLogin: (String, String) -> Unit,
-    onRegister: () -> Unit,
-) {
-    var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    AuthFrame("Вход", message) {
-        OutlinedTextField(
-            value = username,
-            onValueChange = { username = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Логин") },
-            leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
-            singleLine = true,
-            enabled = !submitting,
-        )
-        OutlinedTextField(
-            value = password,
-            onValueChange = { password = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Пароль") },
-            leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
-            enabled = !submitting,
-        )
-        Button(
-            onClick = { onLogin(username, password) },
-            modifier = Modifier.fillMaxWidth().height(52.dp),
-            enabled = !submitting && username.isNotBlank() && password.isNotBlank(),
-        ) {
-            if (submitting) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp) else Text("Войти")
-        }
-        OutlinedButton(onClick = onRegister, modifier = Modifier.fillMaxWidth(), enabled = !submitting) {
-            Text("Регистрация")
-        }
-    }
-}
-
-/** Native customer registration with local confirmation and server-side validation. */
-@Composable
-fun RegistrationScreen(
-    message: String?,
-    submitting: Boolean,
-    onSubmit: (String, String, String) -> Unit,
-    onBack: () -> Unit,
-) {
-    var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var confirmation by remember { mutableStateOf("") }
-    val validation = RegistrationValidator.validate(username, password, confirmation)
-    AuthFrame("Регистрация", message) {
-        OutlinedTextField(
-            value = username,
-            onValueChange = { username = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Логин") },
-            singleLine = true,
-            enabled = !submitting,
-        )
-        OutlinedTextField(
-            value = password,
-            onValueChange = { password = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Пароль") },
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
-            enabled = !submitting,
-        )
-        OutlinedTextField(
-            value = confirmation,
-            onValueChange = { confirmation = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Повторите пароль") },
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
-            enabled = !submitting,
-            supportingText = { if (username.isNotEmpty() || password.isNotEmpty()) Text(validation.orEmpty()) },
-            isError = validation != null && confirmation.isNotEmpty(),
-        )
-        Button(
-            onClick = { onSubmit(username, password, confirmation) },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = validation == null && !submitting,
-        ) {
-            if (submitting) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp) else Text("Зарегистрироваться")
-        }
-        OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth(), enabled = !submitting) {
-            Text("Уже есть аккаунт")
-        }
-    }
-}
 
 /** Creates a customer identity or edits its mutable rental and delivery document fields. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -186,16 +56,21 @@ fun ProfileFormScreen(
     existing: CustomerProfile?,
     busy: Boolean,
     onSave: (CustomerProfile) -> Unit,
-    selectedWarehouse: CustomerWarehouse? = null,
+    errorMessage: String? = null,
+    registrationDraft: CustomerRegistrationProfileDraft? = null,
     onAvatarSelected: (Uri) -> Unit = {},
     onBack: (() -> Unit)? = null,
 ) {
-    var type by remember(existing) { mutableStateOf(existing?.entityType ?: CustomerEntityType.INDIVIDUAL) }
+    val type = existing?.entityType ?: CustomerEntityType.INDIVIDUAL
     var firstName by remember(existing) { mutableStateOf(existing?.firstName.orEmpty()) }
     var lastName by remember(existing) { mutableStateOf(existing?.lastName.orEmpty()) }
     var company by remember(existing) { mutableStateOf(existing?.companyName.orEmpty()) }
-    var phone by remember(existing) { mutableStateOf(existing?.phone.orEmpty()) }
-    var email by remember(existing) { mutableStateOf(existing?.email.orEmpty()) }
+    var phone by remember(existing, registrationDraft) {
+        mutableStateOf(existing?.phone ?: registrationDraft?.phone.orEmpty())
+    }
+    var email by remember(existing, registrationDraft) {
+        mutableStateOf(existing?.email ?: registrationDraft?.email.orEmpty())
+    }
     var info by remember(existing) { mutableStateOf(existing?.additionalInfo.orEmpty()) }
     val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let(onAvatarSelected)
@@ -228,7 +103,6 @@ fun ProfileFormScreen(
                     ProfileAvatar(
                         profile = existing,
                         busy = busy,
-                        warehouseSelected = selectedWarehouse != null,
                         onPick = {
                             avatarPicker.launch(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
@@ -238,23 +112,17 @@ fun ProfileFormScreen(
                 }
             }
             item {
-                Text("Кто арендует бытовки?", style = MaterialTheme.typography.titleMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = type == CustomerEntityType.INDIVIDUAL,
-                        onClick = { type = CustomerEntityType.INDIVIDUAL },
-                        enabled = existing == null,
-                        label = { Text("Физлицо") },
-                        leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
-                    )
-                    FilterChip(
-                        selected = type == CustomerEntityType.LEGAL,
-                        onClick = { type = CustomerEntityType.LEGAL },
-                        enabled = existing == null,
-                        label = { Text("Юрлицо") },
-                        leadingIcon = { Icon(Icons.Default.Apartment, contentDescription = null) },
-                    )
-                }
+                Text(
+                    text = if (type == CustomerEntityType.INDIVIDUAL) {
+                        "Физическое лицо"
+                    } else {
+                        "Юридическое лицо"
+                    },
+                    color = CustomerStoreNavy,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.testTag("profile-entity-type"),
+                )
             }
             if (type == CustomerEntityType.INDIVIDUAL) {
                 item {
@@ -316,6 +184,16 @@ fun ProfileFormScreen(
                     testTag = "profile-additional-info",
                 )
             }
+            errorMessage?.let { message ->
+                item {
+                    Text(
+                        text = message,
+                        color = Color(0xFF8E1C1C),
+                        fontSize = 12.sp,
+                        modifier = Modifier.testTag("profile-error"),
+                    )
+                }
+            }
             item {
                 Spacer(Modifier.height(4.dp))
                 Button(
@@ -339,7 +217,6 @@ fun ProfileFormScreen(
 private fun ProfileAvatar(
     profile: CustomerProfile,
     busy: Boolean,
-    warehouseSelected: Boolean,
     onPick: () -> Unit,
 ) {
     Column(
@@ -372,17 +249,10 @@ private fun ProfileAvatar(
         }
         OutlinedButton(
             onClick = onPick,
-            enabled = !busy && warehouseSelected,
+            enabled = !busy,
             modifier = Modifier.testTag("profile-avatar-picker"),
         ) {
             Text(if (profile.avatar == null) "Загрузить аватар" else "Изменить аватар")
-        }
-        if (!warehouseSelected) {
-            Text(
-                "Чтобы загрузить аватар, сначала выберите склад.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }
@@ -459,18 +329,31 @@ private fun CustomerTextField(
     enabled: Boolean = true,
     testTag: String? = null,
 ) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        modifier = Modifier.fillMaxWidth().then(
-            if (testTag == null) Modifier else Modifier.testTag(testTag),
-        ),
-        label = { Text(label) },
-        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
-        singleLine = singleLine,
-        minLines = if (singleLine) 1 else 3,
-        enabled = enabled,
-    )
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            text = label,
+            color = CustomerStoreNavy,
+            fontSize = 12.sp,
+            lineHeight = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        CustomerStoreInputField(
+            value = value,
+            onValueChange = onValueChange,
+            placeholder = label,
+            enabled = enabled,
+            keyboardType = keyboardType,
+            imeAction = ImeAction.Done,
+            height = if (singleLine) 56.dp else 112.dp,
+            singleLine = singleLine,
+            modifier = Modifier.then(
+                if (testTag == null) Modifier else Modifier.testTag(testTag),
+            ),
+        )
+    }
 }
 
 private fun CustomerProfile.avatarInitials(): String {

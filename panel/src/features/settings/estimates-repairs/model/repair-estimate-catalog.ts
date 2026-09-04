@@ -11,7 +11,6 @@ export type RepairEstimateCatalogMoneyDecimal = string
 
 export type RepairEstimateCatalogRequest = {
   accessToken: string
-  warehouseId: string
   catalogVersionId: string
 }
 

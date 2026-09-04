@@ -13,6 +13,7 @@ import dev.buhanzaz.rwms.worker.core.network.FinalizeUploadRequestDto
 import dev.buhanzaz.rwms.worker.core.network.ImageVariantUploadRequestDto
 import dev.buhanzaz.rwms.worker.core.network.UploadedObjectDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayClient
+import dev.buhanzaz.rwms.worker.core.network.safeWorkerUserMessage
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -174,7 +175,9 @@ class MediaUploadPipeline @Inject constructor(
         } catch (error: Throwable) {
             database.evidenceDao().updateUploadError(
                 evidence.evidenceId,
-                error.message ?: "Не удалось загрузить фотографию",
+                error.safeWorkerUserMessage(
+                    "Не удалось загрузить фотографию. Запустите синхронизацию ещё раз.",
+                ),
                 System.currentTimeMillis(),
             )
             throw error

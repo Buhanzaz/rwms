@@ -10,6 +10,7 @@ import dev.buhanzaz.rwms.worker.core.database.WorkerLocalStore
 import dev.buhanzaz.rwms.worker.core.media.EncryptedEvidenceFileStore
 import dev.buhanzaz.rwms.worker.core.media.WorkerEvidenceBundlePreparer
 import dev.buhanzaz.rwms.worker.core.media.WorkerGalleryJpegImporter
+import dev.buhanzaz.rwms.worker.core.network.safeWorkerUserMessage
 import dev.buhanzaz.rwms.worker.core.sync.WorkerSyncScheduler
 import java.io.File
 import java.time.Instant
@@ -140,15 +141,14 @@ class CameraViewModel @Inject constructor(
                 mutableState.value = CameraUiState(
                     savedEvidenceIds = accumulatedCameraEvidenceIds.toList(),
                     error = syncFailure?.let { failure ->
-                        "Фотографии сохранены, но синхронизация не запущена: " +
-                            (failure.message ?: "неизвестная ошибка")
+                        "Фотографии сохранены. ${cameraSyncFailureReason(failure)}"
                     },
                 )
             } else {
                 val batchFailure = cameraBatchFailureMessage(
                     savedCount = saved.size,
                     selectedCount = selectedFiles.size,
-                    causeMessage = failures.firstNotNullOfOrNull { it.message },
+                    cause = failures.firstOrNull(),
                 )
                 mutableState.value = CameraUiState(
                     persistedCapturePaths = saved.mapTo(linkedSetOf()) { it.first.absolutePath },
@@ -156,8 +156,7 @@ class CameraViewModel @Inject constructor(
                     error = if (syncFailure == null) {
                         batchFailure
                     } else {
-                        "$batchFailure Синхронизация сохранённых фото не запущена: " +
-                            (syncFailure.message ?: "неизвестная ошибка")
+                        "$batchFailure ${cameraSyncFailureReason(syncFailure)}"
                     },
                 )
             }
@@ -226,22 +225,20 @@ class CameraViewModel @Inject constructor(
                     CameraUiState(savedEvidenceIds = savedEvidenceIds.toList())
                 } else {
                     CameraUiState(
-                        error = "Фотографии сохранены, но синхронизация не запущена: " +
-                            (syncFailure.message ?: "неизвестная ошибка"),
+                        error = "Фотографии сохранены. ${cameraSyncFailureReason(syncFailure)}",
                     )
                 }
             } else {
                 val importFailure = galleryBatchFailureMessage(
                     savedCount = savedEvidenceIds.size,
                     selectedCount = selectedUris.size,
-                    causeMessage = failures.firstNotNullOfOrNull { it.message },
+                    cause = failures.firstOrNull(),
                 )
                 mutableState.value = CameraUiState(
                     error = if (syncFailure == null) {
                         importFailure
                     } else {
-                        "$importFailure Синхронизация сохранённых фото не запущена: " +
-                            (syncFailure.message ?: "неизвестная ошибка")
+                        "$importFailure ${cameraSyncFailureReason(syncFailure)}"
                     },
                 )
             }
@@ -308,13 +305,13 @@ internal fun CameraUiState.consumePersistedCaptures(filePaths: Set<String>): Cam
 internal fun cameraBatchFailureMessage(
     savedCount: Int,
     selectedCount: Int,
-    causeMessage: String?,
+    cause: Throwable?,
 ): String {
-    val cause = causeMessage ?: "Не удалось сохранить фотографию"
+    val safeCause = cause?.safeWorkerUserMessage(CAMERA_SAVE_FAILURE) ?: CAMERA_SAVE_FAILURE
     return if (savedCount > 0) {
-        "Сохранено $savedCount из $selectedCount фото. Остальные не сохранены: $cause"
+        "Сохранено $savedCount из $selectedCount фото. Остальные не сохранены: $safeCause"
     } else {
-        cause
+        safeCause
     }
 }
 
@@ -322,15 +319,24 @@ internal fun cameraBatchFailureMessage(
 internal fun galleryBatchFailureMessage(
     savedCount: Int,
     selectedCount: Int,
-    causeMessage: String?,
+    cause: Throwable?,
 ): String {
-    val cause = causeMessage ?: "Не удалось добавить фотографию"
+    val safeCause = cause?.safeWorkerUserMessage(GALLERY_IMPORT_FAILURE) ?: GALLERY_IMPORT_FAILURE
     return if (savedCount > 0) {
-        "Добавлено $savedCount из $selectedCount фото. Остальные не добавлены: $cause"
+        "Добавлено $savedCount из $selectedCount фото. Остальные не добавлены: $safeCause"
     } else {
-        cause
+        safeCause
     }
 }
 
+/** Returns an operation-specific safe reason for a failed evidence sync request. */
+internal fun cameraSyncFailureReason(cause: Throwable): String =
+    cause.safeWorkerUserMessage(CAMERA_SYNC_FAILURE)
+
 private const val EMPTY_GALLERY_SELECTION_ERROR = "Выберите хотя бы одну фотографию"
 private const val EMPTY_CAMERA_BATCH_ERROR = "Сделайте хотя бы одну фотографию"
+private const val CAMERA_SAVE_FAILURE = "Не удалось сохранить фотографию. Повторите снимок."
+private const val GALLERY_IMPORT_FAILURE =
+    "Не удалось добавить фотографию. Проверьте файл и повторите попытку."
+private const val CAMERA_SYNC_FAILURE =
+    "Не удалось запустить синхронизацию фотографий. Повторите её позже."

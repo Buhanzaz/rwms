@@ -19,7 +19,8 @@ Deployment auth-service обязан публиковать UI и Spring Securit
 origin (`http://localhost:9000` при разработке):
 
 - `GET /login` возвращает `dist/index.html`.
-- `GET /assets/**` и `GET /wms-login-cover.png` возвращают файлы из `dist/`.
+- `GET /assets/**` возвращает собранные scripts, fonts, логотип Block Box и
+  фоновое видео с каустикой из `dist/`.
 - `POST /login` без изменений перенаправляется в Spring Security.
 - `/api/**`, `/oauth2/**`, `/.well-known/**`, `/connect/logout` и `/logout`
   без изменений перенаправляются в Spring Boot.
@@ -32,7 +33,9 @@ body, cookies, query string или origin.
 
 Форма получает CSRF token из `GET /api/auth/csrf`, отправляет token с именем
 parameter, возвращённым этим endpoint, и передаёт стандартные поля `username`
-и `password` в `/login`.
+и `password` в `/login`. Явная настройка «Запомнить» сохраняет в browser local
+storage только логин — пароль и token не сохраняются. Восстановление пароля
+пока показано как недоступная заглушка и не имитирует успешное восстановление.
 
 Development credentials заполняются заранее только в Vite development mode
 или при явной сборке с `VITE_DEV_DEFAULT_CREDENTIALS=true`. Production builds

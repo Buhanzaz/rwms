@@ -10,6 +10,7 @@ COPY pyproject.toml ./
 COPY app ./app
 COPY alembic.ini ./
 COPY migrations ./migrations
+COPY openapi.json ./openapi.json
 
 FROM base AS test
 

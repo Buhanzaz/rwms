@@ -16,10 +16,10 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Transport models for versioned per-warehouse KPI appearance and work-schedule configuration.
+ * Transport models for installation-wide KPI appearance and work-schedule configuration.
  *
- * <p>Schedules are expressed in the warehouse's authoritative timezone and become active only
- * through the dedicated idempotent activation command.
+ * <p>A schedule uses one local calendar date and one set of local shift hours across every
+ * warehouse. Each warehouse interprets those values through its own authoritative timezone.
  */
 public final class KpiSettingsApiModels {
   private KpiSettingsApiModels() {}
@@ -32,7 +32,7 @@ public final class KpiSettingsApiModels {
   /**
    * Version-fenced palette replacement with contiguous percentage ranges and an overdue color.
    *
-   * @param expectedVersion observed settings version
+   * @param expectedVersion observed global KPI settings version
    * @param ranges ordered non-overlapping percentage ranges
    * @param overdueColor hexadecimal color used for overdue work
    */
@@ -50,11 +50,10 @@ public final class KpiSettingsApiModels {
       @NotNull @JsonFormat(pattern = "HH:mm") LocalTime end) {}
 
   /**
-   * Version-fenced current-day or future-effective warehouse work schedule.
+   * Version-fenced current-day or future-effective shared work schedule.
    *
    * @param expectedVersion observed settings version
-   * @param effectiveFrom warehouse-local calendar date when the schedule takes effect; the current
-   *     date applies to the whole local day after explicit activation
+   * @param effectiveFrom local calendar date when the schedule takes effect in every warehouse
    * @param shiftStart local working-shift start
    * @param shiftEnd local working-shift end
    * @param daysOff ISO weekday numbers excluded from work time
@@ -85,6 +84,14 @@ public final class KpiSettingsApiModels {
   public record KpiPaletteDto(
       long version, List<KpiPaletteRangeDto> ranges, String overdueColor) {}
 
+  /**
+   * Shared installation-wide palette head.
+   *
+   * @param version observed KPI settings version; zero means no settings exist yet
+   * @param palette configured shared palette, or {@code null} before its first save
+   */
+  public record KpiPaletteResponse(long version, KpiPaletteDto palette) {}
+
   public record KpiWorkBreakDto(
       @JsonFormat(pattern = "HH:mm") LocalTime start,
       @JsonFormat(pattern = "HH:mm") LocalTime end) {}
@@ -99,23 +106,21 @@ public final class KpiSettingsApiModels {
       List<KpiWorkBreakDto> breaks) {}
 
   /**
-   * Active and pending KPI configuration returned for one warehouse.
+   * Active and pending KPI configuration shared by every warehouse.
    *
-   * @param warehouseId warehouse that owns the settings
-   * @param timeZone authoritative warehouse IANA timezone
    * @param status settings lifecycle state
-   * @param version current settings version
-   * @param dataAvailableFrom earliest date with KPI data
-   * @param palette current display palette
+   * @param version current global settings version
+   * @param dataAvailableFrom earliest local date with KPI schedule evidence
+   * @param minimumEffectiveDate earliest date accepted for a new revision
+   * @param palette current installation-wide display palette
    * @param activeSchedule active working-time schedule, if configured
-   * @param pendingSchedule current-day draft or next future-effective schedule, if configured
+   * @param pendingSchedule current draft or next future-effective schedule, if configured
    */
-  public record WarehouseKpiSettingsResponse(
-      UUID warehouseId,
-      String timeZone,
+  public record KpiSettingsResponse(
       KpiSettingsStatus status,
       long version,
       LocalDate dataAvailableFrom,
+      LocalDate minimumEffectiveDate,
       KpiPaletteDto palette,
       KpiWorkScheduleDto activeSchedule,
       KpiWorkScheduleDto pendingSchedule) {}

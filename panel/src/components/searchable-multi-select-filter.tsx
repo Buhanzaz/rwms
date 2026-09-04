@@ -2,7 +2,6 @@ import { useId, useMemo, useState } from "react"
 import { FilterIcon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -42,6 +41,7 @@ export function SearchableMultiSelectFilter<TValue extends string>({
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState("")
   const [draft, setDraft] = useState<TValue[]>(selected)
+  const hasSelectedValues = selected.length > 0
   const filteredOptions = useMemo(() => {
     const normalizedSearch = search.trim().toLocaleLowerCase("ru-RU")
 
@@ -78,19 +78,24 @@ export function SearchableMultiSelectFilter<TValue extends string>({
         <Button
           type="button"
           size="default"
-          variant={selected.length > 0 ? "secondary" : "outline"}
-          className={cn("h-9 w-full justify-start sm:w-auto", className)}
+          variant="outline"
+          className={cn(
+            "h-9 w-full justify-start sm:w-auto",
+            hasSelectedValues && "rwms-button-light",
+            className
+          )}
+          aria-pressed={hasSelectedValues}
           aria-label={
-            selected.length > 0
+            hasSelectedValues
               ? `${label}: выбрано ${selected.length}`
               : undefined
           }
         >
           {label}
-          {selected.length > 0 ? (
-            <Badge aria-hidden="true" variant="outline">
+          {hasSelectedValues ? (
+            <span aria-hidden="true" className="text-xs text-current">
               {selected.length}
-            </Badge>
+            </span>
           ) : null}
           <HugeiconsIcon
             icon={FilterIcon}

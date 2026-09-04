@@ -44,7 +44,7 @@
       "required": ["mediaId", "ownerType", "ownerId", "warehouseId", "kind", "status", "generation", "rotationDegrees"],
       "properties": {
         "mediaId": {"type": "string", "format": "uuid"},
-        "ownerType": {"enum": ["INVENTORY_FINDING", "CABIN", "MAINTENANCE_ESTIMATE", "MAINTENANCE_REPAIR", "MAINTENANCE_ACCEPTANCE", "MAINTENANCE_CATALOG_NODE", "LOGISTICS_RETURN", "LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER", "LOGISTICS_CUSTOMER_PROFILE", "TASK_BOARD_ENTRY", "DRIVER_SHIFT"]},
+        "ownerType": {"enum": ["INVENTORY_FINDING", "CABIN", "MAINTENANCE_ESTIMATE", "MAINTENANCE_REPAIR", "MAINTENANCE_ACCEPTANCE", "MAINTENANCE_CATALOG_NODE", "LOGISTICS_RETURN", "LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER", "LOGISTICS_CUSTOMER_PROFILE", "TASK_BOARD_WORKER_PROFILE", "TASK_BOARD_ENTRY", "DRIVER_SHIFT"]},
         "ownerId": {"type": "string", "maxLength": 128},
         "warehouseId": {"type": "string", "format": "uuid"},
         "clientReferenceId": {"oneOf": [{"type": "string", "format": "uuid"}, {"type": "null"}]},

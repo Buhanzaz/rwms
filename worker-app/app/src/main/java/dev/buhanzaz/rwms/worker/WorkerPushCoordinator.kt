@@ -11,6 +11,7 @@ import dev.buhanzaz.rwms.worker.core.database.WorkerInvalidationEntity
 import dev.buhanzaz.rwms.worker.core.network.GatewayProblemException
 import dev.buhanzaz.rwms.worker.core.network.WorkerDeviceRegistrationRequestDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayClient
+import dev.buhanzaz.rwms.worker.core.network.safeWorkerUserMessage
 import dev.buhanzaz.rwms.worker.core.sync.WorkerSyncScheduler
 import java.time.Instant
 import java.util.Locale
@@ -164,7 +165,11 @@ class WorkerPushCoordinator @Inject constructor(
                 mutableCapability.value = when {
                     error is GatewayProblemException && error.problem.status in OPTIONAL_REGISTRATION_STATUSES ->
                         WorkerPushCapability.RegistrationEndpointUnavailable(error.problem.status)
-                    else -> WorkerPushCapability.TemporaryFailure(error.message)
+                    else -> WorkerPushCapability.TemporaryFailure(
+                        error.safeWorkerUserMessage(
+                            "Не удалось включить уведомления. Повторите попытку позже.",
+                        ),
+                    )
                 }
             }
     }

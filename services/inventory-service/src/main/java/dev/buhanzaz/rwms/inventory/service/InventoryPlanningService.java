@@ -25,17 +25,15 @@ import dev.buhanzaz.rwms.inventory.repository.InventoryPlanningSettingsRepositor
 import dev.buhanzaz.rwms.inventory.repository.InventorySessionRepository;
 import dev.buhanzaz.rwms.inventory.security.InventoryAuthorizer;
 import java.nio.charset.StandardCharsets;
-import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -110,18 +108,9 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
           if (existing == null) {
             saved =
                 planningSettings.saveAndFlush(
-                    InventoryPlanningSettings.create(
-                        warehouseId,
-                        requested.movementDailyCapacity(),
-                        requested.repairDailyCapacity(),
-                        weekdaysJson(requested.workingWeekdays()),
-                        holidaysJson(requested.holidays())));
+                    InventoryPlanningSettings.create(warehouseId, holidaysJson(requested.holidays())));
           } else {
-            existing.replace(
-                requested.movementDailyCapacity(),
-                requested.repairDailyCapacity(),
-                weekdaysJson(requested.workingWeekdays()),
-                holidaysJson(requested.holidays()));
+            existing.replaceHolidays(holidaysJson(requested.holidays()));
             saved = planningSettings.saveAndFlush(existing);
           }
           sessions
@@ -153,17 +142,21 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
     expectRevision(settings.revision(), request.expectedSettingsRevision());
     InventoryFinalPlan existing = finalPlans.findById(inventoryId).orElse(null);
     long finalPlanVersion = existing == null ? 1 : Math.addExact(existing.getFinalPlanVersion(), 1);
+    InventoryPlanningCalendar calendar = calendarFor(session);
     List<FinalPlanDraft> draft =
         scheduleFinalPlan(
             session,
             settings,
+            calendar,
             request.movementScheduleMode(),
             request.repairScheduleMode(),
             initialFinalPlanDrafts(session));
+    InventoryPlanningCalendar.Evidence calendarEvidence = calendar.evidence();
     String sha256 =
         finalPlanSha256(
             session,
             settings,
+            calendarFence(calendarEvidence),
             finalPlanVersion,
             request.movementScheduleMode(),
             request.repairScheduleMode(),
@@ -185,6 +178,7 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
         existing == null ? 0 : existing.getFinalPlanVersion(),
         finalPlanVersion,
         sha256,
+        calendarEvidence,
         request.movementScheduleMode(),
         request.repairScheduleMode(),
         withCandidates);
@@ -231,17 +225,21 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
     expectRevision(current.getFinalPlanVersion(), request.expectedFinalPlanVersion());
     PlanningSpecification settings = planningSpecification(session.getWarehouseId());
     long nextVersion = Math.addExact(current.getFinalPlanVersion(), 1);
+    InventoryPlanningCalendar calendar = calendarFor(session);
     List<FinalPlanDraft> draft =
         scheduleFinalPlan(
             session,
             settings,
+            calendar,
             request.movementScheduleMode(),
             request.repairScheduleMode(),
             updateFinalPlanDrafts(session, request.entries()));
+    InventoryPlanningCalendar.Evidence calendarEvidence = calendar.evidence();
     String sha256 =
         finalPlanSha256(
             session,
             settings,
+            calendarFence(calendarEvidence),
             nextVersion,
             request.movementScheduleMode(),
             request.repairScheduleMode(),
@@ -262,6 +260,7 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
         current.getFinalPlanVersion(),
         nextVersion,
         sha256,
+        calendarEvidence,
         request.movementScheduleMode(),
         request.repairScheduleMode(),
         withCandidates);
@@ -271,27 +270,25 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
     return planningSettings
         .findById(warehouseId)
         .map(this::planningSpecification)
-        .orElseGet(
-            () ->
-                new PlanningSpecification(
-                    0,
-                    6,
-                    6,
-                    List.of(
-                        DayOfWeek.MONDAY,
-                        DayOfWeek.TUESDAY,
-                        DayOfWeek.WEDNESDAY,
-                        DayOfWeek.THURSDAY,
-                        DayOfWeek.FRIDAY),
-                    List.of()));
+        .orElseGet(() -> new PlanningSpecification(0, null, List.of()));
+  }
+
+  PlanningSpecification historicalPlanningSpecification(long revision) {
+    if (revision < 0) {
+      throw new IllegalArgumentException("Planning-settings revision cannot be negative");
+    }
+    return new PlanningSpecification(revision, null, List.of());
+  }
+
+  InventoryPlanningCalendar calendarFor(InventorySession session) {
+    return new InventoryPlanningCalendar(
+        dependencies, session.getWarehouseId(), planningDate(session));
   }
 
   PlanningSpecification planningSpecification(InventoryPlanningSettings value) {
     return new PlanningSpecification(
         value.getRevision(),
-        value.getMovementDailyCapacity(),
-        value.getRepairDailyCapacity(),
-        parseWorkingWeekdays(read(value.getWorkingWeekdays())),
+        value.getUpdatedAt(),
         parseHolidays(read(value.getHolidays())));
   }
 
@@ -299,9 +296,7 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
     if (request == null) throw new IllegalArgumentException("Planning settings are required");
     return new PlanningSpecification(
         request.expectedSettingsRevision(),
-        request.movementDailyCapacity(),
-        request.repairDailyCapacity(),
-        parseWorkingWeekdays(request.workingWeekdays()),
+        null,
         parseHolidays(request.holidays()));
   }
 
@@ -310,46 +305,8 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
     return new PlanningSettingsView(
         warehouseId,
         specification.revision(),
-        specification.movementDailyCapacity(),
-        specification.repairDailyCapacity(),
-        specification.workingWeekdays().stream().map(Enum::name).toList(),
+        specification.updatedAt(),
         specification.holidays());
-  }
-
-  List<DayOfWeek> parseWorkingWeekdays(List<String> values) {
-    if (values == null || values.isEmpty() || values.size() > 7) {
-      throw new IllegalArgumentException("Working weekdays must contain one to seven days");
-    }
-    EnumSet<DayOfWeek> result = EnumSet.noneOf(DayOfWeek.class);
-    for (String value : values) {
-      try {
-        DayOfWeek day = DayOfWeek.valueOf(value.trim().toUpperCase(Locale.ROOT));
-        if (!result.add(day)) {
-          throw new IllegalArgumentException("Working weekdays must not contain duplicates");
-        }
-      } catch (NullPointerException | IllegalArgumentException exception) {
-        if (exception.getMessage() != null
-            && exception.getMessage().contains("duplicates")) {
-          throw exception;
-        }
-        throw new IllegalArgumentException("Working weekday is invalid", exception);
-      }
-    }
-    return List.copyOf(result);
-  }
-
-  List<DayOfWeek> parseWorkingWeekdays(JsonNode values) {
-    if (values == null || !values.isArray()) {
-      throw new IllegalStateException("Stored planning weekdays are invalid");
-    }
-    List<String> text = new ArrayList<>();
-    for (JsonNode value : values) {
-      if (!value.isTextual()) {
-        throw new IllegalStateException("Stored planning weekdays are invalid");
-      }
-      text.add(value.asText());
-    }
-    return parseWorkingWeekdays(text);
   }
 
   List<LocalDate> parseHolidays(List<LocalDate> values) {
@@ -381,10 +338,6 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
       }
     }
     return parseHolidays(dates);
-  }
-
-  String weekdaysJson(List<DayOfWeek> values) {
-    return write(values.stream().map(Enum::name).toList());
   }
 
   String holidaysJson(List<LocalDate> values) {
@@ -532,6 +485,7 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
   List<FinalPlanDraft> scheduleFinalPlan(
       InventorySession session,
       PlanningSpecification settings,
+      InventoryPlanningCalendar calendar,
       FinalPlanScheduleMode movementMode,
       FinalPlanScheduleMode repairMode,
       List<FinalPlanDraft> input) {
@@ -540,7 +494,6 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
     }
     LocalDate planningDate = planningDate(session);
     List<FinalPlanDraft> result = new ArrayList<>(input);
-    Map<LocalDate, Integer> movementUsed = new LinkedHashMap<>();
     for (int index = 0; index < result.size(); index++) {
       FinalPlanDraft entry = result.get(index);
       if (!entry.hasWork()) continue;
@@ -555,22 +508,13 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
         if (entry.movementScheduledDate() != null) {
           throw new IllegalArgumentException("AUTO movement schedule cannot include dates");
         }
-        date =
-            reserveAutomaticDate(
-                planningDate, settings, movementUsed, settings.movementDailyCapacity());
+        date = reserveAutomaticDate(planningDate, settings, calendar);
       } else {
         date = entry.movementScheduledDate();
-        reserveManualDate(
-            date,
-            planningDate,
-            settings,
-            movementUsed,
-            settings.movementDailyCapacity(),
-            "movement");
+        reserveManualDate(date, planningDate, settings, calendar, "movement");
       }
       result.set(index, entry.withDates(date, entry.repairScheduledDate()));
     }
-    Map<LocalDate, Integer> repairUsed = new LinkedHashMap<>();
     for (int index = 0; index < result.size(); index++) {
       FinalPlanDraft entry = result.get(index);
       if (!entry.hasWork()) continue;
@@ -583,16 +527,10 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
         if (entry.repairScheduledDate() != null) {
           throw new IllegalArgumentException("AUTO repair schedule cannot include dates");
         }
-        date = reserveAutomaticDate(earliest, settings, repairUsed, settings.repairDailyCapacity());
+        date = reserveAutomaticDate(earliest, settings, calendar);
       } else {
         date = entry.repairScheduledDate();
-        reserveManualDate(
-            date,
-            planningDate,
-            settings,
-            repairUsed,
-            settings.repairDailyCapacity(),
-            "repair");
+        reserveManualDate(date, planningDate, settings, calendar, "repair");
         if (entry.movementToRepair() && date.isBefore(entry.movementScheduledDate())) {
           throw new IllegalArgumentException("Repair date cannot precede movement date");
         }
@@ -612,12 +550,10 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
   LocalDate reserveAutomaticDate(
       LocalDate earliest,
       PlanningSpecification settings,
-      Map<LocalDate, Integer> used,
-      int capacity) {
+      InventoryPlanningCalendar calendar) {
     LocalDate date = earliest;
     for (int offset = 0; offset < 20_000; offset++, date = date.plusDays(1)) {
-      if (!workingDay(date, settings) || used.getOrDefault(date, 0) >= capacity) continue;
-      used.merge(date, 1, Integer::sum);
+      if (!workingDay(date, settings, calendar)) continue;
       return date;
     }
     throw new IllegalStateException("Planning calendar has no available date");
@@ -627,31 +563,86 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
       LocalDate date,
       LocalDate planningDate,
       PlanningSpecification settings,
-      Map<LocalDate, Integer> used,
-      int capacity,
+      InventoryPlanningCalendar calendar,
       String stream) {
     if (date != null && date.isBefore(planningDate)) {
       throw new IllegalArgumentException(
           "Manual " + stream + " date cannot precede the current warehouse planning date");
     }
-    if (date == null || !workingDay(date, settings)) {
+    if (date == null || !workingDay(date, settings, calendar)) {
       throw new IllegalArgumentException("Manual " + stream + " date must be a working day");
     }
-    int next = Math.addExact(used.getOrDefault(date, 0), 1);
-    if (next > capacity) {
-      throw new IllegalArgumentException("Manual " + stream + " schedule exceeds daily capacity");
-    }
-    used.put(date, next);
   }
 
-  boolean workingDay(LocalDate date, PlanningSpecification settings) {
-    return settings.workingWeekdays().contains(date.getDayOfWeek())
-        && !settings.holidays().contains(date);
+  boolean workingDay(
+      LocalDate date, PlanningSpecification settings, InventoryPlanningCalendar calendar) {
+    return calendar.taskBoardWorking(date) && !settings.holidays().contains(date);
+  }
+
+  TaskBoardCalendarFence calendarFence(InventoryPlanningCalendar.Evidence evidence) {
+    if (evidence == null) {
+      throw new IllegalArgumentException("Task-board calendar evidence is required");
+    }
+    return new TaskBoardCalendarFence(evidence.from(), evidence.through(), evidence.fingerprint());
+  }
+
+  TaskBoardCalendarFence calendarFence(InventoryFinalPlan plan) {
+    if (plan == null) {
+      throw InventoryException.conflict("Inventory final plan calendar evidence is missing");
+    }
+    try {
+      String snapshot = plan.getTaskBoardCalendarSnapshot();
+      if (snapshot == null
+          || snapshot.isBlank()
+          || snapshot.length() > 8_000_000
+          || !read(snapshot).isObject()) {
+        throw new IllegalStateException("Final-plan task-board calendar snapshot is invalid");
+      }
+      return new TaskBoardCalendarFence(
+          plan.getTaskBoardCalendarFrom(),
+          plan.getTaskBoardCalendarThrough(),
+          plan.getTaskBoardCalendarFingerprint());
+    } catch (IllegalArgumentException | IllegalStateException exception) {
+      throw InventoryException.conflict("Inventory final plan calendar evidence is missing");
+    }
+  }
+
+  TaskBoardCalendarFence calendarFenceOrNull(InventoryFinalPlan plan) {
+    if (plan.getTaskBoardCalendarFrom() == null
+        && plan.getTaskBoardCalendarThrough() == null
+        && plan.getTaskBoardCalendarFingerprint() == null
+        && plan.getTaskBoardCalendarSnapshot() == null) {
+      return null;
+    }
+    return calendarFence(plan);
+  }
+
+  String calendarSnapshot(InventoryPlanningCalendar.Evidence evidence) {
+    if (evidence == null) {
+      throw new IllegalArgumentException("Task-board calendar evidence is required");
+    }
+    return write(evidence.snapshot());
+  }
+
+  TaskBoardCalendarFence requireCurrentCalendarFence(
+      InventorySession session, InventoryFinalPlan plan) {
+    TaskBoardCalendarFence persisted = calendarFence(plan);
+    InventoryPlanningCalendar.Evidence current =
+        InventoryPlanningCalendar.currentEvidence(
+            dependencies,
+            session.getWarehouseId(),
+            persisted.from(),
+            persisted.through());
+    if (!persisted.equals(calendarFence(current))) {
+      throw InventoryException.conflict("Inventory final plan calendar is stale");
+    }
+    return persisted;
   }
 
   String finalPlanSha256(
       InventorySession session,
       PlanningSpecification settings,
+      TaskBoardCalendarFence calendarFence,
       long finalPlanVersion,
       FinalPlanScheduleMode movementMode,
       FinalPlanScheduleMode repairMode,
@@ -676,13 +667,20 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
       value.put("dispositionDetails", convert(read(entry.dispositionDetails()), Object.class));
       value.put(
           "reconciliationDecision",
-          entry.reconciliationDecision() == null ? null : convert(read(entry.reconciliationDecision()), Object.class));
+          entry.reconciliationDecision() == null
+              ? null
+              : convert(read(entry.reconciliationDecision()), Object.class));
       canonicalEntries.add(value);
     }
     Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("inventoryId", session.getId());
     payload.put("sessionRevision", session.getRevision());
     payload.put("planningSettingsRevision", settings.revision());
+    if (calendarFence != null) {
+      payload.put("taskBoardCalendarFrom", calendarFence.from());
+      payload.put("taskBoardCalendarThrough", calendarFence.through());
+      payload.put("taskBoardCalendarFingerprint", calendarFence.fingerprint());
+    }
     payload.put("finalPlanVersion", finalPlanVersion);
     payload.put("movementScheduleMode", movementMode);
     payload.put("repairScheduleMode", repairMode);
@@ -910,6 +908,7 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
       long expectedPriorVersion,
       long finalPlanVersion,
       String sha256,
+      InventoryPlanningCalendar.Evidence calendarEvidence,
       FinalPlanScheduleMode movementMode,
       FinalPlanScheduleMode repairMode,
       List<FinalPlanDraft> entries) {
@@ -935,6 +934,10 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
                     inventoryId,
                     locked.getRevision(),
                     lockedSettings.revision(),
+                    calendarEvidence.from(),
+                    calendarEvidence.through(),
+                    calendarEvidence.fingerprint(),
+                    write(calendarEvidence.snapshot()),
                     sha256,
                     movementMode,
                     repairMode);
@@ -942,6 +945,10 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
             head.nextVersion(
                 locked.getRevision(),
                 lockedSettings.revision(),
+                calendarEvidence.from(),
+                calendarEvidence.through(),
+                calendarEvidence.fingerprint(),
+                write(calendarEvidence.snapshot()),
                 sha256,
                 movementMode,
                 repairMode);
@@ -1107,6 +1114,7 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
     if (settings.revision() != plan.getPlanningSettingsRevision()) {
       throw InventoryException.conflict("Inventory final plan calendar is stale");
     }
+    TaskBoardCalendarFence calendarFence = requireCurrentCalendarFence(session, plan);
     List<InventoryFinalPlanEntry> entries =
         finalPlanEntries.findByInventoryIdAndFinalPlanVersionOrderByOrderAscFindingIdAsc(
             session.getId(), plan.getFinalPlanVersion());
@@ -1116,6 +1124,7 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
         finalPlanSha256(
             session,
             settings,
+            calendarFence,
             plan.getFinalPlanVersion(),
             plan.getMovementScheduleMode(),
             plan.getRepairScheduleMode(),
@@ -1296,15 +1305,24 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
         entry.getDispositionDetails());
   }
 
-  /**
-   * Immutable warehouse calendar and capacity inputs used to reproduce one planning revision.
-   */
+  /** Inventory-owned holiday exceptions and their optimistic revision. */
   record PlanningSpecification(
       long revision,
-      int movementDailyCapacity,
-      int repairDailyCapacity,
-      List<DayOfWeek> workingWeekdays,
+      OffsetDateTime updatedAt,
       List<LocalDate> holidays) {}
+
+  /** Immutable calendar range and digest fenced into one final-plan generation. */
+  record TaskBoardCalendarFence(LocalDate from, LocalDate through, String fingerprint) {
+    TaskBoardCalendarFence {
+      if (from == null
+          || through == null
+          || through.isBefore(from)
+          || fingerprint == null
+          || !fingerprint.matches("^[0-9a-f]{64}$")) {
+        throw new IllegalArgumentException("Task-board calendar fence is invalid");
+      }
+    }
+  }
 
   /** A transient, validated proposal before one immutable final-plan version is persisted. */
   record FinalPlanDraft(

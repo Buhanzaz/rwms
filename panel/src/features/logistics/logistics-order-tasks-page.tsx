@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type FormEvent } from "react"
+import { useCallback, useMemo, useRef, useState, type FormEvent } from "react"
 import {
   useMutation,
   useQueries,
@@ -45,6 +45,7 @@ import {
 } from "@/features/logistics/logistics-document-filters"
 import { LogisticsDriverPicker } from "@/features/logistics/logistics-driver-picker"
 import { DesiredTripScheduleFields } from "@/features/logistics/desired-trip-schedule-fields"
+import { calendarDatePartsInTimeZone } from "@/features/kpi/domain/kpi-period"
 import { DRIVER_BOARD_QUERY_KEY } from "@/features/logistics/driver-board/driver-board-api"
 import { CabinFurnitureSummary } from "@/features/logistics/order-tasks/cabin-furniture-summary"
 import { OrderCustomerOverview } from "@/features/logistics/order-tasks/order-customer-overview"
@@ -164,8 +165,11 @@ function commandIdentity() {
   return crypto.randomUUID()
 }
 
-function today() {
-  return new Date().toISOString().slice(0, 10)
+function businessDateInTimeZone(timeZone: string) {
+  const { year, month, day } = calendarDatePartsInTimeZone(new Date(), timeZone)
+  return `${year.toString().padStart(4, "0")}-${month
+    .toString()
+    .padStart(2, "0")}-${day.toString().padStart(2, "0")}`
 }
 
 function formatDate(value: string | null) {
@@ -180,8 +184,8 @@ function formatDetailDate(value: string | null) {
   return formatDate(value)
 }
 
-function isDue(value: string | null) {
-  return Boolean(value && value <= today())
+function isDue(value: string | null, businessDate: string | null) {
+  return Boolean(value && businessDate && value <= businessDate)
 }
 
 function errorMessage(cause: unknown, fallback: string) {
@@ -255,6 +259,7 @@ function pendingOrderShipment(
     id: `order-task:${order.id}`,
     version: order.version,
     documentType: "SHIPMENT",
+    customerDeliveryPurpose: order.customerDeliveryPurpose,
     state: "DRAFT",
     warehouseId: order.warehouseId,
     destinationWarehouseId: null,
@@ -311,7 +316,8 @@ async function listSavedOrderTasks(
 
 function taskState(
   task: RentalOrderTask,
-  referenceLabels?: LogisticsReferenceLabels
+  referenceLabels: LogisticsReferenceLabels | undefined,
+  businessDate: string | null
 ): TaskState {
   if (task.kind === "RETURN") {
     const document = task.document as ReturnDocument
@@ -322,7 +328,9 @@ function taskState(
       const due = order
         ? document.lines.some((line) => {
             const term = unitTerm(order, line.assetId)
-            return term?.returnDate ? isDue(term.returnDate) : false
+            return term?.returnDate
+              ? isDue(term.returnDate, businessDate)
+              : false
           })
         : false
       return due ? "REQUIRES_RETURN" : "SHIPPED"
@@ -340,7 +348,9 @@ function taskState(
       order &&
       document.lines.some((line) => {
         const term = unitTerm(order, line.assetId)
-        return term?.returnDate ? isDue(term.returnDate) : false
+        return term?.returnDate
+          ? isDue(term.returnDate, businessDate)
+          : false
       })
     ) {
       return "REQUIRES_RETURN"
@@ -426,7 +436,7 @@ function unitTerm(order: OrderDetail | null, assetId: string) {
 }
 
 export function LogisticsOrderTasksPage() {
-  const { selectedWarehouseId, warehouses } = useWarehouse()
+  const { selectedWarehouse, selectedWarehouseId, warehouses } = useWarehouse()
   const { accessToken, currentUser } = useAuth()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState("")
@@ -448,6 +458,38 @@ export function LogisticsOrderTasksPage() {
     () =>
       new Map(warehouses.map((warehouse) => [warehouse.id, warehouse.name])),
     [warehouses]
+  )
+  const warehouseTimeZones = useMemo(
+    () =>
+      new Map(
+        warehouses.map((warehouse) => [warehouse.id, warehouse.timeZone] as const)
+      ),
+    [warehouses]
+  )
+
+  const businessDateForTask = useCallback(
+    (task: RentalOrderTask) => {
+      const sourceWarehouseIds =
+        task.kind === "SHIPMENT"
+          ? new Set(
+              (task.document as ShipmentDocument).lines.map(
+                (line) => line.inventorySourceWarehouseId
+              )
+            )
+          : new Set<string>()
+      const sourceWarehouseId =
+        sourceWarehouseIds.size === 1
+          ? sourceWarehouseIds.values().next().value
+          : task.document.warehouseId
+      const timeZone =
+        (sourceWarehouseId
+          ? warehouseTimeZones.get(sourceWarehouseId)
+          : undefined) ??
+        warehouseTimeZones.get(task.document.warehouseId) ??
+        selectedWarehouse?.timeZone
+      return timeZone ? businessDateInTimeZone(timeZone) : null
+    },
+    [selectedWarehouse?.timeZone, warehouseTimeZones]
   )
 
   const shipmentsQuery = useQuery({
@@ -635,7 +677,11 @@ export function LogisticsOrderTasksPage() {
   const rows = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ru")
     return tasks.filter((task) => {
-      const state = taskState(task, referenceLabels)
+      const state = taskState(
+        task,
+        referenceLabels,
+        businessDateForTask(task)
+      )
       if (filters.states.length > 0 && !filters.states.includes(state)) {
         return false
       }
@@ -675,7 +721,7 @@ export function LogisticsOrderTasksPage() {
         .filter(Boolean)
         .some((value) => String(value).toLocaleLowerCase("ru").includes(needle))
     })
-  }, [filters, referenceLabels, search, tasks])
+  }, [businessDateForTask, filters, referenceLabels, search, tasks])
 
   const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? null
 
@@ -964,11 +1010,17 @@ export function LogisticsOrderTasksPage() {
         (candidate) => candidate.id === lineId
       )
       if (!line) throw new Error("Строка бытовки не найдена")
+      const businessDate = businessDateForTask(task)
+      if (!businessDate) {
+        throw new Error(
+          "Не удалось определить локальную дату склада. Обновите список складов и повторите попытку."
+        )
+      }
       return createCabinFurnitureTask({
         accessToken: accessToken!,
         warehouseId: task.document.warehouseId,
         rentalItemId: line.assetId,
-        scheduledDate: today(),
+        scheduledDate: businessDate,
         contents: [],
         idempotencyKey: keyFor(
           `return-furniture:${task.document.id}:${line.id}`
@@ -994,7 +1046,14 @@ export function LogisticsOrderTasksPage() {
     if (task.kind !== "SHIPMENT") return
     const shipment = task.document as ShipmentDocument
     const scheduledDate = shipment.scheduledDate
-    if (!scheduledDate || scheduledDate !== today()) {
+    const businessDate = businessDateForTask(task)
+    if (!businessDate) {
+      setCommandError(
+        "Не удалось определить локальную дату склада-источника. Обновите список складов и повторите попытку."
+      )
+      return
+    }
+    if (!scheduledDate || scheduledDate !== businessDate) {
       setShipmentDateDecisionTarget(task)
       return
     }
@@ -1183,6 +1242,7 @@ export function LogisticsOrderTasksPage() {
                 />
                 <RentalOrderTaskLines
                   task={task}
+                  businessDate={businessDateForTask(task)}
                   referenceLabels={referenceLabels}
                   warehouseNames={warehouseNames}
                   canEdit={hasWarehouseAccess(
@@ -1273,9 +1333,18 @@ export function LogisticsOrderTasksPage() {
                 id: "status",
                 label: "Статус",
                 className: "w-52",
-                getSortValue: taskState,
+                getSortValue: (task) =>
+                  taskState(
+                    task,
+                    referenceLabels,
+                    businessDateForTask(task)
+                  ),
                 render: (task) => {
-                  const state = taskState(task, referenceLabels)
+                  const state = taskState(
+                    task,
+                    referenceLabels,
+                    businessDateForTask(task)
+                  )
                   return (
                     <Badge variant={stateVariant(state)}>
                       {TASK_STATE_LABELS[state]}
@@ -1344,9 +1413,23 @@ export function LogisticsOrderTasksPage() {
                 <CardDescription>{formatDate(taskDate(task))}</CardDescription>
                 <CardAction>
                   <Badge
-                    variant={stateVariant(taskState(task, referenceLabels))}
+                    variant={stateVariant(
+                      taskState(
+                        task,
+                        referenceLabels,
+                        businessDateForTask(task)
+                      )
+                    )}
                   >
-                    {TASK_STATE_LABELS[taskState(task, referenceLabels)]}
+                    {
+                      TASK_STATE_LABELS[
+                        taskState(
+                          task,
+                          referenceLabels,
+                          businessDateForTask(task)
+                        )
+                      ]
+                    }
                   </Badge>
                 </CardAction>
               </CardHeader>
@@ -1358,6 +1441,7 @@ export function LogisticsOrderTasksPage() {
                   />
                   <RentalOrderTaskLines
                     task={task}
+                    businessDate={businessDateForTask(task)}
                     referenceLabels={referenceLabels}
                     warehouseNames={warehouseNames}
                     canEdit={hasWarehouseAccess(
@@ -1452,6 +1536,7 @@ export function LogisticsOrderTasksPage() {
         <TaskScheduleDialog
           accessToken={accessToken}
           task={scheduleTarget}
+          businessDate={businessDateForTask(scheduleTarget)}
           desiredDeliveryWindows={
             (
               scheduleTarget.order ??
@@ -1478,6 +1563,7 @@ export function LogisticsOrderTasksPage() {
       {shipmentDateDecisionTarget ? (
         <ShipmentDateDecisionDialog
           task={shipmentDateDecisionTarget}
+          businessDate={businessDateForTask(shipmentDateDecisionTarget)}
           pending={confirmMutation.isPending}
           onOpenChange={(open) => !open && setShipmentDateDecisionTarget(null)}
           onKeepDate={() => {
@@ -1669,6 +1755,7 @@ function SelectedCabinsActions({
 
 function RentalOrderTaskLines({
   task,
+  businessDate,
   referenceLabels,
   warehouseNames,
   canEdit,
@@ -1681,6 +1768,7 @@ function RentalOrderTaskLines({
   onScheduleReturn,
 }: {
   task: RentalOrderTask
+  businessDate: string | null
   referenceLabels: LogisticsReferenceLabels
   warehouseNames: ReadonlyMap<string, string>
   canEdit: boolean
@@ -1852,13 +1940,14 @@ function RentalOrderTaskLines({
                       </p>
                     ) : null}
                     {term.returnDate &&
-                    isDue(term.returnDate) &&
+                    isDue(term.returnDate, businessDate) &&
                     task.kind === "SHIPMENT" ? (
                       <Badge className="mt-2" variant="destructive">
                         Требует возврата
                       </Badge>
                     ) : null}
-                    {term.returnDate && !isDue(term.returnDate) ? (
+                    {term.returnDate &&
+                    !isDue(term.returnDate, businessDate) ? (
                       <p className="mt-1 text-muted-foreground">
                         {task.kind === "RETURN"
                           ? "Можно назначить возврат на любую дату кнопкой «Возврат»."
@@ -1908,11 +1997,13 @@ function RentalOrderTaskLines({
 
 function ShipmentDateDecisionDialog({
   task,
+  businessDate,
   pending,
   onOpenChange,
   onKeepDate,
 }: {
   task: RentalOrderTask
+  businessDate: string | null
   pending: boolean
   onOpenChange: (open: boolean) => void
   onKeepDate: () => void
@@ -1927,7 +2018,7 @@ function ShipmentDateDecisionDialog({
           <DialogTitle>Дата отгрузки отличается</DialogTitle>
           <DialogDescription>
             Назначенная дата: {formatDetailDate(shipment.scheduledDate)}.
-            Сегодня {formatDetailDate(today())}. Подтверждение и изменение
+            Сегодня {formatDetailDate(businessDate)}. Подтверждение и изменение
             расписания выполняются отдельными командами. Для изменения даты
             используйте действие отгрузки, затем подтвердите её отдельно.
           </DialogDescription>
@@ -2002,6 +2093,7 @@ function SelectedCabinFurniture({
 function TaskScheduleDialog({
   accessToken,
   task,
+  businessDate,
   desiredDeliveryWindows,
   selectedLineCount,
   selectedLineIds,
@@ -2014,6 +2106,7 @@ function TaskScheduleDialog({
 }: {
   accessToken: string
   task: RentalOrderTask
+  businessDate: string | null
   desiredDeliveryWindows: readonly DesiredDeliveryWindow[]
   selectedLineCount: number
   selectedLineIds: readonly string[]
@@ -2030,7 +2123,7 @@ function TaskScheduleDialog({
 }) {
   const [driver, setDriver] = useState<RepairTaskWorkerSnapshotDto | null>(null)
   const [scheduledDate, setScheduledDate] = useState(
-    task.document.scheduledDate ?? today()
+    task.document.scheduledDate ?? businessDate ?? ""
   )
   const [error, setError] = useState<string | null>(null)
 

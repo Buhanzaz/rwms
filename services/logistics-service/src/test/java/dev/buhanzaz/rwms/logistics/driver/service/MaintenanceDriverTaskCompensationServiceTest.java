@@ -565,7 +565,6 @@ class MaintenanceDriverTaskCompensationServiceTest {
     return new LogisticsDependencyGateway.RepairPlaceProjection(
         task.getWarehouseId(),
         3,
-        5,
         "RESERVED".equals(state) ? 1 : 0,
         "OCCUPIED".equals(state) ? 1 : 0,
         0,

@@ -103,6 +103,8 @@ describe('dispatcher slot availability panel', () => {
 
   it('renders exactly three server-controlled cards and structured Russian failure reasons', async () => {
     panel();
+    expect(screen.getByText('Поиск слота для нового заказа')).toBeVisible();
+    expect(screen.queryByText('Проверка нового заказа')).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Адрес нового клиента'), { target: { value: 'СПб, адрес 1' } });
     const region = screen.getByRole('region', { name: 'Доступные клиентские слоты' });
     await within(region).findByText('Вставка создаёт риск опоздания следующей ходки');
@@ -112,6 +114,22 @@ describe('dispatcher slot availability panel', () => {
     expect(within(region).getAllByText('2').length).toBeGreaterThan(0);
   });
 
+  it('never exposes backend reason codes and translates trailer access failures', async () => {
+    const unavailable = {
+      ...calculated,
+      slots: calculated.slots.map((slot, index) => index === 0
+        ? { ...slot, status: 'UNAVAILABLE' as const, candidate_count: 0, best_candidate: undefined, reasons: ['TRAILER_ACCESS_NOT_ALLOWED', 'UNRECOGNIZED_REASON'] }
+        : slot),
+    };
+    panel(vi.fn().mockResolvedValue(unavailable));
+    fireEvent.change(screen.getByLabelText('Адрес нового клиента'), { target: { value: 'СПб, адрес 1' } });
+
+    const region = screen.getByRole('region', { name: 'Доступные клиентские слоты' });
+    expect(await within(region).findByText('Проезд к адресу с прицепом не разрешён')).toBeVisible();
+    expect(within(region).getByText('Слот недоступен из-за ограничений маршрута')).toBeVisible();
+    expect(within(region).queryByText(/TRAILER_ACCESS_NOT_ALLOWED|UNRECOGNIZED_REASON/u)).not.toBeInTheDocument();
+  });
+
   it('shows the dynamic isochrone price and selected route timeline with load changes', async () => {
     panel();
     fireEvent.change(screen.getByLabelText('Адрес нового клиента'), { target: { value: 'СПб, адрес 1' } });
@@ -119,6 +137,8 @@ describe('dispatcher slot availability panel', () => {
     fireEvent.click(available);
 
     const price = screen.getByRole('region', { name: 'Стоимость доставки' });
+    expect(within(price).getByText('Стоимость доставки')).toBeVisible();
+    expect(within(price).queryByText(/изохрона склада/iu)).not.toBeInTheDocument();
     expect(within(price).getByText(/12\s?500 ₽/)).toBeInTheDocument();
     expect(within(price).getByText(/Цена рассчитана по времени пути от склада: до 5 ч/)).toBeInTheDocument();
     const timeline = screen.getByRole('region', { name: 'Временная шкала маршрута' });

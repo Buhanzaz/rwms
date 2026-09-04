@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.inventory.integration;
 
 import dev.buhanzaz.rwms.inventory.service.InventoryException;
 import dev.buhanzaz.rwms.platform.contracts.ApiProblem;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.zone.ZoneRulesException;
@@ -29,6 +30,7 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
       "inventory-warehouse-lifecycle-read";
   private static final String WAREHOUSE_LIFECYCLE_CONFIRM_CLIENT =
       "inventory-warehouse-lifecycle-confirm";
+  private static final String TASK_BOARD_CALENDAR_CLIENT = "inventory-task-board-calendar";
   private static final String ASSET_CLIENT = "inventory-asset";
   private static final String MAINTENANCE_CLIENT = "inventory-maintenance";
   private static final String LOGISTICS_CLIENT = "inventory-logistics";
@@ -38,6 +40,7 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
   private static final String WAREHOUSE_LIFECYCLE_READ_SCOPE = "warehouse.lifecycle.read";
   private static final String WAREHOUSE_LIFECYCLE_CONFIRM_SCOPE =
       "warehouse.lifecycle.confirm";
+  private static final String TASK_BOARD_CALENDAR_SCOPE = "task-board.inventory-calendar.read";
   private static final String ASSET_SCOPE = "asset.inventory";
   private static final String MAINTENANCE_SCOPE = "maintenance.inventory";
   private static final String LOGISTICS_SCOPE = "logistics.inventory";
@@ -46,6 +49,7 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
   private final RestClient client;
   private final OAuth2AuthorizedClientManager authorizedClients;
   private final String warehouseBase;
+  private final String taskBoardBase;
   private final String assetBase;
   private final String maintenanceBase;
   private final String logisticsBase;
@@ -58,6 +62,7 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
     this.client = client;
     this.authorizedClients = authorizedClients;
     warehouseBase = strip(properties.warehouseBaseUrl().toString());
+    taskBoardBase = strip(properties.taskBoardBaseUrl().toString());
     assetBase = strip(properties.assetBaseUrl().toString());
     maintenanceBase = strip(properties.maintenanceBaseUrl().toString());
     logisticsBase = strip(properties.logisticsBaseUrl().toString());
@@ -153,6 +158,31 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
           "Warehouse lifecycle does not admit this inventory operation");
     }
     return admission;
+  }
+
+  @Override
+  public WorkCalendarSnapshot workCalendarSnapshot(UUID warehouseId, LocalDate from, LocalDate through) {
+    if (warehouseId == null || from == null || through == null || through.isBefore(from)) {
+      throw new IllegalArgumentException("Work-calendar range is invalid");
+    }
+    if (from.plusDays(365).isBefore(through)) {
+      throw new IllegalArgumentException("Work-calendar range must not exceed 366 days");
+    }
+    String uri =
+        UriComponentsBuilder.fromUriString(
+                taskBoardBase
+                    + "/api/internal/task-board/v1/inventory/warehouses/"
+                    + warehouseId
+                    + "/work-calendar")
+            .queryParam("from", from)
+            .queryParam("through", through)
+            .build()
+            .encode()
+            .toUriString();
+    WorkCalendarSnapshot snapshot =
+        get(uri, WorkCalendarSnapshot.class, TASK_BOARD_CALENDAR_CLIENT, TASK_BOARD_CALENDAR_SCOPE);
+    validateWorkCalendarSnapshot(warehouseId, from, through, snapshot);
+    return snapshot;
   }
 
   @Override
@@ -1034,6 +1064,55 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
 
   private static boolean sha256(String value) {
     return value != null && value.matches("^[0-9a-f]{64}$");
+  }
+
+  private static void validateWorkCalendarSnapshot(
+      UUID warehouseId, LocalDate from, LocalDate through, WorkCalendarSnapshot snapshot) {
+    if (snapshot == null
+        || !warehouseId.equals(snapshot.warehouseId())
+        || !from.equals(snapshot.from())
+        || !through.equals(snapshot.through())
+        || !sha256(snapshot.calendarFingerprint())
+        || snapshot.dates() == null) {
+      throw malformed("Task-board returned malformed work-calendar evidence");
+    }
+    LocalDate expected = from;
+    for (WorkCalendarDate date : snapshot.dates()) {
+      if (date == null
+          || !expected.equals(date.date())
+          || date.timeZone() == null
+          || date.timeZoneEffectiveFrom() == null
+          || !validCalendarSchedule(date)) {
+        throw malformed("Task-board returned malformed work-calendar date");
+      }
+      try {
+        ZoneId zone = ZoneId.of(date.timeZone());
+        if (!zone.getId().equals(date.timeZone())) {
+          throw new IllegalArgumentException();
+        }
+      } catch (ZoneRulesException | NullPointerException | IllegalArgumentException exception) {
+        throw malformed("Task-board returned invalid work-calendar timezone");
+      }
+      expected = expected.plusDays(1);
+    }
+    if (!expected.equals(through.plusDays(1))) {
+      throw malformed("Task-board returned incomplete work-calendar evidence");
+    }
+  }
+
+  private static boolean validCalendarSchedule(WorkCalendarDate date) {
+    boolean absent =
+        date.scheduleId() == null
+            && date.scheduleVersion() == null
+            && date.scheduleEffectiveFrom() == null;
+    if (absent) {
+      return !date.working();
+    }
+    return date.scheduleId() != null
+        && date.scheduleVersion() != null
+        && date.scheduleVersion() >= 0
+        && date.scheduleEffectiveFrom() != null
+        && !date.scheduleEffectiveFrom().isAfter(date.date());
   }
 
   private static boolean validReconciliationResult(JsonNode response) {

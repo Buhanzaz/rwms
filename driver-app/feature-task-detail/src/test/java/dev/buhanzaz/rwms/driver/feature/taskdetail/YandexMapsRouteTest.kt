@@ -35,6 +35,7 @@ class YandexMapsRouteTest {
         taskNumber = "TRIP-1",
         tripNumber = 1,
         operationType = "SHIPMENT",
+        customerDeliveryPurpose = "RENTAL_DELIVERY",
         clientName = "Клиент",
         address = address,
         latitude = latitude,

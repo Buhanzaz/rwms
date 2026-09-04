@@ -9,33 +9,52 @@ import {
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import type { WarehouseInfo } from "@/api/warehouse-api"
 import { UsersPage } from "@/features/settings/users/users-page"
 
-const { listAdminUsers } = vi.hoisted(() => ({
+const mocks = vi.hoisted(() => ({
+  changeAdminUserPassword: vi.fn(),
+  createAdminUser: vi.fn(),
   listAdminUsers: vi.fn(),
+  replaceAdminUserWarehouseAccesses: vi.fn(),
+  updateAdminUser: vi.fn(),
+  useAuth: vi.fn(),
+  useWarehouse: vi.fn(),
 }))
 
 vi.mock("@/features/settings/users/api/users-api", () => ({
-  changeAdminUserPassword: vi.fn(),
-  createAdminUser: vi.fn(),
-  listAdminUsers,
-  replaceAdminUserWarehouseAccesses: vi.fn(),
-  updateAdminUser: vi.fn(),
+  changeAdminUserPassword: mocks.changeAdminUserPassword,
+  createAdminUser: mocks.createAdminUser,
+  listAdminUsers: mocks.listAdminUsers,
+  replaceAdminUserWarehouseAccesses: mocks.replaceAdminUserWarehouseAccesses,
+  updateAdminUser: mocks.updateAdminUser,
 }))
 
 vi.mock("@/features/auth/use-auth", () => ({
-  useAuth: () => ({
-    accessToken: "access-token",
-    currentUser: {
-      id: "00000000-0000-4000-8000-000000000099",
-      globalRole: "SYSTEM_ADMIN",
-    },
-  }),
+  useAuth: mocks.useAuth,
 }))
 
 vi.mock("@/hooks/use-warehouse", () => ({
-  useWarehouse: () => ({ warehouses: [] }),
+  useWarehouse: mocks.useWarehouse,
 }))
+
+const warehouse: WarehouseInfo = {
+  id: "00000000-0000-4000-8000-000000000010",
+  version: 1,
+  name: "Основной склад",
+  city: "Санкт-Петербург",
+  address: null,
+  latitude: null,
+  longitude: null,
+  timeZone: "Europe/Moscow",
+  active: true,
+  lifecycleState: "ACTIVE",
+  sortOrder: 0,
+  representative: false,
+  production: true,
+  mainWarehouse: false,
+  representativeParentWarehouseId: null,
+}
 
 const users = [
   {
@@ -50,20 +69,6 @@ const users = [
     globalRole: "WAREHOUSE_MANAGER" as const,
     mobileAppAccess: true,
     rentalAccess: false,
-    warehouseAccesses: [],
-  },
-  {
-    id: "00000000-0000-4000-8000-000000000002",
-    version: 1,
-    username: "rental.petrov",
-    firstName: "Пётр",
-    lastName: "Петров",
-    email: "petrov@example.ru",
-    timeZoneId: "Europe/Moscow",
-    active: false,
-    globalRole: "RENTAL_MANAGER" as const,
-    mobileAppAccess: false,
-    rentalAccess: true,
     warehouseAccesses: [],
   },
 ]
@@ -88,7 +93,26 @@ function renderPage() {
 
 beforeEach(() => {
   vi.stubGlobal("ResizeObserver", ResizeObserverMock)
-  listAdminUsers.mockResolvedValue(users)
+  mocks.useAuth.mockReturnValue({
+    accessToken: "access-token",
+    currentUser: {
+      id: "00000000-0000-4000-8000-000000000099",
+      globalRole: "SYSTEM_ADMIN",
+    },
+  })
+  mocks.useWarehouse.mockReturnValue({ warehouses: [warehouse] })
+  mocks.listAdminUsers.mockResolvedValue(users)
+  mocks.updateAdminUser.mockImplementation(
+    async (_token, _id, _version, profile) => ({
+      ...users[0],
+      ...profile,
+      version: 2,
+    })
+  )
+  mocks.replaceAdminUserWarehouseAccesses.mockResolvedValue({
+    ...users[0],
+    version: 3,
+  })
 })
 
 afterEach(() => {
@@ -98,7 +122,7 @@ afterEach(() => {
 })
 
 describe("UsersPage", () => {
-  it("keeps the selected filters while the filter panel is collapsed", async () => {
+  it("keeps filters within the users returned by the server", async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -154,6 +178,29 @@ describe("UsersPage", () => {
         name: "Логин",
       })
     ).toBeTruthy()
-    expect(screen.getAllByText("rental.petrov").length).toBeGreaterThan(0)
+    expect(screen.queryByText("rental.petrov")).toBeNull()
+  })
+
+  it("updates a selected profile and replaces only its warehouse grants", async () => {
+    mocks.listAdminUsers.mockResolvedValue([users[0]])
+    mocks.updateAdminUser.mockResolvedValue({ ...users[0], version: 2 })
+    const interaction = userEvent.setup()
+    renderPage()
+
+    const editButtons = await screen.findAllByRole("button", {
+      name: "Изменить",
+    })
+    await interaction.click(editButtons[0]!)
+
+    await interaction.click(screen.getByRole("button", { name: "Сохранить" }))
+
+    await waitFor(() => {
+      expect(mocks.replaceAdminUserWarehouseAccesses).toHaveBeenCalledWith(
+        "access-token",
+        users[0].id,
+        2,
+        { accesses: [] }
+      )
+    })
   })
 })

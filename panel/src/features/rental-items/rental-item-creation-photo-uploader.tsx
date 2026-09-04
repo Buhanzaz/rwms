@@ -20,7 +20,6 @@ import {
   FieldLegend,
   FieldSet,
 } from "@/components/ui/field"
-import type { MediaUploadCommandKeys } from "@/features/media/media-service"
 import { cn } from "@/lib/utils"
 
 const MAX_CREATION_PHOTOS = 20
@@ -30,7 +29,6 @@ export type StagedRentalItemPhoto = Readonly<{
   id: string
   file: File
   previewUrl: string
-  commandKeys: MediaUploadCommandKeys
   title: boolean
 }>
 
@@ -39,10 +37,6 @@ function stagePhoto(file: File, title = false): StagedRentalItemPhoto {
     id: crypto.randomUUID(),
     file,
     previewUrl: URL.createObjectURL(file),
-    commandKeys: {
-      createSession: crypto.randomUUID(),
-      uploadAndFinalize: crypto.randomUUID(),
-    },
     title,
   }
 }
@@ -289,7 +283,8 @@ export function RentalItemCreationPhotoUploader({
         )}
         {titlePhotoMissing ? (
           <FieldError role="alert">
-            Выберите титульное фото перед созданием бытовки.
+            Добавьте хотя бы одну фотографию и выберите титульное фото перед
+            созданием бытовки.
           </FieldError>
         ) : null}
         {error ? <FieldError role="alert">{error}</FieldError> : null}

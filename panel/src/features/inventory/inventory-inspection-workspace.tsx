@@ -253,7 +253,6 @@ export function InventoryInspectionWorkspace({
             <RepairEstimateCatalogPicker
               lines={lines}
               readOnly={readOnly}
-              warehouseId={warehouseId}
               accessToken={accessToken}
               mediaOwner={inventoryFindingMediaOwner(findingId, warehouseId)}
               onPagerChange={handleCatalogPagerChange}

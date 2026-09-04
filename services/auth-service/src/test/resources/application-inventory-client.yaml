@@ -5,10 +5,10 @@ rwms:
         - client-id: inventory-service
           client-name: Inventory Service Downstream Client
           enabled: ${INVENTORY_CLIENT_ENABLED:false}
-          revision: 6
+          revision: 7
           authentication-methods: [client_secret_basic]
           grant-types: [client_credentials]
-          scopes: [warehouse.timezone.read, warehouse.operation.mark, warehouse.lifecycle.read, warehouse.lifecycle.confirm, asset.inventory, maintenance.inventory, logistics.inventory, media.inventory]
+          scopes: [warehouse.timezone.read, warehouse.operation.mark, warehouse.lifecycle.read, warehouse.lifecycle.confirm, asset.inventory, maintenance.inventory, logistics.inventory, media.inventory, task-board.inventory-calendar.read]
           secret-environment: INVENTORY_CLIENT_SECRET
           audiences: [rwms-services]
           access-token-ttl: 5m

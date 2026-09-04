@@ -24,7 +24,10 @@ import org.mockito.ArgumentCaptor;
 class DriverTaskProcessorTest {
   private final DriverTaskWorkflowStore store = mock(DriverTaskWorkflowStore.class);
   private final LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
-  private final DriverTaskProcessor processor = new DriverTaskProcessor(store, dependencies);
+  private final DriverTransferExecutionService transferExecution =
+      mock(DriverTransferExecutionService.class);
+  private final DriverTaskProcessor processor =
+      new DriverTaskProcessor(store, dependencies, transferExecution);
 
   @Test
   void registrationForwardsTheDurableStructuredWorkerContent() {
@@ -56,7 +59,8 @@ class DriverTaskProcessorTest {
             date,
             3,
             audience,
-            content);
+            content,
+            null);
     LogisticsDependencyGateway.DriverBoardTask board =
         mock(LogisticsDependencyGateway.DriverBoardTask.class);
     when(store.nextWork(taskId)).thenReturn(Optional.of(work), Optional.empty());
@@ -71,7 +75,8 @@ class DriverTaskProcessorTest {
             date,
             3,
             audience,
-            content))
+            content,
+            null))
         .thenReturn(board);
 
     assertThat(processor.processUntilIdle(taskId)).isEqualTo(1);
@@ -88,7 +93,8 @@ class DriverTaskProcessorTest {
             date,
             3,
             audience,
-            content);
+            content,
+            null);
     verify(store).confirmRegistration(taskId, board);
   }
 
@@ -146,6 +152,37 @@ class DriverTaskProcessorTest {
         .isEqualTo(
             UUID.nameUUIDFromBytes(
                 ("driver-task:cover:" + taskId).getBytes(StandardCharsets.UTF_8)));
+  }
+
+  @Test
+  void transferLifecycleWorkUsesTheLogisticsOwnedExecutor() {
+    UUID taskId = UUID.randomUUID();
+    DriverTaskWorkflowStore.TransferDepartureWork departure =
+        new DriverTaskWorkflowStore.TransferDepartureWork(
+            taskId,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            2,
+            3L);
+    DriverTaskWorkflowStore.TransferArrivalWork arrival =
+        new DriverTaskWorkflowStore.TransferArrivalWork(
+            taskId,
+            departure.actorId(),
+            departure.documentId(),
+            departure.lineId(),
+            4,
+            5L,
+            UUID.randomUUID(),
+            7,
+            3);
+    when(store.nextWork(taskId))
+        .thenReturn(Optional.of(departure), Optional.of(arrival), Optional.empty());
+
+    assertThat(processor.processUntilIdle(taskId)).isEqualTo(2);
+
+    verify(transferExecution).depart(departure);
+    verify(transferExecution).arrive(arrival);
   }
 
   @Test

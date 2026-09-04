@@ -1448,7 +1448,7 @@ export function RentalItemDetailPage() {
                   ? `Возврат ожидается до ${formatDateTime(rentalTerm.returnDate)}.`
                   : "Для этой бытовки возврат из аренды ещё не создан."
               }
-              columns={["Дата", "От кого", "Статус", "Действия"]}
+              columns={["Дата", "От кого", "Статус", ""]}
             />
           )}
         </TabsContent>

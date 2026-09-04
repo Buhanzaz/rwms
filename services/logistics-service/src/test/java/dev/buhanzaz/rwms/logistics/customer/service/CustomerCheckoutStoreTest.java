@@ -32,12 +32,19 @@ class CustomerCheckoutStoreTest {
     CustomerDeliverySlotStore slots = mock(CustomerDeliverySlotStore.class);
     CustomerCheckoutStore store = new CustomerCheckoutStore(sessions, slots, CLOCK);
     when(session.getDeliverySlotId()).thenReturn(slotId);
-    when(sessions.prepareCheckout(subjectId, inquiryId, 7, transportKey, hash))
+    when(
+            sessions.prepareCheckout(subjectId, inquiryId, 7, transportKey, hash))
         .thenReturn(
             new CustomerRentalSessionStore.CheckoutPreparation(
                 session, false, true, originalCommand));
-    when(slots.prepareCheckout(subjectId, inquiryId, slotId, 3, originalCommand,
-            java.time.OffsetDateTime.parse("2026-08-27T08:00:00Z")))
+    when(
+            slots.prepareCheckout(
+                subjectId,
+                inquiryId,
+                slotId,
+                3,
+                originalCommand,
+                java.time.OffsetDateTime.parse("2026-08-27T08:00:00Z")))
         .thenReturn(slot);
 
     CustomerCheckoutStore.Preparation result =
@@ -61,7 +68,13 @@ class CustomerCheckoutStoreTest {
     CustomerDeliverySlotStore slots = mock(CustomerDeliverySlotStore.class);
     CustomerCheckoutStore store = new CustomerCheckoutStore(sessions, slots, CLOCK);
     when(sessions.recordPendingBooking(
-            subjectId, inquiryId, commandKey, hash, bookingId, orderId, "token"))
+            subjectId,
+            inquiryId,
+            commandKey,
+            hash,
+            bookingId,
+            orderId,
+            "token"))
         .thenReturn(session);
 
     assertThat(
@@ -77,6 +90,11 @@ class CustomerCheckoutStoreTest {
         .isSameAs(session);
     verify(slots)
         .bindCheckoutBooking(
-            subjectId, inquiryId, slotId, commandKey, bookingId, orderId);
+            subjectId,
+            inquiryId,
+            slotId,
+            commandKey,
+            bookingId,
+            orderId);
   }
 }

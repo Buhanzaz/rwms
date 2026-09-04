@@ -55,7 +55,6 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
@@ -103,6 +102,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.buhanzaz.rwms.worker.core.media.EncryptedEvidenceFileStore
 import dev.buhanzaz.rwms.worker.core.ui.WorkerScreenScaffold
+import dev.buhanzaz.rwms.worker.core.ui.WorkerButton as Button
 import dev.buhanzaz.rwms.worker.core.ui.decodeWorkerBitmapFile
 import java.io.File
 import java.util.concurrent.Executors

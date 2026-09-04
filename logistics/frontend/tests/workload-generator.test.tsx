@@ -8,7 +8,6 @@ function renderDialog(onSubmit: (input: WorkloadGenerationInput) => Promise<void
   return render(
     <WorkloadGeneratorDialog
       planningDate="2026-08-25"
-      seed={42}
       busy={false}
       onClose={() => undefined}
       onSubmit={onSubmit}
@@ -20,19 +19,14 @@ describe('workload generator dialog', () => {
   it('shows defaults and a live horizon/totals preview', () => {
     renderDialog();
 
-    expect(screen.getByLabelText('Дата начала')).toHaveValue('2026-08-25');
+    expect(screen.getByRole('button', { name: 'Дата начала' })).toHaveTextContent('25 августа 2026');
     expect(screen.getByLabelText('Дней')).toHaveValue(1);
     expect(screen.getByLabelText('Доставок в день')).toHaveValue(4);
     expect(screen.getByLabelText('Вывозов в день')).toHaveValue(4);
     expect(screen.getByLabelText('Альтернативных дат')).toHaveValue(0);
-    expect(screen.getByLabelText('Длина груза, мм')).toHaveValue(6000);
-    expect(screen.getByLabelText('Ширина груза, мм')).toHaveValue(2400);
-    expect(screen.getByLabelText('Высота груза, мм')).toHaveValue(2400);
-    expect(screen.getByLabelText('Масса груза, кг')).toHaveValue(1200);
-    expect(screen.getByLabelText('Seed')).toHaveValue(42);
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
-    expect(screen.getByText(/прежняя нагрузка генератора и все сохранённые планы этих дат удаляются атомарно/)).toBeVisible();
-    expect(screen.getByText(/ручные и RWMS-операции, а также другие даты не затрагиваются/)).toBeVisible();
+    expect(screen.getByText(/Создаст случайные тестовые доставки и вывозы/)).toBeVisible();
+    expect(screen.getByText(/остальные даты не затрагиваются/)).toBeVisible();
     expect(screen.getByTestId('workload-preview')).toHaveTextContent('25 августа 2026 г. — 25 августа 2026 г.');
     expect(screen.getByTestId('workload-preview')).toHaveTextContent('Всего позиций8');
   });
@@ -56,8 +50,8 @@ describe('workload generator dialog', () => {
     const submit = vi.fn<(input: WorkloadGenerationInput) => Promise<void>>(() => Promise.resolve());
     renderDialog(submit);
 
-    await user.clear(screen.getByLabelText('Дата начала'));
-    await user.type(screen.getByLabelText('Дата начала'), '2026-09-01');
+    await user.click(screen.getByRole('button', { name: 'Дата начала' }));
+    await user.click(screen.getByRole('button', { name: 'вторник, 1 сентября 2026 г.' }));
     await user.clear(screen.getByLabelText('Дней'));
     await user.type(screen.getByLabelText('Дней'), '4');
     await user.clear(screen.getByLabelText('Доставок в день'));
@@ -66,8 +60,6 @@ describe('workload generator dialog', () => {
     await user.type(screen.getByLabelText('Вывозов в день'), '3');
     await user.clear(screen.getByLabelText('Альтернативных дат'));
     await user.type(screen.getByLabelText('Альтернативных дат'), '3');
-    await user.clear(screen.getByLabelText('Seed'));
-    await user.type(screen.getByLabelText('Seed'), '77');
     await user.click(screen.getByRole('button', { name: 'Сгенерировать и заменить нагрузку' }));
 
     await waitFor(() => expect(submit).toHaveBeenCalledOnce());
@@ -77,11 +69,6 @@ describe('workload generator dialog', () => {
       deliveries_per_day: 2,
       pickups_per_day: 3,
       alternative_dates_count: 3,
-      cargo_length_mm: 6000,
-      cargo_width_mm: 2400,
-      cargo_height_mm: 2400,
-      cargo_weight_kg: 1200,
-      seed: 77,
     });
   });
 

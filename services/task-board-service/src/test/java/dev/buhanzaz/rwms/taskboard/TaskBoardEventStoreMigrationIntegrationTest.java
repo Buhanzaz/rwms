@@ -67,10 +67,10 @@ class TaskBoardEventStoreMigrationIntegrationTest {
   }
 
   @Test
-  void cleanInstallAppliesV4ThroughV40AndRepeatIsNoOp() {
+  void cleanInstallAppliesV4ThroughV47AndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(37);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(44);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -97,6 +97,8 @@ class TaskBoardEventStoreMigrationIntegrationTest {
             "task_board_inbox",
             "warehouse_metadata",
             "warehouse_kpi_settings",
+            "company_kpi_settings",
+            "kpi_activation_receipt",
             "queue_definition",
             "queue_definition_class_binding",
             "task_relocation_receipt",
@@ -262,6 +264,14 @@ class TaskBoardEventStoreMigrationIntegrationTest {
         .containsEntry("description", "contractor profiles without availability range")
         .containsEntry(
             "script", "V40__contractor_profiles_without_availability_range.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='47'"))
+        .containsEntry("version", "47")
+        .containsEntry("description", "company kpi work schedule")
+        .containsEntry("script", "V47__company_kpi_work_schedule.sql")
         .containsEntry("success", true);
     assertThat(
             jdbc.queryForList(
@@ -718,7 +728,7 @@ class TaskBoardEventStoreMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(36);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(41);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
     assertThat(retainedContentDigests()).containsExactlyInAnyOrderEntriesOf(before);

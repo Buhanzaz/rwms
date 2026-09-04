@@ -22,6 +22,11 @@ repair, repair-place/settings and property-disposition work. Mutable commands us
 contract-defined idempotency key and expected-version fields. Clients must handle the canonical
 `409` conflict rather than send a changed retry.
 
+The versioned maintenance catalog and repair-complexity display colors are installation-wide.
+Their public endpoints accept no warehouse selector: authenticated users may read them, while only
+`SYSTEM_ADMIN` or `WMS_ADMIN` may mutate them. A catalog version's retained `warehouseId` is internal
+creation/audit context and never selects or creates a warehouse-specific catalog copy.
+
 Interactive panel and Android clients reach this namespace only through the public
 `api-gateway-service` `/api/maintenance/**` route. They must not call this module host or an
 `/api/internal/**` route directly.

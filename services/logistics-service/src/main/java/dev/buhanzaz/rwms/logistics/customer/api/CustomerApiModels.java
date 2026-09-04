@@ -302,9 +302,23 @@ public final class CustomerApiModels {
       @NotNull UUID slotId,
       @NotNull @Min(0) Long slotVersion) {}
 
+  /** Cancels one completed booking under its current CustomerApp projection version. */
+  public record CancelCustomerBookingRequest(@NotNull @Min(0) Long expectedVersion) {}
+
+  /** Searches replacement delivery slots without reopening the original cart or its contents. */
+  public record SearchCustomerBookingRescheduleRequest(
+      @NotNull @Min(0) Long expectedVersion) {}
+
+  /** Atomically swaps one completed booking to a freshly recalculated delivery slot. */
+  public record RescheduleCustomerBookingRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      @NotNull UUID slotId,
+      @NotNull @Min(0) Long slotVersion) {}
+
   /** Durable presentation booking created by checkout. */
   public record CustomerBookingResponse(
       UUID bookingId,
+      long version,
       UUID orderId,
       String status,
       String errorCode,
@@ -315,7 +329,39 @@ public final class CustomerApiModels {
       LocalDate deliveryDate,
       LocalTime windowStart,
       LocalTime windowEnd,
-      List<CustomerBookingCabin> cabins) {}
+      Long cancellationFeeRubles,
+      List<CustomerBookingCabin> cabins) {
+    /** Preserves source compatibility for checkout assemblers predating booking mutations. */
+    public CustomerBookingResponse(
+        UUID bookingId,
+        UUID orderId,
+        String status,
+        String errorCode,
+        UUID inquiryId,
+        UUID slotId,
+        UUID warehouseId,
+        String deliveryAddress,
+        LocalDate deliveryDate,
+        LocalTime windowStart,
+        LocalTime windowEnd,
+        List<CustomerBookingCabin> cabins) {
+      this(
+          bookingId,
+          0,
+          orderId,
+          status,
+          errorCode,
+          inquiryId,
+          slotId,
+          warehouseId,
+          deliveryAddress,
+          deliveryDate,
+          windowStart,
+          windowEnd,
+          null,
+          cabins);
+    }
+  }
 
   /** Exact shipment media owner that permits subject-bound customer evidence uploads. */
   public record CustomerShipmentMediaOwner(

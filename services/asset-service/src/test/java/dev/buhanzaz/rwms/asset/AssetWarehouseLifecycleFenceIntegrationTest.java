@@ -178,14 +178,17 @@ class AssetWarehouseLifecycleFenceIntegrationTest {
         connection.prepareStatement(
             """
             insert into rental_item(
-              id,version,warehouse_id,display_canonical_number,identity_match_key,status,
+              id,version,company_id,warehouse_id,display_canonical_number,identity_match_key,status,
               passport_json,tags_json,created_at,updated_at)
-            values (?,0,?,?,?,'FREE','{}','[]',clock_timestamp(),clock_timestamp())
+            values (?,0,?,?,?,?,'FREE','{}','[]',clock_timestamp(),clock_timestamp())
             """)) {
       statement.setObject(1, rentalItemId);
-      statement.setObject(2, warehouseId);
-      statement.setString(3, number);
-      statement.setString(4, identity);
+      statement.setObject(
+          2,
+          dev.buhanzaz.rwms.asset.domain.AssetCompanyDefaults.INITIAL_COMPANY_ID);
+      statement.setObject(3, warehouseId);
+      statement.setString(4, number);
+      statement.setString(5, identity);
       statement.executeUpdate();
     }
   }

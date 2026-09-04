@@ -20,6 +20,26 @@ export interface ContractorDriverInput {
   active: boolean;
 }
 
+/** Exact canonical task identities used to create one explicit contractor route link. */
+export interface ContractorRouteShareInput {
+  contractorWorkerId: UUID;
+  expiresAt: string;
+  externalTaskIds: UUID[];
+}
+
+/** Expiring same-origin route link returned by the logistics owner. */
+export interface ContractorRouteShare {
+  id: UUID;
+  version: number;
+  warehouseId: UUID;
+  contractorWorkerId: UUID;
+  expiresAt: string;
+  revokedAt: string | null;
+  createdAt: string;
+  publicPath: string | null;
+  externalTaskIds: UUID[];
+}
+
 async function contractorResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     let problem: ProblemDetails | null = null;
@@ -40,6 +60,27 @@ function headers(accessToken: string, withBody = false): HeadersInit {
     Authorization: `Bearer ${accessToken}`,
     ...(withBody ? { 'Content-Type': 'application/json' } : {}),
   };
+}
+
+/** Creates or replays one explicit contractor route share through the public gateway. */
+export async function createContractorRouteShare(
+  accessToken: string,
+  warehouseId: UUID,
+  input: ContractorRouteShareInput,
+  idempotencyKey: UUID,
+): Promise<ContractorRouteShare> {
+  const response = await fetch(
+    `/api/logistics/v1/warehouses/${encodeURIComponent(warehouseId)}/contractor-route-shares`,
+    {
+      method: 'POST',
+      headers: {
+        ...headers(accessToken, true),
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify(input),
+    },
+  );
+  return contractorResponse<ContractorRouteShare>(response);
 }
 
 /** Loads the complete warehouse-owned contractor catalog, including inactive profiles. */

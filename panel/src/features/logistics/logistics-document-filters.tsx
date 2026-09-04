@@ -1,9 +1,10 @@
+import type { ReactNode } from "react"
 import { FilterIcon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 
 import { SearchableMultiSelectFilter } from "@/components/searchable-multi-select-filter"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { SingleDayPicker } from "@/components/ui/single-day-picker"
 import {
   Select,
   SelectContent,
@@ -65,19 +66,15 @@ function DateFilter({
   onChange: (value: string) => void
 }) {
   return (
-    <label
-      htmlFor={id}
-      className="flex h-9 w-full items-center gap-2 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 sm:min-w-52 sm:w-auto dark:bg-input/30"
-    >
-      <span className="shrink-0 text-muted-foreground">{label}</span>
-      <Input
-        id={id}
-        type="date"
-        value={value}
-        className="h-auto min-w-0 flex-1 border-0 bg-transparent p-0 text-sm shadow-none focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
-        onChange={(event) => onChange(event.target.value)}
-      />
-    </label>
+    <SingleDayPicker
+      id={id}
+      label={label}
+      hideLabel
+      triggerLabel={label}
+      value={value}
+      className="w-full sm:w-56"
+      onValueChange={onChange}
+    />
   )
 }
 
@@ -87,8 +84,12 @@ export function LogisticsDocumentFilters<TState extends string>({
   stateLabel = "Статус",
   stateAfterExtraFilters = false,
   dateLabel,
+  dateFromLabel,
+  dateToLabel,
   extraFilters = [],
+  leadingControl,
   showSchedule = true,
+  showDateRange = true,
   onChange,
   onReset,
 }: {
@@ -97,20 +98,24 @@ export function LogisticsDocumentFilters<TState extends string>({
   stateLabel?: string
   stateAfterExtraFilters?: boolean
   dateLabel: string
+  dateFromLabel?: string
+  dateToLabel?: string
   extraFilters?: LogisticsDocumentExtraFilter[]
+  leadingControl?: ReactNode
   showSchedule?: boolean
+  showDateRange?: boolean
   onChange: (filters: LogisticsDocumentFiltersState<TState>) => void
   onReset?: () => void
 }) {
   const active =
     filters.states.length > 0 ||
     (showSchedule && filters.schedule !== "ALL") ||
-    filters.dateFrom !== "" ||
-    filters.dateTo !== "" ||
+    (showDateRange && (filters.dateFrom !== "" || filters.dateTo !== "")) ||
     extraFilters.some((filter) => filter.selected.length > 0)
 
   return (
     <div className="flex flex-col items-stretch gap-2 rounded-lg border bg-card p-2 sm:flex-row sm:flex-wrap sm:items-center">
+      {leadingControl}
       {!stateAfterExtraFilters ? (
         <SearchableMultiSelectFilter
           label={stateLabel}
@@ -156,18 +161,22 @@ export function LogisticsDocumentFilters<TState extends string>({
           </SelectContent>
         </Select>
       ) : null}
-      <DateFilter
-        id="document-date-from"
-        label={`${dateLabel} с`}
-        value={filters.dateFrom}
-        onChange={(dateFrom) => onChange({ ...filters, dateFrom })}
-      />
-      <DateFilter
-        id="document-date-to"
-        label={`${dateLabel} по`}
-        value={filters.dateTo}
-        onChange={(dateTo) => onChange({ ...filters, dateTo })}
-      />
+      {showDateRange ? (
+        <>
+          <DateFilter
+            id="document-date-from"
+            label={dateFromLabel ?? `${dateLabel} с`}
+            value={filters.dateFrom}
+            onChange={(dateFrom) => onChange({ ...filters, dateFrom })}
+          />
+          <DateFilter
+            id="document-date-to"
+            label={dateToLabel ?? `${dateLabel} по`}
+            value={filters.dateTo}
+            onChange={(dateTo) => onChange({ ...filters, dateTo })}
+          />
+        </>
+      ) : null}
       {active ? (
         <Button
           type="button"

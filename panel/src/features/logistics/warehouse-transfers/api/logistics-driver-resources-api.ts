@@ -19,8 +19,6 @@ const CONTRACTOR_KEYS = [
   "homeWarehouseId",
   "displayName",
   "phone",
-  "availableFrom",
-  "availableUntil",
   "comment",
   "active",
   "employmentType",
@@ -53,8 +51,6 @@ export type CreateContractorDriverInput = {
   contractorId: string
   displayName: string
   phone: string
-  availableFrom: string
-  availableUntil: string
   comment: string | null
 }
 
@@ -65,8 +61,6 @@ export type ContractorDriver = {
   homeWarehouseId: string
   displayName: string
   phone: string
-  availableFrom: string
-  availableUntil: string
   comment: string | null
   active: boolean
   employmentType: "CONTRACTOR"
@@ -175,17 +169,12 @@ function parseContractorDriver(value: unknown): ContractorDriver {
   ) {
     invalidResponse()
   }
-  const availableFrom = timestamp(source.availableFrom)
-  const availableUntil = timestamp(source.availableUntil)
-  if (Date.parse(availableUntil) <= Date.parse(availableFrom)) invalidResponse()
   return {
     workerId: uuid(source.workerId),
     version: source.version as number,
     homeWarehouseId: uuid(source.homeWarehouseId),
     displayName: text(source.displayName),
     phone: text(source.phone),
-    availableFrom,
-    availableUntil,
     comment: source.comment === null ? null : string(source.comment),
     active: source.active,
     employmentType: "CONTRACTOR",
@@ -215,7 +204,7 @@ export async function listLogisticsDriverResources(input: {
   return response.map(parseLogisticsDriverResource)
 }
 
-/** Creates a bounded contractor profile without creating an application account. */
+/** Creates a reusable contractor profile without creating an application account. */
 export async function createContractorDriver(input: {
   accessToken: string
   warehouseId: string

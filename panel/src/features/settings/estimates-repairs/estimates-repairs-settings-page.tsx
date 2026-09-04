@@ -115,11 +115,11 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
+import { isGlobalAdministrator } from "@/features/auth/auth-model"
 import { useAuth } from "@/features/auth/use-auth"
-import { useWarehouse } from "@/hooks/use-warehouse"
 import { cn } from "@/lib/utils"
 import type { EstimateCatalogSettingsActionDto } from "@/features/settings/estimates-repairs/model/estimate-repair-settings"
 import type {
@@ -139,7 +139,6 @@ import {
   repairEstimateCatalogLinkTypeLabel,
   repairEstimateCatalogNodeTypeLabel,
 } from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
-import { EstimateCreationWindowSettingsCard } from "@/features/settings/estimates-repairs/estimate-creation-window-settings-card"
 
 type EstimateScreen =
   | { level: "root" }
@@ -201,7 +200,7 @@ const CANVAS_ANCHOR_INSET = 1
 const CATALOG_COMMENT_MAX_LENGTH = 2000
 const NO_ROUTE_QUEUE_VALUE = "__NO_ROUTE_QUEUE__"
 const DISPLAY_COLOR_PATTERN = /^#[0-9A-Fa-f]{6}$/
-const DISPLAY_COLOR_PICKER_FALLBACK = "#64748B"
+const DISPLAY_COLOR_PICKER_FALLBACK = "#ABB6B9"
 const REPAIR_COMPLEXITY_COLOR_FIELDS = [
   { key: "lightColor", label: "Лёгкий ремонт" },
   { key: "mediumColor", label: "Средний ремонт" },
@@ -331,12 +330,8 @@ function EstimateActionNavigation({
 }) {
   return (
     <nav aria-label="Разделы каталога смет">
-      <ToggleGroup
-        type="single"
+      <Tabs
         value={activeActionId ?? ""}
-        variant="outline"
-        size="default"
-        className="grid w-full grid-cols-2 gap-2 lg:grid-cols-6"
         onValueChange={(actionId) => {
           if (!actionId) {
             return
@@ -348,21 +343,21 @@ function EstimateActionNavigation({
           }
         }}
       >
-        {actions.map((action) => {
-          const Icon = getEstimateActionIcon(action.id)
+        <div className="max-w-full overflow-x-auto pb-1">
+          <TabsList className="min-w-max bg-muted/75 shadow-xs backdrop-blur-md">
+            {actions.map((action) => {
+              const Icon = getEstimateActionIcon(action.id)
 
-          return (
-            <ToggleGroupItem
-              key={action.id}
-              value={action.id}
-              className="h-9 w-full justify-center px-3 text-sm"
-            >
-              <HugeiconsIcon icon={Icon} data-icon="inline-start" />
-              <span className="truncate">{action.title}</span>
-            </ToggleGroupItem>
-          )
-        })}
-      </ToggleGroup>
+              return (
+                <TabsTrigger key={action.id} value={action.id}>
+                  <HugeiconsIcon icon={Icon} data-icon="inline-start" />
+                  <span className="truncate">{action.title}</span>
+                </TabsTrigger>
+              )
+            })}
+          </TabsList>
+        </div>
+      </Tabs>
     </nav>
   )
 }
@@ -1520,7 +1515,6 @@ function EstimateActionCategoryMenu({
   const dataQuery = useQuery({
     queryKey: [
       ...REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
-      request.warehouseId,
       request.catalogVersionId,
       "action-menu",
       action.id,
@@ -2267,9 +2261,11 @@ function CatalogCanvas({
             <Button
               key={`delete-${link.id}`}
               type="button"
-              variant="outline"
-              size="sm"
-              className="group/delete-link absolute z-30 -translate-x-1/2 -translate-y-1/2 border-border bg-background/95 text-muted-foreground shadow-md hover:border-foreground/70 hover:bg-muted/50 hover:text-foreground/80"
+              variant="destructive"
+              size="icon"
+              className="absolute z-30 -translate-x-1/2 -translate-y-1/2 shadow-md"
+              aria-label="Удалить связь"
+              title="Удалить связь"
               style={{
                 left: midpoint.x,
                 top: midpoint.y,
@@ -2281,12 +2277,7 @@ function CatalogCanvas({
               onPointerDown={(event) => event.stopPropagation()}
               onPointerUp={(event) => event.stopPropagation()}
             >
-              <HugeiconsIcon
-                icon={Delete01Icon}
-                data-icon="inline-start"
-                className="text-muted-foreground transition-colors group-hover/delete-link:text-destructive"
-              />
-              <span>Удалить</span>
+              <HugeiconsIcon icon={Delete01Icon} aria-hidden="true" />
             </Button>
           )
         })}
@@ -2689,7 +2680,6 @@ function CatalogCanvasCategoryEditor({
 
   const canvasQueryKey = [
     ...REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
-    request.warehouseId,
     request.catalogVersionId,
     "canvas",
   ] as const
@@ -3206,7 +3196,7 @@ function CatalogItemsTable({
 
   return (
     <table className="w-full min-w-[56rem] border-collapse text-sm">
-      <thead className="sticky top-0 bg-muted text-muted-foreground">
+      <thead className="sticky top-0 bg-muted/85 text-muted-foreground">
         <tr>
           {renderSortableHeader("name", "Название")}
           {renderSortableHeader("unit", "Ед.")}
@@ -3221,7 +3211,10 @@ function CatalogItemsTable({
           {renderSortableHeader("includeInEstimate", "Смета")}
           {renderSortableHeader("commonItem", "Общий")}
           {!readOnly && (
-            <th className="px-3 py-2 text-right font-medium">Действия</th>
+            <th
+              aria-hidden="true"
+              className="px-3 py-2 text-right font-medium"
+            />
           )}
         </tr>
       </thead>
@@ -3268,8 +3261,9 @@ function CatalogItemsTable({
                   </Button>
                   <Button
                     type="button"
-                    variant="ghost"
+                    variant="destructive"
                     size="icon-sm"
+                    title="Удалить"
                     onClick={() => onDelete(item)}
                   >
                     <HugeiconsIcon icon={Delete01Icon} />
@@ -3304,7 +3298,6 @@ function CatalogSectionCategoryEditor({
   const sectionQuery = useQuery({
     queryKey: [
       ...REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
-      request.warehouseId,
       request.catalogVersionId,
       "section",
       kind,
@@ -3477,7 +3470,6 @@ function CommonCatalogItemsView({
   const sectionQuery = useQuery({
     queryKey: [
       ...REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
-      request.warehouseId,
       request.catalogVersionId,
       "common-section",
       kind,
@@ -3721,7 +3713,6 @@ function CatalogDisplayColorSettings({
 }) {
   const snapshotQueryKey = [
     ...REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
-    request.warehouseId,
     request.catalogVersionId,
     "display-colors",
   ] as const
@@ -3856,7 +3847,7 @@ function CatalogDisplayColorForm({
                         [group]: event.target.value.toUpperCase(),
                       }))
                     }
-                    className="size-9 shrink-0"
+                    className="rwms-color-picker size-9 shrink-0 cursor-pointer"
                   />
                   <Input
                     id={id}
@@ -3928,12 +3919,10 @@ function RepairComplexityColorSettings({
   const queryKey = [
     "maintenance",
     "repair-complexity-colors",
-    request.warehouseId,
   ] as const
   const colorsQuery = useQuery({
     queryKey,
-    queryFn: () =>
-      getRepairComplexityColors(request.accessToken, request.warehouseId),
+    queryFn: () => getRepairComplexityColors(request.accessToken),
   })
 
   if (colorsQuery.error) {
@@ -3951,7 +3940,7 @@ function RepairComplexityColorSettings({
 
   return (
     <RepairComplexityColorForm
-      key={`${request.warehouseId}:${colorsQuery.data.version}`}
+      key={`${colorsQuery.data.version}`}
       request={request}
       readOnly={readOnly}
       queryKey={queryKey}
@@ -3980,7 +3969,7 @@ function RepairComplexityColorForm({
   )
   const mutation = useMutation({
     mutationFn: () =>
-      saveRepairComplexityColors(request.accessToken, request.warehouseId, {
+      saveRepairComplexityColors(request.accessToken, {
         version: draft.version,
         lightColor: draft.lightColor,
         mediumColor: draft.mediumColor,
@@ -4044,7 +4033,7 @@ function RepairComplexityColorForm({
                         : DISPLAY_COLOR_PICKER_FALLBACK
                     }
                     disabled={readOnly || mutation.isPending}
-                    className="size-9 shrink-0"
+                    className="rwms-color-picker size-9 shrink-0 cursor-pointer"
                     onChange={(event) =>
                       setDraft((current) => ({
                         ...current,
@@ -4101,7 +4090,7 @@ function EstimateDrilldownView({
   readOnly: boolean
 }) {
   return (
-    <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card">
+    <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-muted/60">
       <div className="min-h-0 flex-1 overflow-auto p-4">
         {screen.action.id === "repair-estimate-catalog-colors" ? (
           <div className="flex flex-col gap-8">
@@ -4139,7 +4128,6 @@ function EstimateDrilldownView({
 export function EstimatesRepairsSettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const { accessToken, currentUser } = useAuth()
-  const { selectedWarehouseId } = useWarehouse()
   const queryClient = useQueryClient()
   const [estimateScreen, setEstimateScreen] = useState<EstimateScreen>({
     level: "root",
@@ -4179,36 +4167,26 @@ export function EstimatesRepairsSettingsPage() {
     commandIdempotencyKeys.current.set(signature, created)
     return created
   }
-  const canEdit = Boolean(
-    selectedWarehouseId &&
-    hasWarehouseAccess(currentUser, selectedWarehouseId, "EDIT")
-  )
   const canManage = Boolean(
-    selectedWarehouseId &&
-    hasWarehouseAccess(currentUser, selectedWarehouseId, "MANAGE")
+    currentUser && isGlobalAdministrator(currentUser.globalRole)
   )
+  const canEdit = canManage
 
   const catalogQuery = useQuery({
-    queryKey: [
-      ...REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
-      selectedWarehouseId,
-      "current",
-    ],
-    queryFn: () =>
-      getCurrentRepairEstimateCatalog(accessToken!, selectedWarehouseId!),
-    enabled: Boolean(accessToken && selectedWarehouseId),
+    queryKey: [...REPAIR_ESTIMATE_CATALOG_QUERY_KEY, "current"],
+    queryFn: () => getCurrentRepairEstimateCatalog(accessToken!),
+    enabled: Boolean(accessToken),
   })
 
   const currentCatalog = catalogQuery.data ?? null
 
   const catalogRequest = useMemo<RepairEstimateCatalogRequest | null>(() => {
-    if (!accessToken || !selectedWarehouseId || !currentCatalog) return null
+    if (!accessToken || !currentCatalog) return null
     return {
       accessToken,
-      warehouseId: selectedWarehouseId,
       catalogVersionId: currentCatalog.id,
     }
-  }, [accessToken, currentCatalog, selectedWarehouseId])
+  }, [accessToken, currentCatalog])
 
   const refreshCatalog = () => {
     void queryClient.invalidateQueries({
@@ -4221,18 +4199,12 @@ export function EstimatesRepairsSettingsPage() {
       if (!accessToken) {
         throw new Error("Не получен токен доступа к maintenance-service.")
       }
-      if (!selectedWarehouseId) {
-        throw new Error(
-          "Выберите склад, чтобы проверить право на создание единого каталога."
-        )
-      }
       if (!canManage) {
         throw new Error("Недостаточно прав для создания единого каталога.")
       }
       const signature = "create-global-catalog"
       return createRepairEstimateCatalog(
         accessToken,
-        selectedWarehouseId,
         commandIdempotencyKey(signature)
       ).then(() => ({ signature }))
     },
@@ -4349,28 +4321,16 @@ export function EstimatesRepairsSettingsPage() {
         onSelect={openEstimateAction}
       />
     ) : null
-  const estimateCreationWindowCard =
-    canManage && accessToken && selectedWarehouseId ? (
-      <div className="shrink-0">
-        <EstimateCreationWindowSettingsCard
-          accessToken={accessToken}
-          warehouseId={selectedWarehouseId}
-        />
-      </div>
-    ) : null
-
   if (estimateScreen.level !== "root") {
     if (!catalogRequest || !currentCatalog) {
       return (
         <ErrorBox>
-          Выберите склад, чтобы открыть единый каталог смет с доступными для
-          него очередями.
+          Единый каталог смет временно недоступен.
         </ErrorBox>
       )
     }
     return (
       <div className="flex h-full min-h-0 flex-col gap-3">
-        {estimateCreationWindowCard}
         {estimateActionNavigation}
         <EstimateDrilldownView
           request={catalogRequest}
@@ -4394,16 +4354,11 @@ export function EstimatesRepairsSettingsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      {estimateCreationWindowCard}
-      {!accessToken || !selectedWarehouseId ? (
+      {!accessToken ? (
         <CatalogNavigationState
           kind="error"
           title="Разделы каталога недоступны"
-          description={
-            !accessToken
-              ? "Не получен токен доступа к maintenance-service."
-              : "Выберите склад для проверки доступа и загрузки его очередей. Каталог смет общий для всех складов."
-          }
+          description="Не получен токен доступа к maintenance-service."
         />
       ) : catalogQuery.isLoading ? (
         <SectionSkeleton label="Загружаем каталог смет…" />

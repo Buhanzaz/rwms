@@ -32,17 +32,23 @@ const document: TransferDocument = {
   id: DOCUMENT_ID,
   version: 4,
   documentType: "TRANSFER",
+  customerDeliveryPurpose: null,
   state: "DRAFT",
   warehouseId: SOURCE_WAREHOUSE_ID,
   destinationWarehouseId: DESTINATION_WAREHOUSE_ID,
+  linkedReturnTransferId: null,
   partySnapshot: null,
   driverSnapshot: null,
   driverWorkerId: null,
   clientId: null,
+  historicalRentalImport: false,
   equipmentMovementTaskId: EQUIPMENT_TASK_ID,
   scheduledDate: "2026-07-19",
   rentalOrderId: null,
   rentalShipmentId: null,
+  inventorySourceId: null,
+  inventorySourceFindingId: null,
+  inventorySourceDispositionKind: null,
   lines: [
     {
       id: LINE_ID,
@@ -53,6 +59,8 @@ const document: TransferDocument = {
       state: "PENDING",
       tenantSnapshot: null,
       rentalOrderId: null,
+      inventorySourceWarehouseId: SOURCE_WAREHOUSE_ID,
+      inventoryShipmentFurniture: null,
     },
   ],
   createdAt: "2026-07-18T08:00:00Z",
@@ -142,9 +150,18 @@ const plan: TransferPlan = {
 }
 
 function json(value: unknown, status = 200) {
+  const paginationHeaders: Record<string, string> = Array.isArray(value)
+    ? {
+        "X-RWMS-Page": "0",
+        "X-RWMS-Page-Size": "100",
+        "X-RWMS-Total-Elements": String(value.length),
+        "X-RWMS-Total-Pages": value.length === 0 ? "0" : "1",
+        "X-RWMS-Has-Next": "false",
+      }
+    : {}
   return new Response(JSON.stringify(value), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...paginationHeaders },
   })
 }
 
@@ -159,6 +176,15 @@ describe("HttpWarehouseTransferClient", () => {
     expect(parseTransferDocument(document)).toEqual(document)
   })
 
+  it("keeps warehouse transfers outside customer delivery purposes", () => {
+    expect(() =>
+      parseTransferDocument({
+        ...document,
+        customerDeliveryPurpose: "RENTAL_DELIVERY",
+      })
+    ).toThrow("Сервис логистики вернул некорректный ответ перемещения.")
+  })
+
   it("lists and gets canonical transfers through the same-origin gateway", async () => {
     const fetchMock = vi
       .fn()
@@ -168,7 +194,7 @@ describe("HttpWarehouseTransferClient", () => {
     const client = new HttpWarehouseTransferClient()
 
     await expect(
-      client.list("transfer-token", SOURCE_WAREHOUSE_ID)
+      client.list("transfer-token", SOURCE_WAREHOUSE_ID, "2026-07-19")
     ).resolves.toEqual([document])
     await expect(client.get("transfer-token", DOCUMENT_ID)).resolves.toEqual(
       document
@@ -179,6 +205,9 @@ describe("HttpWarehouseTransferClient", () => {
     expect(listUrl.origin).toBe(window.location.origin)
     expect(listUrl.pathname).toBe("/api/logistics/v1/transfers")
     expect(listUrl.searchParams.get("warehouseId")).toBe(SOURCE_WAREHOUSE_ID)
+    expect(listUrl.searchParams.get("scheduledDate")).toBe("2026-07-19")
+    expect(listUrl.searchParams.get("page")).toBe("0")
+    expect(listUrl.searchParams.get("size")).toBe("100")
     expect(detailUrl.pathname).toBe(
       `/api/logistics/v1/transfers/${DOCUMENT_ID}`
     )
@@ -584,10 +613,23 @@ describe("HttpWarehouseTransferClient", () => {
     }
   })
 
-  it("rejects transfer documents with shipment-only driver or rental-shipment values", () => {
+  it("keeps an assigned transfer driver as one immutable paired snapshot", () => {
+    expect(
+      parseTransferDocument({
+        ...document,
+        driverSnapshot: "Иванов Иван",
+        driverWorkerId: DRIVER_ID,
+      })
+    ).toMatchObject({
+      driverSnapshot: "Иванов Иван",
+      driverWorkerId: DRIVER_ID,
+    })
+  })
+
+  it("rejects incomplete transfer driver facts and shipment-only values", () => {
     for (const invalidDocument of [
-      { ...document, driverSnapshot: "Иванов Иван" },
-      { ...document, driverWorkerId: EQUIPMENT_TASK_ID },
+      { ...document, driverSnapshot: "Иванов Иван", driverWorkerId: null },
+      { ...document, driverSnapshot: null, driverWorkerId: DRIVER_ID },
       { ...document, rentalShipmentId: EQUIPMENT_TASK_ID },
     ]) {
       expect(() => parseTransferDocument(invalidDocument)).toThrow(

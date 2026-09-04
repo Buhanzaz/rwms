@@ -22,6 +22,7 @@ import dev.buhanzaz.rwms.worker.core.network.WorkerFeedResponse
 import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayClient
 import dev.buhanzaz.rwms.worker.core.network.WorkerTaskDetailDto
 import dev.buhanzaz.rwms.worker.core.network.gatewayFailureDisposition
+import dev.buhanzaz.rwms.worker.core.network.gatewayProblemUserMessage
 import dev.buhanzaz.rwms.worker.core.network.isProvenGatewayTransportFailure
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -275,13 +276,9 @@ class WorkerSyncCoordinator @Inject constructor(
             }
             workerSyncOutcomeForGatewayProblem(error)
         } catch (error: TerminalSyncException) {
-            WorkerSyncOutcome.Failed(error.message ?: "Не удалось синхронизировать данные")
+            WorkerSyncOutcome.Failed(error.message ?: SAFE_SYNC_FAILURE_MESSAGE)
         } catch (error: Throwable) {
-            if (error.isProvenGatewayTransportFailure()) {
-                WorkerSyncOutcome.Retry(error.message ?: "Сеть недоступна")
-            } else {
-                WorkerSyncOutcome.Failed(error.message ?: "Не удалось синхронизировать данные")
-            }
+            workerSyncOutcomeForUnexpectedFailure(error)
         }
     }
 
@@ -305,14 +302,15 @@ class WorkerSyncCoordinator @Inject constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: GatewayProblemException) {
+            val userMessage = gatewayProblemUserMessage(error.problem)
             when (error.disposition) {
                 GatewayFailureDisposition.AUTHENTICATION_REQUIRED -> throw error
                 GatewayFailureDisposition.RETRYABLE -> {
-                    localStore.markOutboxRetry(operation, error.problem.detail ?: error.problem.title)
+                    localStore.markOutboxRetry(operation, userMessage)
                     return EntryOperationResult(
                         completedUnits = 0,
                         blocksEntry = true,
-                        outcome = WorkerSyncOutcome.Retry(error.problem.detail ?: error.problem.title),
+                        outcome = WorkerSyncOutcome.Retry(userMessage),
                     )
                 }
                 GatewayFailureDisposition.USER_ACTION_REQUIRED,
@@ -324,18 +322,14 @@ class WorkerSyncCoordinator @Inject constructor(
                         return EntryOperationResult(
                             completedUnits = 1,
                             blocksEntry = true,
-                            outcome = WorkerSyncOutcome.UserActionRequired(
-                                error.problem.detail ?: "Нужно обновить доступ рабочего",
-                            ),
+                            outcome = WorkerSyncOutcome.UserActionRequired(userMessage),
                         )
                     }
                     return EntryOperationResult(
                         completedUnits = 1,
                         blocksEntry = true,
                         outcome = if (error.disposition == GatewayFailureDisposition.CONFLICT) {
-                            WorkerSyncOutcome.Conflict(
-                                error.problem.detail ?: "Данные задания изменились на RWMS",
-                            )
+                            WorkerSyncOutcome.Conflict(userMessage)
                         } else {
                             null
                         },
@@ -344,18 +338,18 @@ class WorkerSyncCoordinator @Inject constructor(
             }
         } catch (error: Throwable) {
             if (error.isProvenGatewayTransportFailure()) {
-                localStore.markOutboxRetry(operation, error.message ?: "network")
+                localStore.markOutboxRetry(operation, SAFE_ACTION_RETRY_MESSAGE)
                 return EntryOperationResult(
                     completedUnits = 0,
                     blocksEntry = true,
-                    outcome = WorkerSyncOutcome.Retry("Не удалось передать действие"),
+                    outcome = WorkerSyncOutcome.Retry(SAFE_ACTION_RETRY_MESSAGE),
                 )
             }
-            localStore.markOutboxRetry(operation, error.message ?: "network")
+            localStore.markOutboxRetry(operation, SAFE_ACTION_FAILURE_MESSAGE)
             return EntryOperationResult(
                 completedUnits = 0,
                 blocksEntry = true,
-                outcome = WorkerSyncOutcome.Failed("Не удалось передать действие"),
+                outcome = WorkerSyncOutcome.Failed(SAFE_ACTION_FAILURE_MESSAGE),
             )
         }
     }
@@ -391,14 +385,15 @@ class WorkerSyncCoordinator @Inject constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: GatewayProblemException) {
+            val userMessage = gatewayProblemUserMessage(error.problem)
             when (error.disposition) {
                 GatewayFailureDisposition.AUTHENTICATION_REQUIRED -> throw error
                 GatewayFailureDisposition.RETRYABLE -> {
-                    localStore.markOutboxRetry(operation, error.problem.detail ?: error.problem.title)
+                    localStore.markOutboxRetry(operation, userMessage)
                     return EntryOperationResult(
                         completedUnits = 0,
                         blocksEntry = true,
-                        outcome = WorkerSyncOutcome.Retry(error.problem.detail ?: error.problem.title),
+                        outcome = WorkerSyncOutcome.Retry(userMessage),
                     )
                 }
                 GatewayFailureDisposition.USER_ACTION_REQUIRED,
@@ -410,18 +405,14 @@ class WorkerSyncCoordinator @Inject constructor(
                         return EntryOperationResult(
                             completedUnits = 1,
                             blocksEntry = true,
-                            outcome = WorkerSyncOutcome.UserActionRequired(
-                                error.problem.detail ?: "Нужно обновить доступ рабочего",
-                            ),
+                            outcome = WorkerSyncOutcome.UserActionRequired(userMessage),
                         )
                     }
                     return EntryOperationResult(
                         completedUnits = 1,
                         blocksEntry = true,
                         outcome = if (error.disposition == GatewayFailureDisposition.CONFLICT) {
-                            WorkerSyncOutcome.Conflict(
-                                error.problem.detail ?: "Данные задания изменились на RWMS",
-                            )
+                            WorkerSyncOutcome.Conflict(userMessage)
                         } else {
                             null
                         },
@@ -430,18 +421,18 @@ class WorkerSyncCoordinator @Inject constructor(
             }
         } catch (error: Throwable) {
             if (error.isProvenGatewayTransportFailure()) {
-                localStore.markOutboxRetry(operation, error.message ?: "network")
+                localStore.markOutboxRetry(operation, SAFE_EVIDENCE_RESERVATION_RETRY_MESSAGE)
                 return EntryOperationResult(
                     completedUnits = 0,
                     blocksEntry = true,
-                    outcome = WorkerSyncOutcome.Retry("Не удалось зарезервировать фото"),
+                    outcome = WorkerSyncOutcome.Retry(SAFE_EVIDENCE_RESERVATION_RETRY_MESSAGE),
                 )
             }
-            localStore.markOutboxRetry(operation, error.message ?: "network")
+            localStore.markOutboxRetry(operation, SAFE_EVIDENCE_RESERVATION_FAILURE_MESSAGE)
             return EntryOperationResult(
                 completedUnits = 0,
                 blocksEntry = true,
-                outcome = WorkerSyncOutcome.Failed("Не удалось зарезервировать фото"),
+                outcome = WorkerSyncOutcome.Failed(SAFE_EVIDENCE_RESERVATION_FAILURE_MESSAGE),
             )
         }
     }
@@ -510,7 +501,7 @@ class WorkerSyncCoordinator @Inject constructor(
             "REVIEW_REQUIRED",
             null,
             null,
-            error.problem.detail ?: error.problem.title,
+            gatewayProblemUserMessage(error.problem),
             System.currentTimeMillis(),
         )
         localStore.markOutboxComplete(operation.operationId)
@@ -579,7 +570,7 @@ class WorkerSyncCoordinator @Inject constructor(
                     operationId = item.uploadOperationId,
                     entryId = item.entryId,
                     code = error.problem.code,
-                    message = error.problem.detail ?: error.problem.title,
+                    message = gatewayProblemUserMessage(error.problem),
                     currentVersion = error.problem.currentVersion,
                     currentEntryJson = error.problem.currentEntry?.let(json::encodeToString),
                 )
@@ -587,9 +578,9 @@ class WorkerSyncCoordinator @Inject constructor(
             val outcome = if (error is GatewayProblemException) {
                 workerSyncOutcomeForGatewayProblem(error)
             } else if (error.isProvenGatewayTransportFailure()) {
-                WorkerSyncOutcome.Retry(error.message ?: "Не удалось загрузить фотографию")
+                WorkerSyncOutcome.Retry(SAFE_EVIDENCE_UPLOAD_RETRY_MESSAGE)
             } else {
-                WorkerSyncOutcome.Failed(error.message ?: "Не удалось загрузить фотографию")
+                WorkerSyncOutcome.Failed(SAFE_EVIDENCE_UPLOAD_FAILURE_MESSAGE)
             }
             return@supervisorScope EvidenceSyncResult(
                 outcome = outcome,
@@ -711,7 +702,7 @@ class WorkerSyncCoordinator @Inject constructor(
             operationId = operation.operationId,
             entryId = operation.entryId,
             code = error.problem.code,
-            message = error.problem.detail ?: error.problem.title,
+            message = gatewayProblemUserMessage(error.problem),
             currentVersion = error.problem.currentVersion,
             currentEntryJson = error.problem.currentEntry?.let(json::encodeToString),
         )
@@ -725,7 +716,7 @@ class WorkerSyncCoordinator @Inject constructor(
             operationId = "sync:$userId:${error.problem.code}:${error.problem.currentVersion ?: "unknown"}",
             entryId = currentEntry?.entryId ?: SYNC_CONFLICT_ENTRY_ID,
             code = error.problem.code,
-            message = error.problem.detail ?: error.problem.title,
+            message = gatewayProblemUserMessage(error.problem),
             currentVersion = error.problem.currentVersion,
             currentEntryJson = currentEntry?.let(json::encodeToString),
         )
@@ -761,17 +752,23 @@ class WorkerSyncCoordinator @Inject constructor(
 internal fun workerSyncOutcomeForGatewayProblem(error: GatewayProblemException): WorkerSyncOutcome =
     when (error.disposition) {
         GatewayFailureDisposition.AUTHENTICATION_REQUIRED ->
-            WorkerSyncOutcome.AuthenticationRequired(error.problem.detail ?: "Требуется повторный вход")
+            WorkerSyncOutcome.AuthenticationRequired(gatewayProblemUserMessage(error.problem))
         GatewayFailureDisposition.USER_ACTION_REQUIRED ->
-            WorkerSyncOutcome.UserActionRequired(error.problem.detail ?: "Нужно обновить доступ рабочего")
+            WorkerSyncOutcome.UserActionRequired(gatewayProblemUserMessage(error.problem))
         GatewayFailureDisposition.CONFLICT ->
-            WorkerSyncOutcome.Conflict(
-                error.problem.detail ?: "Данные задания изменились на RWMS. Обновите список задач.",
-            )
+            WorkerSyncOutcome.Conflict(gatewayProblemUserMessage(error.problem))
         GatewayFailureDisposition.RETRYABLE ->
-            WorkerSyncOutcome.Retry(error.problem.detail ?: "RWMS временно недоступен")
+            WorkerSyncOutcome.Retry(gatewayProblemUserMessage(error.problem))
         GatewayFailureDisposition.TERMINAL ->
-            WorkerSyncOutcome.Failed(error.problem.detail ?: "Не удалось синхронизировать данные")
+            WorkerSyncOutcome.Failed(gatewayProblemUserMessage(error.problem))
+    }
+
+/** Converts an untyped failure to a fixed outcome without exposing its internal exception text. */
+internal fun workerSyncOutcomeForUnexpectedFailure(error: Throwable): WorkerSyncOutcome =
+    if (error.isProvenGatewayTransportFailure()) {
+        WorkerSyncOutcome.Retry(SAFE_SYNC_RETRY_MESSAGE)
+    } else {
+        WorkerSyncOutcome.Failed(SAFE_SYNC_FAILURE_MESSAGE)
     }
 
 /** A reservation response outside the narrow retry set is terminal for automatic replay. */
@@ -791,7 +788,7 @@ internal fun validateFeedPage(
 ): FeedPageConsistency {
     val current = FeedPageConsistency(revision, serverTime)
     require(previous == null || previous == current) {
-        "RWMS returned a mixed-revision worker feed"
+        "Лента заданий содержит несогласованные данные"
     }
     return current
 }
@@ -877,6 +874,22 @@ private const val MAX_PARALLEL_EVIDENCE_UPLOADS = 2
 private const val TERMINAL_TASK_EVIDENCE_REASON =
     "Задание уже завершено; локальная фотография сохранена на устройстве"
 private const val SYNC_CONFLICT_ENTRY_ID = "worker-feed"
+private const val SAFE_SYNC_RETRY_MESSAGE =
+    "Нет соединения с RWMS. Проверьте сеть и повторите попытку."
+private const val SAFE_SYNC_FAILURE_MESSAGE =
+    "Не удалось синхронизировать данные. Обновите список заданий и повторите попытку."
+private const val SAFE_ACTION_RETRY_MESSAGE =
+    "Не удалось передать действие. Проверьте сеть и повторите попытку."
+private const val SAFE_ACTION_FAILURE_MESSAGE =
+    "Не удалось передать действие. Обновите список заданий и повторите попытку."
+private const val SAFE_EVIDENCE_RESERVATION_RETRY_MESSAGE =
+    "Не удалось зарезервировать фотографию. Проверьте сеть и повторите попытку."
+private const val SAFE_EVIDENCE_RESERVATION_FAILURE_MESSAGE =
+    "Не удалось зарезервировать фотографию. Обновите задание и повторите попытку."
+private const val SAFE_EVIDENCE_UPLOAD_RETRY_MESSAGE =
+    "Не удалось загрузить фотографию. Проверьте сеть и повторите попытку."
+private const val SAFE_EVIDENCE_UPLOAD_FAILURE_MESSAGE =
+    "Не удалось загрузить фотографию. Повторите отправку вручную."
 
 /** Returns whether task-board proved that no further worker evidence can be attached. */
 private fun String.isTerminalWorkerTaskStatus(): Boolean = this == "DONE" || this == "CANCELLED"

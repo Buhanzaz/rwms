@@ -59,6 +59,7 @@ class CustomerAuthorizerTest {
         .isInstanceOf(AccessDeniedException.class);
   }
 
+  @Test
   private static Jwt customerJwt(String clientId) {
     return jwt("USER", "CUSTOMER", List.of("customer.rental"), clientId);
   }

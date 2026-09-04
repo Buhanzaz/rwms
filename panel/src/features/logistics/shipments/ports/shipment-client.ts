@@ -37,7 +37,11 @@ export type ShipmentVersionedCommand = {
 }
 
 export interface ShipmentClient {
-  list(accessToken: string, warehouseId: string): Promise<ShipmentDocument[]>
+  list(
+    accessToken: string,
+    warehouseId: string,
+    scheduledDate?: string
+  ): Promise<ShipmentDocument[]>
   get(accessToken: string, documentId: string): Promise<ShipmentDocument>
   getFurnitureReadiness(
     accessToken: string,

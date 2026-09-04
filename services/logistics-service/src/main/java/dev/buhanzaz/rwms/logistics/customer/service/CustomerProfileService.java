@@ -67,7 +67,9 @@ public class CustomerProfileService {
             "CustomerApp");
     var created =
         clients.createForOrder(
-            access.orderActor(identity, null), deterministic("customer-profile:" + identity.subjectId()), input);
+            access.orderActor(identity, null),
+            deterministic("customer-profile:" + identity.subjectId()),
+            input);
     CustomerProfile profile =
         profiles.saveAndFlush(
             CustomerProfile.create(

@@ -663,9 +663,7 @@ describe("http inventory adapter", () => {
     const settings = {
       warehouseId: session.warehouseId,
       settingsRevision: 4,
-      movementDailyCapacity: 6,
-      repairDailyCapacity: 8,
-      workingWeekdays: ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY"],
+      updatedAt: "2026-08-09T09:30:00Z",
       holidays: ["2026-08-10"],
     }
     const finalPlan = {
@@ -704,9 +702,6 @@ describe("http inventory adapter", () => {
       warehouseId: session.warehouseId,
       request: {
         expectedSettingsRevision: 4,
-        movementDailyCapacity: 7,
-        repairDailyCapacity: 9,
-        workingWeekdays: ["MONDAY", "TUESDAY", "WEDNESDAY"],
         holidays: ["2026-08-10", "2026-08-11"],
       },
     })
@@ -754,10 +749,9 @@ describe("http inventory adapter", () => {
       `/planning-settings/${session.warehouseId}`
     )
     expect(fetchMock.mock.calls[1][1].method).toBe("PUT")
-    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toMatchObject({
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
       expectedSettingsRevision: 4,
-      movementDailyCapacity: 7,
-      repairDailyCapacity: 9,
+      holidays: ["2026-08-10", "2026-08-11"],
     })
     expect(fetchMock.mock.calls[2][0]).toContain(
       `/sessions/${session.id}/final-plan/prepare`

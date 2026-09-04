@@ -110,6 +110,7 @@ class GatewayProductionSafetyValidatorTest {
     properties.getRoutes().setMediaUri(URI.create("http://media-service:8085"));
     properties.getRoutes().setInventoryUri(URI.create("http://inventory-service:8089"));
     properties.getRoutes().setLogisticsUri(URI.create("http://logistics-service:8090"));
+    properties.getRoutes().setLogisticsPlannerUri(URI.create("http://logistics-planner:8000"));
     properties.getRoutes().setDossierUri(URI.create("http://dossier-service:8091"));
     properties.getRoutes().setAnalyticsUri(URI.create("http://analytics-service:8080"));
     properties.getRoutes().setAssistantUri(URI.create("http://assistant-service:8092"));
@@ -161,6 +162,10 @@ class GatewayProductionSafetyValidatorTest {
             "logistics target",
             routes -> routes.setLogisticsUri(publicHost),
             routes -> routes.setLogisticsUri(loopback)),
+        routeCase(
+            "logistics planner target",
+            routes -> routes.setLogisticsPlannerUri(publicHost),
+            routes -> routes.setLogisticsPlannerUri(loopback)),
         routeCase(
             "dossier target",
             routes -> routes.setDossierUri(publicHost),

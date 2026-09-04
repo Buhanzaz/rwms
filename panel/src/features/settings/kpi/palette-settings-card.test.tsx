@@ -10,7 +10,7 @@ import {
   vi,
 } from "vitest"
 
-import type { WarehouseKpiSettings } from "@/features/settings/kpi/api/kpi-settings-api"
+import type { KpiPaletteResponse } from "@/features/settings/kpi/api/kpi-settings-api"
 import { PaletteSettingsCard } from "@/features/settings/kpi/palette-settings-card"
 
 const pointerCaptureDescriptors = new Map(
@@ -24,12 +24,8 @@ const pointerCaptureDescriptors = new Map(
 const setPointerCapture = vi.fn()
 const releasePointerCapture = vi.fn()
 
-const settings: WarehouseKpiSettings = {
-  warehouseId: "00000000-0000-4000-8000-000000000001",
-  timeZone: "Europe/Moscow",
-  status: "DRAFT",
+const settings: KpiPaletteResponse = {
   version: 3,
-  dataAvailableFrom: null,
   palette: {
     version: 1,
     ranges: [
@@ -39,8 +35,6 @@ const settings: WarehouseKpiSettings = {
     ],
     overdueColor: "#7F1D1D",
   },
-  activeSchedule: null,
-  pendingSchedule: null,
 }
 
 function renderCard() {

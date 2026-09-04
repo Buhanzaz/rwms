@@ -63,6 +63,9 @@ import {
   type OrderMovement,
   type OrderUnitCandidate,
 } from "@/features/orders/domain/orders"
+import {
+  CUSTOMER_DELIVERY_PURPOSE_LABELS,
+} from "@/features/logistics/customer-delivery-purpose"
 import { useOrdersModule } from "@/features/orders/orders-module-context"
 import { RentalItemStatusBadge } from "@/features/rental-items/rental-item-status-badge"
 import { ApiError } from "@/lib/api-client"
@@ -177,11 +180,9 @@ function formatDesiredWindow({
   startDate,
   endDate,
 }: OrderDetail["desiredDeliveryWindows"][number]) {
-  return (
-    startDate === endDate
-      ? formatRentalDate(startDate)
-      : `${formatRentalDate(startDate)} — ${formatRentalDate(endDate)}`
-  )
+  return startDate === endDate
+    ? formatRentalDate(startDate)
+    : `${formatRentalDate(startDate)} — ${formatRentalDate(endDate)}`
 }
 
 function monthLabel(value: number) {
@@ -202,7 +203,8 @@ export function OrderDetailPage() {
   const { orderId } = useParams<{ orderId: string }>()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { accessToken, currentUser, warehouses } = useOrdersModule()
+  const { accessToken, currentUser, warehouses, capabilities } =
+    useOrdersModule()
   const [contentsUnitId, setContentsUnitId] = useState<string | null>(null)
   const [addCabinsDialogOpen, setAddCabinsDialogOpen] = useState(false)
   const [replacementDialogOpen, setReplacementDialogOpen] = useState(false)
@@ -339,7 +341,9 @@ export function OrderDetailPage() {
       commandIdentity.current.confirm(fingerprint)
       applyProjection(projection)
       toast.success(
-        "Заказ сохранён. Откройте «Задания», чтобы создать отгрузку; сохранение само не создаёт рейс."
+        capabilities.logisticsTaskNavigation
+          ? "Заказ сохранён. Откройте «Задания», чтобы создать отгрузку; сохранение само не создаёт рейс."
+          : "Заказ сохранён. Отгрузка появится после планирования в логистике."
       )
     },
     onError: (error) => {
@@ -416,7 +420,9 @@ export function OrderDetailPage() {
     (warehouse) => warehouse.id === order.warehouseId
   )
   const canEdit = order.permissions.canEdit
-  const canReplaceUnits = order.permissions.canReplaceUnits
+  const canReplaceUnits =
+    order.permissions.canReplaceUnits &&
+    (capabilities.manualBooking || capabilities.directWarehouseReplacement)
   const canCancel = canEdit && order.status === "DRAFT"
   const desiredDeliveryWindows = order.desiredDeliveryWindows ?? []
   const orderMovements = order.movements ?? []
@@ -513,7 +519,9 @@ export function OrderDetailPage() {
               {saveMutation.isPending ? "Сохраняем…" : "Сохранить заказ"}
             </Button>
           ) : null}
-          {canEdit && order.status === "SAVED" ? (
+          {canEdit &&
+          order.status === "SAVED" &&
+          capabilities.logisticsTaskNavigation ? (
             <Button asChild>
               <Link to="/logistics/order-tasks">Перейти к заданиям</Link>
             </Button>
@@ -636,6 +644,14 @@ export function OrderDetailPage() {
             <p className="font-medium">{order.client.displayName}</p>
             <p className="text-sm text-muted-foreground">
               {ORDER_CLIENT_TYPE_LABELS[order.client.type]}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">
+              Назначение доставки
+            </p>
+            <p className="font-medium">
+              {CUSTOMER_DELIVERY_PURPOSE_LABELS[order.customerDeliveryPurpose]}
             </p>
           </div>
           <div>
@@ -792,7 +808,18 @@ export function OrderDetailPage() {
                       {MOVEMENT_TYPE_LABELS[movement.documentType] ??
                         movement.documentType}
                     </p>
-                    <Badge variant="outline">{movement.state}</Badge>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {movement.customerDeliveryPurpose ? (
+                        <Badge variant="secondary">
+                          {
+                            CUSTOMER_DELIVERY_PURPOSE_LABELS[
+                              movement.customerDeliveryPurpose
+                            ]
+                          }
+                        </Badge>
+                      ) : null}
+                      <Badge variant="outline">{movement.state}</Badge>
+                    </div>
                   </div>
                   <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-4">
                     <div>
@@ -851,9 +878,9 @@ export function OrderDetailPage() {
             <CardHeader>
               <CardTitle>Бытовки ещё не добавлены</CardTitle>
               <CardDescription>
-                Используйте кнопку «Добавить бытовки» и выберите AI-чат или
-                обычное бронирование. Дату и срок аренды клиент выберет в
-                представлении.
+                {capabilities.manualBooking
+                  ? "Используйте кнопку «Добавить бытовки» и выберите AI-чат или обычное бронирование. Дату и срок аренды клиент выберет в представлении."
+                  : "Используйте кнопку «Добавить бытовки» и продолжите в связанном AI-чате. Дату и срок аренды клиент выберет в представлении."}
               </CardDescription>
             </CardHeader>
           </Card>
@@ -890,7 +917,7 @@ export function OrderDetailPage() {
                         ? RESERVATION_STATE_LABELS[candidate.reservationState]
                         : "не активен"}
                     </Badge>
-                    {canEdit ? (
+                    {canEdit && capabilities.equipmentEditing ? (
                       <Button
                         type="button"
                         size="sm"
@@ -1023,13 +1050,15 @@ export function OrderDetailPage() {
         )}
       </section>
 
-      <OrderUnitDossierEvidence
-        accessToken={accessToken!}
-        orderId={order.id}
-        orderCreatedAt={order.createdAt}
-        candidates={selectedUnits}
-        movements={orderMovements}
-      />
+      {capabilities.dossierEvidence ? (
+        <OrderUnitDossierEvidence
+          accessToken={accessToken!}
+          orderId={order.id}
+          orderCreatedAt={order.createdAt}
+          candidates={selectedUnits}
+          movements={orderMovements}
+        />
+      ) : null}
 
       <Card size="sm">
         <CardHeader>
@@ -1091,15 +1120,17 @@ export function OrderDetailPage() {
         </CardContent>
       </Card>
 
-      <OrderUnitEquipmentDialog
-        open={contentsCandidate !== null}
-        order={order}
-        candidate={contentsCandidate}
-        onOpenChange={(open) => {
-          if (!open) setContentsUnitId(null)
-        }}
-        onConflict={refreshOrderBoundary}
-      />
+      {capabilities.equipmentEditing ? (
+        <OrderUnitEquipmentDialog
+          open={contentsCandidate !== null}
+          order={order}
+          candidate={contentsCandidate}
+          onOpenChange={(open) => {
+            if (!open) setContentsUnitId(null)
+          }}
+          onConflict={refreshOrderBoundary}
+        />
+      ) : null}
 
       <AddCabinsDialog
         open={addCabinsDialogOpen}
@@ -1116,13 +1147,15 @@ export function OrderDetailPage() {
         onConflict={refreshOrderBoundary}
       />
 
-      <OrderUnitReplacementDialog
-        open={replacementDialogOpen}
-        order={order}
-        onOpenChange={setReplacementDialogOpen}
-        onReplaced={applyProjection}
-        onConflict={refreshOrderBoundary}
-      />
+      {canReplaceUnits ? (
+        <OrderUnitReplacementDialog
+          open={replacementDialogOpen}
+          order={order}
+          onOpenChange={setReplacementDialogOpen}
+          onReplaced={applyProjection}
+          onConflict={refreshOrderBoundary}
+        />
+      ) : null}
 
       <OrderDeliveryDialog
         open={deliveryDialogOpen}

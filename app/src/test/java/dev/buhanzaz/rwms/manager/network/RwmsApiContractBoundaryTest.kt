@@ -41,7 +41,7 @@ class RwmsApiContractBoundaryTest {
             .filterNot(Method::isSynthetic)
             .associateBy(Method::getName)
 
-        assertThat(expected).hasSize(61)
+        assertThat(expected).hasSize(63)
         assertWithMessage("RwmsApi method inventory must stay synchronized with canonical public OpenAPI")
             .that(methods.keys)
             .containsExactlyElementsIn(expected.keys)
@@ -550,6 +550,8 @@ private fun expectedManagerRoutes(): Map<String, ManagerContractRoute> {
         "transfer" to route("GET", "api/logistics/v1/transfers/{documentId}", "$logistics /api/logistics/v1/transfers/{documentId}"),
         "createTransfer" to route("POST", "api/logistics/v1/transfers", "$logistics /api/logistics/v1/transfers"),
         "transferFurnitureReadiness" to route("GET", "api/logistics/v1/transfers/{documentId}/furniture-readiness", "$logistics /api/logistics/v1/transfers/{documentId}/furniture-readiness"),
+        "departTransfer" to route("POST", "api/logistics/v1/transfers/{documentId}/depart", "$logistics /api/logistics/v1/transfers/{documentId}/depart"),
+        "arriveTransfer" to route("POST", "api/logistics/v1/transfers/{documentId}/arrive", "$logistics /api/logistics/v1/transfers/{documentId}/arrive"),
         "departTransferLine" to route("POST", "api/logistics/v1/transfers/{documentId}/lines/{lineId}/depart", "$logistics /api/logistics/v1/transfers/{documentId}/lines/{lineId}/depart"),
         "arriveTransferLine" to route("POST", "api/logistics/v1/transfers/{documentId}/lines/{lineId}/arrive", "$logistics /api/logistics/v1/transfers/{documentId}/lines/{lineId}/arrive"),
         "cancelTransfer" to route("POST", "api/logistics/v1/transfers/{documentId}/cancel", "$logistics /api/logistics/v1/transfers/{documentId}/cancel"),

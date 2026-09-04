@@ -160,8 +160,6 @@ class RequestDateOption:
         if self.travel_zone_hours is not None:
             if self.travel_zone_hours < 1:
                 raise ValueError("travel_zone_hours must be positive")
-            if self.window_start is None or not self.is_hard:
-                raise ValueError("travel_zone_hours requires a complete hard time window")
 
     @property
     def width(self) -> timedelta:
@@ -174,7 +172,7 @@ class RequestDateOption:
 
 @dataclass(frozen=True, slots=True)
 class LogisticsRequest:
-    """Unsplittable operator intent that is converted into transport tasks."""
+    """Unsplittable operator intent scoped to its authoritative service warehouse."""
 
     id: str
     request_type: TaskType
@@ -194,6 +192,7 @@ class LogisticsRequest:
     trailer_access_allowed: bool = True
     task_quantities: tuple[int, ...] | None = None
     mandatory: bool = False
+    service_warehouse_id: str | None = None
 
     def __post_init__(self) -> None:
         require_aware(self.created_at, "created_at")
@@ -218,7 +217,7 @@ class LogisticsRequest:
 
 @dataclass(frozen=True, slots=True)
 class PlanningTask:
-    """A capacity-bounded transport part scheduled exactly zero or one times."""
+    """A capacity-bounded, warehouse-scoped part scheduled exactly zero or one times."""
 
     id: str
     request_id: str
@@ -238,6 +237,7 @@ class PlanningTask:
     cargo_dimensions: CargoDimensions | None = None
     trailer_access_allowed: bool = True
     mandatory: bool = False
+    service_warehouse_id: str | None = None
 
     def __post_init__(self) -> None:
         require_aware(self.created_at, "created_at")
@@ -290,7 +290,13 @@ class Vehicle:
 
 @dataclass(frozen=True, slots=True)
 class DriverShift:
-    """Exclusive driver/vehicle availability interval on the planning date."""
+    """Physical availability plus one demand-aware depot/link route option.
+
+    Several values may share ``id`` when the same physical support shift is
+    eligible through different served-warehouse links. ``resource_option_id``
+    distinguishes those pure planner alternatives; cycles and persistence keep
+    the physical shift ID.
+    """
 
     id: str
     driver_id: str
@@ -306,6 +312,9 @@ class DriverShift:
     positioning_travel_minutes: int = 0
     positioning_distance_meters: int = 0
     return_required: bool = False
+    route_depot: Warehouse | None = None
+    allowed_service_warehouse_ids: frozenset[str] | None = None
+    resource_option_id: str | None = None
 
     def __post_init__(self) -> None:
         require_aware(self.start_at, "start_at")
@@ -320,6 +329,13 @@ class DriverShift:
             raise ValueError("positioning facts cannot be negative")
         if self.support_link_id is not None and self.resource_origin_warehouse_id is None:
             raise ValueError("support_link_id requires resource_origin_warehouse_id")
+        if (
+            self.allowed_service_warehouse_ids is not None
+            and not self.allowed_service_warehouse_ids
+        ):
+            raise ValueError("allowed_service_warehouse_ids cannot be empty")
+        if self.resource_option_id is not None and not self.resource_option_id.strip():
+            raise ValueError("resource_option_id cannot be blank")
 
 
 @dataclass(frozen=True, slots=True)
@@ -365,6 +381,7 @@ class RouteStop:
     window_start: datetime | None = None
     window_end: datetime | None = None
     window_is_hard: bool = False
+    service_warehouse_id: str | None = None
 
     def __post_init__(self) -> None:
         require_aware(self.planned_arrival, "planned_arrival")
@@ -381,7 +398,7 @@ class RouteStop:
 
 @dataclass(frozen=True, slots=True)
 class RouteCycle:
-    """One immutable depot-to-depot trip assigned to a driver shift."""
+    """One immutable physical-depot trip assigned through a selected route option."""
 
     id: str
     driver_shift_id: str
@@ -400,6 +417,7 @@ class RouteCycle:
     detour_seconds: int
     score: float
     detour_ratio: float = 0.0
+    resource_option_id: str | None = None
     explanation: tuple[str, ...] = ()
     warnings: tuple[ValidationWarningCode, ...] = ()
     locked: bool = False

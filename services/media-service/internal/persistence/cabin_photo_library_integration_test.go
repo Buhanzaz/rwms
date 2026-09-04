@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -503,6 +504,129 @@ func TestCabinPresentationSnapshotCapsOneActiveFolderAtOneHundredIntegration(t *
 		presentations[0].Photos[0].MediaID != evidence.MediaID ||
 		presentations[0].Photos[99].SortOrder != 99 {
 		t.Fatalf("bounded private active-folder snapshot = %#v error=%v", presentations, err)
+	}
+}
+
+// TestCabinPresentationVariantRetainsPinnedGenerationIntegration proves that
+// immutable presentation bytes remain readable across generation advancement
+// and soft deletion, while the ordinary current snapshot remains fail-closed.
+func TestCabinPresentationVariantRetainsPinnedGenerationIntegration(t *testing.T) {
+	databaseURL := os.Getenv("MEDIA_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("MEDIA_TEST_DATABASE_URL is not configured")
+	}
+	databaseURL = testsupport.NewMigratedMediaDatabase(t, databaseURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer database.Close()
+	repository := NewRepository(database.Pool)
+
+	cabinID := uuid.MustParse("51000000-0000-4000-8000-000000000001")
+	warehouseID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	command := createCommand(cabinID, warehouseID, media.KindImage, 0)
+	command.OwnerType = OwnerTypeCabin
+	asset, replayed, err := repository.CreateUpload(ctx, command)
+	if err != nil || replayed {
+		t.Fatalf("CreateUpload(cabin presentation) = %#v replayed:%v error:%v", asset, replayed, err)
+	}
+	if _, err := database.Pool.Exec(ctx, `update media_asset set
+		processing_status='READY',current_generation=1,next_generation=3,version=2,
+		source_version_id='presentation-source-v1',source_etag='presentation-source-etag',
+		source_checksum_sha256=$2,finalized_content_type='image/jpeg',
+		finalized_size_bytes=128,size_bytes=128 where media_id=$1`, asset.ID, command.ChecksumSHA256); err != nil {
+		t.Fatalf("prepare presentation asset: %v", err)
+	}
+	if _, err := database.Pool.Exec(ctx, `update media_cabin_photo
+		set media_generation=1 where cabin_id=$1 and media_id=$2`, cabinID, asset.ID); err != nil {
+		t.Fatalf("prepare presentation association: %v", err)
+	}
+	if _, err := database.Pool.Exec(ctx, `update media_cabin_photo_library
+		set cover_media_id=$2,active_gallery_folder_id=$3,version=1
+		where cabin_id=$1`, cabinID, asset.ID, command.FolderID); err != nil {
+		t.Fatalf("prepare presentation library: %v", err)
+	}
+	for _, generation := range []int{1, 2} {
+		if _, err := database.Pool.Exec(ctx, `insert into media_variant (
+			media_id,generation,variant,object_key,object_version_id,content_type,
+			size_bytes,width,height,checksum_sha256)
+		values ($1,$2,'SMALL',$3,$4,'image/webp',64,360,240,$5)`, asset.ID,
+			generation, "presentation/"+asset.ID.String()+"/"+strconv.Itoa(generation),
+			"presentation-v"+strconv.Itoa(generation), command.ChecksumSHA256); err != nil {
+			t.Fatalf("insert presentation generation %d: %v", generation, err)
+		}
+	}
+
+	var initial []CabinPresentationSnapshotRecord
+	if err := repository.ReadCabinPresentationSnapshots(ctx, warehouseID, []uuid.UUID{cabinID},
+		func(records []CabinPresentationSnapshotRecord) error {
+			initial = records
+			return nil
+		}); err != nil || len(initial) != 1 || len(initial[0].Photos) != 1 ||
+		initial[0].Photos[0].Generation != 1 || !initial[0].Photos[0].HasSmall {
+		t.Fatalf("initial current presentation snapshot = %#v error=%v", initial, err)
+	}
+
+	if _, err := database.Pool.Exec(ctx, `update media_asset
+		set current_generation=2,version=version+1 where media_id=$1`, asset.ID); err != nil {
+		t.Fatalf("advance presentation asset generation: %v", err)
+	}
+	if _, err := database.Pool.Exec(ctx, `update media_cabin_photo
+		set media_generation=2 where cabin_id=$1 and media_id=$2`, cabinID, asset.ID); err != nil {
+		t.Fatalf("advance presentation association generation: %v", err)
+	}
+	var advanced []CabinPresentationSnapshotRecord
+	if err := repository.ReadCabinPresentationSnapshots(ctx, warehouseID, []uuid.UUID{cabinID},
+		func(records []CabinPresentationSnapshotRecord) error {
+			advanced = records
+			return nil
+		}); err != nil || len(advanced) != 1 || len(advanced[0].Photos) != 1 ||
+		advanced[0].Photos[0].Generation != 2 {
+		t.Fatalf("advanced current presentation snapshot = %#v error=%v", advanced, err)
+	}
+
+	readVariant := func(label string, readCabinID, readWarehouseID, readMediaID uuid.UUID,
+		generation int, requestedVariant media.Variant, wantVersion string, wantErr error,
+	) {
+		t.Helper()
+		var selected VariantRecord
+		err := repository.ReadCabinPresentationVariant(ctx, readCabinID, readWarehouseID,
+			readMediaID, generation, requestedVariant, func(record VariantRecord) error {
+				selected = record
+				return nil
+			})
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("%s error = %v, want %v", label, err, wantErr)
+		}
+		if wantErr == nil && (selected.Variant != requestedVariant || selected.ObjectVersionID != wantVersion) {
+			t.Fatalf("%s selected variant = %#v, want %s/%s", label, selected, requestedVariant, wantVersion)
+		}
+	}
+	readVariant("historical generation after advance", cabinID, warehouseID, asset.ID,
+		1, media.VariantSmall, "presentation-v1", nil)
+	readVariant("wrong cabin", uuid.New(), warehouseID, asset.ID, 1, media.VariantSmall, "", ErrNotFound)
+	readVariant("wrong warehouse", cabinID, uuid.New(), asset.ID, 1, media.VariantSmall, "", ErrNotFound)
+	readVariant("wrong media", cabinID, warehouseID, uuid.New(), 1, media.VariantSmall, "", ErrNotFound)
+	readVariant("wrong generation", cabinID, warehouseID, asset.ID, 3, media.VariantSmall, "", ErrNotFound)
+	readVariant("wrong variant", cabinID, warehouseID, asset.ID, 1, media.VariantLarge, "", ErrNotFound)
+
+	if _, err := database.Pool.Exec(ctx, `update media_asset set
+		processing_status='DELETED',deleted_at=clock_timestamp() where media_id=$1`, asset.ID); err != nil {
+		t.Fatalf("soft-delete presentation asset: %v", err)
+	}
+	readVariant("historical generation after soft delete", cabinID, warehouseID, asset.ID,
+		1, media.VariantSmall, "presentation-v1", nil)
+	var deletedSnapshot []CabinPresentationSnapshotRecord
+	if err := repository.ReadCabinPresentationSnapshots(ctx, warehouseID, []uuid.UUID{cabinID},
+		func(records []CabinPresentationSnapshotRecord) error {
+			deletedSnapshot = records
+			return nil
+		}); err != nil || len(deletedSnapshot) != 1 || len(deletedSnapshot[0].Photos) != 0 ||
+		deletedSnapshot[0].PhotoCount != 0 {
+		t.Fatalf("deleted current presentation snapshot = %#v error=%v", deletedSnapshot, err)
 	}
 }
 

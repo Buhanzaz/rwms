@@ -12,34 +12,24 @@ import {
   ArrowDown01Icon,
   ArrowRight01Icon,
   Add01Icon,
-  AiChat02Icon,
   ChartIncreaseIcon,
   CheckmarkCircle02Icon,
-  Clock01Icon,
   ClipboardCheckIcon,
   ClipboardListIcon,
-  ClipboardPenLineIcon,
   DeliveryReturn01Icon,
   DeliverySent01Icon,
   Exchange01Icon,
   DashboardSquare01Icon,
   GaugeIcon,
   HammerIcon,
-  KanbanIcon,
   Loading03Icon,
-  Logout03Icon,
   PackageSearchIcon,
-  Settings02Icon,
-  UserGroupIcon,
   WarehouseIcon,
   WasteIcon,
   Wrench01Icon,
 } from "@hugeicons/core-free-icons"
 import { useWarehouse } from "@/hooks/use-warehouse"
-import { isGlobalAdministrator } from "@/features/auth/auth-model"
 import { useAuth } from "@/features/auth/use-auth"
-import { ORDERS_NAVIGATION } from "@/features/orders/permissions/orders-permissions"
-import { CLIENTS_NAVIGATION } from "@/features/clients/clients-navigation"
 import {
   INVENTORY_QUERY_KEY,
   getActiveInventory,
@@ -49,6 +39,10 @@ import {
 import { getInventoryActor } from "@/features/inventory/inventory-access"
 import type { InventoryActorSnapshot } from "@/features/inventory/model/inventory"
 import { cn } from "@/lib/utils"
+import {
+  PanelSidebarMenuLink,
+  PanelSidebarShell,
+} from "@/components/panel-sidebar-shell"
 
 import {
   Select,
@@ -63,12 +57,9 @@ import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover"
 
 import {
   Sidebar,
-  SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
-  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -104,6 +95,11 @@ const navGroups: SidebarNavGroup[] = [
         url: "/kpi",
         icon: ChartIncreaseIcon,
       },
+      {
+        title: "Работа с претензиями",
+        url: "/claims",
+        icon: ClipboardCheckIcon,
+      },
     ],
   },
   {
@@ -124,16 +120,6 @@ const navGroups: SidebarNavGroup[] = [
   {
     title: "Логистика",
     items: [
-      {
-        title: "Доска логистики",
-        url: "/logistics/board",
-        icon: KanbanIcon,
-      },
-      {
-        title: "Задания",
-        url: "/logistics/order-tasks",
-        icon: ClipboardCheckIcon,
-      },
       {
         title: "Возврат из аренды",
         url: "/logistics/returns",
@@ -165,11 +151,6 @@ const navGroups: SidebarNavGroup[] = [
         icon: Wrench01Icon,
       },
       {
-        title: "Перемещение",
-        url: "/logistics/tasks",
-        icon: KanbanIcon,
-      },
-      {
         title: "Доска задач",
         url: "/task-board",
         icon: GaugeIcon,
@@ -180,49 +161,6 @@ const navGroups: SidebarNavGroup[] = [
         icon: HammerIcon,
       },
     ],
-  },
-]
-
-const settingsNavItems: SidebarNavItem[] = [
-  {
-    title: "Бронирование и чат",
-    url: "/settings/rental",
-    icon: Clock01Icon,
-  },
-  {
-    title: "Склады",
-    url: "/settings/warehouses",
-    icon: WarehouseIcon,
-  },
-  {
-    title: "Настройки бытовок",
-    url: "/settings/cabins",
-    icon: Settings02Icon,
-  },
-  {
-    title: "KPI",
-    url: "/settings/kpi",
-    icon: ChartIncreaseIcon,
-  },
-  {
-    title: "Пользователи",
-    url: "/settings/users",
-    icon: UserGroupIcon,
-  },
-  {
-    title: "Настройка смет и ремонтов",
-    url: "/settings/estimates-repairs",
-    icon: ClipboardPenLineIcon,
-  },
-  {
-    title: "Настройка Доски задач",
-    url: "/settings/task-board",
-    icon: KanbanIcon,
-  },
-  {
-    title: "Настройки логистики",
-    url: "/settings/logistics",
-    icon: Exchange01Icon,
   },
 ]
 
@@ -245,29 +183,6 @@ function isActiveUrl(currentPath: string, url: string) {
   }
 
   return currentPath.startsWith(url)
-}
-
-function RwmsLogoMark() {
-  return (
-    <span
-      data-testid="rwms-logo-mark"
-      aria-hidden="true"
-      className="flex aspect-square size-8 shrink-0 items-center justify-center rounded-lg bg-[#1775a7] text-white group-data-[collapsible=icon]:size-9"
-    >
-      <svg
-        viewBox="0 0 32 32"
-        fill="none"
-        className="size-5"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <path d="M5.5 8.5 16 3l10.5 5.5v15L16 29 5.5 23.5v-15Z" />
-        <path d="m5.5 8.5 10.5 5.75 10.5-5.75M16 14.25V29" />
-      </svg>
-    </span>
-  )
 }
 
 function SidebarInlineNavItem({
@@ -535,7 +450,7 @@ function InventorySidebarMenu({
       aria-haspopup={collapsed ? "menu" : undefined}
       onClick={() => setMenuVisibility(!menuOpen)}
       tooltip="Инвентаризация"
-      className="h-10 py-1 group-data-[collapsible=icon]:w-[42px]!"
+      className="h-9 group-data-[collapsible=icon]:w-[42px]!"
     >
       <span className="flex size-8 shrink-0 items-center justify-center group-data-[collapsible=icon]:size-9">
         <HugeiconsIcon icon={ClipboardCheckIcon} strokeWidth={2} />
@@ -731,7 +646,7 @@ function WriteOffsSidebarMenu({
       aria-haspopup={collapsed ? "menu" : undefined}
       onClick={toggleMenu}
       tooltip="Списание"
-      className="h-10 py-1 group-data-[collapsible=icon]:w-[42px]!"
+      className="h-9 group-data-[collapsible=icon]:w-[42px]!"
     >
       <span className="flex size-8 shrink-0 items-center justify-center group-data-[collapsible=icon]:size-9">
         <HugeiconsIcon icon={WasteIcon} strokeWidth={2} />
@@ -774,118 +689,18 @@ function WriteOffsSidebarMenu({
   )
 }
 
-function OrdersSidebarMenu({
-  currentPath,
-  onNavigate,
-}: {
-  currentPath: string
-  onNavigate: () => void
-}) {
-  return (
-    <SidebarMenuItem>
-      <SidebarMenuButton
-        asChild
-        isActive={isActiveUrl(currentPath, ORDERS_NAVIGATION.listPath)}
-        tooltip={ORDERS_NAVIGATION.rootLabel}
-        className="h-10 py-1"
-      >
-        <Link to={ORDERS_NAVIGATION.listPath} onClick={onNavigate}>
-          <span className="flex size-8 shrink-0 items-center justify-center group-data-[collapsible=icon]:size-9">
-            <HugeiconsIcon icon={ClipboardListIcon} strokeWidth={2} />
-          </span>
-          <span>{ORDERS_NAVIGATION.rootLabel}</span>
-        </Link>
-      </SidebarMenuButton>
-    </SidebarMenuItem>
-  )
-}
-
-function AssistantSidebarMenu({
-  currentPath,
-  onNavigate,
-}: {
-  currentPath: string
-  onNavigate: () => void
-}) {
-  return (
-    <SidebarMenuItem>
-      <SidebarMenuButton
-        asChild
-        isActive={isActiveUrl(currentPath, "/assistant")}
-        tooltip="Чат"
-        className="h-10 py-1"
-      >
-        <Link to="/assistant" onClick={onNavigate}>
-          <span className="flex size-8 shrink-0 items-center justify-center group-data-[collapsible=icon]:size-9">
-            <HugeiconsIcon icon={AiChat02Icon} strokeWidth={2} />
-          </span>
-          <span>Чат</span>
-        </Link>
-      </SidebarMenuButton>
-    </SidebarMenuItem>
-  )
-}
-
-function ClientsSidebarMenu({
-  currentPath,
-  onNavigate,
-}: {
-  currentPath: string
-  onNavigate: () => void
-}) {
-  return (
-    <>
-      <SidebarMenuItem>
-        <SidebarMenuButton
-          asChild
-          isActive={isActiveUrl(currentPath, CLIENTS_NAVIGATION.listPath)}
-          tooltip="Клиенты"
-          className="h-10 py-1"
-        >
-          <Link to={CLIENTS_NAVIGATION.listPath} onClick={onNavigate}>
-            <span className="flex size-8 shrink-0 items-center justify-center group-data-[collapsible=icon]:size-9">
-              <HugeiconsIcon icon={UserGroupIcon} strokeWidth={2} />
-            </span>
-            <span>Клиенты</span>
-          </Link>
-        </SidebarMenuButton>
-      </SidebarMenuItem>
-    </>
-  )
-}
-
-export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
+export function AppSidebar({
+  collapsible = "icon",
+  ...props
+}: ComponentProps<typeof Sidebar>) {
   const location = useLocation()
   const { selectedWarehouse } = useWarehouse()
   const { currentUser, logout } = useAuth()
   const { isMobile, setOpenMobile, state } = useSidebar()
-  const sidebarCollapsed = !isMobile && state === "collapsed"
-  const isSettingsActive = isActiveUrl(location.pathname, "/settings")
-  const [settingsMenuOpenState, setSettingsMenuOpenState] = useState(() => ({
-    sidebarCollapsed,
-    open: isSettingsActive && !sidebarCollapsed,
-  }))
-  const settingsMenuOpen =
-    settingsMenuOpenState.sidebarCollapsed === sidebarCollapsed &&
-    settingsMenuOpenState.open
+  const sidebarCollapsed =
+    collapsible !== "none" && !isMobile && state === "collapsed"
   const [writeOffsResetKey, setWriteOffsResetKey] = useState(0)
   const [inventoryResetKey, setInventoryResetKey] = useState(0)
-  const visibleSettingsNavItems = settingsNavItems.filter((item) => {
-    if (item.url === "/settings/warehouses") {
-      return currentUser?.globalRole === "SYSTEM_ADMIN"
-    }
-
-    if (item.url === "/settings/rental") {
-      return (
-        currentUser !== null && isGlobalAdministrator(currentUser.globalRole)
-      )
-    }
-
-    return (
-      item.url !== "/settings/users" ||
-      (currentUser !== null && isGlobalAdministrator(currentUser.globalRole))
-    )
-  })
 
   function closeSidebarAfterNavigation() {
     if (isMobile) {
@@ -894,248 +709,78 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
   }
 
   function handleNavigationClick() {
-    setSettingsMenuOpenState({ sidebarCollapsed, open: false })
     setWriteOffsResetKey((current) => current + 1)
     setInventoryResetKey((current) => current + 1)
     closeSidebarAfterNavigation()
   }
 
-  function handleSettingsNavigationClick() {
-    setSettingsMenuOpenState({ sidebarCollapsed, open: false })
-    closeSidebarAfterNavigation()
-  }
-
-  function setSettingsMenuVisibility(next: boolean) {
-    if (next) {
-      setWriteOffsResetKey((current) => current + 1)
-      setInventoryResetKey((current) => current + 1)
-    }
-
-    setSettingsMenuOpenState({ sidebarCollapsed, open: next })
-  }
-
-  function toggleSettingsMenu() {
-    setSettingsMenuVisibility(!settingsMenuOpen)
-  }
-
-  function renderSettingsMenuItems(flyout: boolean) {
-    return visibleSettingsNavItems.map((item) => {
-      const isActive = isActiveUrl(location.pathname, item.url)
-
-      return flyout ? (
-        <SidebarFlyoutNavItem
-          key={item.title}
-          item={item}
-          isActive={isActive}
-          onNavigate={handleSettingsNavigationClick}
-        />
-      ) : (
-        <SidebarInlineNavItem
-          key={item.title}
-          item={item}
-          isActive={isActive}
-          onNavigate={handleSettingsNavigationClick}
-        />
-      )
-    })
-  }
-
-  const settingsMenuButton = (
-    <SidebarMenuButton
-      type="button"
-      isActive={settingsMenuOpen || isSettingsActive}
-      aria-controls={
-        sidebarCollapsed ? "settings-submenu-flyout" : "settings-submenu"
-      }
-      aria-expanded={settingsMenuOpen}
-      aria-haspopup={sidebarCollapsed ? "menu" : undefined}
-      onClick={toggleSettingsMenu}
-      tooltip="Настройки"
-      className="h-10 py-1 group-data-[collapsible=icon]:w-[42px]!"
-    >
-      <span className="flex size-8 shrink-0 items-center justify-center group-data-[collapsible=icon]:size-9">
-        <HugeiconsIcon icon={Settings02Icon} strokeWidth={2} />
-      </span>
-      <span>Настройки</span>
-      <HugeiconsIcon
-        icon={settingsMenuOpen ? ArrowDown01Icon : ArrowRight01Icon}
-        strokeWidth={2}
-        className="ml-auto transition-transform group-data-[collapsible=icon]:hidden"
-      />
-    </SidebarMenuButton>
-  )
-
   return (
-    <Sidebar {...props} collapsible="icon">
-      <SidebarHeader className="h-(--header-height) shrink-0 justify-center px-2 py-0">
-        <SidebarMenu className="h-full">
-          <SidebarMenuItem className="flex h-full items-center">
-            <SidebarMenuButton asChild className="h-full">
-              <Link to="/" onClick={handleNavigationClick}>
-                <RwmsLogoMark />
+    <PanelSidebarShell
+      {...props}
+      collapsible={collapsible}
+      ariaLabel="BLOCKBOX: Панель WMS"
+      caption="Панель WMS"
+      brandTo="/"
+      onBrandClick={handleNavigationClick}
+      onLogout={() => void logout()}
+    >
+      <WarehouseSelector collapsed={sidebarCollapsed} />
 
-                <span className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate text-[15px] font-bold tracking-[-0.01em]">
-                    RWMS panel
-                  </span>
-                </span>
-              </Link>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarHeader>
+      {navGroups.map((group, index) => (
+        <Fragment key={group.title}>
+          <SidebarGroup>
+            <SidebarGroupLabel>{group.title}</SidebarGroupLabel>
 
-      <SidebarContent className="gap-1">
-        <WarehouseSelector collapsed={sidebarCollapsed} />
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {group.items.map((item) => (
+                  <PanelSidebarMenuLink
+                    key={item.title}
+                    title={item.title}
+                    to={item.url}
+                    icon={item.icon}
+                    isActive={isActiveUrl(location.pathname, item.url)}
+                    onNavigate={handleNavigationClick}
+                  />
+                ))}
 
-        <SidebarGroup className="mt-2 py-0">
-          <SidebarGroupLabel>Аренда</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <AssistantSidebarMenu
-                currentPath={location.pathname}
-                onNavigate={handleNavigationClick}
-              />
-              <ClientsSidebarMenu
-                currentPath={location.pathname}
-                onNavigate={handleNavigationClick}
-              />
-              <OrdersSidebarMenu
-                currentPath={location.pathname}
-                onNavigate={handleNavigationClick}
-              />
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+                {group.title === "Имущество" ? (
+                  <>
+                    <InventorySidebarMenu
+                      key={`${selectedWarehouse?.id}:${location.pathname}:${inventoryResetKey}`}
+                      currentPath={location.pathname}
+                      warehouseId={selectedWarehouse?.id ?? null}
+                      actor={
+                        selectedWarehouse
+                          ? getInventoryActor(currentUser, selectedWarehouse.id)
+                          : null
+                      }
+                      collapsed={sidebarCollapsed}
+                      onOpen={() => {
+                        setWriteOffsResetKey((current) => current + 1)
+                      }}
+                      onNavigate={closeSidebarAfterNavigation}
+                    />
+                    <WriteOffsSidebarMenu
+                      key={`${location.pathname}:${writeOffsResetKey}`}
+                      currentPath={location.pathname}
+                      collapsed={sidebarCollapsed}
+                      onOpen={() => {
+                        setInventoryResetKey((current) => current + 1)
+                      }}
+                      onNavigate={closeSidebarAfterNavigation}
+                    />
+                  </>
+                ) : null}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
 
-        <SidebarSeparator className="mr-0! ml-[18px]! hidden w-4! group-data-[collapsible=icon]:block" />
-
-        {navGroups.map((group, index) => (
-          <Fragment key={group.title}>
-            <SidebarGroup>
-              <SidebarGroupLabel>{group.title}</SidebarGroupLabel>
-
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  {group.items.map((item) => {
-                    return (
-                      <SidebarMenuItem key={item.title}>
-                        <SidebarMenuButton
-                          asChild
-                          isActive={isActiveUrl(location.pathname, item.url)}
-                          tooltip={item.title}
-                          className="h-10 py-1"
-                        >
-                          <Link to={item.url} onClick={handleNavigationClick}>
-                            <span className="flex size-8 shrink-0 items-center justify-center group-data-[collapsible=icon]:size-9">
-                              <HugeiconsIcon icon={item.icon} strokeWidth={2} />
-                            </span>
-                            <span>{item.title}</span>
-                          </Link>
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    )
-                  })}
-
-                  {group.title === "Имущество" ? (
-                    <>
-                      <InventorySidebarMenu
-                        key={`${selectedWarehouse?.id}:${location.pathname}:${inventoryResetKey}`}
-                        currentPath={location.pathname}
-                        warehouseId={selectedWarehouse?.id ?? null}
-                        actor={
-                          selectedWarehouse
-                            ? getInventoryActor(
-                                currentUser,
-                                selectedWarehouse.id
-                              )
-                            : null
-                        }
-                        collapsed={sidebarCollapsed}
-                        onOpen={() => {
-                          setSettingsMenuOpenState({
-                            sidebarCollapsed,
-                            open: false,
-                          })
-                          setWriteOffsResetKey((current) => current + 1)
-                        }}
-                        onNavigate={closeSidebarAfterNavigation}
-                      />
-                      <WriteOffsSidebarMenu
-                        key={`${location.pathname}:${writeOffsResetKey}`}
-                        currentPath={location.pathname}
-                        collapsed={sidebarCollapsed}
-                        onOpen={() => {
-                          setSettingsMenuOpenState({
-                            sidebarCollapsed,
-                            open: false,
-                          })
-                          setInventoryResetKey((current) => current + 1)
-                        }}
-                        onNavigate={closeSidebarAfterNavigation}
-                      />
-                    </>
-                  ) : null}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-
-            {index < navGroups.length - 1 ? (
-              <SidebarSeparator className="mr-0! ml-[18px]! hidden w-4! group-data-[collapsible=icon]:block" />
-            ) : null}
-          </Fragment>
-        ))}
-      </SidebarContent>
-
-      <SidebarFooter>
-        <SidebarMenu>
-          {sidebarCollapsed ? (
-            <SidebarMenuItem>
-              <>
-                <SidebarCollapsedFlyout
-                  id="settings-submenu-flyout"
-                  title="Настройки"
-                  open={settingsMenuOpen}
-                  onOpenChange={setSettingsMenuVisibility}
-                  align="end"
-                  trigger={settingsMenuButton}
-                >
-                  {renderSettingsMenuItems(true)}
-                </SidebarCollapsedFlyout>
-                <SidebarCollapsedExpandIndicator />
-              </>
-            </SidebarMenuItem>
-          ) : (
-            <>
-              {settingsMenuOpen ? (
-                <SidebarMenuSub id="settings-submenu">
-                  {renderSettingsMenuItems(false)}
-                </SidebarMenuSub>
-              ) : null}
-              <SidebarMenuItem>{settingsMenuButton}</SidebarMenuItem>
-            </>
-          )}
-
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              type="button"
-              tooltip="Выйти"
-              className="h-10 py-1"
-              onClick={() => void logout()}
-            >
-              <span className="flex size-8 shrink-0 items-center justify-center group-data-[collapsible=icon]:size-9">
-                <HugeiconsIcon icon={Logout03Icon} strokeWidth={2} />
-              </span>
-              <span className="truncate">
-                {currentUser?.displayName || currentUser?.username || "Выйти"}
-              </span>
-              <span className="ml-auto text-xs text-muted-foreground">
-                Выйти
-              </span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarFooter>
-    </Sidebar>
+          {index < navGroups.length - 1 ? (
+            <SidebarSeparator className="mr-0! ml-[18px]! hidden w-4! group-data-[collapsible=icon]:block" />
+          ) : null}
+        </Fragment>
+      ))}
+    </PanelSidebarShell>
   )
 }

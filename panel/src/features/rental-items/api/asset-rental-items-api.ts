@@ -1,4 +1,10 @@
-import { ApiError, bearerRequest } from "@/lib/api-client"
+import {
+  ApiError,
+  apiErrorFromRequestFailure,
+  apiErrorFromResponse,
+  bearerRequest,
+  invalidApiResponseError,
+} from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 import {
   formatRentalItemContents,
@@ -17,6 +23,7 @@ const MISSING_ACCESS_TOKEN_MESSAGE =
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const SHA256_PATTERN = /^[0-9a-f]{64}$/
 
 const RENTAL_ITEM_STATUSES = new Set<RentalItemStatus>([
   "RENTED",
@@ -82,6 +89,59 @@ export type CreateAssetRentalItemInput = {
   passport?: UnknownRecord
   tags?: string[]
 }
+
+/** Source-photo proof sent before asset-service creates a held cabin. */
+export type RentalItemCreationPhotoManifestInput = Readonly<{
+  photoIndex: number
+  checksumSha256: string
+  contentType: "image/jpeg" | "image/png" | "image/webp"
+  contentLength: number
+}>
+
+/** Durable server manifest entry with the stable media upload identity. */
+export type RentalItemCreationPhotoManifestEntry =
+  RentalItemCreationPhotoManifestInput &
+    Readonly<{
+      uploadCommandId: string
+    }>
+
+/** Lifecycle states owned by the asset-service creation intent. */
+export type RentalItemCreationIntentState =
+  "PENDING" | "COMPLETED" | "ABANDONED"
+
+/** Durable asset-owned state used to resume or quarantine cabin creation. */
+export type RentalItemCreationIntent = Readonly<{
+  id: string
+  version: number
+  rentalItemId: string
+  warehouseId: string
+  state: RentalItemCreationIntentState
+  expectedPhotoCount: number
+  mediaFolderId: string
+  mediaCommandId: string
+  photoManifestSha256: string
+  photoManifest: readonly RentalItemCreationPhotoManifestEntry[]
+  coverMediaId: string | null
+  mediaProofSha256: string | null
+  createdAt: string
+  completedAt: string | null
+  abandonedAt: string | null
+}>
+
+/** Atomic response containing both the new cabin and its creation hold. */
+export type CreateAssetRentalItemWithPhotoIntentResult = Readonly<{
+  rentalItem: RentalItemDto
+  intent: RentalItemCreationIntent
+}>
+
+/** Bounded warehouse-scoped page of unfinished creation intents. */
+export type RentalItemCreationIntentPage = Readonly<{
+  content: readonly RentalItemCreationIntent[]
+  page: number
+  size: number
+  totalElements: number
+  totalPages: number
+}>
 
 export type UpdateAssetRentalItemPassportInput = {
   id: string
@@ -201,6 +261,10 @@ function isUuid(value: unknown): value is string {
 
 function isNonNegativeSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
 }
 
 function isNullableString(value: unknown): value is string | null {
@@ -505,8 +569,27 @@ function assetRentalItemsEndpoint() {
   return `${getGatewayRuntimeConfig().assetApiBaseUrl}/v1/rental-items`
 }
 
+function rentalItemCreationIntentsEndpoint() {
+  return `${getGatewayRuntimeConfig().assetApiBaseUrl}/v1/rental-item-creation-intents`
+}
+
 function itemEndpoint(id: string) {
   return `${assetRentalItemsEndpoint()}/${encodeURIComponent(id)}`
+}
+
+function assetRentalItemCreatePayload(input: CreateAssetRentalItemInput) {
+  return {
+    warehouseId: input.warehouseId,
+    number: input.number,
+    rentalTypeId: input.rentalTypeId,
+    dimensionId: input.dimensionId,
+    finishingId: input.finishingId,
+    category: input.category,
+    characteristicIds: input.characteristicIds,
+    linoleum: input.linoleum,
+    passport: input.passport ?? {},
+    tags: input.tags ?? [],
+  }
 }
 
 function cabinSettingsEndpoint() {
@@ -623,6 +706,174 @@ function parsePage(value: unknown): PageResponse<RentalItemDto> {
 
   return {
     content: content.map(mapAssetRentalItem),
+    page,
+    size,
+    totalElements,
+    totalPages,
+  }
+}
+
+function parseRentalItemCreationPhotoManifestEntry(
+  value: unknown,
+  expectedIndex: number
+): RentalItemCreationPhotoManifestEntry {
+  if (!isRecord(value)) {
+    throw new Error(INVALID_RESPONSE_MESSAGE)
+  }
+
+  const {
+    photoIndex,
+    uploadCommandId,
+    checksumSha256,
+    contentType,
+    contentLength,
+  } = value
+  if (
+    photoIndex !== expectedIndex ||
+    !isUuid(uploadCommandId) ||
+    typeof checksumSha256 !== "string" ||
+    !SHA256_PATTERN.test(checksumSha256) ||
+    (contentType !== "image/jpeg" &&
+      contentType !== "image/png" &&
+      contentType !== "image/webp") ||
+    !isPositiveSafeInteger(contentLength)
+  ) {
+    throw new Error(INVALID_RESPONSE_MESSAGE)
+  }
+
+  return {
+    photoIndex,
+    uploadCommandId,
+    checksumSha256,
+    contentType,
+    contentLength,
+  }
+}
+
+function parseRentalItemCreationIntentState(
+  value: unknown
+): RentalItemCreationIntentState {
+  if (value === "PENDING" || value === "COMPLETED" || value === "ABANDONED") {
+    return value
+  }
+  throw new Error(INVALID_RESPONSE_MESSAGE)
+}
+
+function parseRentalItemCreationIntent(
+  value: unknown
+): RentalItemCreationIntent {
+  if (!isRecord(value)) {
+    throw new Error(INVALID_RESPONSE_MESSAGE)
+  }
+
+  const {
+    id,
+    version,
+    rentalItemId,
+    warehouseId,
+    state: rawState,
+    expectedPhotoCount,
+    mediaFolderId,
+    mediaCommandId,
+    photoManifestSha256,
+    photoManifest: rawManifest,
+    coverMediaId,
+    mediaProofSha256,
+    createdAt,
+    completedAt,
+    abandonedAt,
+  } = value
+  if (
+    !isUuid(id) ||
+    !isNonNegativeSafeInteger(version) ||
+    !isUuid(rentalItemId) ||
+    !isUuid(warehouseId) ||
+    !isPositiveSafeInteger(expectedPhotoCount) ||
+    expectedPhotoCount > 20 ||
+    !isUuid(mediaFolderId) ||
+    !isUuid(mediaCommandId) ||
+    typeof photoManifestSha256 !== "string" ||
+    !SHA256_PATTERN.test(photoManifestSha256) ||
+    !Array.isArray(rawManifest) ||
+    rawManifest.length !== expectedPhotoCount ||
+    !(coverMediaId === null || isUuid(coverMediaId)) ||
+    !(
+      mediaProofSha256 === null ||
+      (typeof mediaProofSha256 === "string" &&
+        SHA256_PATTERN.test(mediaProofSha256))
+    ) ||
+    !isIsoDateTime(createdAt) ||
+    !(completedAt === null || isIsoDateTime(completedAt)) ||
+    !(abandonedAt === null || isIsoDateTime(abandonedAt))
+  ) {
+    throw new Error(INVALID_RESPONSE_MESSAGE)
+  }
+
+  const state = parseRentalItemCreationIntentState(rawState)
+  if (
+    (state === "PENDING" &&
+      (completedAt !== null ||
+        abandonedAt !== null ||
+        coverMediaId !== null)) ||
+    (state === "COMPLETED" &&
+      (completedAt === null ||
+        abandonedAt !== null ||
+        coverMediaId === null)) ||
+    (state === "ABANDONED" &&
+      (completedAt !== null || abandonedAt === null || coverMediaId !== null))
+  ) {
+    throw new Error(INVALID_RESPONSE_MESSAGE)
+  }
+
+  return {
+    id,
+    version,
+    rentalItemId,
+    warehouseId,
+    state,
+    expectedPhotoCount,
+    mediaFolderId,
+    mediaCommandId,
+    photoManifestSha256,
+    photoManifest: rawManifest.map((entry, index) =>
+      parseRentalItemCreationPhotoManifestEntry(entry, index)
+    ),
+    coverMediaId: coverMediaId ?? null,
+    mediaProofSha256,
+    createdAt,
+    completedAt,
+    abandonedAt,
+  }
+}
+
+function parseRentalItemCreationIntentPage(
+  value: unknown,
+  expectedWarehouseId: string
+): RentalItemCreationIntentPage {
+  if (!isRecord(value)) {
+    throw new Error(INVALID_RESPONSE_MESSAGE)
+  }
+
+  const { content, page, size, totalElements, totalPages } = value
+  if (
+    !Array.isArray(content) ||
+    !isNonNegativeSafeInteger(page) ||
+    !isPositiveSafeInteger(size) ||
+    !isNonNegativeSafeInteger(totalElements) ||
+    !isNonNegativeSafeInteger(totalPages)
+  ) {
+    throw new Error(INVALID_RESPONSE_MESSAGE)
+  }
+
+  const parsedContent = content.map(parseRentalItemCreationIntent)
+  if (
+    parsedContent.some((intent) => intent.warehouseId !== expectedWarehouseId)
+  ) {
+    throw new Error(INVALID_RESPONSE_MESSAGE)
+  }
+
+  return {
+    content: parsedContent,
     page,
     size,
     totalElements,
@@ -791,21 +1042,122 @@ export async function createAssetRentalItem(params: {
       {
         method: "POST",
         headers: { "Idempotency-Key": params.idempotencyKey },
-        body: JSON.stringify({
-          warehouseId: params.input.warehouseId,
-          number: params.input.number,
-          rentalTypeId: params.input.rentalTypeId,
-          dimensionId: params.input.dimensionId,
-          finishingId: params.input.finishingId,
-          category: params.input.category,
-          characteristicIds: params.input.characteristicIds,
-          linoleum: params.input.linoleum,
-          passport: params.input.passport ?? {},
-          tags: params.input.tags ?? [],
-        }),
+        body: JSON.stringify(assetRentalItemCreatePayload(params.input)),
       }
     )
     return mapAssetRentalItem(response)
+  } catch (error) {
+    return mapConflict(error)
+  }
+}
+
+/** Creates a held cabin and its durable mandatory-photo intent atomically. */
+export async function createAssetRentalItemWithPhotoIntent(params: {
+  accessToken: string | null
+  idempotencyKey: string
+  input: CreateAssetRentalItemInput
+  photoManifest: readonly RentalItemCreationPhotoManifestInput[]
+}): Promise<CreateAssetRentalItemWithPhotoIntentResult> {
+  try {
+    const response = await bearerRequest<unknown>(
+      requireAccessToken(params.accessToken),
+      rentalItemCreationIntentsEndpoint(),
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": params.idempotencyKey },
+        body: JSON.stringify({
+          rentalItem: assetRentalItemCreatePayload(params.input),
+          photoManifest: params.photoManifest,
+        }),
+      }
+    )
+    if (!isRecord(response)) {
+      throw new Error(INVALID_RESPONSE_MESSAGE)
+    }
+    return {
+      rentalItem: mapAssetRentalItem(response.rentalItem),
+      intent: parseRentalItemCreationIntent(response.intent),
+    }
+  } catch (error) {
+    return mapConflict(error)
+  }
+}
+
+export function rentalItemCreationIntentsQueryKey(warehouseId: string) {
+  return ["rental-item-creation-intents", warehouseId] as const
+}
+
+/** Lists durable unfinished cabin-creation work for one warehouse. */
+export async function listPendingRentalItemCreationIntents(params: {
+  accessToken: string | null
+  warehouseId: string
+  page?: number
+  size?: number
+}): Promise<RentalItemCreationIntentPage> {
+  const response = await bearerRequest<unknown>(
+    requireAccessToken(params.accessToken),
+    appendQuery(rentalItemCreationIntentsEndpoint(), {
+      warehouseId: params.warehouseId,
+      page: params.page ?? 0,
+      size: params.size ?? 50,
+    })
+  )
+  return parseRentalItemCreationIntentPage(response, params.warehouseId)
+}
+
+/** Reads one intent after a conflict or a lost command response. */
+export async function getRentalItemCreationIntent(
+  accessToken: string | null,
+  intentId: string
+): Promise<RentalItemCreationIntent> {
+  const response = await bearerRequest<unknown>(
+    requireAccessToken(accessToken),
+    `${rentalItemCreationIntentsEndpoint()}/${encodeURIComponent(intentId)}`
+  )
+  return parseRentalItemCreationIntent(response)
+}
+
+/** Completes a pending intent only after asset-service proves READY media. */
+export async function completeRentalItemCreationIntent(params: {
+  accessToken: string | null
+  intentId: string
+  expectedVersion: number
+  idempotencyKey: string
+}): Promise<RentalItemCreationIntent> {
+  try {
+    const response = await bearerRequest<unknown>(
+      requireAccessToken(params.accessToken),
+      `${rentalItemCreationIntentsEndpoint()}/${encodeURIComponent(params.intentId)}/complete`,
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": params.idempotencyKey },
+        body: JSON.stringify({ expectedVersion: params.expectedVersion }),
+      }
+    )
+    return parseRentalItemCreationIntent(response)
+  } catch (error) {
+    return mapConflict(error)
+  }
+}
+
+/** Quarantines an incomplete cabin without deleting the cabin or its media. */
+export async function abandonRentalItemCreationIntent(params: {
+  accessToken: string | null
+  intentId: string
+  expectedVersion: number
+  idempotencyKey: string
+}): Promise<RentalItemCreationIntent> {
+  try {
+    const response = await bearerRequest<unknown>(
+      requireAccessToken(params.accessToken),
+      `${rentalItemCreationIntentsEndpoint()}/${encodeURIComponent(params.intentId)}/abandon`,
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": params.idempotencyKey },
+        body: JSON.stringify({ expectedVersion: params.expectedVersion }),
+      }
+    )
+    return parseRentalItemCreationIntent(response)
   } catch (error) {
     return mapConflict(error)
   }
@@ -1983,54 +2335,36 @@ function parseHtmlImport(value: unknown): HtmlImport {
   }
 }
 
-async function readHtmlImportProblemDetail(response: Response) {
-  const fallback = `Запрос завершился с ошибкой ${response.status}`
-  const contentType = response.headers.get("content-type") ?? ""
-
-  if (!contentType.includes("json")) {
-    return { message: (await response.text()).trim() || fallback, code: null }
-  }
-
-  try {
-    const body = (await response.json()) as {
-      detail?: unknown
-      message?: unknown
-      title?: unknown
-      code?: unknown
-    }
-    const detail = body.detail ?? body.message ?? body.title
-    return {
-      message: typeof detail === "string" && detail.trim() ? detail : fallback,
-      code:
-        typeof body.code === "string" && body.code.trim() ? body.code : null,
-    }
-  } catch {
-    return { message: fallback, code: null }
-  }
-}
-
 async function multipartHtmlImportRequest(
   accessToken: string,
   input: string,
   body: FormData,
   idempotencyKey: string
 ) {
-  const response = await fetch(input, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${accessToken}`,
-      "Idempotency-Key": idempotencyKey,
-    },
-    body,
-  })
-
-  if (!response.ok) {
-    const problem = await readHtmlImportProblemDetail(response)
-    throw new ApiError(problem.message, response.status, problem.code)
+  let response: Response
+  try {
+    response = await fetch(input, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${accessToken}`,
+        "Idempotency-Key": idempotencyKey,
+      },
+      body,
+    })
+  } catch (error) {
+    throw apiErrorFromRequestFailure(error)
   }
 
-  return (await response.json()) as unknown
+  if (!response.ok) {
+    throw await apiErrorFromResponse(response)
+  }
+
+  try {
+    return (await response.json()) as unknown
+  } catch (error) {
+    throw invalidApiResponseError(error)
+  }
 }
 
 export function htmlImportsQueryKey(warehouseId: string) {

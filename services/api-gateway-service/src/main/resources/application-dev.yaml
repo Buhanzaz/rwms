@@ -10,6 +10,7 @@ rwms:
       media-uri: ${MEDIA_SERVICE_URL:http://127.0.0.1:8085}
       inventory-uri: ${INVENTORY_SERVICE_URL:http://127.0.0.1:8089}
       logistics-uri: ${LOGISTICS_SERVICE_URL:http://127.0.0.1:8090}
+      logistics-planner-uri: ${LOGISTICS_PLANNER_URL:http://127.0.0.1:8000}
       dossier-uri: ${DOSSIER_SERVICE_URL:http://127.0.0.1:8091}
       analytics-uri: ${ANALYTICS_SERVICE_URL:http://127.0.0.1:8093}
       assistant-uri: ${ASSISTANT_SERVICE_URL:http://127.0.0.1:8092}

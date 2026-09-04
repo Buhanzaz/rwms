@@ -5,5 +5,7 @@ public enum CustomerSessionState {
   ACTIVE,
   SELECTION_PENDING,
   CHECKOUT_PENDING,
-  BOOKED
+  BOOKED,
+  CANCEL_PENDING,
+  CANCELLED
 }

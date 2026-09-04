@@ -1,25 +1,20 @@
 package dev.buhanzaz.rwms.client.ui
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.ArrowDropUp
-import androidx.compose.material.icons.filled.BatterySaver
+import androidx.compose.material.icons.filled.Apartment
 import androidx.compose.material.icons.filled.Book
-import androidx.compose.material.icons.filled.BrightnessAuto
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.HomeWork
 import androidx.compose.material.icons.filled.LightMode
-import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.CircularProgressIndicator
@@ -34,7 +29,6 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -42,10 +36,8 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -62,14 +54,6 @@ import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
-
-/** Signed-out login destination. */
-@Serializable
-internal data object LoginRoute : NavKey
-
-/** Signed-out registration destination. */
-@Serializable
-internal data object RegistrationRoute : NavKey
 
 /** Free-cabin catalog destination. */
 @Serializable
@@ -113,44 +97,48 @@ fun CustomerApp(viewModel: CustomerAppViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val appearanceStore = remember(context.applicationContext) { CustomerAppearanceStore(context) }
-    val appearanceMode by appearanceStore.mode.collectAsStateWithLifecycle(CustomerAppearanceMode.SYSTEM)
+    val appearanceMode by appearanceStore.mode.collectAsStateWithLifecycle(CustomerAppearanceMode.LIGHT)
     val appearanceScope = rememberCoroutineScope()
     CustomerTheme(appearanceMode = appearanceMode) {
-        CustomerAppContent(
-            state = state,
-            onLogin = viewModel::login,
-            onRegister = viewModel::register,
-            onLogout = viewModel::logout,
-            onSaveProfile = viewModel::saveProfile,
-            onAvatarSelected = viewModel::uploadProfileAvatar,
-            onWarehouse = viewModel::selectWarehouse,
-            onEnsureActiveInquiry = viewModel::ensureActiveInquiry,
-            onFilters = viewModel::applyFilters,
-            onLoadMoreCabins = viewModel::loadMoreCabins,
-            onToggleCabin = viewModel::toggleCabin,
-            onToggleRentalCabin = viewModel::toggleRentalTermCabin,
-            onBulkRentalMonths = viewModel::setRentalMonths,
-            onCabinRentalMonths = viewModel::setCabinRentalMonths,
-            onEquipment = viewModel::setEquipment,
-            onAddress = viewModel::setAddress,
-            onPoint = viewModel::setMapPoint,
-            onConfirmedLocation = viewModel::confirmDeliveryLocation,
-            onSiteCabinCapacity = viewModel::setSiteCabinCapacity,
-            onPrivateSiteAccess = viewModel::setPrivateSiteAccessConfirmed,
-            onFailedTripAcknowledgement = viewModel::setFailedTripChargeAcknowledged,
-            onSearchSlots = viewModel::searchSlots,
-            onSelectSlot = viewModel::selectSlot,
-            onHoldSlot = viewModel::holdSelectedSlot,
-            onCheckout = viewModel::checkout,
-            onRefreshBookings = viewModel::refreshBookings,
-            onAcceptCabin = viewModel::acceptCabin,
-            onReportProblem = viewModel::reportCabinProblem,
-            onDismissError = viewModel::dismissError,
-            appearanceMode = appearanceMode,
-            onAppearanceMode = { mode ->
-                appearanceScope.launch { appearanceStore.setMode(mode) }
-            },
-        )
+        CustomerStoreLaunchGate {
+            CustomerAppContent(
+                state = state,
+                onLogin = viewModel::login,
+                onRegister = viewModel::register,
+                onLogout = viewModel::logout,
+                onSaveProfile = viewModel::saveProfile,
+                onAvatarSelected = viewModel::uploadProfileAvatar,
+                onWarehouse = viewModel::selectWarehouse,
+                onEnsureActiveInquiry = viewModel::ensureActiveInquiry,
+                onFilters = viewModel::applyFilters,
+                onLoadMoreCabins = viewModel::loadMoreCabins,
+                onToggleCabin = viewModel::toggleCabin,
+                onCabinRentalMonths = viewModel::setCabinRentalMonths,
+                onEquipment = viewModel::setEquipment,
+                onAddress = viewModel::setAddress,
+                onPoint = viewModel::setMapPoint,
+                onConfirmedLocation = viewModel::confirmDeliveryLocation,
+                onSiteCabinCapacity = viewModel::setSiteCabinCapacity,
+                onPrivateSiteAccess = viewModel::setPrivateSiteAccessConfirmed,
+                onFailedTripAcknowledgement = viewModel::setFailedTripChargeAcknowledged,
+                onSearchSlots = viewModel::searchSlots,
+                onSelectSlot = viewModel::selectSlot,
+                onHoldSlot = viewModel::holdSelectedSlot,
+                onCheckout = viewModel::checkout,
+                onCancelBooking = viewModel::cancelBooking,
+                onOpenBookingReschedule = viewModel::openBookingReschedule,
+                onSelectBookingRescheduleSlot = viewModel::selectBookingRescheduleSlot,
+                onConfirmBookingReschedule = viewModel::confirmBookingReschedule,
+                onDismissBookingReschedule = viewModel::dismissBookingReschedule,
+                onAcceptCabin = viewModel::acceptCabin,
+                onReportProblem = viewModel::reportCabinProblem,
+                onDismissError = viewModel::dismissError,
+                appearanceMode = appearanceMode,
+                onAppearanceMode = { mode ->
+                    appearanceScope.launch { appearanceStore.setMode(mode) }
+                },
+            )
+        }
     }
 }
 
@@ -159,8 +147,8 @@ fun CustomerApp(viewModel: CustomerAppViewModel = hiltViewModel()) {
 @Suppress("LongParameterList")
 fun CustomerAppContent(
     state: CustomerAppState,
-    onLogin: (String, String) -> Unit = { _, _ -> },
-    onRegister: (String, String, String) -> Unit = { _, _, _ -> },
+    onLogin: (String, String, Boolean) -> Unit = { _, _, _ -> },
+    onRegister: (String, String, String, String, String) -> Unit = { _, _, _, _, _ -> },
     onLogout: () -> Unit = {},
     onSaveProfile: (dev.buhanzaz.rwms.client.data.CustomerProfile) -> Unit = {},
     onAvatarSelected: (android.net.Uri) -> Unit = {},
@@ -169,8 +157,6 @@ fun CustomerAppContent(
     onFilters: (dev.buhanzaz.rwms.client.data.CabinFilters) -> Unit = {},
     onLoadMoreCabins: () -> Unit = {},
     onToggleCabin: (String) -> Unit = {},
-    onToggleRentalCabin: (String) -> Unit = {},
-    onBulkRentalMonths: (Long) -> Unit = {},
     onCabinRentalMonths: (String, Long) -> Unit = { _, _ -> },
     onEquipment: (String, dev.buhanzaz.rwms.client.data.AvailableEquipment, Long) -> Unit = { _, _, _ -> },
     onAddress: (String) -> Unit = {},
@@ -183,21 +169,36 @@ fun CustomerAppContent(
     onSelectSlot: (String) -> Unit = {},
     onHoldSlot: () -> Unit = {},
     onCheckout: () -> Unit = {},
-    onRefreshBookings: () -> Unit = {},
+    onCancelBooking: (String) -> Unit = {},
+    onOpenBookingReschedule: (String) -> Unit = {},
+    onSelectBookingRescheduleSlot: (String) -> Unit = {},
+    onConfirmBookingReschedule: () -> Unit = {},
+    onDismissBookingReschedule: () -> Unit = {},
     onAcceptCabin: (String, String, List<dev.buhanzaz.rwms.client.data.CustomerSignatureStroke>) -> Unit = { _, _, _ -> },
     onReportProblem: (String, String, String, String, List<dev.buhanzaz.rwms.client.data.CustomerEvidenceFile>) -> Unit = { _, _, _, _, _ -> },
     onDismissError: () -> Unit = {},
-    appearanceMode: CustomerAppearanceMode = CustomerAppearanceMode.SYSTEM,
+    appearanceMode: CustomerAppearanceMode = CustomerAppearanceMode.LIGHT,
     onAppearanceMode: (CustomerAppearanceMode) -> Unit = {},
 ) {
     when (state) {
         CustomerAppState.Loading -> LoadingCustomerScreen("Проверяем безопасную сессию…")
-        is CustomerAppState.SignedOut -> SignedOutNavigation(state, onLogin, onRegister)
+        is CustomerAppState.SignedOut -> CustomerAuthenticationScreen(
+            message = state.message,
+            submitting = state.submitting,
+            onLogin = onLogin,
+            onRegister = onRegister,
+        )
         is CustomerAppState.Ready -> {
             val workflow = state.workflow
             when {
                 workflow.bootstrapping -> LoadingCustomerScreen("Загружаем данные клиента…")
-                workflow.profile == null -> ProfileFormScreen(null, workflow.busy, onSaveProfile)
+                workflow.profile == null -> ProfileFormScreen(
+                    existing = null,
+                    busy = workflow.busy,
+                    onSave = onSaveProfile,
+                    errorMessage = workflow.error,
+                    registrationDraft = workflow.registrationProfileDraft,
+                )
                 workflow.selectedWarehouse == null -> WarehouseScreen(
                     warehouses = workflow.warehouses,
                     busy = workflow.busy,
@@ -216,8 +217,6 @@ fun CustomerAppContent(
                     onFilters = onFilters,
                     onLoadMoreCabins = onLoadMoreCabins,
                     onToggleCabin = onToggleCabin,
-                    onToggleRentalCabin = onToggleRentalCabin,
-                    onBulkRentalMonths = onBulkRentalMonths,
                     onCabinRentalMonths = onCabinRentalMonths,
                     onEquipment = onEquipment,
                     onAddress = onAddress,
@@ -230,7 +229,11 @@ fun CustomerAppContent(
                     onSelectSlot = onSelectSlot,
                     onHoldSlot = onHoldSlot,
                     onCheckout = onCheckout,
-                    onRefreshBookings = onRefreshBookings,
+                    onCancelBooking = onCancelBooking,
+                    onOpenBookingReschedule = onOpenBookingReschedule,
+                    onSelectBookingRescheduleSlot = onSelectBookingRescheduleSlot,
+                    onConfirmBookingReschedule = onConfirmBookingReschedule,
+                    onDismissBookingReschedule = onDismissBookingReschedule,
                     onAcceptCabin = onAcceptCabin,
                     onReportProblem = onReportProblem,
                     onDismissError = onDismissError,
@@ -240,41 +243,6 @@ fun CustomerAppContent(
             }
         }
     }
-}
-
-@Composable
-private fun SignedOutNavigation(
-    state: CustomerAppState.SignedOut,
-    onLogin: (String, String) -> Unit,
-    onRegister: (String, String, String) -> Unit,
-) {
-    val backStack = rememberNavBackStack(LoginRoute)
-    NavDisplay(
-        backStack = backStack,
-        onBack = { backStack.removeLastOrNull() },
-        entryDecorators = listOf(
-            rememberSaveableStateHolderNavEntryDecorator(),
-            rememberViewModelStoreNavEntryDecorator(),
-        ),
-        entryProvider = entryProvider {
-            entry<LoginRoute> {
-                LoginScreen(
-                    message = state.message,
-                    submitting = state.submitting,
-                    onLogin = onLogin,
-                    onRegister = { backStack.add(RegistrationRoute) },
-                )
-            }
-            entry<RegistrationRoute> {
-                RegistrationScreen(
-                    message = state.message,
-                    submitting = state.submitting,
-                    onSubmit = onRegister,
-                    onBack = { backStack.removeLastOrNull() },
-                )
-            }
-        },
-    )
 }
 
 @Composable
@@ -289,8 +257,6 @@ private fun SignedInNavigation(
     onFilters: (dev.buhanzaz.rwms.client.data.CabinFilters) -> Unit,
     onLoadMoreCabins: () -> Unit,
     onToggleCabin: (String) -> Unit,
-    onToggleRentalCabin: (String) -> Unit,
-    onBulkRentalMonths: (Long) -> Unit,
     onCabinRentalMonths: (String, Long) -> Unit,
     onEquipment: (String, dev.buhanzaz.rwms.client.data.AvailableEquipment, Long) -> Unit,
     onAddress: (String) -> Unit,
@@ -303,7 +269,11 @@ private fun SignedInNavigation(
     onSelectSlot: (String) -> Unit,
     onHoldSlot: () -> Unit,
     onCheckout: () -> Unit,
-    onRefreshBookings: () -> Unit,
+    onCancelBooking: (String) -> Unit,
+    onOpenBookingReschedule: (String) -> Unit,
+    onSelectBookingRescheduleSlot: (String) -> Unit,
+    onConfirmBookingReschedule: () -> Unit,
+    onDismissBookingReschedule: () -> Unit,
     onAcceptCabin: (String, String, List<dev.buhanzaz.rwms.client.data.CustomerSignatureStroke>) -> Unit,
     onReportProblem: (String, String, String, String, List<dev.buhanzaz.rwms.client.data.CustomerEvidenceFile>) -> Unit,
     onDismissError: () -> Unit,
@@ -315,7 +285,6 @@ private fun SignedInNavigation(
     val coroutineScope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val current = backStack.lastOrNull()
-    var appearanceExpanded by remember { mutableStateOf(false) }
 
     fun topLevel(route: NavKey) {
         backStack.clear()
@@ -341,84 +310,60 @@ private fun SignedInNavigation(
         drawerState = drawerState,
         gesturesEnabled = !current.isDeliveryFlowRoute(),
         drawerContent = {
-            ModalDrawerSheet(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                Text("RWMS Клиент", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(24.dp))
-                NavigationDrawerItem(
-                    label = { Text("Свободные бытовки") },
-                    selected = current is CatalogRoute,
-                    onClick = { topLevel(CatalogRoute) },
-                    icon = { Icon(Icons.Default.HomeWork, contentDescription = null) },
-                )
-                NavigationDrawerItem(
-                    label = { Text("Корзина (${state.selectedCabinIds.size})") },
-                    selected = current is CartRoute || current.isDeliveryFlowRoute(),
-                    onClick = { topLevel(CartRoute) },
-                    icon = { Icon(Icons.Default.ShoppingCart, contentDescription = null) },
-                )
-                NavigationDrawerItem(
-                    label = { Text("Мои заказы") },
-                    selected = current is BookingsRoute,
-                    onClick = { topLevel(BookingsRoute) },
-                    icon = { Icon(Icons.Default.Book, contentDescription = null) },
-                )
-                NavigationDrawerItem(
-                    label = { Text("Профиль") },
-                    selected = current is ProfileRoute,
-                    onClick = { topLevel(ProfileRoute) },
-                    icon = { Icon(Icons.Default.Person, contentDescription = null) },
-                )
-                HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-                NavigationDrawerItem(
-                    label = {
-                        Column {
-                            Text("Оформление")
-                            Text(
-                                appearanceMode.title,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    },
-                    selected = false,
-                    onClick = { appearanceExpanded = !appearanceExpanded },
-                    icon = { Icon(Icons.Default.Palette, contentDescription = null) },
-                    badge = {
-                        Icon(
-                            if (appearanceExpanded) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
-                            contentDescription = if (appearanceExpanded) "Свернуть выбор темы" else "Выбрать тему",
-                        )
-                    },
-                    modifier = Modifier.testTag("appearance-selector"),
-                )
-                AnimatedVisibility(visible = appearanceExpanded) {
-                    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
-                        CustomerAppearanceMode.entries.forEach { mode ->
-                            NavigationDrawerItem(
-                                label = {
-                                    Column {
-                                        Text(mode.title)
-                                        Text(
-                                            mode.description,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                },
-                                selected = appearanceMode == mode,
-                                onClick = { onAppearanceMode(mode) },
-                                icon = { Icon(mode.appearanceIcon(), contentDescription = null) },
-                                badge = {
-                                    RadioButton(
-                                        selected = appearanceMode == mode,
-                                        onClick = null,
-                                    )
-                                },
-                                modifier = Modifier.testTag("appearance-mode-${mode.name.lowercase()}"),
-                            )
-                        }
-                    }
+            ModalDrawerSheet(modifier = Modifier.fillMaxHeight()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    Text("RWMS Клиент", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(24.dp))
+                    NavigationDrawerItem(
+                        label = { Text("Аренда") },
+                        selected = current is CatalogRoute,
+                        onClick = { topLevel(CatalogRoute) },
+                        icon = { Icon(Icons.Default.HomeWork, contentDescription = null) },
+                    )
+                    NavigationDrawerItem(
+                        label = { Text("Корзина (${state.selectedCabinIds.size})") },
+                        selected = current is CartRoute || current.isDeliveryFlowRoute(),
+                        onClick = { topLevel(CartRoute) },
+                        icon = { Icon(Icons.Default.ShoppingCart, contentDescription = null) },
+                    )
+                    NavigationDrawerItem(
+                        label = { Text("Мои заказы") },
+                        selected = current is BookingsRoute,
+                        onClick = { topLevel(BookingsRoute) },
+                        icon = { Icon(Icons.Default.Book, contentDescription = null) },
+                    )
+                    NavigationDrawerItem(
+                        label = { Text("Профиль") },
+                        selected = current is ProfileRoute,
+                        onClick = { topLevel(ProfileRoute) },
+                        icon = { Icon(Icons.Default.Person, contentDescription = null) },
+                    )
+                    NavigationDrawerItem(
+                        label = { Text("Доступ для юрлиц") },
+                        selected = false,
+                        onClick = {
+                            coroutineScope.launch {
+                                drawerState.close()
+                                snackbar.showSnackbar("Доступ для юридических лиц появится позже")
+                            }
+                        },
+                        icon = { Icon(Icons.Default.Apartment, contentDescription = null) },
+                        modifier = Modifier.testTag("legal-entity-access-placeholder"),
+                    )
+                    HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                    val nextAppearanceMode = appearanceMode.toggle()
+                    NavigationDrawerItem(
+                        label = { Text(appearanceMode.toggleActionTitle) },
+                        selected = false,
+                        onClick = { onAppearanceMode(nextAppearanceMode) },
+                        icon = { Icon(nextAppearanceMode.appearanceIcon(), contentDescription = null) },
+                        modifier = Modifier.testTag("appearance-toggle"),
+                    )
+                    NavigationDrawerItem(label = { Text("Выйти") }, selected = false, onClick = onLogout)
                 }
-                NavigationDrawerItem(label = { Text("Выйти") }, selected = false, onClick = onLogout)
             }
         },
     ) {
@@ -444,7 +389,6 @@ private fun SignedInNavigation(
                                 state = state,
                                 onMenu = { coroutineScope.launch { drawerState.open() } },
                                 onProfile = { topLevel(ProfileRoute) },
-                                onCart = { topLevel(CartRoute) },
                                 onWarehouse = onWarehouse,
                                 onFilters = onFilters,
                                 onLoadMore = onLoadMoreCabins,
@@ -465,9 +409,8 @@ private fun SignedInNavigation(
                                     }
                                 },
                                 onToggleCabin = onToggleCabin,
-                                onToggleRentalCabin = onToggleRentalCabin,
-                                onBulkRentalMonths = onBulkRentalMonths,
                                 onCabinRentalMonths = onCabinRentalMonths,
+                                onEquipment = onEquipment,
                             )
                         }
                         entry<DeliveryMapRoute> {
@@ -526,7 +469,14 @@ private fun SignedInNavigation(
                                 busy = state.busy,
                                 onMenu = { coroutineScope.launch { drawerState.open() } },
                                 onProfile = { topLevel(ProfileRoute) },
-                                onRefresh = onRefreshBookings,
+                                rescheduleBookingId = state.bookingRescheduleId,
+                                rescheduleSlots = state.bookingRescheduleSlots,
+                                selectedRescheduleSlotId = state.selectedBookingRescheduleSlotId,
+                                onCancel = onCancelBooking,
+                                onOpenReschedule = onOpenBookingReschedule,
+                                onSelectRescheduleSlot = onSelectBookingRescheduleSlot,
+                                onConfirmReschedule = onConfirmBookingReschedule,
+                                onDismissReschedule = onDismissBookingReschedule,
                                 onAccept = onAcceptCabin,
                                 onReport = onReportProblem,
                             )
@@ -536,7 +486,6 @@ private fun SignedInNavigation(
                                 existing = state.profile,
                                 busy = state.busy,
                                 onSave = onSaveProfile,
-                                selectedWarehouse = state.selectedWarehouse,
                                 onAvatarSelected = onAvatarSelected,
                                 onBack = { topLevel(CatalogRoute) },
                             )
@@ -583,12 +532,12 @@ private fun CustomerAdaptiveNavigation(
         val expanded = maxWidth >= 840.dp
         if (expanded) {
             Row(Modifier.fillMaxSize()) {
-                NavigationRail {
+                NavigationRail(modifier = Modifier.fillMaxHeight()) {
                     NavigationRailItem(
                         selected = current is CatalogRoute,
                         onClick = onCatalog,
-                        icon = { Icon(Icons.Default.HomeWork, contentDescription = "Бытовки") },
-                        label = { Text("Бытовки") },
+                        icon = { Icon(Icons.Default.HomeWork, contentDescription = "Аренда") },
+                        label = { Text("Аренда") },
                     )
                     NavigationRailItem(
                         selected = current is CartRoute || current.isDeliveryFlowRoute(),
@@ -613,7 +562,7 @@ private fun CustomerAdaptiveNavigation(
                         selected = current is CatalogRoute,
                         onClick = onCatalog,
                         icon = { Icon(Icons.Default.HomeWork, contentDescription = null) },
-                        label = { Text("Бытовки") },
+                        label = { Text("Аренда") },
                     )
                     NavigationBarItem(
                         selected = current is CartRoute || current.isDeliveryFlowRoute(),
@@ -643,10 +592,8 @@ internal fun shouldShowGlobalBusyOverlay(isBusy: Boolean, current: NavKey?): Boo
     isBusy && current !is DeliveryMapRoute
 
 private fun CustomerAppearanceMode.appearanceIcon(): ImageVector = when (this) {
-    CustomerAppearanceMode.SYSTEM -> Icons.Default.BrightnessAuto
     CustomerAppearanceMode.LIGHT -> Icons.Default.LightMode
     CustomerAppearanceMode.DARK -> Icons.Default.DarkMode
-    CustomerAppearanceMode.BATTERY -> Icons.Default.BatterySaver
 }
 
 @Composable

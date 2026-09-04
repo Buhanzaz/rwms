@@ -1,11 +1,12 @@
 openapi: 3.1.1
 info:
   title: RWMS Assistant Service API
-  version: 1.0.0
+  version: 1.1.0
   description: |
-    Stateful, owner-scoped rental conversations. The service owns conversation
-    history and tool audit records only. Rental inquiries and cabin availability
-    remain delegated to logistics-service through private service calls.
+    Stateful rental-manager conversations scoped by the signed manager subject.
+    The service owns conversation history and tool audit records only. Rental
+    inquiries and cabin availability remain delegated to logistics-service through
+    private service calls.
 servers:
   - url: /
 security:
@@ -14,11 +15,12 @@ paths:
   /api/assistant/v1/conversations:
     get:
       operationId: listAssistantConversations
-      summary: List active and archived conversations owned by the current rental user
+      summary: List conversations owned by the current rental manager
       description: |
-        Without a filter, returns the owner's normal conversation history. With rentalOrderId,
-        returns only the one active conversation linked to that order, allowing the order screen
-        to open the existing chat without scanning client-side history.
+        Without a filter, returns the manager's conversation history.
+        With rentalOrderId, returns only the one active conversation linked to that order inside
+        the signed manager boundary, allowing the order screen to open the existing chat
+        without scanning client-side history.
       parameters:
         - name: rentalOrderId
           in: query
@@ -26,7 +28,7 @@ paths:
           schema: { type: string, format: uuid }
       responses:
         "200":
-          description: Active conversations in most-recent activity order.
+          description: Active and archived conversations in most-recent activity order.
           content:
             application/json:
               schema:
@@ -37,6 +39,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "502":
+          $ref: "#/components/responses/LogisticsUnavailable"
     post:
       operationId: createAssistantConversation
       summary: Create or replay a conversation and its delegated rental inquiry
@@ -56,7 +60,7 @@ paths:
               $ref: "#/components/schemas/CreateConversationRequest"
       responses:
         "201":
-          description: Conversation created or replayed for its owner.
+          description: Conversation created or replayed for its signed manager owner.
           content:
             application/json:
               schema:
@@ -76,7 +80,7 @@ paths:
       - $ref: "#/components/parameters/ConversationId"
     get:
       operationId: getAssistantConversation
-      summary: Read one owner-scoped conversation and its persisted messages
+      summary: Read one manager-scoped conversation and its persisted messages
       responses:
         "200":
           description: Conversation detail.
@@ -90,9 +94,11 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/ConversationNotFound"
+        "502":
+          $ref: "#/components/responses/LogisticsUnavailable"
     delete:
       operationId: archiveAssistantConversation
-      summary: Archive one owner-scoped conversation
+      summary: Archive one manager-scoped conversation
       description: Archiving is idempotent and does not delete audit history.
       responses:
         "204":
@@ -192,6 +198,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/ConversationNotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /api/assistant/v1/conversations/{conversationId}/selection:
     parameters:
       - $ref: "#/components/parameters/ConversationId"
@@ -200,9 +208,9 @@ paths:
       operationId: replaceAssistantCabinSelection
       summary: Keep exactly the selected cabin IDs and immediately release removed holds
       description: >-
-        Delegates one owner-checked, idempotent replacement to logistics-service. An empty
-        rentalItemIds list releases the complete inquiry selection. Assistant-service stores no
-        independent availability or hold truth.
+        Delegates one owner-checked, idempotent replacement to logistics-service. An
+        empty rentalItemIds list releases the complete inquiry selection. Assistant-service
+        stores no independent availability or hold truth.
       requestBody:
         required: true
         content:
@@ -226,7 +234,10 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: Authenticated JWT with rentalAccess true.
+      description: |
+        JWT issued only to rwms-rental-manager-web or rwms-rental-manager-android with
+        principal_type USER, global_role RENTAL_MANAGER, rentalAccess true, rental.manage
+        scope. RWMS/admin scopes are rejected.
   parameters:
     ConversationId:
       name: conversationId
@@ -256,13 +267,13 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
     Forbidden:
-      description: The token has no rental access.
+      description: The token is not a dedicated rental-manager token.
       content:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
     ConversationNotFound:
-      description: The conversation is absent or is not owned by the caller.
+      description: The conversation is absent or is outside the caller's owner boundary.
       content:
         application/problem+json:
           schema:

@@ -3,10 +3,18 @@ import { useNavigate } from "react-router-dom"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { navigateAfterLogin } from "@/features/auth/auth-callback-navigation"
+import {
+  navigateAfterLogin,
+  toApplicationRouterPath,
+  toExternalApplicationPath,
+} from "@/features/auth/auth-callback-navigation"
 import { useAuth } from "@/features/auth/use-auth"
 
-export function AuthCallbackPage() {
+export function AuthCallbackPage({
+  applicationBasePath = "",
+}: {
+  applicationBasePath?: string
+}) {
   const navigate = useNavigate()
   const { completeLogin, beginLogin } = useAuth()
   const started = useRef(false)
@@ -20,7 +28,17 @@ export function AuthCallbackPage() {
     started.current = true
 
     void completeLogin()
-      .then((returnTo) => navigateAfterLogin(returnTo, navigate))
+      .then((returnTo) => {
+        const routerPath = toApplicationRouterPath(
+          returnTo,
+          applicationBasePath
+        )
+        if (applicationBasePath !== "") {
+          navigate(routerPath, { replace: true })
+          return
+        }
+        navigateAfterLogin(routerPath, navigate)
+      })
       .catch((callbackError: unknown) => {
         setError(
           callbackError instanceof Error
@@ -28,7 +46,7 @@ export function AuthCallbackPage() {
             : "Не удалось завершить вход."
         )
       })
-  }, [completeLogin, navigate])
+  }, [applicationBasePath, completeLogin, navigate])
 
   return (
     <main className="flex min-h-svh items-center justify-center bg-muted p-6">
@@ -39,7 +57,14 @@ export function AuthCallbackPage() {
         <CardContent className="flex flex-col gap-4 text-sm text-muted-foreground">
           {error ? <p role="alert">{error}</p> : <p>Проверяем сессию…</p>}
           {error ? (
-            <Button type="button" onClick={() => void beginLogin("/")}>
+            <Button
+              type="button"
+              onClick={() =>
+                void beginLogin(
+                  toExternalApplicationPath("/", applicationBasePath)
+                )
+              }
+            >
               Войти снова
             </Button>
           ) : null}

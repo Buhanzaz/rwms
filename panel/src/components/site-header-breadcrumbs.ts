@@ -14,14 +14,10 @@ const routeTitles = [
   { path: "/settings/task-board", title: "Настройка доски задач" },
   { path: "/settings/logistics", title: "Настройки логистики" },
   { path: "/settings/rental", title: "Бронирование и чат" },
-  { path: "/assistant", title: "Чат" },
   { path: "/booking", title: "Бронирование" },
   { path: "/warehouse", title: "Склад" },
   { path: "/equipment", title: "Доп. оборудование" },
   { path: "/inventory", title: "Инвентаризация" },
-  { path: "/logistics/order-tasks", title: "Задания" },
-  { path: "/logistics/board", title: "Доска логистики" },
-  { path: "/logistics/tasks", title: "Перемещение" },
   { path: "/logistics/returns", title: "Возврат из аренды" },
   { path: "/logistics/shipments", title: "Отгрузка в аренду" },
   { path: "/logistics/transfers", title: "Перемещения" },
@@ -53,8 +49,7 @@ export function resolveHeaderBreadcrumbs(
   pathname: string,
   search: string,
   rentalItemBreadcrumb: RentalItemHeaderBreadcrumb | null,
-  repairCabinNumber: string | null,
-  orderNumber: string | null = null
+  repairCabinNumber: string | null
 ): HeaderBreadcrumb[] {
   const searchParams = new URLSearchParams(search)
 
@@ -88,10 +83,6 @@ export function resolveHeaderBreadcrumbs(
 
   if (pathname === "/logistics/returns") {
     return [{ title: "Возврат из аренды" }]
-  }
-
-  if (pathname === "/logistics/order-tasks") {
-    return [{ title: "Задания" }]
   }
 
   if (pathname === "/logistics/shipments") {
@@ -185,25 +176,6 @@ export function resolveHeaderBreadcrumbs(
 
   if (pathname === "/repairs" && searchParams.get("create") === "1") {
     return [{ title: "Ремонты", to: "/repairs" }, { title: "Новое задание" }]
-  }
-
-  if (/^\/orders\/[0-9a-f-]{36}$/i.test(pathname)) {
-    return [
-      { title: "Заказы", to: "/orders" },
-      { title: orderNumber ?? "Заказ" },
-    ]
-  }
-
-  if (pathname.startsWith("/orders")) {
-    return [{ title: "Заказы", to: "/orders" }]
-  }
-
-  if (/^\/clients\/[0-9a-f-]{36}$/i.test(pathname)) {
-    return [{ title: "Клиенты", to: "/clients" }, { title: "Клиент" }]
-  }
-
-  if (pathname.startsWith("/clients")) {
-    return [{ title: "Клиенты", to: "/clients" }]
   }
 
   if (pathname === "/") {

@@ -117,7 +117,7 @@ class UserAdministrationServiceWarehouseValidationTest {
                 accessNotes,
                 responseMapper,
                 authorizationRevocations);
-        AuthSubject admin = subject("admin", 0);
+        AuthSubject admin = subject("admin", 0, UserGlobalRole.WMS_ADMIN);
         ReflectionTestUtils.setField(admin, "id", ADMIN_ID);
         when(profiles.findSubjectIdByUsername(any())).thenAnswer(invocation ->
                 "admin".equalsIgnoreCase(invocation.getArgument(0)) ? Optional.of(ADMIN_ID) : Optional.empty());
@@ -167,7 +167,8 @@ class UserAdministrationServiceWarehouseValidationTest {
     void knownAliasesAndCanonicalIdsConvergeBeforePersistence() {
         service.create(request(List.of(access(" SPB "), access(MSK.toString()))), actor);
 
-        verify(warehouseExistenceClient).requireActive(Set.of(SPB, MSK));
+        verify(warehouseExistenceClient)
+                .requireActive(Set.of(SPB, MSK));
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<WarehouseAccessWrite>> replacements = ArgumentCaptor.forClass(List.class);
         verify(projectionWriter).replaceAccesses(any(AuthSubject.class), replacements.capture());
@@ -230,7 +231,7 @@ class UserAdministrationServiceWarehouseValidationTest {
     @Test
     void failedBatchValidationCannotDeleteOrTouchExistingAccesses() {
         UUID userId = UUID.randomUUID();
-        AuthSubject user = subject("existing.user", 7);
+        AuthSubject user = subject("existing.user", 7, UserGlobalRole.VIEWER);
         ReflectionTestUtils.setField(user, "id", userId);
         when(subjects.findById(userId)).thenReturn(Optional.of(user));
         doThrow(new ResponseStatusException(HttpStatus.BAD_GATEWAY, "invalid upstream response"))
@@ -270,6 +271,8 @@ class UserAdministrationServiceWarehouseValidationTest {
                 null,
                 UserGlobalRole.VIEWER,
                 true,
+                null,
+                null,
                 requestedAccesses);
     }
 
@@ -278,6 +281,10 @@ class UserAdministrationServiceWarehouseValidationTest {
     }
 
     private AuthSubject subject(String username, int version) {
+        return subject(username, version, UserGlobalRole.SYSTEM_ADMIN);
+    }
+
+    private AuthSubject subject(String username, int version, UserGlobalRole globalRole) {
         var subject = new AuthSubject();
         subject.registerUser(
                 username,
@@ -286,8 +293,10 @@ class UserAdministrationServiceWarehouseValidationTest {
                 null,
                 null,
                 null,
-                UserGlobalRole.SYSTEM_ADMIN,
-                true);
+                globalRole,
+                true,
+                false,
+                globalRole.hasRentalAccessByDefault());
         ReflectionTestUtils.setField(subject, "version", version);
         return subject;
     }

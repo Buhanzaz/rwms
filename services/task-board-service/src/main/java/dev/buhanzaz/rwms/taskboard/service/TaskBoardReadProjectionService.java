@@ -12,6 +12,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -206,35 +207,121 @@ class TaskBoardReadProjectionService {
     List<BoardColumnDto> columns = new ArrayList<>(ordinary.columns());
     for (WorkQueue queue : queues.findAllActiveOrderedByWarehouseId(warehouseId)) {
       if (queue.isHidden() || queue.getPurpose() != QueuePurpose.LOGISTICS_DRIVER) continue;
-      List<QueueEntry> logisticsEntries =
-          activeEntries(queue).stream()
-              .filter(entry -> entry.getEntryType() == EntryType.REAL)
-              .filter(entry -> includesDriverLane(surface, entry.getTask().getLane()))
-              .filter(entry -> isVisibleToSurface(surface, entry, workerId))
-              .sorted(Comparator.comparingInt(QueueEntry::getQueuePosition))
-              .toList();
-      Map<UUID, TaskSourceReferenceDto> sources = sourceReferences(logisticsEntries);
-      Map<UUID, List<AssignmentDto>> assignmentsByEntry = assignmentDtos(logisticsEntries);
-      columns.add(
-          new BoardColumnDto(
-              queue.getId(),
-              queue.getVersion(),
-              queue.getName(),
-              queue.getType(),
-              queue.getPurpose(),
-              queue.getSortOrder(),
-              queue.getAvailableTaskLimit(),
-              queue.isWorkerFeedEnabled(),
-              logisticsEntries.stream()
-                  .map(
-                      entry ->
-                          dto(
-                              entry,
-                              sources.get(entry.getTask().getId()),
-                              assignmentsByEntry.getOrDefault(entry.getId(), List.of())))
-                  .toList()));
+      addDriverColumn(columns, surface, workerId, queue, activeEntries(queue), true);
+    }
+    if (surface == MobileTaskSurface.DRIVER) {
+      Map<UUID, List<QueueEntry>> remoteByQueue = new LinkedHashMap<>();
+      assignedDriverEntriesOutsideWarehouse(warehouseId, workerId).stream()
+          .filter(entry -> entry.getQueue() != null)
+          .forEach(
+              entry ->
+                  remoteByQueue
+                      .computeIfAbsent(entry.getQueue().getId(), ignored -> new ArrayList<>())
+                      .add(entry));
+      remoteByQueue.values().stream()
+          .sorted(
+              Comparator.comparing(
+                      (List<QueueEntry> values) ->
+                          values.getFirst().getTask().getWarehouseId().toString())
+                  .thenComparingInt(values -> values.getFirst().getQueue().getSortOrder())
+                  .thenComparing(values -> values.getFirst().getQueue().getId().toString()))
+          .forEach(
+              values ->
+                  addDriverColumn(
+                      columns,
+                      surface,
+                      workerId,
+                      values.getFirst().getQueue(),
+                      values,
+                      false));
     }
     return new TaskBoardSnapshot(warehouseId, columns);
+  }
+
+  /** Adds one physical driver queue after applying lane and exact native audience rules. */
+  private void addDriverColumn(
+      List<BoardColumnDto> columns,
+      MobileTaskSurface surface,
+      UUID workerId,
+      WorkQueue queue,
+      Collection<QueueEntry> candidates,
+      boolean includeEmpty) {
+    List<QueueEntry> logisticsEntries =
+        candidates.stream()
+            .filter(entry -> entry.getEntryType() == EntryType.REAL)
+            .filter(entry -> includesDriverLane(surface, entry.getTask().getLane()))
+            .filter(entry -> isVisibleToSurface(surface, entry, workerId))
+            .sorted(Comparator.comparingInt(QueueEntry::getQueuePosition))
+            .toList();
+    if (logisticsEntries.isEmpty() && !includeEmpty) return;
+    Map<UUID, TaskSourceReferenceDto> sources = sourceReferences(logisticsEntries);
+    Map<UUID, List<AssignmentDto>> assignmentsByEntry = assignmentDtos(logisticsEntries);
+    columns.add(
+        new BoardColumnDto(
+            queue.getId(),
+            queue.getVersion(),
+            queue.getName(),
+            queue.getType(),
+            queue.getPurpose(),
+            queue.getSortOrder(),
+            queue.getAvailableTaskLimit(),
+            queue.isWorkerFeedEnabled(),
+            logisticsEntries.stream()
+                .map(
+                    entry ->
+                        dto(
+                            entry,
+                            sources.get(entry.getTask().getId()),
+                            assignmentsByEntry.getOrDefault(entry.getId(), List.of())))
+                .toList()));
+  }
+
+  /**
+   * Loads only exact assigned driver work outside the JWT home warehouse.
+   *
+   * <p>Identity-free warehouse pool tasks are intentionally absent. The subsequent domain-level
+   * audience check remains authoritative for worker activity, qualification and assignment state.
+   */
+  private List<QueueEntry> assignedDriverEntriesOutsideWarehouse(
+      UUID homeWarehouseId, UUID workerId) {
+    List<UUID> entryIds =
+        jdbc.query(
+            """
+            select distinct entry.id
+              from queue_entry entry
+              join board_task task on task.id=entry.task_id
+              join work_queue queue on queue.id=entry.queue_id
+              join queue_definition definition on definition.id=queue.definition_id
+             where task.warehouse_id<>?
+               and task.status='ACTIVE'
+               and entry.status in ('WAITING','IN_PROGRESS','PAUSED')
+               and entry.entry_type='REAL'
+               and queue.warehouse_id=task.warehouse_id
+               and queue.active
+               and not queue.hidden
+               and definition.active
+               and definition.queue_purpose='LOGISTICS_DRIVER'
+               and (
+                 (task.driver_audience_mode='ASSIGNED_DRIVER'
+                  and task.planned_driver_worker_id=?)
+                 or exists (
+                   select 1
+                     from task_assignment assignment
+                    where assignment.queue_entry_id=entry.id
+                      and assignment.worker_id=?
+                      and assignment.status in ('ACTIVE','PAUSED')
+                 )
+               )
+             order by entry.id
+            """,
+            (result, row) -> result.getObject("id", UUID.class),
+            homeWarehouseId,
+            workerId,
+            workerId);
+    if (entryIds.isEmpty()) return List.of();
+    List<QueueEntry> result = new ArrayList<>();
+    entries.findAllById(entryIds).forEach(result::add);
+    return result;
   }
 
   /**

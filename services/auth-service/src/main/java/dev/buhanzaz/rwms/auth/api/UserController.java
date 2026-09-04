@@ -37,7 +37,8 @@ public class UserController {
      */
     @GetMapping("/actor-displays")
     List<ActorDisplayResponse> actorDisplays(
-            @RequestParam(name = "subjectId") List<UUID> subjectIds) {
-        return users.actorDisplays(subjectIds);
+            @RequestParam(name = "subjectId") List<UUID> subjectIds,
+            Authentication authentication) {
+        return users.actorDisplays(subjectIds, authentication);
     }
 }

@@ -8,6 +8,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import jakarta.persistence.Version;
 import jakarta.validation.constraints.Min;
 import java.math.BigDecimal;
@@ -21,12 +22,28 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.proxy.HibernateProxy;
 import org.hibernate.type.SqlTypes;
 
-/** JPA persistence model for Presentation Booking in the logistics-owned database. */
+/**
+ * Logistics-owned booking receipt and its bounded recovery state. Remote effects are attempted
+ * only under a short-lived random lease; terminal results clear that operational metadata.
+ */
 @Entity
-@Table(name = "presentation_booking")
+@Table(
+    name = "presentation_booking",
+    uniqueConstraints = {
+      @UniqueConstraint(
+          name = "uk_presentation_booking_idempotency",
+          columnNames = {"presentation_id", "idempotency_key"}),
+      @UniqueConstraint(
+          name = "uk_presentation_booking_revision",
+          columnNames = {"presentation_id", "presentation_revision"})
+    })
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class PresentationBooking {
+  private static final int MAXIMUM_RECOVERY_ATTEMPTS = 8;
+  private static final long FIRST_RECOVERY_DELAY_SECONDS = 2;
+  private static final long MAXIMUM_RECOVERY_DELAY_SECONDS = 300;
+
   @Id
   @GeneratedValue(strategy = GenerationType.UUID)
   @Column(name = "id", nullable = false)
@@ -98,6 +115,22 @@ public class PresentationBooking {
   @Column(name = "last_error_code", length = 64)
   private String lastErrorCode;
 
+  /** Earliest database time at which another recovery worker may claim this pending booking. */
+  @Column(name = "recovery_next_attempt_at")
+  private OffsetDateTime recoveryNextAttemptAt;
+
+  /** Random, single-use capability owned by the worker currently processing this booking. */
+  @Column(name = "recovery_lease_token")
+  private UUID recoveryLeaseToken;
+
+  /** Exclusive processing deadline after which another worker may recover an abandoned claim. */
+  @Column(name = "recovery_lease_until")
+  private OffsetDateTime recoveryLeaseUntil;
+
+  /** Terminal recovery timestamp for a booking that exhausted the bounded automatic retries. */
+  @Column(name = "recovery_quarantined_at")
+  private OffsetDateTime recoveryQuarantinedAt;
+
   @Column(name = "created_at", nullable = false)
   private OffsetDateTime createdAt;
 
@@ -134,12 +167,19 @@ public class PresentationBooking {
     booking.longitude = longitude;
     booking.additionalContactsJson = optionalJson(additionalContactsJson);
     booking.state = PresentationBookingState.PENDING;
-    booking.createdAt = Objects.requireNonNull(now, "now");
-    booking.updatedAt = now;
+    OffsetDateTime timestamp = Objects.requireNonNull(now, "now");
+    booking.recoveryNextAttemptAt = timestamp;
+    booking.createdAt = timestamp;
+    booking.updatedAt = timestamp;
     return booking;
   }
 
-  public void assignOrder(UUID nextOrderId, OffsetDateTime now) {
+  /**
+   * Attaches the idempotently created order while preserving the current recovery lease. Only the
+   * worker holding the exact unexpired claim may advance this pending booking.
+   */
+  public void assignOrder(UUID nextOrderId, UUID leaseToken, OffsetDateTime now) {
+    requireRecoveryClaim(leaseToken, now);
     UUID required = Objects.requireNonNull(nextOrderId, "orderId");
     if (orderId != null && !orderId.equals(required)) {
       throw new IllegalStateException("Booking already belongs to another order");
@@ -148,30 +188,105 @@ public class PresentationBooking {
     updatedAt = now;
   }
 
-  public void attempted(String errorCode, OffsetDateTime now) {
-    if (state != PresentationBookingState.PENDING) return;
-    attemptCount = Math.addExact(attemptCount, 1);
-    lastErrorCode = optionalCode(errorCode);
-    updatedAt = now;
+  /**
+   * Acquires one bounded recovery lease after the repository locked a due row with SKIP LOCKED.
+   */
+  public void claimRecovery(UUID leaseToken, OffsetDateTime leaseUntil, OffsetDateTime now) {
+    UUID requiredToken = Objects.requireNonNull(leaseToken, "leaseToken");
+    OffsetDateTime requiredUntil = Objects.requireNonNull(leaseUntil, "leaseUntil");
+    OffsetDateTime timestamp = Objects.requireNonNull(now, "now");
+    if (!requiredUntil.isAfter(timestamp)) {
+      throw new IllegalArgumentException("Recovery lease must expire after it starts");
+    }
+    if (!isRecoveryClaimable(timestamp)) {
+      throw new IllegalStateException("Booking recovery is not claimable");
+    }
+    recoveryLeaseToken = requiredToken;
+    recoveryLeaseUntil = requiredUntil;
+    updatedAt = timestamp;
   }
 
-  public void complete(OffsetDateTime now) {
+  /** Returns whether this pending row still belongs to the supplied unexpired lease capability. */
+  public boolean hasRecoveryClaim(UUID leaseToken, OffsetDateTime now) {
+    return state == PresentationBookingState.PENDING
+        && leaseToken != null
+        && leaseToken.equals(recoveryLeaseToken)
+        && recoveryLeaseUntil != null
+        && recoveryLeaseUntil.isAfter(Objects.requireNonNull(now, "now"));
+  }
+
+  /**
+   * Records one failed remote attempt, releases its lease and schedules bounded exponential
+   * backoff. The eighth failure quarantines the still-pending booking for operator recovery.
+   */
+  public void recoveryFailed(UUID leaseToken, String errorCode, OffsetDateTime now) {
+    requireRecoveryClaim(leaseToken, now);
+    attemptCount = Math.addExact(attemptCount, 1);
+    lastErrorCode = optionalCode(errorCode);
+    OffsetDateTime timestamp = Objects.requireNonNull(now, "now");
+    clearRecoveryLease();
+    if (attemptCount >= MAXIMUM_RECOVERY_ATTEMPTS) {
+      recoveryNextAttemptAt = null;
+      recoveryQuarantinedAt = timestamp;
+    } else {
+      recoveryNextAttemptAt = timestamp.plusSeconds(recoveryDelaySeconds(attemptCount));
+    }
+    updatedAt = timestamp;
+  }
+
+  /** Completes an exact leased recovery attempt and clears every retry/lease field. */
+  public void complete(UUID leaseToken, OffsetDateTime now) {
     if (state == PresentationBookingState.COMPLETED) return;
     if (state != PresentationBookingState.PENDING || orderId == null) {
       throw new IllegalStateException("Booking cannot be completed");
     }
+    requireRecoveryClaim(leaseToken, now);
     state = PresentationBookingState.COMPLETED;
     lastErrorCode = null;
+    clearRecoveryMetadata();
     completedAt = now;
     updatedAt = now;
   }
 
-  public void reject(String errorCode, OffsetDateTime now) {
+  /** Rejects an exact leased recovery attempt and clears every retry/lease field. */
+  public void reject(UUID leaseToken, String errorCode, OffsetDateTime now) {
     if (state != PresentationBookingState.PENDING) return;
+    requireRecoveryClaim(leaseToken, now);
     state = PresentationBookingState.REJECTED;
     lastErrorCode = optionalCode(errorCode);
+    clearRecoveryMetadata();
     completedAt = now;
     updatedAt = now;
+  }
+
+  private boolean isRecoveryClaimable(OffsetDateTime now) {
+    return state == PresentationBookingState.PENDING
+        && recoveryQuarantinedAt == null
+        && (recoveryNextAttemptAt == null || !recoveryNextAttemptAt.isAfter(now))
+        && (recoveryLeaseUntil == null || !recoveryLeaseUntil.isAfter(now));
+  }
+
+  private void requireRecoveryClaim(UUID leaseToken, OffsetDateTime now) {
+    if (!hasRecoveryClaim(leaseToken, now)) {
+      throw new IllegalStateException("Presentation booking recovery claim is no longer current");
+    }
+  }
+
+  private static long recoveryDelaySeconds(int failedAttempts) {
+    int exponent = Math.min(failedAttempts - 1, 30);
+    long delay = FIRST_RECOVERY_DELAY_SECONDS << exponent;
+    return Math.min(delay, MAXIMUM_RECOVERY_DELAY_SECONDS);
+  }
+
+  private void clearRecoveryLease() {
+    recoveryLeaseToken = null;
+    recoveryLeaseUntil = null;
+  }
+
+  private void clearRecoveryMetadata() {
+    recoveryNextAttemptAt = null;
+    recoveryQuarantinedAt = null;
+    clearRecoveryLease();
   }
 
   public boolean hasManagerAction(

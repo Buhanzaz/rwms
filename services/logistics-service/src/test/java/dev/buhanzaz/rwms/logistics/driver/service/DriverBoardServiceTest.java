@@ -3,8 +3,10 @@ package dev.buhanzaz.rwms.logistics.driver.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -117,7 +119,7 @@ class DriverBoardServiceTest {
   }
 
   @Test
-  void currentInboundMovedBackToDateCreatesDurableHoldAndRunsReservationRelease() {
+  void currentInboundMovedBackToDateReleasesItsPlaceAndRefillsImmediately() {
     DriverLogisticsTask task = scheduledTask();
     UUID allocationId = UUID.randomUUID();
     task.reserveRepairPlace(allocationId, 0);
@@ -134,7 +136,6 @@ class DriverBoardServiceTest {
     when(dependencies.moveDriverTask(
             task.getExternalTaskId(), 1, 0, "SCHEDULED", targetDate, 2, null))
         .thenReturn(moved);
-    when(dependencies.readRepairPlaces(warehouseId)).thenReturn(repairPlaces());
     doAnswer(
             invocation -> {
               LogisticsDependencyGateway.DriverBoardTask board = invocation.getArgument(1);
@@ -151,16 +152,73 @@ class DriverBoardServiceTest {
             })
         .when(workflowStore)
         .confirmStatus(task.getId(), moved);
+    doAnswer(
+            invocation -> {
+              LogisticsDependencyGateway.RepairPlaceAllocation released =
+                  invocation.getArgument(1);
+              task.releaseRepairPlaceReservation(released.id(), released.version());
+              return null;
+            })
+        .when(workflowStore)
+        .confirmReservationRelease(eq(task.getId()), any());
+    OffsetDateTime releasedAt = OffsetDateTime.now(ZoneOffset.UTC);
+    LogisticsDependencyGateway.RepairPlaceAllocation released =
+        new LogisticsDependencyGateway.RepairPlaceAllocation(
+            allocationId,
+            1,
+            warehouseId,
+            task.getRepairId(),
+            task.getCabinId(),
+            "RELEASED",
+            null,
+            null,
+            task.getPriority(),
+            releasedAt,
+            releasedAt);
+    when(workflowStore.nextWork(task.getId()))
+        .thenReturn(
+            Optional.of(
+                new DriverTaskWorkflowStore.ReservationReleaseWork(
+                    task.getId(),
+                    warehouseId,
+                    task.getRepairId(),
+                    allocationId,
+                    0)),
+            Optional.empty());
+    when(dependencies.transitionRepairPlace(
+            any(), eq(warehouseId), eq(task.getRepairId()), eq(0L), eq("release")))
+        .thenReturn(released);
+    DriverTaskProcessor immediateProcessor =
+        new DriverTaskProcessor(
+            workflowStore, dependencies, mock(DriverTransferExecutionService.class));
+    DriverBoardService immediateService =
+        new DriverBoardService(
+            tasks,
+            dependencies,
+            workflowStore,
+            immediateProcessor,
+            scheduler,
+            driverTaskService,
+            tripProjection,
+            transactionLock,
+            capacityFence);
 
-    service.move(
+    immediateService.move(
         task.getExternalTaskId(),
         new MoveDriverBoardTaskRequest(
             warehouseId, 1L, 0L, DriverBoardLane.SCHEDULED, targetDate, 2));
 
-    assertThat(task.hasManualPromotionHold()).isTrue();
+    assertThat(task.hasPendingRepairPlaceRelease()).isFalse();
+    assertThat(task.getRepairPlaceAllocationId()).isNull();
+    assertThat(task.getRepairPlaceAllocationVersion()).isNull();
     assertThat(task.getPlanningMode()).isEqualTo(DriverTaskPlanningMode.FIXED_DATE);
     assertThat(task.getFixedDateLowerBound()).isEqualTo(targetDate);
-    verify(processor).processUntilIdle(task.getId());
+    var immediateRefill = inOrder(dependencies, scheduler);
+    immediateRefill
+        .verify(dependencies)
+        .transitionRepairPlace(
+            any(), eq(warehouseId), eq(task.getRepairId()), eq(0L), eq("release"));
+    immediateRefill.verify(scheduler).reconcileAndPromote(warehouseId);
     verify(tasks).saveAndFlush(task);
   }
 
@@ -582,7 +640,7 @@ class DriverBoardServiceTest {
     when(dependencies.readRepairPlaces(warehouseId))
         .thenReturn(
             new LogisticsDependencyGateway.RepairPlaceProjection(
-                warehouseId, 6, 5, 1, 0, 0, 5, false, java.util.List.of(reserved)));
+                warehouseId, 6, 1, 0, 0, 5, false, java.util.List.of(reserved)));
     when(dependencies.readCapitalRepairs(warehouseId, 0, 200))
         .thenReturn(
             new LogisticsDependencyGateway.CapitalRepairPage(java.util.List.of(), 0, 200, 0));
@@ -659,7 +717,6 @@ class DriverBoardServiceTest {
             new LogisticsDependencyGateway.RepairPlaceProjection(
                 warehouseId,
                 6,
-                5,
                 1,
                 1,
                 1,
@@ -869,6 +926,6 @@ class DriverBoardServiceTest {
 
   private LogisticsDependencyGateway.RepairPlaceProjection repairPlaces() {
     return new LogisticsDependencyGateway.RepairPlaceProjection(
-        warehouseId, 6, 5, 0, 0, 0, 6, false, java.util.List.of());
+        warehouseId, 6, 0, 0, 0, 6, false, java.util.List.of());
   }
 }

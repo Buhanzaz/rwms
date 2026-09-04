@@ -9,6 +9,10 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.google.common.truth.Truth.assertThat
+import dev.buhanzaz.rwms.client.data.CabinFacetWarehouse
+import dev.buhanzaz.rwms.client.data.CabinFacets
+import dev.buhanzaz.rwms.client.data.CabinFilters
+import dev.buhanzaz.rwms.client.data.CabinTypeDimensions
 import dev.buhanzaz.rwms.client.data.CustomerEntityType
 import dev.buhanzaz.rwms.client.data.CustomerCabin
 import dev.buhanzaz.rwms.client.data.CustomerProfile
@@ -37,7 +41,6 @@ class CatalogScreensTest {
                     state = catalogState(),
                     onMenu = {},
                     onProfile = {},
-                    onCart = {},
                     onFilters = {},
                     onLoadMore = {},
                     onToggleCabin = {},
@@ -49,8 +52,11 @@ class CatalogScreensTest {
         }
 
         composeRule.onNodeWithText("Свободные бытовки").assertDoesNotExist()
+        composeRule.onNodeWithText("Бытовки в аренду").assertDoesNotExist()
+        composeRule.onAllNodesWithText("Выберите отдельный экземпляр", substring = true).assertCountEquals(0)
         composeRule.onNodeWithText("Склад: СПБ").assertExists()
         composeRule.onNodeWithTag("profile-avatar").assertExists()
+        composeRule.onNodeWithTag("catalog-sticky-filter").assertExists()
         composeRule.onNodeWithText("ИП").assertExists()
 
         composeRule.onNodeWithTag("warehouse-selector").performClick()
@@ -99,7 +105,6 @@ class CatalogScreensTest {
                     state = catalogState(),
                     onMenu = {},
                     onProfile = {},
-                    onCart = {},
                     onFilters = {},
                     onLoadMore = {},
                     onToggleCabin = {},
@@ -120,7 +125,44 @@ class CatalogScreensTest {
     }
 
     @Test
-    fun `filter control matches cabin card width and characteristic rows stay explicit`() {
+    fun `type filter limits dimensions and clears an incompatible previous dimension`() {
+        var appliedFilters: CabinFilters? = null
+        val compatibleDimension = "6,0 × 2,4 × 2,6 м"
+        val incompatibleDimension = "7,0 × 2,4 × 2,6 м"
+
+        composeRule.setContent {
+            CustomerTheme {
+                CabinCatalogScreen(
+                    state = catalogState().copy(
+                        filters = CabinFilters(dimensions = incompatibleDimension),
+                        facets = catalogFacets(compatibleDimension, incompatibleDimension),
+                    ),
+                    onMenu = {},
+                    onProfile = {},
+                    onFilters = { appliedFilters = it },
+                    onLoadMore = {},
+                    onToggleCabin = {},
+                    onEquipment = { _, _, _ -> },
+                    onPhoto = { _, _ -> },
+                    onWarehouse = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("catalog-filter-button").performClick()
+        composeRule.onNodeWithText("БК-1").performClick()
+
+        composeRule.onNodeWithText(compatibleDimension).assertExists()
+        composeRule.onNodeWithText(incompatibleDimension).assertDoesNotExist()
+        composeRule.onNodeWithText("Показать").performClick()
+
+        composeRule.runOnIdle {
+            assertThat(appliedFilters).isEqualTo(CabinFilters(cabinType = "БК-1"))
+        }
+    }
+
+    @Test
+    fun `sticky filter stays below header and matches cabin card width`() {
         composeRule.setContent {
             CustomerTheme {
                 CabinCatalogScreen(
@@ -136,7 +178,6 @@ class CatalogScreensTest {
                     ),
                     onMenu = {},
                     onProfile = {},
-                    onCart = {},
                     onFilters = {},
                     onLoadMore = {},
                     onToggleCabin = {},
@@ -147,44 +188,21 @@ class CatalogScreensTest {
             }
         }
 
+        val headerBounds = composeRule.onNodeWithTag("customer-header").fetchSemanticsNode().boundsInRoot
+        val stickyFilterBounds = composeRule.onNodeWithTag("catalog-sticky-filter").fetchSemanticsNode().boundsInRoot
+        val catalogBounds = composeRule.onNodeWithTag("catalog-screen").fetchSemanticsNode().boundsInRoot
         val filterBounds = composeRule.onNodeWithTag("catalog-filter-button").fetchSemanticsNode().boundsInRoot
         val cardBounds = composeRule.onNodeWithTag("cabin-cabin-1").fetchSemanticsNode().boundsInRoot
+
+        assertThat(stickyFilterBounds.top).isWithin(1f).of(headerBounds.bottom)
+        assertThat(catalogBounds.top).isWithin(1f).of(stickyFilterBounds.bottom)
         assertThat(filterBounds.width).isWithin(1f).of(cardBounds.width)
         composeRule.onNodeWithText("Пластиковое окно").assertExists()
         composeRule.onNodeWithText("Усиленная дверь").assertExists()
     }
 
     @Test
-    fun `catalog card presents one available cabin with server delivery guidance and no price`() {
-        composeRule.setContent {
-            CustomerTheme {
-                CabinCatalogScreen(
-                    state = catalogState().copy(
-                        cabins = listOf(catalogCabin()),
-                        estimatedDeliveryDates = listOf("2026-09-08", "2026-09-10"),
-                    ),
-                    onMenu = {},
-                    onProfile = {},
-                    onCart = {},
-                    onFilters = {},
-                    onLoadMore = {},
-                    onToggleCabin = {},
-                    onEquipment = { _, _, _ -> },
-                    onPhoto = { _, _ -> },
-                    onWarehouse = {},
-                )
-            }
-        }
-
-        composeRule.onNodeWithText("В наличии").assertExists()
-        composeRule.onNodeWithText("Ориентир: с 8 сентября · точный срок после адреса").assertExists()
-        composeRule.onAllNodesWithText("шт.", substring = true).assertCountEquals(0)
-        composeRule.onAllNodesWithText("₽", substring = true).assertCountEquals(0)
-    }
-
-    @Test
-    fun `floating cart keeps the selected count and opens checkout`() {
-        var cartOpened = false
+    fun `catalog card leads with number and omits deprecated status and delivery details`() {
         composeRule.setContent {
             CustomerTheme {
                 CabinCatalogScreen(
@@ -194,7 +212,6 @@ class CatalogScreensTest {
                     ),
                     onMenu = {},
                     onProfile = {},
-                    onCart = { cartOpened = true },
                     onFilters = {},
                     onLoadMore = {},
                     onToggleCabin = {},
@@ -205,10 +222,20 @@ class CatalogScreensTest {
             }
         }
 
-        composeRule.onNodeWithTag("cart-fab").assertExists()
-        composeRule.onNodeWithText("В заказе 1 позиция").assertExists()
-        composeRule.onNodeWithTag("cart-checkout-button").performClick()
-        composeRule.runOnIdle { assertThat(cartOpened).isTrue() }
+        val numberBounds = composeRule.onNodeWithTag("cabin-number-cabin-1").fetchSemanticsNode().boundsInRoot
+        val typeBounds = composeRule.onNodeWithTag("cabin-type-cabin-1").fetchSemanticsNode().boundsInRoot
+        assertThat(numberBounds.left).isLessThan(typeBounds.left)
+        assertThat(numberBounds.height).isWithin(1f).of(typeBounds.height)
+        composeRule.onNodeWithText("№ БК-1").assertExists()
+        composeRule.onNodeWithText("Офисная бытовка").assertExists()
+        composeRule.onNodeWithText("Отделка: Графит").assertExists()
+        composeRule.onNodeWithText("+ Дополнительно").assertExists()
+        composeRule.onNodeWithText("Мебель по выбору").assertDoesNotExist()
+        composeRule.onNodeWithText("Настроить мебель").assertDoesNotExist()
+        composeRule.onNodeWithText("В наличии").assertDoesNotExist()
+        composeRule.onAllNodesWithText("Ориентир", substring = true).assertCountEquals(0)
+        composeRule.onNodeWithTag("cart-fab").assertDoesNotExist()
+        composeRule.onNodeWithTag("cart-checkout-button").assertDoesNotExist()
     }
 
     @Test
@@ -220,7 +247,6 @@ class CatalogScreensTest {
                     state = catalogState().copy(cabins = listOf(catalogCabin())),
                     onMenu = {},
                     onProfile = {},
-                    onCart = {},
                     onFilters = {},
                     onLoadMore = {},
                     onToggleCabin = {},
@@ -236,14 +262,28 @@ class CatalogScreensTest {
     }
 
     @Test
-    fun `adaptive and cart labels keep stable customer semantics`() {
+    fun `adaptive card threshold remains stable`() {
         assertThat(usesWideCabinCard(919f)).isFalse()
         assertThat(usesWideCabinCard(920f)).isTrue()
-        assertThat(cartPositionsLabel(2)).isEqualTo("В заказе 2 позиции")
-        assertThat(cartPositionsLabel(11)).isEqualTo("В заказе 11 позиций")
-        assertThat(deliveryEstimateLabel(emptyList()))
-            .isEqualTo("Ориентир доставки уточняется · точный срок после адреса")
     }
+
+    private fun catalogFacets(
+        compatibleDimension: String,
+        incompatibleDimension: String,
+    ): CabinFacets = CabinFacets(
+        warehouses = listOf(
+            CabinFacetWarehouse(
+                warehouseId = "warehouse-spb",
+                name = "СПБ",
+                cabinTypes = listOf("БК-1", "БК-2"),
+                dimensions = listOf(compatibleDimension, incompatibleDimension),
+                typeDimensions = listOf(
+                    CabinTypeDimensions("БК-1", listOf(compatibleDimension)),
+                    CabinTypeDimensions("БК-2", listOf(incompatibleDimension)),
+                ),
+            ),
+        ),
+    )
 
     private fun catalogState(): CustomerWorkflowState {
         val selected = CustomerWarehouse(

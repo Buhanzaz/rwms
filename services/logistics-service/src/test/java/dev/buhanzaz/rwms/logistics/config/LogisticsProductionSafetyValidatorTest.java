@@ -110,6 +110,8 @@ class LogisticsProductionSafetyValidatorTest {
   @ValueSource(
       strings = {
         "disabled",
+        "missing-function",
+        "wrong-function",
         "empty-destinations",
         "missing-destination",
         "wrong-destination",
@@ -145,6 +147,10 @@ class LogisticsProductionSafetyValidatorTest {
     boolean rentalInquiryOutboxEnabled = true;
     switch (unsafeProperty) {
       case "disabled" -> kafka.setEnabled(false);
+      case "missing-function" ->
+          environment.setProperty("spring.cloud.function.definition", " ");
+      case "wrong-function" ->
+          environment.setProperty("spring.cloud.function.definition", "unknownInbound");
       case "empty-destinations" -> kafka.setDestinations(List.of());
       case "missing-destination" ->
           kafka.setDestinations(LogisticsTransportTopics.PRIMARY_OUTPUTS.subList(0, 3));
@@ -390,6 +396,8 @@ class LogisticsProductionSafetyValidatorTest {
 
     assertThat(source.getProperty("rwms.platform.kafka.enabled"))
         .isEqualTo("${LOGISTICS_KAFKA_ENABLED}");
+    assertThat(source.getProperty("spring.cloud.function.definition"))
+        .isEqualTo("${LOGISTICS_KAFKA_FUNCTION_DEFINITION:}");
     for (int index = 0; index < LogisticsTransportTopics.PRIMARY_OUTPUTS.size(); index++) {
       assertThat(source.getProperty("rwms.platform.kafka.destinations[" + index + "]"))
           .isEqualTo(LogisticsTransportTopics.PRIMARY_OUTPUTS.get(index));
@@ -487,6 +495,7 @@ class LogisticsProductionSafetyValidatorTest {
     MockEnvironment environment = new MockEnvironment();
     environment.setActiveProfiles("stage");
     return environment
+        .withProperty("spring.cloud.function.definition", "logisticsInbound")
         .withProperty("spring.cloud.stream.kafka.binder.auto-create-topics", "false")
         .withProperty("spring.cloud.stream.kafka.binder.configuration.acks", "all")
         .withProperty(

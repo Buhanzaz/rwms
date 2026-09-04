@@ -23,6 +23,21 @@ and observe or recover publication work. Mutable commands use the contract-defin
 and idempotency fields; callers must handle a canonical `409` conflict rather than send a changed
 retry.
 
+`GET`/`PUT /api/inventory/v1/planning-settings/{warehouseId}` are holidays-only: the read carries
+exactly `warehouseId`, `settingsRevision`, `updatedAt` and `holidays`, while PUT carries
+`expectedSettingsRevision` and `holidays`. Ordinary calls use the existing USER `rwms.write` plus
+warehouse-MANAGE policy; the isolated admin-web alternative is the exact `rwms-admin-web`
+`admin.manage` token for a `SYSTEM_ADMIN` or `WMS_ADMIN`. Historical capacity/weekdays columns are
+inert transitional storage and are neither public settings nor a planning input.
+
+For every new final plan, inventory reads task-board's private effective object work calendar with
+its sole `task-board.inventory-calendar.read` service credential. It merges task-board `daysOff`
+with inventory holidays, schedules AUTO work on the earliest common date without a per-day cabin
+limit, and validates MANUAL dates against the same calendar and ordering only. The consumed
+schedule/timezone snapshot and fingerprint fence the plan; a changed calendar yields a stale-plan
+conflict. V28 marks already active draft heads `STALE` safely and leaves completed historical plans
+unchanged.
+
 `POST /api/inventory/v1/sessions/{inventoryId}/refresh` is the MANAGE-scoped recovery command for
 an active session whose live cabin membership or derived review became stale. It checks the supplied
 session revision before a fresh read-only asset capture and again under the local apply lock. Remote

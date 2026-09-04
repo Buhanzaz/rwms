@@ -9,10 +9,11 @@ second rental domain owner and does not query a logistics database.
 
 ## Purpose and boundary
 
-The public assistant API lets an authorized rental user start or resume a
-conversation and stream a tool-assisted response. The service persists the user
-message, provider/tool interaction and final assistant message so a later
-conversation read has server-authoritative history.
+The public assistant API lets a user of the dedicated rental-manager web or
+Android application start or resume a conversation and stream a tool-assisted
+response. The service persists the user message, provider/tool interaction and
+final assistant message so a later conversation read has server-authoritative
+history.
 
 It deliberately does not:
 
@@ -32,7 +33,8 @@ The booking completion fact is declared by
     public gateway /api/assistant/**
             |
             v
-    local JWT and rentalAccess check -> conversation/message persistence
+    exact rental-manager client/scope + signed company check
+            -> company/owner-scoped conversation/message persistence
             |
             +--> private logistics REST with the current user bearer
             |        -> exact cabin facets/searches and rental inquiry state
@@ -67,11 +69,11 @@ An optional `rentalOrderId` links the conversation to an existing order and
 requires its existing `clientId`. Assistant-service forwards both identities to
 logistics-service and does not duplicate the logistics-owned editable-order,
 client or warehouse checks. `GET /api/assistant/v1/conversations?rentalOrderId=...`
-returns the owner-scoped active link. A partial unique database index permits
-only one non-archived conversation for an order: an active conversation is
-reopened, while archiving it permits a new linked conversation. The local
-order-scoped finalization lock resolves concurrent creates to that one active
-link. Before an order-filtered list or create reuses that link, assistant-service
+returns the company/owner-scoped active link. A partial unique database index
+permits only one non-archived conversation for an order within a company: an
+active conversation is reopened, while archiving it permits a new linked
+conversation. The company/order-scoped finalization lock resolves concurrent
+creates to that one active link. Before an order-filtered list or create reuses that link, assistant-service
 reads its exact inquiry/client/order context from logistics outside a local
 transaction. `ACTIVE` is reusable; `BOOKED` or `ARCHIVED` archives only that
 exact local conversation under the existing order lock, after which create can
@@ -139,11 +141,11 @@ service origin:
 
 | Public route | Meaning | Authorization |
 | --- | --- | --- |
-| POST /api/assistant/v1/conversations | Create or replay a conversation and delegated inquiry | Authenticated JWT with rentalAccess |
-| GET /api/assistant/v1/conversations | List owner history or locate the active conversation by optional `rentalOrderId` | Authenticated JWT with rentalAccess |
-| GET or DELETE /api/assistant/v1/conversations/{conversationId} | Read or archive one owner-scoped conversation | Same owner-scoped rental access |
-| POST /api/assistant/v1/conversations/{conversationId}/turns | SSE stream for one persisted user turn | Same owner-scoped rental access |
-| PUT /api/assistant/v1/conversations/{conversationId}/selection | Keep exact current cabin IDs and immediately release removals | Same owner-scoped rental access plus Idempotency-Key |
+| POST /api/assistant/v1/conversations | Create or replay a conversation and delegated inquiry | Dedicated rental-manager client and `rental.manage` in the signed company |
+| GET /api/assistant/v1/conversations | List company/owner history or locate the active conversation by optional `rentalOrderId` | Same company/owner boundary |
+| GET or DELETE /api/assistant/v1/conversations/{conversationId} | Read or archive one company/owner-scoped conversation | Same company/owner boundary |
+| POST /api/assistant/v1/conversations/{conversationId}/turns | SSE stream for one persisted user turn | Same company/owner boundary |
+| PUT /api/assistant/v1/conversations/{conversationId}/selection | Keep exact current cabin IDs and immediately release removals | Same company/owner boundary plus Idempotency-Key |
 
 Conversation creation accepts exactly one of `clientId` or `newClient`.
 Supplying `rentalOrderId` additionally requires `clientId`; logistics-service
@@ -154,17 +156,23 @@ editable and rejects a client mismatch.
 responsible manager remains logistics-owned and cannot be
 chosen through this request.
 
-The service requires a UUID JWT subject and rentalAccess claim before it reads
-or changes conversation state. A private logistics request forwards the current
-Bearer token so logistics retains its own user and warehouse authorization
-decision. The service never sends that token to the LLM provider and never logs
-request bodies or provider credentials.
+The service accepts only `rwms-rental-manager-web` and
+`rwms-rental-manager-android` USER tokens with `RENTAL_MANAGER`, `rentalAccess`,
+the exact `rental.manage` application scope, a UUID subject and a signed UUID
+`company_id`. Company identity is never read from a request parameter. Lists,
+direct reads and mutations require both that company and owner; a foreign ID is
+reported as absent. A private logistics request forwards the current Bearer
+token so logistics retains its own user and warehouse authorization decision.
+The service never sends that token to the LLM provider and never logs request
+bodies or provider credentials.
 
 ## Persistence, event delivery and failures
 
 Flyway owns the service-local schema; Hibernate validates it only. V6 adds the
 nullable order link, the active-order partial uniqueness constraint and the
-ordered clarification sequence. Existing questions are ranked without loss;
+ordered clarification sequence. V7 backfills existing conversations into the
+initial company, freezes company ownership and changes inquiry/order uniqueness
+and indexes to company-leading keys. Existing questions are ranked without loss;
 when old data has several `PENDING` rows, only the oldest stays actionable and
 the rest become `QUEUED`. Conversation records use optimistic versioning; only
 the short local creation and clarification transitions take transaction-scoped

@@ -1,0 +1,5 @@
+# Keep the real file outside Git and pass its absolute path with -PsigningPropertiesFile.
+storeFile=/secure/path/rwms-manager-release.jks
+storePassword=replace-me
+keyAlias=rwms-manager
+keyPassword=replace-me

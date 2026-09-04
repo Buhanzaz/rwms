@@ -12,7 +12,7 @@ import org.springframework.web.servlet.function.ServerRequest;
  *
  * <p>Only the {@code auth-service} route receives these headers. Incoming client-supplied
  * forwarding headers have already been removed by {@link TrustedForwardedHeaderFilter}, so auth
- * redirects cannot be influenced by a spoofed request header.
+ * redirects and registration client identity cannot be influenced by a spoofed request header.
  */
 public final class CanonicalAuthForwardedHeadersFilter
     implements HttpHeadersFilter.RequestHttpHeadersFilter, Ordered {
@@ -50,6 +50,7 @@ public final class CanonicalAuthForwardedHeadersFilter
       result.set("X-Forwarded-Proto", scheme);
       result.set("X-Forwarded-Port", port);
       result.set("X-Forwarded-Prefix", "/auth");
+      result.set("X-Forwarded-For", request.servletRequest().getRemoteAddr());
     }
     return result;
   }

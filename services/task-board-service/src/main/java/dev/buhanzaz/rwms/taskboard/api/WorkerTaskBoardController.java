@@ -6,6 +6,7 @@ import dev.buhanzaz.rwms.taskboard.security.AccessLevel;
 import dev.buhanzaz.rwms.taskboard.security.WarehouseAccessAuthorizer;
 import dev.buhanzaz.rwms.taskboard.service.MobileTaskSurface;
 import dev.buhanzaz.rwms.taskboard.service.WorkerInvalidationHub;
+import dev.buhanzaz.rwms.taskboard.service.WorkerProfileMediaService;
 import dev.buhanzaz.rwms.taskboard.service.WorkerTaskBoardService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -43,14 +44,17 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 @RequestMapping("/api/worker/v1")
 public class WorkerTaskBoardController {
   private final WorkerTaskBoardService service;
+  private final WorkerProfileMediaService profileMedia;
   private final WorkerInvalidationHub invalidations;
   private final WarehouseAccessAuthorizer access;
 
   public WorkerTaskBoardController(
       WorkerTaskBoardService service,
+      WorkerProfileMediaService profileMedia,
       WorkerInvalidationHub invalidations,
       WarehouseAccessAuthorizer access) {
     this.service = service;
+    this.profileMedia = profileMedia;
     this.invalidations = invalidations;
     this.access = access;
   }
@@ -61,6 +65,13 @@ public class WorkerTaskBoardController {
     WorkerPrincipal principal = principal(jwt, false);
     return service.context(
         MobileTaskSurface.WORKER, principal.workerId(), principal.warehouseId());
+  }
+
+  /** Establishes and returns this worker's canonical profile-avatar media scope. */
+  @PostMapping("/profile/avatar-scope")
+  public WorkerProfileAvatarScope avatarScope(@AuthenticationPrincipal Jwt jwt) {
+    WorkerPrincipal principal = principal(jwt, true);
+    return profileMedia.prepare(principal.workerId(), principal.warehouseId());
   }
 
   /**
@@ -101,12 +112,11 @@ public class WorkerTaskBoardController {
   /**
    * Opens a worker-scoped SSE invalidation stream.
    *
-   * <p>Events are signals to refresh the authorized feed, not a substitute for task data.
+   * <p>Events are signals to refresh the authorized feed, not a substitute for task data. Each
+   * reconnect starts a fresh subscription; this operation has no replay cursor contract.
    */
   @GetMapping(path = "/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-  public SseEmitter events(
-      @AuthenticationPrincipal Jwt jwt,
-      @RequestHeader(name = "Last-Event-ID", required = false) String lastEventId) {
+  public SseEmitter events(@AuthenticationPrincipal Jwt jwt) {
     WorkerPrincipal principal = principal(jwt, false);
     return invalidations.subscribe(
         principal.warehouseId(),

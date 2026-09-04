@@ -79,7 +79,9 @@ public class ClientPresentationService {
       UUID idempotencyKey,
       PublishClientPresentationRequest request) {
     RentalInquiry inquiry =
-        inquiries.findForUpdate(inquiryId).orElseThrow(() -> notFound("Диалог аренды не найден"));
+        inquiries
+            .findForUpdate(inquiryId)
+            .orElseThrow(() -> notFound("Диалог аренды не найден"));
     RentalInquiryService.requireOwner(actor, inquiry);
     if (inquiry.getState() != RentalInquiryState.ACTIVE) {
       throw conflict("INQUIRY_ARCHIVED", "Диалог уже завершён");
@@ -97,7 +99,9 @@ public class ClientPresentationService {
     OffsetDateTime viewUntil = expiresAt.plusHours(24);
 
     ClientPresentation presentation =
-        presentations.findByInquiryIdForUpdate(inquiryId).orElse(null);
+        presentations
+            .findByInquiryIdForUpdate(inquiryId)
+            .orElse(null);
     if (presentation != null && presentation.hasPublishKey(idempotencyKey)) {
       if (!presentation.matchesPublish(idempotencyKey, requestHash)) {
         throw conflict(
@@ -248,7 +252,9 @@ public class ClientPresentationService {
   @Transactional
   public void revoke(OrderActor actor, UUID inquiryId, UUID idempotencyKey) {
     RentalInquiry inquiry =
-        inquiries.findForUpdate(inquiryId).orElseThrow(() -> notFound("Диалог аренды не найден"));
+        inquiries
+            .findForUpdate(inquiryId)
+            .orElseThrow(() -> notFound("Диалог аренды не найден"));
     RentalInquiryService.requireOwner(actor, inquiry);
     ClientPresentation presentation =
         presentations

@@ -33,7 +33,6 @@ import type {
 import {
   credentialStatusLabels,
   operationalAvailabilityLabels,
-  participationPolicyLabels,
   queueTypeLabels,
 } from "@/features/settings/task-board/model/task-board-settings"
 import {
@@ -81,32 +80,29 @@ function QueueBindings({ queue }: { queue: QueueDefinitionDto }) {
   if (bindings.length === 0) return "—"
 
   return (
-    <div className="flex flex-col gap-1">
-      {bindings.map((binding, index) => (
-        <div key={binding.id} className="flex items-center gap-2">
-          <Badge variant={index === 0 ? "default" : "secondary"}>
-            {binding.primary
-              ? "Основной"
-              : participationPolicyLabels[binding.participationPolicy]}
-          </Badge>
-          <span>{binding.workerClass.name}</span>
-        </div>
+    <div className="flex flex-wrap gap-x-2 gap-y-1">
+      {bindings.map((binding) => (
+        <span key={binding.id}>{binding.workerClass.name}</span>
       ))}
     </div>
   )
 }
 
 const taskBoardSettingsSections = [
-  { value: "queue-definitions", label: "Каталог очередей", icon: Queue01Icon },
+  { value: "queue-definitions", label: "Доски задач", icon: Queue01Icon },
   { value: "classes", label: "Классы", icon: Task01Icon },
   { value: "groups", label: "Бригады", icon: UserGroupIcon },
   { value: "workers", label: "Рабочие", icon: UserIcon },
 ] as const
 
-type TaskBoardSettingsSection =
+export type TaskBoardSettingsSection =
   (typeof taskBoardSettingsSections)[number]["value"]
 
-export function TaskBoardSettingsPage() {
+export function TaskBoardSettingsPage({
+  section,
+}: {
+  section?: TaskBoardSettingsSection
+} = {}) {
   const queryClient = useQueryClient()
   const { accessToken, currentUser } = useAuth()
   const { selectedWarehouse } = useWarehouse()
@@ -130,6 +126,7 @@ export function TaskBoardSettingsPage() {
   const [actionError, setActionError] = useState<string | null>(null)
   const [activeSection, setActiveSection] =
     useState<TaskBoardSettingsSection>("queue-definitions")
+  const visibleSection = section ?? activeSection
   const mutationInFlight = useRef(false)
 
   const explicitAccess = currentUser?.warehouseAccesses.find(
@@ -235,7 +232,7 @@ export function TaskBoardSettingsPage() {
   }
 
   const requiresWarehouse =
-    activeSection === "groups" || activeSection === "workers"
+    visibleSection === "groups" || visibleSection === "workers"
   if (requiresWarehouse && !selectedWarehouse) {
     return (
       <Card size="sm">
@@ -349,17 +346,6 @@ export function TaskBoardSettingsPage() {
       "Порядок очередей сохранён."
     )
   }
-  const actions = (edit: () => void, remove: () => void) => (
-    <div className="flex items-center gap-2">
-      <Button type="button" size="sm" variant="outline" onClick={edit}>
-        Изменить
-      </Button>
-      <Button type="button" size="sm" variant="ghost" onClick={remove}>
-        Удалить
-      </Button>
-    </div>
-  )
-
   async function confirmDelete() {
     if (!deleteTarget || !accessToken) return
     const target = deleteTarget
@@ -451,35 +437,41 @@ export function TaskBoardSettingsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
-      <nav aria-label="Разделы настройки доски задач">
-        <ToggleGroup
-          type="single"
-          value={activeSection}
-          variant="outline"
-          size="lg"
-          className="grid w-full grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-4"
-          onValueChange={(section) => {
-            if (section) {
-              setActiveSection(section as TaskBoardSettingsSection)
-            }
-          }}
-        >
-          {taskBoardSettingsSections.map((section) => (
-            <ToggleGroupItem
-              key={section.value}
-              value={section.value}
-              className="h-9 w-full justify-center"
-            >
-              <HugeiconsIcon icon={section.icon} data-icon="inline-start" />
-              <span className="truncate">{section.label}</span>
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-      </nav>
+      {section === undefined ? (
+        <nav aria-label="Разделы настройки доски задач">
+          <ToggleGroup
+            type="single"
+            value={activeSection}
+            variant="outline"
+            size="lg"
+            className="grid w-full grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-4"
+            onValueChange={(nextSection) => {
+              if (nextSection) {
+                setActiveSection(nextSection as TaskBoardSettingsSection)
+              }
+            }}
+          >
+            {taskBoardSettingsSections.map((item) => (
+              <ToggleGroupItem
+                key={item.value}
+                value={item.value}
+                className="h-9 w-full justify-center"
+              >
+                <HugeiconsIcon
+                  icon={item.icon}
+                  data-icon="inline-start"
+                  aria-hidden="true"
+                />
+                <span className="truncate">{item.label}</span>
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        </nav>
+      ) : null}
 
-      {activeSection === "queue-definitions" ? (
+      {visibleSection === "queue-definitions" ? (
         <section
-          aria-label="Каталог очередей"
+          aria-label="Доски задач"
           className="flex min-h-0 flex-1 flex-col gap-3"
         >
           {canManageGlobal ? (
@@ -581,23 +573,25 @@ export function TaskBoardSettingsPage() {
                 label: "Действия",
                 getSortValue: () => null,
                 render: (item) =>
-                  canManageGlobal
-                    ? actions(
-                        () => setQueueDefinitionEditor(item),
-                        () =>
-                          setDeleteTarget({
-                            kind: "queue-definition",
-                            item,
-                          })
-                      )
-                    : "Только просмотр",
+                  canManageGlobal ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setQueueDefinitionEditor(item)}
+                    >
+                      Изменить
+                    </Button>
+                  ) : (
+                    "Только просмотр"
+                  ),
               },
             ]}
           />
         </section>
       ) : null}
 
-      {activeSection === "classes" ? (
+      {visibleSection === "classes" ? (
         <section
           aria-label="Классы"
           className="flex min-h-0 flex-1 flex-col gap-3"
@@ -636,24 +630,36 @@ export function TaskBoardSettingsPage() {
                 label: "Действия",
                 getSortValue: () => null,
                 render: (item) =>
-                  canManageGlobal
-                    ? actions(
-                        () => setClassEditor(item),
-                        () => setDeleteTarget({ kind: "class", item })
-                      )
-                    : "Только просмотр",
+                  canManageGlobal ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setClassEditor(item)}
+                    >
+                      Изменить
+                    </Button>
+                  ) : (
+                    "Только просмотр"
+                  ),
               },
             ]}
           />
         </section>
       ) : null}
 
-      {activeSection === "groups" ? (
+      {visibleSection === "groups" ? (
         <section
           aria-label="Бригады"
           className="flex min-h-0 flex-1 flex-col gap-3"
         >
-          <div className="flex justify-end">
+          <div
+            className={
+              section === "groups"
+                ? "absolute top-0 right-0 z-10 flex h-9 items-center"
+                : "flex justify-end"
+            }
+          >
             <Button type="button" onClick={() => setGroupEditor("new")}>
               Создать бригаду
             </Button>
@@ -719,47 +725,15 @@ export function TaskBoardSettingsPage() {
                 id: "actions",
                 label: "Действия",
                 getSortValue: () => null,
-                cellClassName: "w-[22rem]",
                 render: (item) => (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setGroupEditor(item)}
-                    >
-                      Изменить
-                    </Button>
-                    {item.operationalStatus === "AVAILABLE" ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        disabled={!item.active || mutation.isPending}
-                        onClick={() => setAvailabilityGroup(item)}
-                      >
-                        Отключить работу
-                      </Button>
-                    ) : (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        disabled={!item.active || mutation.isPending}
-                        onClick={() => void enableGroup(item)}
-                      >
-                        Включить работу
-                      </Button>
-                    )}
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => setDeleteTarget({ kind: "group", item })}
-                    >
-                      Удалить
-                    </Button>
-                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setGroupEditor(item)}
+                  >
+                    Изменить
+                  </Button>
                 ),
               },
             ]}
@@ -767,12 +741,18 @@ export function TaskBoardSettingsPage() {
         </section>
       ) : null}
 
-      {activeSection === "workers" ? (
+      {visibleSection === "workers" ? (
         <section
           aria-label="Рабочие"
           className="flex min-h-0 flex-1 flex-col gap-3"
         >
-          <div className="flex justify-end">
+          <div
+            className={
+              section === "workers"
+                ? "absolute top-0 right-0 z-10 flex h-9 items-center"
+                : "flex justify-end"
+            }
+          >
             <Button type="button" onClick={() => setWorkerEditor("new")}>
               Создать рабочего
             </Button>
@@ -850,70 +830,16 @@ export function TaskBoardSettingsPage() {
                 id: "actions",
                 label: "Действия",
                 getSortValue: () => null,
-                cellClassName: "w-[22rem]",
-                render: (item) => {
-                  const credentialAction = workerCredentialToggleAction(
-                    item.credentialStatus
-                  )
-
-                  return (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setWorkerEditor(item)}
-                      >
-                        Изменить
-                      </Button>
-                      {item.appLogin ? (
-                        <>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => setPasswordWorker(item)}
-                          >
-                            Пароль
-                          </Button>
-                          {credentialAction === "DISABLE" ? (
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="ghost"
-                              onClick={() =>
-                                setDeleteTarget({ kind: "credentials", item })
-                              }
-                            >
-                              Отключить вход
-                            </Button>
-                          ) : null}
-                          {credentialAction === "ENABLE" ? (
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="ghost"
-                              disabled={mutation.isPending}
-                              onClick={() => void enableWorkerCredentials(item)}
-                            >
-                              Включить вход
-                            </Button>
-                          ) : null}
-                        </>
-                      ) : null}
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        onClick={() =>
-                          setDeleteTarget({ kind: "worker", item })
-                        }
-                      >
-                        Удалить
-                      </Button>
-                    </div>
-                  )
-                },
+                render: (item) => (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setWorkerEditor(item)}
+                  >
+                    Изменить
+                  </Button>
+                ),
               },
             ]}
           />
@@ -932,6 +858,18 @@ export function TaskBoardSettingsPage() {
           pending={mutation.isPending}
           error={actionError}
           onClose={closeEditors}
+          onDelete={
+            queueDefinitionEditor === "new"
+              ? undefined
+              : () => {
+                  setQueueDefinitionEditor(null)
+                  setActionError(null)
+                  setDeleteTarget({
+                    kind: "queue-definition",
+                    item: queueDefinitionEditor,
+                  })
+                }
+          }
           onSave={async (request: QueueDefinitionRequest) => {
             if (!accessToken) return
             await run(
@@ -959,6 +897,15 @@ export function TaskBoardSettingsPage() {
           pending={mutation.isPending}
           error={actionError}
           onClose={closeEditors}
+          onDelete={
+            classEditor === "new"
+              ? undefined
+              : () => {
+                  setClassEditor(null)
+                  setActionError(null)
+                  setDeleteTarget({ kind: "class", item: classEditor })
+                }
+          }
           onSave={async (request: WorkerClassRequest) => {
             if (!accessToken) return
             await run(
@@ -984,6 +931,42 @@ export function TaskBoardSettingsPage() {
           pending={mutation.isPending}
           error={actionError}
           onClose={closeEditors}
+          onResetPassword={
+            workerEditor === "new"
+              ? undefined
+              : () => {
+                  setWorkerEditor(null)
+                  setActionError(null)
+                  setPasswordWorker(workerEditor)
+                }
+          }
+          onDisableCredentials={
+            workerEditor === "new" ||
+            workerCredentialToggleAction(workerEditor.credentialStatus) !==
+              "DISABLE"
+              ? undefined
+              : () => {
+                  setWorkerEditor(null)
+                  setActionError(null)
+                  setDeleteTarget({ kind: "credentials", item: workerEditor })
+                }
+          }
+          onEnableCredentials={
+            workerEditor === "new" ||
+            workerCredentialToggleAction(workerEditor.credentialStatus) !==
+              "ENABLE"
+              ? undefined
+              : () => void enableWorkerCredentials(workerEditor)
+          }
+          onDelete={
+            workerEditor === "new"
+              ? undefined
+              : () => {
+                  setWorkerEditor(null)
+                  setActionError(null)
+                  setDeleteTarget({ kind: "worker", item: workerEditor })
+                }
+          }
           onSave={async (request: WorkerRequest) => {
             if (!accessToken) return
             await run(
@@ -1015,6 +998,31 @@ export function TaskBoardSettingsPage() {
           pending={mutation.isPending}
           error={actionError}
           onClose={closeEditors}
+          onDisableAvailability={
+            groupEditor === "new" ||
+            groupEditor.operationalStatus !== "AVAILABLE"
+              ? undefined
+              : () => {
+                  setGroupEditor(null)
+                  setActionError(null)
+                  setAvailabilityGroup(groupEditor)
+                }
+          }
+          onEnableAvailability={
+            groupEditor === "new" ||
+            groupEditor.operationalStatus === "AVAILABLE"
+              ? undefined
+              : () => void enableGroup(groupEditor)
+          }
+          onDelete={
+            groupEditor === "new"
+              ? undefined
+              : () => {
+                  setGroupEditor(null)
+                  setActionError(null)
+                  setDeleteTarget({ kind: "group", item: groupEditor })
+                }
+          }
           onSave={async (request: WorkerGroupRequest) => {
             if (!accessToken) return
             await run(

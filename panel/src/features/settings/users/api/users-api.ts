@@ -18,11 +18,16 @@ export class AdminUserResponseProtocolError extends Error {
   }
 }
 
-function requireAdminUserEntitlements(response: unknown): AdminUser {
+function requireAdminUser(response: unknown): AdminUser {
   if (
     typeof response !== "object" ||
     response === null ||
-    Array.isArray(response) ||
+    Array.isArray(response)
+  ) {
+    throw new AdminUserResponseProtocolError()
+  }
+
+  if (
     typeof (response as { mobileAppAccess?: unknown }).mobileAppAccess !==
       "boolean" ||
     typeof (response as { rentalAccess?: unknown }).rentalAccess !== "boolean"
@@ -38,7 +43,7 @@ async function requestAdminUser(
   input: string,
   init?: RequestInit
 ) {
-  return requireAdminUserEntitlements(
+  return requireAdminUser(
     await bearerRequest<unknown>(accessToken, input, init)
   )
 }
@@ -50,7 +55,7 @@ export function listAdminUsers(accessToken: string) {
         throw new AdminUserResponseProtocolError()
       }
 
-      return response.map(requireAdminUserEntitlements)
+      return response.map(requireAdminUser)
     }
   )
 }

@@ -6,7 +6,7 @@
   "scripts": {
     "build": "node scripts/build-site.mjs && next build",
     "build:cloudflare": "opennextjs-cloudflare build && node scripts/prepare-sites-worker.mjs",
-    "check": "node scripts/build-site.mjs && node scripts/verify-site.mjs && node scripts/verify-worker.mjs"
+    "check": "node --test scripts/release-trust.test.mjs && node scripts/verify-release.mjs && node scripts/build-site.mjs && node scripts/verify-site.mjs && node scripts/verify-worker.mjs"
   },
   "dependencies": {
     "next": "16.3.0",

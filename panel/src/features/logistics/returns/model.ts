@@ -40,6 +40,8 @@ export type ReturnDocument = {
   id: string
   version: number
   documentType: "RETURN"
+  /** Returns do not have a customer-delivery purpose. */
+  customerDeliveryPurpose: null
   state: ReturnDocumentState
   warehouseId: string
   destinationWarehouseId: null

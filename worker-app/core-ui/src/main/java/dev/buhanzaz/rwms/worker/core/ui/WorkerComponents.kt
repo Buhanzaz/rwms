@@ -1,8 +1,10 @@
 package dev.buhanzaz.rwms.worker.core.ui
 
+import android.graphics.Bitmap
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -11,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.Image
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -27,6 +30,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
@@ -42,12 +47,14 @@ fun WorkerScreenScaffold(
     onBack: (() -> Unit)? = null,
     onMenu: (() -> Unit)? = null,
     profileMonogram: String? = null,
+    profileAvatar: Bitmap? = null,
     onProfile: (() -> Unit)? = null,
     actions: @Composable () -> Unit = {},
     bottomBar: @Composable () -> Unit = {},
     content: @Composable (PaddingValues) -> Unit,
 ) {
     Scaffold(
+        containerColor = Color.Transparent,
         contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
             CenterAlignedTopAppBar(
@@ -65,15 +72,22 @@ fun WorkerScreenScaffold(
                 },
                 actions = {
                     actions()
-                    if (onProfile != null && !profileMonogram.isNullOrBlank()) {
+                    if (onProfile != null && (!profileMonogram.isNullOrBlank() || profileAvatar != null)) {
                         WorkerProfileAvatar(
-                            monogram = profileMonogram,
+                            monogram = profileMonogram.orEmpty(),
+                            avatar = profileAvatar,
                             onClick = onProfile,
                             modifier = Modifier.padding(end = 8.dp),
                         )
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(),
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = WorkerGlassSurface,
+                    scrolledContainerColor = WorkerGlassSurface,
+                    navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                    actionIconContentColor = MaterialTheme.colorScheme.onSurface,
+                ),
             )
         },
         bottomBar = bottomBar,
@@ -85,6 +99,7 @@ fun WorkerScreenScaffold(
 @Composable
 private fun WorkerProfileAvatar(
     monogram: String,
+    avatar: Bitmap?,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -95,12 +110,21 @@ private fun WorkerProfileAvatar(
             color = MaterialTheme.colorScheme.primaryContainer,
             contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
         ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text(
-                    text = monogram.take(1).uppercase(),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Medium,
+            if (avatar != null) {
+                Image(
+                    bitmap = avatar.asImageBitmap(),
+                    contentDescription = "Профиль",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
                 )
+            } else {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = monogram.take(1).uppercase(),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
             }
         }
     }

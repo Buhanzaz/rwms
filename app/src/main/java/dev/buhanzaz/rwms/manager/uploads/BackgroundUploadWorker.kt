@@ -752,9 +752,8 @@ class BackgroundUploadWorker(
 
     private fun failureMessage(failure: Throwable): String = when (failure) {
         is HttpException -> backend.problemMessage(failure)
-        is IOException -> "Нет связи с RWMS. Загрузка сохранена и её можно повторить"
-        else -> failure.message?.takeIf(String::isNotBlank)
-            ?: "Не удалось отправить данные в RWMS"
+        is IOException -> "Нет соединения. Загрузка сохранена — проверьте интернет и повторите отправку."
+        else -> "Не удалось отправить данные. Загрузка сохранена — повторите отправку позже."
     }
 
     companion object {

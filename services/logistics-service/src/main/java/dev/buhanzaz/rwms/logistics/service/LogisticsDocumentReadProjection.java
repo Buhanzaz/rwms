@@ -10,9 +10,15 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.mapper.LogisticsDocumentResponseMapper;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
+import java.time.LocalDate;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
 /**
@@ -28,16 +34,24 @@ class LogisticsDocumentReadProjection {
   private final TransferPlanService transferPlanning;
 
   LogisticsDocumentView view(LogisticsDocument document) {
-    return view(document, null);
+    return view(document, null, lines(document.getId()));
   }
 
   /** Materializes a document and an optional server-created reverse transfer association. */
   LogisticsDocumentView view(LogisticsDocument document, UUID linkedReturnTransferId) {
+    return view(document, linkedReturnTransferId, lines(document.getId()));
+  }
+
+  private LogisticsDocumentView view(
+      LogisticsDocument document,
+      UUID linkedReturnTransferId,
+      List<LogisticsDocumentLine> documentLines) {
     LogisticsDocumentSummary summary = responseMapper.toSummary(document);
     return new LogisticsDocumentView(
         summary.id(),
         summary.version(),
         summary.documentType(),
+        summary.customerDeliveryPurpose(),
         summary.state(),
         summary.warehouseId(),
         summary.destinationWarehouseId(),
@@ -54,8 +68,7 @@ class LogisticsDocumentReadProjection {
         summary.inventorySourceId(),
         summary.inventorySourceFindingId(),
         summary.inventorySourceDispositionKind(),
-        responseMapper.toLineViews(
-            lineRepository.findAllByDocument_IdOrderByLineNumber(summary.id())),
+        responseMapper.toLineViews(documentLines),
         summary.createdAt(),
         summary.updatedAt());
   }
@@ -93,13 +106,79 @@ class LogisticsDocumentReadProjection {
     return line;
   }
 
-  List<LogisticsDocumentView> list(LogisticsDocumentType type, UUID warehouseId) {
+  /**
+   * Materializes one deterministic document page and resolves all of its lines with one bounded
+   * batch query rather than issuing one line query per document.
+   */
+  LogisticsDocumentPage page(
+      LogisticsDocumentType type, UUID warehouseId, int pageNumber, int pageSize) {
     if (warehouseId == null) throw new IllegalArgumentException("warehouseId is required");
-    return documentRepository
-        .findAllByDocumentTypeAndWarehouseIdOrderByCreatedAtDescIdDesc(type, warehouseId)
-        .stream()
-        .map(this::view)
-        .toList();
+    PageRequest pageRequest = pageRequest(pageNumber, pageSize);
+    Page<LogisticsDocument> documents =
+        documentRepository.findAllByDocumentTypeAndWarehouseIdOrderByCreatedAtDescIdDesc(
+            type, warehouseId, pageRequest);
+    return materialize(documents);
+  }
+
+  /** Reads only the selected warehouse-local day; transfers are visible in both directions. */
+  LogisticsDocumentPage page(
+      LogisticsDocumentType type,
+      UUID warehouseId,
+      LocalDate scheduledDate,
+      int pageNumber,
+      int pageSize) {
+    if (warehouseId == null) throw new IllegalArgumentException("warehouseId is required");
+    if (scheduledDate == null) throw new IllegalArgumentException("scheduledDate is required");
+    PageRequest pageRequest = pageRequest(pageNumber, pageSize);
+    Page<LogisticsDocument> documents =
+        type == LogisticsDocumentType.TRANSFER
+            ? documentRepository.findTransferPageForWarehouseAndScheduledDate(
+                type, warehouseId, scheduledDate, pageRequest)
+            : documentRepository
+                .findAllByDocumentTypeAndWarehouseIdAndScheduledDateOrderByCreatedAtDescIdDesc(
+                    type, warehouseId, scheduledDate, pageRequest);
+    return materialize(documents);
+  }
+
+  private LogisticsDocumentPage materialize(Page<LogisticsDocument> documents) {
+    List<UUID> documentIds = documents.stream().map(LogisticsDocument::getId).toList();
+    Map<UUID, List<LogisticsDocumentLine>> linesByDocument =
+        documentIds.isEmpty()
+            ? Map.of()
+            : lineRepository.findAllByDocumentIdIn(documentIds).stream()
+                .collect(
+                    Collectors.groupingBy(
+                        line -> line.getDocument().getId(),
+                        LinkedHashMap::new,
+                        Collectors.toList()));
+    List<LogisticsDocumentView> content =
+        documents.stream()
+            .map(
+                document ->
+                    view(
+                        document,
+                        null,
+                        linesByDocument.getOrDefault(document.getId(), List.of())))
+            .toList();
+    return new LogisticsDocumentPage(
+        content,
+        documents.getNumber(),
+        documents.getSize(),
+        documents.getTotalElements(),
+        documents.getTotalPages(),
+        documents.hasNext());
+  }
+
+  private static PageRequest pageRequest(int pageNumber, int pageSize) {
+    if (pageNumber < 0 || pageSize < 1 || pageSize > 100) {
+      throw new IllegalArgumentException("Logistics document page is invalid");
+    }
+    return PageRequest.of(pageNumber, pageSize);
+  }
+
+  /** Preserves the internal list contract as the same bounded first page used by public reads. */
+  List<LogisticsDocumentView> list(LogisticsDocumentType type, UUID warehouseId) {
+    return page(type, warehouseId, 0, 50).content();
   }
 
   boolean isRentalShipmentShipped(UUID shipmentId) {

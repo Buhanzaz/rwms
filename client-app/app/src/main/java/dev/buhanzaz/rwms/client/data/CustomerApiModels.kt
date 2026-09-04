@@ -323,6 +323,22 @@ data class CheckoutRequest(
     val slotVersion: Long,
 )
 
+/** Cancels one completed booking under the exact authoritative booking version. */
+@Serializable
+data class CancelCustomerBookingRequest(val expectedVersion: Long)
+
+/** Recalculates replacement offers from server-owned order contents and address facts. */
+@Serializable
+data class SearchCustomerBookingRescheduleRequest(val expectedVersion: Long)
+
+/** Atomically swaps one booking to an exact freshly calculated slot/version. */
+@Serializable
+data class RescheduleCustomerBookingRequest(
+    val expectedVersion: Long,
+    val slotId: String,
+    val slotVersion: Long,
+)
+
 /** Exact shipment-line media scope authorized for one delivered cabin. */
 @Serializable
 data class CustomerShipmentMediaOwner(
@@ -401,6 +417,7 @@ data class CustomerBookingCabin(
 @Serializable
 data class CustomerBooking(
     val bookingId: String? = null,
+    val version: Long = 0,
     val orderId: String? = null,
     val status: String,
     val errorCode: String? = null,
@@ -411,6 +428,7 @@ data class CustomerBooking(
     val deliveryDate: String? = null,
     val windowStart: String? = null,
     val windowEnd: String? = null,
+    val cancellationFeeRubles: Long? = null,
     val cabins: List<CustomerBookingCabin> = emptyList(),
 )
 

@@ -24,6 +24,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.mutable import MutableDict, MutableList
@@ -39,6 +40,14 @@ class RequestType(StrEnum):
     PICKUP = "PICKUP"
 
 
+class CustomerDeliveryPurpose(StrEnum):
+    """Commercial purpose kept separate from the physical delivery direction."""
+
+    RENTAL_DELIVERY = "RENTAL_DELIVERY"
+    SALE_DELIVERY = "SALE_DELIVERY"
+    CUSTOMER_RELOCATION = "CUSTOMER_RELOCATION"
+
+
 class RequestStatus(StrEnum):
     """Lifecycle status of a source logistics request."""
 
@@ -49,6 +58,35 @@ class RequestStatus(StrEnum):
     COMPLETED = "COMPLETED"
     CANCELLED = "CANCELLED"
     UNASSIGNED = "UNASSIGNED"
+
+
+class CapacityPublicationStatus(StrEnum):
+    """Durable delivery state of the latest anonymous-capacity generation."""
+
+    NOT_REQUESTED = "NOT_REQUESTED"
+    PENDING = "PENDING"
+    PUBLISHED = "PUBLISHED"
+    FAILED = "FAILED"
+
+
+class ContractorHandoffStatus(StrEnum):
+    """Durable delivery state of one immutable RWMS contractor command."""
+
+    PENDING = "PENDING"
+    APPLYING = "APPLYING"
+    SUCCEEDED = "SUCCEEDED"
+    REJECTED = "REJECTED"
+
+
+class RequestRescheduleHoldState(StrEnum):
+    """Durable phase of one owner-backed request reschedule command."""
+
+    CLAIMED = "CLAIMED"
+    OWNER_CALLING = "OWNER_CALLING"
+    QUARANTINED = "QUARANTINED"
+    COMPLETE = "COMPLETE"
+    SUPERSEDED = "SUPERSEDED"
+    FAILED = "FAILED"
 
 
 class TaskStatus(StrEnum):
@@ -102,6 +140,12 @@ class VehicleLoadProfileType(StrEnum):
     CARGO_ON_TRUCK_WITH_TRAILER = "CARGO_ON_TRUCK_WITH_TRAILER"
     CARGO_ON_TRAILER_WITH_TRAILER = "CARGO_ON_TRAILER_WITH_TRAILER"
     TWO_CARGO_SPLIT = "TWO_CARGO_SPLIT"
+
+
+class CatalogVersionMixin:
+    """Provide an application-managed optimistic version for mutable catalog rows."""
+
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
 class OsmRestrictionImport(Base):
@@ -181,7 +225,7 @@ class PlanningDayClosure(UuidPrimaryKeyMixin, TimestampMixin, Base):
         Uuid(as_uuid=True), ForeignKey("warehouses.id", ondelete="CASCADE"), nullable=False
     )
     date: Mapped[date] = mapped_column(Date, nullable=False)
-    closed_by: Mapped[str] = mapped_column(String(100), nullable=False, default="local-admin")
+    closed_by: Mapped[str] = mapped_column(String(200), nullable=False)
 
 class SlotDayPlan(UuidPrimaryKeyMixin, TimestampMixin, Base):
     """Version fence for customer slot holds on one warehouse-local date."""
@@ -242,7 +286,244 @@ class SlotHold(UuidPrimaryKeyMixin, TimestampMixin, Base):
     )
 
 
-class Warehouse(UuidPrimaryKeyMixin, TimestampMixin, Base):
+class CatalogCommandReceipt(UuidPrimaryKeyMixin, Base):
+    """Durable result pointer for one actor-scoped retryable catalog create command."""
+
+    __tablename__ = "catalog_command_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "operation",
+            "actor_id",
+            "idempotency_key",
+            name="uq_catalog_command_receipts_operation_actor_key",
+        ),
+        CheckConstraint("length(request_hash) = 64", name="valid_request_hash"),
+        CheckConstraint("length(idempotency_key) > 0", name="nonempty_idempotency_key"),
+        CheckConstraint(
+            "(resource_type IS NULL) = (resource_id IS NULL)",
+            name="complete_resource_pointer",
+        ),
+        Index("ix_catalog_command_receipts_resource", "resource_type", "resource_id"),
+    )
+
+    operation: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    resource_type: Mapped[str | None] = mapped_column(String(64))
+    resource_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class RequestRescheduleHold(UuidPrimaryKeyMixin, TimestampMixin, Base):
+    """Single active request fence spanning one transaction-free RWMS slot change."""
+
+    __tablename__ = "request_reschedule_holds"
+    __table_args__ = (
+        UniqueConstraint(
+            "actor_id",
+            "idempotency_key",
+            name="uq_request_reschedule_holds_actor_key",
+        ),
+        CheckConstraint("length(request_hash) = 64", name="valid_request_hash"),
+        CheckConstraint("expected_request_version >= 1", name="positive_request_version"),
+        CheckConstraint("expected_order_version >= 0", name="nonnegative_order_version"),
+        CheckConstraint("expected_session_version >= 0", name="nonnegative_session_version"),
+        CheckConstraint("slot_version >= 0", name="nonnegative_slot_version"),
+        CheckConstraint("source_plan_version >= 1", name="positive_source_plan_version"),
+        CheckConstraint(
+            "state IN ('CLAIMED', 'OWNER_CALLING', 'QUARANTINED', 'COMPLETE', "
+            "'SUPERSEDED', 'FAILED')",
+            name="valid_state",
+        ),
+        CheckConstraint("attempt_count >= 0", name="nonnegative_attempt_count"),
+        CheckConstraint("quarantine_count >= 0", name="nonnegative_quarantine_count"),
+        CheckConstraint(
+            "(last_retry_requested_at IS NULL) = (last_retry_requested_by IS NULL)",
+            name="complete_retry_audit",
+        ),
+        CheckConstraint(
+            "lease_until IS NULL OR state IN ('CLAIMED', 'OWNER_CALLING')",
+            name="lease_active_phase_only",
+        ),
+        CheckConstraint(
+            "next_attempt_at IS NULL OR state IN ('CLAIMED', 'OWNER_CALLING')",
+            name="retry_due_active_phase_only",
+        ),
+        CheckConstraint(
+            "selected_slot IS NULL OR jsonb_typeof(selected_slot) = 'object'",
+            name="selected_slot_object",
+        ),
+        CheckConstraint(
+            "owner_result IS NULL OR jsonb_typeof(owner_result) = 'object'",
+            name="owner_result_object",
+        ),
+        CheckConstraint(
+            "public_result IS NULL OR jsonb_typeof(public_result) = 'object'",
+            name="public_result_object",
+        ),
+        CheckConstraint(
+            "(state = 'CLAIMED' AND owner_session_id IS NULL AND "
+            "owner_booking_id IS NULL AND selected_slot IS NULL AND owner_result IS NULL "
+            "AND public_result IS NULL AND completed_at IS NULL AND error_code IS NULL) OR "
+            "(state = 'OWNER_CALLING' AND owner_session_id IS NOT NULL AND "
+            "owner_booking_id IS NOT NULL AND selected_slot IS NOT NULL "
+            "AND owner_result IS NULL AND public_result IS NULL "
+            "AND completed_at IS NULL AND error_code IS NULL) OR "
+            "(state = 'COMPLETE' AND owner_session_id IS NOT NULL AND "
+            "owner_booking_id IS NOT NULL AND selected_slot IS NOT NULL "
+            "AND owner_result IS NOT NULL AND completed_at IS NOT NULL "
+            "AND public_result IS NOT NULL AND error_code IS NULL "
+            "AND next_attempt_at IS NULL AND lease_until IS NULL) OR "
+            "(state = 'SUPERSEDED' AND owner_session_id IS NOT NULL AND "
+            "owner_booking_id IS NOT NULL AND selected_slot IS NOT NULL "
+            "AND owner_result IS NOT NULL AND public_result IS NULL "
+            "AND completed_at IS NOT NULL "
+            "AND error_code = 'RWMS_RESCHEDULE_RESULT_SUPERSEDED' "
+            "AND next_attempt_at IS NULL AND lease_until IS NULL) OR "
+            "(state = 'QUARANTINED' AND owner_session_id IS NOT NULL AND "
+            "owner_booking_id IS NOT NULL AND selected_slot IS NOT NULL "
+            "AND owner_result IS NULL AND public_result IS NULL AND completed_at IS NOT NULL "
+            "AND error_code IS NOT NULL AND next_attempt_at IS NULL "
+            "AND lease_until IS NULL AND quarantined_at IS NOT NULL "
+            "AND quarantine_count >= 1) OR "
+            "(state = 'FAILED' AND owner_result IS NULL AND public_result IS NULL "
+            "AND completed_at IS NOT NULL "
+            "AND error_code IS NOT NULL AND next_attempt_at IS NULL "
+            "AND lease_until IS NULL AND ((owner_session_id IS NULL AND "
+            "owner_booking_id IS NULL AND selected_slot IS NULL) OR "
+            "(owner_session_id IS NOT NULL AND owner_booking_id IS NOT NULL "
+            "AND selected_slot IS NOT NULL)))",
+            name="phase_consistency",
+        ),
+        Index(
+            "uq_request_reschedule_holds_active_request",
+            "request_id",
+            unique=True,
+            postgresql_where=text(
+                "state IN ('CLAIMED', 'OWNER_CALLING', 'QUARANTINED')"
+            ),
+        ),
+        Index(
+            "uq_request_reschedule_holds_active_plan",
+            "source_plan_id",
+            unique=True,
+            postgresql_where=text(
+                "source_plan_id IS NOT NULL AND "
+                "state IN ('CLAIMED', 'OWNER_CALLING', 'QUARANTINED')"
+            ),
+        ),
+        Index("ix_request_reschedule_holds_request_created", "request_id", "created_at"),
+    )
+
+    request_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("logistics_requests.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    actor_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    idempotency_key: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=RequestRescheduleHoldState.CLAIMED
+    )
+    expected_request_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    local_warehouse_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("warehouses.id", ondelete="RESTRICT"), nullable=False
+    )
+    external_warehouse_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    order_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    expected_order_version: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expected_session_version: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    slot_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    slot_version: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    source_plan_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    source_plan_version: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    source_plan_warehouse_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    source_scheduled_date: Mapped[date] = mapped_column(Date, nullable=False)
+    owner_session_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    owner_booking_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    selected_slot: Mapped[dict[str, Any] | None] = mapped_column(
+        MutableDict.as_mutable(JSONB(none_as_null=True))
+    )
+    owner_result: Mapped[dict[str, Any] | None] = mapped_column(
+        MutableDict.as_mutable(JSONB(none_as_null=True))
+    )
+    public_result: Mapped[dict[str, Any] | None] = mapped_column(
+        MutableDict.as_mutable(JSONB(none_as_null=True))
+    )
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    quarantine_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    quarantined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_quarantine_error_code: Mapped[str | None] = mapped_column(String(128))
+    last_retry_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_retry_requested_by: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    error_code: Mapped[str | None] = mapped_column(String(128))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ContractorHandoffCommand(UuidPrimaryKeyMixin, TimestampMixin, Base):
+    """Immutable contractor intent with leased RWMS delivery and terminal outcome state."""
+
+    __tablename__ = "contractor_handoff_commands"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('PENDING', 'APPLYING', 'SUCCEEDED', 'REJECTED')",
+            name="valid_status",
+        ),
+        CheckConstraint("attempts >= 0", name="nonnegative_attempts"),
+        CheckConstraint("jsonb_array_length(request_ids) > 0", name="nonempty_requests"),
+        CheckConstraint("length(assigned_by) > 0", name="nonempty_assigned_by"),
+        CheckConstraint(
+            "(status = 'APPLYING') = (lease_until IS NOT NULL)",
+            name="lease_matches_applying",
+        ),
+        CheckConstraint(
+            "(status IN ('SUCCEEDED', 'REJECTED')) = (completed_at IS NOT NULL)",
+            name="terminal_completion",
+        ),
+        Index(
+            "ix_contractor_handoff_commands_due",
+            "status",
+            "next_attempt_at",
+            "lease_until",
+        ),
+    )
+
+    warehouse_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("warehouses.id", ondelete="RESTRICT"), nullable=False
+    )
+    external_warehouse_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    planning_date: Mapped[date] = mapped_column(Date, nullable=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    request_ids: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(JSONB), nullable=False
+    )
+    command_payload: Mapped[dict[str, Any]] = mapped_column(
+        MutableDict.as_mutable(JSONB), nullable=False
+    )
+    contractor_worker_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    contractor_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    contractor_phone: Mapped[str] = mapped_column(String(64), nullable=False)
+    assigned_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=ContractorHandoffStatus.PENDING
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_code: Mapped[str | None] = mapped_column(String(128))
+    rejection_codes: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(JSONB), nullable=False, default=list
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Warehouse(CatalogVersionMixin, UuidPrimaryKeyMixin, TimestampMixin, Base):
     """RWMS-bound planning root from which route cycles depart and return."""
 
     __tablename__ = "warehouses"
@@ -251,7 +532,30 @@ class Warehouse(UuidPrimaryKeyMixin, TimestampMixin, Base):
         CheckConstraint(
             "external_warehouse_version >= 0", name="nonnegative_external_warehouse_version"
         ),
+        CheckConstraint("version >= 1", name="positive_version"),
         CheckConstraint("capacity_generation >= 0", name="nonnegative_capacity_generation"),
+        CheckConstraint(
+            "capacity_published_generation >= 0",
+            name="nonnegative_capacity_published_generation",
+        ),
+        CheckConstraint(
+            "capacity_published_generation <= capacity_generation",
+            name="published_capacity_not_ahead",
+        ),
+        CheckConstraint(
+            "capacity_publish_status IN ('NOT_REQUESTED', 'PENDING', 'PUBLISHED', 'FAILED')",
+            name="valid_capacity_publish_status",
+        ),
+        CheckConstraint("capacity_publish_attempts >= 0", name="nonnegative_capacity_attempts"),
+        Index(
+            "ix_warehouses_capacity_publish_due",
+            "capacity_publish_status",
+            "capacity_publish_next_attempt_at",
+            postgresql_where=text(
+                "capacity_publish_status IN ('PENDING', 'FAILED') "
+                "AND capacity_generation > capacity_published_generation"
+            ),
+        ),
         CheckConstraint("latitude BETWEEN -90 AND 90", name="valid_latitude"),
         CheckConstraint("longitude BETWEEN -180 AND 180", name="valid_longitude"),
         CheckConstraint("loading_minutes >= 0", name="nonnegative_loading"),
@@ -272,6 +576,20 @@ class Warehouse(UuidPrimaryKeyMixin, TimestampMixin, Base):
     default_planning_date: Mapped[date | None] = mapped_column(Date)
     seed: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     capacity_generation: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    capacity_published_generation: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    capacity_publish_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=CapacityPublicationStatus.NOT_REQUESTED
+    )
+    capacity_publish_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    capacity_publish_error_code: Mapped[str | None] = mapped_column(String(128))
+    capacity_publish_next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    capacity_publish_lease_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     settings: Mapped[dict[str, Any]] = mapped_column(
         MutableDict.as_mutable(JSONB), nullable=False, default=dict
     )
@@ -333,7 +651,7 @@ class WarehouseIsochroneTariff(Base):
     warehouse: Mapped[Warehouse] = relationship(back_populates="isochrone_tariffs")
 
 
-class Driver(UuidPrimaryKeyMixin, Base):
+class Driver(CatalogVersionMixin, UuidPrimaryKeyMixin, Base):
     """Warehouse driver with an explicit RWMS audience assignment mode."""
 
     __tablename__ = "drivers"
@@ -346,6 +664,7 @@ class Driver(UuidPrimaryKeyMixin, Base):
             "(rwms_assignment_mode = 'WAREHOUSE_DRIVERS' AND external_worker_id IS NULL)",
             name="valid_rwms_assignment",
         ),
+        CheckConstraint("version >= 1", name="positive_version"),
         Index("ix_drivers_warehouse_active", "warehouse_id", "active"),
     )
 
@@ -367,7 +686,7 @@ class Driver(UuidPrimaryKeyMixin, Base):
     )
 
 
-class Trailer(UuidPrimaryKeyMixin, Base):
+class Trailer(CatalogVersionMixin, UuidPrimaryKeyMixin, Base):
     """Warehouse-owned trailer whose physical limits participate in routing."""
 
     __tablename__ = "trailers"
@@ -399,6 +718,7 @@ class Trailer(UuidPrimaryKeyMixin, Base):
             "max_gross_weight_kg >= tare_weight_kg",
             name="gross_not_below_tare",
         ),
+        CheckConstraint("version >= 1", name="positive_version"),
         Index("ix_trailers_warehouse_active", "warehouse_id", "active"),
     )
 
@@ -432,7 +752,7 @@ class Trailer(UuidPrimaryKeyMixin, Base):
     )
 
 
-class Vehicle(UuidPrimaryKeyMixin, Base):
+class Vehicle(CatalogVersionMixin, UuidPrimaryKeyMixin, Base):
     """Cabin-carrying vehicle with optional complete physical routing data."""
 
     __tablename__ = "vehicles"
@@ -475,6 +795,7 @@ class Vehicle(UuidPrimaryKeyMixin, Base):
             "weight_safety_margin_kg >= 0",
             name="nonnegative_routing_safety_margins",
         ),
+        CheckConstraint("version >= 1", name="positive_version"),
         Index("ix_vehicles_warehouse_active", "warehouse_id", "active"),
         Index("ix_vehicles_default_trailer_id", "default_trailer_id"),
     )
@@ -555,19 +876,24 @@ class VehicleLoadProfile(UuidPrimaryKeyMixin, Base):
     vehicle: Mapped[Vehicle] = relationship(back_populates="load_profiles")
 
 
-class DriverShift(UuidPrimaryKeyMixin, Base):
-    """Monthly date range with one repeated daily driver/vehicle availability interval."""
+class DriverShift(CatalogVersionMixin, UuidPrimaryKeyMixin, Base):
+    """Bounded date range with one repeated, optionally overnight availability interval."""
 
     __tablename__ = "driver_shifts"
     __table_args__ = (
         CheckConstraint("date_to >= date_from", name="positive_date_range"),
         CheckConstraint("date_to - date_from <= 30", name="bounded_date_range"),
-        CheckConstraint(
-            "date_trunc('month', date_from) = date_trunc('month', date_to)",
-            name="single_month_range",
-        ),
-        CheckConstraint("end_time > start_time", name="positive_daily_duration"),
         CheckConstraint("break_minutes >= 0", name="nonnegative_break"),
+        CheckConstraint("end_time <> start_time", name="nonzero_daily_duration"),
+        CheckConstraint(
+            "break_minutes * 60 < CASE "
+            "WHEN end_time > start_time THEN EXTRACT(EPOCH FROM (end_time - start_time)) "
+            "WHEN end_time < start_time THEN "
+            "86400 + EXTRACT(EPOCH FROM (end_time - start_time)) "
+            "ELSE 0 END",
+            name="break_shorter_than_duration",
+        ),
+        CheckConstraint("version >= 1", name="positive_version"),
         Index("ix_driver_shifts_warehouse_dates", "warehouse_id", "date_from", "date_to"),
         Index("ix_driver_shifts_driver_dates", "driver_id", "date_from", "date_to"),
         Index("ix_driver_shifts_vehicle_dates", "vehicle_id", "date_from", "date_to"),
@@ -595,7 +921,7 @@ class DriverShift(UuidPrimaryKeyMixin, Base):
     cycles: Mapped[list[RouteCycle]] = relationship(back_populates="driver_shift")
 
 
-class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
+class LogisticsRequest(CatalogVersionMixin, UuidPrimaryKeyMixin, TimestampMixin, Base):
     """Source delivery or pickup request classified by backend coordinates."""
 
     __tablename__ = "logistics_requests"
@@ -610,6 +936,7 @@ class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
         CheckConstraint("longitude BETWEEN -180 AND 180", name="valid_longitude"),
         CheckConstraint("quantity > 0", name="positive_quantity"),
         CheckConstraint("service_minutes >= 0", name="nonnegative_service"),
+        CheckConstraint("version >= 1", name="positive_version"),
         CheckConstraint(
             "(cargo_length_mm IS NULL AND cargo_width_mm IS NULL AND "
             "cargo_height_mm IS NULL AND cargo_weight_kg IS NULL) OR "
@@ -632,6 +959,23 @@ class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
             name="supported_price_isochrone",
         ),
         CheckConstraint(
+            "client_type IS NULL OR "
+            "client_type IN ('INDIVIDUAL', 'SOLE_PROPRIETOR', 'LEGAL_ENTITY')",
+            name="valid_client_type",
+        ),
+        CheckConstraint(
+            "customer_delivery_purpose IS NULL OR ("
+            "type = 'DELIVERY' AND customer_delivery_purpose IN ("
+            "'RENTAL_DELIVERY', 'SALE_DELIVERY', 'CUSTOMER_RELOCATION'))",
+            name="valid_customer_delivery_purpose",
+        ),
+        CheckConstraint(
+            "source_system IS DISTINCT FROM 'RWMS' OR type <> 'DELIVERY' OR ("
+            "customer_delivery_purpose IS NOT NULL AND external_payload IS NOT NULL AND "
+            "external_payload ->> 'customerDeliveryPurpose' = customer_delivery_purpose)",
+            name="rwms_delivery_purpose_matches_source",
+        ),
+        CheckConstraint(
             "(assignment_type IS NULL AND assigned_contractor_worker_id IS NULL AND "
             "assigned_contractor_name IS NULL AND assigned_contractor_phone IS NULL AND "
             "assigned_at IS NULL AND assigned_by IS NULL) OR "
@@ -640,6 +984,17 @@ class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
             "assigned_contractor_name IS NOT NULL AND assigned_at IS NOT NULL AND "
             "assigned_by IS NOT NULL)",
             name="valid_contractor_assignment",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(contractor_external_task_ids) = 'array'",
+            name="contractor_external_task_ids_array",
+        ),
+        CheckConstraint(
+            "contractor_handoff_sequence IS NULL OR ("
+            "contractor_handoff_command_id IS NOT NULL AND "
+            "assignment_type = 'CONTRACTOR_HANDOFF' AND "
+            "contractor_handoff_sequence >= 0)",
+            name="valid_contractor_handoff_sequence",
         ),
         Index("ix_logistics_requests_warehouse_status", "warehouse_id", "status"),
         Index(
@@ -657,6 +1012,7 @@ class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
     external_version: Mapped[int | None] = mapped_column(Integer)
     external_payload: Mapped[dict[str, Any] | None] = mapped_column(MutableDict.as_mutable(JSONB))
     type: Mapped[str] = mapped_column(String(16), nullable=False)
+    customer_delivery_purpose: Mapped[str | None] = mapped_column(String(32))
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     address_label: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     latitude: Mapped[float] = mapped_column(Float, nullable=False)
@@ -680,12 +1036,25 @@ class LogisticsRequest(UuidPrimaryKeyMixin, TimestampMixin, Base):
     assigned_contractor_phone: Mapped[str | None] = mapped_column(String(64))
     assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     assigned_by: Mapped[str | None] = mapped_column(String(200))
+    contractor_handoff_command_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("contractor_handoff_commands.id", ondelete="SET NULL"),
+        index=True,
+    )
+    contractor_handoff_sequence: Mapped[int | None] = mapped_column(Integer)
+    contractor_external_task_ids: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(JSONB),
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
     trailer_access_allowed: Mapped[bool | None] = mapped_column(Boolean)
     include_driver_passport_in_notification: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
     contact_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     contact_phone: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    client_type: Mapped[str | None] = mapped_column(String(32))
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     warehouse: Mapped[Warehouse] = relationship(back_populates="requests")
@@ -780,16 +1149,27 @@ class PlanningTask(UuidPrimaryKeyMixin, Base):
 
 
 class RoutePlan(UuidPrimaryKeyMixin, TimestampMixin, Base):
-    """Versioned, independently saved route plan for one warehouse and date."""
+    """Versioned route-plan revision with one active head per warehouse-local date."""
 
     __tablename__ = "route_plans"
     __table_args__ = (
         CheckConstraint("version >= 1", name="positive_version"),
         Index("ix_route_plans_warehouse_date", "warehouse_id", "date"),
+        Index("ix_route_plans_supersedes_plan_id", "supersedes_plan_id"),
+        Index(
+            "uq_route_plans_active_warehouse_date",
+            "warehouse_id",
+            "date",
+            unique=True,
+            postgresql_where=text("status <> 'ARCHIVED'"),
+        ),
     )
 
     warehouse_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("warehouses.id", ondelete="RESTRICT"), nullable=False
+    )
+    supersedes_plan_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("route_plans.id", ondelete="SET NULL")
     )
     date: Mapped[date] = mapped_column(Date, nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False, default="Автоплан")
@@ -1124,7 +1504,7 @@ class ManualChangeAudit(UuidPrimaryKeyMixin, Base):
     route_plan_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("route_plans.id", ondelete="CASCADE"), nullable=False
     )
-    changed_by: Mapped[str] = mapped_column(String(200), nullable=False, default="local-admin")
+    changed_by: Mapped[str] = mapped_column(String(200), nullable=False)
     changed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

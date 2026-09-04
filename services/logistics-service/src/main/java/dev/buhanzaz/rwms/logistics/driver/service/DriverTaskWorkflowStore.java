@@ -3,7 +3,9 @@ package dev.buhanzaz.rwms.logistics.driver.service;
 import dev.buhanzaz.rwms.logistics.customer.capacity.service.CustomerDeliveryCapacityFence;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsLineState;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
@@ -83,20 +85,27 @@ class DriverTaskWorkflowStore {
                       task.getDriverAudienceMode(),
                       task.getPlannedDriverWorkerId(),
                       task.getPlannedDriverNameSnapshot()),
-                  workerContentCodec.decode(task.getWorkerContentJson())));
+                  workerContentCodec.decode(task.getWorkerContentJson()),
+                  task.getSourcePlanId() == null
+                      ? null
+                      : new LogisticsDependencyGateway.DriverTaskPlannerLineage(
+                          task.getSourcePlanId(),
+                          task.getSourcePlanVersion(),
+                          task.getSourcePlanWarehouseId(),
+                          task.getSourcePlanDate())));
       case SCHEDULED ->
-          task.hasManualPromotionHold()
+          task.hasPendingRepairPlaceRelease()
                   && task.getKind().consumesRepairPlace()
                   && task.getRepairPlaceAllocationVersion() != null
               ? Optional.of(
-                  new ManualReservationReleaseWork(
+                  new ReservationReleaseWork(
                       task.getId(),
                       task.getWarehouseId(),
                       task.getRepairId(),
                       task.getRepairPlaceAllocationId(),
                       task.getRepairPlaceAllocationVersion()))
               : Optional.of(new StatusWork(task.getId(), task.getExternalTaskId()));
-      case CURRENT -> Optional.of(new StatusWork(task.getId(), task.getExternalTaskId()));
+      case CURRENT -> currentWork(task);
       case FINALIZING -> finalizingWork(task);
       case COMPLETED, CANCELLED, RECONCILIATION_REQUIRED -> Optional.empty();
     };
@@ -465,10 +474,12 @@ class DriverTaskWorkflowStore {
   }
 
   @Transactional
-  public void confirmManualReservationRelease(
+  public void confirmReservationRelease(
       UUID taskId, LogisticsDependencyGateway.RepairPlaceAllocation allocation) {
     DriverLogisticsTask task = locked(taskId);
-    if (!task.hasManualPromotionHold() || task.getRepairPlaceAllocationVersion() == null) return;
+    if (!task.hasPendingRepairPlaceRelease() || task.getRepairPlaceAllocationVersion() == null) {
+      return;
+    }
     if (!task.getWarehouseId().equals(allocation.warehouseId())
         || !task.getRepairId().equals(allocation.repairId())
         || !task.getCabinId().equals(allocation.rentalItemId())
@@ -509,9 +520,11 @@ class DriverTaskWorkflowStore {
           case RegisterWork ignored -> "TASK_BOARD";
           case StatusWork ignored -> "TASK_BOARD";
           case EvidenceWork ignored -> "TASK_BOARD";
+          case TransferDepartureWork ignored -> "TRANSFER_EFFECT";
+          case TransferArrivalWork ignored -> "TRANSFER_EFFECT";
           case CoverWork ignored -> "COVER_EFFECT";
           case RepairPlaceEffectWork ignored -> "REPAIR_PLACE_EFFECT";
-          case ManualReservationReleaseWork ignored -> "REPAIR_PLACE_EFFECT";
+          case ReservationReleaseWork ignored -> "REPAIR_PLACE_EFFECT";
         };
     recordFailure(workTaskId(work), exception, stage);
   }
@@ -549,38 +562,46 @@ class DriverTaskWorkflowStore {
       case RegisterWork value -> value.taskId();
       case StatusWork value -> value.taskId();
       case EvidenceWork value -> value.taskId();
+      case TransferDepartureWork value -> value.taskId();
+      case TransferArrivalWork value -> value.taskId();
       case CoverWork value -> value.taskId();
       case RepairPlaceEffectWork value -> value.taskId();
-      case ManualReservationReleaseWork value -> value.taskId();
+      case ReservationReleaseWork value -> value.taskId();
     };
+  }
+
+  private Optional<Work> currentWork(DriverLogisticsTask task) {
+    if (!isAssignedTransferTask(task)) {
+      return Optional.of(new StatusWork(task.getId(), task.getExternalTaskId()));
+    }
+    TransferProgress progress = transferProgress(task, false);
+    if (progress.work() != null) return Optional.of(progress.work());
+    if (task.getState() == DriverTaskState.RECONCILIATION_REQUIRED) return Optional.empty();
+    return Optional.of(new StatusWork(task.getId(), task.getExternalTaskId()));
   }
 
   private Optional<Work> finalizingWork(DriverLogisticsTask task) {
     if (task.getCompletionEvidenceId() == null) {
       return Optional.of(new EvidenceWork(task.getId(), task.getExternalTaskId()));
     }
-    if (!task.isCoverApplied()) {
-      if (task.isGroupedDocument()) {
-        var member = task.nextUncoveredGroupedShipmentMember();
-        if (member == null) {
-          throw new LogisticsConflictException(
-              "Групповая отгрузка не синхронизировала общий checkpoint бытовок");
-        }
-        return Optional.of(
-            new CoverWork(
-                task.getId(),
-                member.getCabinId(),
-                task.getCompletionEntryId(),
-                task.getCompletionMediaId(),
-                true));
+    if (isAssignedTransferTask(task) && !task.isCoverApplied()) {
+      // Task-board evidence and the cabin media binding still belong to the departure warehouse
+      // while the asset is in transit. Freeze the cover before the arrival saga changes its
+      // operational warehouse; the transfer itself remains incomplete until the owner confirms
+      // every arrival effect below.
+      return coverWork(task);
+    }
+    if (isAssignedTransferTask(task)) {
+      TransferProgress progress = transferProgress(task, true);
+      if (progress.work() != null) return Optional.of(progress.work());
+      if (task.getState() == DriverTaskState.RECONCILIATION_REQUIRED) return Optional.empty();
+      if (!progress.completed()) {
+        deferTransferProgress(task);
+        return Optional.empty();
       }
-      return Optional.of(
-          new CoverWork(
-              task.getId(),
-              task.getCabinId(),
-              task.getCompletionEntryId(),
-              task.getCompletionMediaId(),
-              false));
+    }
+    if (!task.isCoverApplied()) {
+      return coverWork(task);
     }
     if (!task.isRepairPlaceEffectApplied()) {
       if (task.getRepairPlaceAllocationVersion() == null || task.getRepairId() == null) {
@@ -598,6 +619,178 @@ class DriverTaskWorkflowStore {
     task.complete();
     tasks.saveAndFlush(task);
     return Optional.empty();
+  }
+
+  private Optional<Work> coverWork(DriverLogisticsTask task) {
+    if (task.isGroupedDocument()) {
+      var member = task.nextUncoveredGroupedShipmentMember();
+      if (member == null) {
+        throw new LogisticsConflictException(
+            "Групповая ходка не синхронизировала общий checkpoint бытовок");
+      }
+      return Optional.of(
+          new CoverWork(
+              task.getId(),
+              member.getCabinId(),
+              task.getCompletionEntryId(),
+              task.getCompletionMediaId(),
+              true));
+    }
+    return Optional.of(
+        new CoverWork(
+            task.getId(),
+            task.getCabinId(),
+            task.getCompletionEntryId(),
+            task.getCompletionMediaId(),
+            false));
+  }
+
+  private TransferProgress transferProgress(DriverLogisticsTask task, boolean arrivalAllowed) {
+    TransferExecutionSnapshot snapshot = transferSnapshot(task);
+    if (snapshot == null) return TransferProgress.waiting();
+    LogisticsDocument document = snapshot.document();
+    List<LogisticsDocumentLine> lines = snapshot.lines();
+
+    if (lines.stream()
+        .anyMatch(
+            line ->
+                line.getState() == LogisticsLineState.CONFLICT
+                    || line.getState() == LogisticsLineState.CANCELLED)) {
+      requireTransferReconciliation(task, "TRANSFER_EXECUTION_LINE_CONFLICT");
+      return TransferProgress.waiting();
+    }
+
+    Optional<LogisticsDocumentLine> pending =
+        lines.stream().filter(line -> line.getState() == LogisticsLineState.PENDING).findFirst();
+    if (pending.isPresent()) {
+      if (document.getState() != LogisticsDocumentState.DRAFT
+          && document.getState() != LogisticsDocumentState.DEPARTING) {
+        requireTransferReconciliation(task, "TRANSFER_EXECUTION_DEPARTURE_STATE_CONFLICT");
+        return TransferProgress.waiting();
+      }
+      LogisticsDocumentLine line = pending.orElseThrow();
+      return TransferProgress.work(
+          new TransferDepartureWork(
+              task.getId(),
+              task.getPlannedDriverWorkerId(),
+              document.getId(),
+              line.getId(),
+              document.getVersion(),
+              line.getVersion()));
+    }
+
+    if (lines.isEmpty() && document.getState() == LogisticsDocumentState.DRAFT) {
+      return TransferProgress.work(
+          new TransferDepartureWork(
+              task.getId(),
+              task.getPlannedDriverWorkerId(),
+              document.getId(),
+              null,
+              document.getVersion(),
+              null));
+    }
+    if (!arrivalAllowed) return TransferProgress.waiting();
+
+    if (document.getState() == LogisticsDocumentState.COMPLETED) {
+      if (lines.stream().allMatch(line -> line.getState() == LogisticsLineState.ARRIVED)) {
+        return TransferProgress.complete();
+      }
+      requireTransferReconciliation(task, "TRANSFER_EXECUTION_COMPLETION_CONFLICT");
+      return TransferProgress.waiting();
+    }
+    if (document.getState() == LogisticsDocumentState.IN_TRANSIT
+        || document.getState() == LogisticsDocumentState.ARRIVING) {
+      Optional<LogisticsDocumentLine> departed =
+          lines.stream()
+              .filter(line -> line.getState() == LogisticsLineState.DEPARTED)
+              .findFirst();
+      if (departed.isPresent()) {
+        LogisticsDocumentLine line = departed.orElseThrow();
+        return TransferProgress.work(
+            new TransferArrivalWork(
+                task.getId(),
+                task.getPlannedDriverWorkerId(),
+                document.getId(),
+                line.getId(),
+                document.getVersion(),
+                line.getVersion(),
+                task.getCompletionMediaId(),
+                task.getCompletionMediaGeneration(),
+                task.getPriority()));
+      }
+      if (lines.isEmpty() && document.getState() == LogisticsDocumentState.IN_TRANSIT) {
+        return TransferProgress.work(
+            new TransferArrivalWork(
+                task.getId(),
+                task.getPlannedDriverWorkerId(),
+                document.getId(),
+                null,
+                document.getVersion(),
+                null,
+                task.getCompletionMediaId(),
+                task.getCompletionMediaGeneration(),
+                task.getPriority()));
+      }
+      return TransferProgress.waiting();
+    }
+    if (document.getState() == LogisticsDocumentState.DEPARTING) {
+      return TransferProgress.waiting();
+    }
+    requireTransferReconciliation(task, "TRANSFER_EXECUTION_DOCUMENT_STATE_CONFLICT");
+    return TransferProgress.waiting();
+  }
+
+  private TransferExecutionSnapshot transferSnapshot(DriverLogisticsTask task) {
+    LogisticsDocument document =
+        documents.findByIdAndDocumentType(task.getSourceId(), LogisticsDocumentType.TRANSFER)
+            .orElse(null);
+    if (document == null || !task.getWarehouseId().equals(document.getWarehouseId())) {
+      requireTransferReconciliation(task, "TRANSFER_EXECUTION_SOURCE_CONFLICT");
+      return null;
+    }
+    List<LogisticsDocumentLine> lines =
+        documentLines.findAllByDocument_IdOrderByLineNumber(document.getId());
+    List<UUID> taskLineIds =
+        task.getMembers().stream().map(member -> member.getDocumentLineId()).toList();
+    List<UUID> documentLineIds = lines.stream().map(LogisticsDocumentLine::getId).toList();
+    if ((task.isFurnitureCargoTransfer() && !lines.isEmpty())
+        || (!task.isFurnitureCargoTransfer() && !taskLineIds.equals(documentLineIds))) {
+      requireTransferReconciliation(task, "TRANSFER_EXECUTION_MEMBERSHIP_CONFLICT");
+      return null;
+    }
+    if (task.getPlannedDriverWorkerId() == null) {
+      requireTransferReconciliation(task, "TRANSFER_EXECUTION_DRIVER_MISSING");
+      return null;
+    }
+    return new TransferExecutionSnapshot(document, lines);
+  }
+
+  private void deferTransferProgress(DriverLogisticsTask task) {
+    int deferred =
+        tasks.deferStatusPoll(
+            task.getId(),
+            task.getVersion(),
+            task.getState(),
+            now().plusSeconds(UNCHANGED_STATUS_POLL_DELAY_SECONDS));
+    if (deferred != 1) {
+      throw new LogisticsConflictException("Transfer execution poll fence changed");
+    }
+  }
+
+  private void requireTransferReconciliation(DriverLogisticsTask task, String code) {
+    task.requireReconciliation(code);
+    tasks.saveAndFlush(task);
+  }
+
+  /**
+   * Returns whether logistics owns the exact executor needed for version-fenced transfer effects.
+   * Shared warehouse-pool tasks keep their prior task-board-only lifecycle until a canonical
+   * executor identity is assigned; guessing the worker from a mutable mobile claim is forbidden.
+   */
+  private static boolean isAssignedTransferTask(DriverLogisticsTask task) {
+    return task.getSourceType() == DriverTaskSourceType.LOGISTICS_DOCUMENT
+        && task.getKind() == DriverTaskKind.TRANSFER
+        && task.getPlannedDriverWorkerId() != null;
   }
 
   private DriverLogisticsTask locked(UUID taskId) {
@@ -646,9 +839,11 @@ class DriverTaskWorkflowStore {
       permits RegisterWork,
           StatusWork,
           EvidenceWork,
+          TransferDepartureWork,
+          TransferArrivalWork,
           CoverWork,
           RepairPlaceEffectWork,
-          ManualReservationReleaseWork {}
+          ReservationReleaseWork {}
 
   /** Task-board registration payload frozen from a logistics-owned driver task. */
   record RegisterWork(
@@ -662,7 +857,8 @@ class DriverTaskWorkflowStore {
       java.time.LocalDate scheduledDate,
       int priority,
       LogisticsDependencyGateway.DriverTaskAudience driverAudience,
-      DriverTaskWorkerContent workerContent)
+      DriverTaskWorkerContent workerContent,
+      LogisticsDependencyGateway.DriverTaskPlannerLineage plannerLineage)
       implements Work {}
 
   /** Status lookup used only to reconcile an already registered task-board identity. */
@@ -670,6 +866,29 @@ class DriverTaskWorkflowStore {
 
   /** Completion-evidence lookup for a task whose task-board card is already done. */
   record EvidenceWork(UUID taskId, UUID externalTaskId) implements Work {}
+
+  /** Version-fenced departure selected from the current logistics-owned transfer snapshot. */
+  record TransferDepartureWork(
+      UUID taskId,
+      UUID actorId,
+      UUID documentId,
+      UUID lineId,
+      long expectedDocumentVersion,
+      Long expectedLineVersion)
+      implements Work {}
+
+  /** Arrival command pinned to the selected task-board media evidence and transfer revisions. */
+  record TransferArrivalWork(
+      UUID taskId,
+      UUID actorId,
+      UUID documentId,
+      UUID lineId,
+      long expectedDocumentVersion,
+      Long expectedLineVersion,
+      UUID mediaId,
+      long mediaGeneration,
+      int priority)
+      implements Work {}
 
   /** Asset cover effect that follows task-board completion evidence. */
   record CoverWork(
@@ -685,8 +904,25 @@ class DriverTaskWorkflowStore {
       UUID taskId, UUID warehouseId, UUID repairId, long expectedVersion, String transition)
       implements Work {}
 
-  /** Maintenance reservation release compensation for cancelled manual work. */
-  record ManualReservationReleaseWork(
+  /** Immediate maintenance reservation release after work leaves the current lane. */
+  record ReservationReleaseWork(
       UUID taskId, UUID warehouseId, UUID repairId, UUID allocationId, long expectedVersion)
       implements Work {}
+
+  private record TransferExecutionSnapshot(
+      LogisticsDocument document, List<LogisticsDocumentLine> lines) {}
+
+  private record TransferProgress(Work work, boolean completed) {
+    private static TransferProgress work(Work work) {
+      return new TransferProgress(Objects.requireNonNull(work), false);
+    }
+
+    private static TransferProgress waiting() {
+      return new TransferProgress(null, false);
+    }
+
+    private static TransferProgress complete() {
+      return new TransferProgress(null, true);
+    }
+  }
 }

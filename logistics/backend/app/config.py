@@ -103,6 +103,40 @@ class Settings(BaseSettings):
             "LOGISTICS_DEFAULT_WAREHOUSE_TIMEZONE", "DEFAULT_WAREHOUSE_TIMEZONE"
         ),
     )
+    auth_issuer: str = Field(
+        default="http://localhost:8088/auth",
+        validation_alias=AliasChoices(
+            "AUTH_ISSUER", "LOGISTICS_AUTH_ISSUER", "auth_issuer"
+        ),
+    )
+    auth_jwks_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "AUTH_JWKS_URL", "LOGISTICS_AUTH_JWKS_URL", "auth_jwks_url"
+        ),
+    )
+    auth_audience: str = Field(
+        default="rwms-services",
+        validation_alias=AliasChoices(
+            "AUTH_AUDIENCE", "LOGISTICS_AUTH_AUDIENCE", "auth_audience"
+        ),
+    )
+    auth_panel_client_id: str = Field(
+        default="rwms-panel",
+        validation_alias=AliasChoices(
+            "AUTH_PANEL_CLIENT_ID",
+            "LOGISTICS_AUTH_PANEL_CLIENT_ID",
+            "auth_panel_client_id",
+        ),
+    )
+    auth_jwks_timeout_seconds: float = Field(
+        default=5.0,
+        validation_alias=AliasChoices(
+            "AUTH_JWKS_TIMEOUT_SECONDS",
+            "LOGISTICS_AUTH_JWKS_TIMEOUT_SECONDS",
+            "auth_jwks_timeout_seconds",
+        ),
+    )
     planner_default_seed: int = Field(
         default=1,
         validation_alias=AliasChoices("LOGISTICS_PLANNER_DEFAULT_SEED", "PLANNER_DEFAULT_SEED"),
@@ -115,12 +149,84 @@ class Settings(BaseSettings):
             "RWMS_SYNC_ENABLED", "LOGISTICS_RWMS_SYNC_ENABLED", "rwms_sync_enabled"
         ),
     )
+    rwms_demand_sync_interval_seconds: float = Field(
+        default=60.0,
+        validation_alias=AliasChoices(
+            "RWMS_DEMAND_SYNC_INTERVAL_SECONDS",
+            "LOGISTICS_RWMS_DEMAND_SYNC_INTERVAL_SECONDS",
+            "rwms_demand_sync_interval_seconds",
+        ),
+    )
+    rwms_demand_sync_batch_size: int = Field(
+        default=25,
+        ge=1,
+        le=100,
+        validation_alias=AliasChoices(
+            "RWMS_DEMAND_SYNC_BATCH_SIZE",
+            "LOGISTICS_RWMS_DEMAND_SYNC_BATCH_SIZE",
+            "rwms_demand_sync_batch_size",
+        ),
+    )
     rwms_capacity_publish_enabled: bool = Field(
         default=False,
         validation_alias=AliasChoices(
             "RWMS_CAPACITY_PUBLISH_ENABLED",
             "LOGISTICS_RWMS_CAPACITY_PUBLISH_ENABLED",
             "rwms_capacity_publish_enabled",
+        ),
+    )
+    rwms_capacity_retry_interval_seconds: float = Field(
+        default=15.0,
+        validation_alias=AliasChoices(
+            "RWMS_CAPACITY_RETRY_INTERVAL_SECONDS",
+            "LOGISTICS_RWMS_CAPACITY_RETRY_INTERVAL_SECONDS",
+            "rwms_capacity_retry_interval_seconds",
+        ),
+    )
+    rwms_contractor_handoff_retry_interval_seconds: float = Field(
+        default=15.0,
+        validation_alias=AliasChoices(
+            "RWMS_CONTRACTOR_HANDOFF_RETRY_INTERVAL_SECONDS",
+            "LOGISTICS_RWMS_CONTRACTOR_HANDOFF_RETRY_INTERVAL_SECONDS",
+            "rwms_contractor_handoff_retry_interval_seconds",
+        ),
+    )
+    rwms_contractor_handoff_retry_batch_size: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        validation_alias=AliasChoices(
+            "RWMS_CONTRACTOR_HANDOFF_RETRY_BATCH_SIZE",
+            "LOGISTICS_RWMS_CONTRACTOR_HANDOFF_RETRY_BATCH_SIZE",
+            "rwms_contractor_handoff_retry_batch_size",
+        ),
+    )
+    rwms_request_reschedule_retry_interval_seconds: float = Field(
+        default=15.0,
+        validation_alias=AliasChoices(
+            "RWMS_REQUEST_RESCHEDULE_RETRY_INTERVAL_SECONDS",
+            "LOGISTICS_RWMS_REQUEST_RESCHEDULE_RETRY_INTERVAL_SECONDS",
+            "rwms_request_reschedule_retry_interval_seconds",
+        ),
+    )
+    rwms_request_reschedule_retry_batch_size: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        validation_alias=AliasChoices(
+            "RWMS_REQUEST_RESCHEDULE_RETRY_BATCH_SIZE",
+            "LOGISTICS_RWMS_REQUEST_RESCHEDULE_RETRY_BATCH_SIZE",
+            "rwms_request_reschedule_retry_batch_size",
+        ),
+    )
+    rwms_request_reschedule_retry_max_attempts: int = Field(
+        default=8,
+        ge=1,
+        le=100,
+        validation_alias=AliasChoices(
+            "RWMS_REQUEST_RESCHEDULE_RETRY_MAX_ATTEMPTS",
+            "LOGISTICS_RWMS_REQUEST_RESCHEDULE_RETRY_MAX_ATTEMPTS",
+            "rwms_request_reschedule_retry_max_attempts",
         ),
     )
     rwms_logistics_base_url: str | None = Field(
@@ -295,6 +401,46 @@ class Settings(BaseSettings):
             raise ValueError("RWMS endpoint must not contain a query or fragment")
         return normalized
 
+    @field_validator("auth_issuer", "auth_jwks_url")
+    @classmethod
+    def validate_auth_url(cls, value: str | None) -> str | None:
+        """Require absolute auth endpoints and preserve an issuer path suffix."""
+
+        if value is None:
+            return None
+        normalized = value.strip().rstrip("/")
+        parsed = urlparse(normalized)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("AUTH endpoint must be an absolute http(s) URL")
+        if parsed.query or parsed.fragment:
+            raise ValueError("AUTH endpoint must not contain a query or fragment")
+        return normalized
+
+    @field_validator("auth_audience", "auth_panel_client_id")
+    @classmethod
+    def validate_auth_identifier(cls, value: str) -> str:
+        """Reject blank JWT audience or interactive-client identifiers."""
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("AUTH identifiers must not be blank")
+        return normalized
+
+    @field_validator("auth_jwks_timeout_seconds")
+    @classmethod
+    def validate_auth_jwks_timeout(cls, value: float) -> float:
+        """Bound signing-key discovery latency for fail-closed authentication."""
+
+        if not isfinite(value) or value <= 0 or value > 30:
+            raise ValueError("AUTH_JWKS_TIMEOUT_SECONDS must be between 0 and 30 seconds")
+        return value
+
+    @property
+    def effective_auth_jwks_url(self) -> str:
+        """Return the explicit JWKS endpoint or the Spring Authorization Server default."""
+
+        return self.auth_jwks_url or f"{self.auth_issuer}/oauth2/jwks"
+
     @field_validator("rwms_client_id")
     @classmethod
     def validate_rwms_client_id(cls, value: str) -> str:
@@ -312,6 +458,32 @@ class Settings(BaseSettings):
 
         if value <= 0:
             raise ValueError("RWMS_TIMEOUT_SECONDS must be positive")
+        return value
+
+    @field_validator(
+        "rwms_capacity_retry_interval_seconds",
+        "rwms_contractor_handoff_retry_interval_seconds",
+        "rwms_request_reschedule_retry_interval_seconds",
+    )
+    @classmethod
+    def validate_capacity_retry_interval(cls, value: float) -> float:
+        """Bound RWMS retry polling so recovery is prompt without busy looping."""
+
+        if not isfinite(value) or value < 1 or value > 300:
+            raise ValueError(
+                "RWMS_CAPACITY_RETRY_INTERVAL_SECONDS must be between 1 and 300"
+            )
+        return value
+
+    @field_validator("rwms_demand_sync_interval_seconds")
+    @classmethod
+    def validate_demand_sync_interval(cls, value: float) -> float:
+        """Bound automatic ingestion cadence to avoid busy loops and stale projections."""
+
+        if not isfinite(value) or value < 5 or value > 3600:
+            raise ValueError(
+                "RWMS_DEMAND_SYNC_INTERVAL_SECONDS must be between 5 and 3600"
+            )
         return value
 
     @model_validator(mode="after")

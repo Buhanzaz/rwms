@@ -57,7 +57,6 @@ public class CustomerRegistrationService {
         if (subjects.existsByUsernameIgnoreCase(username)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Логин уже используется");
         }
-
         AuthSubject subject = projectionWriter.insertUser(
                 username,
                 passwordEncoder.encode(request.password()),

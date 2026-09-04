@@ -12,15 +12,23 @@ import dev.buhanzaz.rwms.manager.network.RentalItemDto
 import dev.buhanzaz.rwms.manager.network.RwmsBackend
 import dev.buhanzaz.rwms.manager.network.TransferFurnitureReplacementRequest
 import dev.buhanzaz.rwms.manager.network.TransferLineRequest
+import dev.buhanzaz.rwms.manager.network.WarehouseDto
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadArea
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadCoordinator
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadDraft
 import dev.buhanzaz.rwms.manager.uploads.PendingBackgroundPhoto
 import dev.buhanzaz.rwms.manager.uploads.TransferArrivalUploadCommand
+import java.time.Clock
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 import java.util.UUID
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.flow.update
+
+/** Resolves the calendar date owned by the supplied warehouse at an absolute instant. */
+internal fun warehouseBusinessDate(warehouse: WarehouseDto, instant: Instant): LocalDate =
+    LocalDate.ofInstant(instant, ZoneId.of(warehouse.timeZone))
 
 /**
  * Owns transfer creation, departure, arrival and reconciliation. The coordinator retains only
@@ -32,6 +40,7 @@ internal class ManagerTransferCoordinator(
     private val backend: RwmsBackend,
     private val backgroundUploads: Deferred<BackgroundUploadCoordinator>,
     private val commandKeys: StableCommandKeys,
+    private val clock: Clock = Clock.systemUTC(),
 ) {
     private val mutableState
         get() = runtime.mutableState
@@ -48,6 +57,8 @@ internal class ManagerTransferCoordinator(
 
     fun startTransferEditor(onReady: () -> Unit) = command {
         val warehouseId = requireWarehouseId()
+        val sourceWarehouse = mutableState.value.warehouses.firstOrNull { it.id == warehouseId }
+            ?: throw IllegalStateException("Склад отправления недоступен")
         val user = requireNotNull(mutableState.value.currentUser)
         mutableState.value.requireManagerWarehouseAccess(warehouseId, "EDIT")
         val destinations = mutableState.value.warehouses.filter { warehouse ->
@@ -71,6 +82,7 @@ internal class ManagerTransferCoordinator(
         mutableState.update {
             it.copy(
                 transferEditor = TransferEditorState(
+                    scheduledDate = warehouseBusinessDate(sourceWarehouse, clock.instant()).toString(),
                     destinationWarehouseIds = destinations.mapTo(mutableSetOf()) { it.id },
                     candidates = candidates,
                     furnitureCatalog = furnitureCatalog,
@@ -175,7 +187,11 @@ internal class ManagerTransferCoordinator(
         }
         val date = runCatching { LocalDate.parse(editor.scheduledDate) }
             .getOrElse { throw IllegalArgumentException("Укажите корректную дату задания") }
-        require(!date.isBefore(LocalDate.now())) {
+        val sourceWarehouse = mutableState.value.warehouses.firstOrNull {
+            it.id == sourceWarehouseId
+        } ?: throw IllegalStateException("Склад отправления недоступен")
+        val sourceBusinessDate = warehouseBusinessDate(sourceWarehouse, clock.instant())
+        require(!date.isBefore(sourceBusinessDate)) {
             "Для перемещения укажите дату, начиная с сегодняшней"
         }
         val driver = editor.driverSnapshot.trim().takeIf(String::isNotEmpty)
@@ -263,6 +279,53 @@ internal class ManagerTransferCoordinator(
                 transferReadyMedia = emptyList(),
             )
         }
+    }
+
+    fun departTransfer() = command {
+        val document = requireNotNull(mutableState.value.selectedTransfer) {
+            "Откройте перемещение"
+        }
+        requireTransferManageAccess(document)
+        require(document.lines.isEmpty()) {
+            "Перемещение с бытовками отправляется отдельно по каждой бытовке"
+        }
+        require(document.state == "DRAFT") {
+            "Это перемещение сейчас нельзя начать"
+        }
+        requireTransferFurnitureReady(document)
+        val signature = "transfer-depart-document:${document.id}:${document.version}"
+        val updated = backend.api.departTransfer(
+            documentId = document.id,
+            expectedVersion = document.version,
+            idempotencyKey = commandKeys.logisticsCommandKey(signature),
+        )
+        commandKeys.complete(signature)
+        applyTransferProjection(updated)
+        refreshTransferReadiness(updated)
+        message("Перемещение начато")
+    }
+
+    fun arriveTransfer() = command {
+        val document = requireNotNull(mutableState.value.selectedTransfer) {
+            "Откройте перемещение"
+        }
+        requireTransferManageAccess(document)
+        require(document.lines.isEmpty()) {
+            "Перемещение с бытовками принимается отдельно по каждой бытовке"
+        }
+        require(document.state == "IN_TRANSIT") {
+            "Прибытие этого перемещения сейчас нельзя подтвердить"
+        }
+        val signature = "transfer-arrive-document:${document.id}:${document.version}"
+        val updated = backend.api.arriveTransfer(
+            documentId = document.id,
+            expectedVersion = document.version,
+            idempotencyKey = commandKeys.logisticsCommandKey(signature),
+        )
+        commandKeys.complete(signature)
+        applyTransferProjection(updated)
+        refreshTransferReadiness(updated)
+        message("Прибытие перемещения подтверждено")
     }
 
     fun departTransferLine(lineId: String) = command {

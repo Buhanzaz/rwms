@@ -12,6 +12,7 @@ const (
 	OwnerTypeMaintenanceAcceptance    = "MAINTENANCE_ACCEPTANCE"
 	OwnerTypeMaintenanceCatalogNode   = "MAINTENANCE_CATALOG_NODE"
 	OwnerTypeLogisticsCustomerProfile = "LOGISTICS_CUSTOMER_PROFILE"
+	OwnerTypeTaskBoardWorkerProfile   = "TASK_BOARD_WORKER_PROFILE"
 	OwnerTypeTaskBoardEntry           = "TASK_BOARD_ENTRY"
 	OwnerTypeDriverShift              = "DRIVER_SHIFT"
 	ViewerContextEstimate             = "ESTIMATE"
@@ -30,6 +31,9 @@ const (
 	LogisticsOwnerProofService        = "logistics-service"
 	MaintenanceOwnerProofScope        = "media.maintenance"
 	LogisticsOwnerProofScope          = "media.logistics"
+	TaskBoardOwnerProofConsumer       = "media-service-task-board-owner-proof-v1"
+	TaskBoardOwnerProofService        = "task-board-service"
+	TaskBoardOwnerProofScope          = "media.task-board"
 	TaskBoardEntryOwnerProofConsumer  = "media-service-task-board-entry-owner-proof-v1"
 	TaskBoardEntryOwnerProofTopic     = "rwms.task-board.entry-owner-proof.v1"
 	TaskBoardEntryOwnerProofAggregate = "TASK_BOARD_ENTRY_OWNER_PROOF"
@@ -97,6 +101,11 @@ var ownerScopeDefinitions = map[string]OwnerScopeDefinition{
 		SourceService: LogisticsOwnerProofService, ServiceScope: LogisticsOwnerProofScope,
 		ConsumerName: LogisticsOwnerProofConsumer, AggregateType: "CUSTOMER_PROFILE",
 	},
+	OwnerTypeTaskBoardWorkerProfile: {
+		OwnerType: OwnerTypeTaskBoardWorkerProfile, ViewerContext: ViewerContextProfileAvatar,
+		SourceService: TaskBoardOwnerProofService, ServiceScope: TaskBoardOwnerProofScope,
+		ConsumerName: TaskBoardOwnerProofConsumer, AggregateType: "WORKER_PROFILE",
+	},
 	OwnerTypeTaskBoardEntry: {
 		OwnerType: OwnerTypeTaskBoardEntry, ViewerContext: ViewerContextWorkResult,
 		ConsumerName:  TaskBoardEntryOwnerProofConsumer,
@@ -113,6 +122,12 @@ var ownerScopeDefinitions = map[string]OwnerScopeDefinition{
 // reference and a current task-board worker-audience proof.
 func IsWorkerEvidenceOwnerType(ownerType string) bool {
 	return ownerType == OwnerTypeTaskBoardEntry || ownerType == OwnerTypeDriverShift
+}
+
+// IsWorkerProfileOwnerType reports whether media belongs to the authenticated
+// worker profile itself rather than to one task execution.
+func IsWorkerProfileOwnerType(ownerType string) bool {
+	return ownerType == OwnerTypeTaskBoardWorkerProfile
 }
 
 // PublicOwnerScope returns the owner definition only when its browser-facing

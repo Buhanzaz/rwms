@@ -1,144 +1,240 @@
 package dev.buhanzaz.rwms.worker.feature.tasks
 
 import com.google.common.truth.Truth.assertThat
-import dev.buhanzaz.rwms.worker.core.database.WorkerCategoryEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerAssignmentEntity
-import dev.buhanzaz.rwms.worker.core.database.WorkerGroupEntity
+import dev.buhanzaz.rwms.worker.core.database.WorkerCategoryEntity
 import dev.buhanzaz.rwms.worker.core.database.WorkerTaskEntity
 import org.junit.Test
 
 class TaskQueueSectionsTest {
     @Test
-    fun `board title and cabin task headings use product language`() {
-        assertThat(TASK_BOARD_TITLE).isEqualTo("Доска задач")
+    fun `home title and cabin task headings use single-task product language`() {
+        assertThat(CURRENT_TASK_TITLE).isEqualTo("Моё задание")
         assertThat(taskCardTitle("БТ-42")).isEqualTo("БТ-42")
         assertThat(taskCardTitle(null)).isEqualTo("Задание")
-        assertThat(taskCardTitle("550e8400-e29b-41d4-a716-446655440000")).isEqualTo("Задание")
+        assertThat(taskCardTitle("550e8400-e29b-41d4-a716-446655440000"))
+            .isEqualTo("Задание")
     }
 
     @Test
     fun `technical maintenance queue label is matched without case or spacing sensitivity`() {
-        assertThat(taskBoardQueueLabel("Maintenance repair")).isEqualTo("Работы")
-        assertThat(taskBoardQueueLabel("  MAINTENANCE   REPAIR ")).isEqualTo("Работы")
-        assertThat(taskBoardQueueLabel("Maintenance rapair")).isEqualTo("Работы")
-        assertThat(taskBoardQueueLabel("Погрузка")).isEqualTo("Погрузка")
+        assertThat(taskQueueLabel("Maintenance repair")).isEqualTo("Работы")
+        assertThat(taskQueueLabel("  MAINTENANCE   REPAIR ")).isEqualTo("Работы")
+        assertThat(taskQueueLabel("Maintenance rapair")).isEqualTo("Работы")
+        assertThat(taskQueueLabel("Погрузка")).isEqualTo("Погрузка")
     }
 
     @Test
-    fun `refresh animation requires a recent active synchronization stage`() {
-        val now = 1_000_000L
+    fun `active group assignment wins over every waiting task`() {
+        val active = task("active", "general", queuePosition = 12).copy(status = "IN_PROGRESS")
+        val waiting = task("waiting", "repair", queuePosition = 0)
 
-        assertThat(shouldAnimateTaskBoardRefresh("CONTEXT", now - 1_000, now)).isTrue()
-        assertThat(shouldAnimateTaskBoardRefresh("UPLOAD", now - 60_000, now)).isTrue()
-        assertThat(shouldAnimateTaskBoardRefresh("CONTEXT", now - 60_001, now)).isFalse()
-        assertThat(shouldAnimateTaskBoardRefresh("IDLE", now, now)).isFalse()
-        assertThat(shouldAnimateTaskBoardRefresh("WAITING_FOR_EVIDENCE", now, now)).isFalse()
-        assertThat(shouldAnimateTaskBoardRefresh("CONTEXT", now + 1, now)).isFalse()
-    }
-
-    @Test
-    fun `board notice hides progress chatter but keeps offline and blocked truth`() {
-        assertThat(taskBoardSyncNotice(true, "CONTEXT", "Проверяем доступ")).isNull()
-        assertThat(taskBoardSyncNotice(false, "CONTEXT", "Проверяем доступ"))
-            .isEqualTo("Нет связи с RWMS")
-        assertThat(taskBoardSyncNotice(true, "WAITING_FOR_EVIDENCE", "Фото ожидает отправки"))
-            .isEqualTo("Фото ожидает отправки")
-    }
-
-    @Test
-    fun rendersEveryAuthorizedQueueInServerOrderIncludingEmptyQueues() {
-        val sections = buildTaskQueueSections(
+        val selected = selectCurrentWorkerTask(
+            userId = USER_ID,
+            currentGroupId = GROUP_ID,
             categories = listOf(
-                category("furniture", "Перемещение мебели", sortOrder = 20),
-                category("repair", "Ремонты", sortOrder = 10),
-                category("electric", "Электрики", sortOrder = 30),
+                category("repair", sortOrder = 1),
+                category("general", sortOrder = 50, groupIds = listOf(GROUP_ID)),
             ),
-            tasks = listOf(task("furniture-task", "furniture", "Перемещение мебели", 20, 0)),
+            tasks = listOf(waiting, active),
+            assignments = listOf(assignment(active.entryId, USER_ID, GROUP_ID, "ACTIVE")),
         )
 
-        assertThat(sections.map { it.queueId })
-            .containsExactly("repair", "furniture", "electric")
-            .inOrder()
-        assertThat(sections.first().tasks).isEmpty()
-        assertThat(sections.first().queuePurpose).isEqualTo("GENERAL")
-        assertThat(sections[1].tasks.map { it.entryId }).containsExactly("furniture-task")
-        assertThat(sections.last().tasks).isEmpty()
+        assertThat(selected?.entryId).isEqualTo("active")
     }
 
     @Test
-    fun ordersTasksByExactQueuePositionInsideEachSection() {
-        val sections = buildTaskQueueSections(
-            categories = listOf(category("repair", "Ремонты", sortOrder = 10)),
+    fun `only first waiting task in authoritative queue order is shown`() {
+        val selected = selectCurrentWorkerTask(
+            userId = USER_ID,
+            currentGroupId = GROUP_ID,
+            categories = listOf(
+                category("repair", sortOrder = 10),
+                category("electric", sortOrder = 20),
+            ),
             tasks = listOf(
-                task("last", "repair", "Ремонты", 10, queuePosition = 2),
-                task("first", "repair", "Ремонты", 10, queuePosition = 0),
-                task("middle", "repair", "Ремонты", 10, queuePosition = 1),
+                task("electric-first", "electric", queuePosition = 0),
+                task("repair-second", "repair", queuePosition = 2),
+                task("repair-first", "repair", queuePosition = 1),
             ),
+            assignments = emptyList(),
         )
 
-        assertThat(sections.single().tasks.map { it.entryId })
-            .containsExactly("first", "middle", "last")
-            .inOrder()
+        assertThat(selected?.entryId).isEqualTo("repair-first")
     }
 
     @Test
-    fun `active then pinned and promoted real tasks stay ahead of stored shadows`() {
-        val sections = buildTaskQueueSections(
-            categories = listOf(category("electric", "Электрика", sortOrder = 10)),
+    fun `joined slinger task temporarily replaces paused ordinary task`() {
+        val ordinary = task("ordinary", "general", queuePosition = 0).copy(status = "PAUSED")
+        val slinger = task("slinger", "logistics", queuePosition = 0).copy(
+            status = "IN_PROGRESS",
+            availabilityMode = "OPTIONAL_JOIN",
+        )
+
+        val selected = selectCurrentWorkerTask(
+            userId = USER_ID,
+            currentGroupId = GROUP_ID,
+            categories = listOf(
+                category("general", 10, groupIds = listOf(GROUP_ID)),
+                category("logistics", 20, queuePurpose = LOGISTICS_QUEUE_PURPOSE),
+            ),
+            tasks = listOf(ordinary, slinger),
+            assignments = listOf(
+                assignment(ordinary.entryId, null, GROUP_ID, "PAUSED"),
+                assignment(slinger.entryId, "driver", null, "ACTIVE"),
+                assignment(slinger.entryId, USER_ID, GROUP_ID, "ACTIVE"),
+            ),
+        )
+
+        assertThat(selected?.entryId).isEqualTo("slinger")
+    }
+
+    @Test
+    fun `completed slinger task disappears and paused ordinary task returns`() {
+        val ordinary = task("ordinary", "general", queuePosition = 0).copy(status = "PAUSED")
+        val completedSlinger = task("slinger", "logistics", queuePosition = 0).copy(
+            status = "DONE",
+            availabilityMode = "OPTIONAL_JOIN",
+        )
+
+        val selected = selectCurrentWorkerTask(
+            userId = USER_ID,
+            currentGroupId = GROUP_ID,
+            categories = listOf(
+                category("general", 10, groupIds = listOf(GROUP_ID)),
+                category("logistics", 20, queuePurpose = LOGISTICS_QUEUE_PURPOSE),
+            ),
+            tasks = listOf(ordinary, completedSlinger),
+            assignments = listOf(assignment(ordinary.entryId, null, GROUP_ID, "PAUSED")),
+        )
+
+        assertThat(selected?.entryId).isEqualTo("ordinary")
+    }
+
+    @Test
+    fun `locally pending take stays foreground until assignments refresh`() {
+        val pending = task("pending", "general", queuePosition = 2).copy(
+            status = "IN_PROGRESS",
+            locallyPending = true,
+        )
+
+        val selected = selectCurrentWorkerTask(
+            userId = USER_ID,
+            currentGroupId = GROUP_ID,
+            categories = listOf(category("general", 10, groupIds = listOf(GROUP_ID))),
+            tasks = listOf(task("waiting", "general", 1), pending),
+            assignments = emptyList(),
+        )
+
+        assertThat(selected?.entryId).isEqualTo("pending")
+    }
+
+    @Test
+    fun `active unjoined slinger task becomes a modal candidate`() {
+        val slinger = task("slinger", "logistics", queuePosition = 0).copy(
+            status = "IN_PROGRESS",
+            availabilityMode = "REQUIRED_JOIN",
+        )
+
+        val selected = selectIncomingSlingerTask(
+            userId = USER_ID,
+            currentGroupId = GROUP_ID,
+            operationalAvailability = "AVAILABLE",
+            categories = listOf(
+                category("logistics", 10, queuePurpose = LOGISTICS_QUEUE_PURPOSE),
+            ),
+            tasks = listOf(slinger),
+            assignments = listOf(assignment(slinger.entryId, "driver", null, "ACTIVE")),
+        )
+
+        assertThat(selected?.entryId).isEqualTo("slinger")
+    }
+
+    @Test
+    fun `joined pending or waiting logistics task never opens interruption modal`() {
+        val active = task("active", "logistics", queuePosition = 0).copy(
+            status = "IN_PROGRESS",
+            availabilityMode = "OPTIONAL_JOIN",
+        )
+        val waiting = task("waiting", "logistics", queuePosition = 1).copy(
+            status = "WAITING",
+            availabilityMode = "OPTIONAL_JOIN",
+        )
+        val pending = task("pending", "logistics", queuePosition = 2).copy(
+            status = "IN_PROGRESS",
+            availabilityMode = "REQUIRED_JOIN",
+            locallyPending = true,
+        )
+        val category = category("logistics", 10, queuePurpose = LOGISTICS_QUEUE_PURPOSE)
+
+        assertThat(
+            selectIncomingSlingerTask(
+                USER_ID,
+                GROUP_ID,
+                "AVAILABLE",
+                listOf(category),
+                listOf(active, waiting, pending),
+                listOf(
+                    assignment(active.entryId, "driver", null, "ACTIVE"),
+                    assignment(active.entryId, USER_ID, GROUP_ID, "ACTIVE"),
+                ),
+            ),
+        ).isNull()
+    }
+
+    @Test
+    fun `modal fails closed without current group or operational availability`() {
+        val slinger = task("slinger", "logistics", 0).copy(
+            status = "IN_PROGRESS",
+            availabilityMode = "REQUIRED_JOIN",
+        )
+        val category = category("logistics", 10, queuePurpose = LOGISTICS_QUEUE_PURPOSE)
+        val assignments = listOf(assignment(slinger.entryId, "driver", null, "ACTIVE"))
+
+        assertThat(
+            selectIncomingSlingerTask(
+                USER_ID,
+                null,
+                "AVAILABLE",
+                listOf(category),
+                listOf(slinger),
+                assignments,
+            ),
+        ).isNull()
+        assertThat(
+            selectIncomingSlingerTask(
+                USER_ID,
+                GROUP_ID,
+                "DISABLED",
+                listOf(category),
+                listOf(slinger),
+                assignments,
+            ),
+        ).isNull()
+    }
+
+    @Test
+    fun `shadow revoked and terminal entries are never selected`() {
+        val category = category("general", 10)
+        val selected = selectCurrentWorkerTask(
+            userId = USER_ID,
+            currentGroupId = GROUP_ID,
+            categories = listOf(category),
             tasks = listOf(
-                task("shadow-first", "electric", "Электрика", 10, queuePosition = 0)
-                    .copy(entryType = "SHADOW", priority = 99),
-                task("promoted", "electric", "Электрика", 10, queuePosition = 1)
-                    .copy(entryType = "REAL", status = "WAITING", priority = 1),
-                task("pinned", "electric", "Электрика", 10, queuePosition = 5)
-                    .copy(entryType = "REAL", status = "WAITING", priority = 1, pinned = true),
-                task("later-real", "electric", "Электрика", 10, queuePosition = 6)
-                    .copy(entryType = "REAL", status = "WAITING", priority = 5),
-                task("active", "electric", "Электрика", 10, queuePosition = 8)
-                    .copy(entryType = "REAL", status = "IN_PROGRESS"),
-                task("shadow-last", "electric", "Электрика", 10, queuePosition = 9)
-                    .copy(entryType = "SHADOW"),
+                task("shadow", "general", 0).copy(entryType = "SHADOW"),
+                task("done", "general", 1).copy(status = "DONE"),
+                task("revoked", "revoked", 0),
             ),
+            assignments = emptyList(),
         )
 
-        assertThat(sections.single().tasks.map { it.entryId })
-            .containsExactly(
-                "active",
-                "pinned",
-                "promoted",
-                "later-real",
-                "shadow-first",
-                "shadow-last",
-            )
-            .inOrder()
+        assertThat(selected).isNull()
     }
 
     @Test
-    fun keepsVersionOneTaskSectionsVisibleUntilCategoryProjectionIsSynced() {
-        val sections = buildTaskQueueSections(
-            categories = emptyList(),
-            tasks = listOf(task("legacy-task", "repair", "Ремонты", 10, 0)),
-        )
-
-        assertThat(sections.map { it.queueId }).containsExactly("repair")
-        assertThat(sections.single().tasks.map { it.entryId }).containsExactly("legacy-task")
-    }
-
-    @Test
-    fun hidesTaskThatIsNoLongerInTheAuthorizedQueueProjection() {
-        val sections = buildTaskQueueSections(
-            categories = listOf(category("furniture", "Перемещение мебели", 20)),
-            tasks = listOf(task("revoked-task", "repair", "Ремонты", 10, 0)),
-        )
-
-        assertThat(sections.map { it.queueId }).containsExactly("furniture")
-        assertThat(sections.single().tasks).isEmpty()
-    }
-
-    @Test
-    fun `renders elapsed work and KPI from the server timer snapshot`() {
+    fun `renders elapsed work and KPI from server timer snapshot`() {
         val timer = queueTaskTimerPresentation(
-            task("entry", "repair", "Ремонты", 10, 0).copy(
+            task("entry", "repair", 0).copy(
                 timerCountedActiveSeconds = 1_200,
                 timerRemainingSeconds = 2_400,
                 timerRemainingPercent = 66.6667,
@@ -157,105 +253,26 @@ class TaskQueueSectionsTest {
     }
 
     @Test
-    fun `group roles and qualification-only categories create independent columns`() {
-        val groups = listOf(group("general", "Разнорабочие"))
-        val groupTask = task("general-task", "general-queue", "Общие работы", 10, 0)
-        val personalTask = task("slinger-task", "slinger-queue", "Стропальщики", 20, 0)
-        val columns = buildWorkBoardColumns(
-            groups = groups,
-            categories = listOf(
-                category("general-queue", "Общие работы", 10, groupIds = listOf("general")),
-                category("slinger-queue", "Стропальщики", 20, groupIds = emptyList()),
-            ),
-            tasks = listOf(groupTask, personalTask),
-            assignments = emptyList(),
-        )
+    fun `refresh animation requires a recent active synchronization stage`() {
+        val now = 1_000_000L
 
-        assertThat(columns.map { it.name })
-            .containsExactly("Разнорабочие", "Стропальщики")
-            .inOrder()
-        assertThat(columns.last().id).isEqualTo("qualification-slinger-queue")
-        assertThat(columns.last().personal).isTrue()
-        assertThat(columns.last().sections.single().tasks.map { it.entryId })
-            .containsExactly("slinger-task")
-        assertThat(columns.first().sections.flatMap { it.tasks }.map { it.entryId })
-            .containsExactly("general-task")
+        assertThat(shouldAnimateTaskRefresh("CONTEXT", now - 1_000, now)).isTrue()
+        assertThat(shouldAnimateTaskRefresh("UPLOAD", now - 60_000, now)).isTrue()
+        assertThat(shouldAnimateTaskRefresh("CONTEXT", now - 60_001, now)).isFalse()
+        assertThat(shouldAnimateTaskRefresh("IDLE", now, now)).isFalse()
     }
 
     @Test
-    fun `active shared task is rendered in the slinger group without driver columns`() {
-        val sharedCategory = category(
-            queueId = "joint-loading",
-            name = "Совместная погрузка",
-            sortOrder = 5,
-            groupIds = listOf("slingers"),
-            queuePurpose = "LOGISTICS_DRIVER",
-        )
-        val activeTask = task("shipment", "joint-loading", "Совместная погрузка", 5, 0)
-            .copy(status = "IN_PROGRESS", availabilityMode = "REQUIRED_JOIN")
-
-        val columns = buildWorkBoardColumns(
-            groups = listOf(group("slingers", "Стропальщики")),
-            categories = listOf(sharedCategory),
-            tasks = listOf(activeTask),
-            assignments = listOf(assignment(activeTask.entryId, null)),
-        )
-
-        assertThat(columns.map { it.name }).containsExactly("Стропальщики")
-        assertThat(columns.single().sections.single().tasks.map { it.entryId })
-            .containsExactly("shipment")
-        assertThat(columns.none { it.id.startsWith("driver-") }).isTrue()
-    }
-
-    @Test
-    fun `stale waiting logistics task is hidden from the worker board`() {
-        val category = category(
-            queueId = "joint-loading",
-            name = "Совместная погрузка",
-            sortOrder = 5,
-            groupIds = listOf("slingers"),
-            queuePurpose = "LOGISTICS_DRIVER",
-        )
-
-        val columns = buildWorkBoardColumns(
-            groups = listOf(group("slingers", "Стропальщики")),
-            categories = listOf(category),
-            tasks = listOf(
-                task("waiting", "joint-loading", category.name, 5, 0)
-                    .copy(status = "WAITING"),
-            ),
-            assignments = emptyList(),
-        )
-
-        assertThat(columns.single().sections.single().tasks).isEmpty()
-    }
-
-    @Test
-    fun `live assignment restricts a shared queue card to the assigned group`() {
-        val shared = category("shared", "Общая очередь", 10, groupIds = listOf("a", "b"))
-        val task = task("assigned", "shared", "Общая очередь", 10, 0)
-        val columns = buildWorkBoardColumns(
-            groups = listOf(group("a", "Группа А"), group("b", "Группа Б")),
-            categories = listOf(shared),
-            tasks = listOf(task),
-            assignments = listOf(assignment(task.entryId, "b")),
-        )
-
-        assertThat(columns[0].sections.flatMap { it.tasks }).isEmpty()
-        assertThat(columns[1].sections.flatMap { it.tasks }.map { it.entryId }).containsExactly("assigned")
-    }
-
-    @Test
-    fun `shows authoritative elapsed work when a budget timer is unavailable`() {
-        val task = task("elapsed", "repair", "Ремонты", 10, 0).copy(activeWorkSeconds = 3_661)
-
-        assertThat(queueTaskTimerPresentation(task)).isNull()
-        assertThat(queueTaskElapsedLabel(task)).isEqualTo("1:01:01")
+    fun `sync notice hides progress chatter but keeps offline and blocked truth`() {
+        assertThat(taskSyncNotice(true, "CONTEXT", "Проверяем доступ")).isNull()
+        assertThat(taskSyncNotice(false, "CONTEXT", "Проверяем доступ"))
+            .isEqualTo("Нет связи с RWMS")
+        assertThat(taskSyncNotice(true, "WAITING_FOR_EVIDENCE", "Фото ожидает отправки"))
+            .isEqualTo("Фото ожидает отправки")
     }
 
     private fun category(
         queueId: String,
-        name: String,
         sortOrder: Int,
         groupIds: List<String> = emptyList(),
         queuePurpose: String = "GENERAL",
@@ -263,7 +280,7 @@ class TaskQueueSectionsTest {
         localId = "$USER_ID:$queueId",
         userId = USER_ID,
         queueId = queueId,
-        name = name,
+        name = queueId,
         type = "REPAIR",
         queuePurpose = queuePurpose,
         groupIdsKey = groupIds.joinToString("\u001F"),
@@ -273,25 +290,21 @@ class TaskQueueSectionsTest {
         lastServerRevision = 12,
     )
 
-    private fun group(id: String, name: String) = WorkerGroupEntity(
-        localId = "$USER_ID:$id",
-        userId = USER_ID,
-        groupId = id,
-        name = name,
-        workerClassId = "class-$id",
-        workerClassName = name,
-    )
-
-    private fun assignment(entryId: String, groupId: String?) = WorkerAssignmentEntity(
-        localId = "$USER_ID:$entryId:$groupId",
+    private fun assignment(
+        entryId: String,
+        workerId: String?,
+        groupId: String?,
+        status: String,
+    ) = WorkerAssignmentEntity(
+        localId = "$USER_ID:$entryId:${workerId ?: groupId}",
         userId = USER_ID,
         entryId = entryId,
-        assignmentId = "assignment-${groupId ?: "primary"}",
-        workerId = null,
-        workerName = null,
+        assignmentId = "assignment-$entryId-${workerId ?: groupId}",
+        workerId = workerId,
+        workerName = workerId,
         workerGroupId = groupId,
         workerGroupName = groupId,
-        status = "ACTIVE",
+        status = status,
         assignedAt = "2026-08-04T10:00:00Z",
         startedAt = null,
         pausedAt = null,
@@ -301,8 +314,6 @@ class TaskQueueSectionsTest {
     private fun task(
         entryId: String,
         queueId: String,
-        categoryName: String,
-        categorySortOrder: Int,
         queuePosition: Int,
     ) = WorkerTaskEntity(
         localId = "$USER_ID:$entryId",
@@ -311,16 +322,16 @@ class TaskQueueSectionsTest {
         taskId = "task-$entryId",
         version = 1,
         categoryId = queueId,
-        categoryName = categoryName,
-        categorySortOrder = categorySortOrder,
+        categoryName = queueId,
+        categorySortOrder = 10,
         title = entryId,
         unitNumber = "БТ-1",
         taskText = null,
         scheduledDate = "2026-07-26",
         deadlineAt = null,
-        priority = 0,
+        priority = 3,
         queuePosition = queuePosition,
-        status = "AVAILABLE",
+        status = "WAITING",
         availabilityMode = "AVAILABLE",
         plannedDurationMinutes = null,
         activeStartedAt = null,
@@ -334,5 +345,6 @@ class TaskQueueSectionsTest {
 
     private companion object {
         const val USER_ID = "worker"
+        const val GROUP_ID = "general-group"
     }
 }

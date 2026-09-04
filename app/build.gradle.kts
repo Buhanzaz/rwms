@@ -1,4 +1,6 @@
 import java.net.URI
+import java.util.Properties
+import org.gradle.api.GradleException
 
 plugins {
     id("com.android.application")
@@ -24,6 +26,75 @@ require(
     "RWMS_PUBLIC_BASE_URL must be an HTTPS origin without path, query, fragment, or user info"
 }
 
+val releaseSigningPropertyNames =
+    listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+val signingPropertiesPath =
+    providers.gradleProperty("signingPropertiesFile").orNull?.trim()?.takeIf(String::isNotEmpty)
+val signingPropertiesFile = signingPropertiesPath?.let(::file)
+val releaseSigningProperties =
+    signingPropertiesFile
+        ?.takeIf { it.isFile && it.canRead() }
+        ?.let { propertiesFile ->
+            runCatching {
+                Properties().also { properties ->
+                    propertiesFile.inputStream().use(properties::load)
+                }
+            }.getOrNull()
+        }
+val releaseSigningStoreFile =
+    releaseSigningProperties
+        ?.getProperty("storeFile")
+        ?.trim()
+        ?.takeIf(String::isNotEmpty)
+        ?.let(::file)
+val releaseSigningConfigurationReady =
+    releaseSigningProperties != null &&
+        releaseSigningPropertyNames.all { propertyName ->
+            !releaseSigningProperties.getProperty(propertyName).isNullOrBlank()
+        } &&
+        releaseSigningStoreFile?.isFile == true &&
+        releaseSigningStoreFile?.canRead() == true
+
+fun requireExternalReleaseSigning() {
+    val configuredPath =
+        signingPropertiesPath
+            ?: throw GradleException(
+                "Release APK/bundle tasks require -PsigningPropertiesFile=<protected-properties-file>.",
+            )
+    val propertiesFile = file(configuredPath)
+    if (!propertiesFile.isFile || !propertiesFile.canRead()) {
+        throw GradleException(
+            "Release signing properties file is missing or unreadable: $configuredPath",
+        )
+    }
+    val properties =
+        try {
+            Properties().also { loaded ->
+                propertiesFile.inputStream().use(loaded::load)
+            }
+        } catch (exception: Exception) {
+            throw GradleException(
+                "Release signing properties file could not be read: $configuredPath",
+                exception,
+            )
+        }
+    val missingProperties =
+        releaseSigningPropertyNames.filter { propertyName ->
+            properties.getProperty(propertyName).isNullOrBlank()
+        }
+    if (missingProperties.isNotEmpty()) {
+        throw GradleException(
+            "Release signing properties file is incomplete; missing non-empty keys: " +
+                missingProperties.joinToString(", "),
+        )
+    }
+    val keystorePath = properties.getProperty("storeFile").trim()
+    val keystoreFile = file(keystorePath)
+    if (!keystoreFile.isFile || !keystoreFile.canRead()) {
+        throw GradleException("Release signing keystore is missing or unreadable: $keystorePath")
+    }
+}
+
 android {
     namespace = "dev.buhanzaz.rwms.manager"
     compileSdk = 36
@@ -32,8 +103,8 @@ android {
         applicationId = "dev.buhanzaz.rwms.manager"
         minSdk = 23
         targetSdk = 36
-        versionCode = 53
-        versionName = "0.3.50"
+        versionCode = 54
+        versionName = "0.3.51"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -52,6 +123,15 @@ android {
         release {
             isMinifyEnabled = false
             buildConfigField("String", "PUBLIC_BASE_URL", "\"$publicBaseUrl\"")
+            if (releaseSigningConfigurationReady) {
+                val properties = requireNotNull(releaseSigningProperties)
+                signingConfig = signingConfigs.create("externalRelease") {
+                    storeFile = releaseSigningStoreFile
+                    storePassword = properties.getProperty("storePassword")
+                    keyAlias = properties.getProperty("keyAlias")
+                    keyPassword = properties.getProperty("keyPassword")
+                }
+            }
         }
     }
 
@@ -70,6 +150,40 @@ android {
         unitTests.isIncludeAndroidResources = true
     }
 }
+
+val validateReleaseSigning by tasks.registering {
+    group = "verification"
+    description = "Fails closed unless external release signing is complete and readable"
+    doLast {
+        requireExternalReleaseSigning()
+    }
+}
+
+val releaseArtifactTaskNames =
+    setOf(
+        "assembleRelease",
+        "bundleRelease",
+        "packageRelease",
+        "packageReleaseBundle",
+        "signReleaseBundle",
+    )
+tasks.configureEach {
+    if (name in releaseArtifactTaskNames) {
+        dependsOn(validateReleaseSigning)
+    }
+}
+val releaseArtifactProjectPath = project.path
+gradle.taskGraph.whenReady(
+    org.gradle.api.Action<org.gradle.api.execution.TaskExecutionGraph> {
+        if (
+            allTasks.any { task ->
+                task.project.path == releaseArtifactProjectPath && task.name in releaseArtifactTaskNames
+            }
+        ) {
+            requireExternalReleaseSigning()
+        }
+    },
+)
 
 kotlin {
     jvmToolchain(17)

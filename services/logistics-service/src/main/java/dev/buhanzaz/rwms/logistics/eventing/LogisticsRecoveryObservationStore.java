@@ -10,8 +10,9 @@ import org.springframework.stereotype.Component;
  *
  * <p>This adapter is the single low-level SQL boundary for operational observations spanning the
  * main transactional outbox, sanitized DLT, rental-inquiry outbox, warehouse-operation marks, and
- * inbound gap/checkpoint state. It deliberately returns only counts and timestamps: identifiers,
- * topics, payloads, and error text never cross into metric labels.
+ * inbound gap/checkpoint state. Customer booking recovery observations use the same read-only
+ * boundary. It deliberately returns only counts and timestamps: identifiers, topics, payloads,
+ * and error text never cross into metric labels.
  */
 @Component
 public final class LogisticsRecoveryObservationStore {
@@ -65,6 +66,54 @@ public final class LogisticsRecoveryObservationStore {
   Optional<OffsetDateTime> findOldestRentalInquiryOutboxBacklogCreatedAt() {
     return oldest(
         "select min(created_at) from rental_inquiry_outbox where status = 'PENDING'");
+  }
+
+  /** Returns nonquarantined presentation bookings retained for automatic recovery. */
+  long countPresentationBookingRecoveryBacklog() {
+    return count(
+        "select count(*) from presentation_booking "
+            + "where state = 'PENDING' and recovery_quarantined_at is null");
+  }
+
+  /** Returns the stable creation time of the oldest recoverable presentation booking. */
+  Optional<OffsetDateTime> findOldestPresentationBookingRecoveryCreatedAt() {
+    return oldest(
+        "select min(created_at) from presentation_booking "
+            + "where state = 'PENDING' and recovery_quarantined_at is null");
+  }
+
+  /** Returns presentation bookings requiring explicit reviewed recovery. */
+  long countQuarantinedPresentationBookings() {
+    return count(
+        "select count(*) from presentation_booking "
+            + "where state = 'PENDING' and recovery_quarantined_at is not null");
+  }
+
+  /** Returns receipt-bearing customer checkouts retained for automatic recovery. */
+  long countCustomerCheckoutRecoveryBacklog() {
+    return count(
+        "select count(*) from customer_rental_session "
+            + "where state = 'CHECKOUT_PENDING' "
+            + "and booking_id is not null and presentation_token is not null "
+            + "and recovery_quarantined_at is null");
+  }
+
+  /** Returns the stable cart creation time of the oldest recoverable customer checkout. */
+  Optional<OffsetDateTime> findOldestCustomerCheckoutRecoveryCreatedAt() {
+    return oldest(
+        "select min(created_at) from customer_rental_session "
+            + "where state = 'CHECKOUT_PENDING' "
+            + "and booking_id is not null and presentation_token is not null "
+            + "and recovery_quarantined_at is null");
+  }
+
+  /** Returns customer checkout receipts requiring explicit reviewed recovery. */
+  long countQuarantinedCustomerCheckouts() {
+    return count(
+        "select count(*) from customer_rental_session "
+            + "where state = 'CHECKOUT_PENDING' "
+            + "and booking_id is not null and presentation_token is not null "
+            + "and recovery_quarantined_at is not null");
   }
 
   /** Returns warehouse-operation marks that remain claimable, retryable, or currently leased. */

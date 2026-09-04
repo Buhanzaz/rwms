@@ -66,6 +66,10 @@ public class MaintenanceApplicationService {
     return catalogs.catalogVersions(authorizationWarehouseId);
   }
 
+  public List<CatalogVersionResponse> catalogVersions() {
+    return catalogs.catalogVersions();
+  }
+
   @Transactional(readOnly = true)
   public CatalogVersionResponse catalogVersion(UUID id) {
     return catalogs.catalogVersion(id);
@@ -89,6 +93,10 @@ public class MaintenanceApplicationService {
   public CreateResult<CatalogVersionResponse> createCatalog(
       UUID subjectId, UUID key, CreateCatalogRequest request) {
     return facadeResult(catalogs.createCatalog(subjectId, key, request));
+  }
+
+  public CreateResult<CatalogVersionResponse> createGlobalCatalog(UUID subjectId, UUID key) {
+    return facadeResult(catalogs.createGlobalCatalog(subjectId, key));
   }
 
   public CatalogVersionResponse changeCatalog(UUID id, ChangeCatalogRequest request) {

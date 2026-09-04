@@ -35,6 +35,7 @@ import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsExternalAttemptRepository;
 import dev.buhanzaz.rwms.logistics.repository.TransferPlanRepository;
+import dev.buhanzaz.rwms.logistics.vehicle.service.VehicleOperationalAssignmentService;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
@@ -72,6 +73,7 @@ class TransferPlanWorkflowStore {
   private final TransferPlanWorkflowProperties properties;
   private final DocumentDriverTaskPlanner driverTasks;
   private final TransferDriverTaskContentService driverTaskContent;
+  private final VehicleOperationalAssignmentService vehicleAssignments;
 
   /** Creates all initial reservation and resource intents in the confirmation transaction. */
   @Transactional
@@ -81,6 +83,8 @@ class TransferPlanWorkflowStore {
     Objects.requireNonNull(plan, "plan");
     List<LogisticsDocumentLine> ordered = List.copyOf(physicalLines);
     TransferPlanSnapshot snapshot = plan.snapshot();
+    vehicleAssignments.createForConfirmedTransfer(
+        document, snapshot, properties.resourceArrivalBuffer());
     OffsetDateTime createdAt = now();
     if (!ordered.isEmpty()) {
       createAttempt(
@@ -350,7 +354,7 @@ class TransferPlanWorkflowStore {
     documents.saveAndFlush(document);
     eventStore.append(
         document,
-        requiredPlan(documentId).auditLineCount(),
+        Math.max(1, requiredPlan(documentId).auditLineCount()),
         document.getCorrelationId(),
         document.getRequestedBySubjectId(),
         LogisticsEventType.TRANSFER_PLAN_UPDATED,
@@ -369,12 +373,14 @@ class TransferPlanWorkflowStore {
           snapshot.looseFurniture().stream()
               .mapToLong(TransferPlanSnapshot.LooseFurniture::quantity)
               .reduce(0, Math::addExact);
-      if (snapshot.looseFurniture().isEmpty() || totalQuantity < 1) {
+      if (!snapshot.looseFurniture().isEmpty() && totalQuantity < 1) {
         throw new LogisticsConflictException("В перемещении отсутствует груз для водителя");
       }
       String cargoSummary =
-          "Мебель: %d поз., %d ед."
-              .formatted(snapshot.looseFurniture().size(), totalQuantity);
+          snapshot.looseFurniture().isEmpty()
+              ? resourceOnlySummary(snapshot)
+              : "Мебель: %d поз., %d ед."
+                  .formatted(snapshot.looseFurniture().size(), totalQuantity);
       driverTasks.planTransferCargo(document, cargoSummary, workerContent);
       return;
     }
@@ -405,6 +411,7 @@ class TransferPlanWorkflowStore {
     if (plan == null) return;
     TransferPlanSnapshot snapshot = plan.snapshot();
     plan.markInTransit();
+    vehicleAssignments.beginTransit(document.getId());
     plans.saveAndFlush(plan);
     OffsetDateTime createdAt = now();
     if (hasAssignment(snapshot.tripDriverAssignment())) {
@@ -437,6 +444,7 @@ class TransferPlanWorkflowStore {
       return;
     }
     plan.beginCompletion();
+    vehicleAssignments.arrive(document.getId());
     plans.saveAndFlush(plan);
     TransferPlanSnapshot snapshot = plan.snapshot();
     OffsetDateTime createdAt = now();
@@ -486,6 +494,7 @@ class TransferPlanWorkflowStore {
       return;
     }
     plan.beginRelease();
+    vehicleAssignments.cancelBeforeStart(document.getId());
     plans.saveAndFlush(plan);
     enqueueKnownReleases(document, plan.snapshot());
     maybeFinishCancellation(document, plan);
@@ -866,8 +875,10 @@ class TransferPlanWorkflowStore {
     }
     if (requiresTripOnlyAssignment(snapshot)
         && !planned(snapshot.tripDriverAssignment())) return false;
-    return !requiresRepositionAssignment(snapshot)
-        || planned(snapshot.repositionedDriverAssignment());
+    if (requiresRepositionAssignment(snapshot)
+        && !planned(snapshot.repositionedDriverAssignment())) return false;
+    return vehicleAssignments.confirmationReady(
+        document, snapshot, properties.resourceArrivalBuffer());
   }
 
   private void maybeFinishCompletion(LogisticsDocument document, TransferPlan plan) {
@@ -884,6 +895,7 @@ class TransferPlanWorkflowStore {
     }
     if (hasDistinctRepositionAssignment(snapshot)
         && !"ACTIVE".equals(snapshot.repositionedDriverAssignment().status())) return;
+    if (!vehicleAssignments.arrivalApplied(document.getId())) return;
     plan.completeWorkflow();
     plans.saveAndFlush(plan);
     completeDocument(document, lockedLines(document.getId()));
@@ -915,6 +927,7 @@ class TransferPlanWorkflowStore {
         && !"CANCELLED".equals(snapshot.tripDriverAssignment().status())) return;
     if (hasDistinctRepositionAssignment(snapshot)
         && !"CANCELLED".equals(snapshot.repositionedDriverAssignment().status())) return;
+    if (!vehicleAssignments.cancellationApplied(document.getId())) return;
     plan.finishRelease();
     plans.saveAndFlush(plan);
     finishCancellation(document, lockedLines(document.getId()), plan);
@@ -961,12 +974,18 @@ class TransferPlanWorkflowStore {
         .orElse(false);
   }
 
+  /**
+   * Preserves the non-zero event-envelope cardinality for a transfer whose only concrete facts are
+   * driver or vehicle resources; it does not fabricate a physical cargo line.
+   */
   private int eventLineCount(
       LogisticsDocument document, List<LogisticsDocumentLine> documentLines) {
-    return plans
-        .findByDocument_Id(document.getId())
-        .map(TransferPlan::auditLineCount)
-        .orElse(documentLines.size());
+    int count =
+        plans
+            .findByDocument_Id(document.getId())
+            .map(TransferPlan::auditLineCount)
+            .orElse(documentLines.size());
+    return Math.max(1, count);
   }
 
   private void createAttempt(
@@ -1033,6 +1052,22 @@ class TransferPlanWorkflowStore {
     } catch (RuntimeException exception) {
       throw new IllegalArgumentException("Furniture workflow operation is malformed", exception);
     }
+  }
+
+  private static String resourceOnlySummary(TransferPlanSnapshot snapshot) {
+    List<String> resources = new ArrayList<>();
+    if (snapshot.tripDriverId() != null) resources.add("водитель рейса");
+    if (snapshot.tripVehicleId() != null) resources.add("автомобиль рейса");
+    if (snapshot.driverReposition().mode() != TransferResourceRepositionMode.NONE) {
+      resources.add("перемещение водителя");
+    }
+    if (snapshot.vehicleReposition().mode() != TransferResourceRepositionMode.NONE) {
+      resources.add("перемещение автомобиля");
+    }
+    if (resources.isEmpty()) {
+      throw new LogisticsConflictException("В перемещении отсутствует груз или ресурс");
+    }
+    return "Ресурсное перемещение: " + String.join(", ", resources);
   }
 
   private static boolean requiresTripOnlyAssignment(TransferPlanSnapshot snapshot) {

@@ -14,6 +14,9 @@ export type WarehouseInfo = {
   lifecycleState: WarehouseLifecycleState
   sortOrder: number | null
   representative: boolean
+  production: boolean
+  mainWarehouse: boolean
+  representativeParentWarehouseId: string | null
 }
 
 export type WarehouseLifecycleState = "ACTIVE" | "DRAINING" | "INACTIVE"
@@ -27,6 +30,9 @@ export type WarehouseWriteInput = {
   timeZone: string
   sortOrder: number | null
   representative: boolean
+  production: boolean
+  mainWarehouse: boolean
+  representativeParentWarehouseId: string | null
 }
 
 export type WarehouseCreateInput = WarehouseWriteInput
@@ -92,6 +98,9 @@ const WAREHOUSE_RESPONSE_KEYS = [
   "lifecycleState",
   "sortOrder",
   "representative",
+  "production",
+  "mainWarehouse",
+  "representativeParentWarehouseId",
 ] as const
 
 const WAREHOUSE_SUPPORT_LINK_KEYS = [
@@ -255,7 +264,11 @@ function isDateTime(value: unknown): value is string {
 }
 
 function parseWarehouse(value: unknown): WarehouseInfo {
-  if (!isRecord(value) || !hasExactKeys(value, WAREHOUSE_RESPONSE_KEYS)) {
+  if (!isRecord(value)) {
+    throw new Error("Сервис складов вернул некорректный ответ.")
+  }
+
+  if (!hasExactKeys(value, WAREHOUSE_RESPONSE_KEYS)) {
     throw new Error("Сервис складов вернул некорректный ответ.")
   }
 
@@ -272,6 +285,9 @@ function parseWarehouse(value: unknown): WarehouseInfo {
     lifecycleState,
     sortOrder,
     representative,
+    production,
+    mainWarehouse,
+    representativeParentWarehouseId,
   } = value
   if (
     !isUuid(id) ||
@@ -285,7 +301,20 @@ function parseWarehouse(value: unknown): WarehouseInfo {
     !isWarehouseLifecycleState(lifecycleState) ||
     active !== (lifecycleState === "ACTIVE") ||
     !isOptionalSortOrder(sortOrder) ||
-    typeof representative !== "boolean"
+    typeof representative !== "boolean" ||
+    typeof production !== "boolean" ||
+    typeof mainWarehouse !== "boolean" ||
+    (representativeParentWarehouseId !== null &&
+      !isUuid(representativeParentWarehouseId))
+  ) {
+    throw new Error("Сервис складов вернул некорректный ответ.")
+  }
+  const isRepresentative = representativeParentWarehouseId !== null
+  if (
+    representative !== isRepresentative ||
+    (isRepresentative
+      ? production || mainWarehouse
+      : !production && !mainWarehouse)
   ) {
     throw new Error("Сервис складов вернул некорректный ответ.")
   }
@@ -303,6 +332,9 @@ function parseWarehouse(value: unknown): WarehouseInfo {
     lifecycleState,
     sortOrder,
     representative,
+    production,
+    mainWarehouse,
+    representativeParentWarehouseId,
   }
 }
 
@@ -463,6 +495,16 @@ function requireExpectedVersion(expectedVersion: number) {
 }
 
 function requireWarehouseWriteInput(input: WarehouseWriteInput) {
+  const isRepresentative = input.representativeParentWarehouseId !== null
+  const validClassification =
+    typeof input.production === "boolean" &&
+    typeof input.mainWarehouse === "boolean" &&
+    input.representative === isRepresentative &&
+    (isRepresentative
+      ? isUuid(input.representativeParentWarehouseId) &&
+        !input.production &&
+        !input.mainWarehouse
+      : input.production || input.mainWarehouse)
   const valid =
     isNonEmptyString(input.name, 255) &&
     isNonEmptyString(input.city, 255) &&
@@ -470,10 +512,27 @@ function requireWarehouseWriteInput(input: WarehouseWriteInput) {
     isCoordinatePair(input.latitude, input.longitude) &&
     isNonEmptyString(input.timeZone, 64) &&
     isOptionalSortOrder(input.sortOrder) &&
-    typeof input.representative === "boolean"
+    typeof input.representative === "boolean" &&
+    validClassification
 
   if (!valid) {
     throw new Error("Параметры склада не соответствуют контракту API.")
+  }
+}
+
+function warehouseWriteBody(input: WarehouseWriteInput) {
+  return {
+    name: input.name,
+    city: input.city,
+    address: input.address,
+    latitude: input.latitude,
+    longitude: input.longitude,
+    timeZone: input.timeZone,
+    sortOrder: input.sortOrder,
+    production: input.production,
+    mainWarehouse: input.mainWarehouse,
+    representativeParentWarehouseId: input.representativeParentWarehouseId,
+    representative: input.representative,
   }
 }
 
@@ -576,7 +635,7 @@ export async function createWarehouse(
     {
       method: "POST",
       headers: { "Idempotency-Key": requireIdempotencyKey(idempotencyKey) },
-      body: JSON.stringify(input),
+      body: JSON.stringify(warehouseWriteBody(input)),
     }
   )
 
@@ -598,14 +657,7 @@ export async function replaceWarehouse(
       method: "PUT",
       body: JSON.stringify({
         expectedVersion: requireExpectedVersion(expectedVersion),
-        name: input.name,
-        city: input.city,
-        address: input.address,
-        latitude: input.latitude,
-        longitude: input.longitude,
-        timeZone: input.timeZone,
-        sortOrder: input.sortOrder,
-        representative: input.representative,
+        ...warehouseWriteBody(input),
       }),
     }
   )

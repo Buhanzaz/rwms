@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayClient
+import dev.buhanzaz.rwms.worker.core.network.safeWorkerUserMessage
 import dev.buhanzaz.rwms.worker.core.ui.decodeWorkerBitmap
 import dev.buhanzaz.rwms.worker.core.ui.readWorkerImageBytes
 import java.util.Collections
@@ -242,7 +243,9 @@ class PhotoViewModel @Inject constructor(
             } catch (error: Throwable) {
                 decoded?.recycleSafely()
                 if (currentKey == key && catalog[key] == item) {
-                    originalErrors[key] = error.message ?: "Не удалось открыть фото"
+                    originalErrors[key] = error.safeWorkerUserMessage(
+                        "Не удалось открыть фотографию. Повторите попытку.",
+                    )
                 }
             } finally {
                 if (originalJobs[key] === job) originalJobs.remove(key)

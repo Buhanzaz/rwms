@@ -46,7 +46,7 @@ class RentalOrderLifecycleService {
       return new RentalOrderCommandOutcome(reads.visibleDetail(actor, replay.getOrder()), true);
     }
 
-    RentalOrder order = store.lockedOrder(orderId);
+    RentalOrder order = store.lockedOrder(actor, orderId);
     editability.requireEditable(actor, order);
     RentalOrderProblems.requireVersion(order, request.expectedVersion());
     OrderClient nextClient = clientService.required(actor, request.clientId());
@@ -90,7 +90,7 @@ class RentalOrderLifecycleService {
     if (replay != null) {
       return new RentalOrderCommandOutcome(reads.visibleDetail(actor, replay.getOrder()), true);
     }
-    RentalOrder order = store.lockedOrder(orderId);
+    RentalOrder order = store.lockedOrder(actor, orderId);
     access.requireMutable(actor, order);
     RentalOrderProblems.requireVersion(order, expectedVersion);
     order.requireDraft();

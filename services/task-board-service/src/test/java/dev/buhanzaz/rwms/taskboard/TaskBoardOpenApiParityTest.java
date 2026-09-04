@@ -204,8 +204,69 @@ class TaskBoardOpenApiParityTest {
             "RepairComplexityThresholds",
             "RepairComplexityThresholdsResponse",
             "SaveRepairComplexityThresholdsRequest");
-    assertThat(child(child(schemas, "WarehouseKpiSettings"), "properties"))
+    assertThat(child(child(schemas, "KpiSettingsResponse"), "properties"))
         .doesNotContainKey("repairComplexity");
+  }
+
+  @Test
+  void kpiConfigurationUsesGlobalPathsAndOneVersionFence() throws Exception {
+    Map<String, Object> document = openApiDocument();
+    Map<String, Object> paths = child(document, "paths");
+    Map<String, Object> schemas = child(child(document, "components"), "schemas");
+
+    Map<String, Object> palettePath = child(paths, "/task-board/kpi-palette");
+    assertThat(palettePath).containsOnlyKeys("get", "put");
+
+    Map<String, Object> get = child(palettePath, "get");
+    assertThat(get.get("operationId")).isEqualTo("getKpiPalette");
+    assertThat(child(get, "responses"))
+        .containsKeys("200", "401", "403")
+        .doesNotContainKey("404");
+
+    Map<String, Object> put = child(palettePath, "put");
+    assertThat(put.get("operationId")).isEqualTo("replaceKpiPalette");
+    assertThat(child(put, "responses")).containsKeys("200", "400", "401", "403", "409");
+    Map<String, Object> requestSchema =
+        child(child(child(put, "requestBody"), "content"), "application/json");
+    assertThat(child(requestSchema, "schema").get("$ref"))
+        .isEqualTo("#/components/schemas/SaveKpiPaletteRequest");
+
+    Map<String, Object> palette = child(schemas, "KpiPaletteResponse");
+    assertThat(list(palette.get("required"))).containsExactly("version", "palette");
+    assertThat(child(palette, "properties")).containsKeys("version", "palette");
+
+    Map<String, Object> settingsPath = child(paths, "/task-board/kpi-settings");
+    assertThat(settingsPath).containsOnlyKeys("get");
+    assertThat(child(settingsPath, "get").get("operationId")).isEqualTo("getKpiSettings");
+    assertThat(paths)
+        .containsKeys(
+            "/task-board/kpi-settings/work-schedule",
+            "/task-board/kpi-settings/work-schedule/pending",
+            "/task-board/kpi-settings/activate")
+        .doesNotContainKey("/warehouses/{warehouseId}/task-board/kpi-settings");
+    assertThat(
+            child(child(paths, "/task-board/kpi-settings/work-schedule"), "put")
+                .get("operationId"))
+        .isEqualTo("replacePendingKpiWorkSchedule");
+    assertThat(
+            child(child(paths, "/task-board/kpi-settings/work-schedule/pending"), "delete")
+                .get("operationId"))
+        .isEqualTo("deletePendingKpiWorkSchedule");
+    assertThat(child(child(paths, "/task-board/kpi-settings/activate"), "post").get("operationId"))
+        .isEqualTo("activateKpiSettings");
+
+    Map<String, Object> settings = child(schemas, "KpiSettingsResponse");
+    assertThat(list(settings.get("required")))
+        .contains(
+            "status",
+            "version",
+            "minimumEffectiveDate",
+            "palette",
+            "activeSchedule",
+            "pendingSchedule");
+    assertThat(child(settings, "properties"))
+        .doesNotContainKeys("warehouseId", "timeZone");
+    assertThat(schemas).doesNotContainKeys("CompanyKpiPalette", "CompanyKpiSettings");
   }
 
   @Test

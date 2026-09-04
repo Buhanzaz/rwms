@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from app.api.geocoding import YandexGeocodingClient, get_yandex_geocoding_client
 from app.config import Settings, get_settings
 from app.main import create_app
+from tests.auth import admin_access_token_verifier
 
 
 def _settings(**overrides: object) -> Settings:
@@ -35,7 +36,7 @@ def _api_client(
 ) -> Iterator[TestClient]:
     """Run the real API routes with an optional in-memory provider transport."""
 
-    application = create_app()
+    application = create_app(access_token_verifier=admin_access_token_verifier())
     application.dependency_overrides[get_settings] = lambda: settings
     if transport is not None:
 

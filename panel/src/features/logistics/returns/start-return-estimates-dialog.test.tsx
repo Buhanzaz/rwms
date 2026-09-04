@@ -15,6 +15,7 @@ const document: ReturnDocument = {
   id: "22222222-2222-4222-8222-222222222222",
   version: 4,
   documentType: "RETURN",
+  customerDeliveryPurpose: null,
   state: "INSPECTION_REQUIRED",
   warehouseId: "11111111-1111-4111-8111-111111111111",
   destinationWarehouseId: null,

@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  CheckCircle2,
   ChevronDown,
   LockKeyhole,
   PlayCircle,
@@ -12,11 +11,12 @@ import {
   api,
   ApiError,
   getWarehouseWorkspace,
-  optimizationStreamUrl,
+  startOptimizationEventStream,
+  WORKSPACE_REQUEST_PAGE_LIMIT,
   type RequestPlanningDetailsInput,
+  type RequestRescheduleResultRead,
 } from '../api/client';
 import type {
-  Driver,
   DriverShift,
   LogisticsRequest,
   OptimizationRun,
@@ -39,7 +39,6 @@ import {
   ShiftDialog,
   SimulationOverrideDialog,
   WarehouseDialog,
-  type VehicleEditorInput,
 } from '../components/EntityDialogs';
 import { MapCanvas } from '../map/MapCanvas';
 import { useUiStore } from '../stores/ui-store';
@@ -59,18 +58,20 @@ import type { SlotPlanningMapPresentation } from '../features/slot-availability/
 import { TransferDraftDialog } from '../features/transfers/TransferDraftDialog';
 import { ContractorAssignmentDialog } from '../features/contractors/ContractorAssignmentDialog';
 import { userFacingErrorDetail } from '../utils/user-facing-error';
+import { UnassignedDeliveryRescheduleDialog } from '../features/planning/UnassignedDeliveryRescheduleDialog';
+import { warehouseDisplayName } from '../domain/warehouse-presentation';
 
 type DialogState =
   | { kind: 'workload-generator' }
   | { kind: 'warehouse'; value: Warehouse }
   | { kind: 'transfer'; sourceWarehouseId?: UUID; destinationWarehouseId?: UUID }
   | { kind: 'contractor-assignment'; requestId: UUID }
-  | { kind: 'driver'; value?: Driver }
-  | { kind: 'vehicle'; value?: Vehicle }
-  | { kind: 'trailer'; value?: Trailer }
-  | { kind: 'shift'; value?: DriverShift }
-  | { kind: 'request'; value?: LogisticsRequest; point?: { latitude: number; longitude: number }; address?: string; requestType: 'DELIVERY' | 'PICKUP' }
-  | { kind: 'delete-entity'; entityKind: 'driver' | 'vehicle' | 'trailer' | 'shift' | 'request'; id: UUID; label: string }
+  | { kind: 'delivery-reschedule'; requestId: UUID }
+  | { kind: 'vehicle'; value?: Vehicle; intentKey: UUID }
+  | { kind: 'trailer'; value?: Trailer; intentKey: UUID }
+  | { kind: 'shift'; value?: DriverShift; intentKey: UUID }
+  | { kind: 'request'; value?: LogisticsRequest; point?: { latitude: number; longitude: number }; address?: string; requestType: 'DELIVERY' | 'PICKUP'; intentKey: UUID }
+  | { kind: 'delete-entity'; entityKind: 'driver' | 'vehicle' | 'trailer' | 'shift' | 'request'; id: UUID; label: string; expectedVersion: number }
   | { kind: 'delete-generated-workload'; date: string }
   | { kind: 'close-planning-day'; date: string }
   | { kind: 'confirm-cross-warehouse-plan' }
@@ -96,10 +97,44 @@ const TRACE_PHASES = [
 
 const DEFAULT_INSPECTOR_WIDTH = 420;
 const MIN_INSPECTOR_WIDTH = 320;
+const LAST_WAREHOUSE_KEY = 'rwms:logistics:last-warehouse';
+const PLANNING_DATE_KEY_PREFIX = 'rwms:logistics:planning-date:';
 
-function warehouseOptionLabel(warehouse: Warehouse): string {
-  const city = warehouse.city?.trim() ?? '';
-  return city && city !== warehouse.name.trim() ? `${warehouse.name} — ${city}` : warehouse.name;
+function savedWarehouseSelection(): UUID | null {
+  try {
+    return window.localStorage.getItem(LAST_WAREHOUSE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function saveWarehouseSelection(warehouseId: UUID): void {
+  try {
+    window.localStorage.setItem(LAST_WAREHOUSE_KEY, warehouseId);
+  } catch {
+    // The current in-memory selection remains usable when storage is blocked.
+  }
+}
+
+function savedPlanningDate(warehouseId: UUID): string | null {
+  try {
+    const value = window.localStorage.getItem(`${PLANNING_DATE_KEY_PREFIX}${warehouseId}`);
+    return value && /^\d{4}-\d{2}-\d{2}$/u.test(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function savePlanningDate(warehouseId: UUID, planningDate: string): void {
+  try {
+    window.localStorage.setItem(`${PLANNING_DATE_KEY_PREFIX}${warehouseId}`, planningDate);
+  } catch {
+    // The current in-memory selection remains usable when storage is blocked.
+  }
+}
+
+function warehouseOptionLabel(warehouse: Warehouse, mainWarehouse?: Warehouse | null): string {
+  return warehouseDisplayName(warehouse, mainWarehouse);
 }
 
 function savedInspectorWidth(): number {
@@ -134,8 +169,12 @@ function parseTraceEvent(value: string, runId: UUID): OptimizationTraceEvent | n
 
 export function App() {
   const queryClient = useQueryClient();
-  const [warehouseId, setWarehouseId] = useState<UUID | null>(null);
-  const [planningDate, setPlanningDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [warehouseId, setWarehouseId] = useState<UUID | null>(savedWarehouseSelection);
+  const [planningDate, setPlanningDate] = useState('');
+  const [planningDateContext, setPlanningDateContext] = useState<{
+    warehouseId: UUID;
+    timeZone: string;
+  } | null>(null);
   const [planId, setPlanId] = useState<UUID | null>(null);
   const [plan, setPlan] = useState<RoutePlan | null>(null);
   const [runId, setRunId] = useState<UUID | null>(null);
@@ -147,10 +186,22 @@ export function App() {
   const [slotPlanningMap, setSlotPlanningMap] = useState<SlotPlanningMapPresentation | null>(null);
   const [inspectorWidth, setInspectorWidth] = useState(savedInspectorWidth);
   const [routesNeedRefresh, setRoutesNeedRefresh] = useState(false);
+  const [loadedRequestPage, setLoadedRequestPage] = useState<{
+    contextKey: string;
+    requests: LogisticsRequest[];
+    nextCursor: UUID | null;
+  } | null>(null);
+  const [requestsLoadingMore, setRequestsLoadingMore] = useState(false);
+  const requestPageContextRef = useRef('');
+  const requestPageGenerationRef = useRef(0);
   const surfacedPlanIdRef = useRef<UUID | null>(null);
   const surfacedNotificationIdsRef = useRef(new Set<UUID>());
-  const surfacedRepresentativeRequestIdsRef = useRef(new Set<UUID>());
+  const representativeRequestBaselineRef = useRef<{
+    contextKey: string;
+    requestIds: Set<UUID>;
+  } | null>(null);
   const warehouseSelectorRef = useRef<HTMLDivElement>(null);
+  const warehouseSelectionWasExplicitRef = useRef(warehouseId !== null);
   const mode = useUiStore((state) => state.mode);
   const setMode = useUiStore((state) => state.setMode);
   const setSection = useUiStore((state) => state.setSection);
@@ -186,13 +237,18 @@ export function App() {
     clearSimulationOverrides();
     setSimulationPlaying(false);
     setSimulationTimestamp(null);
-    setMode('PLAN_DAY');
     setSelected(null);
-  }, [clearSimulationOverrides, clearTrace, queryClient, setMode, setSelected, setSimulationPlaying, setSimulationTimestamp]);
+  }, [clearSimulationOverrides, clearTrace, queryClient, setSelected, setSimulationPlaying, setSimulationTimestamp]);
 
   const closeSlotPlanner = useCallback(() => {
     setSlotPlannerOpen(false);
     setSlotPlanningMap(null);
+  }, []);
+
+  const resetLoadedRequestPages = useCallback(() => {
+    requestPageGenerationRef.current += 1;
+    setLoadedRequestPage(null);
+    setRequestsLoadingMore(false);
   }, []);
 
   useEffect(() => {
@@ -213,6 +269,7 @@ export function App() {
 
   const selectPlanningDate = useCallback((date: string) => {
     setPlanningDate(date);
+    if (warehouseId) savePlanningDate(warehouseId, date);
     if (plan?.date !== date) {
       setPlanId(null);
       setPlan(null);
@@ -220,7 +277,13 @@ export function App() {
       setRoutesNeedRefresh(false);
       clearSimulationOverrides();
     }
-  }, [clearSimulationOverrides, plan?.date]);
+  }, [clearSimulationOverrides, plan?.date, warehouseId]);
+
+  const activateWarehouse = useCallback((nextWarehouseId: UUID) => {
+    warehouseSelectionWasExplicitRef.current = true;
+    saveWarehouseSelection(nextWarehouseId);
+    setWarehouseId(nextWarehouseId);
+  }, []);
 
   const resizeInspector = useCallback((requestedWidth: number) => {
     const width = Math.min(
@@ -238,27 +301,87 @@ export function App() {
   const warehousesQuery = useQuery({ queryKey: ['warehouses'], queryFn: api.listWarehouses, refetchInterval: 15_000 });
   const availableWarehousesQuery = useQuery({ queryKey: ['available-warehouses'], queryFn: api.listAvailableWarehouses, refetchInterval: 15_000 });
   useEffect(() => {
-    const initial = initialWarehouseSelection(warehouseId, warehousesQuery.data);
-    if (warehouseId === null && initial !== null) setWarehouseId(initial);
+    const warehouses = warehousesQuery.data;
+    if (!warehouses?.length) return;
+    if (warehouseId && warehouses.some((warehouse) => warehouse.id === warehouseId)) return;
+    if (warehouseId) warehouseSelectionWasExplicitRef.current = false;
+    const initial = initialWarehouseSelection(null, warehouses);
+    if (initial !== null) setWarehouseId(initial);
   }, [warehouseId, warehousesQuery.data]);
 
+  const selectedWarehouseMetadata = warehousesQuery.data?.find(
+    (candidate) => candidate.id === warehouseId,
+  );
+  const planningDateReady = Boolean(
+    warehouseId
+      && planningDate
+      && selectedWarehouseMetadata
+      && planningDateContext?.warehouseId === warehouseId
+      && planningDateContext.timeZone === selectedWarehouseMetadata.timezone,
+  );
+  useEffect(() => {
+    if (!warehouseId || !selectedWarehouseMetadata) return;
+    if (
+      planningDateContext?.warehouseId === warehouseId
+      && planningDateContext.timeZone === selectedWarehouseMetadata.timezone
+    ) return;
+    setPlanningDateContext({
+      warehouseId,
+      timeZone: selectedWarehouseMetadata.timezone,
+    });
+    setPlanningDate(
+      savedPlanningDate(warehouseId)
+        ?? dateInTimeZone(new Date(), selectedWarehouseMetadata.timezone),
+    );
+    clearLocalPlanningState();
+  }, [clearLocalPlanningState, planningDateContext, selectedWarehouseMetadata, warehouseId]);
+
   const workspaceQuery = useQuery({
-    queryKey: ['workspace', warehouseId],
-    queryFn: () => getWarehouseWorkspace(warehouseId as UUID),
-    enabled: Boolean(warehouseId),
+    queryKey: ['workspace', warehouseId, planningDate],
+    queryFn: () => getWarehouseWorkspace(warehouseId as UUID, {
+      planningDate,
+      requestLimit: WORKSPACE_REQUEST_PAGE_LIMIT,
+    }),
+    enabled: planningDateReady,
     refetchInterval: 15_000,
   });
   const baseWorkspace = workspaceQuery.data ?? null;
   const workspaceWarehouseId = baseWorkspace?.warehouse.id;
-  const workspaceTimeZone = baseWorkspace?.warehouse.timezone;
-  useEffect(() => {
-    if (!workspaceWarehouseId || !workspaceTimeZone) return;
-    setPlanningDate(dateInTimeZone(new Date(), workspaceTimeZone));
-    clearLocalPlanningState();
-  }, [clearLocalPlanningState, workspaceWarehouseId, workspaceTimeZone]);
 
-  const workspace = baseWorkspace;
+  const requestPageContextKey = `${warehouseId ?? ''}:${planningDate}`;
+  requestPageContextRef.current = requestPageContextKey;
+  useEffect(() => {
+    resetLoadedRequestPages();
+  }, [requestPageContextKey, resetLoadedRequestPages]);
+  const workspace = useMemo(() => {
+    if (!baseWorkspace || loadedRequestPage?.contextKey !== requestPageContextKey) return baseWorkspace;
+    const requests = new Map(baseWorkspace.requests.map((request) => [request.id, request]));
+    loadedRequestPage.requests.forEach((request) => {
+      if (!requests.has(request.id)) requests.set(request.id, request);
+    });
+    return {
+      ...baseWorkspace,
+      requests: [...requests.values()],
+      request_next_cursor: loadedRequestPage.nextCursor,
+    };
+  }, [baseWorkspace, loadedRequestPage, requestPageContextKey]);
   const planningWarehouseId = workspace?.planning_root_warehouse_id ?? workspaceWarehouseId;
+  const planningTimeZone = workspace
+    ? workspace.warehouses.find((candidate) => candidate.id === planningWarehouseId)?.timezone
+      ?? workspace.warehouse.timezone
+    : null;
+  useEffect(() => {
+    if (
+      !workspace?.warehouse.representative
+      || warehouseSelectionWasExplicitRef.current
+      || !workspace.planning_root_warehouse_id
+      || workspace.planning_root_warehouse_id === workspace.warehouse.id
+      || !warehousesQuery.data?.some((warehouse) => warehouse.id === workspace.planning_root_warehouse_id)
+    ) return;
+    warehouseSelectionWasExplicitRef.current = true;
+    saveWarehouseSelection(workspace.planning_root_warehouse_id);
+    setWarehouseId(workspace.planning_root_warehouse_id);
+  }, [warehousesQuery.data, workspace]);
   const warehouseSelectorOptions = useMemo(() => {
     if (!workspace) return [];
     const knownWarehouses = workspace.warehouses.some((candidate) => candidate.id === workspace.warehouse.id)
@@ -287,18 +410,34 @@ export function App() {
     const planningGroupWarehouseIds = new Set(
       workspace.planning_group_warehouse_ids ?? [workspace.warehouse.id],
     );
+    const planningRootWarehouseId = workspace.planning_root_warehouse_id ?? workspace.warehouse.id;
+    const notificationContextKey = [
+      planningRootWarehouseId,
+      ...[...planningGroupWarehouseIds].sort(),
+    ].join(':');
     const representativeWarehouses = new Map(
       workspace.warehouses
         .filter((candidate) => candidate.representative && planningGroupWarehouseIds.has(candidate.id))
         .map((candidate) => [candidate.id, candidate]),
     );
-    workspace.requests.forEach((request) => {
+    const representativeRequests = workspace.requests.filter((request) => (
+      representativeWarehouses.has(request.warehouse_id) && request.source_system === 'RWMS'
+    ));
+    const baseline = representativeRequestBaselineRef.current;
+    if (!baseline || baseline.contextKey !== notificationContextKey) {
+      representativeRequestBaselineRef.current = {
+        contextKey: notificationContextKey,
+        requestIds: new Set(representativeRequests.map((request) => request.id)),
+      };
+      return;
+    }
+    representativeRequests.forEach((request) => {
       const representativeWarehouse = representativeWarehouses.get(request.warehouse_id);
-      if (!representativeWarehouse || request.source_system !== 'RWMS') return;
+      if (!representativeWarehouse) return;
       const requestDate = request.scheduled_date ?? [...request.date_options]
         .sort((left, right) => left.priority - right.priority || left.date.localeCompare(right.date))[0]?.date;
-      if (!requestDate || surfacedRepresentativeRequestIdsRef.current.has(request.id)) return;
-      surfacedRepresentativeRequestIdsRef.current.add(request.id);
+      if (!requestDate || baseline.requestIds.has(request.id)) return;
+      baseline.requestIds.add(request.id);
       toast({
         tone: 'info',
         replacementKey: `representative-request-${request.id}`,
@@ -317,11 +456,6 @@ export function App() {
       });
     });
   }, [selectPlanningDate, setMapTool, setMode, setSection, setSelected, toast, workspace]);
-  const availableDriversQuery = useQuery({
-    queryKey: ['available-drivers', workspaceWarehouseId],
-    queryFn: () => api.listAvailableDrivers(workspaceWarehouseId as UUID),
-    enabled: Boolean(workspaceWarehouseId && dialog?.kind === 'driver'),
-  });
   const planQuery = useQuery({
     queryKey: ['plan', planId, workspace?.warehouse.updated_at],
     queryFn: () => api.getPlan(planId as UUID, workspace!),
@@ -339,14 +473,19 @@ export function App() {
       workspace!,
       signal,
     ),
-    enabled: Boolean(planningWarehouseId && workspace && !workspaceQuery.isFetching),
+    enabled: Boolean(
+      planningDateReady
+        && planningWarehouseId
+        && workspace
+        && !workspaceQuery.isFetching,
+    ),
     retry: false,
     staleTime: Infinity,
   });
   const planningDayStatusQuery = useQuery({
     queryKey: ['planning-day-status', planningWarehouseId, planningDate],
     queryFn: () => api.getPlanningDayStatus(planningWarehouseId as UUID, planningDate),
-    enabled: Boolean(planningWarehouseId && workspace),
+    enabled: Boolean(planningDateReady && planningWarehouseId && workspace),
     retry: false,
   });
   const acceptingRequests = planningDayStatusQuery.data?.accepting_requests ?? false;
@@ -400,7 +539,6 @@ export function App() {
     surfacedPlanIdRef.current = loadedPlan.id;
     const cycleCount = loadedPlan.driver_routes.reduce((total, route) => total + route.cycles.length, 0);
     if (cycleCount === 0 && loadedPlan.unassigned.length > 0) {
-      setSection('UNASSIGNED');
       toast({
         tone: 'warning',
         replacementKey: 'automatic-plan-result',
@@ -415,7 +553,7 @@ export function App() {
         detail: loadedPlan.unassigned.length > 0 ? `Не распределено задач: ${loadedPlan.unassigned.length}.` : 'Все доступные задачи распределены.',
       });
     }
-  }, [planQuery.data, setSection, toast]);
+  }, [planQuery.data, toast]);
   useEffect(() => {
     plan?.notification_logs?.forEach((log) => {
       if (surfacedNotificationIdsRef.current.has(log.id)) return;
@@ -457,30 +595,20 @@ export function App() {
 
   useEffect(() => {
     if (!runId || isTerminal(runQuery.data?.status)) return;
-    const stream = new EventSource(optimizationStreamUrl(runId));
-    const consume = (event: Event) => {
-      if (!(event instanceof MessageEvent) || typeof event.data !== 'string') return;
-      const trace = parseTraceEvent(event.data, runId);
-      if (trace) appendTrace(trace);
-    };
-    const customEventTypes = [
-      'trace', 'phase_started', 'phase_progress', 'candidate_edge_considered', 'candidate_edge_rejected',
-      'candidate_cycle_created', 'candidate_cycle_rejected', 'cycle_assigned', 'assignment_changed',
-      'best_score_updated', 'phase_completed',
-    ];
-    stream.onmessage = consume;
-    customEventTypes.forEach((eventType) => stream.addEventListener(eventType, consume));
-    const terminal = () => {
-      stream.close();
-      void queryClient.invalidateQueries({ queryKey: ['optimization-run', runId] });
-    };
-    stream.addEventListener('run_terminal', terminal);
-    stream.onerror = () => stream.close();
-    return () => {
-      customEventTypes.forEach((eventType) => stream.removeEventListener(eventType, consume));
-      stream.removeEventListener('run_terminal', terminal);
-      stream.close();
-    };
+    let stop: () => void = () => undefined;
+    stop = startOptimizationEventStream(runId, {
+      onEvent: (event) => {
+        if (event.event === 'run_terminal') {
+          stop();
+          void queryClient.invalidateQueries({ queryKey: ['optimization-run', runId] });
+          return;
+        }
+        const trace = parseTraceEvent(event.data, runId);
+        if (trace) appendTrace(trace);
+      },
+      onError: () => stop(),
+    });
+    return stop;
   }, [appendTrace, queryClient, runId, runQuery.data?.status]);
 
   const currentRun = useMemo(() => {
@@ -504,6 +632,7 @@ export function App() {
   const busy = actionMutation.isPending;
 
   const refresh = useCallback(async () => {
+    resetLoadedRequestPages();
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['warehouses'] }),
       queryClient.invalidateQueries({ queryKey: ['available-warehouses'] }),
@@ -514,7 +643,43 @@ export function App() {
     if (planningWarehouseId) {
       await queryClient.invalidateQueries({ queryKey: ['planning-day-status', planningWarehouseId] });
     }
-  }, [planningWarehouseId, queryClient, warehouseId]);
+  }, [planningWarehouseId, queryClient, resetLoadedRequestPages, warehouseId]);
+
+  const loadMoreRequests = useCallback(async (): Promise<void> => {
+    if (!warehouseId || !baseWorkspace || requestsLoadingMore) return;
+    const cursor = loadedRequestPage?.contextKey === requestPageContextKey
+      ? loadedRequestPage.nextCursor
+      : baseWorkspace.request_next_cursor;
+    if (!cursor) return;
+    const contextKey = requestPageContextKey;
+    const generation = requestPageGenerationRef.current;
+    const isCurrentPageLoad = () => requestPageContextRef.current === contextKey
+      && requestPageGenerationRef.current === generation;
+    setRequestsLoadingMore(true);
+    try {
+      const page = await getWarehouseWorkspace(warehouseId, {
+        planningDate,
+        requestLimit: WORKSPACE_REQUEST_PAGE_LIMIT,
+        requestCursor: cursor,
+      });
+      if (!isCurrentPageLoad()) return;
+      setLoadedRequestPage((current) => {
+        if (!isCurrentPageLoad()) return current;
+        const requests = new Map(
+          (current?.contextKey === contextKey ? current.requests : []).map((request) => [request.id, request]),
+        );
+        page.requests.forEach((request) => requests.set(request.id, request));
+        return { contextKey, requests: [...requests.values()], nextCursor: page.request_next_cursor };
+      });
+    } catch (error: unknown) {
+      if (isCurrentPageLoad()) {
+        const feedback = actionErrorFeedback(error);
+        toast({ tone: 'error', title: 'Не удалось загрузить следующую страницу заявок', detail: feedback.detail ?? feedback.title });
+      }
+    } finally {
+      if (isCurrentPageLoad()) setRequestsLoadingMore(false);
+    }
+  }, [baseWorkspace, loadedRequestPage, planningDate, requestPageContextKey, requestsLoadingMore, toast, warehouseId]);
 
   const reportActionError = useCallback(async (error: unknown): Promise<void> => {
     const { refreshPlan, ...message } = actionErrorFeedback(error);
@@ -573,34 +738,30 @@ export function App() {
 
   const openCreate = (kind: EntityKind) => {
     if (!workspace) return;
-    if (kind === 'driver') setDialog({ kind: 'driver' });
-    else if (kind === 'vehicle') setDialog({ kind: 'vehicle' });
-    else if (kind === 'trailer') setDialog({ kind: 'trailer' });
-    else if (kind === 'shift') setDialog({ kind: 'shift' });
-    else if (kind === 'request') setDialog({ kind: 'request', requestType: 'DELIVERY' });
+    const intentKey = crypto.randomUUID();
+    if (kind === 'vehicle') setDialog({ kind: 'vehicle', intentKey });
+    else if (kind === 'trailer') setDialog({ kind: 'trailer', intentKey });
+    else if (kind === 'shift') setDialog({ kind: 'shift', intentKey });
+    else if (kind === 'request') setDialog({ kind: 'request', requestType: 'DELIVERY', intentKey });
   };
 
   const openEdit = (kind: EntityKind, value: EditableEntity) => {
     if (kind === 'warehouse') setDialog({ kind: 'warehouse', value: value as Warehouse });
-    else if (kind === 'driver') setDialog({ kind: 'driver', value: value as Driver });
     else if (kind === 'vehicle') {
-      if (workspace?.trailers === undefined) {
-        toast({ tone: 'info', title: 'Загружаем грузовые параметры', detail: 'Повторите открытие машины через секунду.' });
-        return;
-      }
-      const currentVehicle = workspace.vehicles.find((candidate) => candidate.id === value.id) ?? value as Vehicle;
-      setDialog({ kind: 'vehicle', value: currentVehicle });
+      const currentVehicle = workspace?.vehicles.find((candidate) => candidate.id === value.id) ?? value as Vehicle;
+      setDialog({ kind: 'vehicle', value: currentVehicle, intentKey: crypto.randomUUID() });
     }
-    else if (kind === 'trailer') setDialog({ kind: 'trailer', value: value as Trailer });
-    else if (kind === 'shift') setDialog({ kind: 'shift', value: value as DriverShift });
-    else if (kind === 'request') setDialog({ kind: 'request', value: value as LogisticsRequest, requestType: (value as LogisticsRequest).type });
+    else if (kind === 'trailer') setDialog({ kind: 'trailer', value: value as Trailer, intentKey: crypto.randomUUID() });
+    else if (kind === 'shift') setDialog({ kind: 'shift', value: value as DriverShift, intentKey: crypto.randomUUID() });
+    else if (kind === 'request') setDialog({ kind: 'request', value: value as LogisticsRequest, requestType: (value as LogisticsRequest).type, intentKey: crypto.randomUUID() });
   };
 
   const handleMapPoint = useCallback((kind: 'request', longitude: number, latitude: number) => {
+    const intentKey = crypto.randomUUID();
     void api.reverseGeocode(latitude, longitude).then((resolved) => {
-      setDialog({ kind, point: { longitude, latitude }, address: resolved.address, requestType: mapTool === 'ADD_PICKUP' ? 'PICKUP' : 'DELIVERY' });
+      setDialog({ kind, point: { longitude, latitude }, address: resolved.address, requestType: mapTool === 'ADD_PICKUP' ? 'PICKUP' : 'DELIVERY', intentKey });
     }).catch(() => {
-      setDialog({ kind, point: { longitude, latitude }, requestType: mapTool === 'ADD_PICKUP' ? 'PICKUP' : 'DELIVERY' });
+      setDialog({ kind, point: { longitude, latitude }, requestType: mapTool === 'ADD_PICKUP' ? 'PICKUP' : 'DELIVERY', intentKey });
     });
   }, [mapTool]);
 
@@ -614,26 +775,55 @@ export function App() {
       toast({ tone: 'warning', title: 'Координаты принадлежат RWMS', detail: 'Исправьте заказ в RWMS и повторите синхронизацию.' });
       return;
     }
-    setDialog({ kind: 'request', value: request, point: { longitude, latitude }, requestType: request.type });
+    setDialog({ kind: 'request', value: request, point: { longitude, latitude }, requestType: request.type, intentKey: crypto.randomUUID() });
     toast({ tone: 'info', title: 'Новые координаты не сохранены', detail: 'Проверьте форму и сохраните: маршрут и доступность по изохронам будут проверены заново.' });
   }, [toast, workspace]);
+
+  const openUnassignedReschedule = useCallback((requestId: UUID) => {
+    const request = workspace?.requests.find((candidate) => candidate.id === requestId);
+    if (!request) {
+      toast({ tone: 'warning', title: 'Заявка уже изменилась', detail: 'Обновите рабочую область и повторите перенос.' });
+      return;
+    }
+    if (request.type === 'PICKUP') {
+      setDialog({ kind: 'request', value: request, requestType: 'PICKUP', intentKey: crypto.randomUUID() });
+      return;
+    }
+    if (request.source_system !== 'RWMS' || !request.external_id) {
+      toast({
+        tone: 'warning',
+        title: 'Для этой доставки нет клиентского заказа RWMS',
+        detail: 'Ручной ввод временного окна из нераспределённых отключён. Измените исходную локальную заявку в разделе доставок.',
+      });
+      return;
+    }
+    setDialog({ kind: 'delivery-reschedule', requestId });
+  }, [toast, workspace]);
+
+  const finishDeliveryReschedule = async (result: RequestRescheduleResultRead) => {
+    clearLocalPlanningState();
+    await Promise.all([
+      refresh(),
+      planningWarehouseId
+        ? queryClient.invalidateQueries({ queryKey: ['automatic-plan', planningWarehouseId, planningDate] })
+        : Promise.resolve(),
+      planningWarehouseId && result.scheduled_date !== planningDate
+        ? queryClient.invalidateQueries({ queryKey: ['automatic-plan', planningWarehouseId, result.scheduled_date] })
+        : Promise.resolve(),
+    ]);
+    setDialog(null);
+    toast({
+      tone: 'success',
+      title: 'Доставка перенесена в подтверждённый слот',
+      detail: `Новая дата: ${formatDate(result.scheduled_date)}. План выбранного дня обновляется.`,
+    });
+  };
   const cancelOptimization = async () => {
     if (!runId || !workspace) return;
     await execute(async () => {
       const cancelled = await api.cancelOptimizationRun(runId, workspace.warehouse.settings);
       queryClient.setQueryData(['optimization-run', runId], cancelled);
     }, 'Отмена оптимизации запрошена').catch(() => undefined);
-  };
-
-  const validatePlan = async (): Promise<ValidationResult | null> => {
-    if (!workspace || !plan) return null;
-    let result: ValidationResult | null = null;
-    await execute(async () => {
-      result = await api.validatePlan(plan.id, plan.version, workspace, plan);
-      setValidation(result);
-      if (result.updated_schedule) setPlan(result.updated_schedule);
-    }, 'Проверка плана завершена').catch(() => undefined);
-    return result;
   };
 
   const confirmPlan = async (emptyPositioningReason?: string) => {
@@ -682,7 +872,6 @@ export function App() {
         ...(move.sourceCycleId ? { source_cycle_id: move.sourceCycleId } : {}),
         target_cycle_id: move.targetCycleId,
         target_sequence: move.targetSequence,
-        changed_by: 'local-admin',
         reason: 'Ручное перемещение в редакторе маршрута',
       }, workspace, plan);
       setValidation(result);
@@ -718,30 +907,30 @@ export function App() {
   const saveRequestPlanning = async (requestId: UUID, input: RequestPlanningDetailsInput) => {
     await execute(async () => {
       const refreshExistingPlan = plan?.date === input.date && plan.status !== 'CONFIRMED';
-      await api.saveRequestPlanningDetails(requestId, input);
+      const expectedVersion = workspace?.requests.find((request) => request.id === requestId)?.version;
+      if (expectedVersion === undefined) throw new Error('Заявка больше не доступна в текущей рабочей области');
+      await api.saveRequestPlanningDetails(requestId, input, expectedVersion);
       await refresh();
       if (refreshExistingPlan) {
         flagCurrentRoutesForRefresh();
       } else {
         await queryClient.invalidateQueries({ queryKey: ['automatic-plan', planningWarehouseId, input.date] });
       }
-      setMode('PLAN_DAY');
-      setSection('PLAN_DAY');
     }, 'Условия доставки сохранены').catch(() => undefined);
   };
 
   const splitRequestIntoSubtasks = async (requestId: UUID, quantities: number[]) => {
     await execute(async () => {
       const refreshExistingPlan = plan?.date === planningDate && plan.status !== 'CONFIRMED';
-      await api.splitRequest(requestId, quantities);
+      const expectedVersion = workspace?.requests.find((request) => request.id === requestId)?.version;
+      if (expectedVersion === undefined) throw new Error('Заявка больше не доступна в текущей рабочей области');
+      await api.splitRequest(requestId, quantities, expectedVersion);
       await refresh();
       if (refreshExistingPlan) {
         flagCurrentRoutesForRefresh();
       } else {
-        await queryClient.invalidateQueries({ queryKey: ['automatic-plan', workspaceWarehouseId, planningDate] });
+        await queryClient.invalidateQueries({ queryKey: ['automatic-plan', planningWarehouseId, planningDate] });
       }
-      setMode('PLAN_DAY');
-      setSection('PLAN_DAY');
     }, `Созданы подзадачи: ${quantities.join(' + ')}`).catch(() => undefined);
   };
 
@@ -780,7 +969,10 @@ export function App() {
     if (!workspace) return;
     try {
       await actionMutation.mutateAsync(async () => {
-        const result = await api.generateWorkload(workspace.warehouse.id, input);
+        const result = await api.generateWorkload(
+          workspace.planning_root_warehouse_id ?? workspace.warehouse.id,
+          input,
+        );
         clearLocalPlanningState();
         selectPlanningDate(result.start_date);
         await refresh();
@@ -818,7 +1010,9 @@ export function App() {
 
   const scheduleRequestDate = async (requestId: UUID, date: string, addIfMissing: boolean) => {
     await execute(async () => {
-      await api.scheduleRequest(requestId, { date, add_if_missing: addIfMissing });
+      const expectedVersion = workspace?.requests.find((request) => request.id === requestId)?.version;
+      if (expectedVersion === undefined) throw new Error('Заявка больше не доступна в текущей рабочей области');
+      await api.scheduleRequest(requestId, { date, add_if_missing: addIfMissing }, expectedVersion);
       await refresh();
       flagCurrentRoutesForRefresh();
       selectPlanningDate(date);
@@ -827,7 +1021,9 @@ export function App() {
 
   const unscheduleRequest = async (requestId: UUID) => {
     await execute(async () => {
-      await api.scheduleRequest(requestId, { date: null });
+      const expectedVersion = workspace?.requests.find((request) => request.id === requestId)?.version;
+      if (expectedVersion === undefined) throw new Error('Заявка больше не доступна в текущей рабочей области');
+      await api.scheduleRequest(requestId, { date: null }, expectedVersion);
       await refresh();
       flagCurrentRoutesForRefresh();
     }, 'Назначение снято; доставка или вывоз снова доступны во все согласованные даты').catch(() => undefined);
@@ -867,12 +1063,32 @@ export function App() {
   const contractorAssignmentRequest = dialog?.kind === 'contractor-assignment'
     ? workspace.requests.find((request) => request.id === dialog.requestId) ?? null
     : null;
+  const deliveryRescheduleRequest = dialog?.kind === 'delivery-reschedule'
+    ? workspace.requests.find((request) => request.id === dialog.requestId) ?? null
+    : null;
   const contractorAssignmentWarehouse = contractorAssignmentRequest
     ? workspace.warehouses.find((warehouse) => warehouse.id === contractorAssignmentRequest.warehouse_id) ?? workspace.warehouse
     : null;
+  const shiftWarehouseId = dialog?.kind === 'shift'
+    ? dialog.value?.warehouse_id ?? workspace.warehouse.id
+    : workspace.warehouse.id;
+  const shiftDrivers = workspace.drivers.filter((driver) => driver.warehouse_id === shiftWarehouseId);
+  const shiftVehicles = workspace.vehicles.filter((vehicle) => vehicle.warehouse_id === shiftWarehouseId);
+  const capacityPublicationPending =
+    workspace.warehouse.capacity_generation > workspace.warehouse.capacity_published_generation
+    && (workspace.warehouse.capacity_publish_status === 'PENDING'
+      || workspace.warehouse.capacity_publish_status === 'FAILED');
+  const workspaceWarning = workspace.rwms_refresh_warning
+    ? userFacingErrorDetail(new Error(workspace.rwms_refresh_warning), 'Не все заявки удалось обновить. Повторите загрузку позже.')
+    : capacityPublicationPending
+      ? 'Локальные настройки сохранены. Доступные слоты RWMS обновляются автоматически; повторно сохранять форму не нужно.'
+      : null;
+  const mainWarehouse = workspace.warehouses.find((candidate) => (
+    candidate.id === (workspace.planning_root_warehouse_id ?? workspace.warehouse.id)
+  ));
 
   return (
-    <div className={`app-shell ${mode === 'SIMULATION' ? 'app-shell--simulation' : 'app-shell--plan'} ${workspace.rwms_refresh_warning ? 'app-shell--refresh-warning' : ''}`}>
+    <div className={`app-shell ${mode === 'SIMULATION' ? 'app-shell--simulation' : 'app-shell--plan'} ${workspaceWarning ? 'app-shell--refresh-warning' : ''}`}>
       <header className="topbar">
         <div className="topbar__brand">
           <Button className="brand-mark" onClick={() => { setMode('PLAN_DAY'); setSection('WAREHOUSE'); setMapTool('SELECT'); setSelected({ kind: 'warehouse', id: warehouseId }); }} aria-label="Открыть склад" title="Открыть склад">L</Button>
@@ -887,7 +1103,7 @@ export function App() {
               onClick={() => setWarehouseSelectorOpen((current) => !current)}
             >
               <span className="topbar__warehouse-selector-copy">
-                <strong>{warehouseOptionLabel(workspace.warehouse)}</strong>
+                <strong>{warehouseOptionLabel(workspace.warehouse, mainWarehouse)}</strong>
                 <WarehouseLocalTime timeZone={workspace.warehouse.timezone} />
               </span>
               <ChevronDown size={14} aria-hidden="true" />
@@ -905,10 +1121,10 @@ export function App() {
                       key={candidate.id}
                       onClick={() => {
                         setWarehouseSelectorOpen(false);
-                        setWarehouseId(candidate.id);
+                        activateWarehouse(candidate.id);
                       }}
                     >
-                      <span>{candidate.representative ? '\u00a0\u00a0· ' : ''}{warehouseOptionLabel(candidate)}</span>
+                      <span>{warehouseOptionLabel(candidate, mainWarehouse)}</span>
                     </button>
                   );
                 })}
@@ -928,23 +1144,26 @@ export function App() {
           ><LockKeyhole size={15} aria-hidden="true" /><span>{planningDayStatusQuery.isPending ? 'Проверяем приём…' : planningDayStatusQuery.isError ? 'Статус приёма недоступен' : acceptingRequests ? 'Закрыть приём доставок' : 'Приём закрыт'}</span></Button>
           <Button disabled={!acceptingRequests} variant={slotPlannerOpen ? 'primary' : 'secondary'} onClick={() => slotPlannerOpen ? closeSlotPlanner() : setSlotPlannerOpen(true)}><RouteIcon size={15} aria-hidden="true" /><span>Проверить слот</span></Button>
           {currentRun && !isTerminal(currentRun.status) ? <Button variant="danger" disabled={busy || currentRun.cancel_requested} onClick={() => void cancelOptimization()}><span>{currentRun.cancel_requested ? 'Отменяем…' : 'Отменить'}</span></Button> : null}
-          <Button disabled={!plan || busy} onClick={() => void validatePlan()}><CheckCircle2 size={15} aria-hidden="true" /><span>Проверить</span></Button>
           <div className="segmented" aria-label="Режим приложения">{([['PLAN_DAY', 'План дня'], ['SIMULATION', 'Симуляция']] as const).map(([value, label]) => <button type="button" key={value} aria-pressed={mode === value} onClick={() => changeMode(value)}>{value === 'PLAN_DAY' ? <RouteIcon size={13} aria-hidden="true" /> : <PlayCircle size={13} aria-hidden="true" />}{label}</button>)}</div>
           <ThemeSwitch />
           <NotificationCenter />
         </div>
       </header>
-      {workspace.rwms_refresh_warning ? (
+      {workspaceWarning ? (
         <div className="workspace-refresh-warning" role="alert">
-          <strong>RWMS обновлён частично</strong>
-          <span>{userFacingErrorDetail(new Error(workspace.rwms_refresh_warning), 'Не все заявки удалось обновить. Повторите загрузку позже.')}</span>
+          <strong>{workspace.rwms_refresh_warning ? 'RWMS обновлён частично' : 'Слоты обновляются'}</strong>
+          <span>{workspaceWarning}</span>
         </div>
       ) : null}
       <div
         className="workspace"
         style={{ '--inspector-width': `${inspectorWidth}px` } as CSSProperties}
       >
-        <Sidebar workspace={workspace} plan={plan} />
+        <Sidebar
+          workspace={workspace}
+          plan={plan}
+          pendingActionCount={planningDayStatusQuery.data?.pending_action_count ?? 0}
+        />
         <MapCanvas
           workspace={workspace}
           plan={plan}
@@ -953,7 +1172,7 @@ export function App() {
           optimizationRun={currentRun}
           selected={selected}
           onSelect={setSelected}
-          onWarehouseActivate={setWarehouseId}
+          onWarehouseActivate={activateWarehouse}
           onPlacePoint={handleMapPoint}
           onRequestMoveDraft={handleRequestMoveDraft}
           onMapError={handleMapError}
@@ -968,18 +1187,19 @@ export function App() {
         />
         <Inspector
           workspace={workspace} plan={plan} simulation={simulationState} validation={validation} busy={busy}
-          onCreate={openCreate} onEdit={openEdit} onDelete={(entityKind, id, label) => setDialog({ kind: 'delete-entity', entityKind, id, label })}
+          onCreate={openCreate} onEdit={openEdit} onDelete={(entityKind, id, label, expectedVersion) => setDialog({ kind: 'delete-entity', entityKind, id, label, expectedVersion })}
           onGenerateWorkload={() => setDialog({ kind: 'workload-generator' })}
           onDeleteGeneratedWorkload={() => setDialog({ kind: 'delete-generated-workload', date: planningDate })}
           onSetMapTool={(tool) => { setMapTool(tool); toast({ tone: 'info', title: 'Инструмент карты включён' }); }}
           onSelect={(kind, id) => setSelected({ kind, id })} onMoveTask={(move) => void moveTask(move)} onToggleCycleLock={(cycle) => void toggleCycleLock(cycle)}
-          onSaveSettings={async (input) => { await execute(async () => { await api.updateWarehouse(workspace.warehouse.id, input); await refresh(); flagCurrentRoutesForRefresh(); }, 'Настройки сохранены'); }}
+          onSaveSettings={async (input) => { await execute(async () => { await api.updateWarehouse(workspace.warehouse.id, input, workspace.warehouse.version); await refresh(); flagCurrentRoutesForRefresh(); }, 'Настройки сохранены'); }}
           onCreateTransfer={(sourceWarehouseId, destinationWarehouseId) => setDialog({
             kind: 'transfer',
             ...(sourceWarehouseId ? { sourceWarehouseId } : {}),
             ...(destinationWarehouseId ? { destinationWarehouseId } : {}),
           })}
           onAssignContractor={(requestId) => setDialog({ kind: 'contractor-assignment', requestId })}
+          onRescheduleUnassigned={openUnassignedReschedule}
           onDispatchContractor={async (contractorWorkerId, dispatchMode, requestIds) => {
             const result = await execute(async () => {
               const assigned = await api.dispatchContractor(
@@ -1006,6 +1226,7 @@ export function App() {
                 ? `Передано заданий: ${result.assigned_count}. Дата: ${planningDate}.`
                 : 'На выбранную в хедере дату нет нераспределённых доставок или вывозов.',
             });
+            return result;
           }}
           onConfirmPlan={() => void confirmPlan()}
           onResetManualChanges={() => void resetManualChanges()}
@@ -1013,6 +1234,8 @@ export function App() {
           planningDate={planningDate} onPlanningDateChange={selectPlanningDate}
           onSaveRequestPlanning={saveRequestPlanning}
           onSplitRequest={splitRequestIntoSubtasks}
+          loadingMoreRequests={requestsLoadingMore}
+          onLoadMoreRequests={loadMoreRequests}
           inspectorWidth={inspectorWidth}
           onInspectorWidthChange={resizeInspector}
         />
@@ -1034,7 +1257,6 @@ export function App() {
 
       {dialog?.kind === 'workload-generator' ? <WorkloadGeneratorDialog
         planningDate={planningDate}
-        seed={workspace.warehouse.seed ?? 42}
         busy={busy}
         onClose={() => setDialog(null)}
         onSubmit={generateWorkload}
@@ -1047,6 +1269,36 @@ export function App() {
         />
       ) : null}
       {dialog?.kind === 'transfer' ? <TransferDraftDialog warehouses={availableWarehousesQuery.data ?? []} sourceWarehouseId={dialog.sourceWarehouseId} destinationWarehouseId={dialog.destinationWarehouseId ?? workspace.warehouse.external_warehouse_id} scheduledDate={planningDate} onClose={() => setDialog(null)} onCreated={(draft) => { setDialog(null); toast({ tone: 'success', title: 'Черновик перемещения создан', detail: `Документ ${draft.id}` }); }} /> : null}
+      {dialog?.kind === 'delivery-reschedule' && deliveryRescheduleRequest ? (
+        <UnassignedDeliveryRescheduleDialog
+          request={deliveryRescheduleRequest}
+          timeZone={planningTimeZone ?? workspace.warehouse.timezone}
+          busy={busy}
+          calculate={api.getRequestRescheduleOptions}
+          onClose={() => setDialog(null)}
+          onSubmit={async (input, idempotencyKey) => {
+            try {
+              const result = await execute(() => api.rescheduleRequest(
+                deliveryRescheduleRequest.id,
+                input,
+                idempotencyKey,
+              ));
+              await finishDeliveryReschedule(result);
+            } catch (error: unknown) {
+              if (error instanceof ApiError && error.status === 409) await refresh();
+              throw error;
+            }
+          }}
+          onRetryQuarantined={async (requestId, input, idempotencyKey) => {
+            const result = await execute(() => api.retryRequestReschedule(
+              requestId,
+              input,
+              idempotencyKey,
+            ));
+            await finishDeliveryReschedule(result);
+          }}
+        />
+      ) : null}
       {dialog?.kind === 'contractor-assignment' && contractorAssignmentRequest && contractorAssignmentWarehouse ? <ContractorAssignmentDialog
         request={contractorAssignmentRequest}
         warehouseId={contractorAssignmentWarehouse.external_warehouse_id}
@@ -1073,44 +1325,41 @@ export function App() {
         }}
       /> : null}
       {dialog?.kind === 'warehouse' ? <WarehouseDialog warehouse={dialog.value} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => {
-        await api.updateWarehouse(dialog.value.id, input);
+        await api.updateWarehouse(dialog.value.id, input, dialog.value.version);
         await refresh();
         flagCurrentRoutesForRefresh();
         setDialog(null); setMapTool('SELECT');
       }, 'Настройки склада сохранены'); }} /> : null}
-      {dialog?.kind === 'driver' || dialog?.kind === 'vehicle' ? <CatalogDialog kind={dialog.kind} value={dialog.value} trailers={workspace.trailers ?? []} availableDrivers={availableDriversQuery.data ?? []} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => {
-        if (dialog.kind === 'driver') {
-          const value = input as Parameters<typeof api.createDriver>[1];
-          if (dialog.value) await api.updateDriver(dialog.value.id, value);
-          else await api.createDriver(workspace.warehouse.id, value);
-        } else {
-          const { load_profiles: loadProfiles, ...vehicleInput } = input as VehicleEditorInput;
-          const configuration = {
-            vehicle: vehicleInput,
-            load_profiles: loadProfiles.map(({ configuration_type, max_actual_axle_load_kg }) => ({
-              configuration_type,
-              max_actual_axle_load_kg,
-            })),
-          };
-          if (dialog.value) await api.updateVehicleConfiguration(dialog.value.id, configuration);
-          else await api.createVehicleConfiguration(workspace.warehouse.id, configuration);
-        }
+      {dialog?.kind === 'vehicle' ? <CatalogDialog value={dialog.value} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => {
+        const { load_profiles: loadProfiles, ...vehicleInput } = input;
+        const configuration = {
+          vehicle: vehicleInput,
+          load_profiles: loadProfiles.map(({ configuration_type, max_actual_axle_load_kg }) => ({
+            configuration_type,
+            max_actual_axle_load_kg,
+          })),
+        };
+        if (dialog.value) await api.updateVehicleConfiguration(dialog.value.id, configuration, dialog.value.version);
+        else await api.createVehicleConfiguration(workspace.warehouse.id, configuration, dialog.intentKey);
         await refresh();
         flagCurrentRoutesForRefresh();
         setDialog(null);
-      }, dialog.kind === 'driver' ? 'Водитель сохранён' : 'Машина и грузовые профили сохранены'); }} /> : null}
+      }, 'Транспортное средство сохранено').catch(() => undefined); }} /> : null}
       {dialog?.kind === 'trailer' ? <TrailerDialog trailer={dialog.value} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => {
-        if (dialog.value) await api.updateTrailer(dialog.value.id, input);
-        else await api.createTrailer(workspace.warehouse.id, input);
+        if (dialog.value) await api.updateTrailer(dialog.value.id, input, dialog.value.version);
+        else await api.createTrailer(workspace.warehouse.id, input, dialog.intentKey);
         await refresh();
         flagCurrentRoutesForRefresh();
         setDialog(null);
-      }, 'Прицеп сохранён'); }} /> : null}
-      {dialog?.kind === 'shift' ? <ShiftDialog shift={dialog.value} warehouse={workspace.warehouse} drivers={workspace.drivers} vehicles={workspace.vehicles} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => { if (dialog.value) await api.updateShift(dialog.value.id, input); else await api.createShift(workspace.warehouse.id, input); await refresh(); flagCurrentRoutesForRefresh(); setDialog(null); }, 'Смена сохранена'); }} /> : null}
-      {dialog?.kind === 'request' ? <RequestDialog request={dialog.value} point={dialog.point} initialAddress={dialog.address} type={dialog.requestType} defaultDate={planningDate} busy={busy} onClose={() => { setDialog(null); setMapTool('SELECT'); }} onSubmit={async (input) => { await execute(async () => { if (dialog.value) await api.updateRequest(dialog.value.id, input); else await api.createRequest(workspace.warehouse.id, input); await refresh(); flagCurrentRoutesForRefresh(); setDialog(null); setMapTool('SELECT'); }, input.type === 'DELIVERY' ? 'Доставка сохранена; ограничения проверены' : 'Вывоз сохранён; ограничения проверены'); }} /> : null}
-      {dialog?.kind === 'delete-entity' ? <ConfirmDialog title={`Удалить «${dialog.label}»?`} description="Изменение относится к выбранному складу. Система проверит связи и не удалит используемый объект." confirmLabel="Удалить" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => { if (dialog.entityKind === 'driver') await api.deleteDriver(dialog.id); else if (dialog.entityKind === 'vehicle') await api.deleteVehicle(dialog.id); else if (dialog.entityKind === 'trailer') await api.deleteTrailer(dialog.id); else if (dialog.entityKind === 'shift') await api.deleteShift(dialog.id); else await api.deleteRequest(dialog.id); await refresh(); flagCurrentRoutesForRefresh(); setDialog(null); }, 'Объект удалён'); }} /> : null}
+      }, 'Прицеп сохранён').catch(() => undefined); }} /> : null}
+      {dialog?.kind === 'shift' ? <ShiftDialog shift={dialog.value} warehouse={workspace.warehouses.find((warehouse) => warehouse.id === shiftWarehouseId) ?? workspace.warehouse} drivers={shiftDrivers} vehicles={shiftVehicles} shifts={workspace.shifts} busy={busy} onClose={() => setDialog(null)} onSubmit={async (input) => { await execute(async () => { if (dialog.value) await api.updateShift(dialog.value.id, input, dialog.value.version); else await api.createShift(workspace.warehouse.id, input, dialog.intentKey); await refresh(); flagCurrentRoutesForRefresh(); setDialog(null); }, 'Смена сохранена').catch(() => undefined); }} /> : null}
+      {dialog?.kind === 'request' ? <RequestDialog request={dialog.value} point={dialog.point} initialAddress={dialog.address} type={dialog.requestType} defaultDate={planningDate} busy={busy} onClose={() => { setDialog(null); setMapTool('SELECT'); }} onSubmit={async (input) => { await execute(async () => { if (dialog.value) await api.updateRequest(dialog.value.id, input, dialog.value.version); else await api.createRequest(workspace.warehouse.id, input, dialog.intentKey); await refresh(); flagCurrentRoutesForRefresh(); setDialog(null); setMapTool('SELECT'); }, input.type === 'DELIVERY' ? 'Доставка сохранена; ограничения проверены' : 'Вывоз сохранён; ограничения проверены').catch(() => undefined); }} /> : null}
+      {dialog?.kind === 'delete-entity' ? <ConfirmDialog title={`Удалить «${dialog.label}»?`} description="Система проверит связанные рейсы и не удалит используемый объект." confirmLabel="Удалить" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => { if (dialog.entityKind === 'driver') await api.deleteDriver(dialog.id, dialog.expectedVersion); else if (dialog.entityKind === 'vehicle') await api.deleteVehicle(dialog.id, dialog.expectedVersion); else if (dialog.entityKind === 'trailer') await api.deleteTrailer(dialog.id, dialog.expectedVersion); else if (dialog.entityKind === 'shift') await api.deleteShift(dialog.id, dialog.expectedVersion); else await api.deleteRequest(dialog.id, dialog.expectedVersion); await refresh(); flagCurrentRoutesForRefresh(); setDialog(null); }, 'Объект удалён'); }} /> : null}
       {dialog?.kind === 'delete-generated-workload' ? <ConfirmDialog title={`Удалить нагрузку за ${formatDate(dialog.date)}?`} description="Будут удалены доставки и вывозы, созданные генератором на эту дату, и все сохранённые планы этой даты. Ручные и RWMS-операции, а также нагрузка и планы других дат останутся без изменений." confirmLabel="Удалить нагрузку" dangerous busy={busy} onClose={() => setDialog(null)} onConfirm={async () => { await execute(async () => {
-        const result = await api.deleteGeneratedWorkload(workspace.warehouse.id, dialog.date);
+        const result = await api.deleteGeneratedWorkload(
+          workspace.planning_root_warehouse_id ?? workspace.warehouse.id,
+          dialog.date,
+        );
         await refresh();
         if (dialog.date === planningDate) clearLocalPlanningState();
         setDialog(null);

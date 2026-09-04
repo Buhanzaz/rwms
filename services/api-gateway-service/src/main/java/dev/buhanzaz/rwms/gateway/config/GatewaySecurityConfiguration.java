@@ -78,6 +78,16 @@ public class GatewaySecurityConfiguration {
                     "/api/logistics/public/v1/cabin-photo-presentations/**")
                 .permitAll()
                 .requestMatchers(
+                    HttpMethod.GET,
+                    "/api/logistics/public/v1/contractor-route-shares/*",
+                    "/api/logistics/public/v1/contractor-route-shares/*/tasks/*/entries/*/media/*/generations/*/variants/*/content")
+                .permitAll()
+                .requestMatchers(
+                    HttpMethod.POST,
+                    "/api/logistics/public/v1/contractor-route-shares/*/tasks/*/entries/*/actions",
+                    "/api/logistics/public/v1/contractor-route-shares/*/tasks/*/entries/*/evidence/*")
+                .permitAll()
+                .requestMatchers(
                     "/auth/**",
                     "/api/logistics/public/v1/client-presentations/**",
                     "/.well-known/assetlinks.json",
@@ -181,6 +191,8 @@ public class GatewaySecurityConfiguration {
             CorrelationIdFilter.HEADER_NAME,
             "Idempotency-Key",
             "Last-Event-ID",
+            "X-Captured-At",
+            "X-Content-SHA256",
             "X-XSRF-TOKEN"));
     configuration.setExposedHeaders(
         List.of(CorrelationIdFilter.HEADER_NAME, HttpHeaders.ETAG, HttpHeaders.RETRY_AFTER));

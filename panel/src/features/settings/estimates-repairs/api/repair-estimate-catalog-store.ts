@@ -91,12 +91,10 @@ function toVersion(
 }
 
 export async function getCurrentRepairEstimateCatalog(
-  accessToken: string,
-  warehouseId: string
+  accessToken: string
 ) {
   const page = await listMaintenanceCatalogVersions(
     accessToken,
-    warehouseId,
     "ACTIVE"
   )
   const current = page.items.find((value) => value.lifecycle === "ACTIVE")
@@ -106,7 +104,6 @@ export async function getCurrentRepairEstimateCatalog(
 async function catalogState(request: RepairEstimateCatalogRequest) {
   const versions = await listMaintenanceCatalogVersions(
     request.accessToken,
-    request.warehouseId,
     "ACTIVE"
   )
   const version = versions.items.find(
@@ -119,12 +116,10 @@ async function catalogState(request: RepairEstimateCatalogRequest) {
   const [nodes, links] = await Promise.all([
     listMaintenanceCatalogNodes(
       request.accessToken,
-      request.warehouseId,
       version.id
     ),
     listMaintenanceCatalogLinks(
       request.accessToken,
-      request.warehouseId,
       version.id
     ),
   ])
@@ -374,7 +369,6 @@ export async function saveRepairEstimateCatalogDisplayColors(
 
   await replaceMaintenanceCatalogNodes(
     request.accessToken,
-    request.warehouseId,
     state.version.id,
     state.version.version,
     nodes
@@ -480,7 +474,6 @@ export async function saveRepairEstimateCatalogNode(
 
   await replaceMaintenanceCatalogNodes(
     request.accessToken,
-    request.warehouseId,
     state.version.id,
     state.version.version,
     nodes
@@ -504,7 +497,6 @@ export async function deleteRepairEstimateCatalogNode(
   }
   await replaceMaintenanceCatalogNodes(
     request.accessToken,
-    request.warehouseId,
     state.version.id,
     state.version.version,
     state.nodes.filter((node) => node.id !== id).map(toNodeInput)
@@ -561,7 +553,6 @@ export async function saveRepairEstimateCatalogLink(
 
   await replaceMaintenanceCatalogLinks(
     request.accessToken,
-    request.warehouseId,
     state.version.id,
     state.version.version,
     links
@@ -578,7 +569,6 @@ export async function deleteRepairEstimateCatalogLink(
   const state = await catalogState(request)
   await replaceMaintenanceCatalogLinks(
     request.accessToken,
-    request.warehouseId,
     state.version.id,
     state.version.version,
     state.links.filter((link) => link.id !== id).map(toLinkInput)
@@ -601,7 +591,6 @@ export async function moveRepairEstimateCatalogCanvasNode(
   }))
   await replaceMaintenanceCatalogNodes(
     request.accessToken,
-    request.warehouseId,
     state.version.id,
     state.version.version,
     nodes
@@ -656,7 +645,6 @@ export async function saveRepairEstimateCatalogCanvasChanges(
 
   await replaceMaintenanceCatalog(
     request.accessToken,
-    request.warehouseId,
     state.version.id,
     state.version.version,
     nodes,
@@ -667,12 +655,9 @@ export async function saveRepairEstimateCatalogCanvasChanges(
 
 export function createRepairEstimateCatalog(
   accessToken: string,
-  warehouseId: string,
   commandKey: string = idempotencyKey()
 ) {
-  return createMaintenanceCatalog(accessToken, commandKey, {
-    warehouseId,
-  }).then(toVersion)
+  return createMaintenanceCatalog(accessToken, commandKey).then(toVersion)
 }
 
 function nodeById(nodes: RepairEstimateCatalogNodeDto[]) {

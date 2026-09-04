@@ -86,6 +86,16 @@ function parseSetting(value: unknown): RepairComplexitySetting {
   }
 }
 
+function parseForWarehouse(value: unknown, warehouseId: string) {
+  const setting = parseSetting(value)
+  if (setting.warehouseId !== warehouseId) {
+    throw new Error(
+      "Сервис ремонтов вернул границы сложности ремонта другого склада."
+    )
+  }
+  return setting
+}
+
 function validateUpdate(input: RepairComplexityUpdate) {
   if (
     !isVersion(input.expectedVersion) ||
@@ -106,8 +116,9 @@ export async function getRepairComplexity(
   accessToken: string,
   warehouseId: string
 ) {
-  return parseSetting(
-    await bearerRequest<unknown>(accessToken, endpoint(warehouseId))
+  return parseForWarehouse(
+    await bearerRequest<unknown>(accessToken, endpoint(warehouseId)),
+    warehouseId
   )
 }
 
@@ -117,10 +128,11 @@ export async function updateRepairComplexity(
   input: RepairComplexityUpdate
 ) {
   validateUpdate(input)
-  return parseSetting(
+  return parseForWarehouse(
     await bearerRequest<unknown>(accessToken, endpoint(warehouseId), {
       method: "PUT",
       body: JSON.stringify(input),
-    })
+    }),
+    warehouseId
   )
 }

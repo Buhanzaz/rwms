@@ -7,6 +7,7 @@ import dev.buhanzaz.rwms.logistics.customer.security.CustomerIdentity;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerCabinCatalogService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerCheckoutService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerBookingService;
+import dev.buhanzaz.rwms.logistics.customer.service.CustomerBookingLifecycleService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerDeliverySlotService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerProfileService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerRentalService;
@@ -50,6 +51,7 @@ public class CustomerController {
   private final CustomerDeliverySlotService deliverySlots;
   private final CustomerCheckoutService checkout;
   private final CustomerBookingService customerBookings;
+  private final CustomerBookingLifecycleService bookingLifecycle;
 
   /** Returns the logistics profile of the authenticated customer. */
   @GetMapping("/profile")
@@ -249,6 +251,35 @@ public class CustomerController {
   @GetMapping("/bookings")
   public List<CustomerBookingResponse> bookings(@AuthenticationPrincipal Jwt jwt) {
     return checkout.bookings(identity(jwt));
+  }
+
+  /** Cancels an untouched completed booking without reopening its original cart. */
+  @PostMapping("/bookings/{bookingId}/cancel")
+  public CustomerBookingResponse cancelBooking(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID bookingId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody CancelCustomerBookingRequest request) {
+    return bookingLifecycle.cancel(identity(jwt), bookingId, idempotencyKey, request);
+  }
+
+  /** Searches delivery-slot replacements using the booked order's exact immutable contents. */
+  @PostMapping("/bookings/{bookingId}/delivery-slots/search")
+  public List<CustomerDeliverySlotResponse> searchBookingRescheduleSlots(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID bookingId,
+      @Valid @RequestBody SearchCustomerBookingRescheduleRequest request) {
+    return deliverySlots.searchBooking(identity(jwt), bookingId, request);
+  }
+
+  /** Atomically replaces one booking's confirmed slot under idempotency and version fences. */
+  @PostMapping("/bookings/{bookingId}/reschedule")
+  public CustomerBookingResponse rescheduleBooking(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID bookingId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody RescheduleCustomerBookingRequest request) {
+    return bookingLifecycle.reschedule(identity(jwt), bookingId, idempotencyKey, request);
   }
 
   /** Accepts one arrived cabin with the customer's full-screen drawn signature. */

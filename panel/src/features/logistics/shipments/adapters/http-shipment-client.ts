@@ -15,6 +15,11 @@ import {
   type ShipmentLine,
   type ShipmentLineState,
 } from "@/features/logistics/shipments/model"
+import {
+  CUSTOMER_DELIVERY_PURPOSES,
+  type CustomerDeliveryPurpose,
+} from "@/features/logistics/customer-delivery-purpose"
+import { listAllLogisticsDocumentPages } from "@/features/logistics/document-list-pagination"
 import type {
   ShipmentClient,
   ShipmentCreateCommand,
@@ -216,6 +221,10 @@ export function parseShipmentDocument(value: unknown): ShipmentDocument {
     id: uuid(source.id),
     version: integer(source.version),
     documentType: "SHIPMENT",
+    customerDeliveryPurpose: oneOf<CustomerDeliveryPurpose>(
+      source.customerDeliveryPurpose,
+      CUSTOMER_DELIVERY_PURPOSES
+    ),
     state: oneOf<ShipmentDocumentState>(source.state, SHIPMENT_DOCUMENT_STATES),
     warehouseId: uuid(source.warehouseId),
     destinationWarehouseId: null,
@@ -263,11 +272,20 @@ async function parsedRequest(
 }
 
 export class HttpShipmentClient implements ShipmentClient {
-  async list(accessToken: string, warehouseId: string) {
-    const response = await bearerRequest<unknown>(
-      accessToken,
-      shipmentsEndpoint(`?warehouseId=${encodeURIComponent(warehouseId)}`)
-    )
+  async list(
+    accessToken: string,
+    warehouseId: string,
+    scheduledDate?: string
+  ) {
+    const search = new URLSearchParams({ warehouseId })
+    if (scheduledDate) search.set("scheduledDate", scheduledDate)
+    const endpoint = shipmentsEndpoint(`?${search.toString()}`)
+    if (scheduledDate) {
+      return listAllLogisticsDocumentPages(accessToken, endpoint, (response) =>
+        list(response).map(parseShipmentDocument)
+      )
+    }
+    const response = await bearerRequest<unknown>(accessToken, endpoint)
     return list(response).map(parseShipmentDocument)
   }
 

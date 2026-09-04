@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.order.api;
 
+import dev.buhanzaz.rwms.logistics.domain.CustomerDeliveryPurpose;
 import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import jakarta.validation.Valid;
@@ -69,7 +70,7 @@ public final class OrderApiModels {
     @AssertTrue(message = "contactPerson is required for this client type")
     public boolean hasRequiredContactPerson() {
       return clientType == null
-          || clientType != ClientType.LEGAL_ENTITY
+          || !clientType.requiresContactPerson()
           || (contactPerson != null && !contactPerson.isBlank());
     }
   }
@@ -98,7 +99,7 @@ public final class OrderApiModels {
     @AssertTrue(message = "contactPerson is required for this client type")
     public boolean hasRequiredContactPerson() {
       return clientType == null
-          || clientType != ClientType.LEGAL_ENTITY
+          || !clientType.requiresContactPerson()
           || (contactPerson != null && !contactPerson.isBlank());
     }
   }
@@ -238,6 +239,7 @@ public final class OrderApiModels {
       long version,
       String number,
       RentalOrderStatus status,
+      CustomerDeliveryPurpose customerDeliveryPurpose,
       ClientResponse client,
       UUID managerId,
       String managerDisplayName,
@@ -312,6 +314,7 @@ public final class OrderApiModels {
   public record OrderMovementResponse(
       UUID documentId,
       String documentType,
+      CustomerDeliveryPurpose customerDeliveryPurpose,
       String state,
       LocalDate scheduledDate,
       OffsetDateTime actualAt,
@@ -329,6 +332,7 @@ public final class OrderApiModels {
       long version,
       String number,
       RentalOrderStatus status,
+      CustomerDeliveryPurpose customerDeliveryPurpose,
       ClientResponse client,
       UUID managerId,
       String managerDisplayName,

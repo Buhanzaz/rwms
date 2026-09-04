@@ -140,8 +140,8 @@ async def test_projection_expands_monthly_shifts_and_carries_mandatory_jobs(
         "travelMinutes": 300,
         "priceRubles": 31_000,
     }
-    assert "priceZones" not in payload
-    assert "restrictionZones" not in payload
+    assert payload["priceZones"] == []
+    assert payload["restrictionZones"] == []
 
 
 @pytest.mark.asyncio
@@ -224,6 +224,8 @@ async def test_publication_uses_external_warehouse_as_path_authority(
         jobCount=0,
         shiftCount=0,
         isochroneTariffCount=4,
+        priceZoneCount=0,
+        restrictionZoneCount=0,
         replayed=False,
         updatedAt=datetime(2026, 8, 30, tzinfo=UTC),
     )
@@ -233,6 +235,8 @@ async def test_publication_uses_external_warehouse_as_path_authority(
     published = await publish_warehouse_capacity(db_session, warehouse.id, client)
 
     assert published == result
+    assert warehouse.capacity_published_generation == 1
+    assert warehouse.capacity_publish_status == "PUBLISHED"
     client.replace_capacity_snapshot.assert_awaited_once()
     assert client.replace_capacity_snapshot.await_args.args[0] == warehouse.external_warehouse_id
     submitted = client.replace_capacity_snapshot.await_args.args[1]

@@ -17,12 +17,14 @@ class ApiError(Exception):
         detail: str,
         *,
         extra: Mapping[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__(detail)
         self.status_code = status_code
         self.code = code
         self.detail = detail
         self.extra = dict(extra or {})
+        self.headers = dict(headers or {})
 
 
 async def api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
@@ -37,7 +39,12 @@ async def api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
         "code": exc.code,
     }
     body.update(exc.extra)
-    return JSONResponse(body, status_code=exc.status_code, media_type="application/problem+json")
+    return JSONResponse(
+        body,
+        status_code=exc.status_code,
+        headers=exc.headers,
+        media_type="application/problem+json",
+    )
 
 
 def not_found(resource: str, resource_id: object) -> ApiError:

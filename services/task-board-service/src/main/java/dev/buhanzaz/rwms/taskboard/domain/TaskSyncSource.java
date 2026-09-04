@@ -11,6 +11,7 @@ import jakarta.persistence.UniqueConstraint;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import java.time.OffsetDateTime;
+import java.time.LocalDate;
 import java.util.Objects;
 import java.util.UUID;
 import org.hibernate.annotations.Check;
@@ -63,6 +64,28 @@ public class TaskSyncSource {
   @Column(name = "source_id")
   private UUID sourceId;
 
+  @Column(name = "source_plan_id")
+  private UUID sourcePlanId;
+
+  @Column(name = "source_plan_version")
+  private Long sourcePlanVersion;
+
+  @Column(name = "source_plan_warehouse_id")
+  private UUID sourcePlanWarehouseId;
+
+  @Column(name = "source_plan_date")
+  private LocalDate sourcePlanDate;
+
+  @Enumerated(EnumType.STRING)
+  @Column(name = "planner_membership_state", nullable = false, length = 16)
+  private PlannerMembershipState plannerMembershipState = PlannerMembershipState.ACTIVE;
+
+  @Column(name = "removed_at")
+  private OffsetDateTime removedAt;
+
+  @Column(name = "removed_source_plan_version")
+  private Long removedSourcePlanVersion;
+
   @Column(name = "created_at", nullable = false, insertable = false, updatable = false)
   private OffsetDateTime createdAt;
 
@@ -78,14 +101,48 @@ public class TaskSyncSource {
       String sourceClientId,
       TaskSourceType sourceType,
       UUID sourceId) {
+    this(boardTaskId, externalTaskId, sourceClientId, sourceType, sourceId, null, null, null, null);
+  }
+
+  /** Creates a source link with optional, all-or-nothing planner lineage. */
+  public TaskSyncSource(
+      UUID boardTaskId,
+      UUID externalTaskId,
+      String sourceClientId,
+      TaskSourceType sourceType,
+      UUID sourceId,
+      UUID sourcePlanId,
+      Long sourcePlanVersion,
+      UUID sourcePlanWarehouseId,
+      LocalDate sourcePlanDate) {
     if ((sourceType == null) != (sourceId == null)) {
       throw new IllegalArgumentException("Task source type and id must be set together");
+    }
+    boolean plannerLineageAbsent =
+        sourcePlanId == null
+            && sourcePlanVersion == null
+            && sourcePlanWarehouseId == null
+            && sourcePlanDate == null;
+    boolean plannerLineageValid =
+        sourcePlanId != null
+            && sourcePlanVersion != null
+            && sourcePlanVersion >= 1
+            && sourcePlanWarehouseId != null
+            && sourcePlanDate != null
+            && "logistics-service".equals(sourceClientId)
+            && sourceType == TaskSourceType.LOGISTICS_DRIVER_TASK;
+    if (!plannerLineageAbsent && !plannerLineageValid) {
+      throw new IllegalArgumentException("Planner task lineage is incomplete or unauthorized");
     }
     this.boardTaskId = Objects.requireNonNull(boardTaskId);
     this.externalTaskId = Objects.requireNonNull(externalTaskId);
     this.sourceClientId = Objects.requireNonNull(sourceClientId);
     this.sourceType = sourceType;
     this.sourceId = sourceId;
+    this.sourcePlanId = sourcePlanId;
+    this.sourcePlanVersion = sourcePlanVersion;
+    this.sourcePlanWarehouseId = sourcePlanWarehouseId;
+    this.sourcePlanDate = sourcePlanDate;
   }
 
   public UUID getBoardTaskId() {
@@ -106,6 +163,61 @@ public class TaskSyncSource {
 
   public UUID getSourceId() {
     return sourceId;
+  }
+
+  public UUID getSourcePlanId() {
+    return sourcePlanId;
+  }
+
+  public Long getSourcePlanVersion() {
+    return sourcePlanVersion;
+  }
+
+  public UUID getSourcePlanWarehouseId() {
+    return sourcePlanWarehouseId;
+  }
+
+  public LocalDate getSourcePlanDate() {
+    return sourcePlanDate;
+  }
+
+  public PlannerMembershipState getPlannerMembershipState() {
+    return plannerMembershipState;
+  }
+
+  public OffsetDateTime getRemovedAt() {
+    return removedAt;
+  }
+
+  public Long getRemovedSourcePlanVersion() {
+    return removedSourcePlanVersion;
+  }
+
+  /** Advances only the revision of the same planner lineage under an exact old-version fence. */
+  public void advanceSourcePlan(long expectedVersion, long replacementVersion) {
+    if (plannerMembershipState != PlannerMembershipState.ACTIVE
+        || sourcePlanId == null
+        || sourcePlanVersion == null
+        || sourcePlanVersion != expectedVersion
+        || replacementVersion <= expectedVersion) {
+      throw new IllegalStateException("Planner task lineage version is stale or absent");
+    }
+    sourcePlanVersion = replacementVersion;
+  }
+
+  /** Retains a tombstone when an agreed cross-date reschedule removes old-day work. */
+  public void removeFromSourcePlan(
+      long expectedVersion, long replacementVersion, OffsetDateTime timestamp) {
+    if (plannerMembershipState != PlannerMembershipState.ACTIVE
+        || sourcePlanId == null
+        || sourcePlanVersion == null
+        || sourcePlanVersion != expectedVersion
+        || replacementVersion <= expectedVersion) {
+      throw new IllegalStateException("Planner task lineage version is stale or absent");
+    }
+    plannerMembershipState = PlannerMembershipState.REMOVED;
+    removedAt = Objects.requireNonNull(timestamp);
+    removedSourcePlanVersion = replacementVersion;
   }
 
   public boolean hasSourceReference() {

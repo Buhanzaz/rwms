@@ -29,7 +29,6 @@ public final class DriverBoardApiModels {
       long occupiedRepairPlaceCount,
       long availableRepairPlaceCount,
       boolean inboundRepairPlaceAvailable,
-      int automaticRefillDelayMinutes,
       boolean repairPlacesOverCapacity,
       List<DriverBoardRepairPlaceCardResponse> repairPlaces,
       List<DriverBoardCardResponse> current,

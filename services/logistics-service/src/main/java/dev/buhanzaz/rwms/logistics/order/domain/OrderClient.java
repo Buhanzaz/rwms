@@ -110,8 +110,9 @@ public class OrderClient {
   /**
    * Creates a client owned by the authenticated responsible manager.
    *
-   * <p>A contact person is mandatory only for a legal entity. The phone projection is mandatory for
-   * every new client even though historical rows created before V42 can still contain no phone.
+   * <p>A contact person is mandatory for every business client (sole proprietor or legal entity).
+   * The phone projection is mandatory for every new client even though historical rows created
+   * before V42 can still contain no phone.
    */
   public static OrderClient create(
       ClientType clientType,
@@ -142,7 +143,7 @@ public class OrderClient {
       throw new IllegalArgumentException("email projection is invalid");
     }
     client.contactPerson = optionalText(contactPerson, 255, "contactPerson");
-    if (client.clientType == ClientType.LEGAL_ENTITY && client.contactPerson == null) {
+    if (client.clientType.requiresContactPerson() && client.contactPerson == null) {
       throw new IllegalArgumentException("contactPerson is required for this client type");
     }
     client.responsibleManagerId =
@@ -201,7 +202,7 @@ public class OrderClient {
       throw new IllegalArgumentException("email projection is invalid");
     }
     this.contactPerson = optionalText(contactPerson, 255, "contactPerson");
-    if (clientType == ClientType.LEGAL_ENTITY && this.contactPerson == null) {
+    if (clientType.requiresContactPerson() && this.contactPerson == null) {
       throw new IllegalArgumentException("contactPerson is required for this client type");
     }
     this.comment = optionalText(comment, 2_000, "comment");

@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom/vitest';
-import { afterEach, vi } from 'vitest';
+import { afterEach, beforeEach, vi } from 'vitest';
 import { cleanup } from '@testing-library/react';
+import { setSimulatorAccessTokenProvider } from '../src/api/client';
 
 class ResizeObserverStub implements ResizeObserver {
   observe(): void {}
@@ -24,6 +25,10 @@ Object.defineProperty(window, 'matchMedia', {
 });
 Object.defineProperty(window.URL, 'createObjectURL', { writable: true, value: () => 'blob:maplibre-worker' });
 Object.defineProperty(window.URL, 'revokeObjectURL', { writable: true, value: () => undefined });
+
+beforeEach(() => {
+  setSimulatorAccessTokenProvider(() => Promise.resolve('test-user-access-token'));
+});
 
 afterEach(() => {
   cleanup();

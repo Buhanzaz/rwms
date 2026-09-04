@@ -239,8 +239,6 @@ final class LogisticsMaintenanceDependencyClient {
     if (response.warehouseId() == null
         || !warehouseId.equals(response.warehouseId())
         || response.repairPlaceCount() < 1
-        || response.automaticRefillDelayMinutes() < 1
-        || response.automaticRefillDelayMinutes() > 1_440
         || response.availableCount() < 0
         || response.allocations() == null) {
       throw malformed("Maintenance-service returned invalid repair-place projection");
@@ -248,7 +246,6 @@ final class LogisticsMaintenanceDependencyClient {
     return new RepairPlaceProjection(
         warehouseId,
         response.repairPlaceCount(),
-        response.automaticRefillDelayMinutes(),
         response.reservedCount(),
         response.occupiedCount(),
         response.readyToReleaseCount(),
@@ -556,7 +553,6 @@ final class LogisticsMaintenanceDependencyClient {
   private record RepairPlaceProjectionResponse(
       UUID warehouseId,
       int repairPlaceCount,
-      int automaticRefillDelayMinutes,
       long reservedCount,
       long occupiedCount,
       long readyToReleaseCount,

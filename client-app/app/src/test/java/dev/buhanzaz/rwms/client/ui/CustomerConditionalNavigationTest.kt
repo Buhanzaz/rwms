@@ -1,7 +1,13 @@
 package dev.buhanzaz.rwms.client.ui
 
 import android.app.Application
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -29,7 +35,9 @@ class CustomerConditionalNavigationTest {
     @Test
     fun `signed out shows login and hides profile workflow`() {
         composeRule.setContent {
-            CustomerTheme { CustomerAppContent(CustomerAppState.SignedOut()) }
+            CompositionLocalProvider(LocalCustomerStoreVideoBackgroundEnabled provides false) {
+                CustomerTheme { CustomerAppContent(CustomerAppState.SignedOut()) }
+            }
         }
 
         composeRule.onNodeWithText("Вход").assertExists()
@@ -127,27 +135,47 @@ class CustomerConditionalNavigationTest {
     }
 
     @Test
-    fun `drawer exposes every appearance source and reports a manual choice`() {
-        var selectedMode: CustomerAppearanceMode? = null
+    fun `drawer presents rental and switches only between explicit light and dark themes`() {
+        var appearanceMode by mutableStateOf(CustomerAppearanceMode.LIGHT)
         composeRule.setContent {
-            CustomerTheme {
+            CustomerTheme(appearanceMode = appearanceMode) {
                 CustomerAppContent(
                     state = CustomerAppState.Ready(readyCatalogWorkflow()),
-                    appearanceMode = CustomerAppearanceMode.SYSTEM,
-                    onAppearanceMode = { selectedMode = it },
+                    appearanceMode = appearanceMode,
+                    onAppearanceMode = { appearanceMode = it },
                 )
             }
         }
 
         composeRule.onNodeWithTag("menu-button").performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("appearance-selector").performClick()
-        composeRule.onNodeWithTag("appearance-mode-system").assertExists()
-        composeRule.onNodeWithTag("appearance-mode-light").assertExists()
-        composeRule.onNodeWithTag("appearance-mode-dark").assertExists().performScrollTo().performClick()
-        composeRule.onNodeWithTag("appearance-mode-battery").assertExists()
+        composeRule.onAllNodesWithText("Аренда").assertCountEquals(2)
+        composeRule.onNodeWithText("Свободные бытовки").assertDoesNotExist()
+        composeRule.onNodeWithText("Как на телефоне").assertDoesNotExist()
+        composeRule.onNodeWithTag("appearance-selector").assertDoesNotExist()
+        composeRule.onNodeWithText("Включить тёмную тему").assertExists()
+        composeRule.onNodeWithTag("appearance-toggle").performScrollTo().performClick()
+        composeRule.runOnIdle { assertThat(appearanceMode).isEqualTo(CustomerAppearanceMode.DARK) }
 
-        composeRule.runOnIdle { assertThat(selectedMode).isEqualTo(CustomerAppearanceMode.DARK) }
+        composeRule.onNodeWithText("Включить светлую тему").assertExists()
+        composeRule.onNodeWithTag("appearance-toggle").performScrollTo().performClick()
+        composeRule.runOnIdle { assertThat(appearanceMode).isEqualTo(CustomerAppearanceMode.LIGHT) }
+    }
+
+    @Test
+    fun `legal entity access is a drawer placeholder and keeps the catalog open`() {
+        composeRule.setContent {
+            CustomerTheme {
+                CustomerAppContent(
+                    state = CustomerAppState.Ready(readyCatalogWorkflow()),
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("menu-button").performClick()
+        composeRule.onNodeWithTag("legal-entity-access-placeholder").performScrollTo().performClick()
+        composeRule.onNodeWithText("Доступ для юридических лиц появится позже").assertExists()
+        composeRule.onNodeWithTag("catalog-screen").assertExists()
     }
 
     @Test

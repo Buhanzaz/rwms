@@ -248,6 +248,17 @@ public class RentalOrder {
     return true;
   }
 
+  /**
+   * Advances the order fence for a successful customer slot swap whose date-only preference did
+   * not change. This invalidates a planner result that still contains the former time window.
+   */
+  public void markCustomerBookingRescheduled() {
+    if (status != RentalOrderStatus.SAVED) {
+      throw new IllegalStateException("Only a saved customer booking can be rescheduled");
+    }
+    touch();
+  }
+
   /** Validates the normal-presentation invariant without exposing the JPA collection to callers. */
   private static List<DesiredDeliveryWindow> normalizedClientDesiredDeliveryWindows(
       List<DesiredDeliveryWindow> values) {
@@ -286,6 +297,15 @@ public class RentalOrder {
 
   public void cancel() {
     requireDraft();
+    status = RentalOrderStatus.CANCELLED;
+    updatedAt = nextUpdatedAt();
+  }
+
+  /** Cancels a SAVED customer booking only after the service-layer pre-start guard has passed. */
+  public void cancelSavedCustomerBooking() {
+    if (status != RentalOrderStatus.SAVED) {
+      throw new IllegalStateException("Saved customer booking cannot be cancelled");
+    }
     status = RentalOrderStatus.CANCELLED;
     updatedAt = nextUpdatedAt();
   }

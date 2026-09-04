@@ -6,7 +6,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import lru_cache
 from time import monotonic
 from uuid import UUID
@@ -24,8 +24,21 @@ from app.schemas.domain import (
     RwmsDriverIdentity,
     RwmsPlanningAssignmentStatusFeed,
     RwmsPlanningFeed,
+    RwmsReplacePlanningAssignmentsCommand,
+    RwmsReplacePlanningAssignmentsResult,
+    RwmsVehicleOperationalAssignment,
     RwmsWarehouseIdentity,
     RwmsWarehouseSupportLink,
+)
+from app.schemas.operations import (
+    RwmsPlanningBaseTask,
+    RwmsProvisionalEtaResult,
+    RwmsProvisionalEtaUpdate,
+    RwmsPublishedAssignmentWithdrawal,
+    RwmsPublishedAssignmentWithdrawalResult,
+    RwmsRescheduleCommand,
+    RwmsRescheduleOptions,
+    RwmsRescheduleResult,
 )
 
 RWMS_PLANNING_SCOPE = "logistics.planning"
@@ -139,10 +152,7 @@ class RwmsPlanningClient:
         self.ensure_enabled()
         response = await self._authorized_request(
             "GET",
-            (
-                "/api/internal/logistics/v1/planning/warehouses/"
-                f"{served_warehouse_id}/support-links"
-            ),
+            (f"/api/internal/logistics/v1/planning/warehouses/{served_warehouse_id}/support-links"),
             params={"at": at.isoformat()},
         )
         links = self._validate_response_list(
@@ -173,10 +183,7 @@ class RwmsPlanningClient:
         self.ensure_enabled()
         response = await self._authorized_request(
             "GET",
-            (
-                "/api/internal/logistics/v1/planning/warehouses/"
-                f"{warehouse_id}/support-network"
-            ),
+            (f"/api/internal/logistics/v1/planning/warehouses/{warehouse_id}/support-network"),
         )
         links = self._validate_response_list(
             response,
@@ -241,6 +248,195 @@ class RwmsPlanningClient:
             )
         return drivers
 
+    async def list_vehicle_assignments(
+        self,
+        warehouse_id: UUID,
+        *,
+        window_start: datetime,
+        window_end: datetime,
+    ) -> list[RwmsVehicleOperationalAssignment]:
+        """Read bounded vehicle placement facts and reject contradictory upstream state."""
+
+        if window_start.utcoffset() is None or window_end.utcoffset() is None:
+            raise ValueError("vehicle assignment window must include UTC offsets")
+        if window_start >= window_end:
+            raise ValueError("vehicle assignment windowStart must precede windowEnd")
+        self.ensure_enabled()
+        response = await self._authorized_request(
+            "GET",
+            "/api/internal/logistics/v1/planning/vehicle-assignments",
+            params={
+                "warehouseId": str(warehouse_id),
+                "windowStart": window_start.isoformat(),
+                "windowEnd": window_end.isoformat(),
+            },
+        )
+        assignments = self._validate_response_list(
+            response,
+            RwmsVehicleOperationalAssignment,
+            "RWMS_VEHICLE_ASSIGNMENT_RESPONSE_INVALID",
+        )
+        self._validate_vehicle_assignment_snapshot(
+            assignments,
+            window_end=window_end,
+        )
+        return assignments
+
+    async def list_base_tasks(
+        self,
+        warehouse_id: UUID,
+        *,
+        available_at: datetime,
+        limit: int = 20,
+    ) -> list[RwmsPlanningBaseTask]:
+        """Read existing low-priority base work without creating planner-owned duplicates."""
+
+        if available_at.utcoffset() is None:
+            raise ValueError("available_at must include a UTC offset")
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        self.ensure_enabled()
+        response = await self._authorized_request(
+            "GET",
+            "/api/internal/logistics/v1/planning/base-tasks",
+            params={
+                "warehouseId": str(warehouse_id),
+                "availableAt": available_at.isoformat(),
+                "limit": str(limit),
+            },
+        )
+        tasks = self._validate_response_list(
+            response,
+            RwmsPlanningBaseTask,
+            "RWMS_BASE_TASK_RESPONSE_INVALID",
+        )
+        if len({task.task_id for task in tasks}) != len(tasks):
+            raise ApiError(
+                502,
+                "RWMS_BASE_TASK_RESPONSE_INVALID",
+                "RWMS logistics-service response contains duplicate base tasks",
+            )
+        return tasks
+
+    async def get_reschedule_options(
+        self,
+        order_id: UUID,
+        *,
+        expected_order_version: int,
+    ) -> RwmsRescheduleOptions:
+        """Read authoritative slot choices before proposing a customer date change."""
+
+        if expected_order_version < 0:
+            raise ValueError("expected_order_version must be non-negative")
+        self.ensure_enabled()
+        response = await self._authorized_request(
+            "GET",
+            f"/api/internal/logistics/v1/planning/orders/{order_id}/reschedule-options",
+            params={"expectedOrderVersion": str(expected_order_version)},
+        )
+        result = self._validate_response(
+            response,
+            RwmsRescheduleOptions,
+            "RWMS_RESCHEDULE_OPTIONS_RESPONSE_INVALID",
+        )
+        if result.order_id != order_id or result.order_version != expected_order_version:
+            raise ApiError(
+                502,
+                "RWMS_RESCHEDULE_OPTIONS_RESPONSE_INVALID",
+                "RWMS reschedule options do not match the requested order fence",
+            )
+        return result
+
+    async def reschedule_order(
+        self,
+        order_id: UUID,
+        command: RwmsRescheduleCommand,
+        *,
+        idempotency_key: str,
+    ) -> RwmsRescheduleResult:
+        """Apply one customer-agreed date through the authoritative order owner."""
+
+        self.ensure_enabled()
+        response = await self._authorized_request(
+            "POST",
+            f"/api/internal/logistics/v1/planning/orders/{order_id}/reschedule",
+            headers={"Idempotency-Key": idempotency_key},
+            json_body=command.model_dump(mode="json", by_alias=True),
+        )
+        result = self._validate_response(
+            response,
+            RwmsRescheduleResult,
+            "RWMS_RESCHEDULE_RESPONSE_INVALID",
+        )
+        if result.order_id != order_id:
+            raise ApiError(
+                502,
+                "RWMS_RESCHEDULE_RESPONSE_INVALID",
+                "RWMS reschedule result belongs to another order",
+            )
+        return result
+
+    async def replace_provisional_eta(
+        self,
+        external_task_id: UUID,
+        command: RwmsProvisionalEtaUpdate,
+    ) -> RwmsProvisionalEtaResult:
+        """Refresh or invalidate one future shared-task ETA under its current task fence."""
+
+        self.ensure_enabled()
+        response = await self._authorized_request(
+            "PUT",
+            (f"/api/internal/logistics/v1/planning/assignments/{external_task_id}/provisional-eta"),
+            json_body=command.model_dump(mode="json", by_alias=True),
+        )
+        result = self._validate_response(
+            response,
+            RwmsProvisionalEtaResult,
+            "RWMS_PROVISIONAL_ETA_RESPONSE_INVALID",
+        )
+        if result.external_task_id != external_task_id:
+            raise ApiError(
+                502,
+                "RWMS_PROVISIONAL_ETA_RESPONSE_INVALID",
+                "RWMS provisional ETA result belongs to another task",
+            )
+        return result
+
+    @staticmethod
+    def _validate_vehicle_assignment_snapshot(
+        assignments: list[RwmsVehicleOperationalAssignment],
+        *,
+        window_end: datetime,
+    ) -> None:
+        """Fail closed on duplicate, out-of-window, or contradictory chain facts."""
+
+        invalid = any(
+            assignment.status not in {"PLANNED", "IN_TRANSIT", "ACTIVE"}
+            or assignment.travel_starts_at >= window_end
+            for assignment in assignments
+        )
+        duplicate_ids = len({item.assignment_id for item in assignments}) != len(assignments)
+        contradictory = False
+        if not duplicate_ids:
+            from app.services.vehicle_availability import (
+                VehicleAssignmentDataError,
+                merge_vehicle_assignments,
+            )
+
+            try:
+                merge_vehicle_assignments(
+                    (assignments,),
+                    observed_at=datetime.min.replace(tzinfo=UTC),
+                )
+            except VehicleAssignmentDataError:
+                contradictory = True
+        if invalid or duplicate_ids or contradictory:
+            raise ApiError(
+                502,
+                "RWMS_VEHICLE_ASSIGNMENT_RESPONSE_INVALID",
+                "RWMS logistics-service vehicle assignment response is invalid",
+            )
+
     async def apply_assignments(
         self,
         command: RwmsAssignmentsCommand,
@@ -257,6 +453,81 @@ class RwmsPlanningClient:
             json_body=command.model_dump(mode="json", by_alias=True),
         )
         return self._validate_response(response, RwmsApplyResult, "RWMS_APPLY_RESPONSE_INVALID")
+
+    async def replace_assignments(
+        self,
+        source_plan_id: UUID,
+        command: RwmsReplacePlanningAssignmentsCommand,
+        *,
+        idempotency_key: UUID,
+    ) -> RwmsReplacePlanningAssignmentsResult:
+        """Atomically replace one complete still-unstarted published plan revision."""
+
+        self.ensure_enabled()
+        response = await self._authorized_request(
+            "PUT",
+            f"/api/internal/logistics/v1/planning/assignments/{source_plan_id}",
+            headers={"Idempotency-Key": str(idempotency_key)},
+            json_body=command.model_dump(mode="json", by_alias=True),
+        )
+        result = self._validate_response(
+            response,
+            RwmsReplacePlanningAssignmentsResult,
+            "RWMS_ASSIGNMENT_REPLACEMENT_RESPONSE_INVALID",
+        )
+        requested_ids = {item.external_task_id for item in command.assignments}
+        returned_ids = {item.external_task_id for item in result.assignments}
+        if (
+            result.source_plan_id != source_plan_id
+            or result.source_plan_version != command.replacement_plan_version
+            or result.warehouse_id != command.warehouse_id
+            or result.date != command.date
+            or returned_ids != requested_ids
+        ):
+            raise ApiError(
+                502,
+                "RWMS_ASSIGNMENT_REPLACEMENT_RESPONSE_INVALID",
+                "RWMS assignment replacement response does not match the submitted revision",
+            )
+        return result
+
+    async def withdraw_cancelled_assignment(
+        self,
+        source_plan_id: UUID,
+        command: RwmsPublishedAssignmentWithdrawal,
+        *,
+        idempotency_key: UUID,
+    ) -> RwmsPublishedAssignmentWithdrawalResult:
+        """Withdraw one owner-cancelled member through the durable published-plan saga."""
+
+        self.ensure_enabled()
+        response = await self._authorized_request(
+            "POST",
+            (
+                "/api/internal/logistics/v1/planning/assignments/"
+                f"{source_plan_id}/withdraw-cancelled"
+            ),
+            headers={"Idempotency-Key": str(idempotency_key)},
+            json_body=command.model_dump(mode="json", by_alias=True),
+        )
+        result = self._validate_response(
+            response,
+            RwmsPublishedAssignmentWithdrawalResult,
+            "RWMS_CANCELLATION_WITHDRAWAL_RESPONSE_INVALID",
+        )
+        if (
+            command.source_plan_id != source_plan_id
+            or result.source_plan_id != source_plan_id
+            or result.source_plan_version != command.replacement_plan_version
+            or result.removed_external_task_id != command.removed_assignment.external_task_id
+            or result.state != "COMPLETE"
+        ):
+            raise ApiError(
+                502,
+                "RWMS_CANCELLATION_WITHDRAWAL_RESPONSE_INVALID",
+                "RWMS cancellation withdrawal response does not match the submitted revision",
+            )
+        return result
 
     async def get_assignment_statuses(
         self,
@@ -349,11 +620,7 @@ class RwmsPlanningClient:
                 "RWMS logistics-service rejected the request",
                 extra={
                     "upstream_status": response.status_code,
-                    **(
-                        {"upstream_code": upstream_code}
-                        if upstream_code is not None
-                        else {}
-                    ),
+                    **({"upstream_code": upstream_code} if upstream_code is not None else {}),
                 },
             )
         return response

@@ -1,6 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from "react"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { Delete02Icon } from "@hugeicons/core-free-icons"
 
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -134,6 +135,8 @@ function EditorShell({
   pendingLabel = "Сохраняем…",
   submitDisabled = false,
   destructiveSubmit = false,
+  footerActions,
+  footerDestructiveAction,
 }: {
   title: string
   description: string
@@ -146,6 +149,8 @@ function EditorShell({
   pendingLabel?: string
   submitDisabled?: boolean
   destructiveSubmit?: boolean
+  footerActions?: ReactNode
+  footerDestructiveAction?: ReactNode
 }) {
   return (
     <Dialog open onOpenChange={(open) => !open && !pending && onClose()}>
@@ -157,22 +162,36 @@ function EditorShell({
         <form onSubmit={onSubmit} className="flex flex-col gap-6">
           {children}
           {error ? <FieldError>{error}</FieldError> : null}
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={pending}
-              onClick={onClose}
-            >
-              Отмена
-            </Button>
-            <Button
-              type="submit"
-              variant={destructiveSubmit ? "destructive" : "default"}
-              disabled={pending || submitDisabled}
-            >
-              {pending ? pendingLabel : submitLabel}
-            </Button>
+          <DialogFooter
+            className={
+              footerActions || footerDestructiveAction
+                ? "gap-2 sm:justify-between"
+                : "gap-2"
+            }
+          >
+            {footerActions || footerDestructiveAction ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {footerDestructiveAction}
+                {footerActions}
+              </div>
+            ) : null}
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending}
+                onClick={onClose}
+              >
+                Отмена
+              </Button>
+              <Button
+                type="submit"
+                variant={destructiveSubmit ? "destructive" : "default"}
+                disabled={pending || submitDisabled}
+              >
+                {pending ? pendingLabel : submitLabel}
+              </Button>
+            </div>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -187,6 +206,7 @@ export function QueueDefinitionEditorDialog({
   error,
   onClose,
   onSave,
+  onDelete,
 }: {
   definition: QueueDefinitionDto | null
   classes: WorkerClassDto[]
@@ -194,6 +214,7 @@ export function QueueDefinitionEditorDialog({
   error: string | null
   onClose: () => void
   onSave: (request: QueueDefinitionRequest) => Promise<void>
+  onDelete?: () => void
 }) {
   const [name, setName] = useState(definition?.name ?? "")
   const [type, setType] = useState<QueueType>(definition?.type ?? "REPAIR")
@@ -284,6 +305,21 @@ export function QueueDefinitionEditorDialog({
       error={validation ?? error}
       onClose={onClose}
       onSubmit={(event) => void submit(event)}
+      footerDestructiveAction={
+        definition && onDelete ? (
+          <Button
+            type="button"
+            variant="destructive"
+            size="icon"
+            aria-label="Удалить"
+            title="Удалить"
+            disabled={pending}
+            onClick={onDelete}
+          >
+            <HugeiconsIcon icon={Delete02Icon} aria-hidden="true" />
+          </Button>
+        ) : null
+      }
     >
       <FieldGroup>
         <Field>
@@ -425,8 +461,7 @@ export function QueueDefinitionEditorDialog({
       <FieldSet>
         <FieldLegend>Классы исполнителей</FieldLegend>
         <FieldDescription>
-          Первый выбранный класс — основной исполнитель. Остальные получают
-          связанное срочное задание в указанном порядке.
+          Выбранные классы получают связанные задания в указанном порядке.
         </FieldDescription>
         <FieldGroup className="gap-3">
           {classes.map((workerClass) => {
@@ -485,12 +520,7 @@ export function QueueDefinitionEditorDialog({
                   className="rounded-lg border p-3"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">{workerClass.name}</span>
-                      <Badge variant={primary ? "default" : "secondary"}>
-                        {primary ? "Основной" : "Вторичный"}
-                      </Badge>
-                    </div>
+                    <span className="font-medium">{workerClass.name}</span>
                     <div className="flex items-center gap-2">
                       <Button
                         type="button"
@@ -520,12 +550,7 @@ export function QueueDefinitionEditorDialog({
                       </Button>
                     </div>
                   </div>
-                  {primary ? (
-                    <FieldDescription>
-                      Взятие задания основным исполнителем запускает связанные
-                      задания для вторичных классов.
-                    </FieldDescription>
-                  ) : (
+                  {primary ? null : (
                     <FieldGroup className="gap-3">
                       <BooleanField
                         id={`queue-stop-${workerClass.id}`}
@@ -596,7 +621,7 @@ export function QueueDefinitionEditorDialog({
                           )
                         }
                       >
-                        Уведомлять после принятия основным исполнителем
+                        Уведомлять после начала работы первого класса
                       </BooleanField>
                     </FieldGroup>
                   )}
@@ -621,12 +646,14 @@ export function ClassEditorDialog({
   error,
   onClose,
   onSave,
+  onDelete,
 }: {
   item: WorkerClassDto | null
   pending: boolean
   error: string | null
   onClose: () => void
   onSave: (request: WorkerClassRequest) => Promise<void>
+  onDelete?: () => void
 }) {
   const [name, setName] = useState(item?.name ?? "")
   const [description, setDescription] = useState(item?.description ?? "")
@@ -657,6 +684,21 @@ export function ClassEditorDialog({
       error={validation ?? error}
       onClose={onClose}
       onSubmit={(event) => void submit(event)}
+      footerDestructiveAction={
+        item && onDelete ? (
+          <Button
+            type="button"
+            variant="destructive"
+            size="icon"
+            aria-label="Удалить"
+            title="Удалить"
+            disabled={pending}
+            onClick={onDelete}
+          >
+            <HugeiconsIcon icon={Delete02Icon} aria-hidden="true" />
+          </Button>
+        ) : null
+      }
     >
       <FieldGroup className="grid gap-4 md:grid-cols-2">
         <Field>
@@ -711,6 +753,10 @@ export function WorkerEditorDialog({
   error,
   onClose,
   onSave,
+  onResetPassword,
+  onDisableCredentials,
+  onEnableCredentials,
+  onDelete,
 }: {
   item: WorkerDto | null
   classes: WorkerClassDto[]
@@ -718,6 +764,10 @@ export function WorkerEditorDialog({
   error: string | null
   onClose: () => void
   onSave: (request: WorkerRequest) => Promise<void>
+  onResetPassword?: () => void
+  onDisableCredentials?: () => void
+  onEnableCredentials?: () => void
+  onDelete?: () => void
 }) {
   const [displayName, setDisplayName] = useState(item?.displayName ?? "")
   const [firstName, setFirstName] = useState(item?.firstName ?? "")
@@ -798,6 +848,57 @@ export function WorkerEditorDialog({
       error={validation ?? error}
       onClose={onClose}
       onSubmit={(event) => void submit(event)}
+      footerActions={
+        item ? (
+          <>
+            {item.appLogin && onResetPassword ? (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending}
+                onClick={onResetPassword}
+              >
+                Сменить пароль
+              </Button>
+            ) : null}
+            {item.appLogin && onDisableCredentials ? (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending}
+                onClick={onDisableCredentials}
+              >
+                Отключить вход
+              </Button>
+            ) : null}
+            {item.appLogin && onEnableCredentials ? (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending}
+                onClick={onEnableCredentials}
+              >
+                Включить вход
+              </Button>
+            ) : null}
+          </>
+        ) : null
+      }
+      footerDestructiveAction={
+        item && onDelete ? (
+          <Button
+            type="button"
+            variant="destructive"
+            size="icon"
+            aria-label="Удалить"
+            title="Удалить"
+            disabled={pending}
+            onClick={onDelete}
+          >
+            <HugeiconsIcon icon={Delete02Icon} aria-hidden="true" />
+          </Button>
+        ) : null
+      }
     >
       <FieldGroup className="grid gap-4 md:grid-cols-2">
         <Field className="md:col-span-2">
@@ -850,23 +951,22 @@ export function WorkerEditorDialog({
           />
           {item?.appLogin ? (
             <FieldDescription>
-              Используйте «Пароль» для сброса или «Отключить вход» для временной
-              деактивации логина.
+              Используйте «Сменить пароль» или «Отключить вход» внизу окна.
             </FieldDescription>
           ) : null}
         </Field>
-        <Field>
-          <FieldLabel htmlFor="worker-password">
-            {item ? "Новый пароль (необязательно)" : "Пароль"}
-          </FieldLabel>
-          <Input
-            id="worker-password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="new-password"
-          />
-        </Field>
+        {!item?.appLogin ? (
+          <Field>
+            <FieldLabel htmlFor="worker-password">Пароль</FieldLabel>
+            <Input
+              id="worker-password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="new-password"
+            />
+          </Field>
+        ) : null}
         <Field className="md:col-span-2">
           <FieldLabel htmlFor="worker-comment">Комментарий</FieldLabel>
           <Textarea
@@ -905,6 +1005,9 @@ export function GroupEditorDialog({
   error,
   onClose,
   onSave,
+  onDisableAvailability,
+  onEnableAvailability,
+  onDelete,
 }: {
   item: WorkerGroupDto | null
   classes: WorkerClassDto[]
@@ -913,6 +1016,9 @@ export function GroupEditorDialog({
   error: string | null
   onClose: () => void
   onSave: (request: WorkerGroupRequest) => Promise<void>
+  onDisableAvailability?: () => void
+  onEnableAvailability?: () => void
+  onDelete?: () => void
 }) {
   const [name, setName] = useState(item?.name ?? "")
   const [description, setDescription] = useState(item?.description ?? "")
@@ -1006,6 +1112,47 @@ export function GroupEditorDialog({
       error={validation ?? error}
       onClose={onClose}
       onSubmit={(event) => void submit(event)}
+      footerActions={
+        item ? (
+          <>
+            {onDisableAvailability ? (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending || !item.active}
+                onClick={onDisableAvailability}
+              >
+                Отключить работу
+              </Button>
+            ) : null}
+            {onEnableAvailability ? (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending || !item.active}
+                onClick={onEnableAvailability}
+              >
+                Включить работу
+              </Button>
+            ) : null}
+          </>
+        ) : null
+      }
+      footerDestructiveAction={
+        item && onDelete ? (
+          <Button
+            type="button"
+            variant="destructive"
+            size="icon"
+            aria-label="Удалить"
+            title="Удалить"
+            disabled={pending}
+            onClick={onDelete}
+          >
+            <HugeiconsIcon icon={Delete02Icon} aria-hidden="true" />
+          </Button>
+        ) : null
+      }
     >
       <FieldGroup className="grid gap-4 md:grid-cols-2">
         <Field>

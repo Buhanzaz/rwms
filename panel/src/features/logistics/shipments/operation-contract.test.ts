@@ -38,6 +38,7 @@ describe("shipment UI contract mapping", () => {
         id: "11111111-1111-4111-8111-111111111111",
         version: 3,
         documentType: "SHIPMENT",
+        customerDeliveryPurpose: "RENTAL_DELIVERY",
         state: "CANCELLING",
         warehouseId: "22222222-2222-4222-8222-222222222222",
         destinationWarehouseId: null,

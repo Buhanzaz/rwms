@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.taskboard.security;
 
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
@@ -17,6 +18,9 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class WarehouseAccessAuthorizer {
+  private static final String ADMIN_WEB_CLIENT_ID = "rwms-admin-web";
+  private static final Set<String> INTERACTIVE_PROTOCOL_SCOPES =
+      Set.of("openid", "profile", "offline_access");
   private final boolean developmentAuthBypass;
 
   public WarehouseAccessAuthorizer(
@@ -30,6 +34,7 @@ public class WarehouseAccessAuthorizer {
   /** Requires a user principal carrying the supplied public scope. */
   public void requireUserScope(Jwt jwt, String scope) {
     if (developmentAuthBypass) return;
+    if (isAdministrationApplication(jwt)) return;
     if (!"USER".equals(jwt.getClaimAsString("principal_type")) || !hasScope(jwt, scope))
       throw new AccessDeniedException("Required USER scope is missing");
   }
@@ -37,6 +42,7 @@ public class WarehouseAccessAuthorizer {
   /** Requires task read/write authority for a user or a worker token. */
   public void requireTaskScope(Jwt jwt, boolean write) {
     if (developmentAuthBypass) return;
+    if (isAdministrationApplication(jwt)) return;
     String type = jwt.getClaimAsString("principal_type");
     String scope = "WORKER".equals(type) ? "worker.tasks" : write ? "rwms.write" : "rwms.read";
     if (!("USER".equals(type) || "WORKER".equals(type)) || !hasScope(jwt, scope))
@@ -129,5 +135,25 @@ public class WarehouseAccessAuthorizer {
     Object scp = jwt.getClaims().get("scp");
     return scp instanceof List<?> values
         && values.stream().map(String::valueOf).anyMatch(required::equals);
+  }
+
+  /** Accepts the isolated administration client only for a global administrator. */
+  private boolean isAdministrationApplication(Jwt jwt) {
+    if (jwt == null
+        || !"USER".equals(jwt.getClaimAsString("principal_type"))
+        || !ADMIN_WEB_CLIENT_ID.equals(jwt.getClaimAsString("client_id"))) {
+      return false;
+    }
+    String role = jwt.getClaimAsString("global_role");
+    if (!"SYSTEM_ADMIN".equals(role) && !"WMS_ADMIN".equals(role)) return false;
+    Object scope = jwt.getClaims().get("scope");
+    List<String> scopes =
+        scope instanceof String value
+            ? List.of(value.split(" "))
+            : scope instanceof List<?> values ? values.stream().map(String::valueOf).toList() : List.of();
+    return scopes.stream()
+        .filter(value -> !INTERACTIVE_PROTOCOL_SCOPES.contains(value))
+        .toList()
+        .equals(List.of("admin.manage"));
   }
 }

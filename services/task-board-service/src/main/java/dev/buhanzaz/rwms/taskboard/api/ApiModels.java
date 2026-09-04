@@ -763,6 +763,13 @@ public final class ApiModels {
       UUID workerId,
       @Size(max = 512) String workerName) {}
 
+  /** All-or-nothing planner lineage attached only to logistics driver tasks. */
+  public record PlannerTaskLineageDto(
+      @NotNull UUID sourcePlanId,
+      @NotNull @Min(1) Long sourcePlanVersion,
+      @NotNull UUID sourcePlanWarehouseId,
+      @NotNull LocalDate sourcePlanDate) {}
+
   /**
    * Source-service request to register externally owned work.
    *
@@ -797,7 +804,40 @@ public final class ApiModels {
       @Min(1) @Max(5) Integer priority,
       @Valid TaskSourceReferenceDto source,
       TaskLane lane,
-      @Valid DriverTaskAudienceDto driverAudience) {
+      @Valid DriverTaskAudienceDto driverAudience,
+      @Valid PlannerTaskLineageDto plannerLineage) {
+    /** Preserves the source-compatible constructor used before planner lineage was persisted. */
+    public RegisterExternalTaskRequest(
+        UUID warehouseId,
+        UUID externalTaskId,
+        String title,
+        String unitNumber,
+        String description,
+        Integer plannedDurationMinutes,
+        OffsetDateTime deadlineAt,
+        List<RouteStepRequest> route,
+        LocalDate scheduledDate,
+        Integer priority,
+        TaskSourceReferenceDto source,
+        TaskLane lane,
+        DriverTaskAudienceDto driverAudience) {
+      this(
+          warehouseId,
+          externalTaskId,
+          title,
+          unitNumber,
+          description,
+          plannedDurationMinutes,
+          deadlineAt,
+          route,
+          scheduledDate,
+          priority,
+          source,
+          lane,
+          driverAudience,
+          null);
+    }
+
     public RegisterExternalTaskRequest(
         UUID warehouseId,
         UUID externalTaskId,
@@ -824,6 +864,7 @@ public final class ApiModels {
           priority,
           source,
           lane,
+          null,
           null);
     }
 
@@ -848,7 +889,9 @@ public final class ApiModels {
           null,
           null,
           null,
-          TaskLane.SCHEDULED);
+          TaskLane.SCHEDULED,
+          null,
+          null);
     }
 
     public RegisterExternalTaskRequest(
@@ -874,7 +917,9 @@ public final class ApiModels {
           scheduledDate,
           priority,
           null,
-          TaskLane.SCHEDULED);
+          TaskLane.SCHEDULED,
+          null,
+          null);
     }
   }
 

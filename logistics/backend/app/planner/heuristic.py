@@ -4,13 +4,23 @@
 
 from __future__ import annotations
 
-from asyncio import sleep
+from asyncio import sleep, timeout
+from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from hashlib import sha256
+from itertools import pairwise
+from math import floor
+from time import monotonic
+from typing import Protocol
 
-from app.routing import GeoJsonLineString, RoutingProvider, TravelMatrix
+from app.routing import (
+    GeoJsonLineString,
+    GeoPoint,
+    RoutingProvider,
+    TravelMetric,
+)
 
 from .engine import CandidateRouteEvaluator, CandidateRouteRejected, ProgressPublisher
 from .models import (
@@ -42,6 +52,53 @@ from .workload import (
     incremental_shift_workload_cost,
     shift_utilization_percent,
 )
+
+_MAX_ROUTING_MATRIX_POINTS = 32
+_MAX_TASKS_PER_MATRIX_BATCH = _MAX_ROUTING_MATRIX_POINTS - 1
+_TIME_WINDOW_PARTITION_MINUTES = 4 * 60
+_SPATIAL_PARTITION_DEGREES = 0.25
+_SPATIAL_NEIGHBOR_OVERLAP = 7
+
+
+class _PlannerMatrix(Protocol):
+    """Minimal exact-edge view consumed by the synchronous planner search."""
+
+    @property
+    def points(self) -> tuple[GeoPoint, ...]:
+        """Return globally indexed depot and task points."""
+
+        ...
+
+    def at(self, from_index: int, to_index: int) -> TravelMetric:
+        """Return one exact directed road metric or reject an absent sparse edge."""
+
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class _SparseTravelMatrix:
+    """Global point index backed only by bounded exact routing submatrices."""
+
+    points: tuple[GeoPoint, ...]
+    metrics: Mapping[tuple[int, int], TravelMetric]
+    loaded_task_ids: frozenset[str]
+    batch_count: int
+    max_batch_points: int
+
+    def at(self, from_index: int, to_index: int) -> TravelMetric:
+        """Return a loaded exact edge without synthesizing a geometric fallback."""
+
+        try:
+            return self.metrics[(from_index, to_index)]
+        except KeyError as exc:
+            raise ValueError(
+                f"planner edge {from_index}->{to_index} was not exact-routed"
+            ) from exc
+
+    def has_exact_edge(self, from_index: int, to_index: int) -> bool:
+        """Return whether a directed edge came from an exact provider batch."""
+
+        return (from_index, to_index) in self.metrics
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +205,66 @@ class HeuristicPlanner:
         self._routing = routing_provider
         self._candidate_route_evaluator = candidate_route_evaluator
 
+    async def _load_sparse_matrix(
+        self,
+        warehouse: Warehouse,
+        tasks: tuple[PlanningTask, ...],
+        departure_at: datetime | None,
+        *,
+        deadline: float,
+    ) -> tuple[_SparseTravelMatrix, dict[str, int], bool]:
+        """Load bounded exact submatrices for deterministic spatial/window partitions."""
+
+        ordered_tasks = tuple(sorted(tasks, key=lambda task: task.id))
+        points = (warehouse.point, *(task.point for task in ordered_tasks))
+        matrix_index = {
+            task.id: index + 1 for index, task in enumerate(ordered_tasks)
+        }
+        metrics: dict[tuple[int, int], TravelMetric] = {
+            (0, 0): TravelMetric(distance_meters=0, travel_seconds=0)
+        }
+        loaded_task_ids: set[str] = set()
+        batch_count = 0
+        max_batch_points = 0
+        stopped_by_deadline = False
+        for partition in _partition_tasks(ordered_tasks):
+            remaining_seconds = deadline - monotonic()
+            if remaining_seconds <= 0:
+                stopped_by_deadline = True
+                break
+            batch_points = [warehouse.point, *(task.point for task in partition)]
+            if len(batch_points) > _MAX_ROUTING_MATRIX_POINTS:
+                raise RuntimeError("planner routing partition exceeds provider batch limit")
+            try:
+                async with timeout(remaining_seconds):
+                    routed = await self._routing.get_matrix(batch_points, departure_at)
+            except TimeoutError:
+                stopped_by_deadline = True
+                break
+            if len(routed.points) != len(batch_points):
+                raise RuntimeError("routing provider returned an incomplete matrix batch")
+            global_indices = [0, *(matrix_index[task.id] for task in partition)]
+            for local_from, global_from in enumerate(global_indices):
+                for local_to, global_to in enumerate(global_indices):
+                    metrics[(global_from, global_to)] = routed.at(
+                        local_from,
+                        local_to,
+                    )
+            loaded_task_ids.update(task.id for task in partition)
+            batch_count += 1
+            max_batch_points = max(max_batch_points, len(batch_points))
+        return (
+            _SparseTravelMatrix(
+                points=points,
+                metrics=metrics,
+                loaded_task_ids=frozenset(loaded_task_ids),
+                batch_count=batch_count,
+                max_batch_points=max_batch_points,
+            ),
+            matrix_index,
+            stopped_by_deadline,
+        )
+
     async def generate_plan(
         self,
         input_data: PlanningInput,
@@ -156,6 +273,8 @@ class HeuristicPlanner:
     ) -> PlanningResult:
         """Generate a valid best-known plan within deterministic search bounds."""
 
+        phase_budget_seconds = max(0.0, settings.max_optimization_seconds)
+        routing_deadline = monotonic() + phase_budget_seconds
         trace = _TraceRecorder(progress, settings)
         await trace.start(TracePhase.VALIDATING_INPUT)
         self._validate_input(input_data)
@@ -175,9 +294,6 @@ class HeuristicPlanner:
         locked_task_ids = {
             task_id for cycle in input_data.locked_cycles for task_id in cycle.task_ids
         }
-        remaining: dict[str, PlanningTask] = {
-            task.id: task for task in tasks if task.id not in locked_task_ids
-        }
         active_vehicles = {vehicle.id: vehicle for vehicle in input_data.vehicles if vehicle.active}
         active_shifts = tuple(
             sorted(
@@ -188,33 +304,103 @@ class HeuristicPlanner:
                     and shift.start_at.date() == input_data.planning_date
                     and shift.vehicle_id in active_vehicles
                 ),
-                key=lambda shift: (shift.start_at, shift.driver_id, shift.id),
+                key=lambda shift: (
+                    shift.start_at,
+                    shift.driver_id,
+                    shift.id,
+                    _shift_option_id(shift),
+                ),
             )
         )
 
         await trace.start(TracePhase.BUILDING_TRAVEL_MATRIX)
-        ordered_tasks = tuple(sorted(tasks, key=lambda task: task.id))
-        matrix_points = [input_data.warehouse.point] + [task.point for task in ordered_tasks]
-        departure_at = min(
-            (shift.start_at for shift in active_shifts),
-            default=_fallback_departure(input_data.requests, input_data.planning_date),
+        depot_by_option_id = {
+            _shift_option_id(shift): shift.route_depot or input_data.warehouse
+            for shift in active_shifts
+        }
+        depot_key_by_option_id = {
+            option_id: _depot_key(depot)
+            for option_id, depot in depot_by_option_id.items()
+        }
+        depots_by_key = {
+            _depot_key(depot): depot for depot in depot_by_option_id.values()
+        }
+        matrices_by_depot: dict[tuple[object, ...], _SparseTravelMatrix] = {}
+        matrix_indices_by_depot: dict[tuple[object, ...], dict[str, int]] = {}
+        matrix_stopped_by_deadline = False
+        for depot_key in sorted(depots_by_key, key=repr):
+            depot = depots_by_key[depot_key]
+            departure_at = min(
+                shift.start_at
+                for shift in active_shifts
+                if depot_key_by_option_id[_shift_option_id(shift)] == depot_key
+            )
+            matrix, matrix_index, stopped = await self._load_sparse_matrix(
+                depot,
+                tasks,
+                departure_at,
+                deadline=routing_deadline,
+            )
+            matrices_by_depot[depot_key] = matrix
+            matrix_indices_by_depot[depot_key] = matrix_index
+            if stopped:
+                matrix_stopped_by_deadline = True
+                break
+        matrices_by_option_id = {
+            option_id: matrices_by_depot[depot_key]
+            for option_id, depot_key in depot_key_by_option_id.items()
+            if depot_key in matrices_by_depot
+        }
+        matrix_indices_by_option_id = {
+            option_id: matrix_indices_by_depot[depot_key]
+            for option_id, depot_key in depot_key_by_option_id.items()
+            if depot_key in matrix_indices_by_depot
+        }
+        loaded_task_ids = frozenset(
+            task_id
+            for matrix in matrices_by_depot.values()
+            for task_id in matrix.loaded_task_ids
         )
-        matrix = await self._routing.get_matrix(matrix_points, departure_at)
-        matrix_index = {task.id: index + 1 for index, task in enumerate(ordered_tasks)}
+        if not active_shifts:
+            # No road edge can be used, but tasks stay in the diagnostic phase so
+            # the operator receives the concrete missing-resource reason.
+            loaded_task_ids = frozenset(task.id for task in tasks)
+        deadline_unassigned = tuple(
+            _unassigned_task(task, (UnassignedReasonCode.UNKNOWN,))
+            for task in tasks
+            if task.id not in loaded_task_ids
+            and task.id not in locked_task_ids
+        )
+        remaining: dict[str, PlanningTask] = {
+            task.id: task
+            for task in tasks
+            if task.id in loaded_task_ids
+            and task.id not in locked_task_ids
+        }
         await trace.complete(
             TracePhase.BUILDING_TRAVEL_MATRIX,
-            point_count=len(matrix_points),
+            point_count=sum(len(matrix.points) for matrix in matrices_by_depot.values()),
+            routed_task_count=len(loaded_task_ids),
+            depot_count=len(depots_by_key),
+            batch_count=sum(matrix.batch_count for matrix in matrices_by_depot.values()),
+            max_batch_points=max(
+                (matrix.max_batch_points for matrix in matrices_by_depot.values()),
+                default=0,
+            ),
         )
 
         cycles: list[RouteCycle] = list(input_data.locked_cycles)
         available_at, next_sequence = _initial_shift_state(
             active_shifts,
             input_data.locked_cycles,
-            input_data.warehouse.turnaround_minutes + settings.default_route_buffer_minutes,
+            depot_by_option_id,
+            settings.default_route_buffer_minutes,
         )
         cycle_counts = {
-            shift.id: sum(cycle.driver_shift_id == shift.id for cycle in input_data.locked_cycles)
-            for shift in active_shifts
+            shift.id: sum(
+                cycle.driver_shift_id == shift.id for cycle in input_data.locked_cycles
+            )
+            for shift in _unique_physical_shifts(active_shifts)
         }
 
         await trace.start(TracePhase.GROUPING_DELIVERIES)
@@ -228,17 +414,32 @@ class HeuristicPlanner:
         await trace.complete(TracePhase.MATCHING_PICKUPS)
         await trace.start(TracePhase.BUILDING_CYCLES)
 
-        # A deterministic evaluation budget is derived from the operator-facing
-        # seconds setting. A wall-clock cutoff would make identical snapshots
-        # produce different plans on faster and slower hosts. Deployment adapters
-        # may still enforce a larger cancellation watchdog around this pure run.
-        evaluation_budget = max(0, round(settings.max_optimization_seconds * 50_000))
+        # Routing preparation and bounded optimization are separate phases. A slow
+        # but successful matrix request must not consume the entire search budget
+        # before the first candidate can pass its mandatory exact-route check.
+        deadline = monotonic() + phase_budget_seconds
+        # The deterministic evaluation budget preserves repeatability on normal
+        # runs. The monotonic deadline is an independent cancellation fence that
+        # returns the best completely validated result reached before exhaustion.
+        evaluation_budget = max(0, round(phase_budget_seconds * 50_000))
         timed_out = evaluation_budget == 0
         evaluation_count = 0
         task_by_id = {task.id: task for task in tasks}
         delivery_reference_cycles = tuple(cycles)
         delivery_reference_available = dict(available_at)
-        if evaluation_budget and self._candidate_route_evaluator is None:
+        single_depot_context = (
+            next(iter(matrices_by_depot.values())),
+            next(iter(matrix_indices_by_depot.values())),
+            next(iter(depots_by_key.values())),
+        ) if len(matrices_by_depot) == 1 and len(depots_by_key) == 1 else None
+        if (
+            evaluation_budget
+            and self._candidate_route_evaluator is None
+            and not matrix_stopped_by_deadline
+            and not _deadline_reached(deadline)
+            and single_depot_context is not None
+        ):
+            matrix, matrix_index, reference_depot = single_depot_context
             delivery_references = tuple(
                 self._project_delivery_plan(
                     remaining_deliveries=tuple(
@@ -246,12 +447,13 @@ class HeuristicPlanner:
                     ),
                     shifts=active_shifts,
                     available_at=available_at,
-                    warehouse=input_data.warehouse,
+                    warehouse=reference_depot,
                     vehicles=active_vehicles,
                     matrix=matrix,
                     matrix_index=matrix_index,
                     settings=settings,
                     cycles=tuple(cycles),
+                    deadline=deadline,
                     deadline_first=deadline_first,
                     longest_first=longest_first,
                 )
@@ -284,41 +486,69 @@ class HeuristicPlanner:
             # health checks and optimization-status requests remain responsive even
             # for dense generated workloads.
             await sleep(0)
-            all_candidate_specs = _candidate_specs(
-                tuple(remaining.values()),
-                matrix,
-                matrix_index,
-                settings,
-            )
+            if _deadline_reached(deadline):
+                timed_out = True
+                break
             delivery_phase = (
                 any(task.task_type is TaskType.DELIVERY for task in remaining.values())
                 and not delivery_phase_complete
             )
-            if delivery_phase:
-                candidate_specs = tuple(spec for spec in all_candidate_specs if spec.deliveries)
-            else:
-                candidate_specs = tuple(spec for spec in all_candidate_specs if not spec.deliveries)
             activated_shift_ids = frozenset(cycle.driver_shift_id for cycle in cycles)
             fleet_fully_activated = activated_shift_ids == frozenset(
-                shift.id for shift in active_shifts
+                shift.id for shift in _unique_physical_shifts(active_shifts)
             )
             best_per_shift: list[_Candidate] = []
+            wall_deadline_hit = False
             for shift in active_shifts:
+                option_id = _shift_option_id(shift)
+                selected_option_ids = {
+                    cycle.resource_option_id or cycle.driver_shift_id
+                    for cycle in cycles
+                    if cycle.driver_shift_id == shift.id
+                }
+                if selected_option_ids and option_id not in selected_option_ids:
+                    continue
+                option_matrix = matrices_by_option_id.get(option_id)
+                option_matrix_index = matrix_indices_by_option_id.get(option_id)
+                warehouse = depot_by_option_id[option_id]
+                if option_matrix is None or option_matrix_index is None:
+                    continue
+                eligible_tasks = tuple(
+                    task
+                    for task in remaining.values()
+                    if task.id in option_matrix.loaded_task_ids
+                    and _shift_allows_task(shift, task)
+                )
+                all_candidate_specs = _candidate_specs(
+                    eligible_tasks,
+                    option_matrix,
+                    option_matrix_index,
+                    settings,
+                )
+                if delivery_phase:
+                    candidate_specs = tuple(
+                        spec for spec in all_candidate_specs if spec.deliveries
+                    )
+                else:
+                    candidate_specs = tuple(
+                        spec for spec in all_candidate_specs if not spec.deliveries
+                    )
                 candidates, evaluated, exhausted = self._candidates_for_shift(
                     shift=shift,
                     start_at=available_at[shift.id],
                     sequence=next_sequence[shift.id],
                     candidate_specs=candidate_specs,
-                    warehouse=input_data.warehouse,
+                    warehouse=warehouse,
                     vehicle=active_vehicles[shift.vehicle_id],
-                    matrix=matrix,
-                    matrix_index=matrix_index,
+                    matrix=option_matrix,
+                    matrix_index=option_matrix_index,
                     settings=settings,
                     existing_cycles=tuple(cycles),
                     cycle_count=cycle_counts[shift.id],
                     activated_shift_ids=activated_shift_ids,
                     prefer_tight_fit=fleet_fully_activated,
                     max_evaluations=evaluation_budget - evaluation_count,
+                    deadline=deadline,
                 )
                 evaluation_count += evaluated
                 if candidates:
@@ -342,6 +572,7 @@ class HeuristicPlanner:
                                     candidate.projected_shift_utilization_percent,
                                     2,
                                 ),
+                                "resource_option_id": option_id,
                             },
                         )
                     routed_candidates: list[_Candidate] = []
@@ -352,14 +583,24 @@ class HeuristicPlanner:
                         if self._candidate_route_evaluator is None:
                             routed_candidates.append(candidate)
                             continue
+                        remaining_seconds = deadline - monotonic()
+                        if remaining_seconds <= 0:
+                            wall_deadline_hit = True
+                            break
                         try:
-                            routed_cycle = await self._candidate_route_evaluator.route_candidate(
-                                candidate.cycle,
-                                tasks=candidate.deliveries + candidate.pickups,
-                                vehicle=active_vehicles[shift.vehicle_id],
-                                shift=shift,
-                                settings=settings,
-                            )
+                            async with timeout(remaining_seconds):
+                                routed_cycle = (
+                                    await self._candidate_route_evaluator.route_candidate(
+                                        candidate.cycle,
+                                        tasks=candidate.deliveries + candidate.pickups,
+                                        vehicle=active_vehicles[shift.vehicle_id],
+                                        shift=shift,
+                                        settings=settings,
+                                    )
+                                )
+                        except TimeoutError:
+                            wall_deadline_hit = True
+                            break
                         except CandidateRouteRejected as exc:
                             for task_id in candidate.task_ids:
                                 route_rejections.setdefault(task_id, set()).add(exc.reason_code)
@@ -392,17 +633,22 @@ class HeuristicPlanner:
                                 candidate,
                                 cycle=routed_cycle,
                                 selection_key=(
-                                    *candidate.selection_key[:-6],
+                                    *candidate.selection_key[:-7],
                                     routed_cycle.score
                                     + candidate.resource_activation_penalty
                                     + workload_penalty,
                                     routed_cycle.planned_finish,
-                                    *candidate.selection_key[-4:],
+                                    *candidate.selection_key[-5:],
                                 ),
                                 driver_workload_penalty=workload_penalty,
                                 projected_shift_utilization_percent=projected_utilization,
                             )
                         )
+                        if _deadline_reached(deadline):
+                            wall_deadline_hit = True
+                            break
+                    if wall_deadline_hit:
+                        break
                     if not routed_candidates:
                         continue
                     best = min(
@@ -415,6 +661,7 @@ class HeuristicPlanner:
                         TraceEventType.CANDIDATE_CYCLE_CREATED,
                         {
                             "driver_shift_id": shift.id,
+                            "resource_option_id": option_id,
                             "task_ids": sorted(best.task_ids),
                             "score": round(best.cycle.score, 6),
                         },
@@ -425,11 +672,19 @@ class HeuristicPlanner:
                         TraceEventType.CANDIDATE_CYCLE_REJECTED,
                         {"driver_shift_id": shift.id},
                     )
+                if _deadline_reached(deadline):
+                    wall_deadline_hit = True
+                    break
                 if exhausted or evaluation_count >= evaluation_budget:
                     timed_out = True
                     break
+            if wall_deadline_hit:
+                timed_out = True
+                break
             if not best_per_shift:
-                if delivery_phase:
+                if timed_out:
+                    break
+                if delivery_phase and single_depot_context is not None:
                     current_delivery_ids = _delivery_task_ids(cycles, task_by_id)
                     if _delivery_coverage_key(
                         current_delivery_ids,
@@ -448,10 +703,10 @@ class HeuristicPlanner:
                             ),
                             shifts=active_shifts,
                             available_at=delivery_reference_available,
-                            warehouse=input_data.warehouse,
+                            warehouse=single_depot_context[2],
                             vehicles=active_vehicles,
-                            matrix=matrix,
-                            matrix_index=matrix_index,
+                            matrix=single_depot_context[0],
+                            matrix_index=single_depot_context[1],
                             settings=settings,
                             cycles=delivery_reference_cycles,
                             task_by_id=task_by_id,
@@ -459,12 +714,19 @@ class HeuristicPlanner:
                                 0,
                                 evaluation_budget - evaluation_count,
                             ),
+                            deadline=deadline,
                         )
                         evaluation_count += attachment_evaluations
                         cycles = list(restored_cycles)
                         available_at = dict(restored_available)
                         assigned_ids = {task_id for cycle in cycles for task_id in cycle.task_ids}
-                        remaining = {task.id: task for task in tasks if task.id not in assigned_ids}
+                        remaining = {
+                            task.id: task
+                            for task in tasks
+                            if task.id in loaded_task_ids
+                            and task.id not in assigned_ids
+                            and task.id not in locked_task_ids
+                        }
                         next_sequence = {
                             shift.id: max(
                                 (
@@ -475,11 +737,11 @@ class HeuristicPlanner:
                                 default=0,
                             )
                             + 1
-                            for shift in active_shifts
+                            for shift in _unique_physical_shifts(active_shifts)
                         }
                         cycle_counts = {
                             shift.id: sum(cycle.driver_shift_id == shift.id for cycle in cycles)
-                            for shift in active_shifts
+                            for shift in _unique_physical_shifts(active_shifts)
                         }
                         await trace.emit(
                             TracePhase.BUILDING_CYCLES,
@@ -491,12 +753,20 @@ class HeuristicPlanner:
                         )
                     delivery_phase_complete = True
                     continue
+                if delivery_phase:
+                    # Multi-depot correctness is owned by the primary candidate
+                    # search. The one-depot delivery reference cannot be reused
+                    # without relabelling a physical depot, so advance to the
+                    # pickup phase only after the validated primary pass.
+                    delivery_phase_complete = True
+                    continue
                 break
             chosen = min(best_per_shift, key=lambda candidate: candidate.selection_key)
             cycles.append(chosen.cycle)
             for task_id in chosen.task_ids:
                 remaining.pop(task_id, None)
             shift_id = chosen.cycle.driver_shift_id
+            chosen_option_id = chosen.cycle.resource_option_id or shift_id
             resource_decision = (
                 "REUSED"
                 if shift_id in activated_shift_ids
@@ -505,7 +775,7 @@ class HeuristicPlanner:
                 else "FIRST"
             )
             turnaround = timedelta(
-                minutes=input_data.warehouse.turnaround_minutes
+                minutes=depot_by_option_id[chosen_option_id].turnaround_minutes
                 + settings.default_route_buffer_minutes
             )
             available_at[shift_id] = chosen.cycle.planned_finish + turnaround
@@ -517,6 +787,7 @@ class HeuristicPlanner:
                 {
                     "cycle_id": chosen.cycle.id,
                     "driver_shift_id": shift_id,
+                    "resource_option_id": chosen_option_id,
                     "task_ids": sorted(chosen.task_ids),
                     "resource_decision": resource_decision,
                     "additional_resource_penalty": (
@@ -536,30 +807,40 @@ class HeuristicPlanner:
             )
             if timed_out:
                 break
+            if remaining and _deadline_reached(deadline):
+                timed_out = True
+                break
+        timed_out = timed_out or matrix_stopped_by_deadline
         await trace.complete(
             TracePhase.BUILDING_CYCLES,
             cycle_count=len(cycles),
             evaluation_count=evaluation_count,
+            delivery_reference_mode=(
+                "SINGLE_DEPOT" if single_depot_context is not None else "PRIMARY_MULTI_DEPOT"
+            ),
         )
 
         await trace.start(TracePhase.ASSIGNING_DRIVERS)
         await trace.complete(
             TracePhase.ASSIGNING_DRIVERS,
-            assigned_count=len(tasks) - len(remaining),
+            assigned_count=(
+                len(tasks) - len(remaining) - len(deadline_unassigned)
+            ),
         )
 
         await trace.start(TracePhase.LOCAL_SEARCH)
         cycle_ids_before_search = tuple(cycle.id for cycle in cycles)
-        if self._candidate_route_evaluator is None:
+        if self._candidate_route_evaluator is None and not timed_out:
             cycles, local_iterations = self._local_improve(
                 cycles=cycles,
                 task_by_id={task.id: task for task in tasks},
-                shifts={shift.id: shift for shift in active_shifts},
-                warehouse=input_data.warehouse,
+                shifts={_shift_option_id(shift): shift for shift in active_shifts},
+                warehouses=depot_by_option_id,
                 vehicles=active_vehicles,
-                matrix=matrix,
-                matrix_index=matrix_index,
+                matrices=matrices_by_option_id,
+                matrix_indices=matrix_indices_by_option_id,
                 settings=settings,
+                deadline=deadline,
             )
         else:
             # A local move is accepted only after full exact routing. The current
@@ -567,6 +848,8 @@ class HeuristicPlanner:
             # the already evaluated primary assignment instead of fabricating a
             # post-search route.
             local_iterations = 0
+        if not timed_out and _deadline_reached(deadline):
+            timed_out = True
         cycle_ids_after_search = tuple(cycle.id for cycle in cycles)
         if cycle_ids_after_search != cycle_ids_before_search:
             await trace.emit(
@@ -595,7 +878,7 @@ class HeuristicPlanner:
         )
 
         await trace.start(TracePhase.FINALIZING)
-        final_unassigned = list(initial_unassigned)
+        final_unassigned = [*initial_unassigned, *deadline_unassigned]
         missing_resource_reason = _missing_resource_reason(input_data)
         for task in sorted(remaining.values(), key=_task_priority_key):
             reasons: tuple[UnassignedReasonCode, ...]
@@ -606,15 +889,18 @@ class HeuristicPlanner:
             elif missing_resource_reason:
                 reasons = missing_resource_reason
                 nearest = None
+            elif timed_out:
+                reasons = (UnassignedReasonCode.UNKNOWN,)
+                nearest = None
             else:
                 reasons, nearest = self._diagnose_task(
                     task=task,
                     shifts=active_shifts,
                     available_at=available_at,
-                    warehouse=input_data.warehouse,
+                    warehouses=depot_by_option_id,
                     vehicles=active_vehicles,
-                    matrix=matrix,
-                    matrix_index=matrix_index,
+                    matrices=matrices_by_option_id,
+                    matrix_indices=matrix_indices_by_option_id,
                     settings=settings,
                     cycles=tuple(cycles),
                 )
@@ -676,8 +962,8 @@ class HeuristicPlanner:
         if input_data.warehouse.point is None:
             raise ValueError("planning requires a warehouse")
         for shift in input_data.shifts:
-            if shift.start_at.date() != shift.end_at.date():
-                raise ValueError("MVP driver shifts must start and end on one local date")
+            if shift.start_at.date() != input_data.planning_date:
+                raise ValueError("driver shifts must start on the local planning date")
         locked_ids = [task_id for cycle in input_data.locked_cycles for task_id in cycle.task_ids]
         if len(locked_ids) != len(set(locked_ids)):
             raise ValueError("locked cycles assign a task more than once")
@@ -691,7 +977,7 @@ class HeuristicPlanner:
         candidate_specs: tuple[_CandidateSpec, ...],
         warehouse: Warehouse,
         vehicle: Vehicle,
-        matrix: TravelMatrix,
+        matrix: _PlannerMatrix,
         matrix_index: Mapping[str, int],
         settings: PlanningSettings,
         existing_cycles: tuple[RouteCycle, ...],
@@ -699,6 +985,7 @@ class HeuristicPlanner:
         activated_shift_ids: frozenset[str],
         prefer_tight_fit: bool,
         max_evaluations: int,
+        deadline: float,
     ) -> tuple[list[_Candidate], int, bool]:
         """Evaluate complete rank buckets until the first feasible bucket is found."""
 
@@ -708,6 +995,8 @@ class HeuristicPlanner:
         evaluated = 0
         current_key = candidate_specs[0].priority_key
         for spec in candidate_specs:
+            if evaluated > 0 and _deadline_reached(deadline):
+                return candidates, evaluated, True
             if spec.priority_key != current_key:
                 if candidates:
                     return candidates, evaluated, False
@@ -749,7 +1038,7 @@ class HeuristicPlanner:
             )
             if candidate is not None and not _resource_overlap(candidate.cycle, existing_cycles):
                 candidates.append(candidate)
-        return candidates, evaluated, False
+        return candidates, evaluated, _deadline_reached(deadline)
 
     def _project_delivery_plan(
         self,
@@ -759,10 +1048,11 @@ class HeuristicPlanner:
         available_at: Mapping[str, datetime],
         warehouse: Warehouse,
         vehicles: Mapping[str, Vehicle],
-        matrix: TravelMatrix,
+        matrix: _PlannerMatrix,
         matrix_index: Mapping[str, int],
         settings: PlanningSettings,
         cycles: tuple[RouteCycle, ...],
+        deadline: float,
         deadline_first: bool = False,
         longest_first: bool = True,
     ) -> tuple[tuple[RouteCycle, ...], dict[str, datetime], frozenset[str]]:
@@ -775,7 +1065,7 @@ class HeuristicPlanner:
         turnaround = timedelta(
             minutes=warehouse.turnaround_minutes + settings.default_route_buffer_minutes
         )
-        while pending:
+        while pending and not _deadline_reached(deadline):
             ordered = sorted(
                 pending.values(),
                 key=lambda task: _delivery_reference_priority_key(
@@ -805,6 +1095,11 @@ class HeuristicPlanner:
                         for task in pending.values()
                         if task.id != anchor.id
                         and task.quantity == 1
+                        and _matrix_has_exact_edge(
+                            matrix,
+                            matrix_index[anchor.id],
+                            matrix_index[task.id],
+                        )
                     ),
                     key=lambda task: (
                         matrix.at(
@@ -821,10 +1116,14 @@ class HeuristicPlanner:
             candidates: list[_Candidate] = []
             activated_shift_ids = frozenset(cycle.driver_shift_id for cycle in projected_cycles)
             for shift in shifts:
+                if _deadline_reached(deadline):
+                    break
                 own_cycles = tuple(
                     cycle for cycle in projected_cycles if cycle.driver_shift_id == shift.id
                 )
                 for group in groups:
+                    if _deadline_reached(deadline):
+                        break
                     probe = self._schedule_candidate(
                         shift=shift,
                         start_at=projected_available[shift.id],
@@ -887,12 +1186,13 @@ class HeuristicPlanner:
         available_at: Mapping[str, datetime],
         warehouse: Warehouse,
         vehicles: Mapping[str, Vehicle],
-        matrix: TravelMatrix,
+        matrix: _PlannerMatrix,
         matrix_index: Mapping[str, int],
         settings: PlanningSettings,
         cycles: tuple[RouteCycle, ...],
         task_by_id: Mapping[str, PlanningTask],
         max_evaluations: int,
+        deadline: float,
     ) -> tuple[tuple[RouteCycle, ...], dict[str, datetime], int]:
         """Attach pickups without dropping or invalidating reference deliveries.
 
@@ -907,7 +1207,11 @@ class HeuristicPlanner:
         turnaround = timedelta(
             minutes=warehouse.turnaround_minutes + settings.default_route_buffer_minutes
         )
-        while pending and evaluated < max_evaluations:
+        while (
+            pending
+            and evaluated < max_evaluations
+            and not _deadline_reached(deadline)
+        ):
             candidates: list[
                 tuple[
                     tuple[object, ...],
@@ -917,13 +1221,21 @@ class HeuristicPlanner:
             ] = []
             budget_exhausted = False
             for target_index, target in enumerate(rebuilt_cycles):
+                if _deadline_reached(deadline):
+                    budget_exhausted = True
+                    break
                 if target.locked or any(
                     task_id in task_by_id and task_by_id[task_id].task_type is TaskType.PICKUP
                     for task_id in target.task_ids
                 ):
                     continue
                 shift = next(
-                    (item for item in shifts if item.id == target.driver_shift_id),
+                    (
+                        item
+                        for item in shifts
+                        if _shift_option_id(item)
+                        == (target.resource_option_id or target.driver_shift_id)
+                    ),
                     None,
                 )
                 if shift is None:
@@ -937,7 +1249,15 @@ class HeuristicPlanner:
                     continue
                 last_delivery_index = matrix_index[deliveries[-1].id]
                 nearby_pickups = sorted(
-                    pending.values(),
+                    (
+                        task
+                        for task in pending.values()
+                        if _matrix_has_exact_edge(
+                            matrix,
+                            last_delivery_index,
+                            matrix_index[task.id],
+                        )
+                    ),
                     key=lambda task: (
                         matrix.at(
                             last_delivery_index,
@@ -962,7 +1282,7 @@ class HeuristicPlanner:
                     )
                 )
                 for pickup_group in pickup_groups[: settings.max_candidate_neighbors]:
-                    if evaluated >= max_evaluations:
+                    if evaluated >= max_evaluations or _deadline_reached(deadline):
                         budget_exhausted = True
                         break
                     rebuilt, rebuild_evaluations = self._reschedule_reference_attachment(
@@ -1029,7 +1349,7 @@ class HeuristicPlanner:
         shift: DriverShift,
         warehouse: Warehouse,
         vehicle: Vehicle,
-        matrix: TravelMatrix,
+        matrix: _PlannerMatrix,
         matrix_index: Mapping[str, int],
         settings: PlanningSettings,
         cycles: tuple[RouteCycle, ...],
@@ -1123,7 +1443,7 @@ class HeuristicPlanner:
         pickups: tuple[PlanningTask, ...],
         warehouse: Warehouse,
         vehicle: Vehicle,
-        matrix: TravelMatrix,
+        matrix: _PlannerMatrix,
         matrix_index: Mapping[str, int],
         settings: PlanningSettings,
         cycle_count: int,
@@ -1149,6 +1469,21 @@ class HeuristicPlanner:
             task.id for task in deliveries + pickups
         }:
             raise ValueError("ordered_tasks must contain exactly the candidate tasks")
+        if any(
+            task.id not in matrix_index or not _shift_allows_task(shift, task)
+            for task in task_sequence
+        ):
+            return None
+        route_indices = (
+            0,
+            *(matrix_index[task.id] for task in task_sequence),
+            0,
+        )
+        if any(
+            not _matrix_has_exact_edge(matrix, start, finish)
+            for start, finish in pairwise(route_indices)
+        ):
+            return None
         if (
             len(deliveries) > settings.max_delivery_stops
             or len(pickups) > settings.max_pickup_stops
@@ -1294,6 +1629,7 @@ class HeuristicPlanner:
                     window_start=window.window_start,
                     window_end=window.window_end,
                     window_is_hard=window.is_hard,
+                    service_warehouse_id=task.service_warehouse_id,
                 )
             )
             cursor = service_finish
@@ -1381,7 +1717,12 @@ class HeuristicPlanner:
             - (settings.paired_pickup_bonus if len(pickups) == 2 else 0.0)
         )
         task_ids = tuple(task.id for task in task_sequence)
-        cycle_id = f"cycle:{shift.id}:{sequence}:{'|'.join(task_ids)}"
+        resource_option_id = _shift_option_id(shift)
+        cycle_id = (
+            f"cycle:{shift.id}:{resource_option_id}:{sequence}:{'|'.join(task_ids)}"
+            if shift.resource_option_id is not None
+            else f"cycle:{shift.id}:{sequence}:{'|'.join(task_ids)}"
+        )
         explanation = _cycle_explanation(
             deliveries,
             pickups,
@@ -1408,6 +1749,7 @@ class HeuristicPlanner:
             detour_seconds=detour_seconds,
             score=round(score, 6),
             detour_ratio=detour_ratio,
+            resource_option_id=shift.resource_option_id,
             explanation=explanation,
             warnings=tuple(sorted(warnings, key=lambda warning: warning.value)),
         )
@@ -1435,7 +1777,7 @@ class HeuristicPlanner:
             deliveries,
             pickups,
         )
-        stable_rank = _stable_rank(settings.seed, shift.id, *task_ids)
+        stable_rank = _stable_rank(settings.seed, shift.id, resource_option_id, *task_ids)
         warning_rank = (
             int(ValidationWarningCode.SOFT_WINDOW_RISK in warnings),
             int(ValidationWarningCode.OVERTIME_WARNING in warnings),
@@ -1465,6 +1807,7 @@ class HeuristicPlanner:
                 cycle_count,
                 stable_rank,
                 shift.id,
+                resource_option_id,
                 task_ids,
             ),
             resource_activation_penalty=resource_activation_penalty,
@@ -1478,10 +1821,10 @@ class HeuristicPlanner:
         task: PlanningTask,
         shifts: tuple[DriverShift, ...],
         available_at: Mapping[str, datetime],
-        warehouse: Warehouse,
+        warehouses: Mapping[str, Warehouse],
         vehicles: Mapping[str, Vehicle],
-        matrix: TravelMatrix,
-        matrix_index: Mapping[str, int],
+        matrices: Mapping[str, _PlannerMatrix],
+        matrix_indices: Mapping[str, Mapping[str, int]],
         settings: PlanningSettings,
         cycles: tuple[RouteCycle, ...],
     ) -> tuple[tuple[UnassignedReasonCode, ...], datetime | None]:
@@ -1489,7 +1832,23 @@ class HeuristicPlanner:
 
         candidates: list[_Candidate] = []
         nearest: datetime | None = None
+        eligible_resource_seen = False
         for shift in shifts:
+            if not _shift_allows_task(shift, task):
+                continue
+            option_id = _shift_option_id(shift)
+            matrix = matrices.get(option_id)
+            matrix_index = matrix_indices.get(option_id)
+            warehouse = warehouses.get(option_id)
+            if (
+                matrix is None
+                or matrix_index is None
+                or warehouse is None
+                or task.id not in matrix_index
+                or not _matrix_has_exact_edge(matrix, 0, matrix_index[task.id])
+            ):
+                continue
+            eligible_resource_seen = True
             start = available_at[shift.id]
             arrival = start + timedelta(
                 minutes=settings.default_load_minutes if task.task_type is TaskType.DELIVERY else 0,
@@ -1513,6 +1872,8 @@ class HeuristicPlanner:
                 candidates.append(candidate)
         if candidates:
             return (UnassignedReasonCode.NO_SHIFT_CAPACITY,), nearest
+        if not eligible_resource_seen:
+            return (UnassignedReasonCode.NO_SHIFT_CAPACITY,), None
         option = task.selected_option
         if option.window_end is not None and nearest is not None:
             if nearest + timedelta(minutes=task.service_minutes) > option.window_end:
@@ -1527,17 +1888,20 @@ class HeuristicPlanner:
         cycles: list[RouteCycle],
         task_by_id: Mapping[str, PlanningTask],
         shifts: Mapping[str, DriverShift],
-        warehouse: Warehouse,
+        warehouses: Mapping[str, Warehouse],
         vehicles: Mapping[str, Vehicle],
-        matrix: TravelMatrix,
-        matrix_index: Mapping[str, int],
+        matrices: Mapping[str, _PlannerMatrix],
+        matrix_indices: Mapping[str, Mapping[str, int]],
         settings: PlanningSettings,
+        deadline: float,
     ) -> tuple[list[RouteCycle], int]:
         """Try bounded delivery/pickup reversals and retain strict improvements."""
 
         result = list(cycles)
         iterations = 0
         for index, cycle in enumerate(tuple(result)):
+            if _deadline_reached(deadline):
+                break
             if cycle.locked or iterations >= settings.max_local_search_iterations:
                 continue
             deliveries = tuple(
@@ -1560,12 +1924,25 @@ class HeuristicPlanner:
             if len(deliveries) == 2 and len(pickups) == 2:
                 variants.append((tuple(reversed(deliveries)), tuple(reversed(pickups))))
             for delivery_variant, pickup_variant in variants:
-                if iterations >= settings.max_local_search_iterations:
+                if (
+                    iterations >= settings.max_local_search_iterations
+                    or _deadline_reached(deadline)
+                ):
                     break
                 iterations += 1
-                shift = shifts.get(cycle.driver_shift_id)
+                option_id = cycle.resource_option_id or cycle.driver_shift_id
+                shift = shifts.get(option_id)
                 vehicle = vehicles.get(cycle.vehicle_id)
-                if shift is None or vehicle is None:
+                warehouse = warehouses.get(option_id)
+                matrix = matrices.get(option_id)
+                matrix_index = matrix_indices.get(option_id)
+                if (
+                    shift is None
+                    or vehicle is None
+                    or warehouse is None
+                    or matrix is None
+                    or matrix_index is None
+                ):
                     continue
                 candidate = self._schedule_candidate(
                     shift=shift,
@@ -1605,6 +1982,135 @@ class HeuristicPlanner:
                 ):
                     result[index] = candidate.cycle
         return result, iterations
+
+
+def _partition_tasks(
+    tasks: Sequence[PlanningTask],
+) -> tuple[tuple[PlanningTask, ...], ...]:
+    """Build bounded time-window batches plus overlapping spatial neighbours.
+
+    Window batches preserve exact edges among tasks competing for the same part of
+    the day.  A second globally spatial ordering overlaps adjacent chunks so nearby
+    delivery/pickup work across window buckets can still be evaluated with exact
+    directed road metrics. Geometry determines only which sparse edges to request;
+    it never confirms route feasibility.
+    """
+
+    by_window: defaultdict[int, list[PlanningTask]] = defaultdict(list)
+    for task in tasks:
+        option = task.selected_option
+        clock = option.window_start or option.window_end or task.created_at
+        minute_of_day = clock.hour * 60 + clock.minute
+        by_window[minute_of_day // _TIME_WINDOW_PARTITION_MINUTES].append(task)
+
+    partitions: list[tuple[PlanningTask, ...]] = []
+    for window_bucket in sorted(by_window):
+        spatially_ordered = sorted(
+            by_window[window_bucket],
+            key=lambda task: (
+                floor(task.point.lat / _SPATIAL_PARTITION_DEGREES),
+                floor(task.point.lon / _SPATIAL_PARTITION_DEGREES),
+                task.point.lat,
+                task.point.lon,
+                _task_priority_key(task),
+            ),
+        )
+        partitions.extend(
+            tuple(spatially_ordered[index : index + _MAX_TASKS_PER_MATRIX_BATCH])
+            for index in range(0, len(spatially_ordered), _MAX_TASKS_PER_MATRIX_BATCH)
+        )
+
+    globally_spatial = sorted(
+        tasks,
+        key=lambda task: (
+            floor(task.point.lat / _SPATIAL_PARTITION_DEGREES),
+            floor(task.point.lon / _SPATIAL_PARTITION_DEGREES),
+            task.point.lat,
+            task.point.lon,
+            _task_priority_key(task),
+        ),
+    )
+    spatial_stride = _MAX_TASKS_PER_MATRIX_BATCH - _SPATIAL_NEIGHBOR_OVERLAP
+    for index in range(0, len(globally_spatial), spatial_stride):
+        partitions.append(
+            tuple(globally_spatial[index : index + _MAX_TASKS_PER_MATRIX_BATCH])
+        )
+        if index + _MAX_TASKS_PER_MATRIX_BATCH >= len(globally_spatial):
+            break
+
+    unique: list[tuple[PlanningTask, ...]] = []
+    seen: set[tuple[str, ...]] = set()
+    for partition in partitions:
+        identity = tuple(task.id for task in partition)
+        if not partition or identity in seen:
+            continue
+        seen.add(identity)
+        unique.append(partition)
+    return tuple(unique)
+
+
+def _matrix_has_exact_edge(
+    matrix: _PlannerMatrix,
+    from_index: int,
+    to_index: int,
+) -> bool:
+    """Return whether candidate feasibility can use an exact directed provider metric."""
+
+    if isinstance(matrix, _SparseTravelMatrix):
+        return matrix.has_exact_edge(from_index, to_index)
+    return True
+
+
+def _deadline_reached(deadline: float) -> bool:
+    """Check the real monotonic cancellation fence independently of evaluation count."""
+
+    return monotonic() >= deadline
+
+
+def _shift_option_id(shift: DriverShift) -> str:
+    """Return a demand-aware route option without changing the physical shift ID."""
+
+    return shift.resource_option_id or shift.id
+
+
+def _shift_allows_task(shift: DriverShift, task: PlanningTask) -> bool:
+    """Enforce the dated support-link scope carried by the immutable snapshot."""
+
+    return (
+        task.service_warehouse_id is None
+        or shift.allowed_service_warehouse_ids is None
+        or task.service_warehouse_id in shift.allowed_service_warehouse_ids
+    )
+
+
+def _depot_key(warehouse: Warehouse) -> tuple[object, ...]:
+    """Build a stable physical-depot key for matrix reuse across route options."""
+
+    return (
+        warehouse.id,
+        warehouse.point.lon,
+        warehouse.point.lat,
+        warehouse.loading_minutes,
+        warehouse.unloading_minutes,
+        warehouse.turnaround_minutes,
+    )
+
+
+def _unique_physical_shifts(shifts: Iterable[DriverShift]) -> tuple[DriverShift, ...]:
+    """Deduplicate route options for physical-shift workload and activation totals."""
+
+    selected: dict[str, DriverShift] = {}
+    for shift in sorted(
+        shifts,
+        key=lambda item: (
+            item.id,
+            item.start_at,
+            item.end_at,
+            _shift_option_id(item),
+        ),
+    ):
+        selected.setdefault(shift.id, shift)
+    return tuple(selected.values())
 
 
 def split_request(
@@ -1647,6 +2153,7 @@ def split_request(
             cargo_dimensions=request.cargo_dimensions,
             trailer_access_allowed=request.trailer_access_allowed,
             mandatory=request.mandatory,
+            service_warehouse_id=request.service_warehouse_id,
         )
         for part_number, quantity in enumerate(quantities, start=1)
     )
@@ -1706,7 +2213,7 @@ def split_requests_for_date(
 
 def _candidate_specs(
     remaining: tuple[PlanningTask, ...],
-    matrix: TravelMatrix,
+    matrix: _PlannerMatrix,
     matrix_index: Mapping[str, int],
     settings: PlanningSettings,
 ) -> tuple[_CandidateSpec, ...]:
@@ -1730,7 +2237,15 @@ def _candidate_specs(
     for delivery_group in delivery_groups:
         last_point_index = matrix_index[delivery_group[-1].id]
         eligible_pickups = sorted(
-            pickups,
+            (
+                task
+                for task in pickups
+                if _matrix_has_exact_edge(
+                    matrix,
+                    last_point_index,
+                    matrix_index[task.id],
+                )
+            ),
             key=lambda task: (
                 matrix.at(last_point_index, matrix_index[task.id]).travel_seconds,
                 _task_priority_key(task),
@@ -1851,7 +2366,7 @@ def _candidate_priority_key(
 def _candidate_route_rank(
     deliveries: tuple[PlanningTask, ...],
     pickups: tuple[PlanningTask, ...],
-    matrix: TravelMatrix,
+    matrix: _PlannerMatrix,
     matrix_index: Mapping[str, int],
 ) -> tuple[object, ...]:
     """Rank equal-urgency combinations by compact, nearby full cycles.
@@ -1898,7 +2413,7 @@ def _candidate_route_rank(
 def _pickup_attachment_rank(
     deliveries: tuple[PlanningTask, ...],
     pickups: tuple[PlanningTask, ...],
-    matrix: TravelMatrix,
+    matrix: _PlannerMatrix,
     matrix_index: Mapping[str, int],
 ) -> tuple[object, ...]:
     """Rank safe reference backhauls by pickup urgency, fill and detour."""
@@ -1932,7 +2447,7 @@ def _pickup_attachment_rank(
 
 def _round_trip_metric(
     tasks: Sequence[PlanningTask],
-    matrix: TravelMatrix,
+    matrix: _PlannerMatrix,
     matrix_index: Mapping[str, int],
 ) -> tuple[int, int]:
     """Return matrix distance and travel seconds for depot, tasks, depot."""
@@ -1989,7 +2504,7 @@ def _delivery_task_ids(
 
 def _ordered_groups(
     tasks: Sequence[PlanningTask],
-    matrix: TravelMatrix,
+    matrix: _PlannerMatrix,
     matrix_index: Mapping[str, int],
     *,
     max_neighbors: int,
@@ -2009,6 +2524,11 @@ def _ordered_groups(
                 for second in tasks
                 if second.id != first.id
                 and second.quantity == 1
+                and _matrix_has_exact_edge(
+                    matrix,
+                    matrix_index[first.id],
+                    matrix_index[second.id],
+                )
             ),
             key=lambda second: (
                 matrix.at(matrix_index[first.id], matrix_index[second.id]).travel_seconds,
@@ -2027,7 +2547,7 @@ def _ordered_groups(
 def _pickup_detour(
     deliveries: tuple[PlanningTask, ...],
     pickups: tuple[PlanningTask, ...],
-    matrix: TravelMatrix,
+    matrix: _PlannerMatrix,
     matrix_index: Mapping[str, int],
 ) -> tuple[int, float]:
     """Return extra road travel and ratio caused by pickup stops.
@@ -2087,7 +2607,7 @@ def _task_priority_key(task: PlanningTask) -> tuple[object, ...]:
 
 def _task_priority_with_distance(
     task: PlanningTask,
-    matrix: TravelMatrix,
+    matrix: _PlannerMatrix,
     matrix_index: Mapping[str, int],
 ) -> tuple[object, ...]:
     """Extend deadline-aware business priority with nearest-first batching."""
@@ -2108,7 +2628,7 @@ def _task_priority_with_distance(
 
 def _delivery_reference_priority_key(
     task: PlanningTask,
-    matrix: TravelMatrix,
+    matrix: _PlannerMatrix,
     matrix_index: Mapping[str, int],
     *,
     deadline_first: bool,
@@ -2153,18 +2673,35 @@ def _delivery_reference_priority_key(
 def _initial_shift_state(
     shifts: Iterable[DriverShift],
     locked_cycles: Iterable[RouteCycle],
-    turnaround_minutes: int,
+    warehouses: Mapping[str, Warehouse],
+    route_buffer_minutes: int,
 ) -> tuple[dict[str, datetime], dict[str, int]]:
     """Reserve immutable cycles and return each shift's next append position."""
 
     locked = tuple(locked_cycles)
     available: dict[str, datetime] = {}
     sequence: dict[str, int] = {}
-    for shift in shifts:
+    shift_options = tuple(shifts)
+    for shift in _unique_physical_shifts(shift_options):
         own = [cycle for cycle in locked if cycle.driver_shift_id == shift.id]
+        option_starts = tuple(
+            option.start_at for option in shift_options if option.id == shift.id
+        )
         available[shift.id] = max(
-            (cycle.planned_finish + timedelta(minutes=turnaround_minutes) for cycle in own),
-            default=shift.start_at,
+            (
+                cycle.planned_finish
+                + timedelta(
+                    minutes=(
+                        warehouses[
+                            cycle.resource_option_id or cycle.driver_shift_id
+                        ].turnaround_minutes
+                        + route_buffer_minutes
+                    )
+                )
+                for cycle in own
+                if (cycle.resource_option_id or cycle.driver_shift_id) in warehouses
+            ),
+            default=min(option_starts),
         )
         sequence[shift.id] = max((cycle.sequence for cycle in own), default=0) + 1
     return available, sequence
@@ -2374,7 +2911,7 @@ def _support_positioning_cost(
 ) -> float:
     """Score one external depot visit as high-cost empty road plus a soft link priority."""
 
-    if shift.resource_origin_warehouse_id is None:
+    if shift.support_link_id is None:
         return 0.0
     return round(
         shift.positioning_travel_minutes * settings.empty_travel_weight
@@ -2390,11 +2927,13 @@ def _plan_support_positioning_cost(
 ) -> float:
     """Charge the full support positioning exactly once for every activated shift."""
 
-    active_shift_ids = {cycle.driver_shift_id for cycle in cycles}
+    active_option_ids = {
+        cycle.resource_option_id or cycle.driver_shift_id for cycle in cycles
+    }
     return sum(
         _support_positioning_cost(shift, settings)
         for shift in shifts
-        if shift.id in active_shift_ids
+        if _shift_option_id(shift) in active_option_ids
     )
 
 
@@ -2411,7 +2950,11 @@ def _plan_score(
     score = sum(cycle.score for cycle in cycle_list)
     score += calculate_resource_activation_cost(cycle_list, settings)
     score += _plan_support_positioning_cost(cycle_list, shift_list, settings)
-    score += calculate_driver_workload_cost(cycle_list, shift_list, settings)
+    score += calculate_driver_workload_cost(
+        cycle_list,
+        _unique_physical_shifts(shift_list),
+        settings,
+    )
     for item in unassigned:
         task = item.task
         is_hard = isinstance(task, PlanningTask) and task.is_hard
@@ -2422,16 +2965,3 @@ def _plan_score(
         if is_last:
             score += settings.last_available_date_penalty
     return round(score, 6)
-
-
-def _fallback_departure(
-    requests: Iterable[LogisticsRequest],
-    planning_date: date,
-) -> datetime | None:
-    """Create an aware deterministic matrix timestamp when no active shift exists."""
-
-    request_list = tuple(requests)
-    if not request_list:
-        return None
-    timezone = request_list[0].created_at.tzinfo
-    return datetime.combine(planning_date, datetime.min.time(), tzinfo=timezone)

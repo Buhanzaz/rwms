@@ -16,6 +16,11 @@ export type KpiPalette = {
   overdueColor: string
 }
 
+export type KpiPaletteResponse = {
+  version: number
+  palette: KpiPalette | null
+}
+
 export type KpiWorkBreak = {
   start: string
   end: string
@@ -31,13 +36,10 @@ export type KpiWorkSchedule = {
   breaks: KpiWorkBreak[]
 }
 
-export type WarehouseKpiSettings = {
-  warehouseId: string
-  timeZone: string
+export type KpiSettingsResponse = KpiPaletteResponse & {
   status: KpiSettingsStatus
-  version: number
   dataAvailableFrom: string | null
-  palette: KpiPalette | null
+  minimumEffectiveDate: string
   activeSchedule: KpiWorkSchedule | null
   pendingSchedule: KpiWorkSchedule | null
 }
@@ -59,8 +61,8 @@ export type SaveWorkScheduleInput = {
 
 export const kpiSettingsKeys = {
   all: ["task-board", "kpi-settings"] as const,
-  warehouse: (warehouseId: string) =>
-    [...kpiSettingsKeys.all, warehouseId] as const,
+  settings: ["task-board", "kpi-settings", "global"] as const,
+  palette: ["task-board", "kpi-palette"] as const,
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -140,7 +142,7 @@ function parsePalette(value: unknown): KpiPalette | null {
   return { version: value.version, ranges, overdueColor: value.overdueColor }
 }
 
-function parseSettings(value: unknown): WarehouseKpiSettings {
+function parseSettings(value: unknown): KpiSettingsResponse {
   const statuses: KpiSettingsStatus[] = [
     "UNCONFIGURED",
     "DRAFT",
@@ -149,52 +151,69 @@ function parseSettings(value: unknown): WarehouseKpiSettings {
   ]
   if (
     !isRecord(value) ||
-    !isString(value.warehouseId) ||
-    !isString(value.timeZone) ||
     typeof value.status !== "string" ||
     !statuses.includes(value.status as KpiSettingsStatus) ||
     !isVersion(value.version) ||
-    !(value.dataAvailableFrom === null || isString(value.dataAvailableFrom))
+    !(value.dataAvailableFrom === null || isString(value.dataAvailableFrom)) ||
+    !isString(value.minimumEffectiveDate)
   ) {
     throw new Error("Сервис доски задач вернул некорректные настройки KPI.")
   }
 
   return {
-    warehouseId: value.warehouseId,
-    timeZone: value.timeZone,
     status: value.status as KpiSettingsStatus,
     version: value.version,
     dataAvailableFrom: value.dataAvailableFrom,
+    minimumEffectiveDate: value.minimumEffectiveDate,
     palette: parsePalette(value.palette),
     activeSchedule: parseSchedule(value.activeSchedule),
     pendingSchedule: parseSchedule(value.pendingSchedule),
   }
 }
 
-function settingsEndpoint(warehouseId: string) {
-  if (!warehouseId.trim()) throw new Error("Не выбран склад для настройки KPI.")
-  return `${getGatewayRuntimeConfig().taskBoardApiBaseUrl}/warehouses/${encodeURIComponent(warehouseId)}/task-board/kpi-settings`
+function parsePaletteResponse(value: unknown): KpiPaletteResponse {
+  if (!isRecord(value) || !isVersion(value.version)) {
+    throw new Error("Сервис доски задач вернул некорректную общую палитру KPI.")
+  }
+
+  return {
+    version: value.version,
+    palette: parsePalette(value.palette),
+  }
+}
+
+function settingsEndpoint() {
+  return `${getGatewayRuntimeConfig().taskBoardApiBaseUrl}/kpi-settings`
+}
+
+function kpiPaletteEndpoint() {
+  return `${getGatewayRuntimeConfig().taskBoardApiBaseUrl}/kpi-palette`
 }
 
 function json(method: string, body: unknown): RequestInit {
   return { method, body: JSON.stringify(body) }
 }
 
-export async function getKpiSettings(accessToken: string, warehouseId: string) {
+export async function getKpiSettings(accessToken: string) {
   return parseSettings(
-    await bearerRequest<unknown>(accessToken, settingsEndpoint(warehouseId))
+    await bearerRequest<unknown>(accessToken, settingsEndpoint())
+  )
+}
+
+export async function getKpiPalette(accessToken: string) {
+  return parsePaletteResponse(
+    await bearerRequest<unknown>(accessToken, kpiPaletteEndpoint())
   )
 }
 
 export async function saveKpiPalette(
   accessToken: string,
-  warehouseId: string,
   input: SaveKpiPaletteInput
 ) {
-  return parseSettings(
+  return parsePaletteResponse(
     await bearerRequest<unknown>(
       accessToken,
-      `${settingsEndpoint(warehouseId)}/palette`,
+      kpiPaletteEndpoint(),
       json("PUT", input)
     )
   )
@@ -202,13 +221,12 @@ export async function saveKpiPalette(
 
 export async function saveWorkSchedule(
   accessToken: string,
-  warehouseId: string,
   input: SaveWorkScheduleInput
 ) {
   return parseSettings(
     await bearerRequest<unknown>(
       accessToken,
-      `${settingsEndpoint(warehouseId)}/work-schedule`,
+      `${settingsEndpoint()}/work-schedule`,
       json("PUT", input)
     )
   )
@@ -216,7 +234,6 @@ export async function saveWorkSchedule(
 
 export function deletePendingWorkSchedule(
   accessToken: string,
-  warehouseId: string,
   expectedVersion: number
 ) {
   const params = new URLSearchParams({
@@ -224,14 +241,13 @@ export function deletePendingWorkSchedule(
   })
   return bearerRequest<void>(
     accessToken,
-    `${settingsEndpoint(warehouseId)}/work-schedule/pending?${params}`,
+    `${settingsEndpoint()}/work-schedule/pending?${params}`,
     { method: "DELETE" }
   )
 }
 
 export async function activateKpiSettings(
   accessToken: string,
-  warehouseId: string,
   expectedVersion: number,
   idempotencyKey: string
 ) {
@@ -241,7 +257,7 @@ export async function activateKpiSettings(
   return parseSettings(
     await bearerRequest<unknown>(
       accessToken,
-      `${settingsEndpoint(warehouseId)}/activate`,
+      `${settingsEndpoint()}/activate`,
       {
         ...json("POST", { expectedVersion }),
         headers: { "Idempotency-Key": idempotencyKey },

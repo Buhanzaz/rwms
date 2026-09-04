@@ -36,8 +36,9 @@ internal data class CustomerWorkflowReference(
 
 private val Context.customerWorkflowDataStore by preferencesDataStore(name = "customer_workflow_recovery")
 private val workflowReferenceKey = stringPreferencesKey("active_inquiry_v1")
+private val pendingIdempotencyOperationsKey = stringPreferencesKey("pending_idempotency_operations_v1")
 
-/** Persists and clears the non-authoritative active-inquiry recovery pointer atomically. */
+/** Persists bounded, non-authoritative inquiry and mutation recovery identities atomically. */
 @Singleton
 class CustomerWorkflowStore @Inject constructor(
     @ApplicationContext context: Context,
@@ -45,12 +46,69 @@ class CustomerWorkflowStore @Inject constructor(
 ) {
     private val applicationContext = context.applicationContext
 
+    /**
+     * Returns the durable UUID for an unresolved mutation, creating it atomically when necessary.
+     *
+     * Pending entries are never evicted to make room: losing an unresolved key could duplicate a
+     * server effect. The ledger stores no command payload or server-owned result.
+     */
+    internal suspend fun beginIdempotentOperation(operation: String): String {
+        require(operation.isNotBlank() && operation.length <= MAX_IDEMPOTENCY_OPERATION_LENGTH) {
+            "Invalid idempotent operation identity"
+        }
+        var resolvedKey: String? = null
+        applicationContext.customerWorkflowDataStore.edit { preferences ->
+            val pending = decodePendingOperations(
+                preferences[pendingIdempotencyOperationsKey],
+            ).toMutableMap()
+            resolvedKey = pending[operation] ?: run {
+                if (pending.size >= MAX_PENDING_CUSTOMER_IDEMPOTENCY_OPERATIONS) {
+                    throw CustomerApiException(
+                        status = null,
+                        message = "Слишком много незавершённых операций. Повторите их после синхронизации.",
+                    )
+                }
+                UUID.randomUUID().toString().also { created ->
+                    pending[operation] = created
+                    preferences[pendingIdempotencyOperationsKey] = json.encodeToString(pending)
+                }
+            }
+        }
+        return checkNotNull(resolvedKey)
+    }
+
+    /** Removes one pending key only after its exact server result has been confirmed. */
+    internal suspend fun completeIdempotentOperation(operation: String, idempotencyKey: String) {
+        UUID.fromString(idempotencyKey)
+        applicationContext.customerWorkflowDataStore.edit { preferences ->
+            val pending = decodePendingOperations(
+                preferences[pendingIdempotencyOperationsKey],
+            ).toMutableMap()
+            if (pending[operation] != idempotencyKey) return@edit
+            pending.remove(operation)
+            writePendingOperations(preferences, pending)
+        }
+    }
+
+    /** Removes terminal variants only after an authoritative singleton result is confirmed. */
+    internal suspend fun completeIdempotentOperations(operationPrefix: String) {
+        require(operationPrefix.isNotBlank()) { "Invalid idempotent operation prefix" }
+        applicationContext.customerWorkflowDataStore.edit { preferences ->
+            val pending = decodePendingOperations(
+                preferences[pendingIdempotencyOperationsKey],
+            ).toMutableMap()
+            if (pending.keys.removeAll { operation -> operation.startsWith(operationPrefix) }) {
+                writePendingOperations(preferences, pending)
+            }
+        }
+    }
+
     /** Returns the validated recovery pointer, removing corrupted local state instead of using it. */
     internal suspend fun read(): CustomerWorkflowReference? {
         val encoded = applicationContext.customerWorkflowDataStore.data.first()[workflowReferenceKey]
             ?: return null
         val decoded = runCatching { json.decodeFromString<CustomerWorkflowReference>(encoded) }.getOrNull()
-        if (decoded == null) clear()
+        if (decoded == null) clearWorkflowReference()
         return decoded
     }
 
@@ -122,10 +180,11 @@ class CustomerWorkflowStore @Inject constructor(
         return replacement
     }
 
-    /** Removes the local pointer on sign-out or when authoritative recovery proves it stale. */
+    /** Removes local recovery pointers on sign-out or when authoritative recovery proves stale. */
     internal suspend fun clear() {
         applicationContext.customerWorkflowDataStore.edit { preferences ->
             preferences.remove(workflowReferenceKey)
+            preferences.remove(pendingIdempotencyOperationsKey)
         }
     }
 
@@ -135,4 +194,35 @@ class CustomerWorkflowStore @Inject constructor(
             preferences[workflowReferenceKey] = encoded
         }
     }
+
+    private suspend fun clearWorkflowReference() {
+        applicationContext.customerWorkflowDataStore.edit { preferences ->
+            preferences.remove(workflowReferenceKey)
+        }
+    }
+
+    private fun decodePendingOperations(encoded: String?): Map<String, String> {
+        val decoded = encoded?.let { value ->
+            runCatching { json.decodeFromString<Map<String, String>>(value) }.getOrNull()
+        }.orEmpty()
+        return decoded.filter { (operation, key) ->
+            operation.isNotBlank() &&
+                operation.length <= MAX_IDEMPOTENCY_OPERATION_LENGTH &&
+                runCatching { UUID.fromString(key) }.isSuccess
+        }
+    }
+
+    private fun writePendingOperations(
+        preferences: androidx.datastore.preferences.core.MutablePreferences,
+        pending: Map<String, String>,
+    ) {
+        if (pending.isEmpty()) {
+            preferences.remove(pendingIdempotencyOperationsKey)
+        } else {
+            preferences[pendingIdempotencyOperationsKey] = json.encodeToString(pending)
+        }
+    }
 }
+
+internal const val MAX_PENDING_CUSTOMER_IDEMPOTENCY_OPERATIONS = 32
+private const val MAX_IDEMPOTENCY_OPERATION_LENGTH = 512

@@ -1,17 +1,11 @@
 import { useState, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Clock01Icon, Loading03Icon } from "@hugeicons/core-free-icons"
+import { Loading03Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   Field,
   FieldDescription,
@@ -24,21 +18,19 @@ import {
   getRentalSettings,
   updateRentalSettings,
 } from "@/features/assistant/api/rental-presentations-api"
-import { isGlobalAdministrator } from "@/features/auth/auth-model"
 import { useAuth } from "@/features/auth/use-auth"
-
-const RENTAL_SETTINGS_QUERY_KEY = ["rental-settings"] as const
 
 export function RentalSettingsPage() {
   const { accessToken, currentUser } = useAuth()
   const queryClient = useQueryClient()
+  const rentalSettingsQueryKey = ["rental-settings"] as const
   const settingsQuery = useQuery({
-    queryKey: RENTAL_SETTINGS_QUERY_KEY,
+    queryKey: rentalSettingsQueryKey,
     queryFn: () => getRentalSettings(accessToken!),
     enabled: Boolean(
       accessToken &&
       currentUser &&
-      isGlobalAdministrator(currentUser.globalRole)
+      currentUser.globalRole === "SYSTEM_ADMIN"
     ),
   })
   const [editedChatSelectionHoldMinutes, setEditedChatSelectionHoldMinutes] =
@@ -119,13 +111,13 @@ export function RentalSettingsPage() {
       })
     },
     onSuccess: async (settings) => {
-      queryClient.setQueryData(RENTAL_SETTINGS_QUERY_KEY, settings)
+      queryClient.setQueryData(rentalSettingsQueryKey, settings)
       setEditedChatSelectionHoldMinutes(null)
       setEditedManualBookingHoldMinutes(null)
       setEditedPresentationHoldMinutes(null)
       setEditedDraftReservationHoldMinutes(null)
       await queryClient.invalidateQueries({
-        queryKey: RENTAL_SETTINGS_QUERY_KEY,
+        queryKey: rentalSettingsQueryKey,
       })
       toast.success("Срок временного удержания сохранён.")
     },
@@ -135,10 +127,13 @@ export function RentalSettingsPage() {
       ),
   })
 
-  if (!currentUser || !isGlobalAdministrator(currentUser.globalRole)) {
+  if (
+    !currentUser ||
+    currentUser.globalRole !== "SYSTEM_ADMIN"
+  ) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        Настройка доступна только системному или WMS-администратору.
+        Настройка доступна системному администратору.
       </div>
     )
   }
@@ -149,22 +144,16 @@ export function RentalSettingsPage() {
   }
 
   return (
-    <div className="mx-auto h-full max-w-3xl overflow-y-auto py-4">
-      <Card>
-        <CardHeader>
-          <div className="mb-2 flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
-            <HugeiconsIcon icon={Clock01Icon} className="size-5" />
-          </div>
-          <CardTitle>Бронирование и чат</CardTitle>
-          <CardDescription>
-            Общие сроки удержания бытовок для ручного бронирования, чата,
-            клиентского представления и созданного черновика заказа.
-          </CardDescription>
-        </CardHeader>
+    <div className="w-full">
+      <Card size="sm" className="bg-muted/65">
         <CardContent>
           {settingsQuery.isPending ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <HugeiconsIcon icon={Loading03Icon} className="animate-spin" />
+              <HugeiconsIcon
+                icon={Loading03Icon}
+                className="animate-spin"
+                aria-hidden="true"
+              />
               Загружаем настройку…
             </div>
           ) : settingsQuery.isError ? (
@@ -175,19 +164,22 @@ export function RentalSettingsPage() {
             </FieldError>
           ) : (
             <form onSubmit={submit}>
-              <FieldGroup>
+              <FieldGroup className="flex flex-col gap-5">
                 <Field>
                   <FieldLabel htmlFor="chat-selection-hold-minutes">
                     Удержание бытовок в чате
                   </FieldLabel>
                   <Input
                     id="chat-selection-hold-minutes"
+                    name="chat-selection-hold-minutes"
+                    autoComplete="off"
                     type="number"
                     min={1}
                     max={1_440}
                     step={1}
                     inputMode="numeric"
                     value={chatSelectionHoldMinutes}
+                    className="w-full"
                     onChange={(event) =>
                       setEditedChatSelectionHoldMinutes(event.target.value)
                     }
@@ -202,19 +194,22 @@ export function RentalSettingsPage() {
                   </FieldLabel>
                   <Input
                     id="manual-booking-hold-minutes"
+                    name="manual-booking-hold-minutes"
+                    autoComplete="off"
                     type="number"
                     min={5}
                     max={1_440}
                     step={1}
                     inputMode="numeric"
                     value={manualBookingHoldMinutes}
+                    className="w-full"
                     onChange={(event) =>
                       setEditedManualBookingHoldMinutes(event.target.value)
                     }
                   />
                   <FieldDescription>
-                    Начинается после кнопки «Продолжить бронирование».
-                    Допустимо от 5 минут до 24 часов. По умолчанию — 60 минут.
+                    Начинается после кнопки «Продолжить бронирование». Допустимо
+                    от 5 минут до 24 часов. По умолчанию — 60 минут.
                   </FieldDescription>
                 </Field>
                 <Field>
@@ -223,12 +218,15 @@ export function RentalSettingsPage() {
                   </FieldLabel>
                   <Input
                     id="draft-reservation-hold-minutes"
+                    name="draft-reservation-hold-minutes"
+                    autoComplete="off"
                     type="number"
                     min={1_440}
                     max={14_400}
                     step={1}
                     inputMode="numeric"
                     value={draftReservationHoldMinutes}
+                    className="w-full"
                     onChange={(event) =>
                       setEditedDraftReservationHoldMinutes(event.target.value)
                     }
@@ -244,12 +242,15 @@ export function RentalSettingsPage() {
                   </FieldLabel>
                   <Input
                     id="presentation-hold-minutes"
+                    name="presentation-hold-minutes"
+                    autoComplete="off"
                     type="number"
                     min={5}
                     max={1_440}
                     step={1}
                     inputMode="numeric"
                     value={presentationHoldMinutes}
+                    className="w-full"
                     onChange={(event) =>
                       setEditedPresentationHoldMinutes(event.target.value)
                     }
@@ -260,13 +261,14 @@ export function RentalSettingsPage() {
                     просмотра.
                   </FieldDescription>
                 </Field>
-                <Field orientation="horizontal" className="justify-end">
+                <Field orientation="horizontal" className="justify-end pt-1">
                   <Button type="submit" disabled={mutation.isPending}>
                     {mutation.isPending ? (
                       <HugeiconsIcon
                         icon={Loading03Icon}
                         data-icon="inline-start"
                         className="animate-spin"
+                        aria-hidden="true"
                       />
                     ) : null}
                     Сохранить

@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import "tailwindcss" source("./");
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
@@ -55,153 +55,168 @@
 
 :root {
   --background: oklch(1 0 0);
-  --foreground: oklch(0.148 0.004 228.8);
+  --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.148 0.004 228.8);
+  --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.148 0.004 228.8);
+  --popover-foreground: oklch(0.145 0 0);
   --primary: oklch(0.5 0.134 242.749);
   --primary-foreground: oklch(0.977 0.013 236.62);
-  --delivery-estimate: oklch(0.63 0.17 54);
-  --cart-surface: oklch(0.19 0.025 240);
-  --cart-surface-foreground: oklch(0.985 0.004 236);
-  --history-past: oklch(0.54 0.145 145);
-  --history-past-foreground: oklch(0.985 0.01 145);
-  --secondary: oklch(0.967 0.001 286.375);
+  --secondary: oklch(0.985 0.002 247.839);
   --secondary-foreground: oklch(0.21 0.006 285.885);
-  --muted: oklch(0.963 0.002 197.1);
-  --muted-foreground: oklch(0.56 0.021 213.5);
-  --accent: oklch(0.5 0.134 242.749);
-  --accent-foreground: oklch(0.977 0.013 236.62);
+  --muted: oklch(0.985 0.002 247.839);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.985 0.002 247.839);
+  --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.925 0.005 214.3);
-  --input: oklch(0.925 0.005 214.3);
-  --ring: oklch(0.723 0.014 214.4);
-  --chart-1: oklch(0.809 0.105 251.813);
-  --chart-2: oklch(0.623 0.214 259.815);
-  --chart-3: oklch(0.546 0.245 262.881);
-  --chart-4: oklch(0.488 0.243 264.376);
-  --chart-5: oklch(0.424 0.199 265.638);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.828 0.111 230.318);
+  --chart-2: oklch(0.685 0.169 237.323);
+  --chart-3: oklch(0.588 0.158 241.966);
+  --chart-4: oklch(0.5 0.134 242.749);
+  --chart-5: oklch(0.443 0.11 240.79);
   --radius: 0.625rem;
-  --sidebar: oklch(0.987 0.002 197.1);
-  --sidebar-foreground: oklch(0.148 0.004 228.8);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.588 0.158 241.966);
   --sidebar-primary-foreground: oklch(0.977 0.013 236.62);
-  --sidebar-accent: oklch(0.963 0.002 197.1);
-  --sidebar-accent-foreground: oklch(0.218 0.008 223.9);
-  --sidebar-border: oklch(0.925 0.005 214.3);
-  --sidebar-ring: oklch(0.723 0.014 214.4);
-  --status-rented-bg: oklch(0.92 0.08 260);
-  --status-rented-fg: oklch(0.3 0.11 265);
-  --status-after-rent-bg: oklch(0.94 0.1 85);
-  --status-after-rent-fg: oklch(0.33 0.08 65);
-  --status-booked-bg: oklch(0.93 0.08 305);
-  --status-booked-fg: oklch(0.31 0.1 305);
-  --status-repair-bg: oklch(0.93 0.1 55);
-  --status-repair-fg: oklch(0.34 0.1 45);
-  --status-capital-repair-bg: oklch(0.92 0.08 25);
-  --status-capital-repair-fg: oklch(0.34 0.11 25);
-  --status-sale-bg: oklch(0.93 0.08 355);
-  --status-sale-fg: oklch(0.33 0.1 355);
-  --status-free-bg: oklch(0.93 0.08 145);
-  --status-free-fg: oklch(0.29 0.08 145);
-  --status-warehouse-bg: oklch(0.94 0.02 235);
-  --status-warehouse-fg: oklch(0.32 0.03 235);
-  --status-own-needs-bg: oklch(0.92 0.08 185);
-  --status-own-needs-fg: oklch(0.28 0.08 190);
-  --status-waiting-repair-check-bg: oklch(0.94 0.1 85);
-  --status-waiting-repair-check-fg: oklch(0.33 0.08 65);
-  --status-written-off-bg: oklch(0.2 0.01 230);
-  --status-written-off-fg: oklch(0.98 0 0);
-  --acceptance-pending-bg: oklch(0.94 0.1 85);
-  --acceptance-pending-fg: oklch(0.33 0.08 65);
-  --acceptance-accepted-bg: oklch(0.93 0.08 145);
-  --acceptance-accepted-fg: oklch(0.29 0.08 145);
-  --acceptance-written-off-bg: oklch(0.2 0.01 230);
-  --acceptance-written-off-fg: oklch(0.98 0 0);
-  --acceptance-time-safe-bg: oklch(0.93 0.08 145);
-  --acceptance-time-safe-fg: oklch(0.29 0.08 145);
-  --acceptance-time-warning-bg: oklch(0.94 0.1 85);
-  --acceptance-time-warning-fg: oklch(0.33 0.08 65);
-  --acceptance-time-critical-bg: oklch(0.92 0.08 25);
-  --acceptance-time-critical-fg: oklch(0.34 0.11 25);
-  --acceptance-time-expired-bg: oklch(0.2 0.01 230);
-  --acceptance-time-expired-fg: oklch(0.98 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+  --rwms-dusk-blue: var(--primary);
+  --rwms-blue-bell: var(--chart-2);
+  --rwms-white: var(--primary-foreground);
+  --rwms-silver: var(--muted);
+  --rwms-dark-khaki: var(--foreground);
+  --button-blue: #204b79;
+  --button-sky: #549ac5;
+  --button-foreground: #e8f4fc;
+  --button-dark: var(--button-sky);
+  --button-dark-foreground: var(--button-foreground);
+  --button-light: var(--button-blue);
+  --button-light-foreground: var(--button-foreground);
+  --delivery-estimate: var(--chart-2);
+  --cart-surface: var(--foreground);
+  --cart-surface-foreground: var(--background);
+  --history-past: color-mix(
+    in oklch,
+    var(--chart-5) 72%,
+    var(--background)
+  );
+  --history-past-foreground: var(--foreground);
+  --status-rented-bg: color-mix(
+    in oklch,
+    var(--chart-3) 28%,
+    var(--background)
+  );
+  --status-rented-fg: var(--foreground);
+  --status-after-rent-bg: color-mix(
+    in oklch,
+    var(--chart-2) 22%,
+    var(--background)
+  );
+  --status-after-rent-fg: var(--foreground);
+  --status-booked-bg: color-mix(
+    in oklch,
+    var(--chart-1) 24%,
+    var(--background)
+  );
+  --status-booked-fg: var(--foreground);
+  --status-repair-bg: color-mix(
+    in oklch,
+    var(--chart-3) 36%,
+    var(--background)
+  );
+  --status-repair-fg: var(--foreground);
+  --status-capital-repair-bg: color-mix(
+    in oklch,
+    var(--chart-4) 42%,
+    var(--background)
+  );
+  --status-capital-repair-fg: var(--foreground);
+  --status-sale-bg: color-mix(
+    in oklch,
+    var(--chart-5) 34%,
+    var(--background)
+  );
+  --status-sale-fg: var(--foreground);
+  --status-free-bg: color-mix(
+    in oklch,
+    var(--muted) 70%,
+    var(--background)
+  );
+  --status-free-fg: var(--foreground);
+  --status-warehouse-bg: color-mix(
+    in oklch,
+    var(--secondary) 76%,
+    var(--background)
+  );
+  --status-warehouse-fg: var(--foreground);
+  --status-own-needs-bg: color-mix(
+    in oklch,
+    var(--accent) 76%,
+    var(--background)
+  );
+  --status-own-needs-fg: var(--foreground);
+  --status-waiting-repair-check-bg: var(--status-after-rent-bg);
+  --status-waiting-repair-check-fg: var(--status-after-rent-fg);
+  --status-written-off-bg: var(--primary);
+  --status-written-off-fg: var(--primary-foreground);
+  --acceptance-pending-bg: var(--status-after-rent-bg);
+  --acceptance-pending-fg: var(--status-after-rent-fg);
+  --acceptance-accepted-bg: var(--status-free-bg);
+  --acceptance-accepted-fg: var(--status-free-fg);
+  --acceptance-written-off-bg: var(--status-written-off-bg);
+  --acceptance-written-off-fg: var(--status-written-off-fg);
+  --acceptance-time-safe-bg: var(--status-free-bg);
+  --acceptance-time-safe-fg: var(--status-free-fg);
+  --acceptance-time-warning-bg: var(--status-after-rent-bg);
+  --acceptance-time-warning-fg: var(--status-after-rent-fg);
+  --acceptance-time-critical-bg: var(--status-capital-repair-bg);
+  --acceptance-time-critical-fg: var(--status-capital-repair-fg);
+  --acceptance-time-expired-bg: var(--status-written-off-bg);
+  --acceptance-time-expired-fg: var(--status-written-off-fg);
 }
 
 .dark {
-  --background: oklch(0.148 0.004 228.8);
-  --foreground: oklch(0.987 0.002 197.1);
-  --card: oklch(0.218 0.008 223.9);
-  --card-foreground: oklch(0.987 0.002 197.1);
-  --popover: oklch(0.218 0.008 223.9);
-  --popover-foreground: oklch(0.987 0.002 197.1);
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
   --primary: oklch(0.443 0.11 240.79);
   --primary-foreground: oklch(0.977 0.013 236.62);
-  --delivery-estimate: oklch(0.76 0.15 64);
-  --cart-surface: oklch(0.11 0.018 240);
-  --cart-surface-foreground: oklch(0.985 0.004 236);
-  --history-past: oklch(0.66 0.145 145);
-  --history-past-foreground: oklch(0.16 0.025 145);
   --secondary: oklch(0.274 0.006 286.033);
   --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.275 0.011 216.9);
-  --muted-foreground: oklch(0.723 0.014 214.4);
-  --accent: oklch(0.443 0.11 240.79);
-  --accent-foreground: oklch(0.977 0.013 236.62);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.56 0.021 213.5);
-  --chart-1: oklch(0.809 0.105 251.813);
-  --chart-2: oklch(0.623 0.214 259.815);
-  --chart-3: oklch(0.546 0.245 262.881);
-  --chart-4: oklch(0.488 0.243 264.376);
-  --chart-5: oklch(0.424 0.199 265.638);
-  --sidebar: oklch(0.218 0.008 223.9);
-  --sidebar-foreground: oklch(0.987 0.002 197.1);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.828 0.111 230.318);
+  --chart-2: oklch(0.685 0.169 237.323);
+  --chart-3: oklch(0.588 0.158 241.966);
+  --chart-4: oklch(0.5 0.134 242.749);
+  --chart-5: oklch(0.443 0.11 240.79);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.685 0.169 237.323);
   --sidebar-primary-foreground: oklch(0.293 0.066 243.157);
-  --sidebar-accent: oklch(0.275 0.011 216.9);
-  --sidebar-accent-foreground: oklch(0.987 0.002 197.1);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.56 0.021 213.5);
-  --status-rented-bg: oklch(0.31 0.11 265);
-  --status-rented-fg: oklch(0.9 0.08 260);
-  --status-after-rent-bg: oklch(0.33 0.08 65);
-  --status-after-rent-fg: oklch(0.92 0.11 85);
-  --status-booked-bg: oklch(0.31 0.1 305);
-  --status-booked-fg: oklch(0.92 0.08 305);
-  --status-repair-bg: oklch(0.34 0.1 45);
-  --status-repair-fg: oklch(0.92 0.1 55);
-  --status-capital-repair-bg: oklch(0.34 0.11 25);
-  --status-capital-repair-fg: oklch(0.92 0.08 25);
-  --status-sale-bg: oklch(0.33 0.1 355);
-  --status-sale-fg: oklch(0.92 0.08 355);
-  --status-free-bg: oklch(0.29 0.08 145);
-  --status-free-fg: oklch(0.9 0.08 145);
-  --status-warehouse-bg: oklch(0.32 0.03 235);
-  --status-warehouse-fg: oklch(0.9 0.02 235);
-  --status-own-needs-bg: oklch(0.28 0.08 190);
-  --status-own-needs-fg: oklch(0.9 0.08 185);
-  --status-waiting-repair-check-bg: oklch(0.33 0.08 65);
-  --status-waiting-repair-check-fg: oklch(0.92 0.11 85);
-  --status-written-off-bg: oklch(0.08 0.005 230);
-  --status-written-off-fg: oklch(0.98 0 0);
-  --acceptance-pending-bg: oklch(0.33 0.08 65);
-  --acceptance-pending-fg: oklch(0.92 0.11 85);
-  --acceptance-accepted-bg: oklch(0.29 0.08 145);
-  --acceptance-accepted-fg: oklch(0.9 0.08 145);
-  --acceptance-written-off-bg: oklch(0.08 0.005 230);
-  --acceptance-written-off-fg: oklch(0.98 0 0);
-  --acceptance-time-safe-bg: oklch(0.29 0.08 145);
-  --acceptance-time-safe-fg: oklch(0.9 0.08 145);
-  --acceptance-time-warning-bg: oklch(0.33 0.08 65);
-  --acceptance-time-warning-fg: oklch(0.92 0.11 85);
-  --acceptance-time-critical-bg: oklch(0.34 0.11 25);
-  --acceptance-time-critical-fg: oklch(0.92 0.08 25);
-  --acceptance-time-expired-bg: oklch(0.08 0.005 230);
-  --acceptance-time-expired-fg: oklch(0.98 0 0);
+  --sidebar-ring: oklch(0.556 0 0);
+  --button-dark: var(--button-blue);
+  --button-dark-foreground: var(--button-foreground);
+  --button-light: var(--button-sky);
+  --button-light-foreground: var(--button-foreground);
 }
 
 @layer base {
@@ -219,6 +234,11 @@
 
   html {
     @apply font-sans;
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
   }
 
   body {
@@ -226,8 +246,118 @@
     overflow: hidden;
   }
 
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
+    mix-blend-mode: normal;
+  }
+
+  html[data-magicui-theme-vt="active"]::view-transition-group(root) {
+    animation-duration: var(--magicui-theme-toggle-vt-duration);
+  }
+
+  html[data-magicui-theme-vt="active"]::view-transition-new(root) {
+    clip-path: var(--magicui-theme-vt-clip-from);
+  }
+
   button:not(:disabled),
   [role="button"]:not(:disabled) {
     cursor: pointer;
+  }
+}
+
+@layer components {
+  [data-slot="button"] {
+    border-radius: var(--radius) !important;
+  }
+
+  .rwms-button-dark,
+  .rwms-button-light {
+    border: 0 !important;
+    transform: translateY(0) scale(1) !important;
+    transition:
+      box-shadow 80ms ease-out,
+      transform 55ms ease-out !important;
+  }
+
+  .rwms-button-dark {
+    color: var(--button-dark-foreground);
+    background-color: var(--button-dark);
+    box-shadow: 0 1px 2px
+      color-mix(in oklch, var(--button-dark) 28%, transparent) !important;
+  }
+
+  .rwms-button-light {
+    color: var(--button-light-foreground);
+    background-color: var(--button-light);
+    box-shadow: 0 1px 2px
+      color-mix(in oklch, var(--button-light) 20%, transparent) !important;
+  }
+
+  .rwms-button-dark:active:not(:disabled),
+  .rwms-button-light:active:not(:disabled) {
+    transform: translateY(1px) scale(0.985) !important;
+    transition-duration: 55ms !important;
+  }
+
+  .rwms-button-light:active:not(:disabled) {
+    color: var(--button-dark-foreground);
+    background-color: var(--button-dark);
+    box-shadow: 0 1px 2px
+      color-mix(in oklch, var(--button-dark) 28%, transparent) !important;
+  }
+
+  .rwms-button-dark:active:not(:disabled) {
+    color: var(--button-light-foreground);
+    background-color: var(--button-light);
+    box-shadow: 0 1px 2px
+      color-mix(in oklch, var(--button-light) 20%, transparent) !important;
+  }
+
+  .rwms-button-dark:disabled,
+  .rwms-button-light:disabled {
+    box-shadow: none !important;
+    opacity: 0.48;
+  }
+
+  .rwms-button-dark:focus-visible,
+  .rwms-button-light:focus-visible {
+    outline: 3px solid color-mix(in oklch, var(--chart-2) 45%, transparent);
+    outline-offset: 2px;
+  }
+
+  .rwms-button-color::before,
+  .rwms-button-color::after {
+    display: none;
+  }
+
+  .rwms-search-field {
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.05);
+    transition:
+      border-color 120ms ease-out,
+      box-shadow 120ms ease-out;
+  }
+
+  .rwms-search-field:focus-visible {
+    border-color: var(--button-sky) !important;
+    box-shadow: 0 0 0 2px
+      color-mix(in oklch, var(--button-sky) 28%, transparent) !important;
+  }
+
+  .rwms-color-picker {
+    overflow: hidden;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  .rwms-color-picker::-webkit-color-swatch-wrapper {
+    padding: 0;
+  }
+
+  .rwms-color-picker::-webkit-color-swatch,
+  .rwms-color-picker::-moz-color-swatch {
+    border: 0;
+    border-radius: inherit;
   }
 }

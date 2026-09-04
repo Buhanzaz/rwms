@@ -154,7 +154,7 @@ class RepairPlaceServiceTest {
             now,
             now);
     when(capacity.get(warehouseId))
-        .thenReturn(new RepairCapacitySettingsResponse(warehouseId, 1, 6, 5, now, now));
+        .thenReturn(new RepairCapacitySettingsResponse(warehouseId, 1, 6, now, now));
     when(allocations.findAllByWarehouseIdAndStateInOrderByCreatedAtAscIdAsc(
             warehouseId,
             List.of(
@@ -176,6 +176,7 @@ class RepairPlaceServiceTest {
 
     var projection = service.logisticsProjection(warehouseId);
 
+    assertThat(projection.automaticRefillDelayMinutes()).isZero();
     assertThat(projection.occupiedCount()).isEqualTo(1);
     assertThat(projection.allocations())
         .singleElement()

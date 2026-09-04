@@ -8,11 +8,9 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react"
 import { toast } from "sonner"
 
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
-  CardAction,
   CardContent,
   CardDescription,
   CardFooter,
@@ -53,7 +51,7 @@ function LoadingCard() {
   return (
     <Card aria-label="Загрузка настроек ремонтных мест">
       <CardHeader>
-        <CardTitle>Ремонтные места и автозаполнение</CardTitle>
+        <CardTitle>Ремонтные места</CardTitle>
         <CardDescription>
           Загружаем настройки выбранного склада…
         </CardDescription>
@@ -105,6 +103,7 @@ function QueryErrorCard({
             icon={retrying ? Loading03Icon : Refresh01Icon}
             data-icon="inline-start"
             className={retrying ? "animate-spin" : undefined}
+            aria-hidden="true"
           />
           {retrying ? "Повторяем…" : "Повторить"}
         </Button>
@@ -129,20 +128,11 @@ function CapacityForm({
   const [repairPlaceCount, setRepairPlaceCount] = useState(
     String(setting.repairPlaceCount)
   )
-  const [automaticRefillDelayMinutes, setAutomaticRefillDelayMinutes] =
-    useState(String(setting.automaticRefillDelayMinutes))
   const [validationError, setValidationError] = useState<string | null>(null)
   const parsedRepairPlaceCount = Number(repairPlaceCount)
   const validRepairPlaceCount =
     Number.isInteger(parsedRepairPlaceCount) && parsedRepairPlaceCount >= 1
       ? parsedRepairPlaceCount
-      : null
-  const parsedAutomaticRefillDelayMinutes = Number(automaticRefillDelayMinutes)
-  const validAutomaticRefillDelayMinutes =
-    Number.isInteger(parsedAutomaticRefillDelayMinutes) &&
-    parsedAutomaticRefillDelayMinutes >= 1 &&
-    parsedAutomaticRefillDelayMinutes <= 1440
-      ? parsedAutomaticRefillDelayMinutes
       : null
   const visibleError = validationError ?? actionError
 
@@ -156,36 +146,25 @@ function CapacityForm({
       return
     }
 
-    if (validAutomaticRefillDelayMinutes === null) {
-      setValidationError(
-        "Укажите задержку автозаполнения от 1 до 1440 минут."
-      )
-      return
-    }
-
     setValidationError(null)
     onSave({
       expectedVersion: setting.version,
       repairPlaceCount: validRepairPlaceCount,
-      automaticRefillDelayMinutes: validAutomaticRefillDelayMinutes,
     })
   }
 
   return (
     <form onSubmit={submit}>
-      <Card>
+      <Card size="sm">
         <CardHeader>
-          <CardTitle>Ремонтные места и автозаполнение</CardTitle>
+          <CardTitle>Ремонтные места</CardTitle>
           <CardDescription>
-            Фактическая вместимость обычного ремонта и задержка автозаполнения
-            текущей очереди на складе «{warehouseName}».
+            Фактическая вместимость обычного ремонта на складе «{warehouseName}
+            ». Освободившееся место заполняется автоматически и сразу.
           </CardDescription>
-          <CardAction>
-            <Badge variant="outline">Версия {setting.version}</Badge>
-          </CardAction>
         </CardHeader>
 
-        <CardContent className="flex flex-col gap-7">
+        <CardContent className="flex flex-col gap-5">
           <FieldGroup>
             <Field
               data-invalid={
@@ -197,6 +176,8 @@ function CapacityForm({
               </FieldLabel>
               <Input
                 id="repair-capacity-count"
+                name="repair-capacity-count"
+                autoComplete="off"
                 type="number"
                 min={1}
                 step={1}
@@ -214,51 +195,22 @@ function CapacityForm({
                 Значение действует только для выбранного склада.
               </FieldDescription>
             </Field>
-
-            <Field
-              data-invalid={
-                validationError !== null || actionError !== null || undefined
-              }
-            >
-              <FieldLabel htmlFor="repair-capacity-refill-delay">
-                Задержка автозаполнения, минут
-              </FieldLabel>
-              <Input
-                id="repair-capacity-refill-delay"
-                type="number"
-                min={1}
-                max={1440}
-                step={1}
-                inputMode="numeric"
-                value={automaticRefillDelayMinutes}
-                disabled={saving}
-                aria-invalid={visibleError !== null}
-                onChange={(event) => {
-                  setAutomaticRefillDelayMinutes(event.target.value)
-                  setValidationError(null)
-                }}
-              />
-              <FieldDescription>
-                После ручного освобождения текущей очереди следующее задание
-                добавится автоматически не раньше указанного времени. От 1 до
-                1440 минут.
-              </FieldDescription>
-            </Field>
           </FieldGroup>
           <FieldError>{visibleError}</FieldError>
         </CardContent>
 
-        <CardFooter className="justify-between gap-4 border-t">
+        <CardFooter className="flex-col items-stretch justify-between gap-4 sm:flex-row sm:items-center">
           <p className="text-sm text-muted-foreground">
             {setting.createdAt === null
               ? "Настройка ещё не сохранялась для выбранного склада."
               : "Настройка сохранена в сервисе ремонтов."}
           </p>
-          <Button type="submit" disabled={saving}>
+          <Button type="submit" className="self-end" disabled={saving}>
             <HugeiconsIcon
               icon={saving ? Loading03Icon : FloppyDiskIcon}
               data-icon="inline-start"
               className={saving ? "animate-spin" : undefined}
+              aria-hidden="true"
             />
             {saving ? "Сохраняем…" : "Сохранить"}
           </Button>
@@ -334,7 +286,7 @@ export function RepairCapacitySettingsCard({
 
   return (
     <CapacityForm
-      key={`${warehouseId}:${capacityQuery.data.version}:${capacityQuery.data.repairPlaceCount}:${capacityQuery.data.automaticRefillDelayMinutes}`}
+      key={`${warehouseId}:${capacityQuery.data.version}:${capacityQuery.data.repairPlaceCount}`}
       setting={capacityQuery.data}
       warehouseName={warehouseName}
       saving={saveMutation.isPending}

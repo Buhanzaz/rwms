@@ -109,6 +109,9 @@ const warehouses = [
     lifecycleState: "ACTIVE" as const,
     sortOrder: 1,
     representative: false,
+    production: true,
+    mainWarehouse: false,
+    representativeParentWarehouseId: null,
   },
   {
     id: DESTINATION_ID,
@@ -123,23 +126,32 @@ const warehouses = [
     lifecycleState: "ACTIVE" as const,
     sortOrder: 2,
     representative: true,
+    production: false,
+    mainWarehouse: false,
+    representativeParentWarehouseId: SOURCE_ID,
   },
 ]
 const document: TransferDocument = {
   id: TRANSFER_ID,
   version: 1,
   documentType: "TRANSFER",
+  customerDeliveryPurpose: null,
   state: "DRAFT",
   warehouseId: SOURCE_ID,
   destinationWarehouseId: DESTINATION_ID,
+  linkedReturnTransferId: null,
   partySnapshot: null,
   driverSnapshot: null,
   driverWorkerId: null,
   clientId: null,
+  historicalRentalImport: false,
   equipmentMovementTaskId: null,
   scheduledDate: "2026-09-02",
   rentalOrderId: null,
   rentalShipmentId: null,
+  inventorySourceId: null,
+  inventorySourceFindingId: null,
+  inventorySourceDispositionKind: null,
   lines: [],
   createdAt: "2026-08-29T08:00:00Z",
   updatedAt: "2026-08-29T08:00:00Z",
@@ -190,9 +202,15 @@ function planFromRequest(request: TransferPlanRequest): TransferPlan {
   }
 }
 
-function renderDialog(
-  initialDestinationWarehouseId: string | null = DESTINATION_ID
-) {
+function renderDialog({
+  initialDestinationWarehouseId = DESTINATION_ID,
+  initialScheduledDate,
+  warehouseList = warehouses,
+}: {
+  initialDestinationWarehouseId?: string | null
+  initialScheduledDate?: string
+  warehouseList?: typeof warehouses
+} = {}) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -205,8 +223,9 @@ function renderDialog(
         accessToken="access-token"
         currentUser={currentUser}
         warehouseId={SOURCE_ID}
-        warehouses={warehouses}
+        warehouses={warehouseList}
         initialDestinationWarehouseId={initialDestinationWarehouseId}
+        initialScheduledDate={initialScheduledDate}
         onCreated={vi.fn()}
         onLegacyCreate={vi.fn()}
         onOpenChange={vi.fn()}
@@ -362,6 +381,7 @@ afterEach(() => {
   cleanup()
   vi.clearAllMocks()
   vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
 
 describe("TransferPlanDialog", () => {
@@ -419,13 +439,149 @@ describe("TransferPlanDialog", () => {
     ).toBe("checked")
   })
 
-  it("saves a zero-line draft without allocations and surfaces confirm blockers", async () => {
-    const user = userEvent.setup()
+  it("shows only source-stock cabins that can satisfy the selected group", async () => {
+    assetApi.listAssetRentalItems.mockResolvedValue({
+      content: [
+        {
+          id: CABIN_IDS[0],
+          version: 1,
+          warehouseId: SOURCE_ID,
+          number: "БК-свободная",
+          rentalTypeId: TYPE_ID,
+          dimensionId: DIMENSION_ID,
+          finishingId: FINISHING_ID,
+          type: "BK2",
+          dimensions: "6 × 2,4",
+          finishing: "ЛДСП",
+          category: null,
+          characteristics: [],
+          linoleum: true,
+          status: "FREE",
+          comment: null,
+          contents: null,
+          contentsItems: [],
+          shipmentDate: null,
+          tenant: null,
+          price: null,
+          activeOrderReservation: null,
+          passport: {},
+          tags: [],
+        },
+        {
+          id: CABIN_IDS[1],
+          version: 2,
+          warehouseId: SOURCE_ID,
+          number: "БК-в-ремонте",
+          rentalTypeId: TYPE_ID,
+          dimensionId: DIMENSION_ID,
+          finishingId: FINISHING_ID,
+          type: "BK2",
+          dimensions: "6 × 2,4",
+          finishing: "ЛДСП",
+          category: null,
+          characteristics: [],
+          linoleum: true,
+          status: "REPAIR",
+          comment: null,
+          contents: null,
+          contentsItems: [],
+          shipmentDate: null,
+          tenant: null,
+          price: null,
+          activeOrderReservation: null,
+          passport: {},
+          tags: [],
+        },
+        {
+          id: CABIN_IDS[2],
+          version: 3,
+          warehouseId: SOURCE_ID,
+          number: "БК-зарезервирована",
+          rentalTypeId: TYPE_ID,
+          dimensionId: DIMENSION_ID,
+          finishingId: FINISHING_ID,
+          type: "BK2",
+          dimensions: "6 × 2,4",
+          finishing: "ЛДСП",
+          category: null,
+          characteristics: [],
+          linoleum: true,
+          status: "FREE",
+          comment: null,
+          contents: null,
+          contentsItems: [],
+          shipmentDate: null,
+          tenant: null,
+          price: null,
+          activeOrderReservation: {
+            reservationId: "11111111-aaaa-4111-8111-111111111111",
+            orderId: "22222222-aaaa-4222-8222-222222222222",
+            clientId: null,
+            tenantSnapshot: null,
+            reservedAt: "2026-09-02T09:00:00Z",
+          },
+          passport: {},
+          tags: [],
+        },
+      ],
+    })
     renderDialog()
     await addConfiguredGroup()
-    fireEvent.change(screen.getByLabelText("Дата"), {
-      target: { value: "2026-09-02" },
-    })
+
+    expect(
+      screen.getByRole("checkbox", { name: "Выбрать бытовку БК-свободная" })
+    ).toBeTruthy()
+    expect(screen.getByText(/Свободна · ЛДСП/)).toBeTruthy()
+    expect(screen.queryByText("FREE")).toBeNull()
+    expect(
+      screen.queryByRole("checkbox", { name: "Выбрать бытовку БК-в-ремонте" })
+    ).toBeNull()
+    expect(
+      screen.queryByRole("checkbox", {
+        name: "Выбрать бытовку БК-зарезервирована",
+      })
+    ).toBeNull()
+  })
+
+  it("uses the source warehouse day and project picker instead of browser-local dates", () => {
+    vi.useFakeTimers()
+    vi.setSystemTime("2026-09-01T20:30:00Z")
+    const sourceTimeZoneWarehouses = warehouses.map((warehouse) =>
+      warehouse.id === SOURCE_ID
+        ? { ...warehouse, timeZone: "Asia/Novosibirsk" }
+        : warehouse
+    )
+    renderDialog({ warehouseList: sourceTimeZoneWarehouses })
+
+    expect(
+      screen.getByRole("button", { name: "Дата: 2 сентября 2026 г." })
+    ).toBeTruthy()
+    expect(window.document.querySelector('input[type="date"]')).toBeNull()
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Дата: 2 сентября 2026 г." })
+    )
+    expect(screen.getByLabelText("Дата: календарь")).toBeTruthy()
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Сегодня, вторник, 1 сентября 2026 г.",
+      })
+    )
+    expect(
+      screen.getByRole("button", { name: "Дата: 1 сентября 2026 г." })
+    ).toBeTruthy()
+
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить черновик" }))
+    expect(
+      screen.getByText("Плановая дата не может быть в прошлом.")
+    ).toBeTruthy()
+    expect(transferApi.createWarehouseTransfer).not.toHaveBeenCalled()
+  })
+
+  it("saves a zero-line draft without allocations and surfaces confirm blockers", async () => {
+    const user = userEvent.setup()
+    renderDialog({ initialScheduledDate: "2026-09-02" })
+    await addConfiguredGroup()
 
     expect(screen.getByText("Не назначено бытовок: 2.")).toBeTruthy()
     await user.click(screen.getByRole("button", { name: "Сохранить черновик" }))
@@ -458,10 +614,7 @@ describe("TransferPlanDialog", () => {
 
   it("selects a driver, stores temporary reposition intent, and confirms a complete draft", async () => {
     const user = userEvent.setup()
-    renderDialog()
-    fireEvent.change(screen.getByLabelText("Дата"), {
-      target: { value: "2026-09-02" },
-    })
+    renderDialog({ initialScheduledDate: "2026-09-02" })
     fireEvent.change(screen.getByLabelText("Отправление"), {
       target: { value: "2026-09-02T08:00" },
     })
@@ -515,15 +668,13 @@ describe("TransferPlanDialog", () => {
         })
       )
     )
-    expect(
-      await screen.findByText("Перемещение подтверждено")
-    ).toBeTruthy()
+    expect(await screen.findByText("Перемещение подтверждено")).toBeTruthy()
     expect(
       screen.getByText(/Конкретные бытовки и мебель зарезервированы/)
     ).toBeTruthy()
   })
 
-  it("creates and immediately selects a bounded contractor driver", async () => {
+  it("creates and immediately selects a reusable contractor profile", async () => {
     const user = userEvent.setup()
     driverApi.createContractorDriver.mockResolvedValue({
       workerId: DRIVER_ID,
@@ -531,9 +682,7 @@ describe("TransferPlanDialog", () => {
       homeWarehouseId: SOURCE_ID,
       displayName: "Наёмный Николай",
       phone: "+79990000000",
-      availableFrom: "2026-09-02T05:00:00Z",
-      availableUntil: "2026-09-02T15:00:00Z",
-      comment: null,
+      comment: "Свой автомобиль",
       active: true,
       employmentType: "CONTRACTOR",
     })
@@ -543,6 +692,13 @@ describe("TransferPlanDialog", () => {
     )
     const dialogs = screen.getAllByRole("dialog")
     const contractorDialog = dialogs.at(-1)!
+    expect(
+      within(contractorDialog).getByText(
+        /Создаётся постоянный профиль без учётной записи\. На рейс и выбранный день водитель назначается отдельно\./
+      )
+    ).toBeTruthy()
+    expect(within(contractorDialog).queryByLabelText("Начало смены")).toBeNull()
+    expect(within(contractorDialog).queryByLabelText("Конец смены")).toBeNull()
     await user.type(
       within(contractorDialog).getByLabelText("Имя"),
       "Наёмный Николай"
@@ -551,12 +707,10 @@ describe("TransferPlanDialog", () => {
       within(contractorDialog).getByLabelText("Телефон"),
       "+79990000000"
     )
-    fireEvent.change(within(contractorDialog).getByLabelText("Начало смены"), {
-      target: { value: "2026-09-02T08:00" },
-    })
-    fireEvent.change(within(contractorDialog).getByLabelText("Конец смены"), {
-      target: { value: "2026-09-02T18:00" },
-    })
+    await user.type(
+      within(contractorDialog).getByLabelText("Комментарий"),
+      "Свой автомобиль"
+    )
     await user.click(
       within(contractorDialog).getByRole("button", {
         name: "Добавить водителя",
@@ -566,14 +720,18 @@ describe("TransferPlanDialog", () => {
     await waitFor(() =>
       expect(driverApi.createContractorDriver).toHaveBeenCalled()
     )
-    expect(driverApi.createContractorDriver.mock.calls[0]?.[0]).toMatchObject({
+    expect(driverApi.createContractorDriver.mock.calls[0]?.[0]).toEqual({
+      accessToken: "access-token",
       warehouseId: SOURCE_ID,
       contractor: {
+        contractorId: TRANSFER_ID,
         displayName: "Наёмный Николай",
         phone: "+79990000000",
-        availableFrom: "2026-09-02T05:00:00.000Z",
-        availableUntil: "2026-09-02T15:00:00.000Z",
+        comment: "Свой автомобиль",
       },
     })
+    expect(
+      screen.getByRole("combobox", { name: "Водитель рейса" }).textContent
+    ).toContain("Наёмный Николай")
   })
 })

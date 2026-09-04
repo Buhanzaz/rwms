@@ -5,7 +5,6 @@ export type RepairCapacitySetting = {
   warehouseId: string
   version: number
   repairPlaceCount: number
-  automaticRefillDelayMinutes: number
   createdAt: string | null
   updatedAt: string | null
 }
@@ -13,7 +12,6 @@ export type RepairCapacitySetting = {
 export type RepairCapacityUpdate = {
   expectedVersion: number
   repairPlaceCount: number
-  automaticRefillDelayMinutes: number
 }
 
 export const repairCapacityKeys = {
@@ -36,7 +34,9 @@ function isNullableString(value: unknown): value is string | null {
 
 function parseRepairCapacitySetting(value: unknown): RepairCapacitySetting {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("Сервис ремонтов вернул некорректную настройку ремонтных мест.")
+    throw new Error(
+      "Сервис ремонтов вернул некорректную настройку ремонтных мест."
+    )
   }
 
   const response = value as Record<string, unknown>
@@ -49,21 +49,18 @@ function parseRepairCapacitySetting(value: unknown): RepairCapacitySetting {
     typeof response.repairPlaceCount !== "number" ||
     !Number.isInteger(response.repairPlaceCount) ||
     response.repairPlaceCount < 1 ||
-    typeof response.automaticRefillDelayMinutes !== "number" ||
-    !Number.isInteger(response.automaticRefillDelayMinutes) ||
-    response.automaticRefillDelayMinutes < 1 ||
-    response.automaticRefillDelayMinutes > 1440 ||
     !isNullableString(response.createdAt) ||
     !isNullableString(response.updatedAt)
   ) {
-    throw new Error("Сервис ремонтов вернул некорректную настройку ремонтных мест.")
+    throw new Error(
+      "Сервис ремонтов вернул некорректную настройку ремонтных мест."
+    )
   }
 
   return {
     warehouseId: response.warehouseId,
     version: response.version,
     repairPlaceCount: response.repairPlaceCount,
-    automaticRefillDelayMinutes: response.automaticRefillDelayMinutes,
     createdAt: response.createdAt,
     updatedAt: response.updatedAt,
   }
@@ -74,14 +71,9 @@ function validateUpdate(input: RepairCapacityUpdate) {
     !Number.isInteger(input.expectedVersion) ||
     input.expectedVersion < 0 ||
     !Number.isInteger(input.repairPlaceCount) ||
-    input.repairPlaceCount < 1 ||
-    !Number.isInteger(input.automaticRefillDelayMinutes) ||
-    input.automaticRefillDelayMinutes < 1 ||
-    input.automaticRefillDelayMinutes > 1440
+    input.repairPlaceCount < 1
   ) {
-    throw new Error(
-      "Проверьте количество мест и задержку автозаполнения."
-    )
+    throw new Error("Проверьте количество ремонтных мест.")
   }
 }
 

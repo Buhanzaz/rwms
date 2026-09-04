@@ -370,7 +370,8 @@ public class RentalItemHtmlImportCommitService {
     if (resolved.comment() != null) {
       result =
           assets.updateGeneralComment(
-              result.id(), new UpdateGeneralCommentRequest(result.version(), resolved.comment()));
+              result.id(),
+              new UpdateGeneralCommentRequest(result.version(), resolved.comment()));
     }
     return result;
   }

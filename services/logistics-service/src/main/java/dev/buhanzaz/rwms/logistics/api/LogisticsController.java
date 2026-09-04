@@ -22,6 +22,7 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
 import dev.buhanzaz.rwms.logistics.service.CabinFurnitureTaskService;
+import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentPage;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
@@ -30,12 +31,15 @@ import dev.buhanzaz.rwms.logistics.service.TransferFurnitureTaskService;
 import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -68,10 +72,19 @@ public class LogisticsController {
   private final LogisticsAuthorizer access;
 
   @GetMapping("/returns")
-  public List<LogisticsDocumentView> listReturns(
-      @AuthenticationPrincipal Jwt jwt, @RequestParam UUID warehouseId) {
+  public ResponseEntity<List<LogisticsDocumentView>> listReturns(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestParam UUID warehouseId,
+      @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+          LocalDate scheduledDate,
+      @RequestParam(name = "page", defaultValue = "0") @Min(0) int pageNumber,
+      @RequestParam(name = "size", defaultValue = "50") @Min(1) @Max(100) int size) {
     access.requireRead(jwt, warehouseId);
-    return service.list(LogisticsDocumentType.RETURN, warehouseId);
+    return page(
+        scheduledDate == null
+            ? service.page(LogisticsDocumentType.RETURN, warehouseId, pageNumber, size)
+            : service.page(
+                LogisticsDocumentType.RETURN, warehouseId, scheduledDate, pageNumber, size));
   }
 
   @GetMapping("/returns/{documentId}")
@@ -166,10 +179,19 @@ public class LogisticsController {
   }
 
   @GetMapping("/shipments")
-  public List<LogisticsDocumentView> listShipments(
-      @AuthenticationPrincipal Jwt jwt, @RequestParam UUID warehouseId) {
+  public ResponseEntity<List<LogisticsDocumentView>> listShipments(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestParam UUID warehouseId,
+      @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+          LocalDate scheduledDate,
+      @RequestParam(name = "page", defaultValue = "0") @Min(0) int pageNumber,
+      @RequestParam(name = "size", defaultValue = "50") @Min(1) @Max(100) int size) {
     access.requireRead(jwt, warehouseId);
-    return service.list(LogisticsDocumentType.SHIPMENT, warehouseId);
+    return page(
+        scheduledDate == null
+            ? service.page(LogisticsDocumentType.SHIPMENT, warehouseId, pageNumber, size)
+            : service.page(
+                LogisticsDocumentType.SHIPMENT, warehouseId, scheduledDate, pageNumber, size));
   }
 
   @GetMapping("/shipments/{documentId}")
@@ -287,10 +309,19 @@ public class LogisticsController {
   }
 
   @GetMapping("/transfers")
-  public List<LogisticsDocumentView> listTransfers(
-      @AuthenticationPrincipal Jwt jwt, @RequestParam UUID warehouseId) {
+  public ResponseEntity<List<LogisticsDocumentView>> listTransfers(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestParam UUID warehouseId,
+      @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+          LocalDate scheduledDate,
+      @RequestParam(name = "page", defaultValue = "0") @Min(0) int pageNumber,
+      @RequestParam(name = "size", defaultValue = "50") @Min(1) @Max(100) int size) {
     access.requireRead(jwt, warehouseId);
-    return service.list(LogisticsDocumentType.TRANSFER, warehouseId);
+    return page(
+        scheduledDate == null
+            ? service.page(LogisticsDocumentType.TRANSFER, warehouseId, pageNumber, size)
+            : service.page(
+                LogisticsDocumentType.TRANSFER, warehouseId, scheduledDate, pageNumber, size));
   }
 
   @GetMapping("/transfers/{documentId}")
@@ -449,6 +480,25 @@ public class LogisticsController {
             expectedLineVersion));
   }
 
+  /** Starts a version-fenced transfer whose confirmed plan has no physical cabin lines. */
+  @PostMapping("/transfers/{documentId}/depart")
+  public ResponseEntity<LogisticsDocumentView> departTransfer(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID documentId,
+      @RequestParam @Min(0) long expectedVersion,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      HttpServletRequest servletRequest) {
+    LogisticsDocumentView current = service.get(documentId, LogisticsDocumentType.TRANSFER);
+    access.requireManageBoth(jwt, current.warehouseId(), current.destinationWarehouseId());
+    return accepted(
+        service.departTransfer(
+            access.subjectId(jwt),
+            idempotencyKey,
+            correlationId(servletRequest),
+            documentId,
+            expectedVersion));
+  }
+
   @PostMapping("/transfers/{documentId}/lines/{lineId}/arrive")
   public ResponseEntity<LogisticsDocumentView> arriveTransferLine(
       @AuthenticationPrincipal Jwt jwt,
@@ -471,6 +521,25 @@ public class LogisticsController {
             expectedVersion,
             expectedLineVersion,
             request));
+  }
+
+  /** Records factual arrival for a zero-cabin transfer without bypassing line-owned cabin flows. */
+  @PostMapping("/transfers/{documentId}/arrive")
+  public ResponseEntity<LogisticsDocumentView> arriveTransfer(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID documentId,
+      @RequestParam @Min(0) long expectedVersion,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      HttpServletRequest servletRequest) {
+    LogisticsDocumentView current = service.get(documentId, LogisticsDocumentType.TRANSFER);
+    access.requireManageBoth(jwt, current.warehouseId(), current.destinationWarehouseId());
+    return accepted(
+        service.arriveTransfer(
+            access.subjectId(jwt),
+            idempotencyKey,
+            correlationId(servletRequest),
+            documentId,
+            expectedVersion));
   }
 
   @GetMapping("/transfers/{documentId}/lines/{lineId}/arrival-preflight")
@@ -549,6 +618,16 @@ public class LogisticsController {
             .header(HttpHeaders.ETAG, eTag(result.response().version()));
     if (result.replayed()) response.header("Idempotency-Replayed", "true");
     return response.body(result.response());
+  }
+
+  private static ResponseEntity<List<LogisticsDocumentView>> page(LogisticsDocumentPage page) {
+    return ResponseEntity.ok()
+        .header("X-RWMS-Page", Integer.toString(page.page()))
+        .header("X-RWMS-Page-Size", Integer.toString(page.pageSize()))
+        .header("X-RWMS-Total-Elements", Long.toString(page.totalElements()))
+        .header("X-RWMS-Total-Pages", Integer.toString(page.totalPages()))
+        .header("X-RWMS-Has-Next", Boolean.toString(page.hasNext()))
+        .body(page.content());
   }
 
   private static ResponseEntity<LogisticsDocumentView> accepted(

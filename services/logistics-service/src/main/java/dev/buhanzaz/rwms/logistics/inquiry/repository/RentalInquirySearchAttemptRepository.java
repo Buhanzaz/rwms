@@ -34,7 +34,8 @@ public interface RentalInquirySearchAttemptRepository
   @Query(
       """
       select attempt from RentalInquirySearchAttempt attempt
-      where attempt.inquiryId = :inquiryId and attempt.state = :state
+      where attempt.inquiryId = :inquiryId
+        and attempt.state = :state
       """)
   Optional<RentalInquirySearchAttempt> findByInquiryAndStateForUpdate(
       @Param("inquiryId") UUID inquiryId,

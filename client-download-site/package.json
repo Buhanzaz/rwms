@@ -1,9 +1,9 @@
 {
   "name": "rwms-customer-download",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node scripts/verify-release.mjs"
+    "check": "node --test scripts/release-trust.test.mjs && node scripts/verify-release.mjs"
   }
 }

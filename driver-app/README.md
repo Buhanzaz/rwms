@@ -12,17 +12,22 @@ The main menu has exactly three destinations:
   board for repair/KPP, internal movement and shared `WAREHOUSE_DRIVERS`
   movement work. Personally assigned logistics is not duplicated here.
 - **Logistics** (`Логистика`) shows the driver's `ASSIGNED_DRIVER` shipments and
-  returns for the selected date. For dates strictly after the device-local
-  current date, eligible `WAREHOUSE_DRIVERS` trips appear in a separate
-  **Additional tasks** section. These can be identity-free movements or future
+  returns for the selected date. For dates strictly after the current calendar
+  date of the driver's assigned warehouse, eligible `WAREHOUSE_DRIVERS` trips
+  appear in a separate **Additional tasks** section. These can be identity-free movements or future
   deliveries explicitly published by a logistics operator; ordinary hidden
   `UNASSIGNED` shipments are not exposed. The driver may preview a rich trip and reserve
   it with **Take additional task**. This online claim assigns future work but
   does not start task-board execution; the service repeats the date, warehouse
   and qualification checks. Today's shared work cannot be previewed or claimed
-  through this flow. The screen opens on the current date; a fixed Russian
-  month heading follows the centered date in the horizontal neighboring-date
-  carousel. A card opens the existing rich trip, media and action detail. The
+  through this flow. The screen opens on the warehouse-local current date and
+  advances at warehouse midnight; both the carousel and claim availability use
+  the persisted server-time anchor plus the canonical IANA timezone from
+  `shift/today`. Missing, invalid or cross-warehouse clock data fails closed and
+  asks for synchronization instead of using the Android timezone. A fixed
+  Russian month heading follows the centered date in the horizontal
+  neighboring-date carousel. A card opens the existing rich trip, media and
+  action detail. The
   rich trip detail offers **Open in Yandex Maps**:
   it hands the driver-selected destination to the installed Maps app, or to its
   HTTPS web fallback. Confirmed coordinates take priority over the address;
@@ -59,6 +64,8 @@ The navigation and menu are owned by
 [`DriverDownloads.kt`](app/src/main/java/dev/buhanzaz/rwms/driver/DriverDownloads.kt).
 The dated projection is owned by
 [`LogisticsScreen.kt`](feature-tasks/src/main/java/dev/buhanzaz/rwms/driver/feature/tasks/LogisticsScreen.kt).
+Its shared warehouse clock is owned by
+[`DriverWarehouseClock.kt`](core-sync/src/main/java/dev/buhanzaz/rwms/driver/core/sync/DriverWarehouseClock.kt).
 
 ## Daily driver shift
 
@@ -71,6 +78,22 @@ briefing, self-confirmed test medical check, template-backed vehicle
 inspection, existing task screens, warehouse return, end-of-shift vehicle
 report, odometer, fuel, optional or defect-required evidence, and final close.
 A closed shift remains closed until the next warehouse work date.
+
+The same startup projection now carries the immutable ordered operations of
+the exact applied plan: warehouse start/load/unload, customer delivery/pickup,
+and cross-warehouse positioning with planned arrival/departure and load before
+and after each step. DriverApp renders this cached timeline before start, while
+tasks are active through the **Route** sheet, and during return/closing. ETA is
+converted to the selected shift warehouse's valid IANA timezone; if that
+metadata is absent or invalid, the timestamp's own offset is preserved rather
+than assuming a city. These values are planned snapshot times, not live or
+actual ETA.
+
+`TRANSFER_LOAD` and `TRANSFER_UNLOAD` are rendered as explicit Russian load/unload actions in that
+same sequence, and a known effective vehicle cabin capacity appears beside the frozen vehicle
+snapshot. Legacy snapshots omit the capacity label. These additions are read-only presentation:
+actual departure, evidence and arrival still use the existing task detail, encrypted offline queue,
+media upload and synchronization flow; DriverApp owns no parallel transfer command or stock state.
 
 The daily briefing uses the driver's existing profile and the assigned
 warehouse snapshot. Weather is normalized by task-board from MET Norway and
@@ -127,6 +150,12 @@ does not discard them. CameraX capture normalizes EXIF orientation and applies
 the existing size/resolution limits. Server state remains authoritative after
 every reconnect or conflict.
 
+Public Problem Details remain available internally for status, code and retry
+decisions, but raw backend text is never persisted as an outbox/conflict error
+or shown to the driver. One gateway mapper emits actionable Russian messages;
+known stale lease, capacity, time-window, shift and route codes have specific
+guidance, while unknown retryable and terminal failures use safe fixed text.
+
 Shift snapshots, the current inspection progress and closing drafts are also
 stored in Room, so process death resumes the exact server-required screen and
 the entered closing data. Critical commands are durably queued with their
@@ -148,8 +177,11 @@ encrypted payloads or private file paths.
 
 SSE and optional FCM data messages are invalidation signals only. DriverApp
 registers a Firebase Installation ID (`targetKind=FID`) rather than a legacy
-registration token, then refreshes authoritative REST state. It deliberately
-rejects `TASK_JOIN_AVAILABLE`, which is intended for slingers.
+registration token, then refreshes authoritative REST state. A reconnect opens
+a fresh SSE subscription and triggers an authoritative REST refresh; local event
+IDs are retained only for invalidation deduplication and audit, not cursor
+replay. It deliberately rejects `TASK_JOIN_AVAILABLE`, which is intended for
+slingers.
 
 Firebase is enabled only when
 `driver-app/app/google-services.json` is supplied outside source control. The
@@ -176,6 +208,15 @@ JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew \
   :app:testDebugUnitTest
 JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew :app:assembleDebug
 ```
+
+All release artifact tasks require a readable external
+`-PsigningPropertiesFile` with `storeFile`, `storePassword`, `keyAlias`, and
+`keyPassword`, plus the referenced readable keystore. The file follows
+[`signing.properties.example`](signing.properties.example) and remains outside
+Git. `driver-download-site/release-trust-policy.json` currently permits only
+the pinned `INTERNAL_TEST` debug signer; its empty production allowlist blocks
+a production publication until a reviewed production certificate is
+provisioned.
 
 Without `google-services.json`, the APK still builds and uses SSE/polling, but
 an end-to-end FCM delivery test is unavailable. End-to-end gateway validation

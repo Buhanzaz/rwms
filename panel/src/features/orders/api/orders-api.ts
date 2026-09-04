@@ -26,6 +26,10 @@ import {
 import type { CreateClientInput } from "@/features/clients/domain/clients"
 import type { AdditionalContact } from "@/features/clients/domain/clients"
 import {
+  CUSTOMER_DELIVERY_PURPOSES,
+  type CustomerDeliveryPurpose,
+} from "@/features/logistics/customer-delivery-purpose"
+import {
   RENTAL_ITEM_STATUS_LABEL,
   type RentalItemStatus,
 } from "@/features/rental-items/model/rental-item"
@@ -201,6 +205,10 @@ function parseOrderSummaryRecord(source: JsonRecord): OrderSummary {
     version: nonNegativeInteger(source.version),
     number: text(source.number),
     status: enumValue<OrderStatus>(source.status, ORDER_STATUSES),
+    customerDeliveryPurpose: enumValue<"RENTAL_DELIVERY">(
+      source.customerDeliveryPurpose,
+      ["RENTAL_DELIVERY"]
+    ),
     client: parseClient(source.client),
     managerId: uuid(source.managerId),
     managerDisplayName: text(source.managerDisplayName),
@@ -226,9 +234,28 @@ function parseOrderSummaryRecord(source: JsonRecord): OrderSummary {
 
 function parseOrderMovement(value: unknown): OrderMovement {
   const source = record(value)
+  const documentType = enumValue<OrderMovement["documentType"]>(
+    source.documentType,
+    ["SHIPMENT", "RETURN"]
+  )
+  const customerDeliveryPurpose =
+    source.customerDeliveryPurpose === null
+      ? null
+      : enumValue<CustomerDeliveryPurpose>(
+          source.customerDeliveryPurpose,
+          CUSTOMER_DELIVERY_PURPOSES
+        )
+  if (
+    (documentType === "SHIPMENT" && customerDeliveryPurpose === null) ||
+    (documentType === "RETURN" && customerDeliveryPurpose !== null)
+  ) {
+    invalidResponse()
+  }
+
   return {
     documentId: uuid(source.documentId),
-    documentType: enumValue(source.documentType, ["SHIPMENT", "RETURN"]),
+    documentType,
+    customerDeliveryPurpose,
     state: text(source.state),
     scheduledDate:
       source.scheduledDate === null ? null : date(source.scheduledDate),

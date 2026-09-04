@@ -8,6 +8,8 @@ import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskServic
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
 import jakarta.validation.Valid;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
@@ -40,9 +42,9 @@ public class EquipmentMovementTaskController {
       @AuthenticationPrincipal Jwt jwt,
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody CreateEquipmentMovementTaskRequest request) {
-    access.requireEdit(jwt, request.warehouseId());
+    requireEdit(jwt, request.warehouseId());
     if (request.targetWarehouseId() != null) {
-      access.requireEdit(jwt, request.targetWarehouseId());
+      requireEdit(jwt, request.targetWarehouseId());
     }
     UUID subjectId = access.subjectId(jwt);
     var admission =
@@ -61,7 +63,7 @@ public class EquipmentMovementTaskController {
   public EquipmentMovementTaskResponse get(
       @AuthenticationPrincipal Jwt jwt, @PathVariable UUID taskId) {
     EquipmentMovementTaskResponse response = service.get(taskId);
-    access.requireRead(jwt, response.warehouseId());
+    requireRead(jwt, response);
     return response;
   }
 
@@ -72,12 +74,46 @@ public class EquipmentMovementTaskController {
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody CancelEquipmentMovementTaskRequest request) {
     EquipmentMovementTaskResponse current = service.get(taskId);
-    access.requireEdit(jwt, current.warehouseId());
+    requireEdit(jwt, current);
     EquipmentMovementTaskService.MutationResult result =
         service.cancel(access.subjectId(jwt), taskId, idempotencyKey, request);
     processor.processUntilIdle(taskId);
     EquipmentMovementTaskResponse response = service.get(taskId);
     return response(response, HttpStatus.ACCEPTED, result.replayed());
+  }
+
+  private void requireRead(Jwt jwt, EquipmentMovementTaskResponse task) {
+    requireTaskWarehouses(jwt, task, false);
+  }
+
+  private void requireEdit(Jwt jwt, EquipmentMovementTaskResponse task) {
+    requireTaskWarehouses(jwt, task, true);
+  }
+
+  private void requireTaskWarehouses(
+      Jwt jwt, EquipmentMovementTaskResponse task, boolean edit) {
+    Set<UUID> warehouseIds = new LinkedHashSet<>();
+    warehouseIds.add(task.warehouseId());
+    task.lines()
+        .forEach(
+            line -> {
+              warehouseIds.add(line.sourceWarehouseId());
+              warehouseIds.add(line.targetWarehouseId());
+            });
+    warehouseIds.remove(null);
+    warehouseIds.forEach(
+        warehouseId -> {
+          if (edit) requireEdit(jwt, warehouseId);
+          else requireRead(jwt, warehouseId);
+        });
+  }
+
+  private void requireRead(Jwt jwt, UUID warehouseId) {
+    access.requireRead(jwt, warehouseId);
+  }
+
+  private void requireEdit(Jwt jwt, UUID warehouseId) {
+    access.requireEdit(jwt, warehouseId);
   }
 
   private static ResponseEntity<EquipmentMovementTaskResponse> response(

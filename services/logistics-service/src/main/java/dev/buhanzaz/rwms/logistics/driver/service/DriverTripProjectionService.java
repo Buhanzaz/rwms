@@ -27,6 +27,9 @@ import dev.buhanzaz.rwms.logistics.repository.ShipmentFurnitureMovementTaskRepos
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.ShipmentFurnitureTaskService;
 import java.util.ArrayList;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -238,7 +241,7 @@ public class DriverTripProjectionService {
               movementCompleted,
               contentReady));
     }
-    return response(task, document, order, cabins);
+    return response(task, document, order, cabins, provisionalEta(task));
   }
 
   private DriverTripDetailsResponse details(DriverLogisticsTask task) {
@@ -343,14 +346,15 @@ public class DriverTripProjectionService {
               contentReady));
     }
 
-    return response(task, document, order, cabins);
+    return response(task, document, order, cabins, provisionalEta(task));
   }
 
   private static DriverTripDetailsResponse response(
       DriverLogisticsTask task,
       LogisticsDocument document,
       RentalOrder order,
-      List<DriverTripCabinResponse> cabins) {
+      List<DriverTripCabinResponse> cabins,
+      ProvisionalEta preview) {
     List<AdditionalContactResponse> additionalContacts = new ArrayList<>();
     order
         .getClient()
@@ -375,7 +379,9 @@ public class DriverTripProjectionService {
         task.getId().toString(),
         task.getTripNumber(),
         task.getKind().name(),
+        document.getCustomerDeliveryPurpose(),
         order.getClient().getDisplayName(),
+        order.getClient().getClientType(),
         order.getDeliveryAddress(),
         order.getLatitude(),
         order.getLongitude(),
@@ -390,8 +396,33 @@ public class DriverTripProjectionService {
                         window.getStartDate(), window.getEndDate()))
             .toList(),
         document.getScheduledDate(),
+        preview == null ? null : preview.eta(),
+        preview != null,
+        preview == null ? null : preview.sourcePlanId(),
+        preview == null ? null : preview.sourcePlanVersion(),
         List.copyOf(cabins));
   }
+
+  private ProvisionalEta provisionalEta(DriverLogisticsTask task) {
+    if (task.getProvisionalEta() == null
+        || task.getDriverAudienceMode()
+            != dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskAudienceMode.WAREHOUSE_DRIVERS
+        || task.getScheduledDate() == null) {
+      return null;
+    }
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    String timeZone = dependencies.warehouseTimeZoneAt(task.getWarehouseId(), now).timeZone();
+    if (!task.getScheduledDate().isAfter(now.toInstant().atZone(ZoneId.of(timeZone)).toLocalDate())) {
+      return null;
+    }
+    return new ProvisionalEta(
+        task.getProvisionalEta(),
+        task.getProvisionalEtaSourcePlanId(),
+        task.getProvisionalEtaSourcePlanVersion());
+  }
+
+  /** Versioned approximate preview facts that remain valid only for shared future work. */
+  private record ProvisionalEta(OffsetDateTime eta, UUID sourcePlanId, Long sourcePlanVersion) {}
 
   private static List<DriverTripActualEquipmentResponse> actualContents(
       LogisticsDependencyGateway.OrderUnitReservation unit) {

@@ -24,6 +24,9 @@ import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderEquipmentRequirement;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderEquipmentRequirementRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
+import dev.buhanzaz.rwms.logistics.order.domain.recovery.RentalOrderMutationCommand.State;
+import dev.buhanzaz.rwms.logistics.order.recovery.RentalOrderMutationCommandRepository;
+import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.repository.ShipmentFurnitureMovementTaskRepository;
@@ -42,6 +45,7 @@ import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.http.HttpStatus;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -58,6 +62,7 @@ public class ShipmentFurnitureTaskService {
   private final LogisticsDocumentRepository documents;
   private final LogisticsDocumentLineRepository documentLines;
   private final RentalOrderRepository orders;
+  private final RentalOrderMutationCommandRepository orderMutationCommands;
   private final RentalOrderEquipmentRequirementRepository requirements;
   private final ShipmentFurnitureMovementTaskRepository taskLinks;
   private final LogisticsDependencyGateway dependencies;
@@ -78,7 +83,9 @@ public class ShipmentFurnitureTaskService {
 
   /**
    * Atomically persists every pair checkpoint and existing movement task before one asset batch
-   * call. A crash can therefore expose either the whole recoverable batch or no batch at all.
+   * call. A crash can therefore expose either the whole recoverable batch or no batch at all. The
+   * locked order cannot acquire a competing checkpoint while a durable cancel/remove command is
+   * pending or quarantined.
    */
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public List<ShipmentFurnitureMovementTask> checkpointReplacements(
@@ -94,6 +101,13 @@ public class ShipmentFurnitureTaskService {
         orders
             .findForUpdate(first.orderId())
             .orElseThrow(() -> new LogisticsConflictException("Заказ замены не найден"));
+    if (orderMutationCommands.existsByOrder_IdAndStateIn(
+        first.orderId(), Set.of(State.PENDING, State.QUARANTINED))) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "ORDER_MUTATION_PENDING",
+          "Операция заказа ещё восстанавливается");
+    }
     List<ShipmentFurnitureMovementTask> replay =
         taskLinks.findAllByOrder_IdAndReplacementBatchIdempotencyKeyOrderByReplacementPairIndexAsc(
             first.orderId(), first.batchIdempotencyKey());

@@ -84,6 +84,7 @@ class GatewayFailureIntegrationTest {
     registry.add("rwms.gateway.routes.media-uri", GatewayFailureIntegrationTest::slowOrigin);
     registry.add("rwms.gateway.routes.inventory-uri", () -> "http://127.0.0.1:9");
     registry.add("rwms.gateway.routes.logistics-uri", () -> "http://127.0.0.1:9");
+    registry.add("rwms.gateway.routes.logistics-planner-uri", () -> "http://127.0.0.1:9");
     registry.add("rwms.gateway.routes.dossier-uri", () -> "http://127.0.0.1:9");
     registry.add("rwms.gateway.routes.analytics-uri", () -> "http://127.0.0.1:9");
     registry.add("rwms.gateway.routes.assistant-uri", GatewayFailureIntegrationTest::slowOrigin);

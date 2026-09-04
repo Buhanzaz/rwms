@@ -25,29 +25,40 @@
 Сервис не владеет кабинами, inventory sessions, repairs, tasks, logistics
 documents, пользователями, warehouse grants или client-side выбором склада.
 
-## Представительские склады и граф обслуживания
+## Классификация складов и граф обслуживания
 
-Представительский склад остаётся тем же aggregate `Warehouse` с независимым признаком
-`representative`. По умолчанию признак равен `false` и не означает lifecycle-состояние, отсутствие
-персонала, ограничение направления остатков или запрет обычной доставки. WGS84-поля `latitude` и
-`longitude` принадлежат метаданным склада и задаются только парой; `address` может отсутствовать,
-если координаты заполнены. Склад без координат остаётся валидным в directory, но его logistics-
-projection помечает его как неготовый к маршрутизации, поэтому новый workspace карты для него не
-материализуется.
+Каждый склад имеет независимые классификации `production` и `mainWarehouse`; обычный объект
+может иметь одну или обе. Представительский склад не имеет этих классификаций и обязан иметь
+ровно один `representativeParentWarehouseId`, указывающий на производственный или основной
+объект той же компании. Устаревшие поля `warehouseType`, `productionWarehouseId` и
+`representative` остаются compatibility-проекциями; они не задают lifecycle-состояние,
+персонал, направление остатков или возможность доставки. WGS84-поля
+`latitude` и `longitude` принадлежат метаданным склада и задаются только парой; `address` может отсутствовать,
+если координаты заполнены. Точная пара `0,0` зарезервирована как placeholder незаданной точки и
+отклоняется при создании, полной замене и persistence normalization; точка на одной нулевой оси
+остаётся допустимой, если вторая координата ненулевая. Склад без операционных координат остаётся
+валидным в directory, но его logistics-projection помечает его как неготовый к маршрутизации,
+поэтому новый workspace карты для него не материализуется. Существующие placeholder-строки
+автоматически не переписываются: downstream logistics boundaries считают их немаршрутизируемыми,
+пока оператор не задаст реальную точку.
 
-Owner также хранит направленный many-to-many граф обслуживания. Одна активная связь означает, что
+Организационная связь представительского объекта с родителем не зависит от направленного
+many-to-many графа обслуживания.
+Одна активная support-связь означает, что
 опорный склад может предоставлять выбранные возможности одному обслуживаемому представительскому
 складу. Policy независимо разрешает водителей, автомобили, имущество, прямое исполнение,
 межскладские перемещения и fallback на подрядчика, а также задаёт приоритет, дни недели,
 разрешённые даты, исключения и необязательный дневной интервал. Связи склада с самим собой и
 дубликаты опорного склада запрещены. Полная коллекция заменяется атомарно под aggregate-version
-fence обслуживаемого склада; снять представительский признак при существующих связях нельзя.
+fence обслуживаемого склада; убрать родителя у обслуживаемого представительского склада при
+существующих связях нельзя.
 
-Логистика читает тот же UUID склада, owner-held координаты, представительский признак и опорные
-связи через private warehouse boundary. Отфильтрованный по дате read обслуживает один
+Логистика читает тот же UUID склада, owner-held координаты, классификацию и support-связи через
+private warehouse boundary. Отфильтрованный по дате read обслуживает один
 представительский склад в переданный момент; adjacent-network read возвращает все активные
 входящие и исходящие связи, чтобы самостоятельный планировщик мог определить одну нетранзитивную
-группу основного склада без выдуманного parent-поля. Она не создаёт вторую identity склада или
+группу основного склада по операционной поддержке независимо от его организационного производства.
+Она не создаёт вторую identity склада или
 точки карты. Самостоятельный планировщик сверяет directory по UUID и версии склада; изменение
 версии или координат инвалидирует изменяемые планы маршрутов до использования новой точки. См.
 [`Warehouse`](src/main/java/dev/buhanzaz/rwms/warehouse/domain/Warehouse.java),
@@ -95,7 +106,7 @@ owner сохраняет pending, ambiguous, quarantined и non-terminal work к
 
 | Граница | Audience | Назначение |
 | --- | --- | --- |
-| `/api/warehouse/v1/warehouses/**` | Authenticated `USER`; writes требуют exact administrator policy | Global directory, create/replace, draining, inactivation и timezone scheduling |
+| `/api/warehouse/v1/warehouses/**` | Authenticated `USER`; writes требуют exact administrator policy | Directory компании, create/replace, draining, inactivation и timezone scheduling |
 | `/api/warehouse/v1/warehouses/{id}/support-links` | Authenticated warehouse manager с grants для всех endpoints | Чтение или атомарная замена полного графа обслуживания представительского склада |
 | `/api/warehouse/v1/admin/outbox-events/**` | Reviewed administrator recovery | Повтор одного immutable terminal/quarantined outbox fact под review fence |
 | `/api/internal/warehouse/v1/warehouses/{id}/existence` | Exact auth-service credential/scope | Узкая existence-проверка warehouse grants |
@@ -111,8 +122,8 @@ owner сохраняет pending, ambiguous, quarantined и non-terminal work к
 | `/api/internal/warehouse/v1/warehouses/{id}/time-zone` | Least-privilege service credential | Timezone на immutable instant |
 | `/api/internal/warehouse/v1/warehouses/{id}/operation-marks` | Contract-defined owner | Идемпотентное доказательство первой операции |
 
-Public directory намеренно является глобальным authenticated read. Warehouse
-grants его не фильтруют; write- и domain access checks остаются отдельными.
+Public directory ограничен компанией из подписанной identity. Warehouse grants дополнительно не
+фильтруют directory этой компании; write- и domain access checks остаются отдельными.
 
 Responses logistics identity и directory всегда содержат принадлежащее
 warehouse-service поле `address`; оно nullable для складов, адрес которых ещё
@@ -139,9 +150,9 @@ client ID `task-board-service` ровно со scope `warehouse.identity.read` �
 - Inactive warehouse остаётся доступным для исторических references.
 - Lifecycle readiness привязан к точной warehouse version, поэтому позднее
   подтверждение не может деактивировать более новое состояние.
-- Изменение координат, представительского признака и коллекции связей увеличивает ту же aggregate
-  version; замена связей дополнительно увеличивает принадлежащую складу revision и не может
-  конкурировать с lifecycle-изменениями endpoints.
+- Изменение координат, классификации, representative-parent и коллекции связей увеличивает ту же
+  aggregate version; замена связей дополнительно увеличивает принадлежащую складу revision и не
+  может конкурировать с lifecycle-изменениями endpoints.
 
 ## Persistence и события
 
@@ -152,8 +163,14 @@ client ID `task-board-service` ровно со scope `warehouse.identity.read` �
 
 V7 добавляет обратносуместимый non-null столбец `representative=false`. V8 добавляет пару координат,
 warehouse-owned support revision, направленные строки связей и их weekday/date value tables с
-ограничениями уникальности и направления. Отдельной таблицы представительского склада и
-`parentWarehouseId` нет.
+ограничениями уникальности и направления. V9 добавляет принадлежность компании и
+compatibility-проекции `warehouse_type`/`production_warehouse_id`: существующий
+представительский склад сохраняет классификацию только при однозначно выводимом из прежних
+support-связей допустимом родителе; иначе миграция завершается с явной ошибкой. V10 добавляет
+независимые флаги `production`/`main_warehouse`: существующие обычные склады становятся
+основными объектами, а представительский склад не имеет ни одного флага. Согласованность
+классификации и родителя защищают database constraints и owner validation. Representative-parent
+не заменяет независимый support graph.
 
 Aggregate transition, append-only domain history и outbox envelope фиксируются
 локально. Kafka relay забирает упорядоченную запись с lease, проверяет immutable
@@ -174,6 +191,10 @@ checksum и schema валидны, прежде чем тот же relay пов�
 ## Безопасность и изоляция
 
 - Сервис является JWT resource server и валидирует issuer и audience.
+- Список складов компании принимает обычный `warehouse.read`, exact `admin.manage` администратора
+  компании либо точный credential менеджера аренды с `rentalAccess=true` и только
+  `rental.manage`. Этот manager credential не может читать склад напрямую по UUID, включать
+  неактивные склады, изменять данные, использовать support-links или private routes.
 - Public writes требуют exact user, scope и global administrator rules из
   `WarehouseAuthorizer`.
 - Private routes требуют `SERVICE` principal, allow-listed `client_id` и exact

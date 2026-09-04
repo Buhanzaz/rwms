@@ -122,6 +122,7 @@ const order: OrderDetail = {
   version: 1,
   number: "З-001",
   status: "DRAFT",
+  customerDeliveryPurpose: "RENTAL_DELIVERY",
   client: {
     id: CLIENT_ID,
     version: 1,

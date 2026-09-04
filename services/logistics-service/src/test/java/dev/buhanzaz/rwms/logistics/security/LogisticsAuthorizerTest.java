@@ -34,6 +34,21 @@ class LogisticsAuthorizerTest {
   }
 
   @Test
+  void isolatedAdministrationApplicationAllowsGlobalAdministratorsWithoutRwmsScopes() {
+    Jwt administrator = administrationJwt("SYSTEM_ADMIN");
+
+    assertThatCode(() -> authorizer.requireRead(administrator, WAREHOUSE))
+        .doesNotThrowAnyException();
+    assertThatCode(() -> authorizer.requireManage(administrator, WAREHOUSE))
+        .doesNotThrowAnyException();
+    assertThatCode(() -> authorizer.requireWarehouseOperationRecoveryAdministrator(administrator))
+        .doesNotThrowAnyException();
+    assertThatThrownBy(() -> authorizer.requireRead(administrationJwt("WAREHOUSE_MANAGER"), WAREHOUSE))
+        .isInstanceOf(AccessDeniedException.class)
+        .hasMessageContaining("Required USER scope");
+  }
+
+  @Test
   void transferManagementRequiresManageAtBothWarehouses() {
     Jwt jwt =
         userJwt(
@@ -270,6 +285,19 @@ class LogisticsAuthorizerTest {
             .claim("warehouse_access", warehouseAccess);
     if (globalRole != null) builder.claim("global_role", globalRole);
     return builder.build();
+  }
+
+  private static Jwt administrationJwt(String globalRole) {
+    return Jwt.withTokenValue("token")
+        .header("alg", "none")
+        .subject(SUBJECT.toString())
+        .issuedAt(Instant.now())
+        .expiresAt(Instant.now().plusSeconds(60))
+        .claim("principal_type", "USER")
+        .claim("client_id", "rwms-admin-web")
+        .claim("global_role", globalRole)
+        .claim("scope", "openid profile offline_access admin.manage")
+        .build();
   }
 
   private static Jwt serviceJwt(

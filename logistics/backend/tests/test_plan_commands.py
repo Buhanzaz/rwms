@@ -13,7 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.errors import ApiError
 from app.models import LogisticsRequest, ManualChangeAudit, RoutePlan, UnassignedTask
 from app.models.domain import PlanStatus
-from app.schemas.domain import GeneratePlanRequest, ManualChangeRequest, RequestPlanningDetailsInput
+from app.schemas.domain import (
+    GeneratePlanRequest,
+    ManualChangeCommand,
+    RequestPlanningDetailsInput,
+)
 from app.services import catalog, plans
 from app.services.auto_planning import generate_missing_draft_plans
 from app.services.planner_runtime import RuntimePlannerFacade
@@ -26,6 +30,7 @@ from tests.factories import (
 )
 
 pytestmark = pytest.mark.integration
+TEST_ACTOR = "test-logistics-user"
 
 
 async def _unassigned_plan(
@@ -198,6 +203,8 @@ async def test_mandatory_unassigned_task_prevents_plan_confirmation(
             plan.id,
             plan.version,
             accept_warnings=True,
+            empty_positioning_reason=None,
+            confirmed_by=TEST_ACTOR,
         )
 
     assert rejected.value.status_code == 409
@@ -226,6 +233,8 @@ async def test_pending_request_refresh_prevents_stale_plan_confirmation(
             plan.id,
             plan.version,
             accept_warnings=True,
+            empty_positioning_reason=None,
+            confirmed_by=TEST_ACTOR,
         )
 
     assert rejected.value.code == "PLAN_REFRESH_REQUIRED"
@@ -250,6 +259,8 @@ async def test_empty_support_positioning_requires_reason_and_audits_once(
             plan.id,
             plan.version,
             accept_warnings=True,
+            empty_positioning_reason=None,
+            confirmed_by=TEST_ACTOR,
         )
     assert rejected.value.code == "EMPTY_POSITIONING_REASON_REQUIRED"
 
@@ -259,13 +270,15 @@ async def test_empty_support_positioning_requires_reason_and_audits_once(
         plan.version,
         accept_warnings=True,
         empty_positioning_reason="Нет подходящего попутного груза",
-        confirmed_by="logistics-user",
+        confirmed_by=TEST_ACTOR,
     )
     repeated = await plans.confirm_plan(
         db_session,
         confirmed.id,
         confirmed.version,
         accept_warnings=True,
+        empty_positioning_reason=None,
+        confirmed_by=TEST_ACTOR,
     )
 
     audits = list(
@@ -283,7 +296,7 @@ async def test_empty_support_positioning_requires_reason_and_audits_once(
         "Нет подходящего попутного груза"
     )
     assert [(audit.changed_by, audit.reason) for audit in audits] == [
-        ("logistics-user", "Нет подходящего попутного груза")
+        (TEST_ACTOR, "Нет подходящего попутного груза")
     ]
 
 
@@ -305,7 +318,7 @@ async def test_manual_phase_order_and_metadata_refresh_preserve_operator_order(
     await planner.apply_manual_change(
         db_session,
         plan.id,
-        ManualChangeRequest(
+        ManualChangeCommand(
             expected_version=plan.version,
             change_type="REORDER_TASK",
             payload={
@@ -315,6 +328,7 @@ async def test_manual_phase_order_and_metadata_refresh_preserve_operator_order(
                 "target_sequence": 2,
             },
             reason="Забрать бытовку по пути",
+            changed_by=TEST_ACTOR,
         ),
     )
     manually_ordered = await plans.get_plan(db_session, plan.id)
@@ -340,6 +354,7 @@ async def test_manual_phase_order_and_metadata_refresh_preserve_operator_order(
         db_session,
         request.id,
         RequestPlanningDetailsInput(
+            expected_version=request.version,
             date=plan.date,
             window_start=time(9, 30),
             window_end=time(15),
@@ -381,6 +396,8 @@ async def test_manual_phase_order_and_metadata_refresh_preserve_operator_order(
         refreshed.id,
         refreshed.version,
         accept_warnings=True,
+        empty_positioning_reason=None,
+        confirmed_by=TEST_ACTOR,
     )
     assert confirmed.status == PlanStatus.CONFIRMED
 
@@ -407,7 +424,7 @@ async def test_manual_move_clamps_delivery_and_pickup_to_their_route_phases(
     delivery_changed = await planner.apply_manual_change(
         db_session,
         plan.id,
-        ManualChangeRequest(
+        ManualChangeCommand(
             expected_version=plan.version,
             change_type="MOVE_TASK",
             payload={
@@ -417,6 +434,7 @@ async def test_manual_move_clamps_delivery_and_pickup_to_their_route_phases(
                 "target_sequence": len(customer_stops) + 1,
             },
             reason="Перемещение доставки в конец на карте",
+            changed_by=TEST_ACTOR,
         ),
     )
     after_delivery = await plans.get_plan(db_session, delivery_changed.id)
@@ -431,7 +449,7 @@ async def test_manual_move_clamps_delivery_and_pickup_to_their_route_phases(
     pickup_changed = await planner.apply_manual_change(
         db_session,
         plan.id,
-        ManualChangeRequest(
+        ManualChangeCommand(
             expected_version=after_delivery.version,
             change_type="MOVE_TASK",
             payload={
@@ -441,6 +459,7 @@ async def test_manual_move_clamps_delivery_and_pickup_to_their_route_phases(
                 "target_sequence": 1,
             },
             reason="Перемещение вывоза в начало на карте",
+            changed_by=TEST_ACTOR,
         ),
     )
     after_pickup = await plans.get_plan(db_session, pickup_changed.id)
@@ -483,7 +502,7 @@ async def test_manual_move_still_rejects_actual_delivery_overcapacity(
         await planner.apply_manual_change(
             db_session,
             plan.id,
-            ManualChangeRequest(
+            ManualChangeCommand(
                 expected_version=plan.version,
                 change_type="MOVE_TASK",
                 payload={
@@ -493,6 +512,7 @@ async def test_manual_move_still_rejects_actual_delivery_overcapacity(
                     "target_sequence": 3,
                 },
                 reason="Проверка реальной перегрузки",
+                changed_by=TEST_ACTOR,
             ),
         )
 
@@ -534,7 +554,7 @@ async def test_manual_reorder_reschedules_following_locked_cycle_after_duration_
     changed = await planner.apply_manual_change(
         db_session,
         plan.id,
-        ManualChangeRequest(
+        ManualChangeCommand(
             expected_version=plan.version,
             change_type="REORDER_TASK",
             payload={
@@ -544,6 +564,7 @@ async def test_manual_reorder_reschedules_following_locked_cycle_after_duration_
                 "target_sequence": 1,
             },
             reason="Уточнена длительность обслуживания",
+            changed_by=TEST_ACTOR,
         ),
     )
     refreshed = await plans.get_plan(db_session, changed.id)
@@ -574,6 +595,86 @@ async def test_manual_reorder_reschedules_following_locked_cycle_after_duration_
     )
     assert validated.status == PlanStatus.VALIDATED
     assert validated.validation_errors == []
+
+
+@pytest.mark.asyncio
+async def test_non_persistent_delay_returns_shifted_preview_without_mutating_plan(
+    db_session: AsyncSession,
+) -> None:
+    """Return the validated shifted schedule while the saved revision stays byte-for-byte timed."""
+
+    planner, plan, _ = await _two_cycle_generated_plan(db_session)
+    source_cycle = min(plan.cycles, key=lambda item: item.sequence)
+    plan_id = plan.id
+    original_start = source_cycle.planned_start
+    original_version = plan.version
+
+    preview = await planner.apply_simulation_delay(
+        db_session,
+        plan_id,
+        ManualChangeCommand(
+            expected_version=plan.version,
+            change_type="SIMULATION_DELAY",
+            payload={
+                "driver_shift_id": str(source_cycle.driver_shift_id),
+                "effective_at": original_start.isoformat(),
+                "delay_minutes": 30,
+                "persist": False,
+            },
+            reason="Проверка опоздания",
+            changed_by=TEST_ACTOR,
+        ),
+    )
+
+    preview_cycle = min(preview.cycles, key=lambda item: item.sequence)
+    assert preview_cycle.planned_start == original_start + timedelta(minutes=30)
+    assert preview_cycle.stops[0].planned_arrival == preview_cycle.planned_start
+    assert preview.version == original_version
+
+    db_session.expire_all()
+    persisted = await plans.get_plan(db_session, plan_id)
+    persisted_cycle = min(persisted.cycles, key=lambda item: item.sequence)
+    assert persisted_cycle.planned_start == original_start
+    assert persisted.version == original_version
+
+
+@pytest.mark.asyncio
+async def test_non_persistent_unavailability_returns_warning_without_audit_mutation(
+    db_session: AsyncSession,
+) -> None:
+    """Explain the affected work in preview mode without changing plan warnings or version."""
+
+    planner, plan, _ = await _two_cycle_generated_plan(db_session)
+    source_cycle = min(plan.cycles, key=lambda item: item.sequence)
+    plan_id = plan.id
+    original_warnings = list(plan.validation_warnings)
+    original_version = plan.version
+
+    preview = await planner.apply_simulation_delay(
+        db_session,
+        plan_id,
+        ManualChangeCommand(
+            expected_version=plan.version,
+            change_type="DRIVER_UNAVAILABLE",
+            payload={
+                "driver_shift_id": str(source_cycle.driver_shift_id),
+                "effective_at": source_cycle.planned_start.isoformat(),
+                "persist": False,
+            },
+            reason="Проверка отсутствия водителя",
+            changed_by=TEST_ACTOR,
+        ),
+    )
+
+    warning = preview.validation_warnings[-1]
+    assert warning["code"] == "DRIVER_UNAVAILABLE"
+    assert warning["affected_task_ids"]
+    assert preview.version == original_version
+
+    db_session.expire_all()
+    persisted = await plans.get_plan(db_session, plan_id)
+    assert persisted.validation_warnings == original_warnings
+    assert persisted.version == original_version
 
 
 @pytest.mark.asyncio
@@ -613,36 +714,46 @@ async def test_manual_reset_archives_source_and_is_retry_safe(
         mandatory=False,
         manually_changed=True,
     )
-    replacement = RoutePlan(
-        warehouse_id=source.warehouse_id,
-        date=source.date,
-        name="Automatic replacement",
-        version=1,
-        status=PlanStatus.GENERATED,
-        score=1,
-        metrics={},
-        validation_errors=[],
-        validation_warnings=[],
-        manually_changed=False,
-    )
-    db_session.add(replacement)
-    await db_session.flush()
     planner = RuntimePlannerFacade()
     planner._load_snapshot = AsyncMock(return_value=object())  # type: ignore[method-assign]
+
+    async def replace_head(*args: object, **kwargs: object) -> object:
+        """Model the atomic head swap while generation itself is mocked."""
+
+        assert kwargs["supersedes_plan_id"] == source.id
+        source.status = PlanStatus.ARCHIVED
+        source.version += 1
+        replacement = RoutePlan(
+            warehouse_id=source.warehouse_id,
+            supersedes_plan_id=source.id,
+            date=source.date,
+            name="Automatic replacement",
+            version=1,
+            status=PlanStatus.GENERATED,
+            score=1,
+            metrics={},
+            validation_errors=[],
+            validation_warnings=[],
+            manually_changed=False,
+        )
+        db_session.add(replacement)
+        await db_session.flush()
+        return SimpleNamespace(plan_id=replacement.id, error_message=None)
+
     planner._execute_generation = AsyncMock(  # type: ignore[method-assign]
-        return_value=SimpleNamespace(plan_id=replacement.id, error_message=None)
+        side_effect=replace_head
     )
 
     first = await planner.reset_manual_changes(db_session, source.id, source.version)
     retried = await planner.reset_manual_changes(db_session, source.id, 2)
 
-    assert first.id == replacement.id
-    assert retried.id == replacement.id
+    assert first.supersedes_plan_id == source.id
+    assert retried.id == first.id
     assert source.status == PlanStatus.ARCHIVED
     assert source.version == 3
     assert source.metrics["manual_reset"] == {
         "expected_version": 2,
-        "replacement_plan_id": str(replacement.id),
+        "replacement_plan_id": str(first.id),
     }
     planner._load_snapshot.assert_awaited_once()
     planner._execute_generation.assert_awaited_once()

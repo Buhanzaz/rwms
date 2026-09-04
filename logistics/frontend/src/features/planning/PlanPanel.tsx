@@ -12,10 +12,16 @@ import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalList
 import { CSS } from '@dnd-kit/utilities';
 import { Banknote, GripVertical, Lock, LockOpen, TriangleAlert, UserRoundCheck } from 'lucide-react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import type { RouteCycle, RoutePlan, RouteStop, UnassignedTask, UUID } from '../../domain/types';
+import type { LogisticsRequest, RouteCycle, RoutePlan, RouteStop, UnassignedTask, UUID } from '../../domain/types';
 import { Badge, Button, EmptyState } from '../../components/ui';
 import { formatDeliveryPrice, formatDistance, formatDuration, formatTime, shortId } from '../../utils/format';
 import { validationMessageRu } from '../../utils/user-facing-error';
+import {
+  customerDeliveryPurposeFromRequest,
+  customerDeliveryPurposeLabel,
+  customerLegalTypeFromRequest,
+  customerLegalTypeLabel,
+} from '../../utils/customer-presentation';
 
 interface DragData {
   taskId: UUID;
@@ -46,7 +52,7 @@ function stopTypeLabel(stop: RouteStop): string {
   return 'Склад';
 }
 
-function SortableStop({ stop, cycleId, locked, readOnly, timeZone }: { stop: RouteStop; cycleId: UUID; locked: boolean; readOnly: boolean; timeZone: string }) {
+function SortableStop({ stop, request, cycleId, locked, readOnly, timeZone }: { stop: RouteStop; request: LogisticsRequest | null; cycleId: UUID; locked: boolean; readOnly: boolean; timeZone: string }) {
   const draggable = Boolean(stop.task_id) && !locked && !stop.locked && !readOnly;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: stop.task_id ?? stop.id,
@@ -64,14 +70,15 @@ function SortableStop({ stop, cycleId, locked, readOnly, timeZone }: { stop: Rou
     >
       <time>{formatTime(stop.planned_arrival, timeZone)}</time>
       <span className={`stop-row__type stop-row__type--${stop.stop_type.toLowerCase()}`} title={stop.stop_type}>{stopTypeLabel(stop)}</span>
-      <span>{stop.label ?? stop.stop_type}</span>
+      <span>{stop.label ?? stop.stop_type}{stop.task_id ? <> · Тип клиента: <strong>{customerLegalTypeLabel(customerLegalTypeFromRequest(request))}</strong></> : null}</span>
       <span className="stop-row__load">{stop.load_before}→{stop.load_after}</span>
     </div>
   );
 }
 
-function CycleCard({ cycle, timeZone, readOnly, onSelect, onToggleLock }: {
+function CycleCard({ cycle, requestsByTaskId, timeZone, readOnly, onSelect, onToggleLock }: {
   cycle: RouteCycle;
+  requestsByTaskId: ReadonlyMap<UUID, LogisticsRequest>;
   timeZone: string;
   readOnly: boolean;
   onSelect: (id: UUID) => void;
@@ -95,7 +102,7 @@ function CycleCard({ cycle, timeZone, readOnly, onSelect, onToggleLock }: {
       </header>
       <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
         <div className="stop-list">
-          {cycle.stops.map((stop) => <SortableStop key={stop.id} stop={stop} cycleId={cycle.id} locked={cycle.locked} readOnly={readOnly} timeZone={timeZone} />)}
+          {cycle.stops.map((stop) => <SortableStop key={stop.id} stop={stop} request={stop.task_id ? requestsByTaskId.get(stop.task_id) ?? null : null} cycleId={cycle.id} locked={cycle.locked} readOnly={readOnly} timeZone={timeZone} />)}
         </div>
       </SortableContext>
       <div className="load-chain" aria-label={`Цепочка загрузки цикла ${cycle.sequence}`}>
@@ -119,6 +126,7 @@ const DRIVER_UNAVAILABLE_REASONS = new Set([
 
 function DraggableUnassigned({
   item,
+  request,
   readOnly,
   selected,
   onSelect,
@@ -126,6 +134,7 @@ function DraggableUnassigned({
   onAssignContractor,
 }: {
   item: UnassignedTask;
+  request: LogisticsRequest | null;
   readOnly: boolean;
   selected: boolean;
   onSelect: (requestId: UUID) => void;
@@ -137,12 +146,13 @@ function DraggableUnassigned({
     disabled: readOnly,
     data: { taskId: item.task.id, sourceCycleId: null, sourceSequence: 0 } satisfies DragData,
   });
-  const requestId = item.request?.id ?? item.task.request_id;
+  const sourceRequest = item.request ?? request;
+  const requestId = sourceRequest?.id ?? item.task.request_id;
   const staffUnavailable = item.reason_codes.some((code) => DRIVER_UNAVAILABLE_REASONS.has(code));
   const contractorRecommended = staffUnavailable
     || item.reason_codes.includes('NO_ACTIVE_VEHICLE')
     || item.reason_codes.includes('CONTRACTOR_REQUIRED');
-  const handedToContractor = item.request?.assignment_type === 'CONTRACTOR_HANDOFF';
+  const handedToContractor = sourceRequest?.assignment_type === 'CONTRACTOR_HANDOFF';
   const canChangeWindow = item.reason_codes.includes('TIME_WINDOW_CONFLICT') && Boolean(item.closest_option);
   const openRequestEditor = (event: ReactMouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
@@ -157,11 +167,12 @@ function DraggableUnassigned({
       {...attributes}
       {...listeners}
     >
-      <div className="entity-card__row"><strong>№{shortId(item.request?.id ?? item.task.request_id)}</strong><span>{item.task.mandatory ? <Badge tone="danger">обязательно</Badge> : null}{!readOnly ? <GripVertical size={15} /> : null}</span></div>
-      <p>{item.request?.type === 'PICKUP' ? 'Вывоз' : 'Доставка'}, {item.task.quantity} бытов.</p>
-      <p className="unassigned-card__price"><Banknote size={13} aria-hidden="true" />Стоимость: <strong>{formatDeliveryPrice(item.request?.delivery_price_rubles)}</strong></p>
+      <div className="entity-card__row"><strong>№{shortId(sourceRequest?.id ?? item.task.request_id)}</strong><span>{item.task.mandatory ? <Badge tone="danger">обязательно</Badge> : null}{!readOnly ? <GripVertical size={15} /> : null}</span></div>
+      <p>{sourceRequest?.type === 'PICKUP' ? 'Вывоз' : customerDeliveryPurposeLabel(customerDeliveryPurposeFromRequest(sourceRequest))}, {item.task.quantity} бытов.</p>
+      <p>Тип клиента: <strong>{customerLegalTypeLabel(customerLegalTypeFromRequest(sourceRequest))}</strong></p>
+      <p className="unassigned-card__price"><Banknote size={13} aria-hidden="true" />Стоимость: <strong>{formatDeliveryPrice(sourceRequest?.delivery_price_rubles)}</strong></p>
       {handedToContractor ? (
-        <div className="unassigned-card__contractor"><UserRoundCheck size={14} aria-hidden="true" /><span>Передано наёмному водителю: <strong>{item.request?.assigned_contractor_name}</strong></span></div>
+        <div className="unassigned-card__contractor"><UserRoundCheck size={14} aria-hidden="true" /><span>Передано наёмному водителю: <strong>{sourceRequest?.assigned_contractor_name}</strong></span></div>
       ) : staffUnavailable ? (
         <div className="unassigned-card__driver-warning">
           <strong>Нет доступных водителей</strong>
@@ -193,8 +204,9 @@ export interface PlanMove {
   kind: 'MOVE_TASK' | 'REORDER_TASK';
 }
 
-export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, readOnly = false, selectedRequestId = null, onSelectCycle, onSelectDriverRoute, onSelectRequest = () => undefined, onMove, onToggleLock, onCreateTransfer = () => undefined, onRescheduleUnassigned = () => undefined, onAssignContractor = () => undefined }: {
+export function PlanPanel({ plan, requests = [], timeZone, showUnassignedOnly = false, readOnly = false, selectedRequestId = null, onSelectCycle, onSelectDriverRoute, onSelectRequest = () => undefined, onMove, onToggleLock, onCreateTransfer = () => undefined, onRescheduleUnassigned = () => undefined, onAssignContractor = () => undefined }: {
   plan: RoutePlan | null;
+  requests?: readonly LogisticsRequest[];
   timeZone: string;
   showUnassignedOnly?: boolean;
   readOnly?: boolean;
@@ -213,6 +225,8 @@ export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, readOnly
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
   if (!plan) return <EmptyState title="Автоплан пока не готов" description="Заполните для доставок и вывозов время, количество и проезд с прицепом. После этого рейсы появятся автоматически." />;
+  const requestsByTaskId = new Map<UUID, LogisticsRequest>();
+  requests.forEach((request) => request.tasks?.forEach((task) => requestsByTaskId.set(task.id, request)));
   const onDragEnd = (event: DragEndEvent) => {
     if (readOnly) return;
     if (!isDragData(event.active.data.current) || !event.over) return;
@@ -246,9 +260,11 @@ export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, readOnly
           <SortableContext items={plan.unassigned.map((item) => `unassigned-${item.task.id}`)} strategy={verticalListSortingStrategy}>
             <div className="entity-list">
               {plan.unassigned.map((item) => {
-                const requestId = item.request?.id ?? item.task.request_id;
+                const mappedRequest = requestsByTaskId.get(item.task.id) ?? null;
+                const requestId = item.request?.id ?? mappedRequest?.id ?? item.task.request_id;
                 return <DraggableUnassigned
                   item={item}
+                  request={mappedRequest}
                   readOnly={readOnly}
                   selected={selectedRequestId === requestId}
                   onSelect={onSelectRequest}
@@ -312,7 +328,7 @@ export function PlanPanel({ plan, timeZone, showUnassignedOnly = false, readOnly
                   ) : null}
                 </div>
               ) : null}
-              {route.cycles.map((cycle) => <CycleCard key={cycle.id} cycle={cycle} timeZone={timeZone} readOnly={readOnly} onSelect={onSelectCycle} onToggleLock={onToggleLock} />)}
+              {route.cycles.map((cycle) => <CycleCard key={cycle.id} cycle={cycle} requestsByTaskId={requestsByTaskId} timeZone={timeZone} readOnly={readOnly} onSelect={onSelectCycle} onToggleLock={onToggleLock} />)}
             </section>
           ))}
           {!plan.driver_routes.length ? <EmptyState icon={<TriangleAlert />} title="Нет маршрутов" description="Планировщик не смог создать ни одного допустимого цикла. Проверьте нераспределённые задачи." /> : null}

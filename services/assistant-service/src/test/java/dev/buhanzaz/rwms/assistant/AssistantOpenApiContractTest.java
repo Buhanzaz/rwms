@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.assistant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import dev.buhanzaz.rwms.assistant.api.AssistantApiModels;
 import dev.buhanzaz.rwms.assistant.api.AssistantConversationController;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
@@ -13,6 +14,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -20,10 +22,31 @@ import org.springframework.web.bind.annotation.RequestMethod;
 import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.SafeConstructor;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 /** Strictly parses and verifies the canonical public assistant contract. */
 class AssistantOpenApiContractTest {
   private static final Set<String> OPENAPI_METHODS = Set.of("get", "post", "put", "delete");
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void sseDiscriminatorPayloadOmitsFieldsOwnedByOtherEventVariants() throws Exception {
+    ObjectMapper mapper = JsonMapper.builder().build();
+    UUID conversationId = UUID.randomUUID();
+    AssistantApiModels.TurnEvent event =
+        new AssistantApiModels.TurnEvent(
+            "assistant.delta", conversationId, null, null, "Подбираю бытовки", null, null);
+
+    Map<String, Object> payload =
+        mapper.readValue(mapper.writeValueAsBytes(event), Map.class);
+
+    assertThat(payload)
+        .containsOnlyKeys("event", "conversationId", "delta")
+        .containsEntry("event", "assistant.delta")
+        .containsEntry("conversationId", conversationId.toString())
+        .containsEntry("delta", "Подбираю бытовки");
+  }
 
   @Test
   @SuppressWarnings("unchecked")
@@ -46,6 +69,10 @@ class AssistantOpenApiContractTest {
     Map<String, Object> conversationsPath =
         (Map<String, Object>) paths.get("/api/assistant/v1/conversations");
     Map<String, Object> listOperation = (Map<String, Object>) conversationsPath.get("get");
+    assertThat(listOperation.get("description").toString())
+        .contains("conversation history", "one active conversation");
+    assertThat((Map<String, Object>) listOperation.get("responses"))
+        .containsKeys("200", "401", "403", "502");
     assertThat((List<Map<String, Object>>) listOperation.get("parameters"))
         .singleElement()
         .satisfies(
@@ -59,6 +86,20 @@ class AssistantOpenApiContractTest {
                   .containsEntry("format", "uuid");
             });
     Map<String, Object> components = (Map<String, Object>) document.get("components");
+    Map<String, Object> detailOperation =
+        (Map<String, Object>)
+            ((Map<String, Object>)
+                    paths.get("/api/assistant/v1/conversations/{conversationId}"))
+                .get("get");
+    assertThat((Map<String, Object>) detailOperation.get("responses"))
+        .containsKeys("200", "401", "403", "404", "502");
+    Map<String, Object> turnOperation =
+        (Map<String, Object>)
+            ((Map<String, Object>)
+                    paths.get("/api/assistant/v1/conversations/{conversationId}/turns"))
+                .get("post");
+    assertThat((Map<String, Object>) turnOperation.get("responses"))
+        .containsKeys("200", "400", "401", "403", "404", "409");
     Map<String, Object> schemas = (Map<String, Object>) components.get("schemas");
     Map<String, Object> cabinFacetWarehouse =
         (Map<String, Object>) schemas.get("CabinFacetWarehouse");
@@ -88,6 +129,9 @@ class AssistantOpenApiContractTest {
     String serialized = Files.readString(contract);
     assertThat(serialized)
         .contains(
+            "rwms-rental-manager-web",
+            "rwms-rental-manager-android",
+            "signed manager subject",
             "turn.started",
             "assistant.delta",
             "tool.started",
@@ -123,6 +167,8 @@ class AssistantOpenApiContractTest {
             "CabinSelection",
             "LEGAL_ENTITY",
             "enum: [FREE]");
+    assertThat(serialized)
+        .doesNotContain("name: companyId", "name: company_id", "signed company", "company/owner");
     assertThat(serialized).doesNotContain("request_search_merge_confirmation", "SOLE_PROPRIETOR");
     assertThat(serialized).doesNotContain("ALL_RENTABLE", "NEW_ONLY", "enum: [FREE, NEW]");
     Map<String, Object> cabinSearchToolResult =

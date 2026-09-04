@@ -15,7 +15,6 @@ import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskPlanningMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
-import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
@@ -91,9 +90,6 @@ class DriverQueueRollingReflowTest {
         .thenReturn(List.of(overdue, secondInbound, fixed));
     when(dependencies.readRepairPlaces(warehouseId)).thenReturn(repairPlaces(1, 0, 0, 1, 0));
     when(dependencies.readDriverBoard(warehouseId)).thenReturn(board);
-    when(tasks.existsByWarehouseIdAndStateAndManualPromotionHoldUntilAfter(
-            eq(warehouseId), eq(DriverTaskState.SCHEDULED), any(OffsetDateTime.class)))
-        .thenReturn(false);
     when(dependencies.readDriverTask(overdue.getExternalTaskId())).thenReturn(overdueBoard);
     when(dependencies.readDriverTask(secondInbound.getExternalTaskId())).thenReturn(secondBoard);
     when(dependencies.readDriverTask(fixed.getExternalTaskId())).thenReturn(fixedBoard);
@@ -134,7 +130,7 @@ class DriverQueueRollingReflowTest {
   }
 
   @Test
-  void currentTaskMovedToFutureDateIsNotPulledBackWhileItsRefillHoldIsActive() {
+  void currentTaskMovedToFutureDateKeepsItsFixedDateWithoutDelayGating() {
     LocalDate targetDate = today.plusDays(2);
     DriverLogisticsTask task =
         scheduledTask(
@@ -154,7 +150,6 @@ class DriverQueueRollingReflowTest {
         "ACTIVE",
         null);
     task.markFixedDate(targetDate);
-    task.markManualPromotionHold(5);
     LogisticsDependencyGateway.DriverBoardTask scheduled =
         boardTask(task, targetDate, 0, 2, 2);
     LogisticsDependencyGateway.DriverBoardSnapshot board = board(List.of(), List.of(scheduled));
@@ -162,16 +157,12 @@ class DriverQueueRollingReflowTest {
     when(tasks.findAllByWarehouseIdOrderByCreatedAtAscIdAsc(warehouseId)).thenReturn(List.of(task));
     when(dependencies.readRepairPlaces(warehouseId)).thenReturn(repairPlaces(1, 1, 0, 0, 0));
     when(dependencies.readDriverBoard(warehouseId)).thenReturn(board);
-    when(tasks.existsByWarehouseIdAndStateAndManualPromotionHoldUntilAfter(
-            eq(warehouseId), eq(DriverTaskState.SCHEDULED), any(OffsetDateTime.class)))
-        .thenReturn(true);
     when(dependencies.readDriverTask(task.getExternalTaskId())).thenReturn(scheduled);
 
     scheduler.reconcileAndPromote(warehouseId);
 
     assertThat(task.getPlanningMode()).isEqualTo(DriverTaskPlanningMode.FIXED_DATE);
     assertThat(task.getFixedDateLowerBound()).isEqualTo(targetDate);
-    assertThat(task.isManualPromotionHeldAt(OffsetDateTime.now(ZoneOffset.UTC))).isTrue();
     verify(dependencies, never())
         .moveDriverTask(any(), anyLong(), anyLong(), any(), any(), anyInt());
   }
@@ -194,10 +185,6 @@ class DriverQueueRollingReflowTest {
             today,
             null);
     when(tasks.findById(inbound.getId())).thenReturn(Optional.of(inbound));
-    when(tasks
-            .findAllByWarehouseIdAndStateAndManualPromotionHoldUntilAfterOrderByManualPromotionHoldUntilAscIdAsc(
-                eq(warehouseId), eq(DriverTaskState.SCHEDULED), any(OffsetDateTime.class)))
-        .thenReturn(List.of());
     when(dependencies.readRepairPlaces(warehouseId)).thenReturn(repairPlaces(1, 0, 0, 1, 0));
 
     assertThatThrownBy(() -> scheduler.promoteRequested(inbound.getId()))
@@ -229,10 +216,6 @@ class DriverQueueRollingReflowTest {
     LogisticsDependencyGateway.DriverBoardTask scheduled = boardTask(task, today, 0, 1, 1);
     LogisticsDependencyGateway.DriverBoardTask current = current(scheduled);
     when(tasks.findById(task.getId())).thenReturn(Optional.of(task));
-    when(tasks
-            .findAllByWarehouseIdAndStateAndManualPromotionHoldUntilAfterOrderByManualPromotionHoldUntilAscIdAsc(
-                eq(warehouseId), eq(DriverTaskState.SCHEDULED), any(OffsetDateTime.class)))
-        .thenReturn(List.of());
     when(dependencies.readRepairPlaces(warehouseId)).thenReturn(repairPlaces(1, 0, 0, 1, 0));
     when(dependencies.readDriverBoard(warehouseId)).thenReturn(board(List.of(), List.of(scheduled)));
     when(dependencies.readDriverTask(task.getExternalTaskId())).thenReturn(scheduled);
@@ -351,7 +334,6 @@ class DriverQueueRollingReflowTest {
     return new LogisticsDependencyGateway.RepairPlaceProjection(
         warehouseId,
         capacity,
-        5,
         reserved,
         occupied,
         ready,

@@ -7,9 +7,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import tools.jackson.databind.ObjectMapper;
 
-/**
- * Selects the enabled or disabled asset media-import client from configuration.
- */
+/** Selects enabled or fail-closed asset media clients from one service-credential configuration. */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(MediaAssetImportProperties.class)
 class MediaAssetImportConfiguration {
@@ -29,8 +27,30 @@ class MediaAssetImportConfiguration {
   }
 
   @Bean
+  @ConditionalOnProperty(
+      prefix = "rwms.asset.media-import",
+      name = "enabled",
+      havingValue = "true")
+  MediaCabinCreationSnapshotClient oauthMediaCabinCreationSnapshotClient(
+      MediaAssetImportProperties properties, ObjectMapper mapper) {
+    MediaAssetImportProperties.Validated validated =
+        properties.requireEnabledConfiguration();
+    return new OAuthMediaCabinCreationSnapshotClient(
+        validated,
+        mapper,
+        OAuthMediaCabinCreationSnapshotClient.httpClient(
+            validated.connectTimeout()));
+  }
+
+  @Bean
   @ConditionalOnMissingBean(MediaAssetImportClient.class)
   MediaAssetImportClient disabledMediaAssetImportClient() {
     return new DisabledMediaAssetImportClient();
+  }
+
+  @Bean
+  @ConditionalOnMissingBean(MediaCabinCreationSnapshotClient.class)
+  MediaCabinCreationSnapshotClient disabledMediaCabinCreationSnapshotClient() {
+    return new DisabledMediaCabinCreationSnapshotClient();
   }
 }

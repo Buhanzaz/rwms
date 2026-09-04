@@ -79,7 +79,7 @@ class InventoryJpaValidationIntegrationTest {
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from flyway_schema_history where success", Integer.class))
-        .isEqualTo(27);
+        .isEqualTo(28);
     assertThat(
             jdbc.queryForObject(
                 """
@@ -102,6 +102,18 @@ class InventoryJpaValidationIntegrationTest {
                 """,
                 Integer.class))
         .isEqualTo(2);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from information_schema.columns
+                where table_schema='public'
+                  and table_name='inventory_final_plan'
+                  and column_name in (
+                    'task_board_calendar_from','task_board_calendar_through',
+                    'task_board_calendar_fingerprint','task_board_calendar_snapshot')
+                """,
+                Integer.class))
+        .isEqualTo(4);
     assertThat(entityManagerFactory.getMetamodel().getEntities())
         .extracting(value -> value.getJavaType().getSimpleName())
         .contains(

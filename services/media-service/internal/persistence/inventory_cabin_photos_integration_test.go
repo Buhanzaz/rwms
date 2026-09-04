@@ -321,6 +321,19 @@ func TestAuthoritativeInventoryCabinPhotosV12ToV13BackfillIntegration(t *testing
 		pool.Close()
 		t.Fatalf("record V20 history: %v", err)
 	}
+	started = time.Now()
+	if _, err := pool.Exec(ctx, string(mediamigration.V22)); err != nil {
+		pool.Close()
+		t.Fatalf("apply V22 upgrade: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
+		installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
+	values (23,'22','task board worker profile avatar owner','SQL',
+		'V22__task_board_worker_profile_avatar_owner.sql',$1,current_user,$2,true)`,
+		flywayChecksum(mediamigration.V22), int(time.Since(started)/time.Millisecond)); err != nil {
+		pool.Close()
+		t.Fatalf("record V22 history: %v", err)
+	}
 	pool.Close()
 	if galleryFolderID != folderID || activeFolderID != folderID {
 		t.Fatalf("V13 folder backfill = gallery:%s active:%s, want %s",
@@ -328,7 +341,7 @@ func TestAuthoritativeInventoryCabinPhotosV12ToV13BackfillIntegration(t *testing
 	}
 	verified, err := Open(ctx, databaseURL)
 	if err != nil {
-		t.Fatalf("Open(V20-complete upgrade) error = %v", err)
+		t.Fatalf("Open(V22-complete upgrade) error = %v", err)
 	}
 	verified.Close()
 }

@@ -46,6 +46,9 @@ const warehouse: WarehouseInfo = {
   lifecycleState: "ACTIVE",
   sortOrder: null,
   representative: false,
+  production: true,
+  mainWarehouse: false,
+  representativeParentWarehouseId: null,
 }
 
 const secondWarehouse: WarehouseInfo = {
@@ -221,6 +224,29 @@ describe("WarehouseProvider", () => {
     )
     expect(window.localStorage.getItem("wms:selected-warehouse-id")).toBe(
       warehouse.id
+    )
+  })
+
+  it("keeps the dedicated manager directory filtered by signed warehouse grants", async () => {
+    auth.currentUser = {
+      ...currentUser,
+      globalRole: "RENTAL_MANAGER",
+      rentalAccess: true,
+      warehouseAccesses: [{ warehouseId: secondWarehouse.id, level: "EDIT" }],
+    }
+    listWarehouses.mockResolvedValue([warehouse, secondWarehouse])
+
+    render(
+      <WarehouseProvider>
+        <SelectionProbe />
+      </WarehouseProvider>
+    )
+
+    await waitFor(() =>
+      expect(screen.getByText(secondWarehouse.id)).toBeTruthy()
+    )
+    expect(window.localStorage.getItem("wms:selected-warehouse-id")).toBe(
+      secondWarehouse.id
     )
   })
 

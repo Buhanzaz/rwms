@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './styles.css';
 import { App } from './app/App';
+import { AuthenticatedLogisticsApp } from './auth/AuthenticatedLogisticsApp';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -18,7 +19,9 @@ if (!root) throw new Error('Не найден корневой элемент п
 createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <App />
+      <AuthenticatedLogisticsApp>
+        <App />
+      </AuthenticatedLogisticsApp>
     </QueryClientProvider>
   </StrictMode>,
 );

@@ -1,4 +1,9 @@
-import { ApiError, bearerRequest } from "@/lib/api-client"
+import {
+  apiErrorFromRequestFailure,
+  apiErrorFromResponse,
+  bearerRequest,
+  invalidApiResponseError,
+} from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 import type { AdditionalContact } from "@/features/clients/domain/clients"
 import type { DesiredDeliveryWindow } from "@/features/orders/domain/orders"
@@ -261,18 +266,20 @@ async function publicJson<T>(input: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers)
   headers.set("Accept", "application/json")
   if (init?.body !== undefined) headers.set("Content-Type", "application/json")
-  const response = await fetch(input, { ...init, headers })
-  if (!response.ok) {
-    let detail = `Запрос завершился с ошибкой ${response.status}.`
-    try {
-      const body = (await response.json()) as { detail?: unknown }
-      if (typeof body.detail === "string") detail = body.detail
-    } catch {
-      // The status remains enough to render a safe public error.
-    }
-    throw new ApiError(detail, response.status)
+  let response: Response
+  try {
+    response = await fetch(input, { ...init, headers })
+  } catch (error) {
+    throw apiErrorFromRequestFailure(error)
   }
-  return (await response.json()) as T
+  if (!response.ok) {
+    throw await apiErrorFromResponse(response)
+  }
+  try {
+    return (await response.json()) as T
+  } catch (error) {
+    throw invalidApiResponseError(error)
+  }
 }
 
 async function publicBookingJson(
@@ -282,12 +289,19 @@ async function publicBookingJson(
   const headers = new Headers(init?.headers)
   headers.set("Accept", "application/json")
   if (init?.body !== undefined) headers.set("Content-Type", "application/json")
-  const response = await fetch(input, { ...init, headers })
-  let body: unknown = null
+  let response: Response
+  try {
+    response = await fetch(input, { ...init, headers })
+  } catch (error) {
+    throw apiErrorFromRequestFailure(error)
+  }
+  const errorResponse = response.clone()
+  let body: unknown
   try {
     body = await response.json()
-  } catch {
-    // A safe status-based error is rendered below.
+  } catch (error) {
+    if (!response.ok) throw await apiErrorFromResponse(errorResponse)
+    throw invalidApiResponseError(error)
   }
   if (
     (response.ok || response.status === 409) &&
@@ -300,13 +314,10 @@ async function publicBookingJson(
   ) {
     return body as PresentationBooking
   }
-  const detail =
-    body !== null &&
-    typeof body === "object" &&
-    typeof (body as { detail?: unknown }).detail === "string"
-      ? String((body as { detail: string }).detail)
-      : `Запрос завершился с ошибкой ${response.status}.`
-  throw new ApiError(detail, response.status)
+  if (!response.ok) throw await apiErrorFromResponse(errorResponse)
+  throw invalidApiResponseError(
+    new Error("Public presentation booking response is invalid")
+  )
 }
 
 export function getPublicPresentation(token: string) {

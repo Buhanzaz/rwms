@@ -108,6 +108,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/logistics-actions/{action_id}/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Human Decision
+         * @description Record customer/operator feedback as an immutable solve constraint.
+         */
+        post: operations["post_human_decision_api_logistics_actions__action_id__decisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/optimization-runs/{run_id}": {
         parameters: {
             query?: never;
@@ -488,6 +508,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/recovery-proposals/{proposal_id}/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply Recovery Proposal
+         * @description Apply only a ready, version-fenced proposal through the existing planner.
+         */
+        post: operations["apply_recovery_proposal_api_recovery_proposals__proposal_id__apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/request-date-options/{option_id}": {
         parameters: {
             query?: never;
@@ -600,6 +640,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/requests/{request_id}/reschedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reschedule Request
+         * @description Apply one explicitly selected owner slot and converge the local request.
+         */
+        post: operations["reschedule_request_api_requests__request_id__reschedule_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/requests/{request_id}/reschedule-options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Reschedule Options
+         * @description Calculate all current owner slots for the dispatcher-selected date.
+         */
+        post: operations["request_reschedule_options_api_requests__request_id__reschedule_options_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/requests/{request_id}/reschedule-retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry Quarantined Request Reschedule
+         * @description Safely replay the persisted owner command after bounded recovery quarantines it.
+         */
+        post: operations["retry_quarantined_request_reschedule_api_requests__request_id__reschedule_retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/requests/{request_id}/schedule": {
         parameters: {
             query?: never;
@@ -634,6 +734,26 @@ export interface paths {
          * @description Regenerate automatic or explicitly-sized transport parts.
          */
         post: operations["split_request_api_requests__request_id__split_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/retention/dry-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Retention Dry Run
+         * @description Show safe retention candidates; never delete or archive records.
+         */
+        get: operations["retention_dry_run_api_retention_dry_run_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -801,7 +921,7 @@ export interface paths {
         };
         /**
          * List Warehouses
-         * @description Reconcile and list routing-ready canonical RWMS warehouse workspaces.
+         * @description List persisted routing-ready workspaces without reconciling external state.
          */
         get: operations["list_warehouses_api_warehouses_get"];
         put?: never;
@@ -825,7 +945,7 @@ export interface paths {
         };
         /**
          * List Available Warehouses
-         * @description List authoritative RWMS warehouse candidates and their local binding state.
+         * @description Join authoritative candidates to persisted bindings without mutating either source.
          */
         get: operations["list_available_warehouses_api_warehouses_available_get"];
         put?: never;
@@ -991,9 +1111,69 @@ export interface paths {
         put?: never;
         /**
          * Close Day Acceptance
-         * @description Finalize one date and automatically apply its assigned RWMS deliveries when enabled.
+         * @description Finalize one date without publishing an unconfirmed route plan to RWMS.
          */
         post: operations["close_day_acceptance_api_warehouses__warehouse_id__planning_days__planning_date__close_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/{warehouse_id}/planning-days/{planning_date}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Logistics Event
+         * @description Register an incident and return its structured impact analysis.
+         */
+        post: operations["post_logistics_event_api_warehouses__warehouse_id__planning_days__planning_date__events_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/{warehouse_id}/planning-days/{planning_date}/mode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Day Mode
+         * @description Change a day mode without silently removing conflicting planned work.
+         */
+        put: operations["put_day_mode_api_warehouses__warehouse_id__planning_days__planning_date__mode_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/{warehouse_id}/planning-days/{planning_date}/operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Day Operations
+         * @description Read mode, comments, pending actions, decisions, and proposal history.
+         */
+        get: operations["get_day_operations_api_warehouses__warehouse_id__planning_days__planning_date__operations_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1018,6 +1198,58 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/{warehouse_id}/policy-zones": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Warehouse Policy Zones
+         * @description List exact exceptional policies visible for one authorized warehouse.
+         */
+        get: operations["list_warehouse_policy_zones_api_warehouses__warehouse_id__policy_zones_get"];
+        put?: never;
+        /**
+         * Create Warehouse Policy Zone
+         * @description Create exactly once, then advance and publish warehouse capacity facts.
+         */
+        post: operations["create_warehouse_policy_zone_api_warehouses__warehouse_id__policy_zones_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warehouses/{warehouse_id}/policy-zones/{zone_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Warehouse Policy Zone
+         * @description Read one exact owner policy after warehouse authorization.
+         */
+        get: operations["get_warehouse_policy_zone_api_warehouses__warehouse_id__policy_zones__zone_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Remove Warehouse Policy Zone
+         * @description Delete one fenced owner policy and publish its absence.
+         */
+        delete: operations["remove_warehouse_policy_zone_api_warehouses__warehouse_id__policy_zones__zone_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Patch Warehouse Policy Zone
+         * @description Apply a fenced update and publish the new policy revision.
+         */
+        patch: operations["patch_warehouse_policy_zone_api_warehouses__warehouse_id__policy_zones__zone_id__patch"];
         trace?: never;
     };
     "/api/warehouses/{warehouse_id}/requests": {
@@ -1091,7 +1323,7 @@ export interface paths {
         put?: never;
         /**
          * Sync Rwms Requests
-         * @description Import a bounded RWMS delivery feed without geocoding address-only orders.
+         * @description Import a bounded RWMS delivery feed, resolving address-only orders server-side.
          */
         post: operations["sync_rwms_requests_api_warehouses__warehouse_id__rwms_sync_post"];
         delete?: never;
@@ -1169,7 +1401,7 @@ export interface paths {
         };
         /**
          * Get Warehouse Workspace
-         * @description Refresh RWMS demand by default, or read persisted state for explicit recovery.
+         * @description Read one bounded persisted planning-date projection without synchronizing demand.
          */
         get: operations["get_warehouse_workspace_api_warehouses__warehouse_id__workspace_get"];
         put?: never;
@@ -1256,8 +1488,6 @@ export interface components {
              * @default false
              */
             accept_warnings: boolean;
-            /** @default local-admin */
-            confirmed_by: components["schemas"]["NonBlank"];
             empty_positioning_reason?: components["schemas"]["NonBlank"] | null;
             /** Expected Version */
             expected_version: number;
@@ -1305,12 +1535,16 @@ export interface components {
             assigned_count: number;
             /** Assigned Request Ids */
             assigned_request_ids: string[];
+            /** Contractor Handoff Command Id */
+            contractor_handoff_command_id: string | null;
             contractor_name: components["schemas"]["NonBlank"];
             /**
              * Contractor Worker Id
              * Format: uuid
              */
             contractor_worker_id: string;
+            /** External Task Ids */
+            external_task_ids: string[];
             /**
              * Mode
              * @enum {string}
@@ -1427,6 +1661,8 @@ export interface components {
              * @enum {string}
              */
             rwms_assignment_mode: "ASSIGNED_DRIVER" | "WAREHOUSE_DRIVERS";
+            /** Version */
+            version: number;
             /**
              * Warehouse Id
              * Format: uuid
@@ -1465,6 +1701,8 @@ export interface components {
         DriverUpdate: {
             /** Active */
             active?: boolean | null;
+            /** Expected Version */
+            expected_version: number;
             /** External Worker Id */
             external_worker_id?: string | null;
             /** Notes */
@@ -1481,6 +1719,18 @@ export interface components {
         ExpectedVersionRequest: {
             /** Expected Version */
             expected_version: number;
+        };
+        /**
+         * GeoJsonMultiPolygon
+         * @description Validated WGS84 GeoJSON MultiPolygon used at every policy boundary.
+         */
+        GeoJsonMultiPolygon: {
+            coordinates: components["schemas"]["MultiPolygonCoordinates"];
+            /**
+             * Type
+             * @constant
+             */
+            type: "MultiPolygon";
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1517,6 +1767,299 @@ export interface components {
             /** Travel Minutes */
             travel_minutes: number;
         };
+        Latitude: number;
+        LinearRing: components["schemas"]["Position"][];
+        /**
+         * LogisticsDecisionType
+         * @description Immutable dispatcher outcome for a pending customer or operational action.
+         * @enum {string}
+         */
+        LogisticsDecisionType: "ACCEPT_RECOMMENDATION" | "ACCEPT_OTHER_DATE" | "REJECT" | "UNREACHABLE" | "ACCEPT_DELAY" | "REJECT_DELAY" | "ACKNOWLEDGE_RESOLVED";
+        /**
+         * LogisticsEventCreate
+         * @description Structured incident or plan-change fact submitted for impact analysis.
+         */
+        LogisticsEventCreate: {
+            /** Cycle Id */
+            cycle_id?: string | null;
+            /** Delay Minutes */
+            delay_minutes?: number | null;
+            /** Driver Shift Id */
+            driver_shift_id?: string | null;
+            /** Effective At */
+            effective_at?: string | null;
+            event_type: components["schemas"]["LogisticsEventType"];
+            /** Expected Plan Version */
+            expected_plan_version?: number | null;
+            /** Facts */
+            facts?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /** Plan Id */
+            plan_id?: string | null;
+            /** Reason */
+            reason: string;
+            /** Request Id */
+            request_id?: string | null;
+            /** Source Event */
+            source_event?: string | null;
+            /** Task Id */
+            task_id?: string | null;
+            /** Vehicle Id */
+            vehicle_id?: string | null;
+        };
+        /**
+         * LogisticsEventRead
+         * @description Immutable operational event returned in the day history.
+         */
+        LogisticsEventRead: {
+            /** Actor */
+            actor: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Cycle Id */
+            cycle_id: string | null;
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /** Event Type */
+            event_type: string;
+            /** Facts */
+            facts: {
+                [key: string]: unknown;
+            };
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /** Plan Id */
+            plan_id: string | null;
+            /** Request Id */
+            request_id: string | null;
+            /** Source Event */
+            source_event: string | null;
+            /** Task Id */
+            task_id: string | null;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+        };
+        /**
+         * LogisticsEventResult
+         * @description Impact analysis result for one idempotently accepted event.
+         */
+        LogisticsEventResult: {
+            /** Actions */
+            actions: components["schemas"]["LogisticsHumanActionRead"][];
+            event: components["schemas"]["LogisticsEventRead"];
+            /** Notices */
+            notices: components["schemas"]["LogisticsNoticeRead"][];
+            /** Proposals */
+            proposals: components["schemas"]["RecoveryProposalRead"][];
+        };
+        /**
+         * LogisticsEventType
+         * @description Facts that can invalidate or constrain the current operational plan.
+         * @enum {string}
+         */
+        LogisticsEventType: "VEHICLE_BREAKDOWN" | "VEHICLE_DELAY" | "DRIVER_UNAVAILABLE" | "DELIVERY_CANCELLED" | "PICKUP_CANCELLED" | "ORDER_CANCELLED" | "TASK_BLOCKED" | "MANUAL_PLAN_CHANGE" | "PLANNING_MODE_CHANGED";
+        /**
+         * LogisticsHumanActionRead
+         * @description One unresolved or historical dispatcher action with contact details.
+         */
+        LogisticsHumanActionRead: {
+            /** Action Type */
+            action_type: string;
+            /** Alternative Dates */
+            alternative_dates: string[];
+            /** Context */
+            context: {
+                [key: string]: unknown;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Current Date */
+            current_date: string | null;
+            /** Customer Name */
+            customer_name: string | null;
+            /** Customer Phone */
+            customer_phone: string | null;
+            /** Customer Type */
+            customer_type: string | null;
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /**
+             * Event Id
+             * Format: uuid
+             */
+            event_id: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Notice Id
+             * Format: uuid
+             */
+            notice_id: string;
+            /** Recommended Date */
+            recommended_date: string | null;
+            /** Request Id */
+            request_id: string | null;
+            /** Resolved At */
+            resolved_at: string | null;
+            /** Status */
+            status: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Version */
+            version: number;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+        };
+        /**
+         * LogisticsHumanDecisionCreate
+         * @description Version-fenced dispatcher outcome that becomes a future solve constraint.
+         */
+        LogisticsHumanDecisionCreate: {
+            /** Comment */
+            comment?: string | null;
+            decision_type: components["schemas"]["LogisticsDecisionType"];
+            /** Expected Proposal Version */
+            expected_proposal_version?: number | null;
+            /** Expected Version */
+            expected_version: number;
+            /** Selected Date */
+            selected_date?: string | null;
+        };
+        /**
+         * LogisticsHumanDecisionRead
+         * @description Append-only record of the dispatcher response to an action.
+         */
+        LogisticsHumanDecisionRead: {
+            /**
+             * Action Id
+             * Format: uuid
+             */
+            action_id: string;
+            /** Actor */
+            actor: string;
+            /** Comment */
+            comment: string | null;
+            /** Constraint Data */
+            constraint_data: {
+                [key: string]: unknown;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Decision Type */
+            decision_type: string;
+            /**
+             * Event Id
+             * Format: uuid
+             */
+            event_id: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Selected Date */
+            selected_date: string | null;
+        };
+        /**
+         * LogisticsNoticeRead
+         * @description Structured, deterministic system comment visible to a dispatcher.
+         */
+        LogisticsNoticeRead: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Cycle Id */
+            cycle_id: string | null;
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /**
+             * Event Id
+             * Format: uuid
+             */
+            event_id: string;
+            /** Facts */
+            facts: {
+                [key: string]: unknown;
+            };
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Message Ru */
+            message_ru: string;
+            /** Notice Type */
+            notice_type: string;
+            /** Plan Id */
+            plan_id: string | null;
+            /** Reason Codes */
+            reason_codes: string[];
+            /** Recommended Action Ru */
+            recommended_action_ru: string | null;
+            /** Request Id */
+            request_id: string | null;
+            /** Requires Action */
+            requires_action: boolean;
+            /** Resolved At */
+            resolved_at: string | null;
+            /** Severity */
+            severity: string;
+            /** Status */
+            status: string;
+            /** Task Id */
+            task_id: string | null;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+        };
         /**
          * LogisticsRequestCreate
          * @description Source request input intentionally excluding any client-supplied zone.
@@ -1535,6 +2078,8 @@ export interface components {
             cargo_weight_kg?: number | null;
             /** Cargo Width Mm */
             cargo_width_mm?: number | null;
+            /** Client Type */
+            client_type?: ("INDIVIDUAL" | "SOLE_PROPRIETOR" | "LEGAL_ENTITY") | null;
             /**
              * Contact Name
              * @default
@@ -1584,8 +2129,12 @@ export interface components {
              * @default true
              */
             split_allowed: boolean;
-            /** @default READY */
-            status: components["schemas"]["RequestStatus"];
+            /**
+             * Status
+             * @default READY
+             * @constant
+             */
+            status: "READY";
             /** Trailer Access Allowed */
             trailer_access_allowed?: boolean | null;
             type: components["schemas"]["RequestType"];
@@ -1617,10 +2166,19 @@ export interface components {
             cargo_weight_kg?: number | null;
             /** Cargo Width Mm */
             cargo_width_mm?: number | null;
+            /** Client Type */
+            client_type: ("INDIVIDUAL" | "SOLE_PROPRIETOR" | "LEGAL_ENTITY") | null;
             /** Contact Name */
             contact_name: string;
             /** Contact Phone */
             contact_phone: string;
+            /** Contractor Handoff Command Id */
+            contractor_handoff_command_id: string | null;
+            /**
+             * Contractor Handoff Sequence
+             * @description Zero-based request position in the immutable contractor handoff command.
+             */
+            contractor_handoff_sequence: number | null;
             /**
              * Created At
              * Format: date-time
@@ -1632,6 +2190,8 @@ export interface components {
             delivery_price_rubles: number | null;
             /** External Id */
             external_id: string | null;
+            /** External Task Ids */
+            external_task_ids: string[];
             /**
              * Id
              * Format: uuid
@@ -1674,6 +2234,8 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Version */
+            version: number;
             /**
              * Warehouse Id
              * Format: uuid
@@ -1695,12 +2257,16 @@ export interface components {
             cargo_weight_kg?: number | null;
             /** Cargo Width Mm */
             cargo_width_mm?: number | null;
+            /** Client Type */
+            client_type?: ("INDIVIDUAL" | "SOLE_PROPRIETOR" | "LEGAL_ENTITY") | null;
             /** Contact Name */
             contact_name?: string | null;
             /** Contact Phone */
             contact_phone?: string | null;
             /** Date Options */
             date_options?: components["schemas"]["RequestDateOptionInput"][] | null;
+            /** Expected Version */
+            expected_version: number;
             /** Include Driver Passport In Notification */
             include_driver_passport_in_notification?: boolean | null;
             /** Latitude */
@@ -1720,19 +2286,19 @@ export interface components {
             service_minutes?: number | null;
             /** Split Allowed */
             split_allowed?: boolean | null;
-            status?: components["schemas"]["RequestStatus"] | null;
+            /** Status */
+            status?: "READY" | null;
             /** Trailer Access Allowed */
             trailer_access_allowed?: boolean | null;
             type?: components["schemas"]["RequestType"] | null;
         };
+        Longitude: number;
         /**
          * ManualChangeRequest
-         * @description Validated manual route-edit command and audit context.
+         * @description Validated manual route-edit request without client-owned audit identity.
          */
         ManualChangeRequest: {
             change_type: components["schemas"]["NonBlank"];
-            /** @default local-admin */
-            changed_by: components["schemas"]["NonBlank"];
             /** Expected Version */
             expected_version: number;
             /** Payload */
@@ -1741,6 +2307,7 @@ export interface components {
             };
             reason: components["schemas"]["NonBlank"];
         };
+        MultiPolygonCoordinates: components["schemas"]["PolygonCoordinates"][];
         /**
          * NearestOptionRead
          * @description Earliest typed scheduling alternative for one unassigned task.
@@ -1844,6 +2411,86 @@ export interface components {
          */
         PlanStatus: "DRAFT" | "GENERATED" | "VALIDATED" | "CONFIRMED" | "ARCHIVED";
         /**
+         * PlanningDayMode
+         * @description Task directions permitted by the optimizer for one warehouse-local day.
+         * @enum {string}
+         */
+        PlanningDayMode: "DELIVERIES_AND_PICKUPS" | "DELIVERIES_ONLY" | "PICKUPS_ONLY";
+        /**
+         * PlanningDayModeResult
+         * @description Mode-change result including whether real conflicts required human action.
+         */
+        PlanningDayModeResult: {
+            /** Conflict Count */
+            conflict_count: number;
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /**
+             * Event Id
+             * Format: uuid
+             */
+            event_id: string;
+            mode: components["schemas"]["PlanningDayMode"];
+            /** Pending Action Count */
+            pending_action_count: number;
+            /** Version */
+            version: number;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+        };
+        /**
+         * PlanningDayModeUpdate
+         * @description Version-fenced command that changes the optimizer mode for one day.
+         */
+        PlanningDayModeUpdate: {
+            /** Expected Plan Version */
+            expected_plan_version?: number | null;
+            /** Expected Version */
+            expected_version: number;
+            mode: components["schemas"]["PlanningDayMode"];
+            /** Plan Id */
+            plan_id?: string | null;
+        };
+        /**
+         * PlanningDayOperationsRead
+         * @description Latest bounded operational window with explicit truncation metadata.
+         */
+        PlanningDayOperationsRead: {
+            /** Actions */
+            actions: components["schemas"]["LogisticsHumanActionRead"][];
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /** Decisions */
+            decisions: components["schemas"]["LogisticsHumanDecisionRead"][];
+            /** Events */
+            events: components["schemas"]["LogisticsEventRead"][];
+            mode: components["schemas"]["PlanningDayMode"];
+            /** Mode Version */
+            mode_version: number;
+            /** Notices */
+            notices: components["schemas"]["LogisticsNoticeRead"][];
+            /** Pending Action Count */
+            pending_action_count: number;
+            /** Proposals */
+            proposals: components["schemas"]["RecoveryProposalRead"][];
+            /** Truncated Collections */
+            truncated_collections?: ("EVENTS" | "NOTICES" | "ACTIONS" | "DECISIONS" | "PROPOSALS")[];
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+        };
+        /**
          * PlanningDayStatusRead
          * @description Operator-visible acceptance and finalization state for one depot date.
          */
@@ -1859,6 +2506,22 @@ export interface components {
              * Format: date
              */
             date: string;
+            /**
+             * Mode
+             * @default DELIVERIES_AND_PICKUPS
+             * @enum {string}
+             */
+            mode: "DELIVERIES_AND_PICKUPS" | "DELIVERIES_ONLY" | "PICKUPS_ONLY";
+            /**
+             * Mode Version
+             * @default 0
+             */
+            mode_version: number;
+            /**
+             * Pending Action Count
+             * @default 0
+             */
+            pending_action_count: number;
             /** Plan Id */
             plan_id?: string | null;
             /**
@@ -2113,8 +2776,165 @@ export interface components {
             type: components["schemas"]["RequestType"];
         };
         /**
+         * PolicyZoneCreate
+         * @description Create one exceptional policy without any ordinary delivery-region meaning.
+         */
+        PolicyZoneCreate: {
+            /** Color */
+            color?: string | null;
+            /** Delivery Price Rubles */
+            delivery_price_rubles?: number | null;
+            geometry: components["schemas"]["GeoJsonMultiPolygon"];
+            kind: components["schemas"]["PolicyZoneKind"];
+            /** Name */
+            name: string;
+            /** Pickup Price Rubles */
+            pickup_price_rubles?: number | null;
+        };
+        /**
+         * PolicyZoneKind
+         * @description Supported exceptional policies layered over ordinary isochrone coverage.
+         * @enum {string}
+         */
+        PolicyZoneKind: "SPECIAL_PRICE" | "FORBIDDEN" | "NO_TRAILER";
+        /**
+         * PolicyZoneRead
+         * @description Exact server-authoritative exceptional policy returned to dispatchers.
+         */
+        PolicyZoneRead: {
+            /** Color */
+            color: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Delivery Price Rubles */
+            delivery_price_rubles: number | null;
+            geometry: components["schemas"]["GeoJsonMultiPolygon"];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            kind: components["schemas"]["PolicyZoneKind"];
+            /** Name */
+            name: string;
+            /** Pickup Price Rubles */
+            pickup_price_rubles: number | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Version */
+            version: number;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+        };
+        /**
+         * PolicyZoneUpdate
+         * @description Optimistically fenced partial update for one exceptional policy.
+         */
+        PolicyZoneUpdate: {
+            /** Color */
+            color?: string | null;
+            /** Delivery Price Rubles */
+            delivery_price_rubles?: number | null;
+            /** Expected Version */
+            expected_version: number;
+            geometry?: components["schemas"]["GeoJsonMultiPolygon"] | null;
+            kind?: components["schemas"]["PolicyZoneKind"] | null;
+            /** Name */
+            name?: string | null;
+            /** Pickup Price Rubles */
+            pickup_price_rubles?: number | null;
+        };
+        PolygonCoordinates: components["schemas"]["LinearRing"][];
+        Position: [
+            components["schemas"]["Longitude"],
+            components["schemas"]["Latitude"]
+        ];
+        /**
+         * RecoveryProposalApply
+         * @description Optimistic command that applies only a ready recovery proposal.
+         */
+        RecoveryProposalApply: {
+            /** Expected Version */
+            expected_version: number;
+        };
+        /**
+         * RecoveryProposalRead
+         * @description Recovery candidate with explicit customer-agreement/application state.
+         */
+        RecoveryProposalRead: {
+            /** Action Id */
+            action_id: string | null;
+            /** Affected Request Ids */
+            affected_request_ids: string[];
+            /** Affected Task Ids */
+            affected_task_ids: string[];
+            /** Applied At */
+            applied_at: string | null;
+            /** Changes */
+            changes: {
+                [key: string]: unknown;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /**
+             * Event Id
+             * Format: uuid
+             */
+            event_id: string;
+            /** Failure Code */
+            failure_code: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Metrics */
+            metrics: {
+                [key: string]: unknown;
+            };
+            /** Proposal Type */
+            proposal_type: string;
+            /** Result Plan Id */
+            result_plan_id: string | null;
+            /** Source Plan Id */
+            source_plan_id: string | null;
+            /** Status */
+            status: string;
+            /** Summary Ru */
+            summary_ru: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Version */
+            version: number;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+        };
+        /**
          * RequestDateOptionInput
-         * @description Acceptable request date with a hard or soft local time window.
+         * @description Acceptable date whose travel band is independent of its optional window.
          */
         RequestDateOptionInput: {
             /**
@@ -2183,6 +3003,8 @@ export interface components {
         RequestDateOptionUpdate: {
             /** Date */
             date?: string | null;
+            /** Expected Version */
+            expected_version: number;
             /** Is Hard */
             is_hard?: boolean | null;
             /** Priority */
@@ -2208,6 +3030,8 @@ export interface components {
              * Format: date
              */
             date: string;
+            /** Expected Version */
+            expected_version: number;
             /**
              * Include Driver Passport In Notification
              * @default false
@@ -2228,6 +3052,162 @@ export interface components {
             window_start?: string | null;
         };
         /**
+         * RequestRescheduleApply
+         * @description Existing-request reschedule command containing only authoritative owner fences.
+         */
+        RequestRescheduleApply: {
+            /** Expected Order Version */
+            expected_order_version: number;
+            /** Expected Request Version */
+            expected_request_version: number;
+            /** Expected Session Version */
+            expected_session_version: number;
+            /**
+             * Slot Id
+             * Format: uuid
+             */
+            slot_id: string;
+            /** Slot Version */
+            slot_version: number;
+            /**
+             * Source Plan Id
+             * Format: uuid
+             */
+            source_plan_id: string;
+            /** Source Plan Version */
+            source_plan_version: number;
+        };
+        /**
+         * RequestRescheduleOptionsQuery
+         * @description Version-fenced date selected before loading authoritative delivery slots.
+         */
+        RequestRescheduleOptionsQuery: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Expected Request Version */
+            expected_request_version: number;
+        };
+        /**
+         * RequestRescheduleOptionsRead
+         * @description All owner-calculated slots for the dispatcher-selected date and current fences.
+         */
+        RequestRescheduleOptionsRead: {
+            current_slot: components["schemas"]["RequestRescheduleSlotRead"];
+            /** Options */
+            options: components["schemas"]["RequestRescheduleSlotRead"][];
+            /**
+             * Order Id
+             * Format: uuid
+             */
+            order_id: string;
+            /** Order Version */
+            order_version: number;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /** Request Version */
+            request_version: number;
+            /**
+             * Session Id
+             * Format: uuid
+             */
+            session_id: string;
+            /** Session Version */
+            session_version: number;
+            /**
+             * Source Plan Id
+             * Format: uuid
+             */
+            source_plan_id: string;
+            /** Source Plan Version */
+            source_plan_version: number;
+        };
+        /**
+         * RequestRescheduleResultRead
+         * @description Converged local request plus the authoritative owner receipt returned to the panel.
+         */
+        RequestRescheduleResultRead: {
+            confirmed_slot: components["schemas"]["RequestRescheduleSlotRead"];
+            /**
+             * Order Id
+             * Format: uuid
+             */
+            order_id: string;
+            /** Order Version */
+            order_version: number;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /** Request Version */
+            request_version: number;
+            /**
+             * Scheduled Date
+             * Format: date
+             */
+            scheduled_date: string;
+            /**
+             * Session Id
+             * Format: uuid
+             */
+            session_id: string;
+            /** Session Version */
+            session_version: number;
+        };
+        /**
+         * RequestRescheduleRetry
+         * @description Exact quarantined command identity used for an operator-authorized replay.
+         */
+        RequestRescheduleRetry: {
+            /** Expected Quarantine Count */
+            expected_quarantine_count: number;
+            /**
+             * Hold Id
+             * Format: uuid
+             */
+            hold_id: string;
+        };
+        /**
+         * RequestRescheduleSlotRead
+         * @description One owner-calculated slot exposed without browser-authored timing fields.
+         */
+        RequestRescheduleSlotRead: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Delivery Price Rubles */
+            delivery_price_rubles: number | null;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "FIXED_WINDOW" | "DURING_DAY";
+            /**
+             * Slot Id
+             * Format: uuid
+             */
+            slot_id: string;
+            /** Slot Version */
+            slot_version: number;
+            /** Window End */
+            window_end: string | null;
+            /** Window Start */
+            window_start: string | null;
+        };
+        /**
          * RequestScheduleInput
          * @description Explicitly assign a request to one accepted date or clear that choice.
          */
@@ -2239,6 +3219,8 @@ export interface components {
             add_if_missing: boolean;
             /** Date */
             date: string | null;
+            /** Expected Version */
+            expected_version: number;
         };
         /**
          * RequestStatus
@@ -2251,8 +3233,10 @@ export interface components {
          * @description Explicit operator-selected transport-part quantities for one request.
          */
         RequestTaskSplitInput: {
+            /** Expected Version */
+            expected_version: number;
             /** Part Quantities */
-            part_quantities: number[];
+            part_quantities?: number[] | null;
         };
         /**
          * RequestType
@@ -2278,6 +3262,32 @@ export interface components {
          * @enum {string}
          */
         RestrictionSupportStatus: "SUPPORTED" | "PARTIAL" | "UNSUPPORTED";
+        /**
+         * RetentionDryRunRead
+         * @description Safe retention report that never deletes or archives rows by itself.
+         */
+        RetentionDryRunRead: {
+            /** Candidate Counts */
+            candidate_counts: {
+                [key: string]: number;
+            };
+            /**
+             * Destructive Purge Enabled
+             * @default false
+             */
+            destructive_purge_enabled: boolean;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Legal Hold Count */
+            legal_hold_count: number;
+            /** Policies */
+            policies: {
+                [key: string]: unknown;
+            }[];
+        };
         /**
          * RouteCycleRead
          * @description One route cycle with ordered stops, segments, and explanations.
@@ -2369,6 +3379,8 @@ export interface components {
             /** Score */
             score: number;
             status: components["schemas"]["PlanStatus"];
+            /** Supersedes Plan Id */
+            supersedes_plan_id?: string | null;
             /** Unassigned Tasks */
             unassigned_tasks: components["schemas"]["UnassignedTaskRead"][];
             /**
@@ -2498,12 +3510,21 @@ export interface components {
              */
             documentId: string;
             /**
+             * Externaltaskid
+             * Format: uuid
+             */
+            externalTaskId: string;
+            /**
              * Orderid
              * Format: uuid
              */
             orderId: string;
+            /** Orderversion */
+            orderVersion: number;
             /** Replayed */
             replayed: boolean;
+            /** Taskversion */
+            taskVersion: number;
         };
         /**
          * RwmsApplyResult
@@ -2524,8 +3545,12 @@ export interface components {
             isochroneTariffCount: number;
             /** Jobcount */
             jobCount: number;
+            /** Pricezonecount */
+            priceZoneCount: number;
             /** Replayed */
             replayed: boolean;
+            /** Restrictionzonecount */
+            restrictionZoneCount: number;
             /** Shiftcount */
             shiftCount: number;
             /** Sourcegeneration */
@@ -2714,7 +3739,7 @@ export interface components {
         };
         /**
          * ShiftCreate
-         * @description Input for one repeated daily shift over an inclusive monthly date range.
+         * @description Input for one repeated local shift over at most 31 inclusive start dates.
          */
         ShiftCreate: {
             /**
@@ -2808,6 +3833,8 @@ export interface components {
              * Format: uuid
              */
             vehicle_id: string;
+            /** Version */
+            version: number;
             /**
              * Warehouse Id
              * Format: uuid
@@ -2831,6 +3858,8 @@ export interface components {
             driver_id?: string | null;
             /** End Time */
             end_time?: string | null;
+            /** Expected Version */
+            expected_version: number;
             /** Start Time */
             start_time?: string | null;
             /** Vehicle Id */
@@ -3303,6 +4332,8 @@ export interface components {
             registration_number: components["schemas"]["NonBlank"];
             /** Tare Weight Kg */
             tare_weight_kg?: number | null;
+            /** Version */
+            version: number;
             /**
              * Warehouse Id
              * Format: uuid
@@ -3320,6 +4351,8 @@ export interface components {
             active?: boolean | null;
             /** Axle Count */
             axle_count?: number | null;
+            /** Expected Version */
+            expected_version: number;
             /** Height Mm */
             height_mm?: number | null;
             /** Length Mm */
@@ -3839,6 +4872,8 @@ export interface components {
             tare_weight_kg?: number | null;
             /** Vehicle Type */
             vehicle_type?: string | null;
+            /** Version */
+            version: number;
             /**
              * Warehouse Id
              * Format: uuid
@@ -3880,6 +4915,8 @@ export interface components {
             coupling_length_mm?: number | null;
             /** Default Trailer Id */
             default_trailer_id?: string | null;
+            /** Expected Version */
+            expected_version: number;
             /** Height Mm */
             height_mm?: number | null;
             /** Height Safety Margin Mm */
@@ -3978,6 +5015,19 @@ export interface components {
             address: string | null;
             /** Capacity Generation */
             capacity_generation: number;
+            /** Capacity Publish Attempts */
+            capacity_publish_attempts: number;
+            /** Capacity Publish Error Code */
+            capacity_publish_error_code: string | null;
+            /** Capacity Publish Next Attempt At */
+            capacity_publish_next_attempt_at: string | null;
+            /**
+             * Capacity Publish Status
+             * @enum {string}
+             */
+            capacity_publish_status: "NOT_REQUESTED" | "PENDING" | "PUBLISHED" | "FAILED";
+            /** Capacity Published Generation */
+            capacity_published_generation: number;
             /** City */
             city: string | null;
             /**
@@ -4030,6 +5080,8 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Version */
+            version: number;
             /**
              * Working Day End
              * Format: time
@@ -4048,6 +5100,8 @@ export interface components {
         WarehouseUpdate: {
             /** Default Planning Date */
             default_planning_date?: string | null;
+            /** Expected Version */
+            expected_version: number;
             /** Isochrone Tariffs */
             isochrone_tariffs?: components["schemas"]["IsochroneTariff"][] | null;
             /** Loading Minutes */
@@ -4066,11 +5120,16 @@ export interface components {
         };
         /**
          * WarehouseWorkspaceRead
-         * @description Selected warehouse, its direct planning group, and root-owned resources.
+         * @description Bounded dated projection for a selected warehouse and its direct planning group.
          */
         WarehouseWorkspaceRead: {
             /** Drivers */
             drivers: components["schemas"]["DriverRead"][];
+            /**
+             * Planning Date
+             * Format: date
+             */
+            planning_date: string;
             /** Planning Group Warehouse Ids */
             planning_group_warehouse_ids: string[];
             /**
@@ -4078,6 +5137,10 @@ export interface components {
              * Format: uuid
              */
             planning_root_warehouse_id: string;
+            /** Request Next Cursor */
+            request_next_cursor?: string | null;
+            /** Request Total */
+            request_total: number;
             /** Requests */
             requests: components["schemas"]["LogisticsRequestRead"][];
             /** Shifts */
@@ -4176,8 +5239,6 @@ export interface components {
              * @default 0
              */
             replaced_requests: number;
-            /** Seed */
-            seed: number;
             /**
              * Start Date
              * Format: date
@@ -4191,7 +5252,7 @@ export interface components {
         };
         /**
          * WorkloadGeneratorInput
-         * @description Bounded deterministic request workload generated for one warehouse horizon.
+         * @description Bounded random request workload generated for one warehouse horizon.
          */
         WorkloadGeneratorInput: {
             /**
@@ -4199,26 +5260,6 @@ export interface components {
              * @default 0
              */
             alternative_dates_count: number;
-            /**
-             * Cargo Height Mm
-             * @default 2400
-             */
-            cargo_height_mm: number;
-            /**
-             * Cargo Length Mm
-             * @default 6000
-             */
-            cargo_length_mm: number;
-            /**
-             * Cargo Weight Kg
-             * @default 1200
-             */
-            cargo_weight_kg: number;
-            /**
-             * Cargo Width Mm
-             * @default 2400
-             */
-            cargo_width_mm: number;
             /**
              * Days
              * @default 1
@@ -4228,8 +5269,6 @@ export interface components {
             deliveries_per_day: number;
             /** Pickups Per Day */
             pickups_per_day: number;
-            /** Seed */
-            seed: number;
             /**
              * Start Date
              * Format: date
@@ -4247,7 +5286,9 @@ export type $defs = Record<string, never>;
 export interface operations {
     delete_driver_api_drivers__driver_id__delete: {
         parameters: {
-            query?: never;
+            query: {
+                expected_version: number;
+            };
             header?: never;
             path: {
                 driver_id: string;
@@ -4421,6 +5462,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HealthRead"];
+                };
+            };
+        };
+    };
+    post_human_decision_api_logistics_actions__action_id__decisions_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                action_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LogisticsHumanDecisionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogisticsHumanDecisionRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -5070,9 +6148,48 @@ export interface operations {
             };
         };
     };
-    delete_date_option_api_request_date_options__option_id__delete: {
+    apply_recovery_proposal_api_recovery_proposals__proposal_id__apply_post: {
         parameters: {
             query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryProposalApply"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryProposalRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_date_option_api_request_date_options__option_id__delete: {
+        parameters: {
+            query: {
+                expected_version: number;
+            };
             header?: never;
             path: {
                 option_id: string;
@@ -5167,7 +6284,9 @@ export interface operations {
     };
     delete_request_api_requests__request_id__delete: {
         parameters: {
-            query?: never;
+            query: {
+                expected_version: number;
+            };
             header?: never;
             path: {
                 request_id: string;
@@ -5267,7 +6386,9 @@ export interface operations {
     create_date_option_api_requests__request_id__date_options_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
             path: {
                 request_id: string;
             };
@@ -5334,6 +6455,115 @@ export interface operations {
             };
         };
     };
+    reschedule_request_api_requests__request_id__reschedule_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestRescheduleApply"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestRescheduleResultRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_reschedule_options_api_requests__request_id__reschedule_options_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestRescheduleOptionsQuery"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestRescheduleOptionsRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_quarantined_request_reschedule_api_requests__request_id__reschedule_retry_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestRescheduleRetry"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestRescheduleResultRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     schedule_request_api_requests__request_id__schedule_post: {
         parameters: {
             query?: never;
@@ -5378,9 +6608,9 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
-                "application/json": components["schemas"]["RequestTaskSplitInput"] | null;
+                "application/json": components["schemas"]["RequestTaskSplitInput"];
             };
         };
         responses: {
@@ -5400,6 +6630,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retention_dry_run_api_retention_dry_run_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetentionDryRunRead"];
                 };
             };
         };
@@ -5507,7 +6757,9 @@ export interface operations {
     };
     delete_shift_api_shifts__shift_id__delete: {
         parameters: {
-            query?: never;
+            query: {
+                expected_version: number;
+            };
             header?: never;
             path: {
                 shift_id: string;
@@ -5571,7 +6823,9 @@ export interface operations {
     };
     delete_trailer_api_trailers__trailer_id__delete: {
         parameters: {
-            query?: never;
+            query: {
+                expected_version: number;
+            };
             header?: never;
             path: {
                 trailer_id: string;
@@ -5635,7 +6889,9 @@ export interface operations {
     };
     delete_vehicle_api_vehicles__vehicle_id__delete: {
         parameters: {
-            query?: never;
+            query: {
+                expected_version: number;
+            };
             header?: never;
             path: {
                 vehicle_id: string;
@@ -5755,7 +7011,9 @@ export interface operations {
     create_warehouse_api_warehouses_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -5940,7 +7198,9 @@ export interface operations {
     create_driver_api_warehouses__warehouse_id__drivers_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
             path: {
                 warehouse_id: string;
             };
@@ -6104,6 +7364,114 @@ export interface operations {
             };
         };
     };
+    post_logistics_event_api_warehouses__warehouse_id__planning_days__planning_date__events_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                warehouse_id: string;
+                planning_date: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LogisticsEventCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogisticsEventResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_day_mode_api_warehouses__warehouse_id__planning_days__planning_date__mode_put: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                warehouse_id: string;
+                planning_date: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanningDayModeUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningDayModeResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_day_operations_api_warehouses__warehouse_id__planning_days__planning_date__operations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+                planning_date: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningDayOperationsRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     ensure_automatic_plan_api_warehouses__warehouse_id__plans_ensure_post: {
         parameters: {
             query: {
@@ -6137,10 +7505,180 @@ export interface operations {
             };
         };
     };
-    create_request_api_warehouses__warehouse_id__requests_post: {
+    list_warehouse_policy_zones_api_warehouses__warehouse_id__policy_zones_get: {
         parameters: {
             query?: never;
             header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyZoneRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_warehouse_policy_zone_api_warehouses__warehouse_id__policy_zones_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PolicyZoneCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyZoneRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_warehouse_policy_zone_api_warehouses__warehouse_id__policy_zones__zone_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+                zone_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyZoneRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_warehouse_policy_zone_api_warehouses__warehouse_id__policy_zones__zone_id__delete: {
+        parameters: {
+            query: {
+                expected_version: number;
+            };
+            header?: never;
+            path: {
+                warehouse_id: string;
+                zone_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_warehouse_policy_zone_api_warehouses__warehouse_id__policy_zones__zone_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+                zone_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PolicyZoneUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyZoneRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_request_api_warehouses__warehouse_id__requests_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
             path: {
                 warehouse_id: string;
             };
@@ -6272,7 +7810,9 @@ export interface operations {
     create_shift_api_warehouses__warehouse_id__shifts_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
             path: {
                 warehouse_id: string;
             };
@@ -6307,7 +7847,9 @@ export interface operations {
     create_trailer_api_warehouses__warehouse_id__trailers_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
             path: {
                 warehouse_id: string;
             };
@@ -6342,7 +7884,9 @@ export interface operations {
     create_vehicle_configuration_api_warehouses__warehouse_id__vehicle_configurations_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
             path: {
                 warehouse_id: string;
             };
@@ -6377,7 +7921,9 @@ export interface operations {
     get_warehouse_workspace_api_warehouses__warehouse_id__workspace_get: {
         parameters: {
             query?: {
-                refresh_rwms?: boolean;
+                planning_date?: string | null;
+                request_limit?: number;
+                request_cursor?: string | null;
             };
             header?: never;
             path: {

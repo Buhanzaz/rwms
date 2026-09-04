@@ -3,6 +3,10 @@ package dev.buhanzaz.rwms.client.ui
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.client.data.CustomerApiException
 import dev.buhanzaz.rwms.client.data.CustomerBooking
+import dev.buhanzaz.rwms.client.data.CustomerEntityType
+import dev.buhanzaz.rwms.client.data.CustomerProfile
+import dev.buhanzaz.rwms.client.data.CustomerProfileAvatar
+import dev.buhanzaz.rwms.client.data.CustomerWarehouse
 import org.junit.Test
 
 /** Covers command serialization and booking-status reconciliation for the active workflow. */
@@ -63,11 +67,64 @@ class CustomerWorkflowPolicyTest {
         ).isFalse()
     }
 
+    @Test
+    fun `avatar upload resolves a bound scope before selected or available warehouse`() {
+        val listedWarehouse = customerWarehouse("warehouse-list")
+        val selectedWarehouse = customerWarehouse("warehouse-selected")
+        val scopedProfile = customerProfile(
+            CustomerProfileAvatar(
+                mediaId = "avatar",
+                generation = 1,
+                warehouseId = "warehouse-avatar",
+                thumbnailUrl = "/thumbnail",
+                url = "/full",
+            ),
+        )
+
+        assertThat(
+            CustomerWorkflowState(
+                profile = scopedProfile,
+                selectedWarehouse = selectedWarehouse,
+                warehouses = listOf(listedWarehouse),
+            ).avatarUploadWarehouseId(),
+        ).isEqualTo("warehouse-avatar")
+        assertThat(
+            CustomerWorkflowState(
+                profile = customerProfile(),
+                selectedWarehouse = selectedWarehouse,
+                warehouses = listOf(listedWarehouse),
+            ).avatarUploadWarehouseId(),
+        ).isEqualTo("warehouse-selected")
+        assertThat(
+            CustomerWorkflowState(
+                profile = customerProfile(),
+                warehouses = listOf(listedWarehouse),
+            ).avatarUploadWarehouseId(),
+        ).isEqualTo("warehouse-list")
+    }
+
     private fun booking(status: String): CustomerBooking = CustomerBooking(
         bookingId = "booking-a",
         orderId = null,
         status = status,
         inquiryId = "inquiry-a",
         warehouseId = "warehouse-a",
+    )
+
+    private fun customerProfile(avatar: CustomerProfileAvatar? = null): CustomerProfile = CustomerProfile(
+        entityType = CustomerEntityType.INDIVIDUAL,
+        firstName = "Иван",
+        lastName = "Петров",
+        phone = "+79990000000",
+        avatar = avatar,
+    )
+
+    private fun customerWarehouse(id: String): CustomerWarehouse = CustomerWarehouse(
+        id = id,
+        name = id,
+        city = "Москва",
+        timezone = "Europe/Moscow",
+        depotLatitude = 55.75,
+        depotLongitude = 37.61,
     )
 }

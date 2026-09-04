@@ -13,8 +13,11 @@ export const SHIPMENT_FURNITURE_READINESS_QUERY_KEY = [
 
 export const shipmentClient = new HttpShipmentClient()
 
-export const listShipments = (accessToken: string, warehouseId: string) =>
-  shipmentClient.list(accessToken, warehouseId)
+export const listShipments = (
+  accessToken: string,
+  warehouseId: string,
+  scheduledDate?: string
+) => shipmentClient.list(accessToken, warehouseId, scheduledDate)
 
 export const getShipment = (accessToken: string, documentId: string) =>
   shipmentClient.get(accessToken, documentId)

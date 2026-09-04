@@ -48,9 +48,10 @@ public class RentalBookingAlertService {
   private final ObjectMapper json;
 
   public List<RentalBookingAlertResponse> list(OrderActor actor) {
-    UUID managerId = requiredManagerId(actor);
+    OrderActor requiredActor = requiredActor(actor);
     return bookings
-        .findUnprocessedByManagerIdAndState(managerId, PresentationBookingState.COMPLETED)
+        .findUnprocessedByManagerIdAndState(
+            requiredActor.subjectId(), PresentationBookingState.COMPLETED)
         .stream()
         .map(this::response)
         .toList();
@@ -77,10 +78,13 @@ public class RentalBookingAlertService {
         || request.action() == null) {
       throw new IllegalArgumentException("Booking action and Idempotency-Key are required");
     }
+    OrderActor requiredActor = requiredActor(actor);
     PresentationBooking booking =
         bookings
             .findForUpdateByIdAndManagerIdAndState(
-                bookingId, requiredManagerId(actor), PresentationBookingState.COMPLETED)
+                bookingId,
+                requiredActor.subjectId(),
+                PresentationBookingState.COMPLETED)
             .orElseThrow(() -> notFound("Подтверждение клиента не найдено"));
     PresentationBookingManagerAction action = request.action();
     if (booking.hasManagerAction(action, idempotencyKey)) return;
@@ -164,11 +168,11 @@ public class RentalBookingAlertService {
     }
   }
 
-  private static UUID requiredManagerId(OrderActor actor) {
+  private static OrderActor requiredActor(OrderActor actor) {
     if (actor == null || actor.subjectId() == null) {
       throw new IllegalArgumentException("Manager identity is required");
     }
-    return actor.subjectId();
+    return actor;
   }
 
   private static OrderProblemException notFound(String message) {

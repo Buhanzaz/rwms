@@ -39,6 +39,7 @@ class AuthTaskBoardServiceClientIntegrationTest {
     void mintsOnlySeparateExactServiceTokens() throws Exception {
         for (String scope : List.of(
                 "worker-credentials.manage",
+                "media.task-board",
                 "warehouse.identity.read",
                 "warehouse.timezone.read",
                 "warehouse.lifecycle.read",

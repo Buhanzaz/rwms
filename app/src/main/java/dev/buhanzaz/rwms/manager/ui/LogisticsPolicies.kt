@@ -26,7 +26,7 @@ internal fun shipmentFurnitureIsReady(
 
 internal fun LogisticsDocumentDto.needsTransferFurnitureReadiness(): Boolean =
     (state == "DRAFT" || state == "DEPARTING") &&
-        lines.any { it.state == "PENDING" }
+        (lines.isEmpty() || lines.any { it.state == "PENDING" })
 
 internal fun transferFurnitureIsReady(
     document: LogisticsDocumentDto,
@@ -35,6 +35,56 @@ internal fun transferFurnitureIsReady(
     !document.needsTransferFurnitureReadiness() ||
         readiness?.state == "NOT_REQUIRED" ||
         readiness?.state == "READY"
+
+/** Identifies the only whole-document command allowed for a zero-cabin transfer screen. */
+internal enum class WholeTransferCommand {
+    DEPART,
+    ARRIVE,
+}
+
+/** Presents one server-authoritative zero-cabin transfer command without duplicating its lifecycle. */
+internal data class WholeTransferAction(
+    val command: WholeTransferCommand,
+    val label: String,
+    val enabled: Boolean,
+    val blockingMessage: String?,
+)
+
+/**
+ * Resolves the single valid whole-document action for a zero-cabin transfer projection. All
+ * transitions and final validation remain owned by logistics-service.
+ */
+internal fun wholeTransferAction(
+    document: LogisticsDocumentDto,
+    canManage: Boolean,
+    busy: Boolean,
+    furnitureReady: Boolean,
+): WholeTransferAction? {
+    if (!canManage || document.documentType != "TRANSFER" || document.lines.isNotEmpty()) {
+        return null
+    }
+    return when (document.state) {
+        "DRAFT" -> WholeTransferAction(
+            command = WholeTransferCommand.DEPART,
+            label = "Начать перемещение",
+            enabled = !busy && furnitureReady,
+            blockingMessage = if (!busy && !furnitureReady) {
+                "Сначала завершите задания по мебели."
+            } else {
+                null
+            },
+        )
+
+        "IN_TRANSIT" -> WholeTransferAction(
+            command = WholeTransferCommand.ARRIVE,
+            label = "Подтвердить прибытие",
+            enabled = !busy,
+            blockingMessage = null,
+        )
+
+        else -> null
+    }
+}
 
 internal fun ManagerUiState.withLoadedReturnReadyMedia(
     documentId: String,

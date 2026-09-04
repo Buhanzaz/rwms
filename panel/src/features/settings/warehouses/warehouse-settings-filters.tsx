@@ -35,7 +35,9 @@ export function WarehouseFiltersToggle({
       type="button"
       size="icon"
       variant={open ? "secondary" : "outline"}
-      aria-label={open ? "Скрыть фильтры складов" : "Показать фильтры складов"}
+      aria-label={
+        open ? "Скрыть фильтры объектов" : "Показать фильтры объектов"
+      }
       aria-controls={controls}
       aria-expanded={open}
       onClick={() => onOpenChange(!open)}
@@ -55,9 +57,9 @@ export function WarehouseSettingsFilters({
   onChange: (filters: WarehouseFiltersState) => void
 }) {
   return (
-    <div className="flex flex-col items-stretch gap-2 rounded-lg border bg-card p-2 sm:flex-row sm:flex-wrap sm:items-center">
+    <div className="flex flex-col items-stretch gap-2 rounded-lg border bg-muted/65 p-2 sm:flex-row sm:flex-wrap sm:items-center">
       <SearchableMultiSelectFilter
-        label="Название"
+        label="Код города"
         options={options.names}
         selected={filters.names}
         onApply={(names) => onChange({ ...filters, names })}

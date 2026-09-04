@@ -44,6 +44,7 @@ public class RentalOrderUnitReplacementService {
 
   private final RentalOrderReadService reads;
   private final RentalOrderReservationService reservations;
+  private final RentalOrderMutationLocalStore orderMutations;
   private final RentalOrderInventorySourcePolicy inventorySources;
   private final OrderAuthorizer access;
   private final LogisticsDependencyGateway dependencies;
@@ -180,6 +181,7 @@ public class RentalOrderUnitReplacementService {
         || batchIdempotencyKey == null) {
       throw new IllegalArgumentException("Cabin replacement command is invalid");
     }
+    orderMutations.requireNoOpenMutation(actor, orderId);
     OrderDetailResponse order = reads.get(actor, orderId);
     Map<UUID, UUID> mapping = new LinkedHashMap<>();
     for (ReplacementPair pair : pairs) {
@@ -289,6 +291,7 @@ public class RentalOrderUnitReplacementService {
 
   private OrderDetailResponse process(
       UUID orderId, UUID batchIdempotencyKey, boolean propagate, boolean presentationBooking) {
+    orderMutations.requireNoOpenMutation(orderId);
     List<ReplacementCheckpoint> checkpoints =
         furnitureTasks.replacementBatch(orderId, batchIdempotencyKey);
     ReplacementCheckpoint first = checkpoints.getFirst();

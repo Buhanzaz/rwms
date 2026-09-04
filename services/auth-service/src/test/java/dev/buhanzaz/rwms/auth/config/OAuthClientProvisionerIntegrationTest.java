@@ -472,6 +472,55 @@ class OAuthClientProvisionerIntegrationTest {
     }
 
     @Test
+    void dedicatedManagerAndAdminClientsRejectCrossApplicationScopesBeforeMutation() {
+        OAuthClientProperties.Client managerWithCrossApplicationScopes = dedicatedUserClient(
+                OAuthClientProperties.RENTAL_MANAGER_WEB_CLIENT_ID,
+                Set.of(
+                        "openid",
+                        "profile",
+                        "offline_access",
+                        "rental.manage",
+                        "rwms.read",
+                        "logistics.planning",
+                        "admin.manage"),
+                "http://localhost:8080/manager/auth/callback",
+                "http://localhost:8080/manager/");
+        OAuthClientProperties.Client adminWithCrossApplicationScopes = dedicatedUserClient(
+                OAuthClientProperties.ADMIN_WEB_CLIENT_ID,
+                Set.of(
+                        "openid",
+                        "profile",
+                        "offline_access",
+                        "admin.manage",
+                        "rental.manage",
+                        "rwms.read",
+                        "logistics.planning"),
+                "http://localhost:8080/admin/auth/callback",
+                "http://localhost:8080/admin/");
+
+        assertThatThrownBy(() -> provisioner(managerWithCrossApplicationScopes).run(null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("rwms-rental-manager-web")
+                .hasMessageContaining("isolated USER PKCE contract");
+        assertThatThrownBy(() -> provisioner(adminWithCrossApplicationScopes).run(null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("rwms-admin-web")
+                .hasMessageContaining("isolated USER PKCE contract");
+        assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isZero();
+
+        provisioner(dedicatedUserClient(
+                        OAuthClientProperties.RENTAL_MANAGER_ANDROID_CLIENT_ID,
+                        OAuthClientProperties.RENTAL_MANAGER_SCOPES,
+                        "http://localhost:8080/auth/rental-manager/callback",
+                        "http://localhost:8080/manager/"))
+                .run(null);
+        assertThat(repository.findByClientId(OAuthClientProperties.RENTAL_MANAGER_ANDROID_CLIENT_ID))
+                .isNotNull()
+                .satisfies(client -> assertThat(client.getScopes())
+                        .containsExactlyInAnyOrder("openid", "profile", "offline_access", "rental.manage"));
+    }
+
+    @Test
     void sameRevisionRejectsConfigurationAndSecretDrift() throws Exception {
         provisioner(serviceClient(true, 1, "secret-one", false)).run(null);
 
@@ -848,6 +897,33 @@ class OAuthClientProvisionerIntegrationTest {
                 accessTokenTtl,
                 refreshTokenTtl,
                 reuseRefreshTokens,
+                null,
+                null,
+                false);
+    }
+
+    private OAuthClientProperties.Client dedicatedUserClient(
+            String clientId,
+            Set<String> scopes,
+            String redirectUri,
+            String postLogoutRedirectUri) {
+        return new OAuthClientProperties.Client(
+                clientId,
+                "Dedicated interactive client",
+                true,
+                1,
+                Set.of("none"),
+                Set.of("authorization_code", "refresh_token"),
+                Set.of(redirectUri),
+                Set.of(postLogoutRedirectUri),
+                scopes,
+                true,
+                Set.of(PrincipalType.USER),
+                Set.of("rwms-services"),
+                Set.of("http://localhost:8080"),
+                Duration.ofMinutes(5),
+                Duration.ofDays(30),
+                false,
                 null,
                 null,
                 false);

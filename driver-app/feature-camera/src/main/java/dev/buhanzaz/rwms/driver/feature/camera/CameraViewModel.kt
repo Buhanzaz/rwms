@@ -11,6 +11,7 @@ import dev.buhanzaz.rwms.driver.core.media.EncryptedEvidenceFileStore
 import dev.buhanzaz.rwms.driver.core.sync.DriverSyncScheduler
 import dev.buhanzaz.rwms.driver.core.network.DriverShiftPhotoDto
 import dev.buhanzaz.rwms.driver.core.network.TodayDriverShiftDto
+import dev.buhanzaz.rwms.driver.core.network.toDriverUserMessage
 import java.io.File
 import java.time.Instant
 import java.util.UUID
@@ -97,7 +98,11 @@ class CameraViewModel @Inject constructor(
                 mutableState.value = CameraUiState(savedEvidenceId = evidenceId)
             }.onFailure { error ->
                 temporaryFile.delete()
-                mutableState.value = CameraUiState(error = error.message ?: "Не удалось сохранить фотографию")
+                mutableState.value = CameraUiState(
+                    error = error.toDriverUserMessage(
+                        "Не удалось сохранить фотографию. Сделайте снимок ещё раз.",
+                    ),
+                )
             }
         }
     }
@@ -190,7 +195,11 @@ class CameraViewModel @Inject constructor(
                 mutableState.value = CameraUiState(savedEvidenceId = evidenceId)
             }.onFailure { error ->
                 temporaryFile.delete()
-                mutableState.value = CameraUiState(error = error.message ?: "Не удалось сохранить фотографию")
+                mutableState.value = CameraUiState(
+                    error = error.toDriverUserMessage(
+                        "Не удалось сохранить фотографию. Сделайте снимок ещё раз.",
+                    ),
+                )
             }
         }
     }

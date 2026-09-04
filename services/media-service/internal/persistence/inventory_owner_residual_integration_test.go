@@ -108,6 +108,7 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 			{20, "18", "customer shipment subject binding", "V18__customer_shipment_subject_binding.sql", mediamigration.V18},
 			{21, "19", "customer profile avatar owner", "V19__customer_profile_avatar_owner.sql", mediamigration.V19},
 			{22, "20", "driver shift media owner", "V20__driver_shift_media_owner.sql", mediamigration.V20},
+			{23, "22", "task board worker profile avatar owner", "V22__task_board_worker_profile_avatar_owner.sql", mediamigration.V22},
 		} {
 			applyResidualMigration(t, ctx, pool, migration.rank, migration.version,
 				migration.description, migration.script, migration.body)
@@ -133,17 +134,17 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 		}
 	})
 
-	t.Run("clean V1 through V20 repeat and checksum drift", func(t *testing.T) {
+	t.Run("clean V1 through V20 and V22 repeat and checksum drift", func(t *testing.T) {
 		databaseURL := testsupport.NewIsolatedPostgresDatabase(t, environment.DatabaseURL)
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		pool := openResidualPool(t, ctx, databaseURL)
-		installResidualMigrations(t, ctx, pool, 22)
+		installResidualMigrations(t, ctx, pool, 23)
 		pool.Close()
 
 		first, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open clean V1 through V20 database: %v", err)
+			t.Fatalf("open clean V1 through V20 and V22 database: %v", err)
 		}
 		assertWorkerEvidenceConstraintsValidated(t, ctx, first.Pool)
 		first.Close()
@@ -211,6 +212,8 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 			"V19__customer_profile_avatar_owner.sql", mediamigration.V19)
 		applyResidualMigration(t, ctx, pool, 22, "20", "driver shift media owner",
 			"V20__driver_shift_media_owner.sql", mediamigration.V20)
+		applyResidualMigration(t, ctx, pool, 23, "22", "task board worker profile avatar owner",
+			"V22__task_board_worker_profile_avatar_owner.sql", mediamigration.V22)
 		pool.Close()
 		database, err := Open(ctx, databaseURL)
 		if err != nil {
@@ -321,6 +324,8 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 			"V19__customer_profile_avatar_owner.sql", mediamigration.V19)
 		applyResidualMigration(t, ctx, pool, 22, "20", "driver shift media owner",
 			"V20__driver_shift_media_owner.sql", mediamigration.V20)
+		applyResidualMigration(t, ctx, pool, 23, "22", "task board worker profile avatar owner",
+			"V22__task_board_worker_profile_avatar_owner.sql", mediamigration.V22)
 		pool.Close()
 		upgraded, err := Open(ctx, databaseURL)
 		if err != nil {
@@ -386,6 +391,8 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 			"V19__customer_profile_avatar_owner.sql", mediamigration.V19)
 		applyResidualMigration(t, ctx, pool, 22, "20", "driver shift media owner",
 			"V20__driver_shift_media_owner.sql", mediamigration.V20)
+		applyResidualMigration(t, ctx, pool, 23, "22", "task board worker profile avatar owner",
+			"V22__task_board_worker_profile_avatar_owner.sql", mediamigration.V22)
 		pool.Close()
 		database, err := Open(ctx, databaseURL)
 		if err != nil {
@@ -463,7 +470,7 @@ func TestInventoryOwnerResidualStreamAndReconciliationGateReal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	pool := openResidualPool(t, ctx, databaseURL)
-	installResidualMigrations(t, ctx, pool, 22)
+	installResidualMigrations(t, ctx, pool, 23)
 	pool.Close()
 	database, err := Open(ctx, databaseURL)
 	if err != nil {
@@ -751,10 +758,11 @@ func installResidualMigrations(t testing.TB, ctx context.Context, pool *pgxpool.
 		{"customer shipment subject binding", "V18__customer_shipment_subject_binding.sql", mediamigration.V18},
 		{"customer profile avatar owner", "V19__customer_profile_avatar_owner.sql", mediamigration.V19},
 		{"driver shift media owner", "V20__driver_shift_media_owner.sql", mediamigration.V20},
+		{"task board worker profile avatar owner", "V22__task_board_worker_profile_avatar_owner.sql", mediamigration.V22},
 	}
 	for index := 0; index < through; index++ {
 		migration := migrations[index]
-		versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20"}
+		versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "22"}
 		applyResidualMigration(t, ctx, pool, index+1, versions[index], migration.description,
 			migration.script, migration.body)
 	}

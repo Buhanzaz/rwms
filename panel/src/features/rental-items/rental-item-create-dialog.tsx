@@ -1,20 +1,43 @@
-import { useEffect, useId, useRef, useState, type FormEvent } from "react"
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactElement,
+} from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { CheckIcon } from "@hugeicons/core-free-icons"
 
 import {
+  abandonRentalItemCreationIntent,
   AssetRentalItemConflictError,
-  createAssetRentalItem,
+  completeRentalItemCreationIntent,
+  createAssetRentalItemWithPhotoIntent,
   createIdempotencyKey,
+  getAssetRentalItem,
   getRentalItemCreationOptions,
+  listPendingRentalItemCreationIntents,
   rentalItemCreationOptionsQueryKey,
+  rentalItemCreationIntentsQueryKey,
+  type RentalItemCreationIntent,
+  type RentalItemCreationPhotoManifestInput,
 } from "@/features/rental-items/api/asset-rental-items-api"
 import {
   cabinMediaOwner,
   createHttpMediaClient,
+  type MediaAsset,
 } from "@/features/media/media-service"
 import { retryOwnerProofOperation } from "@/features/media/owner-proof-retry"
+import {
+  creationPhotoCommandKeys,
+  matchRentalItemCreationManifest,
+  prepareRentalItemCreationPhotos,
+  validateCreatedRentalItemIntent,
+  waitForRentalItemCreationPhotosReady,
+  type PreparedRentalItemCreationPhotos,
+} from "@/features/rental-items/rental-item-creation-intent-support"
 import {
   RentalItemCreationPhotoUploader,
   type StagedRentalItemPhoto,
@@ -30,6 +53,14 @@ import {
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 import { Button } from "@/components/ui/button"
 import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -37,6 +68,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import {
   Field,
   FieldError,
@@ -80,7 +121,35 @@ export type RentalItemCreationResult<T> = {
   value: T
 }
 
-export type RentalItemCreationDialogProps<T> = {
+/** Result of atomically creating a cabin and its server-owned photo intent. */
+export type RentalItemPhotoIntentCreationResult<T> =
+  RentalItemCreationResult<T> & {
+    intent: RentalItemCreationIntent
+  }
+
+/** Asset-owned operations injected into the shared creation form. */
+export type RentalItemPhotoIntentWorkflow<T> = {
+  pendingQueryKey: readonly unknown[]
+  listPending: () => Promise<readonly RentalItemCreationIntent[]>
+  create: (
+    command: RentalItemCreationCommand,
+    manifest: readonly RentalItemCreationPhotoManifestInput[]
+  ) => Promise<RentalItemPhotoIntentCreationResult<T>>
+  load: (
+    intent: RentalItemCreationIntent
+  ) => Promise<RentalItemCreationResult<T>>
+  complete: (
+    intent: RentalItemCreationIntent,
+    idempotencyKey: string
+  ) => Promise<RentalItemCreationIntent>
+  abandon: (
+    intent: RentalItemCreationIntent,
+    idempotencyKey: string
+  ) => Promise<RentalItemCreationIntent>
+}
+
+/** Shared presentation callbacks and composition fields for both create modes. */
+type RentalItemCreationDialogCommonProps<T> = {
   open: boolean
   warehouseId: string
   onOpenChange: (open: boolean) => void
@@ -91,18 +160,37 @@ export type RentalItemCreationDialogProps<T> = {
   initialNumber?: string
   numberReadOnly?: boolean
   categoryMode?: Extract<RentalItemCompositionCategoryMode, "NEW" | "USED">
-  /** Defaults to true. Inventory attaches photos later to the inspection finding. */
-  photosEnabled?: boolean
   submitLabel?: string
-  createRentalItem: (
-    command: RentalItemCreationCommand
-  ) => Promise<RentalItemCreationResult<T>>
   /** Runs as soon as the cabin itself exists, before staged photos upload. */
   onAssetCreated?: (value: T, createdItem: CreatedRentalItemAsset) => void
   /** Runs only after all staged photos have completed (or there were none). */
   onCompleted?: (value: T, createdItem: CreatedRentalItemAsset) => void
   errorMessage?: (error: unknown) => string | null
 }
+
+/** Warehouse create mode whose mandatory photos are owned by a durable intent. */
+type RentalItemPhotoIntentDialogProps<T> =
+  RentalItemCreationDialogCommonProps<T> & {
+    /** Photo creation is the default and has no browser-owned fallback. */
+    photosEnabled?: true
+    createRentalItem?: never
+    photoIntentWorkflow: RentalItemPhotoIntentWorkflow<T>
+  }
+
+/** Inventory create mode whose later inspection owns photo collection. */
+type RentalItemLegacyCreationDialogProps<T> =
+  RentalItemCreationDialogCommonProps<T> & {
+    /** Inventory attaches photos later to the inspection finding. */
+    photosEnabled: false
+    createRentalItem: (
+      command: RentalItemCreationCommand
+    ) => Promise<RentalItemCreationResult<T>>
+    photoIntentWorkflow?: never
+  }
+
+/** Supported mutually exclusive creation modes for the shared dialog. */
+export type RentalItemCreationDialogProps<T> =
+  RentalItemPhotoIntentDialogProps<T> | RentalItemLegacyCreationDialogProps<T>
 
 type RentalItemCreateFormState = {
   number: string
@@ -122,16 +210,7 @@ function disposeStagedRentalItemPhotos(
 function hasStagedRentalItemTitlePhoto(
   photos: readonly StagedRentalItemPhoto[]
 ) {
-  return photos.length === 0 || photos.some((photo) => photo.title)
-}
-
-function orderStagedRentalItemPhotosForUpload(
-  photos: readonly StagedRentalItemPhoto[]
-) {
-  const titlePhoto = photos.find((photo) => photo.title)
-  if (!titlePhoto) return [...photos]
-
-  return [titlePhoto, ...photos.filter((photo) => photo.id !== titlePhoto.id)]
+  return photos.length > 0 && photos.some((photo) => photo.title)
 }
 
 function rentalItemNumberError(number: string) {
@@ -181,6 +260,12 @@ function hasRequiredFormFields(
   )
 }
 
+export function RentalItemCreationDialog<T>(
+  props: RentalItemPhotoIntentDialogProps<T>
+): ReactElement
+export function RentalItemCreationDialog<T>(
+  props: RentalItemLegacyCreationDialogProps<T>
+): ReactElement
 export function RentalItemCreationDialog<T>({
   open,
   warehouseId,
@@ -194,6 +279,7 @@ export function RentalItemCreationDialog<T>({
   photosEnabled = true,
   submitLabel = "Создать бытовку",
   createRentalItem,
+  photoIntentWorkflow,
   onAssetCreated,
   onCompleted,
   errorMessage,
@@ -205,18 +291,32 @@ export function RentalItemCreationDialog<T>({
     createEmptyForm({ number: initialNumber })
   )
   const [submitted, setSubmitted] = useState(false)
-  const [createdItem, setCreatedItem] = useState<CreatedRentalItemAsset | null>(
-    null
-  )
   const [createdResult, setCreatedResult] =
     useState<RentalItemCreationResult<T> | null>(null)
+  const [activeIntent, setActiveIntent] =
+    useState<RentalItemCreationIntent | null>(null)
+  const [abandonTarget, setAbandonTarget] =
+    useState<RentalItemCreationIntent | null>(null)
+  const [completionNotice, setCompletionNotice] = useState<string | null>(null)
   const [photoUploadPending, setPhotoUploadPending] = useState(false)
   const [photoUploadError, setPhotoUploadError] = useState<string | null>(null)
-  const photoFolderId = useRef(crypto.randomUUID())
+  const completionKeys = useRef(new Map<string, string>())
+  const abandonmentKeys = useRef(new Map<string, string>())
+  const creationAttemptKeys = useRef(new Map<string, string>())
   const creationOptionsQuery = useQuery({
     queryKey: rentalItemCreationOptionsQueryKey(warehouseId),
     queryFn: () => getRentalItemCreationOptions(accessToken, warehouseId),
     enabled: Boolean(open && canCreate && accessToken && warehouseId),
+  })
+  const pendingIntentsQuery = useQuery({
+    queryKey: photoIntentWorkflow?.pendingQueryKey ?? [
+      "rental-item-creation-intents-disabled",
+      warehouseId,
+    ],
+    queryFn: () => photoIntentWorkflow?.listPending() ?? Promise.resolve([]),
+    enabled: Boolean(
+      open && canCreate && photosEnabled && accessToken && photoIntentWorkflow
+    ),
   })
   const creationOptions = creationOptionsQuery.data
   const numberError = submitted ? rentalItemNumberError(form.number) : null
@@ -264,11 +364,15 @@ export function RentalItemCreationDialog<T>({
       })
     )
     setSubmitted(false)
-    setCreatedItem(null)
     setCreatedResult(null)
+    setActiveIntent(null)
+    setAbandonTarget(null)
+    setCompletionNotice(null)
     setPhotoUploadError(null)
     setPhotoUploadPending(false)
-    photoFolderId.current = crypto.randomUUID()
+    completionKeys.current.clear()
+    abandonmentKeys.current.clear()
+    creationAttemptKeys.current.clear()
   }
 
   function finishCreation(
@@ -291,12 +395,14 @@ export function RentalItemCreationDialog<T>({
 
   async function uploadCreatedPhotos(
     result: RentalItemCreationResult<T>,
-    photos: StagedRentalItemPhoto[]
+    intent: RentalItemCreationIntent,
+    photos: StagedRentalItemPhoto[],
+    preparedPhotos?: PreparedRentalItemCreationPhotos
   ) {
     const item = result.createdItem
-    if (!accessToken) {
+    if (!accessToken || !photoIntentWorkflow) {
       setPhotoUploadError(
-        "Бытовка создана, но для загрузки фото не получен токен доступа."
+        "Создание бытовки не завершено: недоступна защищённая загрузка фотографий. Откройте незавершённое создание позже."
       )
       return
     }
@@ -305,29 +411,67 @@ export function RentalItemCreationDialog<T>({
     setPhotoUploadError(null)
     const owner = cabinMediaOwner(item.id, item.warehouseId)
     try {
-      const orderedPhotos = orderStagedRentalItemPhotosForUpload(photos)
-      for (const [index, photo] of orderedPhotos.entries()) {
-        await retryOwnerProofOperation(() =>
+      const prepared =
+        preparedPhotos ??
+        (await prepareRentalItemCreationPhotos(
+          rentalItemCreationMediaClient,
+          photos
+        ))
+      const manifestMatch = matchRentalItemCreationManifest(prepared, intent)
+      if (!manifestMatch.matches) throw new Error(manifestMatch.message)
+
+      const uploadedAssets: MediaAsset[] = []
+      for (const [index, photo] of prepared.photos.entries()) {
+        const manifestEntry = intent.photoManifest[index]
+        if (!manifestEntry) {
+          throw new Error(
+            "Сохранённый состав фотографий неполон. Создание осталось незавершённым."
+          )
+        }
+        const upload = await retryOwnerProofOperation(() =>
           rentalItemCreationMediaClient.uploadFile(
             accessToken,
             owner,
             photo.file,
             index,
-            photoFolderId.current,
-            photo.commandKeys
+            intent.mediaFolderId,
+            creationPhotoCommandKeys(manifestEntry)
           )
+        )
+        uploadedAssets.push(upload.asset)
+      }
+      await waitForRentalItemCreationPhotosReady({
+        mediaClient: rentalItemCreationMediaClient,
+        accessToken,
+        owner,
+        folderId: intent.mediaFolderId,
+        uploadedAssets,
+      })
+      const completionKey =
+        completionKeys.current.get(intent.id) ?? createIdempotencyKey()
+      completionKeys.current.set(intent.id, completionKey)
+      const completedIntent = await photoIntentWorkflow.complete(
+        intent,
+        completionKey
+      )
+      if (completedIntent.state !== "COMPLETED") {
+        throw new Error(
+          "Сервис имущества не подтвердил завершение создания бытовки."
         )
       }
       await queryClient.invalidateQueries({ queryKey: ["rental-item-media"] })
       await queryClient.invalidateQueries({
         queryKey: ["rental-item-media-covers"],
       })
+      await queryClient.invalidateQueries({
+        queryKey: photoIntentWorkflow.pendingQueryKey,
+      })
       finishCreation(result, photos)
     } catch (error) {
       setPhotoUploadError(
-        `Бытовка ${item.number} создана, но фото не загружены: ${
+        `Создание бытовки ${item.number} не завершено: ${
           error instanceof Error ? error.message : "сервис фото недоступен"
-        }`
+        } Бытовка пока недоступна для аренды.`
       )
     } finally {
       setPhotoUploadPending(false)
@@ -335,10 +479,58 @@ export function RentalItemCreationDialog<T>({
   }
 
   const createMutation = useMutation({
-    mutationFn: (
+    mutationFn: async (
       input: RentalItemCreationCommand & { photos: StagedRentalItemPhoto[] }
-    ) => createRentalItem(input),
-    onSuccess: (result, input) => {
+    ) => {
+      if (!photosEnabled) {
+        if (!createRentalItem) {
+          throw new Error("Создание бытовки без фотографий не настроено.")
+        }
+        return {
+          result: await createRentalItem(input),
+          intent: null,
+          preparedPhotos: null,
+        }
+      }
+      if (!photoIntentWorkflow) {
+        throw new Error(
+          "Создание бытовки с обязательными фотографиями не настроено."
+        )
+      }
+      const preparedPhotos = await prepareRentalItemCreationPhotos(
+        rentalItemCreationMediaClient,
+        input.photos
+      )
+      const creationFingerprint = JSON.stringify({
+        number: input.number,
+        rentalTypeId: input.rentalTypeId,
+        dimensionId: input.dimensionId,
+        finishingId: input.finishingId,
+        category: input.category,
+        characteristicIds: input.characteristicIds,
+        linoleum: input.linoleum,
+        photoManifest: preparedPhotos.manifest,
+      })
+      const idempotencyKey =
+        creationAttemptKeys.current.get(creationFingerprint) ??
+        input.idempotencyKey
+      creationAttemptKeys.current.set(creationFingerprint, idempotencyKey)
+      const created = await photoIntentWorkflow.create(
+        { ...input, idempotencyKey },
+        preparedPhotos.manifest
+      )
+      validateCreatedRentalItemIntent(
+        created.intent,
+        created.createdItem,
+        preparedPhotos
+      )
+      return {
+        result: created,
+        intent: created.intent,
+        preparedPhotos,
+      }
+    },
+    onSuccess: ({ result, intent, preparedPhotos }, input) => {
       setCreatedResult(result)
       try {
         onAssetCreated?.(result.value, result.createdItem)
@@ -349,27 +541,96 @@ export function RentalItemCreationDialog<T>({
           }`
         )
       }
-      if (!photosEnabled || input.photos.length === 0) {
+      if (!intent || !preparedPhotos) {
         finishCreation(result, [])
         return
       }
-      setCreatedItem(result.createdItem)
-      void uploadCreatedPhotos(result, input.photos)
+      setActiveIntent(intent)
+      void queryClient.invalidateQueries({
+        queryKey: photoIntentWorkflow?.pendingQueryKey,
+      })
+      void uploadCreatedPhotos(result, intent, input.photos, preparedPhotos)
+    },
+    onError: () => {
+      if (photosEnabled && photoIntentWorkflow) {
+        void queryClient.invalidateQueries({
+          queryKey: photoIntentWorkflow.pendingQueryKey,
+        })
+      }
+    },
+  })
+
+  const resumeMutation = useMutation({
+    mutationFn: async (intent: RentalItemCreationIntent) => {
+      if (!photoIntentWorkflow) {
+        throw new Error("Продолжение создания бытовки не настроено.")
+      }
+      return { intent, result: await photoIntentWorkflow.load(intent) }
+    },
+    onSuccess: ({ intent, result }) => {
+      disposeStagedRentalItemPhotos(form.photos)
+      setForm((current) => ({ ...current, photos: [] }))
+      setActiveIntent(intent)
+      setCreatedResult(result)
+      setCompletionNotice(null)
+      setPhotoUploadError(null)
+      onAssetCreated?.(result.value, result.createdItem)
+    },
+  })
+
+  const abandonMutation = useMutation({
+    mutationFn: async (intent: RentalItemCreationIntent) => {
+      if (!photoIntentWorkflow) {
+        throw new Error("Прекращение создания бытовки не настроено.")
+      }
+      const abandonmentKey =
+        abandonmentKeys.current.get(intent.id) ?? createIdempotencyKey()
+      abandonmentKeys.current.set(intent.id, abandonmentKey)
+      const abandoned = await photoIntentWorkflow.abandon(
+        intent,
+        abandonmentKey
+      )
+      return {
+        abandoned,
+        result: await photoIntentWorkflow.load(abandoned),
+      }
+    },
+    onSuccess: ({ abandoned, result }) => {
+      onAssetCreated?.(result.value, result.createdItem)
+      if (activeIntent?.id === abandoned.id) {
+        disposeStagedRentalItemPhotos(form.photos)
+        setForm((current) => ({ ...current, photos: [] }))
+        setActiveIntent(null)
+        setCreatedResult(null)
+      }
+      setCompletionNotice(
+        `Создание бытовки ${result.createdItem.number} прекращено. Бытовка и загруженные фото сохранены, статус бытовки — «На складе».`
+      )
+      setPhotoUploadError(null)
+      void queryClient.invalidateQueries({
+        queryKey: photoIntentWorkflow?.pendingQueryKey,
+      })
+    },
+    onError: (error) => {
+      setPhotoUploadError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось прекратить незавершённое создание бытовки."
+      )
     },
   })
 
   const formControlsDisabled =
-    createMutation.isPending || photoUploadPending || createdItem !== null
+    createMutation.isPending ||
+    photoUploadPending ||
+    resumeMutation.isPending ||
+    abandonMutation.isPending
 
   function handleDialogOpenChange(nextOpen: boolean) {
     if (nextOpen && !canCreate) return
-    if (!nextOpen && (createMutation.isPending || photoUploadPending)) return
+    if (!nextOpen && formControlsDisabled) return
 
     if (!nextOpen) {
-      if (createdResult) {
-        finishCreation(createdResult, form.photos)
-        return
-      }
       resetDialogState()
     }
 
@@ -383,7 +644,7 @@ export function RentalItemCreationDialog<T>({
     if (
       !hasRequiredFormFields(form, photosEnabled) ||
       !canCreate ||
-      createdItem !== null ||
+      activeIntent !== null ||
       createMutation.isPending
     ) {
       return
@@ -407,152 +668,311 @@ export function RentalItemCreationDialog<T>({
       ? creationOptionsQuery.error.message
       : "Не удалось загрузить настройки бытовок."
     : null
+  const pendingIntentsError = pendingIntentsQuery.error
+    ? pendingIntentsQuery.error instanceof Error
+      ? pendingIntentsQuery.error.message
+      : "Не удалось загрузить незавершённые создания бытовок."
+    : null
+
+  function retryActiveIntent() {
+    if (activeIntent && createdResult) {
+      void uploadCreatedPhotos(createdResult, activeIntent, form.photos)
+    }
+  }
 
   return (
-    <Dialog open={open && canCreate} onOpenChange={handleDialogOpenChange}>
-      <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          {description ? (
-            <DialogDescription>{description}</DialogDescription>
+    <>
+      <Dialog open={open && canCreate} onOpenChange={handleDialogOpenChange}>
+        <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>{title}</DialogTitle>
+            {description ? (
+              <DialogDescription>{description}</DialogDescription>
+            ) : null}
+          </DialogHeader>
+
+          {completionNotice ? (
+            <Card size="sm">
+              <CardHeader>
+                <CardTitle>Незавершённое создание обработано</CardTitle>
+                <CardDescription>{completionNotice}</CardDescription>
+              </CardHeader>
+            </Card>
           ) : null}
-        </DialogHeader>
 
-        {!creationOptions ? (
-          <div className="flex flex-col gap-4">
-            {optionsError ? (
-              <FieldError role="alert">{optionsError}</FieldError>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                Загружаем настройки бытовок…
-              </p>
-            )}
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => handleDialogOpenChange(false)}
-              >
-                Отмена
-              </Button>
-              {optionsError ? (
-                <Button
-                  type="button"
-                  onClick={() => void creationOptionsQuery.refetch()}
-                >
-                  Повторить
-                </Button>
+          {photosEnabled && photoIntentWorkflow && !activeIntent ? (
+            <div className="flex flex-col gap-3">
+              {pendingIntentsQuery.isPending ? (
+                <p className="text-sm text-muted-foreground">
+                  Проверяем незавершённые создания…
+                </p>
               ) : null}
-            </DialogFooter>
-          </div>
-        ) : (
-          <form className="flex flex-col gap-5" onSubmit={submitForm}>
-            <div
-              aria-busy={formControlsDisabled || undefined}
-              aria-disabled={formControlsDisabled || undefined}
-              inert={formControlsDisabled || undefined}
-              className="flex min-w-0 flex-col gap-5"
-            >
-              <FieldGroup>
-                <Field data-invalid={numberError !== null}>
-                  <FieldLabel htmlFor={numberInputId}>Номер бытовки</FieldLabel>
-                  <Input
-                    id={numberInputId}
-                    value={form.number}
-                    maxLength={128}
-                    readOnly={numberReadOnly}
-                    aria-invalid={numberError !== null}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        number: event.target.value,
-                      }))
-                    }
-                    placeholder="Например, БЫТ-121"
-                  />
-                  {numberError ? <FieldError>{numberError}</FieldError> : null}
-                </Field>
-              </FieldGroup>
-
-              <RentalItemCompositionFields
-                options={creationOptions}
-                value={form.composition}
-                categoryMode={categoryMode}
-                submitted={submitted}
-                disabled={formControlsDisabled}
-                onChange={(composition) =>
-                  setForm((current) => ({ ...current, composition }))
-                }
-              />
-
-              {photosEnabled ? (
-                <RentalItemCreationPhotoUploader
-                  photos={form.photos}
-                  disabled={formControlsDisabled}
-                  titlePhotoMissing={
-                    submitted && !hasStagedRentalItemTitlePhoto(form.photos)
-                  }
-                  onChange={(photos) =>
-                    setForm((current) => ({ ...current, photos }))
-                  }
-                />
+              {pendingIntentsError ? (
+                <FieldError role="alert">{pendingIntentsError}</FieldError>
+              ) : null}
+              {(pendingIntentsQuery.data ?? []).length > 0 ? (
+                <Card size="sm">
+                  <CardHeader>
+                    <CardTitle>Незавершённые создания</CardTitle>
+                    <CardDescription>
+                      Бытовки ещё удерживаются сервисом имущества и недоступны
+                      для аренды. Выберите исходные фото для продолжения или
+                      явно прекратите создание.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-3">
+                    {(pendingIntentsQuery.data ?? []).map((intent) => (
+                      <Card key={intent.id} size="sm">
+                        <CardHeader>
+                          <CardTitle>
+                            Бытовка {intent.rentalItemId.slice(0, 8)}…
+                          </CardTitle>
+                          <CardDescription>
+                            Требуется фото: {intent.expectedPhotoCount}. Создано{" "}
+                            {new Date(intent.createdAt).toLocaleString("ru-RU")}
+                            .
+                          </CardDescription>
+                        </CardHeader>
+                        <CardFooter className="flex flex-wrap justify-end gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            disabled={formControlsDisabled}
+                            onClick={() => setAbandonTarget(intent)}
+                          >
+                            Прекратить
+                          </Button>
+                          <Button
+                            type="button"
+                            disabled={formControlsDisabled}
+                            onClick={() => resumeMutation.mutate(intent)}
+                          >
+                            Продолжить
+                          </Button>
+                        </CardFooter>
+                      </Card>
+                    ))}
+                  </CardContent>
+                </Card>
               ) : null}
             </div>
+          ) : null}
 
-            {createMutation.isError ? (
-              <FieldError>
-                {errorMessage?.(createMutation.error) ??
-                  (createMutation.error instanceof Error
-                    ? createMutation.error.message
-                    : "Не удалось создать бытовку. Проверьте данные и повторите.")}
-              </FieldError>
-            ) : null}
-
-            {photoUploadError ? (
-              <FieldError role="alert">{photoUploadError}</FieldError>
-            ) : null}
-
-            <DialogFooter className={formFooterClassName}>
-              <Button
-                type="button"
-                variant="outline"
-                className="flex-1"
-                disabled={createMutation.isPending || photoUploadPending}
-                onClick={() => handleDialogOpenChange(false)}
-              >
-                {createdItem ? "Закрыть" : "Отмена"}
-              </Button>
-              {createdItem ? (
+          {activeIntent && createdResult ? (
+            <Card size="sm">
+              <CardHeader>
+                <CardTitle>
+                  Продолжение создания {createdResult.createdItem.number}
+                </CardTitle>
+                <CardDescription>
+                  Повторно выберите ровно {activeIntent.expectedPhotoCount} фото
+                  из исходного набора. Титульное фото должно остаться первым в
+                  сохранённом составе.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-4">
+                <div
+                  aria-busy={formControlsDisabled || undefined}
+                  aria-disabled={formControlsDisabled || undefined}
+                  inert={formControlsDisabled || undefined}
+                >
+                  <RentalItemCreationPhotoUploader
+                    photos={form.photos}
+                    disabled={formControlsDisabled}
+                    titlePhotoMissing={
+                      submitted && !hasStagedRentalItemTitlePhoto(form.photos)
+                    }
+                    onChange={(photos) =>
+                      setForm((current) => ({ ...current, photos }))
+                    }
+                  />
+                </div>
+                {photoUploadError ? (
+                  <FieldError role="alert">{photoUploadError}</FieldError>
+                ) : null}
+              </CardContent>
+              <CardFooter className="flex flex-wrap justify-end gap-2">
                 <Button
                   type="button"
-                  className="flex-[1.65]"
-                  disabled={photoUploadPending}
-                  onClick={() => {
-                    if (createdResult) {
-                      void uploadCreatedPhotos(createdResult, form.photos)
-                    }
-                  }}
+                  variant="outline"
+                  disabled={formControlsDisabled}
+                  onClick={() => handleDialogOpenChange(false)}
+                >
+                  Отложить
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={formControlsDisabled}
+                  onClick={() => setAbandonTarget(activeIntent)}
+                >
+                  Прекратить
+                </Button>
+                <Button
+                  type="button"
+                  disabled={formControlsDisabled}
+                  onClick={retryActiveIntent}
                 >
                   <HugeiconsIcon icon={CheckIcon} data-icon="inline-start" />
                   {photoUploadPending
-                    ? "Загрузка фото..."
-                    : "Повторить загрузку фото"}
+                    ? "Загрузка и проверка..."
+                    : "Загрузить и завершить"}
                 </Button>
+              </CardFooter>
+            </Card>
+          ) : !creationOptions ? (
+            <div className="flex flex-col gap-4">
+              {optionsError ? (
+                <FieldError role="alert">{optionsError}</FieldError>
               ) : (
+                <p className="text-sm text-muted-foreground">
+                  Загружаем настройки бытовок…
+                </p>
+              )}
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => handleDialogOpenChange(false)}
+                >
+                  Отмена
+                </Button>
+                {optionsError ? (
+                  <Button
+                    type="button"
+                    onClick={() => void creationOptionsQuery.refetch()}
+                  >
+                    Повторить
+                  </Button>
+                ) : null}
+              </DialogFooter>
+            </div>
+          ) : (
+            <form className="flex flex-col gap-5" onSubmit={submitForm}>
+              <div
+                aria-busy={formControlsDisabled || undefined}
+                aria-disabled={formControlsDisabled || undefined}
+                inert={formControlsDisabled || undefined}
+                className="flex min-w-0 flex-col gap-5"
+              >
+                <FieldGroup>
+                  <Field data-invalid={numberError !== null}>
+                    <FieldLabel htmlFor={numberInputId}>
+                      Номер бытовки
+                    </FieldLabel>
+                    <Input
+                      id={numberInputId}
+                      value={form.number}
+                      maxLength={128}
+                      readOnly={numberReadOnly}
+                      aria-invalid={numberError !== null}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          number: event.target.value,
+                        }))
+                      }
+                      placeholder="Например, БЫТ-121"
+                    />
+                    {numberError ? (
+                      <FieldError>{numberError}</FieldError>
+                    ) : null}
+                  </Field>
+                </FieldGroup>
+
+                <RentalItemCompositionFields
+                  options={creationOptions}
+                  value={form.composition}
+                  categoryMode={categoryMode}
+                  submitted={submitted}
+                  disabled={formControlsDisabled}
+                  onChange={(composition) =>
+                    setForm((current) => ({ ...current, composition }))
+                  }
+                />
+
+                {photosEnabled ? (
+                  <RentalItemCreationPhotoUploader
+                    photos={form.photos}
+                    disabled={formControlsDisabled}
+                    titlePhotoMissing={
+                      submitted && !hasStagedRentalItemTitlePhoto(form.photos)
+                    }
+                    onChange={(photos) =>
+                      setForm((current) => ({ ...current, photos }))
+                    }
+                  />
+                ) : null}
+              </div>
+
+              {createMutation.isError ? (
+                <FieldError>
+                  {errorMessage?.(createMutation.error) ??
+                    (createMutation.error instanceof Error
+                      ? createMutation.error.message
+                      : "Не удалось создать бытовку. Проверьте данные и повторите.")}
+                </FieldError>
+              ) : null}
+
+              {photoUploadError ? (
+                <FieldError role="alert">{photoUploadError}</FieldError>
+              ) : null}
+
+              <DialogFooter className={formFooterClassName}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="flex-1"
+                  disabled={formControlsDisabled}
+                  onClick={() => handleDialogOpenChange(false)}
+                >
+                  Отмена
+                </Button>
                 <Button
                   type="submit"
                   className="flex-[1.65]"
-                  disabled={!canCreate || createMutation.isPending}
+                  disabled={!canCreate || formControlsDisabled}
                 >
                   <HugeiconsIcon icon={CheckIcon} data-icon="inline-start" />
                   {createMutation.isPending ? "Создание..." : submitLabel}
                 </Button>
-              )}
-            </DialogFooter>
-          </form>
-        )}
-      </DialogContent>
-    </Dialog>
+              </DialogFooter>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={abandonTarget !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && !abandonMutation.isPending) setAbandonTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Прекратить создание бытовки?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Бытовка и уже загруженные фото не удалятся. Бытовка перейдёт в
+              неарендный статус «На складе», а незавершённое создание закроется.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={abandonMutation.isPending}>
+              Отмена
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={abandonMutation.isPending}
+              onClick={() => {
+                if (abandonTarget) abandonMutation.mutate(abandonTarget)
+              }}
+            >
+              {abandonMutation.isPending ? "Прекращаем..." : "Прекратить"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   )
 }
 
@@ -581,6 +1001,19 @@ export function RentalItemCreateDialog({
     })
   }
 
+  function creationResult(
+    item: RentalItemDto
+  ): RentalItemCreationResult<RentalItemDto> {
+    return {
+      createdItem: {
+        id: item.id,
+        warehouseId: item.warehouseId,
+        number: item.number,
+      },
+      value: item,
+    }
+  }
+
   return (
     <RentalItemCreationDialog<RentalItemDto>
       open={open}
@@ -588,29 +1021,56 @@ export function RentalItemCreateDialog({
       onOpenChange={onOpenChange}
       canCreate={canEditRentalItems}
       title="Создание новой бытовки"
-      createRentalItem={async (command) => {
-        const item = await createAssetRentalItem({
-          accessToken,
-          idempotencyKey: command.idempotencyKey,
-          input: {
-            warehouseId,
-            number: command.number,
-            rentalTypeId: command.rentalTypeId,
-            dimensionId: command.dimensionId,
-            finishingId: command.finishingId,
-            category: command.category,
-            characteristicIds: command.characteristicIds,
-            linoleum: command.linoleum,
-          },
-        })
-        return {
-          createdItem: {
-            id: item.id,
-            warehouseId: item.warehouseId,
-            number: item.number,
-          },
-          value: item,
-        }
+      photoIntentWorkflow={{
+        pendingQueryKey: rentalItemCreationIntentsQueryKey(warehouseId),
+        listPending: async () =>
+          (
+            await listPendingRentalItemCreationIntents({
+              accessToken,
+              warehouseId,
+              page: 0,
+              size: 50,
+            })
+          ).content,
+        create: async (command, photoManifest) => {
+          const created = await createAssetRentalItemWithPhotoIntent({
+            accessToken,
+            idempotencyKey: command.idempotencyKey,
+            input: {
+              warehouseId,
+              number: command.number,
+              rentalTypeId: command.rentalTypeId,
+              dimensionId: command.dimensionId,
+              finishingId: command.finishingId,
+              category: command.category,
+              characteristicIds: command.characteristicIds,
+              linoleum: command.linoleum,
+            },
+            photoManifest,
+          })
+          return {
+            ...creationResult(created.rentalItem),
+            intent: created.intent,
+          }
+        },
+        load: async (intent) =>
+          creationResult(
+            await getAssetRentalItem(accessToken, intent.rentalItemId)
+          ),
+        complete: (intent, idempotencyKey) =>
+          completeRentalItemCreationIntent({
+            accessToken,
+            intentId: intent.id,
+            expectedVersion: intent.version,
+            idempotencyKey,
+          }),
+        abandon: (intent, idempotencyKey) =>
+          abandonRentalItemCreationIntent({
+            accessToken,
+            intentId: intent.id,
+            expectedVersion: intent.version,
+            idempotencyKey,
+          }),
       }}
       onAssetCreated={(item) => refreshRentalItemQueries(item)}
       errorMessage={(error) =>

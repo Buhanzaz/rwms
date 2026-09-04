@@ -1,6 +1,7 @@
 import { useMemo, useState, type FormEvent } from "react"
 
 import type { WarehouseInfo } from "@/api/warehouse-api"
+import { TimeZoneSelect } from "@/components/time-zone-select"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -53,6 +54,7 @@ const ACCESS_LEVELS = Object.keys(
 type UserEditorResult = {
   profile: AdminUserProfileInput | CreateAdminUserInput
   accesses: AdminUserWarehouseAccess[]
+  password: string | null
 }
 
 type AccessDraft = {
@@ -92,9 +94,14 @@ export function UserEditorDialog({
   const [firstName, setFirstName] = useState(user?.firstName ?? "")
   const [lastName, setLastName] = useState(user?.lastName ?? "")
   const [email, setEmail] = useState(user?.email ?? "")
-  const [timeZoneId, setTimeZoneId] = useState(user?.timeZoneId ?? "")
+  const [timeZoneId, setTimeZoneId] = useState(
+    user?.timeZoneId ?? "Europe/Moscow"
+  )
   const [globalRole, setGlobalRole] = useState<UserGlobalRole>(
-    user?.globalRole ?? "VIEWER"
+    user?.globalRole ??
+      (allowedRoles.includes("VIEWER")
+        ? "VIEWER"
+        : (allowedRoles[0] ?? "VIEWER"))
   )
   const [active, setActive] = useState(user?.active ?? true)
   const [mobileAppAccess, setMobileAppAccess] = useState(
@@ -105,8 +112,7 @@ export function UserEditorDialog({
     Object.fromEntries(
       warehouses.map((warehouse) => {
         const current = user?.warehouseAccesses.find(
-          (access) =>
-            access.warehouseId === warehouse.id && access.active
+          (access) => access.warehouseId === warehouse.id && access.active
         )
 
         return [
@@ -161,6 +167,16 @@ export function UserEditorDialog({
       return
     }
 
+    if (user !== null && password.length > 0 && password.length < 8) {
+      setValidationError("Новый пароль должен содержать не менее 8 символов.")
+      return
+    }
+
+    if (user !== null && password.length > 0 && password !== confirmPassword) {
+      setValidationError("Пароли не совпадают.")
+      return
+    }
+
     if (!active && deactivationBlockedReason !== null) {
       setValidationError(deactivationBlockedReason)
       return
@@ -171,34 +187,38 @@ export function UserEditorDialog({
       firstName: firstName.trim() || null,
       lastName: lastName.trim() || null,
       email: email.trim() || null,
-      timeZoneId: timeZoneId.trim() || null,
+      timeZoneId: timeZoneId,
       active,
       globalRole,
       mobileAppAccess: managerAppEligible ? mobileAppAccess : false,
       rentalAccess,
     }
 
-    const warehouseAccesses = warehouses.flatMap((warehouse) => {
-      const draft = accesses[warehouse.id]
+    const warehouseAccesses =
+      managerAppEligible && mobileAppAccess
+        ? warehouses.flatMap((warehouse) => {
+            const draft = accesses[warehouse.id]
 
-      if (!draft?.enabled) {
-        return []
-      }
+            if (!draft?.enabled) {
+              return []
+            }
 
-      return [
-        {
-          warehouseId: warehouse.id,
-          accessLevel: draft.accessLevel,
-          comment: draft.comment.trim() || null,
-          active: true,
-        },
-      ]
-    })
+            return [
+              {
+                warehouseId: warehouse.id,
+                accessLevel: draft.accessLevel,
+                comment: draft.comment.trim() || null,
+                active: true,
+              },
+            ]
+          })
+        : []
 
     await onSubmit({
       profile:
         user === null ? { ...profile, password, warehouseAccesses } : profile,
       accesses: warehouseAccesses,
+      password: user === null || password.length === 0 ? null : password,
     })
   }
 
@@ -208,7 +228,7 @@ export function UserEditorDialog({
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
-            Профиль, глобальная роль и доступ к складам.
+            Профиль, глобальная роль и доступы.
           </DialogDescription>
         </DialogHeader>
 
@@ -287,12 +307,12 @@ export function UserEditorDialog({
             </Field>
 
             <Field>
-              <FieldLabel htmlFor="user-time-zone">Часовой пояс</FieldLabel>
-              <Input
+              <FieldLabel htmlFor="user-time-zone">Временная зона</FieldLabel>
+              <TimeZoneSelect
                 id="user-time-zone"
                 value={timeZoneId}
-                onChange={(event) => setTimeZoneId(event.target.value)}
-                placeholder="Europe/Moscow"
+                onValueChange={setTimeZoneId}
+                className="w-full"
               />
             </Field>
 
@@ -330,7 +350,51 @@ export function UserEditorDialog({
                   />
                 </Field>
               </>
-            ) : null}
+            ) : (
+              <>
+                <Field
+                  data-invalid={validationError !== null && password.length > 0}
+                >
+                  <FieldLabel htmlFor="user-password">Новый пароль</FieldLabel>
+                  <Input
+                    id="user-password"
+                    type="password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    autoComplete="new-password"
+                    placeholder="Необязательно"
+                    aria-invalid={
+                      validationError !== null && password.length > 0
+                    }
+                  />
+                </Field>
+
+                <Field
+                  data-invalid={
+                    validationError !== null &&
+                    password.length > 0 &&
+                    password !== confirmPassword
+                  }
+                >
+                  <FieldLabel htmlFor="user-confirm-password">
+                    Повторите новый пароль
+                  </FieldLabel>
+                  <Input
+                    id="user-confirm-password"
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(event) => setConfirmPassword(event.target.value)}
+                    autoComplete="new-password"
+                    disabled={password.length === 0}
+                    aria-invalid={
+                      validationError !== null &&
+                      password.length > 0 &&
+                      password !== confirmPassword
+                    }
+                  />
+                </Field>
+              </>
+            )}
 
             <Field orientation="horizontal" className="md:col-span-2">
               <Checkbox
@@ -344,112 +408,121 @@ export function UserEditorDialog({
                 <FieldDescription>{deactivationBlockedReason}</FieldDescription>
               ) : null}
             </Field>
-
-            <Field orientation="horizontal" className="md:col-span-2">
-              <Checkbox
-                id="user-mobile-app-access"
-                checked={managerAppEligible && mobileAppAccess}
-                onCheckedChange={(checked) =>
-                  setMobileAppAccess(checked === true)
-                }
-                disabled={!managerAppEligible}
-              />
-              <div className="flex flex-col gap-1">
-                <FieldLabel htmlFor="user-mobile-app-access">
-                  Доступ к приложению руководителя
-                </FieldLabel>
-                <FieldDescription>
-                  {managerAppEligible
-                    ? "Вход выполняется тем же логином и паролем, отдельные реквизиты не создаются."
-                    : "Доступ разрешён только системному администратору, администратору WMS и руководителю склада."}
-                </FieldDescription>
-              </div>
-            </Field>
-
-            <Field orientation="horizontal" className="md:col-span-2">
-              <Checkbox
-                id="user-rental-access"
-                checked={rentalAccess}
-                onCheckedChange={(checked) => setRentalAccess(checked === true)}
-              />
-              <FieldContent>
-                <FieldLabel htmlFor="user-rental-access">
-                  Доступ к аренде и чату
-                </FieldLabel>
-                <FieldDescription>
-                  Открывает бронирования и чат для подбора бытовок.
-                </FieldDescription>
-              </FieldContent>
-            </Field>
           </FieldGroup>
 
-          <FieldSet>
-            <FieldLegend>Доступ к складам ({enabledAccessCount})</FieldLegend>
-            <FieldGroup className="gap-3">
-              {warehouses.map((warehouse) => {
-                const draft = accesses[warehouse.id] ?? emptyAccessDraft()
-
-                return (
-                  <Field key={warehouse.id} className="rounded-lg border p-3">
-                    <div className="flex items-center gap-3">
-                      <Checkbox
-                        id={`warehouse-access-${warehouse.id}`}
-                        checked={draft.enabled}
-                        onCheckedChange={(checked) =>
-                          updateAccess(warehouse.id, {
-                            enabled: checked === true,
-                          })
-                        }
-                      />
-                      <FieldLabel htmlFor={`warehouse-access-${warehouse.id}`}>
-                        {warehouse.name}
-                      </FieldLabel>
-                    </div>
-
-                    {draft.enabled ? (
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <Select
-                          value={draft.accessLevel}
-                          onValueChange={(value) =>
-                            updateAccess(warehouse.id, {
-                              accessLevel: value as WarehouseAccessLevel,
-                            })
-                          }
-                        >
-                          <SelectTrigger
-                            aria-label={`Уровень доступа: ${warehouse.name}`}
-                            className="w-full"
-                          >
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectGroup>
-                              {ACCESS_LEVELS.map((level) => (
-                                <SelectItem key={level} value={level}>
-                                  {warehouseAccessLevelLabels[level]}
-                                </SelectItem>
-                              ))}
-                            </SelectGroup>
-                          </SelectContent>
-                        </Select>
-
-                        <Input
-                          value={draft.comment}
-                          onChange={(event) =>
-                            updateAccess(warehouse.id, {
-                              comment: event.target.value,
-                            })
-                          }
-                          aria-label={`Комментарий доступа: ${warehouse.name}`}
-                          placeholder="Комментарий"
-                        />
-                      </div>
-                    ) : null}
-                  </Field>
-                )
-              })}
+          <FieldSet className="rounded-lg border p-4">
+            <FieldLegend>Доступы</FieldLegend>
+            <FieldGroup data-slot="checkbox-group" className="gap-3">
+              <Field orientation="horizontal">
+                <Checkbox
+                  id="user-mobile-app-access"
+                  checked={managerAppEligible && mobileAppAccess}
+                  onCheckedChange={(checked) =>
+                    setMobileAppAccess(checked === true)
+                  }
+                  disabled={!managerAppEligible}
+                />
+                <FieldContent>
+                  <FieldLabel htmlFor="user-mobile-app-access">
+                    Доступ к RWMS
+                  </FieldLabel>
+                  <FieldDescription>
+                    Доступ к приложению руководителя. Доступ разрешён только
+                    системному администратору, администратору WMS и руководителю
+                    склада.
+                  </FieldDescription>
+                </FieldContent>
+              </Field>
+              <Field orientation="horizontal">
+                <Checkbox
+                  id="user-rental-access"
+                  checked={rentalAccess}
+                  onCheckedChange={(checked) =>
+                    setRentalAccess(checked === true)
+                  }
+                />
+                <FieldContent>
+                  <FieldLabel htmlFor="user-rental-access">
+                    Доступ к аренде
+                  </FieldLabel>
+                </FieldContent>
+              </Field>
             </FieldGroup>
           </FieldSet>
+
+          {managerAppEligible && mobileAppAccess ? (
+            <FieldSet className="rounded-lg border p-4">
+              <FieldLegend>
+                Доступ к объектам ({enabledAccessCount})
+              </FieldLegend>
+              <FieldGroup className="gap-3">
+                {warehouses.map((warehouse) => {
+                  const draft = accesses[warehouse.id] ?? emptyAccessDraft()
+
+                  return (
+                    <Field key={warehouse.id} className="rounded-lg border p-3">
+                      <div className="flex items-center gap-3">
+                        <Checkbox
+                          id={`warehouse-access-${warehouse.id}`}
+                          checked={draft.enabled}
+                          onCheckedChange={(checked) =>
+                            updateAccess(warehouse.id, {
+                              enabled: checked === true,
+                            })
+                          }
+                        />
+                        <FieldLabel
+                          htmlFor={`warehouse-access-${warehouse.id}`}
+                        >
+                          {warehouse.name}
+                        </FieldLabel>
+                      </div>
+
+                      {draft.enabled ? (
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <Select
+                            value={draft.accessLevel}
+                            onValueChange={(value) =>
+                              updateAccess(warehouse.id, {
+                                accessLevel: value as WarehouseAccessLevel,
+                              })
+                            }
+                          >
+                            <SelectTrigger
+                              aria-label={`Уровень доступа к объекту: ${warehouse.name}`}
+                              className="w-full"
+                            >
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                {ACCESS_LEVELS.map((level) => (
+                                  <SelectItem key={level} value={level}>
+                                    {warehouseAccessLevelLabels[level]}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+
+                          <Input
+                            value={draft.comment}
+                            onChange={(event) =>
+                              updateAccess(warehouse.id, {
+                                comment: event.target.value,
+                              })
+                            }
+                            aria-label={`Комментарий доступа к объекту: ${warehouse.name}`}
+                            placeholder="Комментарий"
+                          />
+                        </div>
+                      ) : null}
+                    </Field>
+                  )
+                })}
+              </FieldGroup>
+            </FieldSet>
+          ) : null}
 
           {validationError || serverError ? (
             <FieldError>{validationError ?? serverError}</FieldError>

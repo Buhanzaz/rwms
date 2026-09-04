@@ -25,6 +25,18 @@ from .models import (
 from .workload import shift_duty_seconds, shift_usable_seconds
 
 
+def _shift_option_id(shift: DriverShift) -> str:
+    """Return the selected route option without replacing the physical shift ID."""
+
+    return shift.resource_option_id or shift.id
+
+
+def _cycle_option_id(cycle: RouteCycle) -> str:
+    """Return the route option persisted on one planned cycle."""
+
+    return cycle.resource_option_id or cycle.driver_shift_id
+
+
 def calculate_plan_metrics(
     cycles: Iterable[RouteCycle],
     *,
@@ -37,7 +49,7 @@ def calculate_plan_metrics(
 
     cycle_list = tuple(cycles)
     shift_list = tuple(shifts)
-    shift_by_id = {shift.id: shift for shift in shift_list}
+    shift_by_option_id = {_shift_option_id(shift): shift for shift in shift_list}
     assigned = max(0, total_tasks - unassigned_tasks)
     distance = sum(cycle.total_distance_meters for cycle in cycle_list)
     empty_distance = sum(cycle.empty_distance_meters for cycle in cycle_list)
@@ -52,16 +64,17 @@ def calculate_plan_metrics(
         delivery_pairs += int(delivery_count == 2)
         pickup_pairs += int(pickup_count == 2)
         loads.extend(stop.load_after for stop in cycle.stops[:-1])
-        shift = shift_by_id.get(cycle.driver_shift_id)
+        shift = shift_by_option_id.get(_cycle_option_id(cycle))
         if shift is not None:
             buffer_seconds = round((shift.end_at - cycle.planned_finish).total_seconds())
             buffers.append(buffer_seconds)
             overtime_seconds += max(0, -buffer_seconds)
-    used_shifts = tuple(
-        shift
-        for shift in shift_list
-        if any(cycle.driver_shift_id == shift.id for cycle in cycle_list)
-    )
+    used_shift_by_physical_id: dict[str, DriverShift] = {}
+    for cycle in cycle_list:
+        shift = shift_by_option_id.get(_cycle_option_id(cycle))
+        if shift is not None:
+            used_shift_by_physical_id.setdefault(cycle.driver_shift_id, shift)
+    used_shifts = tuple(used_shift_by_physical_id.values())
     total_usable_seconds = sum(shift_usable_seconds(shift) for shift in used_shifts)
     total_duty_seconds = sum(shift_duty_seconds(cycle_list, shift) for shift in used_shifts)
     return PlanMetrics(
@@ -104,21 +117,28 @@ def validate_route_plan(
     """Validate hard invariants, including source-side waiting between legs."""
 
     cycle_list = tuple(cycles)
-    shift_by_id = {shift.id: shift for shift in shifts}
+    shift_list = tuple(shifts)
+    shift_by_option_id = {_shift_option_id(shift): shift for shift in shift_list}
     vehicle_by_id = {vehicle.id: vehicle for vehicle in vehicles}
     errors: list[ValidationIssue] = []
     warnings: list[ValidationIssue] = []
     assigned_tasks: list[tuple[str, str]] = []
 
     for cycle in cycle_list:
+        shift = shift_by_option_id.get(_cycle_option_id(cycle))
+        expected_depot = (
+            shift.route_depot
+            if shift is not None and shift.route_depot is not None
+            else warehouse
+        )
         vehicle = vehicle_by_id.get(cycle.vehicle_id)
         capacity = vehicle.capacity if vehicle is not None else settings.vehicle_capacity
         if (
             len(cycle.stops) < 2
             or cycle.stops[0].stop_type is not StopType.DEPOT_LOAD
             or cycle.stops[-1].stop_type is not StopType.DEPOT_RETURN
-            or cycle.stops[0].point.coordinates != warehouse.point.coordinates
-            or cycle.stops[-1].point.coordinates != warehouse.point.coordinates
+            or cycle.stops[0].point.coordinates != expected_depot.point.coordinates
+            or cycle.stops[-1].point.coordinates != expected_depot.point.coordinates
         ):
             errors.append(
                 ValidationIssue(
@@ -300,6 +320,21 @@ def validate_route_plan(
                 )
             if stop.task_id is not None:
                 assigned_tasks.append((stop.task_id, cycle.id))
+                if (
+                    shift is not None
+                    and stop.service_warehouse_id is not None
+                    and shift.allowed_service_warehouse_ids is not None
+                    and stop.service_warehouse_id
+                    not in shift.allowed_service_warehouse_ids
+                ):
+                    errors.append(
+                        ValidationIssue(
+                            ValidationErrorCode.SHIFT_EXCEEDED,
+                            "Смена не допущена к заявкам этого обслуживаемого склада.",
+                            cycle.id,
+                            stop.task_id,
+                        )
+                    )
                 if abs(stop.quantity_delta) not in (1, 2):
                     errors.append(
                         ValidationIssue(
@@ -359,7 +394,6 @@ def validate_route_plan(
                     )
                 )
 
-        shift = shift_by_id.get(cycle.driver_shift_id)
         if shift is None:
             errors.append(
                 ValidationIssue(
@@ -462,7 +496,7 @@ def validate_route_plan(
         total_tasks=resolved_total,
         unassigned_tasks=unassigned_tasks,
         score=score,
-        shifts=shift_by_id.values(),
+        shifts=shift_list,
     )
     return ValidationResult(tuple(errors), tuple(warnings), metrics)
 

@@ -10,6 +10,7 @@ import dev.buhanzaz.rwms.driver.core.database.DriverInvalidationEntity
 import dev.buhanzaz.rwms.driver.core.network.GatewayProblemException
 import dev.buhanzaz.rwms.driver.core.network.DriverDeviceRegistrationRequestDto
 import dev.buhanzaz.rwms.driver.core.network.DriverGatewayClient
+import dev.buhanzaz.rwms.driver.core.network.toDriverUserMessage
 import dev.buhanzaz.rwms.driver.core.sync.DriverSyncScheduler
 import java.time.Instant
 import java.util.Locale
@@ -155,7 +156,11 @@ class DriverPushCoordinator @Inject constructor(
                 mutableCapability.value = when {
                     error is GatewayProblemException && error.problem.status in OPTIONAL_REGISTRATION_STATUSES ->
                         DriverPushCapability.RegistrationEndpointUnavailable(error.problem.status)
-                    else -> DriverPushCapability.TemporaryFailure(error.message)
+                    else -> DriverPushCapability.TemporaryFailure(
+                        error.toDriverUserMessage(
+                            "Не удалось включить уведомления. Обновите задания вручную.",
+                        ),
+                    )
                 }
             }
     }

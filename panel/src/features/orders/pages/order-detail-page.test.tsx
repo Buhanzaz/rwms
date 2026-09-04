@@ -20,6 +20,15 @@ const ordersApi = vi.hoisted(() => ({
 const warehouseApi = vi.hoisted(() => ({
   listWarehouseSupportLinks: vi.fn(),
 }))
+const ordersRuntime = vi.hoisted(() => ({
+  capabilities: {
+    manualBooking: true,
+    logisticsTaskNavigation: false,
+    dossierEvidence: true,
+    equipmentEditing: true,
+    directWarehouseReplacement: true,
+  },
+}))
 
 vi.mock("@/features/orders/api/orders-api", () => ({
   ORDERS_QUERY_KEY: ["orders"],
@@ -54,6 +63,7 @@ vi.mock("@/features/orders/orders-module-context", () => ({
         address: "Складская, 1",
       },
     ],
+    capabilities: ordersRuntime.capabilities,
   }),
 }))
 vi.mock("@/features/orders/components/order-unit-dossier-evidence", () => ({
@@ -83,6 +93,7 @@ const baseOrder: OrderDetail = {
   version: 3,
   number: "ORD-000042",
   status: "DRAFT",
+  customerDeliveryPurpose: "RENTAL_DELIVERY",
   client: {
     id: CLIENT_ID,
     version: 1,
@@ -223,6 +234,13 @@ function renderPage(order: OrderDetail) {
 }
 
 beforeEach(() => {
+  Object.assign(ordersRuntime.capabilities, {
+    manualBooking: true,
+    logisticsTaskNavigation: false,
+    dossierEvidence: true,
+    equipmentEditing: true,
+    directWarehouseReplacement: true,
+  })
   ordersApi.listOrderHistory.mockResolvedValue([])
   warehouseApi.listWarehouseSupportLinks.mockResolvedValue({
     servedWarehouseId: "22222222-2222-4222-8222-222222222222",
@@ -339,6 +357,65 @@ describe("OrderDetailPage cabin entry", () => {
     ).toBeNull()
   })
 
+  it("keeps the shared manager screen inside its authorized application boundary", async () => {
+    Object.assign(ordersRuntime.capabilities, {
+      manualBooking: false,
+      logisticsTaskNavigation: false,
+      dossierEvidence: false,
+      equipmentEditing: false,
+      directWarehouseReplacement: false,
+    })
+    const user = userEvent.setup()
+    renderPage({
+      ...baseOrder,
+      status: "SAVED",
+      warehouseId: selectedUnit.unit.warehouseId,
+      unitCount: 1,
+      units: [selectedUnit],
+      permissions: {
+        ...baseOrder.permissions,
+        canReplaceUnits: true,
+      },
+    })
+
+    expect(await screen.findByText("Сохранён")).toBeTruthy()
+    expect(
+      screen.queryByRole("link", { name: "Перейти к заданиям" })
+    ).toBeNull()
+    expect(screen.queryByText("Досье бытовок")).toBeNull()
+    expect(
+      screen.queryByRole("button", {
+        name: `Добавить мебель ${selectedUnit.unit.number}`,
+      })
+    ).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Заменить бытовки" })
+    ).toBeNull()
+
+    await user.click(
+      screen.getAllByRole("button", { name: "Добавить бытовки" })[0]
+    )
+    expect(screen.getByRole("link", { name: "Открыть AI-чат" })).toBeTruthy()
+    expect(
+      screen.queryByRole("link", { name: "Открыть бронирование" })
+    ).toBeNull()
+  })
+
+  it("does not offer the removed logistics tasks page for a saved RWMS order", async () => {
+    renderPage({
+      ...baseOrder,
+      status: "SAVED",
+      warehouseId: selectedUnit.unit.warehouseId,
+      unitCount: 1,
+      units: [selectedUnit],
+    })
+
+    expect(await screen.findByText("Сохранён")).toBeTruthy()
+    expect(
+      screen.queryByRole("link", { name: "Перейти к заданиям" })
+    ).toBeNull()
+  })
+
   it("keeps extension available for a shipped fulfilled cabin when ordinary editing is closed", async () => {
     renderPage({
       ...baseOrder,
@@ -395,6 +472,7 @@ describe("OrderDetailPage cabin entry", () => {
         {
           documentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
           documentType: "SHIPMENT",
+          customerDeliveryPurpose: "RENTAL_DELIVERY",
           state: "WAITING",
           scheduledDate: "2026-08-20",
           actualAt: null,
@@ -477,6 +555,7 @@ describe("OrderDetailPage cabin entry", () => {
         {
           documentId: "88888888-8888-4888-8888-888888888888",
           documentType: "SHIPMENT",
+          customerDeliveryPurpose: "RENTAL_DELIVERY",
           state: "DRAFT",
           scheduledDate: "2026-08-20",
           actualAt: null,
@@ -491,6 +570,7 @@ describe("OrderDetailPage cabin entry", () => {
     expect(
       await screen.findByText("Основное контактное лицо клиента")
     ).toBeTruthy()
+    expect(screen.getAllByText("Доставка в аренду")).toHaveLength(2)
     expect(screen.getByText("Иван Иванов")).toBeTruthy()
     expect(screen.getByText("+79990000000")).toBeTruthy()
     expect(screen.getByText("Дополнительные контакты клиента")).toBeTruthy()

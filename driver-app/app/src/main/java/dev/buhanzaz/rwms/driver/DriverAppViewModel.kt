@@ -7,6 +7,7 @@ import dev.buhanzaz.rwms.driver.core.auth.DriverAuthRepository
 import dev.buhanzaz.rwms.driver.core.auth.DriverAuthUiState
 import dev.buhanzaz.rwms.driver.core.database.DriverLocalStore
 import dev.buhanzaz.rwms.driver.core.network.DriverGatewayClient
+import dev.buhanzaz.rwms.driver.core.network.toDriverUserMessage
 import dev.buhanzaz.rwms.driver.core.sync.RealtimeHandles
 import dev.buhanzaz.rwms.driver.core.sync.DriverProjectionWriter
 import dev.buhanzaz.rwms.driver.core.sync.DriverRealtimeCoordinator
@@ -119,7 +120,9 @@ class DriverAppViewModel @Inject constructor(
                 .onFailure { error ->
                     if (activeUserId == null) {
                         mutableState.value = DriverAppUiState.Connecting(
-                            error.message ?: "Не удалось связаться с RWMS. Проверьте сеть и повторите.",
+                            error.toDriverUserMessage(
+                                "Не удалось подключиться к RWMS. Проверьте соединение и повторите.",
+                            ),
                         )
                     }
                 }

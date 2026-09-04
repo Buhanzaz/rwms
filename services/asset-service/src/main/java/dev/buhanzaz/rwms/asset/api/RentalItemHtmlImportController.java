@@ -53,7 +53,11 @@ public class RentalItemHtmlImportController {
     validateHtmlPart(html);
     try {
       HtmlImportDetailResponse response =
-          service.create(access.subjectId(jwt), idempotencyKey, warehouseId, html.getBytes());
+          service.create(
+              access.subjectId(jwt),
+              idempotencyKey,
+              warehouseId,
+              html.getBytes());
       return ResponseEntity.status(HttpStatus.CREATED).body(response);
     } catch (IOException exception) {
       throw new IllegalArgumentException("HTML file could not be read", exception);

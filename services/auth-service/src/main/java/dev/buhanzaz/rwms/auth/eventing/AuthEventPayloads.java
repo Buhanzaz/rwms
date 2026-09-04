@@ -49,6 +49,7 @@ public final class AuthEventPayloads {
      * @param subjectId opaque auth-subject identifier
      * @param active whether the subject is active
      * @param mobileAppAccess whether the subject may use the manager mobile application
+     * @param rentalAccess whether the subject may use rental-management capabilities
      * @param globalRole authorization role
      * @param profileRevision opaque revision of the private profile vault entry
      * @param warehouseAccess immutable warehouse-grant snapshot
@@ -57,6 +58,7 @@ public final class AuthEventPayloads {
             UUID subjectId,
             boolean active,
             boolean mobileAppAccess,
+            boolean rentalAccess,
             UserGlobalRole globalRole,
             UUID profileRevision,
             List<WarehouseGrantFact> warehouseAccess) {
@@ -79,6 +81,34 @@ public final class AuthEventPayloads {
             this(
                     subjectId,
                     active,
+                    false,
+                    false,
+                    globalRole,
+                    profileRevision,
+                    warehouseAccess);
+        }
+
+        /**
+         * Creates the pre-rental-access fact shape used by existing source callers.
+         *
+         * @param subjectId opaque auth-subject identifier
+         * @param active whether the subject is active
+         * @param mobileAppAccess manager-mobile entitlement
+         * @param globalRole authorization role
+         * @param profileRevision private-profile revision used for invalidation
+         * @param warehouseAccess warehouse grants to include
+         */
+        public UserAuthorizationFact(
+                UUID subjectId,
+                boolean active,
+                boolean mobileAppAccess,
+                UserGlobalRole globalRole,
+                UUID profileRevision,
+                List<WarehouseGrantFact> warehouseAccess) {
+            this(
+                    subjectId,
+                    active,
+                    mobileAppAccess,
                     false,
                     globalRole,
                     profileRevision,
@@ -134,7 +164,6 @@ public final class AuthEventPayloads {
             UUID warehouseId,
             boolean active,
             WorkerCredentialFactStatus credentialStatus) {
-
         /**
          * Validates the opaque subject link and keeps active state consistent with credentials.
          */

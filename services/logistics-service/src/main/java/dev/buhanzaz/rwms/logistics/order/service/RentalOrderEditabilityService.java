@@ -39,6 +39,15 @@ class RentalOrderEditabilityService {
     }
   }
 
+  /**
+   * Applies actor, status, warehouse and pending-replacement checks while deliberately leaving the
+   * published-shipment fence to the dedicated pre-start reschedule saga.
+   */
+  void requirePublishedRescheduleActor(OrderActor actor, RentalOrder order) {
+    access.requireEditable(actor, order);
+    requireNoPendingReplacement(order.getId());
+  }
+
   boolean canEdit(OrderActor actor, RentalOrder order) {
     if (!access.canEdit(actor, order)) {
       return false;

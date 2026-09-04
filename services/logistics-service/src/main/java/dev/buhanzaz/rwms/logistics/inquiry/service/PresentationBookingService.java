@@ -7,6 +7,7 @@ import dev.buhanzaz.rwms.logistics.inquiry.domain.ClientPresentationMode;
 import dev.buhanzaz.rwms.logistics.inquiry.domain.PresentationBooking;
 import dev.buhanzaz.rwms.logistics.inquiry.domain.PresentationBookingState;
 import dev.buhanzaz.rwms.logistics.inquiry.service.PresentationBookingStore.BookingContext;
+import dev.buhanzaz.rwms.logistics.inquiry.service.PresentationBookingStore.RecoveryClaim;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRequest;
@@ -35,10 +36,11 @@ import org.springframework.stereotype.Service;
  * Owns the presentation booking lifecycle: a normal selection converts held cabins and the complete
  * per-cabin furniture composition atomically, then durably applies up to five individual client
  * receiving days, delivery facts and the initial term to the converted cabins. A replacement delegates
- * one ordered same-order batch without changing either. Pending effects are retried from the
- * existing booking receipt; only terminal rejection releases holds and allows a manager to publish
- * the next presentation revision. CustomerApp confirmations additionally save the resulting order
- * before completion so they enter the real planning feed without a manager-side browser saga.
+ * one ordered same-order batch without changing either. Pending effects use one bounded,
+ * skip-locked lease path for synchronous confirmation and scheduled recovery; only terminal
+ * rejection releases holds and allows a manager to publish the next presentation revision.
+ * CustomerApp confirmations additionally save the resulting order before completion so they enter
+ * the real planning feed without a manager-side browser saga.
  */
 @Service
 @RequiredArgsConstructor
@@ -52,7 +54,7 @@ public class PresentationBookingService {
   public PresentationBookingResponse confirm(
       String token, UUID idempotencyKey, ConfirmClientPresentationRequest request) {
     PresentationBooking booking = store.begin(token, idempotencyKey, request);
-    process(booking.getId());
+    store.claim(booking.getId()).ifPresent(this::process);
     return status(token, booking.getId());
   }
 
@@ -73,14 +75,18 @@ public class PresentationBookingService {
       fixedDelayString = "${rwms.logistics.rental-inquiry.booking-retry-delay:2s}",
       initialDelayString = "${rwms.logistics.rental-inquiry.booking-retry-initial-delay:2s}")
   public void retryPending() {
-    for (UUID bookingId : store.pendingIds()) {
-      process(bookingId);
+    for (RecoveryClaim claim : store.claimDue()) {
+      process(claim);
     }
   }
 
-  void process(UUID bookingId) {
-    BookingContext context = store.context(bookingId);
-    if (context.booking().getState() != PresentationBookingState.PENDING) return;
+  /**
+   * Performs remote and cross-aggregate work only after the short claim transaction committed.
+   * Every following local mutation revalidates the immutable lease capability.
+   */
+  void process(RecoveryClaim claim) {
+    BookingContext context = store.claimedContext(claim).orElse(null);
+    if (context == null || context.booking().getState() != PresentationBookingState.PENDING) return;
     OrderActor actor = actor(context);
     UUID orderId = context.booking().getOrderId();
     try {
@@ -122,8 +128,9 @@ public class PresentationBookingService {
                 "ORDER_WAREHOUSE_LOCKED",
                 "Представление использует другой склад заказа");
           }
-          store.assignOrder(bookingId, orderId);
-          context = store.context(bookingId);
+          if (!store.assignOrder(claim, orderId)) return;
+          context = store.claimedContext(claim).orElse(null);
+          if (context == null) return;
         } else {
           RentalOrderService.CreateResult created =
               rentalOrders.create(
@@ -149,8 +156,9 @@ public class PresentationBookingService {
                         context.presentation().getWarehouseId())
                     .response();
           }
-          store.assignOrder(bookingId, orderId);
-          context = store.context(bookingId);
+          if (!store.assignOrder(claim, orderId)) return;
+          context = store.claimedContext(claim).orElse(null);
+          if (context == null) return;
         }
       }
       if (context.presentation().getMode() == ClientPresentationMode.NORMAL) {
@@ -210,21 +218,22 @@ public class PresentationBookingService {
             presentations.replacementUnitIds(context.presentation()),
             context.selectedRentalItemIds());
       }
-      store.complete(bookingId);
+      store.complete(claim);
     } catch (LogisticsDependencyException exception) {
       if (exception.kind() == LogisticsDependencyException.FailureKind.PERMANENT_REJECTION) {
-        reject(context, actor, exception.dependencyCode());
+        reject(claim, context, actor, exception.dependencyCode());
       } else {
-        store.attempted(bookingId, "DEPENDENCY_TRANSIENT");
+        store.attempted(claim, "DEPENDENCY_TRANSIENT");
       }
     } catch (OrderProblemException exception) {
-      reject(context, actor, exception.code());
+      reject(claim, context, actor, exception.code());
     } catch (RuntimeException exception) {
-      store.attempted(bookingId, "UNKNOWN_OUTCOME");
+      store.attempted(claim, "UNKNOWN_OUTCOME");
     }
   }
 
-  private void reject(BookingContext context, OrderActor actor, String errorCode) {
+  private void reject(
+      RecoveryClaim claim, BookingContext context, OrderActor actor, String errorCode) {
     UUID orderId = context.booking().getOrderId();
     if (orderId != null && context.inquiry().getRentalOrderId() == null) {
       try {
@@ -243,7 +252,7 @@ public class PresentationBookingService {
     releaseHoldScope(context, context.inquiry().getId(), "inquiry");
     releaseHoldScope(context, context.presentation().getId(), "legacy-presentation");
     store.reject(
-        context.booking().getId(), errorCode == null ? "PRESENTATION_BOOKING_REJECTED" : errorCode);
+        claim, errorCode == null ? "PRESENTATION_BOOKING_REJECTED" : errorCode);
   }
 
   private static OrderActor actor(BookingContext context) {

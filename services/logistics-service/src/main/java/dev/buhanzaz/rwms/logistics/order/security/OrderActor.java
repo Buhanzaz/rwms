@@ -16,25 +16,10 @@ public record OrderActor(
     boolean localAdministrator,
     boolean writeScope,
     boolean rentalAccess) {
-  public OrderActor(
-      UUID subjectId,
-      String role,
-      String displayName,
-      Set<UUID> readableWarehouses,
-      Set<UUID> editableWarehouses,
-      boolean globalAdministrator,
-      boolean localAdministrator,
-      boolean writeScope) {
-    this(
-        subjectId,
-        role,
-        displayName,
-        readableWarehouses,
-        editableWarehouses,
-        globalAdministrator,
-        localAdministrator,
-        writeScope,
-        Set.of("SYSTEM_ADMIN", "WMS_ADMIN", "RENTAL_MANAGER").contains(role));
+  public OrderActor {
+    if (subjectId == null) {
+      throw new IllegalArgumentException("Order actor subject is required");
+    }
   }
 
   public boolean canViewOtherManagers() {

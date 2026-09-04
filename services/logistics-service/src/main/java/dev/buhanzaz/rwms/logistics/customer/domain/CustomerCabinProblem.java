@@ -2,6 +2,8 @@ package dev.buhanzaz.rwms.logistics.customer.domain;
 
 import dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerCabinProblemCategory;
 import dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerCabinProblemPhase;
+import dev.buhanzaz.rwms.logistics.customer.claims.CustomerCabinProblemResolutionKind;
+import dev.buhanzaz.rwms.logistics.customer.claims.CustomerCabinProblemStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -11,6 +13,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
+import jakarta.persistence.Version;
 import java.time.OffsetDateTime;
 import java.util.Objects;
 import java.util.UUID;
@@ -19,7 +22,10 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.proxy.HibernateProxy;
 
-/** Immutable customer problem report for one arrived cabin and its exact shipment media owner. */
+/**
+ * Customer-reported immutable evidence for one arrived cabin and its exact shipment media owner,
+ * with a separately managed claim lifecycle.
+ */
 @Entity
 @Table(
     name = "customer_cabin_problem",
@@ -34,6 +40,10 @@ public class CustomerCabinProblem {
   @GeneratedValue(strategy = GenerationType.UUID)
   @Column(name = "id", nullable = false)
   private UUID id;
+
+  @Version
+  @Column(name = "version", nullable = false)
+  private long version;
 
   @Column(name = "customer_subject_id", nullable = false)
   private UUID customerSubjectId;
@@ -82,6 +92,26 @@ public class CustomerCabinProblem {
   @Column(name = "reported_at", nullable = false)
   private OffsetDateTime reportedAt;
 
+  @Enumerated(EnumType.STRING)
+  @Column(name = "lifecycle_status", nullable = false, length = 32)
+  private CustomerCabinProblemStatus status;
+
+  @Column(name = "resolution_deadline", nullable = false)
+  private OffsetDateTime resolutionDeadline;
+
+  @Enumerated(EnumType.STRING)
+  @Column(name = "resolution_kind", length = 32)
+  private CustomerCabinProblemResolutionKind resolutionKind;
+
+  @Column(name = "resolved_by_subject_id")
+  private UUID resolvedBySubjectId;
+
+  @Column(name = "resolution_comment", length = 2_000)
+  private String resolutionComment;
+
+  @Column(name = "resolved_at")
+  private OffsetDateTime resolvedAt;
+
   /** Creates a validated arrived-cabin problem from canonical ready-media references. */
   public static CustomerCabinProblem create(
       UUID customerSubjectId,
@@ -117,12 +147,45 @@ public class CustomerCabinProblem {
     problem.idempotencyKey = Objects.requireNonNull(idempotencyKey, "idempotencyKey");
     problem.requestSha256 = requireHash(requestSha256);
     problem.reportedAt = Objects.requireNonNull(reportedAt, "reportedAt");
+    problem.status = CustomerCabinProblemStatus.OPEN;
+    problem.resolutionDeadline = problem.reportedAt.plusDays(3);
     return problem;
   }
 
   /** Returns whether an idempotent replay contains the exact canonical report. */
   public boolean matchesRequest(String requestSha256) {
     return this.requestSha256.equals(requestSha256);
+  }
+
+  /** Moves an open report into active manager investigation under the supplied optimistic fence. */
+  public CustomerCabinProblemStatus startProgress(long expectedVersion) {
+    requireExpectedVersion(expectedVersion);
+    if (status != CustomerCabinProblemStatus.OPEN) {
+      throw new IllegalStateException("Customer cabin problem is not open");
+    }
+    CustomerCabinProblemStatus previous = status;
+    status = CustomerCabinProblemStatus.IN_PROGRESS;
+    return previous;
+  }
+
+  /** Records the final manager decision after the report has entered active investigation. */
+  public CustomerCabinProblemStatus resolve(
+      long expectedVersion,
+      CustomerCabinProblemResolutionKind nextResolutionKind,
+      UUID resolverSubjectId,
+      String comment,
+      OffsetDateTime resolvedAt) {
+    requireExpectedVersion(expectedVersion);
+    if (status != CustomerCabinProblemStatus.IN_PROGRESS) {
+      throw new IllegalStateException("Customer cabin problem is not in progress");
+    }
+    CustomerCabinProblemStatus previous = status;
+    resolutionKind = Objects.requireNonNull(nextResolutionKind, "resolutionKind");
+    resolvedBySubjectId = Objects.requireNonNull(resolverSubjectId, "resolverSubjectId");
+    resolutionComment = required(comment, 2_000, "resolutionComment");
+    this.resolvedAt = Objects.requireNonNull(resolvedAt, "resolvedAt");
+    status = CustomerCabinProblemStatus.RESOLVED;
+    return previous;
   }
 
   private static String required(String value, int maximum, String field) {
@@ -138,6 +201,12 @@ public class CustomerCabinProblem {
       throw new IllegalArgumentException("requestSha256 is invalid");
     }
     return value;
+  }
+
+  private void requireExpectedVersion(long expectedVersion) {
+    if (expectedVersion < 0 || version != expectedVersion) {
+      throw new IllegalArgumentException("Customer cabin problem version is stale");
+    }
   }
 
   @Override

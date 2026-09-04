@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.asset.security;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import dev.buhanzaz.rwms.asset.domain.AssetCompanyDefaults;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
@@ -28,6 +29,21 @@ class AssetAuthorizerTest {
     authorizer.requireGlobalCatalogManagement(user("rwms.read rwms.write", "WMS_ADMIN", "VIEW"));
     assertThatThrownBy(() -> authorizer.requireEdit(user("rwms.read", "VIEWER", "VIEW"), warehouseId))
         .isInstanceOf(AccessDeniedException.class);
+  }
+
+  @Test
+  void isolatedAdministrationApplicationAllowsOnlyGlobalAdministratorsWithoutRwmsScopes() {
+    AssetAuthorizer authorizer = new AssetAuthorizer(new MockEnvironment(), false);
+
+    Jwt administrator = administrationApplication("SYSTEM_ADMIN");
+    authorizer.requireRead(administrator, warehouseId);
+    authorizer.requireManage(administrator, warehouseId);
+    authorizer.requireGlobalCatalogManagement(administrator);
+
+    assertThatThrownBy(
+            () -> authorizer.requireRead(administrationApplication("WAREHOUSE_MANAGER"), warehouseId))
+        .isInstanceOf(AccessDeniedException.class)
+        .hasMessageContaining("Required USER scope");
   }
 
   @Test
@@ -88,6 +104,52 @@ class AssetAuthorizerTest {
     AssetAuthorizer bypass = new AssetAuthorizer(development, true);
     bypass.requireOutboxRecovery(null);
     assertThat(bypass.subjectId(null)).isNotNull();
+    assertThat(bypass.companyId(null)).isEqualTo(AssetCompanyDefaults.INITIAL_COMPANY_ID);
+  }
+
+  @Test
+  void companyFenceRequiresAValidSignedUserClaim() {
+    AssetAuthorizer authorizer = new AssetAuthorizer(new MockEnvironment(), false);
+    UUID companyId = UUID.randomUUID();
+    Jwt valid =
+        jwt(
+            Map.of(
+                "sub",
+                UUID.randomUUID().toString(),
+                "principal_type",
+                "USER",
+                "company_id",
+                companyId.toString()));
+
+    assertThat(authorizer.companyId(valid)).isEqualTo(companyId);
+    assertThatThrownBy(
+            () ->
+                authorizer.companyId(
+                    jwt(
+                        Map.of(
+                            "sub",
+                            UUID.randomUUID().toString(),
+                            "principal_type",
+                            "USER"))))
+        .isInstanceOf(AccessDeniedException.class)
+        .hasMessageContaining("company claim");
+    assertThatThrownBy(
+            () ->
+                authorizer.companyId(
+                    jwt(
+                        Map.of(
+                            "sub",
+                            UUID.randomUUID().toString(),
+                            "principal_type",
+                            "USER",
+                            "company_id",
+                            "not-a-uuid"))))
+        .isInstanceOf(AccessDeniedException.class)
+        .hasMessageContaining("UUID");
+    assertThatThrownBy(
+            () -> authorizer.companyId(service("asset.inventory", "inventory-service")))
+        .isInstanceOf(AccessDeniedException.class)
+        .hasMessageContaining("USER");
   }
 
   @Test
@@ -162,7 +224,18 @@ class AssetAuthorizerTest {
         "principal_type", "USER",
         "scope", scope,
         "global_role", globalRole,
+        "company_id", AssetCompanyDefaults.INITIAL_COMPANY_ID.toString(),
         "warehouse_access", java.util.List.of(Map.of("warehouseId", warehouseId.toString(), "level", level))));
+  }
+
+  private static Jwt administrationApplication(String globalRole) {
+    return jwt(
+        Map.of(
+            "sub", UUID.randomUUID().toString(),
+            "principal_type", "USER",
+            "client_id", "rwms-admin-web",
+            "global_role", globalRole,
+            "scope", "openid profile offline_access admin.manage"));
   }
 
   private static Jwt service(String scope, String clientId) {

@@ -54,8 +54,7 @@ public class AssetRentalItemController {
       @RequestParam(name = "excludeStatus", required = false)
           Set<RentalItemStatus> excludedStatuses) {
     access.requireRead(jwt, warehouseId);
-    return service.listRentalItems(
-        warehouseId, page, size, search, excludedStatuses);
+    return service.listRentalItems(warehouseId, page, size, search, excludedStatuses);
   }
 
   @GetMapping("/available")
@@ -97,7 +96,8 @@ public class AssetRentalItemController {
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody CreateRentalItemRequest request) {
     access.requireEdit(jwt, request.warehouseId());
-    AssetService.CreateResult<RentalItemResponse> result = service.createRentalItem(access.subjectId(jwt), idempotencyKey, request);
+    AssetService.CreateResult<RentalItemResponse> result =
+        service.createRentalItem(access.subjectId(jwt), idempotencyKey, request);
     ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.CREATED);
     if (result.replayed()) response.header("Idempotency-Replayed", "true");
     return response.body(result.response());
@@ -137,7 +137,8 @@ public class AssetRentalItemController {
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody AddManualNoteRequest request) {
     access.requireEdit(jwt, service.rentalItem(id).warehouseId());
-    AssetService.CreateResult<ManualNoteResponse> result = service.addManualNote(access.subjectId(jwt), idempotencyKey, id, request);
+    AssetService.CreateResult<ManualNoteResponse> result =
+        service.addManualNote(access.subjectId(jwt), idempotencyKey, id, request);
     ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.CREATED);
     if (result.replayed()) response.header("Idempotency-Replayed", "true");
     return response.body(result.response());

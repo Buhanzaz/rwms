@@ -6,6 +6,7 @@ import {
   type ReturnLine,
   type ReturnLineState,
 } from "@/features/logistics/returns/model"
+import { listAllLogisticsDocumentPages } from "@/features/logistics/document-list-pagination"
 import type {
   ReturnAcceptUndamagedCommand,
   ReturnClient,
@@ -106,12 +107,14 @@ export function parseReturnDocument(value: unknown): ReturnDocument {
   const lines = list(source.lines).map(returnLine)
   if (lines.length === 0) invalidResponse()
   if (source.documentType !== "RETURN") invalidResponse()
+  if (source.customerDeliveryPurpose !== null) invalidResponse()
   if (nullableUuid(source.destinationWarehouseId) !== null) invalidResponse()
 
   return {
     id: uuid(source.id),
     version: integer(source.version),
     documentType: "RETURN",
+    customerDeliveryPurpose: null,
     state: oneOf<ReturnDocumentState>(source.state, RETURN_DOCUMENT_STATES),
     warehouseId: uuid(source.warehouseId),
     destinationWarehouseId: null,
@@ -153,11 +156,20 @@ async function parsedRequest(
 }
 
 export class HttpReturnClient implements ReturnClient {
-  async list(accessToken: string, warehouseId: string) {
-    const response = await bearerRequest<unknown>(
-      accessToken,
-      returnsEndpoint(`?warehouseId=${encodeURIComponent(warehouseId)}`)
-    )
+  async list(
+    accessToken: string,
+    warehouseId: string,
+    scheduledDate?: string
+  ) {
+    const search = new URLSearchParams({ warehouseId })
+    if (scheduledDate) search.set("scheduledDate", scheduledDate)
+    const endpoint = returnsEndpoint(`?${search.toString()}`)
+    if (scheduledDate) {
+      return listAllLogisticsDocumentPages(accessToken, endpoint, (response) =>
+        list(response).map(parseReturnDocument)
+      )
+    }
+    const response = await bearerRequest<unknown>(accessToken, endpoint)
     return list(response).map(parseReturnDocument)
   }
 

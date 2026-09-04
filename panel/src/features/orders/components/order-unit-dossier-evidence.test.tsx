@@ -110,6 +110,8 @@ function movement(
   return {
     documentId,
     documentType,
+    customerDeliveryPurpose:
+      documentType === "SHIPMENT" ? "RENTAL_DELIVERY" : null,
     state: actualAt ? "COMPLETED" : "PLANNED",
     scheduledDate: "2026-08-09",
     actualAt,

@@ -81,7 +81,8 @@ public class CustomerRentalService {
 
   /** Returns exact asset-owned filters for the inquiry's selected warehouse. */
   public CabinFacetsResponse facets(CustomerIdentity identity, UUID inquiryId) {
-    CustomerRentalSession session = sessionStore.required(identity.subjectId(), inquiryId);
+    CustomerRentalSession session =
+        sessionStore.required(identity.subjectId(), inquiryId);
     return inquiries.facets(access.orderActor(identity, session.getWarehouseId()), inquiryId);
   }
 
@@ -133,7 +134,10 @@ public class CustomerRentalService {
       if (!preparation.completedReplay()) {
         try {
           sessionStore.failSelection(
-              identity.subjectId(), inquiryId, preparation.commandKey(), requestHash);
+              identity.subjectId(),
+              inquiryId,
+              preparation.commandKey(),
+              requestHash);
         } catch (RuntimeException ignored) {
           // The prepared receipt and asset command remain safely retryable with the same key.
         }
@@ -145,7 +149,8 @@ public class CustomerRentalService {
   /** Returns the current cabin selection without renewing its holds. */
   public CustomerCabinSelectionResponse cabinSelection(
       CustomerIdentity identity, UUID inquiryId) {
-    CustomerRentalSession session = sessionStore.required(identity.subjectId(), inquiryId);
+    CustomerRentalSession session =
+        sessionStore.required(identity.subjectId(), inquiryId);
     CabinSelectionResponse held =
         selections.get(access.orderActor(identity, session.getWarehouseId()), inquiryId);
     return new CustomerCabinSelectionResponse(
@@ -157,7 +162,8 @@ public class CustomerRentalService {
   /** Lists only active furniture positions with positive warehouse availability. */
   public List<CustomerEquipmentAvailability> equipment(
       CustomerIdentity identity, UUID inquiryId) {
-    CustomerRentalSession session = sessionStore.required(identity.subjectId(), inquiryId);
+    CustomerRentalSession session =
+        sessionStore.required(identity.subjectId(), inquiryId);
     try {
       return dependencies.readLogisticsEquipmentAvailability(session.getWarehouseId()).stream()
           .filter(LogisticsDependencyGateway.EquipmentWarehouseAvailability::active)
@@ -184,7 +190,8 @@ public class CustomerRentalService {
       CustomerIdentity identity,
       UUID inquiryId,
       ReplaceCustomerEquipmentRequest request) {
-    CustomerRentalSession current = sessionStore.required(identity.subjectId(), inquiryId);
+    CustomerRentalSession current =
+        sessionStore.required(identity.subjectId(), inquiryId);
     CabinSelectionResponse held =
         selections.get(access.orderActor(identity, current.getWarehouseId()), inquiryId);
     Set<UUID> selectedCabins = Set.copyOf(held.rentalItemIds());
@@ -192,7 +199,10 @@ public class CustomerRentalService {
     String normalized = equipmentCodec.encode(request.selections(), selectedCabins);
     CustomerRentalSession updated =
         sessionStore.replaceEquipment(
-            identity.subjectId(), inquiryId, request.expectedVersion(), normalized);
+            identity.subjectId(),
+            inquiryId,
+            request.expectedVersion(),
+            normalized);
     return new CustomerEquipmentSelectionResponse(
         updated.getVersion(), equipmentCodec.decode(updated.getEquipmentSelectionJson()));
   }
@@ -202,21 +212,26 @@ public class CustomerRentalService {
       CustomerIdentity identity,
       UUID inquiryId,
       ReplaceCustomerRentalTermsRequest request) {
-    CustomerRentalSession current = sessionStore.required(identity.subjectId(), inquiryId);
+    CustomerRentalSession current =
+        sessionStore.required(identity.subjectId(), inquiryId);
     CabinSelectionResponse held =
         selections.get(access.orderActor(identity, current.getWarehouseId()), inquiryId);
     Set<UUID> selectedCabins = Set.copyOf(held.rentalItemIds());
     String normalized = rentalTermCodec.encode(request.terms(), selectedCabins);
     CustomerRentalSession updated =
         sessionStore.replaceRentalTerms(
-            identity.subjectId(), inquiryId, request.expectedVersion(), normalized);
+            identity.subjectId(),
+            inquiryId,
+            request.expectedVersion(),
+            normalized);
     return new CustomerRentalTermsResponse(
         updated.getVersion(), rentalTermCodec.decode(updated.getRentalTermsJson()));
   }
 
   /** Returns the complete customer cart from authoritative cabin holds plus local furniture intent. */
   public CustomerCartResponse cart(CustomerIdentity identity, UUID inquiryId) {
-    CustomerRentalSession session = sessionStore.required(identity.subjectId(), inquiryId);
+    CustomerRentalSession session =
+        sessionStore.required(identity.subjectId(), inquiryId);
     CabinSelectionResponse held =
         selections.get(access.orderActor(identity, session.getWarehouseId()), inquiryId);
     return new CustomerCartResponse(
@@ -232,7 +247,8 @@ public class CustomerRentalService {
 
   /** Returns current authoritative cabin IDs for slot capacity and checkout orchestration. */
   public List<UUID> selectedCabinIds(CustomerIdentity identity, UUID inquiryId) {
-    CustomerRentalSession session = sessionStore.required(identity.subjectId(), inquiryId);
+    CustomerRentalSession session =
+        sessionStore.required(identity.subjectId(), inquiryId);
     return selections
         .get(access.orderActor(identity, session.getWarehouseId()), inquiryId)
         .rentalItemIds();

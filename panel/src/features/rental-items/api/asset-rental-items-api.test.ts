@@ -8,21 +8,26 @@ vi.mock("@/lib/gateway-config", () => ({
 
 import {
   addAssetRentalItemManualNote,
+  abandonRentalItemCreationIntent,
   AssetRentalItemConflictError,
   cancelHtmlImport,
   commitHtmlImport,
+  completeRentalItemCreationIntent,
   createCabinCatalogItem,
   createAssetRentalItem,
+  createAssetRentalItemWithPhotoIntent,
   createHtmlImport,
   deleteCabinCatalogItem,
   getCabinSettings,
   getAssetRentalItem,
   getHtmlImport,
+  getRentalItemCreationIntent,
   getRentalItemCreationOptions,
   listHtmlImportRows,
   listHtmlImports,
   listAssetRentalItemManualNotes,
   listAssetRentalItems,
+  listPendingRentalItemCreationIntents,
   replaceCabinTypeDimensions,
   replaceHtmlImportMedia,
   retryHtmlImportMedia,
@@ -45,6 +50,11 @@ const DIMENSION_ID = "93eaad90-e67d-4b59-b34e-0af48ce4f731"
 const FINISHING_ID = "a3eaad90-e67d-4b59-b34e-0af48ce4f731"
 const CATEGORY_ID = "a4eaad90-e67d-4b59-b34e-0af48ce4f731"
 const CHARACTERISTIC_ID = "b3eaad90-e67d-4b59-b34e-0af48ce4f731"
+const CREATION_INTENT_ID = "c4eaad90-e67d-4b59-b34e-0af48ce4f731"
+const MEDIA_FOLDER_ID = "d4eaad90-e67d-4b59-b34e-0af48ce4f731"
+const MEDIA_COMMAND_ID = "e4eaad90-e67d-4b59-b34e-0af48ce4f731"
+const UPLOAD_COMMAND_ID = "f4eaad90-e67d-4b59-b34e-0af48ce4f731"
+const CHECKSUM_SHA256 = "a".repeat(64)
 
 function rentalItemResponse(overrides: Record<string, unknown> = {}) {
   return {
@@ -76,6 +86,35 @@ function rentalItemResponse(overrides: Record<string, unknown> = {}) {
     activeOrderReservation: null,
     createdAt: "2026-07-18T10:00:00Z",
     updatedAt: "2026-07-18T11:00:00Z",
+    ...overrides,
+  }
+}
+
+function creationIntentResponse(overrides: Record<string, unknown> = {}) {
+  return {
+    id: CREATION_INTENT_ID,
+    version: 0,
+    rentalItemId: RENTAL_ITEM_ID,
+    warehouseId: WAREHOUSE_ID,
+    state: "PENDING",
+    expectedPhotoCount: 1,
+    mediaFolderId: MEDIA_FOLDER_ID,
+    mediaCommandId: MEDIA_COMMAND_ID,
+    photoManifestSha256: "b".repeat(64),
+    photoManifest: [
+      {
+        photoIndex: 0,
+        uploadCommandId: UPLOAD_COMMAND_ID,
+        checksumSha256: CHECKSUM_SHA256,
+        contentType: "image/jpeg",
+        contentLength: 5,
+      },
+    ],
+    coverMediaId: null,
+    mediaProofSha256: null,
+    createdAt: "2026-08-31T09:00:00Z",
+    completedAt: null,
+    abandonedAt: null,
     ...overrides,
   }
 }
@@ -806,6 +845,182 @@ describe("asset rental-items HTTP adapter", () => {
 
     await expect(
       listAssetRentalItems({
+        accessToken: "access-token",
+        warehouseId: WAREHOUSE_ID,
+      })
+    ).rejects.toThrow("некорректный ответ")
+  })
+
+  it("uses the durable photo-intent API for create, pending, completion and abandon", async () => {
+    const coverMediaId = "04eaad90-e67d-4b59-b34e-0af48ce4f731"
+    const pending = creationIntentResponse()
+    const completed = creationIntentResponse({
+      version: 1,
+      state: "COMPLETED",
+      coverMediaId,
+      mediaProofSha256: "c".repeat(64),
+      completedAt: "2026-08-31T09:05:00Z",
+    })
+    const abandoned = creationIntentResponse({
+      version: 1,
+      state: "ABANDONED",
+      abandonedAt: "2026-08-31T09:06:00Z",
+    })
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            rentalItem: rentalItemResponse({ status: "FREE" }),
+            intent: pending,
+          },
+          201
+        )
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          content: [pending],
+          page: 0,
+          size: 50,
+          totalElements: 1,
+          totalPages: 1,
+        })
+      )
+      .mockResolvedValueOnce(jsonResponse(pending))
+      .mockResolvedValueOnce(jsonResponse(completed))
+      .mockResolvedValueOnce(jsonResponse(abandoned))
+
+    const input = {
+      warehouseId: WAREHOUSE_ID,
+      number: "БЫТ-042",
+      rentalTypeId: RENTAL_TYPE_ID,
+      dimensionId: DIMENSION_ID,
+      finishingId: FINISHING_ID,
+      category: "Обычная",
+      characteristicIds: [CHARACTERISTIC_ID],
+      linoleum: true,
+    }
+    const photoManifest = [
+      {
+        photoIndex: 0,
+        checksumSha256: CHECKSUM_SHA256,
+        contentType: "image/jpeg" as const,
+        contentLength: 5,
+      },
+    ]
+    await expect(
+      createAssetRentalItemWithPhotoIntent({
+        accessToken: "access-token",
+        idempotencyKey: IDEMPOTENCY_KEY,
+        input,
+        photoManifest,
+      })
+    ).resolves.toMatchObject({
+      rentalItem: { id: RENTAL_ITEM_ID, status: "FREE" },
+      intent: {
+        id: CREATION_INTENT_ID,
+        mediaFolderId: MEDIA_FOLDER_ID,
+        photoManifest: [{ uploadCommandId: UPLOAD_COMMAND_ID }],
+      },
+    })
+    await expect(
+      listPendingRentalItemCreationIntents({
+        accessToken: "access-token",
+        warehouseId: WAREHOUSE_ID,
+      })
+    ).resolves.toMatchObject({ content: [{ id: CREATION_INTENT_ID }] })
+    await expect(
+      getRentalItemCreationIntent("access-token", CREATION_INTENT_ID)
+    ).resolves.toMatchObject({ id: CREATION_INTENT_ID, state: "PENDING" })
+    await expect(
+      completeRentalItemCreationIntent({
+        accessToken: "access-token",
+        intentId: CREATION_INTENT_ID,
+        expectedVersion: 0,
+        idempotencyKey: IDEMPOTENCY_KEY,
+      })
+    ).resolves.toMatchObject({ state: "COMPLETED", coverMediaId })
+    await expect(
+      abandonRentalItemCreationIntent({
+        accessToken: "access-token",
+        intentId: CREATION_INTENT_ID,
+        expectedVersion: 0,
+        idempotencyKey: IDEMPOTENCY_KEY,
+      })
+    ).resolves.toMatchObject({ state: "ABANDONED" })
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://gateway.example.test/api/asset/v1/rental-item-creation-intents"
+    )
+    const createRequest = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(createRequest.method).toBe("POST")
+    expect(new Headers(createRequest.headers).get("Idempotency-Key")).toBe(
+      IDEMPOTENCY_KEY
+    )
+    expect(JSON.parse(String(createRequest.body))).toEqual({
+      rentalItem: { ...input, passport: {}, tags: [] },
+      photoManifest,
+    })
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      `https://gateway.example.test/api/asset/v1/rental-item-creation-intents?warehouseId=${WAREHOUSE_ID}&page=0&size=50`
+    )
+    expect(fetchMock.mock.calls[2]?.[0]).toBe(
+      `https://gateway.example.test/api/asset/v1/rental-item-creation-intents/${CREATION_INTENT_ID}`
+    )
+    expect(fetchMock.mock.calls[3]?.[0]).toBe(
+      `https://gateway.example.test/api/asset/v1/rental-item-creation-intents/${CREATION_INTENT_ID}/complete`
+    )
+    expect(fetchMock.mock.calls[4]?.[0]).toBe(
+      `https://gateway.example.test/api/asset/v1/rental-item-creation-intents/${CREATION_INTENT_ID}/abandon`
+    )
+  })
+
+  it("rejects a reordered server photo manifest", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        creationIntentResponse({
+          expectedPhotoCount: 2,
+          photoManifest: [
+            {
+              photoIndex: 1,
+              uploadCommandId: UPLOAD_COMMAND_ID,
+              checksumSha256: CHECKSUM_SHA256,
+              contentType: "image/jpeg",
+              contentLength: 5,
+            },
+            {
+              photoIndex: 0,
+              uploadCommandId: "14eaad90-e67d-4b59-b34e-0af48ce4f731",
+              checksumSha256: "d".repeat(64),
+              contentType: "image/png",
+              contentLength: 7,
+            },
+          ],
+        })
+      )
+    )
+
+    await expect(
+      getRentalItemCreationIntent("access-token", CREATION_INTENT_ID)
+    ).rejects.toThrow("некорректный ответ")
+  })
+
+  it("rejects a pending intent returned for another warehouse", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        content: [
+          creationIntentResponse({
+            warehouseId: "14eaad90-e67d-4b59-b34e-0af48ce4f731",
+          }),
+        ],
+        page: 0,
+        size: 50,
+        totalElements: 1,
+        totalPages: 1,
+      })
+    )
+
+    await expect(
+      listPendingRentalItemCreationIntents({
         accessToken: "access-token",
         warehouseId: WAREHOUSE_ID,
       })

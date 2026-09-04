@@ -9,6 +9,7 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
@@ -38,6 +39,21 @@ public class InventoryFinalPlan {
   @Column(name = "planning_settings_revision", nullable = false)
   private long planningSettingsRevision;
 
+  /** Immutable task-board calendar evidence used to create this plan generation. */
+  @Column(name = "task_board_calendar_from")
+  private LocalDate taskBoardCalendarFrom;
+
+  @Column(name = "task_board_calendar_through")
+  private LocalDate taskBoardCalendarThrough;
+
+  @Column(name = "task_board_calendar_fingerprint", length = 64)
+  private String taskBoardCalendarFingerprint;
+
+  /** JSONB snapshot of the effective dates, timezone facts and schedule revisions behind the fence. */
+  @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.JSON)
+  @Column(name = "task_board_calendar_snapshot", columnDefinition = "jsonb")
+  private String taskBoardCalendarSnapshot;
+
   @Column(name = "final_plan_sha256", nullable = false, length = 64)
   private String finalPlanSha256;
 
@@ -61,6 +77,10 @@ public class InventoryFinalPlan {
       UUID inventoryId,
       long basisSessionRevision,
       long planningSettingsRevision,
+      LocalDate taskBoardCalendarFrom,
+      LocalDate taskBoardCalendarThrough,
+      String taskBoardCalendarFingerprint,
+      String taskBoardCalendarSnapshot,
       String finalPlanSha256,
       FinalPlanScheduleMode movementScheduleMode,
       FinalPlanScheduleMode repairScheduleMode) {
@@ -70,6 +90,10 @@ public class InventoryFinalPlan {
     value.replace(
         basisSessionRevision,
         planningSettingsRevision,
+        taskBoardCalendarFrom,
+        taskBoardCalendarThrough,
+        taskBoardCalendarFingerprint,
+        taskBoardCalendarSnapshot,
         finalPlanSha256,
         movementScheduleMode,
         repairScheduleMode);
@@ -79,6 +103,10 @@ public class InventoryFinalPlan {
   public void nextVersion(
       long nextBasisSessionRevision,
       long nextPlanningSettingsRevision,
+      LocalDate nextTaskBoardCalendarFrom,
+      LocalDate nextTaskBoardCalendarThrough,
+      String nextTaskBoardCalendarFingerprint,
+      String nextTaskBoardCalendarSnapshot,
       String nextFinalPlanSha256,
       FinalPlanScheduleMode nextMovementScheduleMode,
       FinalPlanScheduleMode nextRepairScheduleMode) {
@@ -86,6 +114,10 @@ public class InventoryFinalPlan {
     replace(
         nextBasisSessionRevision,
         nextPlanningSettingsRevision,
+        nextTaskBoardCalendarFrom,
+        nextTaskBoardCalendarThrough,
+        nextTaskBoardCalendarFingerprint,
+        nextTaskBoardCalendarSnapshot,
         nextFinalPlanSha256,
         nextMovementScheduleMode,
         nextRepairScheduleMode);
@@ -105,6 +137,10 @@ public class InventoryFinalPlan {
   private void replace(
       long nextBasisSessionRevision,
       long nextPlanningSettingsRevision,
+      LocalDate nextTaskBoardCalendarFrom,
+      LocalDate nextTaskBoardCalendarThrough,
+      String nextTaskBoardCalendarFingerprint,
+      String nextTaskBoardCalendarSnapshot,
       String nextFinalPlanSha256,
       FinalPlanScheduleMode nextMovementScheduleMode,
       FinalPlanScheduleMode nextRepairScheduleMode) {
@@ -114,8 +150,27 @@ public class InventoryFinalPlan {
     if (nextFinalPlanSha256 == null || !nextFinalPlanSha256.matches("^[0-9a-f]{64}$")) {
       throw new IllegalArgumentException("Final-plan SHA-256 is required");
     }
+    boolean noTaskBoardEvidence =
+        nextTaskBoardCalendarFrom == null
+            && nextTaskBoardCalendarThrough == null
+            && nextTaskBoardCalendarFingerprint == null
+            && nextTaskBoardCalendarSnapshot == null;
+    if (!noTaskBoardEvidence
+        && (nextTaskBoardCalendarFrom == null
+            || nextTaskBoardCalendarThrough == null
+            || nextTaskBoardCalendarThrough.isBefore(nextTaskBoardCalendarFrom)
+            || nextTaskBoardCalendarFingerprint == null
+            || !nextTaskBoardCalendarFingerprint.matches("^[0-9a-f]{64}$")
+            || nextTaskBoardCalendarSnapshot == null
+            || nextTaskBoardCalendarSnapshot.isBlank())) {
+      throw new IllegalArgumentException("Task-board calendar evidence is invalid");
+    }
     basisSessionRevision = nextBasisSessionRevision;
     planningSettingsRevision = nextPlanningSettingsRevision;
+    taskBoardCalendarFrom = nextTaskBoardCalendarFrom;
+    taskBoardCalendarThrough = nextTaskBoardCalendarThrough;
+    taskBoardCalendarFingerprint = nextTaskBoardCalendarFingerprint;
+    taskBoardCalendarSnapshot = nextTaskBoardCalendarSnapshot;
     finalPlanSha256 = nextFinalPlanSha256;
     movementScheduleMode = require(nextMovementScheduleMode, "Movement schedule mode");
     repairScheduleMode = require(nextRepairScheduleMode, "Repair schedule mode");
@@ -152,6 +207,22 @@ public class InventoryFinalPlan {
 
   public long getPlanningSettingsRevision() {
     return planningSettingsRevision;
+  }
+
+  public LocalDate getTaskBoardCalendarFrom() {
+    return taskBoardCalendarFrom;
+  }
+
+  public LocalDate getTaskBoardCalendarThrough() {
+    return taskBoardCalendarThrough;
+  }
+
+  public String getTaskBoardCalendarFingerprint() {
+    return taskBoardCalendarFingerprint;
+  }
+
+  public String getTaskBoardCalendarSnapshot() {
+    return taskBoardCalendarSnapshot;
   }
 
   public String getFinalPlanSha256() {

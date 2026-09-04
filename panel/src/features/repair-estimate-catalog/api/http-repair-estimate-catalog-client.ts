@@ -6,30 +6,19 @@ import {
 import type { RepairEstimateCatalogClient } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-client"
 import { getUserManager } from "@/features/auth/oidc-client"
 
-const WAREHOUSE_STORAGE_KEY = "wms:selected-warehouse-id"
-
-async function currentRequest(authoritativeWarehouseId?: string | null) {
+async function currentRequest() {
   const user = await getUserManager().getUser()
   if (!user || user.expired || !user.access_token.trim()) {
     throw new Error("Не получен токен доступа к каталогу ремонта.")
   }
-  const warehouseId =
-    authoritativeWarehouseId?.trim() ||
-    window.localStorage.getItem(WAREHOUSE_STORAGE_KEY)
-  if (!warehouseId) {
-    throw new Error("Не выбран склад для загрузки каталога ремонта.")
-  }
-  return { accessToken: user.access_token, warehouseId }
+  return { accessToken: user.access_token }
 }
 
 export const httpRepairEstimateCatalogClient: RepairEstimateCatalogClient = {
-  async getOperationalCatalog(authoritativeWarehouseId) {
-    const { accessToken, warehouseId } = await currentRequest(
-      authoritativeWarehouseId
-    )
+  async getOperationalCatalog() {
+    const { accessToken } = await currentRequest()
     const versions = await listMaintenanceCatalogVersions(
       accessToken,
-      warehouseId,
       "ACTIVE"
     )
     const active = versions.items.find(
@@ -40,8 +29,8 @@ export const httpRepairEstimateCatalogClient: RepairEstimateCatalogClient = {
     }
 
     const [nodes, links] = await Promise.all([
-      listMaintenanceCatalogNodes(accessToken, warehouseId, active.id),
-      listMaintenanceCatalogLinks(accessToken, warehouseId, active.id),
+      listMaintenanceCatalogNodes(accessToken, active.id),
+      listMaintenanceCatalogLinks(accessToken, active.id),
     ])
     return {
       nodes: nodes.map((node) => ({

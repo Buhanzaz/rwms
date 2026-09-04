@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from datetime import date
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -20,10 +20,17 @@ from app.models import (
     Vehicle,
     Warehouse,
 )
-from app.models.domain import PlanStatus, RequestStatus
+from app.models.domain import CustomerDeliveryPurpose, PlanStatus, RequestStatus
 from app.schemas.domain import GeneratePlanRequest
-from app.services.planner_runtime import request_is_available_on_date
-from app.services.plans import PENDING_REQUEST_REFRESH_METRIC, PlannerFacade
+from app.services.planner_runtime import (
+    planning_window_is_complete,
+    request_is_available_on_date,
+)
+from app.services.plans import (
+    PENDING_REQUEST_REFRESH_METRIC,
+    PlannerFacade,
+    archive_mutable_plans_for_dates,
+)
 
 
 async def invalidate_mutable_group_root_plans(
@@ -31,21 +38,12 @@ async def invalidate_mutable_group_root_plans(
     warehouse_id: UUID,
     planning_dates: Iterable[date],
 ) -> None:
-    """Remove recomputable root plans before refreshing demand owned by group members."""
+    """Archive recomputable root heads before refreshing group-owned demand."""
 
     dates = tuple(sorted(set(planning_dates)))
     if not dates:
         return
-    await session.execute(
-        delete(RoutePlan).where(
-            RoutePlan.warehouse_id == warehouse_id,
-            RoutePlan.date.in_(dates),
-            RoutePlan.status.in_(
-                (PlanStatus.DRAFT, PlanStatus.GENERATED, PlanStatus.VALIDATED)
-            ),
-        )
-    )
-    await session.flush()
+    await archive_mutable_plans_for_dates(session, warehouse_id, set(dates))
 
 
 async def generate_missing_draft_plans(
@@ -55,6 +53,7 @@ async def generate_missing_draft_plans(
     planning_dates: Iterable[date],
     *,
     request_warehouse_ids: Iterable[UUID] | None = None,
+    resource_warehouse_ids: Iterable[UUID] | None = None,
 ) -> tuple[OptimizationRun, ...]:
     """Refresh marked plans in place, then generate one missing plan per ready date.
 
@@ -79,6 +78,9 @@ async def generate_missing_draft_plans(
         return ()
     demand_warehouse_ids = tuple(
         dict.fromkeys((warehouse_id, *(request_warehouse_ids or ())))
+    )
+    permitted_resource_warehouse_ids = tuple(
+        dict.fromkeys((warehouse_id, *(resource_warehouse_ids or ())))
     )
     demand_requests = (
         warehouse.requests
@@ -122,8 +124,15 @@ async def generate_missing_draft_plans(
         and plan.metrics.get("accepting_requests") != (plan.date not in closed_dates)
     ]
     if stale_automatic_ids:
-        await session.execute(delete(RoutePlan).where(RoutePlan.id.in_(stale_automatic_ids)))
-        await session.flush()
+        await archive_mutable_plans_for_dates(
+            session,
+            warehouse_id,
+            {
+                plan.date
+                for plan in active_plans
+                if plan.id in stale_automatic_ids
+            },
+        )
     for plan in sorted(active_plans, key=lambda item: (item.date, str(item.id))):
         if (
             plan.id not in stale_automatic_ids
@@ -154,7 +163,11 @@ async def generate_missing_draft_plans(
         if (
             not ready
             or not _planning_facts_complete(ready, planning_date)
-            or not await _planning_resources_complete(session, warehouse_id, planning_date)
+            or not await _planning_resources_complete(
+                session,
+                permitted_resource_warehouse_ids,
+                planning_date,
+            )
         ):
             continue
         run = await planner.generate_plan(
@@ -173,17 +186,18 @@ async def generate_missing_draft_plans(
 
 async def _planning_resources_complete(
     session: AsyncSession,
-    warehouse_id: UUID,
+    warehouse_ids: Iterable[UUID],
     planning_date: date,
 ) -> bool:
-    """Require at least one usable driver/vehicle shift before persisting a pre-plan."""
+    """Require one usable shift from the exact-date admitted planning-group members."""
 
+    permitted_warehouse_ids = tuple(dict.fromkeys(warehouse_ids))
     shift_id = await session.scalar(
         select(DriverShift.id)
         .join(Driver, Driver.id == DriverShift.driver_id)
         .join(Vehicle, Vehicle.id == DriverShift.vehicle_id)
         .where(
-            DriverShift.warehouse_id == warehouse_id,
+            DriverShift.warehouse_id.in_(permitted_warehouse_ids),
             DriverShift.date_from <= planning_date,
             DriverShift.date_to >= planning_date,
             DriverShift.active.is_(True),
@@ -199,7 +213,11 @@ def _planning_facts_complete(
     requests: list[LogisticsRequest],
     planning_date: date,
 ) -> bool:
-    """Return whether every ready request has the mandatory facts for automatic planning."""
+    """Return whether every ready request has the mandatory facts for automatic planning.
+
+    A soft date-only option deliberately represents the whole warehouse day and therefore needs
+    no synthetic time window. Partial windows and hard options without bounds remain incomplete.
+    """
 
     for request in requests:
         option = next(
@@ -207,8 +225,11 @@ def _planning_facts_complete(
                 item
                 for item in request.date_options
                 if item.date == planning_date
-                and item.window_start is not None
-                and item.window_end is not None
+                and planning_window_is_complete(
+                    item.window_start,
+                    item.window_end,
+                    is_hard=item.is_hard,
+                )
             ),
             None,
         )
@@ -222,6 +243,8 @@ def _planning_facts_complete(
             option is None
             or request.trailer_access_allowed is None
             or any(value is None for value in cargo)
+            or request.customer_delivery_purpose
+            == CustomerDeliveryPurpose.CUSTOMER_RELOCATION
         ):
             return False
     return True

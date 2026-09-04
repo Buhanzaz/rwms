@@ -1,6 +1,6 @@
 import type {
   KpiPalette,
-  WarehouseKpiSettings,
+  KpiPaletteResponse,
 } from "@/features/settings/kpi/api/kpi-settings-api"
 import type {
   TaskBoardEntryDto,
@@ -26,15 +26,9 @@ export function nextTaskTimerTransitionAt(entries: TaskBoardEntryDto[]) {
 }
 
 export function paletteForTaskBoard(
-  settings: Pick<WarehouseKpiSettings, "status" | "palette"> | null
+  settings: Pick<KpiPaletteResponse, "palette"> | null
 ) {
-  if (
-    !settings ||
-    (settings.status !== "ACTIVE" && settings.status !== "SCHEDULED")
-  ) {
-    return null
-  }
-  return settings.palette
+  return settings?.palette ?? null
 }
 
 function elapsedWholeSeconds(from: string | null, now: number) {

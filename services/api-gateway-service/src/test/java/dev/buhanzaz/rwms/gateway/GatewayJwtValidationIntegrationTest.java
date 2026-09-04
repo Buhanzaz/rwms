@@ -94,6 +94,9 @@ class GatewayJwtValidationIntegrationTest {
     registry.add("rwms.gateway.routes.media-uri", GatewayJwtValidationIntegrationTest::downstreamOrigin);
     registry.add("rwms.gateway.routes.inventory-uri", GatewayJwtValidationIntegrationTest::downstreamOrigin);
     registry.add("rwms.gateway.routes.logistics-uri", GatewayJwtValidationIntegrationTest::downstreamOrigin);
+    registry.add(
+        "rwms.gateway.routes.logistics-planner-uri",
+        GatewayJwtValidationIntegrationTest::downstreamOrigin);
     registry.add("rwms.gateway.routes.dossier-uri", GatewayJwtValidationIntegrationTest::downstreamOrigin);
     registry.add("rwms.gateway.routes.analytics-uri", GatewayJwtValidationIntegrationTest::downstreamOrigin);
     registry.add("rwms.gateway.routes.assistant-uri", GatewayJwtValidationIntegrationTest::downstreamOrigin);

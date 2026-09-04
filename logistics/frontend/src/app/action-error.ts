@@ -13,6 +13,10 @@ const conflictTitles: Readonly<Record<string, string>> = {
   GENERATED_REQUESTS_ALREADY_PLANNED: 'Перегенерация заблокирована сохранённым планом',
   CYCLE_LOCKED: 'Рейс заблокирован',
   TASK_LOCKED: 'Задача заблокирована',
+  DRIVER_SHIFT_OVERLAP: 'Смены водителя пересекаются',
+  VEHICLE_SHIFT_OVERLAP: 'Машина уже занята в смене',
+  CATALOG_VERSION_CONFLICT: 'Смена уже изменена',
+  DATABASE_CONSTRAINT_VIOLATION: 'Объект используется в сохранённом плане',
 };
 
 /** Keeps domain conflicts distinct from optimistic plan-version conflicts. */

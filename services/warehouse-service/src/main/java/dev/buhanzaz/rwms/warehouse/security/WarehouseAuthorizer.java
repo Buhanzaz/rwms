@@ -25,6 +25,11 @@ import org.springframework.stereotype.Component;
 public class WarehouseAuthorizer {
   private static final UUID DEVELOPMENT_SUBJECT =
       UUID.fromString("00000000-0000-0000-0000-0000000000d1");
+  private static final Set<String> INTERACTIVE_PROTOCOL_SCOPES =
+      Set.of("openid", "profile", "offline_access");
+  private static final String ADMIN_WEB_CLIENT_ID = "rwms-admin-web";
+  private static final Set<String> RENTAL_MANAGER_CLIENT_IDS =
+      Set.of("rwms-rental-manager-web", "rwms-rental-manager-android");
   private final boolean developmentPublicBypass;
 
   /**
@@ -46,10 +51,46 @@ public class WarehouseAuthorizer {
    *
    * @param jwt authenticated caller
    */
+  public void requireWarehouseDirectoryRead(Jwt jwt) {
+    if (developmentPublicBypass) return;
+    requireUser(jwt);
+    if (isRentalManagerCredential(jwt)) {
+      requireRentalManagerDirectoryRead(jwt);
+      return;
+    }
+    if (scopes(jwt).contains("admin.manage")) {
+      if (!hasAdministratorRole(jwt)) {
+        throw new AccessDeniedException("Administrator role is required");
+      }
+      requireExactApplicationScope(jwt, "admin.manage");
+      return;
+    }
+    requireScope(jwt, "warehouse.read");
+  }
+
+  /** Requires ordinary RWMS warehouse-read authority for one direct identity lookup. */
   public void requireWarehouseRead(Jwt jwt) {
     if (developmentPublicBypass) return;
     requireUser(jwt);
     requireScope(jwt, "warehouse.read");
+  }
+
+  /**
+   * Requires a system or WMS administrator with mutation authority.
+   *
+   * @param jwt authenticated user caller
+   */
+  public void requireAdminWrite(Jwt jwt) {
+    if (developmentPublicBypass) return;
+    requireUser(jwt);
+    if (!hasAdministratorRole(jwt)) {
+      throw new AccessDeniedException("Administrator role is required");
+    }
+    if (scopes(jwt).contains("admin.manage")) {
+      requireExactApplicationScope(jwt, "admin.manage");
+      return;
+    }
+    requireScope(jwt, "rwms.write");
   }
 
   /**
@@ -72,6 +113,7 @@ public class WarehouseAuthorizer {
   public void requireWarehouseSupportRead(Jwt jwt, UUID servedWarehouseId) {
     if (developmentPublicBypass) return;
     requireUser(jwt);
+    if (isAdministrationApplication(jwt)) return;
     requireScope(jwt, "warehouse.read");
     requireWarehouseManagementRole(jwt);
     requireWarehouseGrant(jwt, servedWarehouseId, 0);
@@ -91,6 +133,7 @@ public class WarehouseAuthorizer {
       Jwt jwt, UUID servedWarehouseId, Collection<UUID> supportWarehouseIds) {
     if (developmentPublicBypass) return;
     requireUser(jwt);
+    if (isAdministrationApplication(jwt)) return;
     requireScope(jwt, "rwms.write");
     requireWarehouseManagementRole(jwt);
     requireWarehouseGrant(jwt, servedWarehouseId, 2);
@@ -318,6 +361,49 @@ public class WarehouseAuthorizer {
     }
   }
 
+  private static boolean hasAdministratorRole(Jwt jwt) {
+    String role = jwt.getClaimAsString("global_role");
+    return "SYSTEM_ADMIN".equals(role) || "WMS_ADMIN".equals(role);
+  }
+
+  private boolean isAdministrationApplication(Jwt jwt) {
+    return jwt != null
+        && "USER".equals(jwt.getClaimAsString("principal_type"))
+        && ADMIN_WEB_CLIENT_ID.equals(jwt.getClaimAsString("client_id"))
+        && hasAdministratorRole(jwt)
+        && hasExactApplicationScope(jwt, "admin.manage");
+  }
+
+  private static boolean isRentalManagerCredential(Jwt jwt) {
+    return isRentalManagerClient(jwt)
+        || "RENTAL_MANAGER".equals(jwt.getClaimAsString("global_role"))
+        || scopes(jwt).contains("rental.manage");
+  }
+
+  private void requireRentalManagerDirectoryRead(Jwt jwt) {
+    if (!isRentalManagerClient(jwt)) {
+      throw new AccessDeniedException("Dedicated rental-manager client is required");
+    }
+    if (!"RENTAL_MANAGER".equals(jwt.getClaimAsString("global_role"))) {
+      throw new AccessDeniedException("RENTAL_MANAGER role is required");
+    }
+    if (!rentalAccess(jwt)) {
+      throw new AccessDeniedException("Rental access is required");
+    }
+    requireExactApplicationScope(jwt, "rental.manage");
+  }
+
+  private static boolean isRentalManagerClient(Jwt jwt) {
+    String clientId = jwt.getClaimAsString("client_id");
+    return clientId != null && RENTAL_MANAGER_CLIENT_IDS.contains(clientId);
+  }
+
+  private static boolean rentalAccess(Jwt jwt) {
+    Object value = jwt.getClaims().get("rentalAccess");
+    if (value instanceof Boolean flag) return flag;
+    return value instanceof String text && Boolean.parseBoolean(text);
+  }
+
   private static void requireWarehouseGrant(Jwt jwt, UUID warehouseId, int requiredRank) {
     String role = jwt.getClaimAsString("global_role");
     if ("SYSTEM_ADMIN".equals(role) || "WMS_ADMIN".equals(role)) return;
@@ -346,6 +432,20 @@ public class WarehouseAuthorizer {
     if (!scopes(jwt).contains(required)) {
       throw new AccessDeniedException("Required scope is missing");
     }
+  }
+
+  private void requireExactApplicationScope(Jwt jwt, String required) {
+    if (!hasExactApplicationScope(jwt, required)) {
+      throw new AccessDeniedException("Exact application scope is required");
+    }
+  }
+
+  private static boolean hasExactApplicationScope(Jwt jwt, String required) {
+    List<String> applicationScopes =
+        scopes(jwt).stream()
+            .filter(scope -> !INTERACTIVE_PROTOCOL_SCOPES.contains(scope))
+            .toList();
+    return applicationScopes.size() == 1 && required.equals(applicationScopes.getFirst());
   }
 
   private boolean exactlyWarehouseRead(Jwt jwt) {

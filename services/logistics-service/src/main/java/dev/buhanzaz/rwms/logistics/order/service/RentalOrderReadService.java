@@ -362,6 +362,7 @@ class RentalOrderReadService {
         summary.version(),
         summary.number(),
         summary.status(),
+        summary.customerDeliveryPurpose(),
         summary.client(),
         summary.managerId(),
         summary.managerDisplayName(),
@@ -417,6 +418,7 @@ class RentalOrderReadService {
     return new OrderMovementResponse(
         document.getId(),
         document.getDocumentType().name(),
+        document.getCustomerDeliveryPurpose(),
         document.getState().name(),
         document.getScheduledDate(),
         actualAt(document),

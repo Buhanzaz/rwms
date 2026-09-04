@@ -5,6 +5,8 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import org.junit.Test
 
@@ -126,6 +128,7 @@ class DriverLogisticsContractTest {
                 "taskNumber":"123",
                 "tripNumber":2,
                 "operationType":"SHIPMENT",
+                "customerDeliveryPurpose":"RENTAL_DELIVERY",
                 "clientName":"ООО Стройка",
                 "address":"Санкт-Петербург, Невский проспект, 1",
                 "latitude":59.9343,
@@ -203,6 +206,7 @@ class DriverLogisticsContractTest {
         assertThat(detail.source?.sourceId)
             .isEqualTo("66666666-6666-4666-8666-666666666666")
         val trip = requireNotNull(response.tripDetails)
+        assertThat(trip.customerDeliveryPurpose).isEqualTo("RENTAL_DELIVERY")
         assertThat(trip.additionalContacts.map { it.name }).containsExactly("Анна", "Пётр")
         assertThat(trip.desiredDeliveryWindows).hasSize(2)
         assertThat(trip.scheduledDate).isEqualTo("2026-08-12")
@@ -222,6 +226,7 @@ class DriverLogisticsContractTest {
                 "taskNumber":"123",
                 "tripNumber":1,
                 "operationType":"SHIPMENT",
+                "customerDeliveryPurpose":null,
                 "clientName":"ООО Стройка",
                 "address":null,
                 "latitude":null,
@@ -245,8 +250,28 @@ class DriverLogisticsContractTest {
         )
 
         val trip = requireNotNull(response.tripDetails)
+        assertThat(trip.customerDeliveryPurpose).isNull()
         assertThat(trip.desiredDeliveryWindows.single().startDate).isEqualTo("2026-08-11")
         assertThat(trip.scheduledDate).isEqualTo("2026-08-12")
+    }
+
+    @Test
+    fun `trip details require the nullable customer delivery purpose key`() {
+        val expected = tripDetails(customerDeliveryPurpose = null)
+        val canonical = json.parseToJsonElement(json.encodeToString(expected)).jsonObject
+
+        assertThat(canonical["customerDeliveryPurpose"]).isEqualTo(JsonNull)
+        assertThat(json.decodeFromString<DriverTripDetailsDto>(canonical.toString()))
+            .isEqualTo(expected)
+
+        val missingPurpose = JsonObject(
+            canonical.filterKeys { key -> key != "customerDeliveryPurpose" },
+        )
+        val failure = runCatching {
+            json.decodeFromString<DriverTripDetailsDto>(missingPurpose.toString())
+        }.exceptionOrNull()
+
+        assertThat(failure).isInstanceOf(SerializationException::class.java)
     }
 
     @Test
@@ -350,4 +375,22 @@ class DriverLogisticsContractTest {
         assertThat(selector.mode).isEqualTo("OPTIONAL_JOIN")
         assertThat(selector.notifyOnPrimaryTake).isTrue()
     }
+
+    private fun tripDetails(customerDeliveryPurpose: String?) = DriverTripDetailsDto(
+        taskNumber = "123",
+        tripNumber = 1,
+        operationType = "RETURN",
+        customerDeliveryPurpose = customerDeliveryPurpose,
+        clientName = "ООО Стройка",
+        address = null,
+        latitude = null,
+        longitude = null,
+        primaryContactName = null,
+        primaryContactPhone = null,
+        additionalContacts = emptyList(),
+        comment = null,
+        desiredDeliveryWindows = emptyList(),
+        scheduledDate = "2026-08-12",
+        cabins = emptyList(),
+    )
 }

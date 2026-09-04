@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.customer.domain;
 
+
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -83,6 +84,23 @@ class CustomerDeliverySlotTest {
     assertThrows(IllegalArgumentException.class, () -> offerWithPrice(7_500L, 90));
   }
 
+  @Test
+  void persistsExactlyOneSpecialPriceOrOrdinaryTierProvenance() {
+    UUID priceZoneId = UUID.randomUUID();
+
+    CustomerDeliverySlot special = offerWithProvenance(7_500L, priceZoneId, null);
+
+    assertEquals(7_500L, special.getDeliveryPriceRubles());
+    assertEquals(priceZoneId, special.getPriceZoneId());
+    assertEquals(null, special.getPriceIsochroneMinutes());
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> offerWithProvenance(7_500L, priceZoneId, 60));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> offerWithProvenance(7_500L, null, null));
+  }
+
   private static CustomerDeliverySlot offer(int travelZoneHours) {
     return offer(travelZoneHours, true, true);
   }
@@ -122,6 +140,11 @@ class CustomerDeliverySlotTest {
 
   private static CustomerDeliverySlot offerWithPrice(
       Long deliveryPriceRubles, Integer priceIsochroneMinutes) {
+    return offerWithProvenance(deliveryPriceRubles, null, priceIsochroneMinutes);
+  }
+
+  private static CustomerDeliverySlot offerWithProvenance(
+      Long deliveryPriceRubles, UUID priceZoneId, Integer priceIsochroneMinutes) {
     return CustomerDeliverySlot.offer(
         UUID.randomUUID(),
         UUID.randomUUID(),
@@ -139,6 +162,7 @@ class CustomerDeliverySlotTest {
         0,
         2,
         deliveryPriceRubles,
+        priceZoneId,
         priceIsochroneMinutes,
         true,
         true,

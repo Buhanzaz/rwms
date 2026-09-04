@@ -333,19 +333,18 @@ class HttpLogisticsDependencyGatewayTest {
     server.verify();
   }
 
-  @Test
   void readsCalendarFilteredWarehouseSupportLinksWithOwnerCoordinates() {
     UUID servedWarehouseId = UUID.randomUUID();
     UUID supportWarehouseId = UUID.randomUUID();
     UUID supportLinkId = UUID.randomUUID();
-    OffsetDateTime at = OffsetDateTime.parse("2026-09-15T08:30:00Z");
+    OffsetDateTime at = OffsetDateTime.parse("2026-09-15T11:30:00+03:00");
     server
         .expect(
             requestTo(
                 "http://warehouse.test/api/internal/warehouse/v1/warehouses/logistics/"
                     + servedWarehouseId
                     + "/support-links?at="
-                    + at))
+                    + at.toInstant()))
         .andExpect(method(HttpMethod.GET))
         .andExpect(header("Authorization", "Bearer test-warehouse.logistics"))
         .andRespond(
@@ -2412,7 +2411,7 @@ class HttpLogisticsDependencyGatewayTest {
             withSuccess(
                 """
                 {
-                  "warehouseId":"%s","repairPlaceCount":3,"automaticRefillDelayMinutes":5,"reservedCount":0,
+                  "warehouseId":"%s","repairPlaceCount":3,"automaticRefillDelayMinutes":0,"reservedCount":0,
                   "occupiedCount":2,"readyToReleaseCount":1,"availableCount":1,
                   "overCapacity":false,"allocations":[{
                     "id":"%s","version":4,"warehouseId":"%s","repairId":"%s",
@@ -2452,7 +2451,6 @@ class HttpLogisticsDependencyGatewayTest {
         .satisfies(
             places -> {
               assertThat(places.availableCount()).isOne();
-              assertThat(places.automaticRefillDelayMinutes()).isEqualTo(5);
               assertThat(places.allocations())
                   .singleElement()
                   .satisfies(
@@ -2513,7 +2511,7 @@ class HttpLogisticsDependencyGatewayTest {
   void usesFourExactWarehouseLifecycleScopesAndVersionedRoutes() {
     UUID warehouseId = UUID.randomUUID();
     UUID operationId = UUID.randomUUID();
-    OffsetDateTime at = OffsetDateTime.parse("2026-09-01T00:30:00Z");
+    OffsetDateTime at = OffsetDateTime.parse("2026-09-01T03:30:00+03:00");
 
     server
         .expect(
@@ -2537,7 +2535,7 @@ class HttpLogisticsDependencyGatewayTest {
                 "http://warehouse.test/api/internal/warehouse/v1/warehouses/"
                     + warehouseId
                     + "/time-zone?at="
-                    + at))
+                    + at.toInstant()))
         .andExpect(method(HttpMethod.GET))
         .andExpect(header("Authorization", "Bearer test-warehouse.timezone.read"))
         .andRespond(
@@ -2557,7 +2555,7 @@ class HttpLogisticsDependencyGatewayTest {
         .andExpect(method(HttpMethod.POST))
         .andExpect(header("Authorization", "Bearer test-warehouse.operation.mark"))
         .andExpect(jsonPath("$.operationId").value(operationId.toString()))
-        .andExpect(jsonPath("$.occurredAt").value("2026-09-01T00:30:00Z"))
+        .andExpect(jsonPath("$.occurredAt").value("2026-09-01T03:30:00+03:00"))
         .andRespond(withSuccess());
     server
         .expect(

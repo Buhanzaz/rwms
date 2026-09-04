@@ -37,12 +37,19 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.round
 
+/** Contact values collected during account registration and reused by the mandatory profile step. */
+data class CustomerRegistrationProfileDraft(
+    val email: String,
+    val phone: String,
+)
+
 /** Complete UI state for the signed-in customer funnel; no field is authoritative outside the server. */
 data class CustomerWorkflowState(
     val bootstrapping: Boolean = true,
     val busy: Boolean = false,
     val error: String? = null,
     val profile: CustomerProfile? = null,
+    val registrationProfileDraft: CustomerRegistrationProfileDraft? = null,
     val warehouses: List<CustomerWarehouse> = emptyList(),
     val selectedWarehouse: CustomerWarehouse? = null,
     val rememberWarehouseChoice: Boolean = false,
@@ -58,7 +65,6 @@ data class CustomerWorkflowState(
     val equipment: List<AvailableEquipment> = emptyList(),
     val equipmentDraft: Map<EquipmentKey, Long> = emptyMap(),
     val rentalTerms: Map<String, Long> = emptyMap(),
-    val selectedRentalTermCabinIds: Set<String> = emptySet(),
     val cart: CustomerCart? = null,
     val address: String = "",
     val latitude: Double? = null,
@@ -74,6 +80,9 @@ data class CustomerWorkflowState(
     val heldSlot: HeldDeliverySlot? = null,
     val booking: CustomerBooking? = null,
     val bookings: List<CustomerBooking> = emptyList(),
+    val bookingRescheduleId: String? = null,
+    val bookingRescheduleSlots: List<DeliverySlot> = emptyList(),
+    val selectedBookingRescheduleSlotId: String? = null,
 )
 
 /**
@@ -121,6 +130,36 @@ internal fun normalizedSiteCabinCapacity(selectedCabinCount: Int, requestedCapac
     require(selectedCabinCount >= 0)
     require(requestedCapacity in 1..2)
     return if (selectedCabinCount <= 1) 1 else requestedCapacity
+}
+
+/**
+ * Chooses the media warehouse without making the profile screen depend on a selected rental
+ * catalog. A previously bound avatar keeps its immutable warehouse; otherwise the current catalog
+ * choice wins, followed by an already authorized warehouse returned by the service.
+ */
+internal fun CustomerWorkflowState.avatarUploadWarehouseId(): String? =
+    profile?.avatar?.warehouseId
+        ?: selectedWarehouse?.id
+        ?: warehouses.firstOrNull()?.id
+
+/** Applies a confirmed atomic slot swap and discards every offer calculated for the old booking. */
+internal fun CustomerWorkflowState.withSuccessfulBookingReschedule(
+    updated: CustomerBooking,
+): CustomerWorkflowState {
+    val latest = booking?.let { current ->
+        if (current.bookingId == updated.bookingId || current.inquiryId == updated.inquiryId) {
+            updated
+        } else {
+            current
+        }
+    }
+    return copy(
+        booking = latest,
+        bookings = CustomerBookingPolicy.replace(updated, bookings),
+        bookingRescheduleId = null,
+        bookingRescheduleSlots = emptyList(),
+        selectedBookingRescheduleSlotId = null,
+    )
 }
 
 /** App-level conditional state consumed by Navigation 3. */
@@ -181,13 +220,26 @@ class CustomerAppViewModel @Inject constructor(
         }
     }
 
-    /** Starts the PKCE customer login. */
-    fun login(username: String, password: String) {
-        viewModelScope.launch { authRepository.login(username, password) }
+    /** Starts the PKCE customer login with the explicit session persistence choice. */
+    fun login(username: String, password: String, rememberMe: Boolean) {
+        mutableWorkflow.value = mutableWorkflow.value.copy(registrationProfileDraft = null)
+        viewModelScope.launch { authRepository.login(username, password, rememberMe) }
     }
 
-    /** Registers and immediately signs in with the same non-persisted credentials. */
-    fun register(username: String, password: String, confirmation: String) {
+    /** Registers an individual account and carries its contact values into profile completion. */
+    fun register(
+        username: String,
+        email: String,
+        password: String,
+        confirmation: String,
+        phone: String,
+    ) {
+        mutableWorkflow.value = mutableWorkflow.value.copy(
+            registrationProfileDraft = CustomerRegistrationProfileDraft(
+                email = email.trim(),
+                phone = phone.trim(),
+            ),
+        )
         viewModelScope.launch { authRepository.register(username, password, confirmation) }
     }
 
@@ -205,20 +257,31 @@ class CustomerAppViewModel @Inject constructor(
             repository.updateProfile(profile)
         }
         val warehouses = if (profile.id == null) repository.warehouses() else mutableWorkflow.value.warehouses
-        mutableWorkflow.value = mutableWorkflow.value.copy(profile = saved, warehouses = warehouses)
+        mutableWorkflow.value = mutableWorkflow.value.copy(
+            profile = saved,
+            registrationProfileDraft = null,
+            warehouses = warehouses,
+        )
     }
 
-    /** Uploads and binds an avatar only after a warehouse has fixed its authorization scope. */
+    /**
+     * Uploads and binds an avatar through an existing profile media scope. Catalog selection is
+     * optional: the immutable avatar scope or an authorized warehouse supplies the required owner
+     * warehouse when the customer opens the profile directly.
+     */
     fun uploadProfileAvatar(uri: Uri) = launchMutation {
         val current = mutableWorkflow.value
         val profile = current.profile
             ?: throw CustomerApiException(409, "Сначала сохраните профиль")
-        val warehouse = current.selectedWarehouse
-            ?: throw CustomerApiException(409, "Сначала выберите склад")
-        val updated = withContext(Dispatchers.IO) {
-            repository.uploadProfileAvatar(profile, warehouse.id, uri)
+        val warehouses = current.warehouses.ifEmpty {
+            withContext(Dispatchers.IO) { repository.warehouses() }
         }
-        mutableWorkflow.value = mutableWorkflow.value.copy(profile = updated)
+        val warehouseId = current.copy(warehouses = warehouses).avatarUploadWarehouseId()
+            ?: throw CustomerApiException(409, "Для загрузки аватара пока нет доступного склада")
+        val updated = withContext(Dispatchers.IO) {
+            repository.uploadProfileAvatar(profile, warehouseId, uri)
+        }
+        mutableWorkflow.value = mutableWorkflow.value.copy(profile = updated, warehouses = warehouses)
     }
 
     /** Selects a warehouse, optionally resumes its remembered inquiry, and loads free cabins. */
@@ -300,9 +363,6 @@ class CustomerAppViewModel @Inject constructor(
             selectedCabinIds = selectedIds,
             equipmentDraft = draft.equipment,
             rentalTerms = cart.rentalTerms.associate { it.cabinUnitId to it.rentalMonths },
-            selectedRentalTermCabinIds = current.selectedRentalTermCabinIds.intersect(
-                selection.cabins.mapTo(mutableSetOf()) { it.unitId },
-            ),
             equipment = available,
             cart = cart,
             siteCabinCapacity = normalizedSiteCabinCapacity(selectedIds.size, current.siteCabinCapacity),
@@ -346,55 +406,16 @@ class CustomerAppViewModel @Inject constructor(
         )
     }
 
-    /** Selects which cart cabins receive the next bulk rental-duration change. */
-    fun toggleRentalTermCabin(cabinUnitId: String) {
-        if (mutationGate.isActive()) return
-        val current = mutableWorkflow.value
-        require(cabinUnitId in current.selectedCabinIds)
-        val next = if (cabinUnitId in current.selectedRentalTermCabinIds) {
-            current.selectedRentalTermCabinIds - cabinUnitId
-        } else {
-            current.selectedRentalTermCabinIds + cabinUnitId
-        }
-        mutableWorkflow.value = current.copy(selectedRentalTermCabinIds = next)
-    }
-
-    /** Applies one duration to checked cabins, or to the complete cart when none are checked. */
-    fun setRentalMonths(months: Long) = launchMutation {
-        require(months in 1..120)
-        val current = mutableWorkflow.value
-        requireMutableCart(current)
-        val next = CustomerRentalTermPolicy.apply(
-            current.selectedCabinIds,
-            current.rentalTerms,
-            current.selectedRentalTermCabinIds,
-            months,
-        )
-        val response = repository.updateRentalTerms(
-            requireNotNull(current.inquiryId),
-            current.selectionVersion,
-            next,
-        )
-        mutableWorkflow.value = current.copy(
-            selectionVersion = response.version,
-            rentalTerms = response.terms.associate { it.cabinUnitId to it.rentalMonths },
-            slots = emptyList(),
-            slotSearchCompleted = false,
-            selectedSlotId = null,
-            heldSlot = null,
-        )
-    }
-
     /** Applies a duration override to exactly one selected cabin. */
     fun setCabinRentalMonths(cabinUnitId: String, months: Long) = launchMutation {
         require(months in 1..120)
         val current = mutableWorkflow.value
         require(cabinUnitId in current.selectedCabinIds)
-        val next = CustomerRentalTermPolicy.apply(
-            current.selectedCabinIds,
-            current.rentalTerms,
-            setOf(cabinUnitId),
-            months,
+        val next = CustomerRentalTermPolicy.withCabinTerm(
+            selectedCabins = current.selectedCabinIds,
+            existingTerms = current.rentalTerms,
+            cabinUnitId = cabinUnitId,
+            months = months,
         )
         val response = repository.updateRentalTerms(
             requireNotNull(current.inquiryId),
@@ -592,12 +613,55 @@ class CustomerAppViewModel @Inject constructor(
         )
     }
 
-    /** Reloads real booking statuses from RWMS. */
-    fun refreshBookings() = launchMutation {
+    /** Submits cancellation with the exact booking version and then reconciles the server list. */
+    fun cancelBooking(bookingId: String) = launchMutation {
+        val booking = requireChangeableBooking(bookingId)
+        applyBookingResponse(repository.cancelBooking(booking))
+        reconcileBookings(repository.bookings())
+    }
+
+    /** Loads replacement slots derived solely from the server-owned booking contents. */
+    fun openBookingReschedule(bookingId: String) = launchMutation {
+        val booking = requireChangeableBooking(bookingId)
+        val slots = repository.searchBookingRescheduleSlots(booking)
+        mutableWorkflow.value = mutableWorkflow.value.copy(
+            bookingRescheduleId = bookingId,
+            bookingRescheduleSlots = CustomerBookingLifecyclePolicy.orderedSlots(slots),
+            selectedBookingRescheduleSlotId = null,
+        )
+    }
+
+    /** Selects one exact replacement offer returned by the booking-scoped search. */
+    fun selectBookingRescheduleSlot(slotId: String) {
+        if (mutationGate.isActive()) return
         val current = mutableWorkflow.value
-        val bookings = repository.bookings()
-        val latest = current.booking?.let { CustomerBookingPolicy.reconcile(it, bookings) }
-        mutableWorkflow.value = current.copy(booking = latest, bookings = bookings)
+        if (current.bookingRescheduleSlots.none { slot -> slot.slotId == slotId }) return
+        mutableWorkflow.value = current.copy(selectedBookingRescheduleSlotId = slotId)
+    }
+
+    /** Closes the local offer dialog without changing the booking or its original slot. */
+    fun dismissBookingReschedule() {
+        if (mutationGate.isActive()) return
+        mutableWorkflow.value = mutableWorkflow.value.copy(
+            bookingRescheduleId = null,
+            bookingRescheduleSlots = emptyList(),
+            selectedBookingRescheduleSlotId = null,
+        )
+    }
+
+    /** Confirms an atomic server slot swap and refreshes the authoritative booking projection. */
+    fun confirmBookingReschedule() = launchMutation {
+        val current = mutableWorkflow.value
+        val bookingId = current.bookingRescheduleId
+            ?: throw CustomerApiException(409, "Сначала выберите заказ для переноса")
+        val booking = requireChangeableBooking(bookingId)
+        val slotId = current.selectedBookingRescheduleSlotId
+            ?: throw CustomerApiException(422, "Выберите новое время доставки")
+        val slot = current.bookingRescheduleSlots.singleOrNull { offer -> offer.slotId == slotId }
+            ?: throw CustomerApiException(409, "Выбранное время устарело. Рассчитайте варианты заново")
+        val updated = repository.rescheduleBooking(booking, slot)
+        mutableWorkflow.value = mutableWorkflow.value.withSuccessfulBookingReschedule(updated)
+        reconcileBookings(repository.bookings())
     }
 
     /** Accepts one arrived cabin and reloads its authoritative reception state. */
@@ -675,6 +739,7 @@ class CustomerAppViewModel @Inject constructor(
     }
 
     private suspend fun reloadAfterConflict() {
+        runCatching { repository.bookings() }.getOrNull()?.let(::reconcileBookings)
         val inquiryId = mutableWorkflow.value.inquiryId ?: return
         runCatching { repository.cart(inquiryId) }.getOrNull()?.let { cart ->
             val selectedIds = cart.cabins.mapTo(mutableSetOf()) { it.unitId }
@@ -696,6 +761,58 @@ class CustomerAppViewModel @Inject constructor(
                 heldSlot = null,
             )
         }
+    }
+
+    private fun requireChangeableBooking(bookingId: String): CustomerBooking {
+        val booking = CustomerBookingPolicy.visible(
+            mutableWorkflow.value.booking,
+            mutableWorkflow.value.bookings,
+        ).firstOrNull { candidate -> candidate.bookingId == bookingId }
+            ?: throw CustomerApiException(404, "Заказ не найден")
+        if (!CustomerBookingLifecyclePolicy.canChange(booking)) {
+            throw CustomerApiException(
+                409,
+                "Заказ уже передан в работу. Отменить или перенести доставку больше нельзя.",
+                "CUSTOMER_BOOKING_NOT_EDITABLE",
+            )
+        }
+        return booking
+    }
+
+    private fun applyBookingResponse(updated: CustomerBooking) {
+        val current = mutableWorkflow.value
+        val latest = current.booking?.let { booking ->
+            if (booking.bookingId == updated.bookingId || booking.inquiryId == updated.inquiryId) {
+                updated
+            } else {
+                booking
+            }
+        }
+        mutableWorkflow.value = current.copy(
+            booking = latest,
+            bookings = CustomerBookingPolicy.replace(updated, current.bookings),
+        )
+    }
+
+    private fun reconcileBookings(bookings: List<CustomerBooking>) {
+        val current = mutableWorkflow.value
+        val latest = current.booking?.let { booking -> CustomerBookingPolicy.reconcile(booking, bookings) }
+        val rescheduleId = current.bookingRescheduleId?.takeIf { bookingId ->
+            bookings.any { booking ->
+                booking.bookingId == bookingId && CustomerBookingLifecyclePolicy.canChange(booking)
+            }
+        }
+        mutableWorkflow.value = current.copy(
+            booking = latest,
+            bookings = bookings,
+            bookingRescheduleId = rescheduleId,
+            bookingRescheduleSlots = if (rescheduleId == null) emptyList() else current.bookingRescheduleSlots,
+            selectedBookingRescheduleSlotId = if (rescheduleId == null) {
+                null
+            } else {
+                current.selectedBookingRescheduleSlotId
+            },
+        )
     }
 
     private suspend fun resumeWorkflow(
@@ -751,7 +868,6 @@ class CustomerAppViewModel @Inject constructor(
             equipment = emptyList(),
             equipmentDraft = emptyMap(),
             rentalTerms = emptyMap(),
-            selectedRentalTermCabinIds = emptySet(),
             cart = null,
             address = "",
             latitude = null,
@@ -854,7 +970,7 @@ class CustomerAppViewModel @Inject constructor(
 }
 
 private fun validateProfile(profile: CustomerProfile): String? = when {
-    profile.phone.trim().length < 7 -> "Укажите номер телефона"
+    profile.phone.isBlank() -> "Укажите номер телефона"
     profile.entityType == CustomerEntityType.INDIVIDUAL && profile.firstName.isNullOrBlank() -> "Укажите имя"
     profile.entityType == CustomerEntityType.INDIVIDUAL && profile.lastName.isNullOrBlank() -> "Укажите фамилию"
     profile.entityType == CustomerEntityType.LEGAL && profile.companyName.isNullOrBlank() -> "Укажите компанию"

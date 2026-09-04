@@ -83,14 +83,14 @@ public class RentalInquiryCabinSelectionService {
       if (prepared.commandType() == RentalInquirySelectionCommandType.RELEASE) {
         holds =
             dependencies.releasePresentationHoldsExact(
-                prepared.idempotencyKey(), inquiryId, prepared.exactRequestBody());
+                prepared.downstreamIdempotencyKey(), inquiryId, prepared.exactRequestBody());
         if (!activeIds(holds, inquiryId, prepared.warehouseId()).isEmpty()) {
           throw malformedSelection();
         }
       } else {
         holds =
             dependencies.replacePresentationHoldsExact(
-                prepared.idempotencyKey(), inquiryId, prepared.exactRequestBody());
+                prepared.downstreamIdempotencyKey(), inquiryId, prepared.exactRequestBody());
         if (!sameIds(activeIds(holds, inquiryId, prepared.warehouseId()), prepared.rentalItemIds())
             || !prepared.expiresAt().equals(holds.expiresAt())) {
           throw malformedSelection();

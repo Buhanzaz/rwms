@@ -48,6 +48,683 @@
         "title": "AddressSuggestion",
         "type": "object"
       },
+      "AdminCatalogRelocationRequest": {
+        "additionalProperties": false,
+        "description": "Optimistically fenced permanent relocation to a canonical warehouse.",
+        "properties": {
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "target_warehouse_id": {
+            "description": "Canonical warehouse-service UUID of the new owning object.",
+            "format": "uuid",
+            "title": "Target Warehouse Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_version",
+          "target_warehouse_id"
+        ],
+        "title": "AdminCatalogRelocationRequest",
+        "type": "object"
+      },
+      "AdminTrailerRead": {
+        "additionalProperties": false,
+        "description": "Administrative trailer view keyed by the canonical warehouse UUID.",
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "axle_count": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Axle Count"
+          },
+          "height_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height Mm"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "length_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Length Mm"
+          },
+          "max_axle_load_kg": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Axle Load Kg"
+          },
+          "max_cargo_height_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Cargo Height Mm"
+          },
+          "max_cargo_length_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Cargo Length Mm"
+          },
+          "max_cargo_weight_kg": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Cargo Weight Kg"
+          },
+          "max_cargo_width_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Cargo Width Mm"
+          },
+          "max_gross_weight_kg": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Gross Weight Kg"
+          },
+          "max_platform_payload_kg": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Platform Payload Kg"
+          },
+          "name": {
+            "$ref": "#/components/schemas/NonBlank"
+          },
+          "notes": {
+            "title": "Notes",
+            "type": "string"
+          },
+          "payload_capacity_kg": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payload Capacity Kg"
+          },
+          "platform_height_from_ground_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Height From Ground Mm"
+          },
+          "platform_length_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Length Mm"
+          },
+          "platform_width_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Width Mm"
+          },
+          "registration_number": {
+            "$ref": "#/components/schemas/NonBlank"
+          },
+          "tare_weight_kg": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tare Weight Kg"
+          },
+          "version": {
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          },
+          "warehouse_id": {
+            "description": "Canonical warehouse-service UUID, never the planner-local row UUID.",
+            "format": "uuid",
+            "title": "Warehouse Id",
+            "type": "string"
+          },
+          "width_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width Mm"
+          }
+        },
+        "required": [
+          "name",
+          "registration_number",
+          "active",
+          "tare_weight_kg",
+          "max_gross_weight_kg",
+          "length_mm",
+          "width_mm",
+          "height_mm",
+          "platform_length_mm",
+          "platform_width_mm",
+          "platform_height_from_ground_mm",
+          "max_platform_payload_kg",
+          "payload_capacity_kg",
+          "axle_count",
+          "max_axle_load_kg",
+          "max_cargo_length_mm",
+          "max_cargo_width_mm",
+          "max_cargo_height_mm",
+          "max_cargo_weight_kg",
+          "notes",
+          "id",
+          "version",
+          "warehouse_id"
+        ],
+        "title": "AdminTrailerRead",
+        "type": "object"
+      },
+      "AdminVehicleRead": {
+        "additionalProperties": false,
+        "description": "Administrative vehicle view keyed by the canonical warehouse UUID.",
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "average_speed_city": {
+            "exclusiveMinimum": 0.0,
+            "title": "Average Speed City",
+            "type": "number"
+          },
+          "average_speed_region": {
+            "exclusiveMinimum": 0.0,
+            "title": "Average Speed Region",
+            "type": "number"
+          },
+          "axle_count": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Axle Count"
+          },
+          "can_use_trailer": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Can Use Trailer"
+          },
+          "capacity": {
+            "maximum": 2.0,
+            "minimum": 1.0,
+            "title": "Capacity",
+            "type": "integer"
+          },
+          "combined_length_with_trailer_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Combined Length With Trailer Mm"
+          },
+          "coupling_length_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coupling Length Mm"
+          },
+          "default_trailer_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Trailer Id"
+          },
+          "height_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height Mm"
+          },
+          "height_safety_margin_mm": {
+            "minimum": 0.0,
+            "title": "Height Safety Margin Mm",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_hgv": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Hgv"
+          },
+          "length_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Length Mm"
+          },
+          "load_profiles": {
+            "items": {
+              "$ref": "#/components/schemas/VehicleLoadProfileCreate"
+            },
+            "title": "Load Profiles",
+            "type": "array"
+          },
+          "manufacturer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manufacturer"
+          },
+          "max_axle_load_kg": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Axle Load Kg"
+          },
+          "max_cargo_height_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Cargo Height Mm"
+          },
+          "max_cargo_length_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Cargo Length Mm"
+          },
+          "max_cargo_weight_kg": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Cargo Weight Kg"
+          },
+          "max_cargo_width_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Cargo Width Mm"
+          },
+          "max_gross_weight_kg": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Gross Weight Kg"
+          },
+          "max_platform_payload_kg": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Platform Payload Kg"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "name": {
+            "$ref": "#/components/schemas/NonBlank"
+          },
+          "notes": {
+            "title": "Notes",
+            "type": "string"
+          },
+          "payload_capacity_kg": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payload Capacity Kg"
+          },
+          "platform_height_from_ground_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Height From Ground Mm"
+          },
+          "platform_length_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Length Mm"
+          },
+          "platform_width_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Width Mm"
+          },
+          "registration_number": {
+            "$ref": "#/components/schemas/NonBlank"
+          },
+          "tare_weight_kg": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tare Weight Kg"
+          },
+          "vehicle_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vehicle Type"
+          },
+          "version": {
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          },
+          "warehouse_id": {
+            "description": "Canonical warehouse-service UUID, never the planner-local row UUID.",
+            "format": "uuid",
+            "title": "Warehouse Id",
+            "type": "string"
+          },
+          "weight_safety_margin_kg": {
+            "minimum": 0.0,
+            "title": "Weight Safety Margin Kg",
+            "type": "integer"
+          },
+          "width_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width Mm"
+          },
+          "width_safety_margin_mm": {
+            "minimum": 0.0,
+            "title": "Width Safety Margin Mm",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "registration_number",
+          "capacity",
+          "active",
+          "average_speed_city",
+          "average_speed_region",
+          "vehicle_type",
+          "manufacturer",
+          "model",
+          "is_hgv",
+          "tare_weight_kg",
+          "max_gross_weight_kg",
+          "length_mm",
+          "width_mm",
+          "height_mm",
+          "axle_count",
+          "max_axle_load_kg",
+          "payload_capacity_kg",
+          "platform_length_mm",
+          "platform_width_mm",
+          "platform_height_from_ground_mm",
+          "max_platform_payload_kg",
+          "max_cargo_length_mm",
+          "max_cargo_width_mm",
+          "max_cargo_height_mm",
+          "max_cargo_weight_kg",
+          "can_use_trailer",
+          "default_trailer_id",
+          "combined_length_with_trailer_mm",
+          "coupling_length_mm",
+          "height_safety_margin_mm",
+          "width_safety_margin_mm",
+          "weight_safety_margin_kg",
+          "notes",
+          "id",
+          "version",
+          "warehouse_id",
+          "load_profiles"
+        ],
+        "title": "AdminVehicleRead",
+        "type": "object"
+      },
       "AvailableDriverRead": {
         "additionalProperties": false,
         "description": "Canonical RWMS worker eligible for one warehouse planning audience.",
@@ -183,10 +860,6 @@
             "title": "Accept Warnings",
             "type": "boolean"
           },
-          "confirmed_by": {
-            "$ref": "#/components/schemas/NonBlank",
-            "default": "local-admin"
-          },
           "empty_positioning_reason": {
             "anyOf": [
               {
@@ -282,6 +955,18 @@
             "title": "Assigned Request Ids",
             "type": "array"
           },
+          "contractor_handoff_command_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contractor Handoff Command Id"
+          },
           "contractor_name": {
             "$ref": "#/components/schemas/NonBlank"
           },
@@ -289,6 +974,14 @@
             "format": "uuid",
             "title": "Contractor Worker Id",
             "type": "string"
+          },
+          "external_task_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "External Task Ids",
+            "type": "array"
           },
           "mode": {
             "enum": [
@@ -310,10 +1003,22 @@
           "planning_date",
           "mode",
           "assigned_request_ids",
-          "assigned_count"
+          "assigned_count",
+          "contractor_handoff_command_id",
+          "external_task_ids"
         ],
         "title": "ContractorDispatchRead",
         "type": "object"
+      },
+      "CustomerDeliveryPurpose": {
+        "description": "Commercial purpose kept separate from the physical delivery direction.",
+        "enum": [
+          "RENTAL_DELIVERY",
+          "SALE_DELIVERY",
+          "CUSTOMER_RELOCATION"
+        ],
+        "title": "CustomerDeliveryPurpose",
+        "type": "string"
       },
       "CustomerSlotRead": {
         "additionalProperties": false,
@@ -526,6 +1231,10 @@
             "title": "Rwms Assignment Mode",
             "type": "string"
           },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
           "warehouse_id": {
             "format": "uuid",
             "title": "Warehouse Id",
@@ -535,6 +1244,7 @@
         "required": [
           "rwms_assignment_mode",
           "id",
+          "version",
           "warehouse_id",
           "name"
         ],
@@ -593,6 +1303,11 @@
             ],
             "title": "Active"
           },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
           "external_worker_id": {
             "anyOf": [
               {
@@ -643,6 +1358,9 @@
             "title": "Rwms Assignment Mode"
           }
         },
+        "required": [
+          "expected_version"
+        ],
         "title": "DriverUpdate",
         "type": "object"
       },
@@ -660,6 +1378,26 @@
           "expected_version"
         ],
         "title": "ExpectedVersionRequest",
+        "type": "object"
+      },
+      "GeoJsonMultiPolygon": {
+        "additionalProperties": false,
+        "description": "Validated WGS84 GeoJSON MultiPolygon used at every policy boundary.",
+        "properties": {
+          "coordinates": {
+            "$ref": "#/components/schemas/MultiPolygonCoordinates"
+          },
+          "type": {
+            "const": "MultiPolygon",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "coordinates"
+        ],
+        "title": "GeoJsonMultiPolygon",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -731,6 +1469,815 @@
         "title": "IsochroneTariff",
         "type": "object"
       },
+      "Latitude": {
+        "maximum": 90.0,
+        "minimum": -90.0,
+        "type": "number"
+      },
+      "LinearRing": {
+        "items": {
+          "$ref": "#/components/schemas/Position"
+        },
+        "minItems": 4,
+        "type": "array"
+      },
+      "LogisticsDecisionType": {
+        "description": "Immutable dispatcher outcome for a pending customer or operational action.",
+        "enum": [
+          "ACCEPT_RECOMMENDATION",
+          "ACCEPT_OTHER_DATE",
+          "REJECT",
+          "UNREACHABLE",
+          "ACCEPT_DELAY",
+          "REJECT_DELAY",
+          "ACKNOWLEDGE_RESOLVED"
+        ],
+        "title": "LogisticsDecisionType",
+        "type": "string"
+      },
+      "LogisticsEventCreate": {
+        "additionalProperties": false,
+        "description": "Structured incident or plan-change fact submitted for impact analysis.",
+        "properties": {
+          "cycle_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cycle Id"
+          },
+          "delay_minutes": {
+            "anyOf": [
+              {
+                "maximum": 1440.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delay Minutes"
+          },
+          "driver_shift_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Driver Shift Id"
+          },
+          "effective_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective At"
+          },
+          "event_type": {
+            "$ref": "#/components/schemas/LogisticsEventType"
+          },
+          "expected_plan_version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Plan Version"
+          },
+          "facts": {
+            "additionalProperties": true,
+            "title": "Facts",
+            "type": "object"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "source_event": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Event"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "vehicle_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vehicle Id"
+          }
+        },
+        "required": [
+          "event_type",
+          "occurred_at",
+          "reason"
+        ],
+        "title": "LogisticsEventCreate",
+        "type": "object"
+      },
+      "LogisticsEventRead": {
+        "additionalProperties": false,
+        "description": "Immutable operational event returned in the day history.",
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "cycle_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cycle Id"
+          },
+          "day": {
+            "format": "date",
+            "title": "Day",
+            "type": "string"
+          },
+          "event_type": {
+            "title": "Event Type",
+            "type": "string"
+          },
+          "facts": {
+            "additionalProperties": true,
+            "title": "Facts",
+            "type": "object"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "source_event": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Event"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "warehouse_id": {
+            "format": "uuid",
+            "title": "Warehouse Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "warehouse_id",
+          "day",
+          "plan_id",
+          "cycle_id",
+          "request_id",
+          "task_id",
+          "event_type",
+          "source_event",
+          "occurred_at",
+          "actor",
+          "facts",
+          "created_at"
+        ],
+        "title": "LogisticsEventRead",
+        "type": "object"
+      },
+      "LogisticsEventResult": {
+        "additionalProperties": false,
+        "description": "Impact analysis result for one idempotently accepted event.",
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/LogisticsHumanActionRead"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "event": {
+            "$ref": "#/components/schemas/LogisticsEventRead"
+          },
+          "notices": {
+            "items": {
+              "$ref": "#/components/schemas/LogisticsNoticeRead"
+            },
+            "title": "Notices",
+            "type": "array"
+          },
+          "proposals": {
+            "items": {
+              "$ref": "#/components/schemas/RecoveryProposalRead"
+            },
+            "title": "Proposals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "event",
+          "notices",
+          "actions",
+          "proposals"
+        ],
+        "title": "LogisticsEventResult",
+        "type": "object"
+      },
+      "LogisticsEventType": {
+        "description": "Facts that can invalidate or constrain the current operational plan.",
+        "enum": [
+          "VEHICLE_BREAKDOWN",
+          "VEHICLE_DELAY",
+          "DRIVER_UNAVAILABLE",
+          "DELIVERY_CANCELLED",
+          "PICKUP_CANCELLED",
+          "ORDER_CANCELLED",
+          "TASK_BLOCKED",
+          "MANUAL_PLAN_CHANGE",
+          "PLANNING_MODE_CHANGED"
+        ],
+        "title": "LogisticsEventType",
+        "type": "string"
+      },
+      "LogisticsHumanActionRead": {
+        "additionalProperties": false,
+        "description": "One unresolved or historical dispatcher action with contact details.",
+        "properties": {
+          "action_type": {
+            "title": "Action Type",
+            "type": "string"
+          },
+          "alternative_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Alternative Dates",
+            "type": "array"
+          },
+          "context": {
+            "additionalProperties": true,
+            "title": "Context",
+            "type": "object"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "current_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Date"
+          },
+          "customer_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Customer Name"
+          },
+          "customer_phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Customer Phone"
+          },
+          "customer_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Customer Type"
+          },
+          "day": {
+            "format": "date",
+            "title": "Day",
+            "type": "string"
+          },
+          "event_id": {
+            "format": "uuid",
+            "title": "Event Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "notice_id": {
+            "format": "uuid",
+            "title": "Notice Id",
+            "type": "string"
+          },
+          "recommended_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommended Date"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "warehouse_id": {
+            "format": "uuid",
+            "title": "Warehouse Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "notice_id",
+          "event_id",
+          "warehouse_id",
+          "day",
+          "request_id",
+          "action_type",
+          "status",
+          "version",
+          "customer_name",
+          "customer_type",
+          "customer_phone",
+          "current_date",
+          "recommended_date",
+          "alternative_dates",
+          "context",
+          "created_at",
+          "updated_at",
+          "resolved_at"
+        ],
+        "title": "LogisticsHumanActionRead",
+        "type": "object"
+      },
+      "LogisticsHumanDecisionCreate": {
+        "additionalProperties": false,
+        "description": "Version-fenced dispatcher outcome that becomes a future solve constraint.",
+        "properties": {
+          "comment": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "decision_type": {
+            "$ref": "#/components/schemas/LogisticsDecisionType"
+          },
+          "expected_proposal_version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Proposal Version"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "selected_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Date"
+          }
+        },
+        "required": [
+          "expected_version",
+          "decision_type"
+        ],
+        "title": "LogisticsHumanDecisionCreate",
+        "type": "object"
+      },
+      "LogisticsHumanDecisionRead": {
+        "additionalProperties": false,
+        "description": "Append-only record of the dispatcher response to an action.",
+        "properties": {
+          "action_id": {
+            "format": "uuid",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "constraint_data": {
+            "additionalProperties": true,
+            "title": "Constraint Data",
+            "type": "object"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decision_type": {
+            "title": "Decision Type",
+            "type": "string"
+          },
+          "event_id": {
+            "format": "uuid",
+            "title": "Event Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "selected_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Date"
+          }
+        },
+        "required": [
+          "id",
+          "action_id",
+          "event_id",
+          "decision_type",
+          "selected_date",
+          "actor",
+          "comment",
+          "constraint_data",
+          "created_at"
+        ],
+        "title": "LogisticsHumanDecisionRead",
+        "type": "object"
+      },
+      "LogisticsNoticeRead": {
+        "additionalProperties": false,
+        "description": "Structured, deterministic system comment visible to a dispatcher.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "cycle_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cycle Id"
+          },
+          "day": {
+            "format": "date",
+            "title": "Day",
+            "type": "string"
+          },
+          "event_id": {
+            "format": "uuid",
+            "title": "Event Id",
+            "type": "string"
+          },
+          "facts": {
+            "additionalProperties": true,
+            "title": "Facts",
+            "type": "object"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "message_ru": {
+            "title": "Message Ru",
+            "type": "string"
+          },
+          "notice_type": {
+            "title": "Notice Type",
+            "type": "string"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
+          },
+          "reason_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reason Codes",
+            "type": "array"
+          },
+          "recommended_action_ru": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommended Action Ru"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "requires_action": {
+            "title": "Requires Action",
+            "type": "boolean"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "severity": {
+            "title": "Severity",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "warehouse_id": {
+            "format": "uuid",
+            "title": "Warehouse Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "event_id",
+          "warehouse_id",
+          "day",
+          "plan_id",
+          "cycle_id",
+          "request_id",
+          "task_id",
+          "notice_type",
+          "severity",
+          "reason_codes",
+          "facts",
+          "message_ru",
+          "recommended_action_ru",
+          "requires_action",
+          "status",
+          "created_at",
+          "resolved_at"
+        ],
+        "title": "LogisticsNoticeRead",
+        "type": "object"
+      },
       "LogisticsRequestCreate": {
         "additionalProperties": false,
         "description": "Source request input intentionally excluding any client-supplied zone.",
@@ -787,6 +2334,22 @@
               }
             ],
             "title": "Cargo Width Mm"
+          },
+          "client_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "INDIVIDUAL",
+                  "SOLE_PROPRIETOR",
+                  "LEGAL_ENTITY"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Type"
           },
           "contact_name": {
             "default": "",
@@ -859,8 +2422,10 @@
             "type": "boolean"
           },
           "status": {
-            "$ref": "#/components/schemas/RequestStatus",
-            "default": "READY"
+            "const": "READY",
+            "default": "READY",
+            "title": "Status",
+            "type": "string"
           },
           "trailer_access_allowed": {
             "anyOf": [
@@ -1008,6 +2573,22 @@
             ],
             "title": "Cargo Width Mm"
           },
+          "client_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "INDIVIDUAL",
+                  "SOLE_PROPRIETOR",
+                  "LEGAL_ENTITY"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Type"
+          },
           "contact_name": {
             "title": "Contact Name",
             "type": "string"
@@ -1016,10 +2597,45 @@
             "title": "Contact Phone",
             "type": "string"
           },
+          "contractor_handoff_command_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contractor Handoff Command Id"
+          },
+          "contractor_handoff_sequence": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Zero-based request position in the immutable contractor handoff command.",
+            "title": "Contractor Handoff Sequence"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
             "type": "string"
+          },
+          "customer_delivery_purpose": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CustomerDeliveryPurpose"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "date_options": {
             "items": {
@@ -1051,6 +2667,14 @@
               }
             ],
             "title": "External Id"
+          },
+          "external_task_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "External Task Ids",
+            "type": "array"
           },
           "id": {
             "format": "uuid",
@@ -1162,6 +2786,10 @@
             "title": "Updated At",
             "type": "string"
           },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
           "warehouse_id": {
             "format": "uuid",
             "title": "Warehouse Id",
@@ -1170,10 +2798,12 @@
         },
         "required": [
           "id",
+          "version",
           "warehouse_id",
           "source_system",
           "external_id",
           "type",
+          "customer_delivery_purpose",
           "name",
           "address_label",
           "latitude",
@@ -1193,10 +2823,14 @@
           "assigned_contractor_phone",
           "assigned_at",
           "assigned_by",
+          "contractor_handoff_command_id",
+          "contractor_handoff_sequence",
+          "external_task_ids",
           "trailer_access_allowed",
           "include_driver_passport_in_notification",
           "contact_name",
           "contact_phone",
+          "client_type",
           "notes",
           "created_at",
           "updated_at"
@@ -1267,6 +2901,22 @@
             ],
             "title": "Cargo Width Mm"
           },
+          "client_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "INDIVIDUAL",
+                  "SOLE_PROPRIETOR",
+                  "LEGAL_ENTITY"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Type"
+          },
           "contact_name": {
             "anyOf": [
               {
@@ -1304,6 +2954,11 @@
               }
             ],
             "title": "Date Options"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
           },
           "include_driver_passport_in_notification": {
             "anyOf": [
@@ -1423,12 +3078,14 @@
           "status": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/RequestStatus"
+                "const": "READY",
+                "type": "string"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Status"
           },
           "trailer_access_allowed": {
             "anyOf": [
@@ -1452,19 +3109,23 @@
             ]
           }
         },
+        "required": [
+          "expected_version"
+        ],
         "title": "LogisticsRequestUpdate",
         "type": "object"
       },
+      "Longitude": {
+        "maximum": 180.0,
+        "minimum": -180.0,
+        "type": "number"
+      },
       "ManualChangeRequest": {
         "additionalProperties": false,
-        "description": "Validated manual route-edit command and audit context.",
+        "description": "Validated manual route-edit request without client-owned audit identity.",
         "properties": {
           "change_type": {
             "$ref": "#/components/schemas/NonBlank"
-          },
-          "changed_by": {
-            "$ref": "#/components/schemas/NonBlank",
-            "default": "local-admin"
           },
           "expected_version": {
             "minimum": 1.0,
@@ -1488,6 +3149,13 @@
         ],
         "title": "ManualChangeRequest",
         "type": "object"
+      },
+      "MultiPolygonCoordinates": {
+        "items": {
+          "$ref": "#/components/schemas/PolygonCoordinates"
+        },
+        "minItems": 1,
+        "type": "array"
       },
       "NearestOptionRead": {
         "additionalProperties": false,
@@ -1716,6 +3384,197 @@
         "title": "PlanStatus",
         "type": "string"
       },
+      "PlanningDayMode": {
+        "description": "Task directions permitted by the optimizer for one warehouse-local day.",
+        "enum": [
+          "DELIVERIES_AND_PICKUPS",
+          "DELIVERIES_ONLY",
+          "PICKUPS_ONLY"
+        ],
+        "title": "PlanningDayMode",
+        "type": "string"
+      },
+      "PlanningDayModeResult": {
+        "additionalProperties": false,
+        "description": "Mode-change result including whether real conflicts required human action.",
+        "properties": {
+          "conflict_count": {
+            "title": "Conflict Count",
+            "type": "integer"
+          },
+          "day": {
+            "format": "date",
+            "title": "Day",
+            "type": "string"
+          },
+          "event_id": {
+            "format": "uuid",
+            "title": "Event Id",
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/PlanningDayMode"
+          },
+          "pending_action_count": {
+            "title": "Pending Action Count",
+            "type": "integer"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "warehouse_id": {
+            "format": "uuid",
+            "title": "Warehouse Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "warehouse_id",
+          "day",
+          "mode",
+          "version",
+          "event_id",
+          "conflict_count",
+          "pending_action_count"
+        ],
+        "title": "PlanningDayModeResult",
+        "type": "object"
+      },
+      "PlanningDayModeUpdate": {
+        "additionalProperties": false,
+        "description": "Version-fenced command that changes the optimizer mode for one day.",
+        "properties": {
+          "expected_plan_version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Plan Version"
+          },
+          "expected_version": {
+            "minimum": 0.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/PlanningDayMode"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
+          }
+        },
+        "required": [
+          "expected_version",
+          "mode"
+        ],
+        "title": "PlanningDayModeUpdate",
+        "type": "object"
+      },
+      "PlanningDayOperationsRead": {
+        "additionalProperties": false,
+        "description": "Latest bounded operational window with explicit truncation metadata.",
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/LogisticsHumanActionRead"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "day": {
+            "format": "date",
+            "title": "Day",
+            "type": "string"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/LogisticsHumanDecisionRead"
+            },
+            "title": "Decisions",
+            "type": "array"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/LogisticsEventRead"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/PlanningDayMode"
+          },
+          "mode_version": {
+            "title": "Mode Version",
+            "type": "integer"
+          },
+          "notices": {
+            "items": {
+              "$ref": "#/components/schemas/LogisticsNoticeRead"
+            },
+            "title": "Notices",
+            "type": "array"
+          },
+          "pending_action_count": {
+            "title": "Pending Action Count",
+            "type": "integer"
+          },
+          "proposals": {
+            "items": {
+              "$ref": "#/components/schemas/RecoveryProposalRead"
+            },
+            "title": "Proposals",
+            "type": "array"
+          },
+          "truncated_collections": {
+            "items": {
+              "enum": [
+                "EVENTS",
+                "NOTICES",
+                "ACTIONS",
+                "DECISIONS",
+                "PROPOSALS"
+              ],
+              "type": "string"
+            },
+            "title": "Truncated Collections",
+            "type": "array"
+          },
+          "warehouse_id": {
+            "format": "uuid",
+            "title": "Warehouse Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "warehouse_id",
+          "day",
+          "mode",
+          "mode_version",
+          "pending_action_count",
+          "events",
+          "notices",
+          "actions",
+          "decisions",
+          "proposals"
+        ],
+        "title": "PlanningDayOperationsRead",
+        "type": "object"
+      },
       "PlanningDayStatusRead": {
         "additionalProperties": false,
         "description": "Operator-visible acceptance and finalization state for one depot date.",
@@ -1751,6 +3610,28 @@
             "format": "date",
             "title": "Date",
             "type": "string"
+          },
+          "mode": {
+            "default": "DELIVERIES_AND_PICKUPS",
+            "enum": [
+              "DELIVERIES_AND_PICKUPS",
+              "DELIVERIES_ONLY",
+              "PICKUPS_ONLY"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "mode_version": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Mode Version",
+            "type": "integer"
+          },
+          "pending_action_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Pending Action Count",
+            "type": "integer"
           },
           "plan_id": {
             "anyOf": [
@@ -2140,9 +4021,440 @@
         "title": "PlanningTaskRead",
         "type": "object"
       },
+      "PolicyZoneCreate": {
+        "additionalProperties": false,
+        "description": "Create one exceptional policy without any ordinary delivery-region meaning.",
+        "properties": {
+          "color": {
+            "anyOf": [
+              {
+                "pattern": "^#[0-9A-Fa-f]{6}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "delivery_price_rubles": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Price Rubles"
+          },
+          "geometry": {
+            "$ref": "#/components/schemas/GeoJsonMultiPolygon"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PolicyZoneKind"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "pickup_price_rubles": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pickup Price Rubles"
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "geometry"
+        ],
+        "title": "PolicyZoneCreate",
+        "type": "object"
+      },
+      "PolicyZoneKind": {
+        "description": "Supported exceptional policies layered over ordinary isochrone coverage.",
+        "enum": [
+          "SPECIAL_PRICE",
+          "FORBIDDEN",
+          "NO_TRAILER"
+        ],
+        "title": "PolicyZoneKind",
+        "type": "string"
+      },
+      "PolicyZoneRead": {
+        "additionalProperties": false,
+        "description": "Exact server-authoritative exceptional policy returned to dispatchers.",
+        "properties": {
+          "color": {
+            "title": "Color",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "delivery_price_rubles": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Price Rubles"
+          },
+          "geometry": {
+            "$ref": "#/components/schemas/GeoJsonMultiPolygon"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PolicyZoneKind"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "pickup_price_rubles": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pickup Price Rubles"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "warehouse_id": {
+            "format": "uuid",
+            "title": "Warehouse Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "warehouse_id",
+          "name",
+          "kind",
+          "color",
+          "geometry",
+          "version",
+          "delivery_price_rubles",
+          "pickup_price_rubles",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "PolicyZoneRead",
+        "type": "object"
+      },
+      "PolicyZoneUpdate": {
+        "additionalProperties": false,
+        "description": "Optimistically fenced partial update for one exceptional policy.",
+        "properties": {
+          "color": {
+            "anyOf": [
+              {
+                "pattern": "^#[0-9A-Fa-f]{6}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "delivery_price_rubles": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Price Rubles"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "geometry": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GeoJsonMultiPolygon"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PolicyZoneKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "pickup_price_rubles": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pickup Price Rubles"
+          }
+        },
+        "required": [
+          "expected_version"
+        ],
+        "title": "PolicyZoneUpdate",
+        "type": "object"
+      },
+      "PolygonCoordinates": {
+        "items": {
+          "$ref": "#/components/schemas/LinearRing"
+        },
+        "minItems": 1,
+        "type": "array"
+      },
+      "Position": {
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+          {
+            "$ref": "#/components/schemas/Longitude"
+          },
+          {
+            "$ref": "#/components/schemas/Latitude"
+          }
+        ],
+        "type": "array"
+      },
+      "RecoveryProposalApply": {
+        "additionalProperties": false,
+        "description": "Optimistic command that applies only a ready recovery proposal.",
+        "properties": {
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_version"
+        ],
+        "title": "RecoveryProposalApply",
+        "type": "object"
+      },
+      "RecoveryProposalRead": {
+        "additionalProperties": false,
+        "description": "Recovery candidate with explicit customer-agreement/application state.",
+        "properties": {
+          "action_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Id"
+          },
+          "affected_request_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Affected Request Ids",
+            "type": "array"
+          },
+          "affected_task_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Affected Task Ids",
+            "type": "array"
+          },
+          "applied_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applied At"
+          },
+          "changes": {
+            "additionalProperties": true,
+            "title": "Changes",
+            "type": "object"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "day": {
+            "format": "date",
+            "title": "Day",
+            "type": "string"
+          },
+          "event_id": {
+            "format": "uuid",
+            "title": "Event Id",
+            "type": "string"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "metrics": {
+            "additionalProperties": true,
+            "title": "Metrics",
+            "type": "object"
+          },
+          "proposal_type": {
+            "title": "Proposal Type",
+            "type": "string"
+          },
+          "result_plan_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Plan Id"
+          },
+          "source_plan_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Plan Id"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "summary_ru": {
+            "title": "Summary Ru",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "warehouse_id": {
+            "format": "uuid",
+            "title": "Warehouse Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "event_id",
+          "action_id",
+          "warehouse_id",
+          "day",
+          "source_plan_id",
+          "result_plan_id",
+          "proposal_type",
+          "status",
+          "version",
+          "summary_ru",
+          "affected_request_ids",
+          "affected_task_ids",
+          "changes",
+          "metrics",
+          "failure_code",
+          "created_at",
+          "updated_at",
+          "applied_at"
+        ],
+        "title": "RecoveryProposalRead",
+        "type": "object"
+      },
       "RequestDateOptionInput": {
         "additionalProperties": false,
-        "description": "Acceptable request date with a hard or soft local time window.",
+        "description": "Acceptable date whose travel band is independent of its optional window.",
         "properties": {
           "date": {
             "format": "date",
@@ -2292,6 +4604,11 @@
             ],
             "title": "Date"
           },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
           "is_hard": {
             "anyOf": [
               {
@@ -2351,6 +4668,9 @@
             "title": "Window Start"
           }
         },
+        "required": [
+          "expected_version"
+        ],
         "title": "RequestDateOptionUpdate",
         "type": "object"
       },
@@ -2372,6 +4692,11 @@
             "format": "date",
             "title": "Date",
             "type": "string"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
           },
           "include_driver_passport_in_notification": {
             "default": false,
@@ -2417,6 +4742,7 @@
           }
         },
         "required": [
+          "expected_version",
           "date",
           "mandatory",
           "trailer_access_allowed",
@@ -2424,6 +4750,310 @@
           "contact_phone"
         ],
         "title": "RequestPlanningDetailsInput",
+        "type": "object"
+      },
+      "RequestRescheduleApply": {
+        "additionalProperties": false,
+        "description": "Existing-request reschedule command containing only authoritative owner fences.",
+        "properties": {
+          "expected_order_version": {
+            "minimum": 0.0,
+            "title": "Expected Order Version",
+            "type": "integer"
+          },
+          "expected_request_version": {
+            "minimum": 1.0,
+            "title": "Expected Request Version",
+            "type": "integer"
+          },
+          "expected_session_version": {
+            "minimum": 0.0,
+            "title": "Expected Session Version",
+            "type": "integer"
+          },
+          "slot_id": {
+            "format": "uuid",
+            "title": "Slot Id",
+            "type": "string"
+          },
+          "slot_version": {
+            "minimum": 0.0,
+            "title": "Slot Version",
+            "type": "integer"
+          },
+          "source_plan_id": {
+            "format": "uuid",
+            "title": "Source Plan Id",
+            "type": "string"
+          },
+          "source_plan_version": {
+            "minimum": 1.0,
+            "title": "Source Plan Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_request_version",
+          "source_plan_id",
+          "source_plan_version",
+          "expected_order_version",
+          "expected_session_version",
+          "slot_id",
+          "slot_version"
+        ],
+        "title": "RequestRescheduleApply",
+        "type": "object"
+      },
+      "RequestRescheduleOptionsQuery": {
+        "additionalProperties": false,
+        "description": "Version-fenced date selected before loading authoritative delivery slots.",
+        "properties": {
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "expected_request_version": {
+            "minimum": 1.0,
+            "title": "Expected Request Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_request_version",
+          "date"
+        ],
+        "title": "RequestRescheduleOptionsQuery",
+        "type": "object"
+      },
+      "RequestRescheduleOptionsRead": {
+        "additionalProperties": false,
+        "description": "All owner-calculated slots for the dispatcher-selected date and current fences.",
+        "properties": {
+          "current_slot": {
+            "$ref": "#/components/schemas/RequestRescheduleSlotRead"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/RequestRescheduleSlotRead"
+            },
+            "title": "Options",
+            "type": "array"
+          },
+          "order_id": {
+            "format": "uuid",
+            "title": "Order Id",
+            "type": "string"
+          },
+          "order_version": {
+            "minimum": 0.0,
+            "title": "Order Version",
+            "type": "integer"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "request_version": {
+            "minimum": 1.0,
+            "title": "Request Version",
+            "type": "integer"
+          },
+          "session_id": {
+            "format": "uuid",
+            "title": "Session Id",
+            "type": "string"
+          },
+          "session_version": {
+            "minimum": 0.0,
+            "title": "Session Version",
+            "type": "integer"
+          },
+          "source_plan_id": {
+            "format": "uuid",
+            "title": "Source Plan Id",
+            "type": "string"
+          },
+          "source_plan_version": {
+            "minimum": 1.0,
+            "title": "Source Plan Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "request_id",
+          "request_version",
+          "source_plan_id",
+          "source_plan_version",
+          "order_id",
+          "order_version",
+          "session_id",
+          "session_version",
+          "current_slot",
+          "options"
+        ],
+        "title": "RequestRescheduleOptionsRead",
+        "type": "object"
+      },
+      "RequestRescheduleResultRead": {
+        "additionalProperties": false,
+        "description": "Converged local request plus the authoritative owner receipt returned to the panel.",
+        "properties": {
+          "confirmed_slot": {
+            "$ref": "#/components/schemas/RequestRescheduleSlotRead"
+          },
+          "order_id": {
+            "format": "uuid",
+            "title": "Order Id",
+            "type": "string"
+          },
+          "order_version": {
+            "minimum": 0.0,
+            "title": "Order Version",
+            "type": "integer"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "request_version": {
+            "minimum": 1.0,
+            "title": "Request Version",
+            "type": "integer"
+          },
+          "scheduled_date": {
+            "format": "date",
+            "title": "Scheduled Date",
+            "type": "string"
+          },
+          "session_id": {
+            "format": "uuid",
+            "title": "Session Id",
+            "type": "string"
+          },
+          "session_version": {
+            "minimum": 0.0,
+            "title": "Session Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "request_id",
+          "request_version",
+          "order_id",
+          "order_version",
+          "session_id",
+          "session_version",
+          "scheduled_date",
+          "confirmed_slot"
+        ],
+        "title": "RequestRescheduleResultRead",
+        "type": "object"
+      },
+      "RequestRescheduleRetry": {
+        "additionalProperties": false,
+        "description": "Exact quarantined command identity used for an operator-authorized replay.",
+        "properties": {
+          "expected_quarantine_count": {
+            "minimum": 1.0,
+            "title": "Expected Quarantine Count",
+            "type": "integer"
+          },
+          "hold_id": {
+            "format": "uuid",
+            "title": "Hold Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hold_id",
+          "expected_quarantine_count"
+        ],
+        "title": "RequestRescheduleRetry",
+        "type": "object"
+      },
+      "RequestRescheduleSlotRead": {
+        "additionalProperties": false,
+        "description": "One owner-calculated slot exposed without browser-authored timing fields.",
+        "properties": {
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "delivery_price_rubles": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Price Rubles"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "FIXED_WINDOW",
+              "DURING_DAY"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "slot_id": {
+            "format": "uuid",
+            "title": "Slot Id",
+            "type": "string"
+          },
+          "slot_version": {
+            "minimum": 0.0,
+            "title": "Slot Version",
+            "type": "integer"
+          },
+          "window_end": {
+            "anyOf": [
+              {
+                "format": "time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window End"
+          },
+          "window_start": {
+            "anyOf": [
+              {
+                "format": "time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Start"
+          }
+        },
+        "required": [
+          "slot_id",
+          "slot_version",
+          "date",
+          "kind",
+          "window_start",
+          "window_end",
+          "delivery_price_rubles",
+          "expires_at"
+        ],
+        "title": "RequestRescheduleSlotRead",
         "type": "object"
       },
       "RequestScheduleInput": {
@@ -2446,9 +5076,15 @@
               }
             ],
             "title": "Date"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
           }
         },
         "required": [
+          "expected_version",
           "date"
         ],
         "title": "RequestScheduleInput",
@@ -2472,17 +5108,29 @@
         "additionalProperties": false,
         "description": "Explicit operator-selected transport-part quantities for one request.",
         "properties": {
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
           "part_quantities": {
-            "items": {
-              "type": "integer"
-            },
-            "minItems": 1,
-            "title": "Part Quantities",
-            "type": "array"
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Part Quantities"
           }
         },
         "required": [
-          "part_quantities"
+          "expected_version"
         ],
         "title": "RequestTaskSplitInput",
         "type": "object"
@@ -2534,6 +5182,49 @@
         ],
         "title": "RestrictionSupportStatus",
         "type": "string"
+      },
+      "RetentionDryRunRead": {
+        "additionalProperties": false,
+        "description": "Safe retention report that never deletes or archives rows by itself.",
+        "properties": {
+          "candidate_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Candidate Counts",
+            "type": "object"
+          },
+          "destructive_purge_enabled": {
+            "default": false,
+            "title": "Destructive Purge Enabled",
+            "type": "boolean"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "legal_hold_count": {
+            "title": "Legal Hold Count",
+            "type": "integer"
+          },
+          "policies": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Policies",
+            "type": "array"
+          }
+        },
+        "required": [
+          "generated_at",
+          "policies",
+          "legal_hold_count",
+          "candidate_counts"
+        ],
+        "title": "RetentionDryRunRead",
+        "type": "object"
       },
       "RouteCycleRead": {
         "additionalProperties": false,
@@ -2697,6 +5388,18 @@
           },
           "status": {
             "$ref": "#/components/schemas/PlanStatus"
+          },
+          "supersedes_plan_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Plan Id"
           },
           "unassigned_tasks": {
             "items": {
@@ -2966,19 +5669,37 @@
             "title": "Documentid",
             "type": "string"
           },
+          "externalTaskId": {
+            "format": "uuid",
+            "title": "Externaltaskid",
+            "type": "string"
+          },
           "orderId": {
             "format": "uuid",
             "title": "Orderid",
             "type": "string"
           },
+          "orderVersion": {
+            "minimum": 0.0,
+            "title": "Orderversion",
+            "type": "integer"
+          },
           "replayed": {
             "title": "Replayed",
             "type": "boolean"
+          },
+          "taskVersion": {
+            "minimum": 0.0,
+            "title": "Taskversion",
+            "type": "integer"
           }
         },
         "required": [
           "orderId",
+          "orderVersion",
           "documentId",
+          "externalTaskId",
+          "taskVersion",
           "replayed"
         ],
         "title": "RwmsAppliedAssignment",
@@ -3021,9 +5742,21 @@
             "title": "Jobcount",
             "type": "integer"
           },
+          "priceZoneCount": {
+            "maximum": 500.0,
+            "minimum": 0.0,
+            "title": "Pricezonecount",
+            "type": "integer"
+          },
           "replayed": {
             "title": "Replayed",
             "type": "boolean"
+          },
+          "restrictionZoneCount": {
+            "maximum": 500.0,
+            "minimum": 0.0,
+            "title": "Restrictionzonecount",
+            "type": "integer"
           },
           "shiftCount": {
             "minimum": 0.0,
@@ -3064,6 +5797,8 @@
           "jobCount",
           "shiftCount",
           "isochroneTariffCount",
+          "priceZoneCount",
+          "restrictionZoneCount",
           "replayed",
           "updatedAt"
         ],
@@ -3414,7 +6149,7 @@
       },
       "ShiftCreate": {
         "additionalProperties": false,
-        "description": "Input for one repeated daily shift over an inclusive monthly date range.",
+        "description": "Input for one repeated local shift over at most 31 inclusive start dates.",
         "properties": {
           "active": {
             "default": true,
@@ -3519,6 +6254,10 @@
             "title": "Vehicle Id",
             "type": "string"
           },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
           "warehouse_id": {
             "format": "uuid",
             "title": "Warehouse Id",
@@ -3533,6 +6272,7 @@
           "start_time",
           "end_time",
           "id",
+          "version",
           "warehouse_id"
         ],
         "title": "ShiftRead",
@@ -3613,6 +6353,11 @@
             ],
             "title": "End Time"
           },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
           "start_time": {
             "anyOf": [
               {
@@ -3638,6 +6383,9 @@
             "title": "Vehicle Id"
           }
         },
+        "required": [
+          "expected_version"
+        ],
         "title": "ShiftUpdate",
         "type": "object"
       },
@@ -4848,6 +7596,10 @@
             ],
             "title": "Tare Weight Kg"
           },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
           "warehouse_id": {
             "format": "uuid",
             "title": "Warehouse Id",
@@ -4870,6 +7622,7 @@
           "name",
           "registration_number",
           "id",
+          "version",
           "warehouse_id"
         ],
         "title": "TrailerRead",
@@ -4901,6 +7654,11 @@
               }
             ],
             "title": "Axle Count"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
           },
           "height_mm": {
             "anyOf": [
@@ -5114,6 +7872,9 @@
             "title": "Width Mm"
           }
         },
+        "required": [
+          "expected_version"
+        ],
         "title": "TrailerUpdate",
         "type": "object"
       },
@@ -6421,6 +9182,10 @@
             ],
             "title": "Vehicle Type"
           },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
           "warehouse_id": {
             "format": "uuid",
             "title": "Warehouse Id",
@@ -6455,6 +9220,7 @@
           "name",
           "registration_number",
           "id",
+          "version",
           "warehouse_id",
           "load_profiles"
         ],
@@ -6571,6 +9337,11 @@
               }
             ],
             "title": "Default Trailer Id"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
           },
           "height_mm": {
             "anyOf": [
@@ -6864,6 +9635,9 @@
             "title": "Width Safety Margin Mm"
           }
         },
+        "required": [
+          "expected_version"
+        ],
         "title": "VehicleUpdate",
         "type": "object"
       },
@@ -6939,6 +9713,47 @@
           },
           "capacity_generation": {
             "title": "Capacity Generation",
+            "type": "integer"
+          },
+          "capacity_publish_attempts": {
+            "title": "Capacity Publish Attempts",
+            "type": "integer"
+          },
+          "capacity_publish_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capacity Publish Error Code"
+          },
+          "capacity_publish_next_attempt_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capacity Publish Next Attempt At"
+          },
+          "capacity_publish_status": {
+            "enum": [
+              "NOT_REQUESTED",
+              "PENDING",
+              "PUBLISHED",
+              "FAILED"
+            ],
+            "title": "Capacity Publish Status",
+            "type": "string"
+          },
+          "capacity_published_generation": {
+            "title": "Capacity Published Generation",
             "type": "integer"
           },
           "city": {
@@ -7040,6 +9855,10 @@
             "title": "Updated At",
             "type": "string"
           },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
           "working_day_end": {
             "format": "time",
             "title": "Working Day End",
@@ -7053,6 +9872,7 @@
         },
         "required": [
           "id",
+          "version",
           "external_warehouse_id",
           "external_warehouse_version",
           "name",
@@ -7073,6 +9893,11 @@
           "seed",
           "settings",
           "capacity_generation",
+          "capacity_published_generation",
+          "capacity_publish_status",
+          "capacity_publish_attempts",
+          "capacity_publish_error_code",
+          "capacity_publish_next_attempt_at",
           "created_at",
           "updated_at"
         ],
@@ -7094,6 +9919,11 @@
               }
             ],
             "title": "Default Planning Date"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
           },
           "isochrone_tariffs": {
             "anyOf": [
@@ -7193,12 +10023,15 @@
             "title": "Working Day Start"
           }
         },
+        "required": [
+          "expected_version"
+        ],
         "title": "WarehouseUpdate",
         "type": "object"
       },
       "WarehouseWorkspaceRead": {
         "additionalProperties": false,
-        "description": "Selected warehouse, its direct planning group, and root-owned resources.",
+        "description": "Bounded dated projection for a selected warehouse and its direct planning group.",
         "properties": {
           "drivers": {
             "items": {
@@ -7206,6 +10039,11 @@
             },
             "title": "Drivers",
             "type": "array"
+          },
+          "planning_date": {
+            "format": "date",
+            "title": "Planning Date",
+            "type": "string"
           },
           "planning_group_warehouse_ids": {
             "items": {
@@ -7219,6 +10057,23 @@
             "format": "uuid",
             "title": "Planning Root Warehouse Id",
             "type": "string"
+          },
+          "request_next_cursor": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Next Cursor"
+          },
+          "request_total": {
+            "minimum": 0.0,
+            "title": "Request Total",
+            "type": "integer"
           },
           "requests": {
             "items": {
@@ -7261,6 +10116,7 @@
         },
         "required": [
           "warehouse",
+          "planning_date",
           "planning_root_warehouse_id",
           "planning_group_warehouse_ids",
           "warehouses",
@@ -7268,7 +10124,8 @@
           "vehicles",
           "trailers",
           "shifts",
-          "requests"
+          "requests",
+          "request_total"
         ],
         "title": "WarehouseWorkspaceRead",
         "type": "object"
@@ -7427,10 +10284,6 @@
             "title": "Replaced Requests",
             "type": "integer"
           },
-          "seed": {
-            "title": "Seed",
-            "type": "integer"
-          },
           "start_date": {
             "format": "date",
             "title": "Start Date",
@@ -7444,7 +10297,6 @@
         },
         "required": [
           "warehouse_id",
-          "seed",
           "start_date",
           "end_date",
           "created_requests",
@@ -7457,37 +10309,13 @@
       },
       "WorkloadGeneratorInput": {
         "additionalProperties": false,
-        "description": "Bounded deterministic request workload generated for one warehouse horizon.",
+        "description": "Bounded random request workload generated for one warehouse horizon.",
         "properties": {
           "alternative_dates_count": {
             "default": 0,
             "maximum": 3.0,
             "minimum": 0.0,
             "title": "Alternative Dates Count",
-            "type": "integer"
-          },
-          "cargo_height_mm": {
-            "default": 2400,
-            "exclusiveMinimum": 0.0,
-            "title": "Cargo Height Mm",
-            "type": "integer"
-          },
-          "cargo_length_mm": {
-            "default": 6000,
-            "exclusiveMinimum": 0.0,
-            "title": "Cargo Length Mm",
-            "type": "integer"
-          },
-          "cargo_weight_kg": {
-            "default": 1200,
-            "exclusiveMinimum": 0.0,
-            "title": "Cargo Weight Kg",
-            "type": "integer"
-          },
-          "cargo_width_mm": {
-            "default": 2400,
-            "exclusiveMinimum": 0.0,
-            "title": "Cargo Width Mm",
             "type": "integer"
           },
           "days": {
@@ -7509,10 +10337,6 @@
             "title": "Pickups Per Day",
             "type": "integer"
           },
-          "seed": {
-            "title": "Seed",
-            "type": "integer"
-          },
           "start_date": {
             "format": "date",
             "title": "Start Date",
@@ -7522,11 +10346,16 @@
         "required": [
           "start_date",
           "deliveries_per_day",
-          "pickups_per_day",
-          "seed"
+          "pickups_per_day"
         ],
         "title": "WorkloadGeneratorInput",
         "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "scheme": "bearer",
+        "type": "http"
       }
     }
   },
@@ -7537,19 +10366,29 @@
   },
   "openapi": "3.1.0",
   "paths": {
-    "/api/drivers/{driver_id}": {
+    "/api/admin/trailers/{trailer_id}": {
       "delete": {
-        "description": "Delete a driver not retained by plan history.",
-        "operationId": "delete_driver_api_drivers__driver_id__delete",
+        "description": "Delete an eligible trailer only when no vehicle selects it as default.",
+        "operationId": "admin_delete_trailer_api_admin_trailers__trailer_id__delete",
         "parameters": [
           {
             "in": "path",
-            "name": "driver_id",
+            "name": "trailer_id",
             "required": true,
             "schema": {
               "format": "uuid",
-              "title": "Driver Id",
+              "title": "Trailer Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_version",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Expected Version",
+              "type": "integer"
             }
           }
         ],
@@ -7568,6 +10407,652 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Admin Delete Trailer",
+        "tags": [
+          "admin catalog"
+        ]
+      },
+      "patch": {
+        "description": "Update a trailer owned by an eligible canonical warehouse.",
+        "operationId": "admin_update_trailer_api_admin_trailers__trailer_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "trailer_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Trailer Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrailerUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminTrailerRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Admin Update Trailer",
+        "tags": [
+          "admin catalog"
+        ]
+      }
+    },
+    "/api/admin/trailers/{trailer_id}/relocate": {
+      "post": {
+        "description": "Permanently relocate a trailer to a canonical production/main warehouse.",
+        "operationId": "admin_relocate_trailer_api_admin_trailers__trailer_id__relocate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "trailer_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Trailer Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminCatalogRelocationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminTrailerRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Admin Relocate Trailer",
+        "tags": [
+          "admin catalog"
+        ]
+      }
+    },
+    "/api/admin/vehicles/{vehicle_id}": {
+      "delete": {
+        "description": "Delete an eligible vehicle only when no driver shift retains it.",
+        "operationId": "admin_delete_vehicle_api_admin_vehicles__vehicle_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "vehicle_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Vehicle Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_version",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Expected Version",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Admin Delete Vehicle",
+        "tags": [
+          "admin catalog"
+        ]
+      },
+      "patch": {
+        "description": "Update a vehicle owned by an eligible canonical warehouse.",
+        "operationId": "admin_update_vehicle_api_admin_vehicles__vehicle_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "vehicle_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Vehicle Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VehicleUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminVehicleRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Admin Update Vehicle",
+        "tags": [
+          "admin catalog"
+        ]
+      }
+    },
+    "/api/admin/vehicles/{vehicle_id}/configuration": {
+      "put": {
+        "description": "Atomically replace a vehicle and its axle profiles through the admin client.",
+        "operationId": "admin_update_vehicle_configuration_api_admin_vehicles__vehicle_id__configuration_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "vehicle_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Vehicle Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VehicleConfigurationUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminVehicleRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Admin Update Vehicle Configuration",
+        "tags": [
+          "admin catalog"
+        ]
+      }
+    },
+    "/api/admin/vehicles/{vehicle_id}/relocate": {
+      "post": {
+        "description": "Permanently relocate a vehicle to a canonical production/main warehouse.",
+        "operationId": "admin_relocate_vehicle_api_admin_vehicles__vehicle_id__relocate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "vehicle_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Vehicle Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminCatalogRelocationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminVehicleRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Admin Relocate Vehicle",
+        "tags": [
+          "admin catalog"
+        ]
+      }
+    },
+    "/api/admin/warehouses/{warehouse_id}/trailers": {
+      "get": {
+        "description": "List trailers for one canonical production/main warehouse UUID.",
+        "operationId": "admin_list_trailers_api_admin_warehouses__warehouse_id__trailers_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AdminTrailerRead"
+                  },
+                  "title": "Response Admin List Trailers Api Admin Warehouses  Warehouse Id  Trailers Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Admin List Trailers",
+        "tags": [
+          "admin catalog"
+        ]
+      },
+      "post": {
+        "description": "Create a trailer under a canonical warehouse UUID.",
+        "operationId": "admin_create_trailer_api_admin_warehouses__warehouse_id__trailers_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "pattern": "^[\\x21-\\x7e]+$",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrailerCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminTrailerRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Admin Create Trailer",
+        "tags": [
+          "admin catalog"
+        ]
+      }
+    },
+    "/api/admin/warehouses/{warehouse_id}/vehicle-configurations": {
+      "post": {
+        "description": "Create a complete vehicle under a canonical warehouse UUID.",
+        "operationId": "admin_create_vehicle_configuration_api_admin_warehouses__warehouse_id__vehicle_configurations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "pattern": "^[\\x21-\\x7e]+$",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VehicleConfigurationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminVehicleRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Admin Create Vehicle Configuration",
+        "tags": [
+          "admin catalog"
+        ]
+      }
+    },
+    "/api/admin/warehouses/{warehouse_id}/vehicles": {
+      "get": {
+        "description": "List vehicles for one canonical production/main warehouse UUID.",
+        "operationId": "admin_list_vehicles_api_admin_warehouses__warehouse_id__vehicles_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AdminVehicleRead"
+                  },
+                  "title": "Response Admin List Vehicles Api Admin Warehouses  Warehouse Id  Vehicles Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Admin List Vehicles",
+        "tags": [
+          "admin catalog"
+        ]
+      }
+    },
+    "/api/drivers/{driver_id}": {
+      "delete": {
+        "description": "Delete a driver not retained by plan history.",
+        "operationId": "delete_driver_api_drivers__driver_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "driver_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Driver Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_version",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Expected Version",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Delete Driver",
         "tags": [
           "catalog"
@@ -7620,6 +11105,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Update Driver",
         "tags": [
           "catalog"
@@ -7665,6 +11155,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Resolve Address",
         "tags": [
           "geocoding"
@@ -7721,6 +11216,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Reverse Geocode",
         "tags": [
           "geocoding"
@@ -7806,6 +11306,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Suggest Addresses",
         "tags": [
           "geocoding"
@@ -7831,6 +11336,76 @@
         "summary": "Health",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/api/logistics-actions/{action_id}/decisions": {
+      "post": {
+        "description": "Record customer/operator feedback as an immutable solve constraint.",
+        "operationId": "post_human_decision_api_logistics_actions__action_id__decisions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "action_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Action Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogisticsHumanDecisionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogisticsHumanDecisionRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Post Human Decision",
+        "tags": [
+          "dynamic-logistics"
         ]
       }
     },
@@ -7872,6 +11447,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Get Optimization Run",
         "tags": [
           "plans"
@@ -7916,6 +11496,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Cancel Optimization Run",
         "tags": [
           "plans"
@@ -7987,6 +11572,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "List Optimization Events",
         "tags": [
           "plans"
@@ -8045,6 +11635,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Stream Optimization Events",
         "tags": [
           "plans"
@@ -8087,6 +11682,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Calculate Slot Availability",
         "tags": [
           "slot-planning"
@@ -8129,6 +11729,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Hold Slot",
         "tags": [
           "slot-planning"
@@ -8183,6 +11788,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Confirm Slot",
         "tags": [
           "slot-planning"
@@ -8227,6 +11837,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Get Plan",
         "tags": [
           "plans"
@@ -8281,6 +11896,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Confirm Plan",
         "tags": [
           "plans"
@@ -8345,6 +11965,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Patch Cycle",
         "tags": [
           "plans"
@@ -8399,6 +12024,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Manual Change",
         "tags": [
           "plans"
@@ -8453,6 +12083,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Reset Manual Changes",
         "tags": [
           "plans"
@@ -8507,6 +12142,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Reoptimize Plan",
         "tags": [
           "plans"
@@ -8561,6 +12201,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Apply Rwms Plan",
         "tags": [
           "rwms-integration"
@@ -8615,6 +12260,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Rwms Plan Status",
         "tags": [
           "rwms-integration"
@@ -8669,6 +12319,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Simulation Delay",
         "tags": [
           "plans"
@@ -8723,6 +12378,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Simulation Driver Unavailable",
         "tags": [
           "plans"
@@ -8777,6 +12437,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Simulation Replan",
         "tags": [
           "plans"
@@ -8831,9 +12496,84 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Validate Plan",
         "tags": [
           "plans"
+        ]
+      }
+    },
+    "/api/recovery-proposals/{proposal_id}/apply": {
+      "post": {
+        "description": "Apply only a ready, version-fenced proposal through the existing planner.",
+        "operationId": "apply_recovery_proposal_api_recovery_proposals__proposal_id__apply_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "proposal_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Proposal Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoveryProposalApply"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryProposalRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Apply Recovery Proposal",
+        "tags": [
+          "dynamic-logistics"
         ]
       }
     },
@@ -8850,6 +12590,16 @@
               "format": "uuid",
               "title": "Option Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_version",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Expected Version",
+              "type": "integer"
             }
           }
         ],
@@ -8868,6 +12618,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Delete Date Option",
         "tags": [
           "catalog"
@@ -8920,6 +12675,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Update Date Option",
         "tags": [
           "catalog"
@@ -8940,6 +12700,16 @@
               "title": "Request Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "expected_version",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Expected Version",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -8957,6 +12727,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Delete Request",
         "tags": [
           "catalog"
@@ -8999,6 +12774,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Get Request",
         "tags": [
           "catalog"
@@ -9051,6 +12831,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Update Request",
         "tags": [
           "catalog"
@@ -9105,6 +12890,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Assign Contractor",
         "tags": [
           "catalog"
@@ -9123,6 +12913,18 @@
             "schema": {
               "format": "uuid",
               "title": "Request Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "pattern": "^[\\x21-\\x7e]+$",
+              "title": "Idempotency-Key",
               "type": "string"
             }
           }
@@ -9159,6 +12961,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Create Date Option",
         "tags": [
           "catalog"
@@ -9213,9 +13020,211 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Set Request Planning Details",
         "tags": [
           "catalog"
+        ]
+      }
+    },
+    "/api/requests/{request_id}/reschedule": {
+      "post": {
+        "description": "Apply one explicitly selected owner slot and converge the local request.",
+        "operationId": "reschedule_request_api_requests__request_id__reschedule_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestRescheduleApply"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestRescheduleResultRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reschedule Request",
+        "tags": [
+          "request-rescheduling"
+        ]
+      }
+    },
+    "/api/requests/{request_id}/reschedule-options": {
+      "post": {
+        "description": "Calculate all current owner slots for the dispatcher-selected date.",
+        "operationId": "request_reschedule_options_api_requests__request_id__reschedule_options_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestRescheduleOptionsQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestRescheduleOptionsRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Request Reschedule Options",
+        "tags": [
+          "request-rescheduling"
+        ]
+      }
+    },
+    "/api/requests/{request_id}/reschedule-retry": {
+      "post": {
+        "description": "Safely replay the persisted owner command after bounded recovery quarantines it.",
+        "operationId": "retry_quarantined_request_reschedule_api_requests__request_id__reschedule_retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestRescheduleRetry"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestRescheduleResultRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Retry Quarantined Request Reschedule",
+        "tags": [
+          "request-rescheduling"
         ]
       }
     },
@@ -9267,6 +13276,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Schedule Request",
         "tags": [
           "catalog"
@@ -9293,18 +13307,11 @@
           "content": {
             "application/json": {
               "schema": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/RequestTaskSplitInput"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Payload"
+                "$ref": "#/components/schemas/RequestTaskSplitInput"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -9328,9 +13335,41 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Split Request",
         "tags": [
           "catalog"
+        ]
+      }
+    },
+    "/api/retention/dry-run": {
+      "get": {
+        "description": "Show safe retention candidates; never delete or archive records.",
+        "operationId": "retention_dry_run_api_retention_dry_run_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionDryRunRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Retention Dry Run",
+        "tags": [
+          "dynamic-logistics"
         ]
       }
     },
@@ -9370,6 +13409,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Estimate Transfer Arrival",
         "tags": [
           "routing"
@@ -9440,6 +13484,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Get Travel Time Contours",
         "tags": [
           "routing"
@@ -9530,6 +13579,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "List Truck Restrictions",
         "tags": [
           "routing"
@@ -9550,6 +13604,16 @@
               "title": "Shift Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "expected_version",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Expected Version",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -9567,6 +13631,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Delete Shift",
         "tags": [
           "catalog"
@@ -9619,6 +13688,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Update Shift",
         "tags": [
           "catalog"
@@ -9627,7 +13701,7 @@
     },
     "/api/trailers/{trailer_id}": {
       "delete": {
-        "description": "Delete a trailer while vehicle defaults are cleared by the database.",
+        "description": "Delete a trailer only when no vehicle selects it as default.",
         "operationId": "delete_trailer_api_trailers__trailer_id__delete",
         "parameters": [
           {
@@ -9638,6 +13712,16 @@
               "format": "uuid",
               "title": "Trailer Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_version",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Expected Version",
+              "type": "integer"
             }
           }
         ],
@@ -9656,6 +13740,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Delete Trailer",
         "tags": [
           "catalog"
@@ -9708,6 +13797,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Update Trailer",
         "tags": [
           "catalog"
@@ -9716,7 +13810,7 @@
     },
     "/api/vehicles/{vehicle_id}": {
       "delete": {
-        "description": "Delete a vehicle not retained by plan history.",
+        "description": "Delete a vehicle only when no driver shift retains it.",
         "operationId": "delete_vehicle_api_vehicles__vehicle_id__delete",
         "parameters": [
           {
@@ -9727,6 +13821,16 @@
               "format": "uuid",
               "title": "Vehicle Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_version",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Expected Version",
+              "type": "integer"
             }
           }
         ],
@@ -9745,6 +13849,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Delete Vehicle",
         "tags": [
           "catalog"
@@ -9797,6 +13906,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Update Vehicle",
         "tags": [
           "catalog"
@@ -9851,6 +13965,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Update Vehicle Configuration",
         "tags": [
           "catalog"
@@ -9859,7 +13978,7 @@
     },
     "/api/warehouses": {
       "get": {
-        "description": "Reconcile and list routing-ready canonical RWMS warehouse workspaces.",
+        "description": "List persisted routing-ready workspaces without reconciling external state.",
         "operationId": "list_warehouses_api_warehouses_get",
         "responses": {
           "200": {
@@ -9877,6 +13996,11 @@
             "description": "Successful Response"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "List Warehouses",
         "tags": [
           "catalog"
@@ -9885,6 +14009,20 @@
       "post": {
         "description": "Bind one RWMS identity, resolving its canonical address when coordinates are absent.",
         "operationId": "create_warehouse_api_warehouses_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "pattern": "^[\\x21-\\x7e]+$",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -9917,6 +14055,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Create Warehouse",
         "tags": [
           "catalog"
@@ -9925,7 +14068,7 @@
     },
     "/api/warehouses/available": {
       "get": {
-        "description": "List authoritative RWMS warehouse candidates and their local binding state.",
+        "description": "Join authoritative candidates to persisted bindings without mutating either source.",
         "operationId": "list_available_warehouses_api_warehouses_available_get",
         "responses": {
           "200": {
@@ -9943,6 +14086,11 @@
             "description": "Successful Response"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "List Available Warehouses",
         "tags": [
           "catalog"
@@ -9987,6 +14135,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Get Warehouse",
         "tags": [
           "catalog"
@@ -10039,6 +14192,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Update Warehouse",
         "tags": [
           "catalog"
@@ -10087,6 +14245,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "List Available Drivers",
         "tags": [
           "catalog"
@@ -10141,6 +14304,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Dispatch Contractor Requests",
         "tags": [
           "catalog"
@@ -10159,6 +14327,18 @@
             "schema": {
               "format": "uuid",
               "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "pattern": "^[\\x21-\\x7e]+$",
+              "title": "Idempotency-Key",
               "type": "string"
             }
           }
@@ -10195,6 +14375,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Create Driver",
         "tags": [
           "catalog"
@@ -10203,7 +14388,7 @@
     },
     "/api/warehouses/{warehouse_id}/generate-workload": {
       "post": {
-        "description": "Replace deterministic load for one warehouse and rebuild missing draft plans.",
+        "description": "Replace random test load for one warehouse and rebuild missing draft plans.",
         "operationId": "generate_workload_api_warehouses__warehouse_id__generate_workload_post",
         "parameters": [
           {
@@ -10249,6 +14434,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Generate Workload",
         "tags": [
           "catalog"
@@ -10303,6 +14493,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Delete Workload",
         "tags": [
           "catalog"
@@ -10357,6 +14552,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Planning Day Status",
         "tags": [
           "plans"
@@ -10365,7 +14565,7 @@
     },
     "/api/warehouses/{warehouse_id}/planning-days/{planning_date}/close": {
       "post": {
-        "description": "Finalize one date and automatically apply its assigned RWMS deliveries when enabled.",
+        "description": "Finalize one date without publishing an unconfirmed route plan to RWMS.",
         "operationId": "close_day_acceptance_api_warehouses__warehouse_id__planning_days__planning_date__close_post",
         "parameters": [
           {
@@ -10411,9 +14611,233 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Close Day Acceptance",
         "tags": [
           "plans"
+        ]
+      }
+    },
+    "/api/warehouses/{warehouse_id}/planning-days/{planning_date}/events": {
+      "post": {
+        "description": "Register an incident and return its structured impact analysis.",
+        "operationId": "post_logistics_event_api_warehouses__warehouse_id__planning_days__planning_date__events_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "planning_date",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "Planning Date",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogisticsEventCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogisticsEventResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Post Logistics Event",
+        "tags": [
+          "dynamic-logistics"
+        ]
+      }
+    },
+    "/api/warehouses/{warehouse_id}/planning-days/{planning_date}/mode": {
+      "put": {
+        "description": "Change a day mode without silently removing conflicting planned work.",
+        "operationId": "put_day_mode_api_warehouses__warehouse_id__planning_days__planning_date__mode_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "planning_date",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "Planning Date",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanningDayModeUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanningDayModeResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Day Mode",
+        "tags": [
+          "dynamic-logistics"
+        ]
+      }
+    },
+    "/api/warehouses/{warehouse_id}/planning-days/{planning_date}/operations": {
+      "get": {
+        "description": "Read mode, comments, pending actions, decisions, and proposal history.",
+        "operationId": "get_day_operations_api_warehouses__warehouse_id__planning_days__planning_date__operations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "planning_date",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "Planning Date",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanningDayOperationsRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Day Operations",
+        "tags": [
+          "dynamic-logistics"
         ]
       }
     },
@@ -10473,9 +14897,322 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Ensure Automatic Plan",
         "tags": [
           "plans"
+        ]
+      }
+    },
+    "/api/warehouses/{warehouse_id}/policy-zones": {
+      "get": {
+        "description": "List exact exceptional policies visible for one authorized warehouse.",
+        "operationId": "list_warehouse_policy_zones_api_warehouses__warehouse_id__policy_zones_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PolicyZoneRead"
+                  },
+                  "title": "Response List Warehouse Policy Zones Api Warehouses  Warehouse Id  Policy Zones Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Warehouse Policy Zones",
+        "tags": [
+          "policy-zones"
+        ]
+      },
+      "post": {
+        "description": "Create exactly once, then advance and publish warehouse capacity facts.",
+        "operationId": "create_warehouse_policy_zone_api_warehouses__warehouse_id__policy_zones_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "pattern": "^[\\x21-\\x7e]+$",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyZoneCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyZoneRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Warehouse Policy Zone",
+        "tags": [
+          "policy-zones"
+        ]
+      }
+    },
+    "/api/warehouses/{warehouse_id}/policy-zones/{zone_id}": {
+      "delete": {
+        "description": "Delete one fenced owner policy and publish its absence.",
+        "operationId": "remove_warehouse_policy_zone_api_warehouses__warehouse_id__policy_zones__zone_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "zone_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Zone Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_version",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Expected Version",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Remove Warehouse Policy Zone",
+        "tags": [
+          "policy-zones"
+        ]
+      },
+      "get": {
+        "description": "Read one exact owner policy after warehouse authorization.",
+        "operationId": "get_warehouse_policy_zone_api_warehouses__warehouse_id__policy_zones__zone_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "zone_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Zone Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyZoneRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Warehouse Policy Zone",
+        "tags": [
+          "policy-zones"
+        ]
+      },
+      "patch": {
+        "description": "Apply a fenced update and publish the new policy revision.",
+        "operationId": "patch_warehouse_policy_zone_api_warehouses__warehouse_id__policy_zones__zone_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "zone_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Zone Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyZoneUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyZoneRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Patch Warehouse Policy Zone",
+        "tags": [
+          "policy-zones"
         ]
       }
     },
@@ -10491,6 +15228,18 @@
             "schema": {
               "format": "uuid",
               "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "pattern": "^[\\x21-\\x7e]+$",
+              "title": "Idempotency-Key",
               "type": "string"
             }
           }
@@ -10527,6 +15276,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Create Request",
         "tags": [
           "catalog"
@@ -10571,6 +15325,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Reconcile Rwms Capacity",
         "tags": [
           "rwms-integration"
@@ -10615,6 +15374,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Refresh Rwms Requests",
         "tags": [
           "rwms-integration"
@@ -10623,7 +15387,7 @@
     },
     "/api/warehouses/{warehouse_id}/rwms/sync": {
       "post": {
-        "description": "Import a bounded RWMS delivery feed without geocoding address-only orders.",
+        "description": "Import a bounded RWMS delivery feed, resolving address-only orders server-side.",
         "operationId": "sync_rwms_requests_api_warehouses__warehouse_id__rwms_sync_post",
         "parameters": [
           {
@@ -10669,6 +15433,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Sync Rwms Requests",
         "tags": [
           "rwms-integration"
@@ -10687,6 +15456,18 @@
             "schema": {
               "format": "uuid",
               "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "pattern": "^[\\x21-\\x7e]+$",
+              "title": "Idempotency-Key",
               "type": "string"
             }
           }
@@ -10723,6 +15504,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Create Shift",
         "tags": [
           "catalog"
@@ -10741,6 +15527,18 @@
             "schema": {
               "format": "uuid",
               "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "pattern": "^[\\x21-\\x7e]+$",
+              "title": "Idempotency-Key",
               "type": "string"
             }
           }
@@ -10777,6 +15575,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Create Trailer",
         "tags": [
           "catalog"
@@ -10795,6 +15598,18 @@
             "schema": {
               "format": "uuid",
               "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "pattern": "^[\\x21-\\x7e]+$",
+              "title": "Idempotency-Key",
               "type": "string"
             }
           }
@@ -10831,6 +15646,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Create Vehicle Configuration",
         "tags": [
           "catalog"
@@ -10839,7 +15659,7 @@
     },
     "/api/warehouses/{warehouse_id}/workspace": {
       "get": {
-        "description": "Refresh RWMS demand by default, or read persisted state for explicit recovery.",
+        "description": "Read one bounded persisted planning-date projection without synchronizing demand.",
         "operationId": "get_warehouse_workspace_api_warehouses__warehouse_id__workspace_get",
         "parameters": [
           {
@@ -10854,12 +15674,48 @@
           },
           {
             "in": "query",
-            "name": "refresh_rwms",
+            "name": "planning_date",
             "required": false,
             "schema": {
-              "default": true,
-              "title": "Refresh Rwms",
-              "type": "boolean"
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Planning Date"
+            }
+          },
+          {
+            "in": "query",
+            "name": "request_limit",
+            "required": false,
+            "schema": {
+              "default": 250,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Request Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "request_cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Request Cursor"
             }
           }
         ],
@@ -10885,6 +15741,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Get Warehouse Workspace",
         "tags": [
           "catalog"

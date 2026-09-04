@@ -29,6 +29,9 @@ class AssetClientCredentialsValidatorTest {
         assertThatCode(() -> AuthorizationServerConfiguration.validateAssetDownstreamRequest(
                         context("asset-service", Set.of("media.asset-import"), exactOverrides)))
                 .doesNotThrowAnyException();
+        assertThatCode(() -> AuthorizationServerConfiguration.validateAssetDownstreamRequest(
+                        context("asset-service", Set.of("media.asset"), exactOverrides)))
+                .doesNotThrowAnyException();
     }
 
     @Test
@@ -36,6 +39,7 @@ class AssetClientCredentialsValidatorTest {
         for (Set<String> scopes : Set.of(
                 Set.<String>of(),
                 Set.of("warehouse.read", "media.asset-import"),
+                Set.of("media.asset", "media.asset-import"),
                 Set.of("rwms.write"),
                 Set.of("foreign.scope"))) {
             assertThatThrownBy(() -> AuthorizationServerConfiguration.validateAssetDownstreamRequest(

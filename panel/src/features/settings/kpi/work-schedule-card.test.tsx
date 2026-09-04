@@ -2,20 +2,19 @@ import { cleanup, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import type { WarehouseKpiSettings } from "@/features/settings/kpi/api/kpi-settings-api"
+import type { KpiSettingsResponse } from "@/features/settings/kpi/api/kpi-settings-api"
 import { WorkScheduleCard } from "@/features/settings/kpi/work-schedule-card"
 
 afterEach(cleanup)
 
 function settingsWithBreaks(
   breaks: { start: string; end: string }[]
-): WarehouseKpiSettings {
+): KpiSettingsResponse {
   return {
-    warehouseId: "00000000-0000-4000-8000-000000000001",
-    timeZone: "Europe/Moscow",
     status: "DRAFT",
     version: 3,
     dataAvailableFrom: null,
+    minimumEffectiveDate: "2026-07-30",
     palette: null,
     activeSchedule: {
       id: "00000000-0000-4000-8000-000000000002",

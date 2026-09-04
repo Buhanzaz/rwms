@@ -22,10 +22,12 @@ Published-manifest собирается только с проверенным A
 
 Для manifest со статусом 'published' обязательны:
 
+- канал `PRODUCTION`, точные non-debug application ID и version;
 - неизменяемый HTTPS download URL без учётных данных;
 - SHA-256 из 64 строчных шестнадцатеричных символов;
 - дата публикации в ISO-формате; и
-- фактические package/version metadata проверенного APK; и
+- фактические package/version/единственный signer metadata проверенного APK,
+  закреплённые в `release-trust-policy.json`; и
 - переменная `RWMS_WORKER_APK`, указывающая на этот проверенный APK во время
   сборки сайта.
 
@@ -56,7 +58,9 @@ artifact следующим релизом.
 проверяет security, root-route и download-route handling generated Worker.
 `npm run build:cloudflare` затем создаёт deployable OpenNext Worker и static
 assets в '.open-next/'. Для published-релиза проверки также доказывают, что
-байты generated APK совпадают с показанной контрольной суммой.
+байты generated APK, package/version и signer из `aapt`/`apksigner` совпадают
+с manifest и закреплённой policy канала. Неразрешённый или cross-channel
+сертификат закрывает проверку с ошибкой.
 
 ## Опубликованный маршрут VPS
 

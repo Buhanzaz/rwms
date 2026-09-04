@@ -68,6 +68,9 @@ const warehouse = {
   active: true,
   lifecycleState: "ACTIVE",
   sortOrder: 2,
+  production: true,
+  mainWarehouse: false,
+  representativeParentWarehouseId: null,
   representative: false,
 }
 
@@ -117,14 +120,39 @@ class ResizeObserverMock {
   disconnect() {}
 }
 
+const pointerCaptureDescriptors = new Map(
+  [
+    "hasPointerCapture",
+    "setPointerCapture",
+    "releasePointerCapture",
+    "scrollIntoView",
+  ].map((name) => [
+    name,
+    Object.getOwnPropertyDescriptor(HTMLElement.prototype, name),
+  ])
+)
+
 beforeEach(() => {
   vi.stubGlobal("ResizeObserver", ResizeObserverMock)
+  Object.defineProperties(HTMLElement.prototype, {
+    hasPointerCapture: { configurable: true, value: () => false },
+    setPointerCapture: { configurable: true, value: () => undefined },
+    releasePointerCapture: { configurable: true, value: () => undefined },
+    scrollIntoView: { configurable: true, value: () => undefined },
+  })
 })
 
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
   vi.clearAllMocks()
+  for (const [name, descriptor] of pointerCaptureDescriptors) {
+    if (descriptor) {
+      Object.defineProperty(HTMLElement.prototype, name, descriptor)
+    } else {
+      Reflect.deleteProperty(HTMLElement.prototype, name)
+    }
+  }
 })
 
 describe("WarehouseSettingsPage", () => {
@@ -142,7 +170,7 @@ describe("WarehouseSettingsPage", () => {
     await waitFor(() => expect(screen.queryByText("Южный склад")).toBeNull())
 
     await user.click(
-      screen.getByRole("button", { name: "Скрыть фильтры складов" })
+      screen.getByRole("button", { name: "Скрыть фильтры объектов" })
     )
 
     expect(
@@ -151,12 +179,12 @@ describe("WarehouseSettingsPage", () => {
         ?.hasAttribute("hidden")
     ).toBe(true)
     expect(
-      screen.getByRole("searchbox", { name: "Поиск складов" })
+      screen.getByRole("searchbox", { name: "Поиск объектов" })
     ).toBeTruthy()
-    expect(screen.getByRole("button", { name: "Создать склад" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Создать объект" })).toBeTruthy()
 
     await user.click(
-      screen.getByRole("button", { name: "Показать фильтры складов" })
+      screen.getByRole("button", { name: "Показать фильтры объектов" })
     )
 
     const filtersPanel = document.getElementById("warehouse-settings-filters")
@@ -182,14 +210,35 @@ describe("WarehouseSettingsPage", () => {
     renderPage()
 
     await user.click(
-      await screen.findByRole("button", { name: "Создать склад" })
+      await screen.findByRole("button", { name: "Создать объект" })
     )
-    await setField(user, "Название", "Южный склад")
+    const orderedFields = [
+      screen.getByLabelText("Адрес"),
+      screen.getByLabelText("Временная зона"),
+      screen.getByLabelText("Порядок"),
+      screen.getByLabelText("Долгота"),
+      screen.getByLabelText("Широта"),
+    ]
+    for (let index = 1; index < orderedFields.length; index += 1) {
+      expect(
+        orderedFields[index - 1]!.compareDocumentPosition(
+          orderedFields[index]!
+        ) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).not.toBe(0)
+    }
+    await setField(user, "Код города", "MSK")
     await setField(user, "Город", "Москва")
-    await setField(user, "Временная зона", "Europe/Moscow")
     await setField(user, "Широта", "55.7558")
     await setField(user, "Долгота", "37.6173")
-    await user.click(screen.getByLabelText("Представительский склад"))
+    await user.click(
+      screen.getByRole("checkbox", { name: "Представительский склад" })
+    )
+    await user.click(screen.getByLabelText("Код города объекта"))
+    await user.click(
+      screen.getByRole("option", {
+        name: "Северный склад · Санкт-Петербург",
+      })
+    )
     await user.click(screen.getByRole("button", { name: "Сохранить" }))
 
     await waitFor(() =>
@@ -197,13 +246,16 @@ describe("WarehouseSettingsPage", () => {
         "access-token",
         "00000000-0000-4000-8000-000000000002",
         {
-          name: "Южный склад",
+          name: "MSK",
           city: "Москва",
           address: null,
           latitude: 55.7558,
           longitude: 37.6173,
           timeZone: "Europe/Moscow",
           sortOrder: null,
+          production: false,
+          mainWarehouse: false,
+          representativeParentWarehouseId: warehouse.id,
           representative: true,
         }
       )
@@ -235,6 +287,9 @@ describe("WarehouseSettingsPage", () => {
           longitude: warehouse.longitude,
           timeZone: warehouse.timeZone,
           sortOrder: warehouse.sortOrder,
+          production: true,
+          mainWarehouse: false,
+          representativeParentWarehouseId: null,
           representative: false,
         }
       )
@@ -243,10 +298,34 @@ describe("WarehouseSettingsPage", () => {
     })
   })
 
-  it("shows the representative badge and preserves the checked edit value", async () => {
+  it("shows the warehouse classification and parent production in list and edit", async () => {
     const user = userEvent.setup()
-    const representativeWarehouse = { ...warehouse, representative: true }
-    listWarehouses.mockResolvedValue([representativeWarehouse])
+    const productionWarehouse = {
+      ...warehouse,
+      production: true,
+      mainWarehouse: false,
+      representativeParentWarehouseId: null,
+    }
+    const representativeWarehouse = {
+      ...warehouse,
+      id: "00000000-0000-4000-8000-000000000021",
+      name: "Псковский склад",
+      city: "Псков",
+      production: false,
+      mainWarehouse: false,
+      representativeParentWarehouseId: productionWarehouse.id,
+      representative: true,
+    }
+    const additionalProductionWarehouse = {
+      ...productionWarehouse,
+      id: "00000000-0000-4000-8000-000000000022",
+      name: "Дополнительное производство",
+    }
+    listWarehouses.mockResolvedValue([
+      representativeWarehouse,
+      productionWarehouse,
+      additionalProductionWarehouse,
+    ])
     listWarehouseSupportLinks.mockResolvedValue({
       servedWarehouseId: representativeWarehouse.id,
       warehouseVersion: representativeWarehouse.version,
@@ -260,7 +339,11 @@ describe("WarehouseSettingsPage", () => {
 
     renderPage()
 
-    expect((await screen.findAllByText("Представительский")).length).toBe(2)
+    expect(
+      (await screen.findAllByText("Представительский склад: Северный склад"))
+        .length
+    ).toBe(2)
+    expect(screen.getAllByText("Производство").length).toBeGreaterThan(0)
     await user.click(
       (await screen.findAllByRole("button", { name: "Изменить" }))[0]!
     )
@@ -269,6 +352,18 @@ describe("WarehouseSettingsPage", () => {
         .getByRole("checkbox", { name: "Представительский склад" })
         .getAttribute("data-state")
     ).toBe("checked")
+    await user.click(screen.getByLabelText("Код города объекта"))
+    expect(
+      screen.getByRole("option", {
+        name: "Северный склад · Санкт-Петербург",
+      })
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole("option", {
+        name: "Дополнительное производство · Санкт-Петербург",
+      })
+    ).toBeTruthy()
+    await user.keyboard("{Escape}")
     await user.click(screen.getByRole("button", { name: "Сохранить" }))
 
     await waitFor(() =>
@@ -276,14 +371,25 @@ describe("WarehouseSettingsPage", () => {
         "access-token",
         representativeWarehouse.id,
         representativeWarehouse.version,
-        expect.objectContaining({ representative: true })
+        expect.objectContaining({
+          production: false,
+          mainWarehouse: false,
+          representativeParentWarehouseId: productionWarehouse.id,
+          representative: true,
+        })
       )
     )
   })
 
   it("edits support warehouses through the version-fenced collection command", async () => {
     const user = userEvent.setup()
-    const representativeWarehouse = { ...warehouse, representative: true }
+    const representativeWarehouse = {
+      ...warehouse,
+      production: false,
+      mainWarehouse: false,
+      representativeParentWarehouseId: "00000000-0000-4000-8000-000000000005",
+      representative: true,
+    }
     const supportWarehouse = {
       ...warehouse,
       id: "00000000-0000-4000-8000-000000000005",
@@ -368,8 +474,9 @@ describe("WarehouseSettingsPage", () => {
     renderPage()
 
     await user.click(
-      (await screen.findAllByRole("button", { name: "Начать вывод" }))[0]!
+      (await screen.findAllByRole("button", { name: "Изменить" }))[0]!
     )
+    await user.click(screen.getByRole("button", { name: "Начать вывод" }))
     const dialog = screen.getByRole("alertdialog")
     expect(within(dialog).getByText(/Переход необратим/)).toBeTruthy()
     await user.click(
@@ -398,8 +505,9 @@ describe("WarehouseSettingsPage", () => {
     renderPage()
 
     await user.click(
-      (await screen.findAllByRole("button", { name: "Завершить вывод" }))[0]!
+      (await screen.findAllByRole("button", { name: "Изменить" }))[0]!
     )
+    await user.click(screen.getByRole("button", { name: "Завершить вывод" }))
     const dialog = screen.getByRole("alertdialog")
     expect(within(dialog).getByText(/подтверждения готовности/)).toBeTruthy()
     await user.click(
@@ -429,13 +537,13 @@ describe("WarehouseSettingsPage", () => {
     renderPage()
 
     await user.click(
-      (
-        await screen.findAllByRole("button", {
-          name: "Сменить часовой пояс",
-        })
-      )[0]!
+      (await screen.findAllByRole("button", { name: "Изменить" }))[0]!
     )
-    await setField(user, "Новая временная зона", "Europe/Samara")
+    await user.click(
+      screen.getByRole("button", { name: "Сменить часовой пояс" })
+    )
+    await user.click(screen.getByLabelText("Новая временная зона"))
+    await user.click(screen.getByRole("option", { name: /Europe\/Samara/ }))
     await setField(user, "Начать с даты и времени", "2099-09-01T00:00:00+04:00")
     await user.click(screen.getByRole("button", { name: "Запланировать" }))
 

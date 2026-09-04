@@ -189,8 +189,9 @@ describe("ShipmentTaskSettingsCard", () => {
     renderCard()
 
     expect((await screen.findByRole("alert")).textContent).toContain(
-      "logistics-service недоступен"
+      "Сервис временно недоступен. Повторите попытку позже."
     )
+    expect(screen.queryByText("logistics-service недоступен")).toBeNull()
     expect(
       screen.getByText(
         "Локальное значение не подставляется: лимит задания задаёт сервис логистики."

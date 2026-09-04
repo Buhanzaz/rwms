@@ -25,6 +25,13 @@ revision and application diff. The static page supports phones and desktops
 and requires no runtime package installation. Publish the page and reviewed
 APK only after an authorized release process has verified the APK itself.
 
+`release-trust-policy.json` is the channel-specific certificate allowlist.
+`npm run check` requires a non-debug `PRODUCTION` package/version, complete
+source provenance, one manifest signer, and exact APK agreement for SHA-256,
+package, version and signer as reported by `aapt`/`apksigner`. A signer not
+pinned in that policy fails closed; certificate rotation is a separate reviewed
+policy change.
+
 ## Runtime path
 
 The intended VPS surface is `/client-download/`; the immutable APK path is the

@@ -86,9 +86,8 @@ class OAuthWarehouseExistenceClientTest {
         assertStatus(SPB, json(404, "{}"), HttpStatus.UNPROCESSABLE_CONTENT);
         assertStatus(SPB, json(200, existence(SPB, 0, false)), HttpStatus.CONFLICT);
         assertStatus(SPB, json(200, existence(MSK, 0, true)), HttpStatus.BAD_GATEWAY);
-        assertStatus(SPB, json(200, "{\"id\":\"" + SPB + "\",\"version\":0,\"active\":true,\"extra\":1}"), HttpStatus.BAD_GATEWAY);
-        assertStatus(SPB, json(200, "{\"id\":\"" + SPB + "\",\"active\":true}"), HttpStatus.BAD_GATEWAY);
-        assertStatus(SPB, json(200, "{\"id\":\"" + SPB + "\",\"version\":0,\"active\":true,\"active\":true}"), HttpStatus.BAD_GATEWAY);
+        assertStatus(SPB, json(200, existence(SPB, 0, true).replace("}", ",\"extra\":1}")), HttpStatus.BAD_GATEWAY);
+        assertStatus(SPB, json(200, existence(SPB, 0, true).replace("}", ",\"active\":true}")), HttpStatus.BAD_GATEWAY);
         assertStatus(SPB, json(200, existence(SPB, -1, true)), HttpStatus.BAD_GATEWAY);
         assertStatus(SPB, new Response(200, "text/plain", existence(SPB, 0, true), Map.of()), HttpStatus.BAD_GATEWAY);
     }

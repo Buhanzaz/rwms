@@ -25,7 +25,30 @@ only during one native exchange and are never persisted. The callback
 not opened. Registration first obtains CSRF metadata, posts the confirmed
 password, and then runs the same PKCE login.
 
-Access/refresh tokens are stored as AES-GCM ciphertext in DataStore. The key is
+Every process launch first renders the exact imported BLOCK BOX vector for
+three seconds. The start actions then enter from opposite edges and below with
+the supplied scale/fade motion. Login, registration, and recovery are states of
+one signed-out screen, so `Вход` cannot resolve to registration. Registration
+collects login, email, confirmed password, and phone; the auth boundary still
+receives only its contract fields, while email and phone prefill the mandatory
+individual logistics profile after sign-in. `Продолжить без аккаунта` remains
+visible but unavailable because the public contract has no guest catalog.
+Recovery remains an explicit unavailable result rather than fabricated success.
+
+One silent Media3 player renders the exact imported `background_caustic.webm`
+behind every CustomerApp route. It uses crop/zoom, repeats the asset indefinitely,
+pauses decoding outside the active lifecycle, and is released with the root
+composition instead of being recreated between screens. Auth/profile fields and
+app actions reuse the translucent 16 dp field, gradient button, press, and shadow
+components. The motion foreground is in
+[`CustomerStoreWelcomeScreen.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerStoreWelcomeScreen.kt),
+the shared visual/player layer is in
+[`CustomerStoreDesign.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerStoreDesign.kt),
+and the conditional binding is in
+[`CustomerApp.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerApp.kt).
+
+When `Запомнить` is selected, access/refresh tokens are stored as AES-GCM ciphertext in DataStore;
+otherwise the usable session remains process-memory only. The key is
 non-exportable Android Keystore material. A rejected access token is refreshed
 once; a repeated 401 signs the client out, while 409 reloads authoritative cart
 state and invalidates stale delivery-slot data. A separate non-authoritative
@@ -35,6 +58,10 @@ cleared on sign-out and reloads the inquiry after process recreation only when t
 enabled; otherwise the customer returns to the separate warehouse step.
 A same-process retry after an uncertain create response reuses that pending key
 instead of opening another inquiry.
+A separate bounded, non-authoritative DataStore ledger retains only stable UUIDs for unresolved
+cabin-acceptance and problem-report request fingerprints. It survives process recreation, never
+evicts an unresolved key, and removes a key only after the server returns or the booking list
+reconciles the authoritative result; it stores neither command payloads nor server-owned results.
 When the restored server session is `BOOKED`, or a cart-scoped read returns the
 stable `INQUIRY_ARCHIVED` problem code, CustomerApp keeps the completed booking
 and selected warehouse but atomically rotates the pointer to a new durable
@@ -44,29 +71,35 @@ does not fence mutations in that new cart.
 ## Customer flow
 
 Jetpack Compose Material 3 and Navigation 3 provide mutually exclusive
-signed-out and signed-in graphs. The signed-in flow collects an individual or
-legal profile, then presents warehouse selection as its own step with an optional
+signed-out and signed-in graphs. Every newly registered customer completes an
+individual profile. Existing individual/legal profile kinds remain immutable;
+the drawer exposes `Доступ для юрлиц` as an intentionally non-functional future-access placeholder.
+The signed-in flow then presents warehouse selection as its own step with an optional
 `Remember selected warehouse` checkbox, and only then pages through server-returned free cabins.
 The catalog header keeps the selected warehouse geometrically centered between fixed menu and
 profile actions. Tapping it grows the header downward with other available warehouses without
 moving that fixed row, then creates or resumes the corresponding warehouse-bound inquiry. The
-catalog has a full-card-width filter action for type, finish, dimensions, category, linoleum and
-characteristics, but no text search; characteristic chips have explicit row spacing and every
-one-row cabin card uses an `onSurface` outline, which remains legible in the dark theme.
-Swipe/full-screen photos never navigate to a passport. Available warehouse furniture can be
-assigned per cabin.
+catalog keeps its filter action in a surface directly below the fixed header while cards scroll.
+It filters by type, finish, dimensions, category, linoleum and characteristics, but has no text
+search. A selected type narrows dimensions to the server-returned `typeDimensions` relation and
+clears an incompatible size before the request. Cabin cards lead with an unframed accounting
+number followed by the type at the same title scale; they omit provisional availability and
+delivery copy. Swipe/full-screen photos never navigate to a passport. Available warehouse
+furniture can be assigned per cabin as `+ Additional`.
 
 An existing individual/legal kind is immutable, while its name/company and contact fields are
 editable under the logistics profile version fence. The circular profile affordance renders
 initials or the current authenticated avatar. Android's system Photo Picker needs no storage
-permission; after a warehouse is selected, the app prepares the exact subject-bound
-`LOGISTICS_CUSTOMER_PROFILE/PROFILE_AVATAR` scope, uploads and finalizes one image, waits for its
-current `READY` generation and binds it back to the profile. Media-service remains the byte owner.
+permission. The profile can prepare the exact subject-bound
+`LOGISTICS_CUSTOMER_PROFILE/PROFILE_AVATAR` scope before catalog selection by using the existing
+avatar warehouse, the current catalog warehouse, or the first authorized warehouse; the server
+still validates that immutable scope. The app uploads and finalizes one image, waits for its current
+`READY` generation and binds it back to the profile. Media-service remains the byte owner.
 
-The cart supports checkbox multi-selection, bulk rental duration, a different
-duration per cabin and removal. The app persists the complete per-cabin term
-set through the logistics-owned replacement endpoint. Any cabin, furniture or
-term change invalidates stale slots. The confirmation screen uses the same
+The cart presents each selected cabin as a card with its own rental-term control, additional
+furniture/equipment sheet and removal action; it has no checkbox or bulk-duration UI. The app
+persists the complete per-cabin term set through the logistics-owned replacement endpoint. Any
+cabin, furniture or term change invalidates stale slots. The confirmation screen uses the same
 one-month default for both its displayed value and checkout eligibility, so a
 temporarily absent local term entry cannot disable an otherwise valid held
 slot. Delivery is a focused four-step Navigation
@@ -114,7 +147,9 @@ public-road feasibility for its frozen height, width, length, weight and axle
 profile and returns that profile with offers. The date step displays the server price and its
 mutually exclusive source: ordinary 60/120/180/240-minute isochrone tier through
 `priceIsochroneMinutes`, or a special-price polygon through nullable UUID `priceZoneId`. A missing
-or contradictory tariff is shown as undefined and is never replaced by local zero. Forbidden and
+or contradictory tariff is shown as `Не рассчитана` and is never replaced by local zero. Known
+whole-ruble prices are locale-grouped from the server integer without floating-point or local price
+calculation. Forbidden and
 no-trailer polygons remain server routing constraints; the APK does not use a price source as route
 feasibility. Dates and
 slots are grouped only from exact server offers, never fabricated locally. A `DURING_DAY` offer is
@@ -129,9 +164,26 @@ app-private cache without a system confirmation screen; the document picker
 can import supported gallery images/videos, and a mini-gallery supports removal.
 Evidence is uploaded to the exact `LOGISTICS_SHIPMENT` line, finalized, polled
 until `READY`, and only then referenced by the immutable problem command.
+Acceptance and problem retries reuse their durable request identity after process death; an
+uncertain response is reconciled from the authoritative booking before local recovery state is
+cleared.
+My Orders also supports service-owned cancellation and delivery rescheduling only for an identified
+`COMPLETED` booking. Both commands carry the exact booking version; cancellation and atomic slot
+replacement additionally use a process-durable `Idempotency-Key`. Replacement offers are searched
+against that booking alone and confirmation sends only the selected server slot ID/version, never
+the original cart, cabin, or equipment payload. The command response is shown immediately and then
+reconciled from the authoritative booking list, so a failed replacement leaves the old delivery
+projection intact. `CANCELLATION_PENDING` and `CANCELLED` have customer-facing Russian labels,
+stable domain codes become actionable Russian messages, and an absent `cancellationFeeRubles` is
+not rendered as zero. The transport and recovery behavior is owned by
+[`CustomerApi.kt`](app/src/main/java/dev/buhanzaz/rwms/client/data/CustomerApi.kt) and
+[`CustomerRepository.kt`](app/src/main/java/dev/buhanzaz/rwms/client/data/CustomerRepository.kt);
+the presentation policy is in
+[`CustomerPolicies.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerPolicies.kt).
 
 Phone layouts use bottom navigation and larger windows use a navigation rail;
-the focused delivery flow hides both. Screens and full-screen dialogs are
+the focused delivery flow hides both. The full-height drawer exposes a single one-tap explicit
+light/dark appearance toggle; system and battery appearance sources are not supported. Screens and full-screen dialogs are
 edge-to-edge and IME-aware. Customer commands are serialized, 409 reloads
 authoritative cart state, and checkout is reconciled with the durable booking
 list.
@@ -139,7 +191,8 @@ list.
 ## Dependency graph
 
 Hilt provides one application graph. Retrofit with Kotlin serialization owns
-typed API transport; OkHttp owns Bearer/refresh handling; Coil loads images;
+typed API transport; OkHttp owns Bearer/refresh handling; Coil loads images; Media3 owns the
+single lifecycle-aware silent background loop;
 Yandex MapKit `4.42.0-full` owns map rendering, suggestions and forward/reverse geocoding; Android
 `LocationManager` owns cancellable foreground current-location acquisition;
 CameraX owns the in-app photo/silent-video session. An installed Yandex
@@ -185,4 +238,10 @@ The debug artifact is
 `dev.buhanzaz.rwms.client.debug`. A production publication passes an external,
 root-readable `signingPropertiesFile` and builds `assembleRelease`; the keystore
 and its passwords must never enter this repository. The reviewed release APK
-must update only `client-download-site/`.
+must update only `client-download-site/`. Every release artifact task validates
+the four required signing properties and referenced keystore before execution;
+the property names are documented in
+[`signing.properties.example`](signing.properties.example). The download site
+then independently requires the `PRODUCTION` package identity, immutable APK
+hash, source provenance, and a signer certificate pinned in
+`client-download-site/release-trust-policy.json`.

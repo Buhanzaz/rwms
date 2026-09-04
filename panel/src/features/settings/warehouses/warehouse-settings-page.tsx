@@ -1,6 +1,8 @@
 import { useMemo, useState, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
+import { Alert01Icon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
 
 import {
   completeWarehouseInactivation,
@@ -15,6 +17,7 @@ import {
   type WarehouseWriteInput,
 } from "@/api/warehouse-api"
 import { OperationsListGrid } from "@/components/operations-list-grid"
+import { TimeZoneSelect } from "@/components/time-zone-select"
 import {
   PageToolbar,
   PageToolbarActions,
@@ -44,11 +47,29 @@ import {
 } from "@/components/ui/dialog"
 import {
   Field,
+  FieldContent,
+  FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
+  FieldLegend,
+  FieldSet,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { useAuth } from "@/features/auth/use-auth"
 import {
   getWarehouseMutationError,
@@ -83,6 +104,66 @@ const warehouseLifecyclePresentation: Record<
   INACTIVE: { label: "Неактивен", badge: "outline" },
 }
 
+function WarehouseClassification({
+  warehouse,
+  representativeParent,
+}: {
+  warehouse: WarehouseInfo
+  representativeParent?: WarehouseInfo
+}) {
+  const production = warehouse.production
+  const mainWarehouse = warehouse.mainWarehouse
+  const representativeParentWarehouseId = warehouse.representativeParentWarehouseId
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      {production ? <Badge variant="outline">Производство</Badge> : null}
+      {mainWarehouse ? <Badge variant="outline">Основной склад</Badge> : null}
+      {representativeParentWarehouseId ? (
+        <Badge variant="outline">
+          Представительский склад: {representativeParent?.name ?? "—"}
+        </Badge>
+      ) : null}
+    </div>
+  )
+}
+
+function getWarehouseProblems(warehouse: WarehouseInfo) {
+  const problems: string[] = []
+  if (warehouse.latitude === null || warehouse.longitude === null) {
+    problems.push("Нет координат.")
+  }
+  return problems
+}
+
+function WarehouseProblemIndicator({
+  warehouse,
+}: {
+  warehouse: WarehouseInfo
+}) {
+  const problems = getWarehouseProblems(warehouse)
+  if (problems.length === 0) return null
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          aria-label={problems.join(" ")}
+          className="inline-flex text-destructive"
+          tabIndex={0}
+        >
+          <HugeiconsIcon
+            icon={Alert01Icon}
+            strokeWidth={2}
+            className="size-4"
+          />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent sideOffset={6}>{problems.join(" ")}</TooltipContent>
+    </Tooltip>
+  )
+}
+
 function WarehouseEditorDialog({
   warehouse,
   pending,
@@ -93,6 +174,8 @@ function WarehouseEditorDialog({
   onSave,
   onSupportSaved,
   onSupportConflict,
+  onScheduleTimeZone,
+  onLifecycleTransition,
 }: {
   warehouse: WarehouseInfo | null
   pending: boolean
@@ -103,12 +186,22 @@ function WarehouseEditorDialog({
   onSave: (input: WarehouseWriteInput) => void
   onSupportSaved: () => Promise<void>
   onSupportConflict: () => Promise<void>
+  onScheduleTimeZone: (warehouse: WarehouseInfo) => void
+  onLifecycleTransition: (warehouse: WarehouseInfo) => void
 }) {
   const [values, setValues] = useState<WarehouseFormValues>(() =>
     createWarehouseFormValues(warehouse)
   )
   const [validationError, setValidationError] = useState<string | null>(null)
   const formError = validationError ?? serverError
+  const persistedRepresentative = Boolean(
+    warehouse?.representativeParentWarehouseId
+  )
+  const representativeParentObjects = warehouses.filter(
+    (candidate) =>
+      candidate.id !== warehouse?.id &&
+      (candidate.production || candidate.mainWarehouse)
+  )
 
   function updateValue<Key extends keyof WarehouseFormValues>(
     key: Key,
@@ -134,13 +227,13 @@ function WarehouseEditorDialog({
     <Dialog open onOpenChange={(open) => !pending && onOpenChange(open)}>
       <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
-          <DialogTitle>{warehouse ? "Склад" : "Новый склад"}</DialogTitle>
+          <DialogTitle>{warehouse ? "Объект" : "Новый объект"}</DialogTitle>
         </DialogHeader>
 
         <form onSubmit={(event) => void submit(event)}>
           <FieldGroup className="grid gap-4 md:grid-cols-2">
             <Field data-invalid={formError !== null || undefined}>
-              <FieldLabel htmlFor="warehouse-name">Название</FieldLabel>
+              <FieldLabel htmlFor="warehouse-name">Код города</FieldLabel>
               <Input
                 id="warehouse-name"
                 value={values.name}
@@ -161,22 +254,6 @@ function WarehouseEditorDialog({
                 aria-invalid={formError !== null}
               />
             </Field>
-            <Field data-invalid={formError !== null || undefined}>
-              <FieldLabel htmlFor="warehouse-time-zone">
-                Временная зона
-              </FieldLabel>
-              <Input
-                id="warehouse-time-zone"
-                value={values.timeZone}
-                maxLength={64}
-                onChange={(event) =>
-                  updateValue("timeZone", event.target.value)
-                }
-                placeholder="Europe/Moscow"
-                required
-                aria-invalid={formError !== null}
-              />
-            </Field>
             <Field
               className="md:col-span-2"
               data-invalid={formError !== null || undefined}
@@ -192,15 +269,29 @@ function WarehouseEditorDialog({
               />
             </Field>
             <Field data-invalid={formError !== null || undefined}>
-              <FieldLabel htmlFor="warehouse-latitude">Широта</FieldLabel>
+              <FieldLabel htmlFor="warehouse-time-zone">
+                Временная зона
+              </FieldLabel>
+              <TimeZoneSelect
+                id="warehouse-time-zone"
+                value={values.timeZone}
+                onValueChange={(value) => updateValue("timeZone", value)}
+                invalid={formError !== null}
+                className="w-full"
+              />
+            </Field>
+            <Field data-invalid={formError !== null || undefined}>
+              <FieldLabel htmlFor="warehouse-sort-order">Порядок</FieldLabel>
               <Input
-                id="warehouse-latitude"
-                inputMode="decimal"
-                value={values.latitude}
+                id="warehouse-sort-order"
+                type="number"
+                min={0}
+                step={1}
+                value={values.sortOrder}
                 onChange={(event) =>
-                  updateValue("latitude", event.target.value)
+                  updateValue("sortOrder", event.target.value)
                 }
-                placeholder="59.934300"
+                placeholder="Необязательно"
                 aria-invalid={formError !== null}
               />
             </Field>
@@ -217,43 +308,157 @@ function WarehouseEditorDialog({
                 aria-invalid={formError !== null}
               />
             </Field>
+            <Field data-invalid={formError !== null || undefined}>
+              <FieldLabel htmlFor="warehouse-latitude">Широта</FieldLabel>
+              <Input
+                id="warehouse-latitude"
+                inputMode="decimal"
+                value={values.latitude}
+                onChange={(event) =>
+                  updateValue("latitude", event.target.value)
+                }
+                placeholder="59.934300"
+                aria-invalid={formError !== null}
+              />
+            </Field>
             <p
               className={`text-xs md:col-span-2 ${
                 values.latitude.trim() === "" && values.longitude.trim() === ""
-                  ? "text-amber-700 dark:text-amber-300"
+                  ? "text-[var(--rwms-dark-khaki)]"
                   : "text-muted-foreground"
               }`}
             >
               {values.latitude.trim() === "" && values.longitude.trim() === ""
-                ? "Не заданы координаты для использования склада в логистике."
+                ? "Не заданы координаты для использования объекта в логистике."
                 : "Координаты WGS84 используются картой, маршрутизацией и изохронами."}
             </p>
-            <Field data-invalid={formError !== null || undefined}>
-              <FieldLabel htmlFor="warehouse-sort-order">Порядок</FieldLabel>
-              <Input
-                id="warehouse-sort-order"
-                type="number"
-                min={0}
-                step={1}
-                value={values.sortOrder}
-                onChange={(event) =>
-                  updateValue("sortOrder", event.target.value)
-                }
-                placeholder="Необязательно"
-                aria-invalid={formError !== null}
-              />
-            </Field>
-            <Field orientation="horizontal" className="md:col-span-2">
-              <Checkbox
-                id="warehouse-representative"
-                checked={values.representative}
-                onCheckedChange={(checked) =>
-                  updateValue("representative", checked === true)
-                }
-              />
-              <FieldLabel htmlFor="warehouse-representative">
-                Представительский склад
+            <FieldSet
+              className="rounded-md border p-4 md:col-span-2"
+              data-invalid={formError !== null || undefined}
+            >
+              <FieldLegend>Тип объекта</FieldLegend>
+              <FieldGroup data-slot="checkbox-group" className="gap-3">
+                <Field orientation="horizontal">
+                  <Checkbox
+                    id="warehouse-production"
+                    checked={values.production}
+                    onCheckedChange={(checked) =>
+                      setValues((current) => ({
+                        ...current,
+                        production: checked === true,
+                        representative:
+                          checked === true ? false : current.representative,
+                        representativeParentWarehouseId:
+                          checked === true
+                            ? ""
+                            : current.representativeParentWarehouseId,
+                      }))
+                    }
+                  />
+                  <FieldContent>
+                    <FieldLabel htmlFor="warehouse-production">
+                      Производство
+                    </FieldLabel>
+                    <FieldDescription>
+                      В будущем объект будет отображаться в manufacture
+                      management system MMS.
+                    </FieldDescription>
+                  </FieldContent>
+                </Field>
+                <Field orientation="horizontal">
+                  <Checkbox
+                    id="warehouse-main"
+                    checked={values.mainWarehouse}
+                    onCheckedChange={(checked) =>
+                      setValues((current) => ({
+                        ...current,
+                        mainWarehouse: checked === true,
+                        representative:
+                          checked === true ? false : current.representative,
+                        representativeParentWarehouseId:
+                          checked === true
+                            ? ""
+                            : current.representativeParentWarehouseId,
+                      }))
+                    }
+                  />
+                  <FieldContent>
+                    <FieldLabel htmlFor="warehouse-main">
+                      Основной склад
+                    </FieldLabel>
+                    <FieldDescription>
+                      В будущем объект будет отображаться в RWMS.
+                    </FieldDescription>
+                  </FieldContent>
+                </Field>
+                <Field orientation="horizontal">
+                  <Checkbox
+                    id="warehouse-representative"
+                    checked={values.representative}
+                    onCheckedChange={(checked) =>
+                      setValues((current) => ({
+                        ...current,
+                        representative: checked === true,
+                        production:
+                          checked === true ? false : current.production,
+                        mainWarehouse:
+                          checked === true ? false : current.mainWarehouse,
+                        representativeParentWarehouseId:
+                          checked === true
+                            ? current.representativeParentWarehouseId
+                            : "",
+                      }))
+                    }
+                  />
+                  <FieldContent>
+                    <FieldLabel htmlFor="warehouse-representative">
+                      Представительский склад
+                    </FieldLabel>
+                    <FieldDescription>
+                      Отображается в RWMS и выбирает объект с производством или
+                      основным складом.
+                    </FieldDescription>
+                  </FieldContent>
+                </Field>
+              </FieldGroup>
+            </FieldSet>
+            <Field
+              className="md:col-span-2"
+              data-invalid={formError !== null || undefined}
+            >
+              <FieldLabel htmlFor="warehouse-representative-parent">
+                Код города объекта
               </FieldLabel>
+              <Select
+                value={values.representativeParentWarehouseId || undefined}
+                disabled={!values.representative}
+                onValueChange={(value) =>
+                  updateValue("representativeParentWarehouseId", value)
+                }
+              >
+                <SelectTrigger
+                  id="warehouse-representative-parent"
+                  className="w-full"
+                  aria-invalid={formError !== null}
+                >
+                  <SelectValue placeholder="Выберите код города" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {representativeParentObjects.map((candidate) => (
+                      <SelectItem key={candidate.id} value={candidate.id}>
+                        {candidate.name} · {candidate.city}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              {values.representative &&
+              representativeParentObjects.length === 0 ? (
+                <FieldDescription>
+                  Сначала создайте объект с производством или основным складом.
+                </FieldDescription>
+              ) : null}
             </Field>
           </FieldGroup>
 
@@ -276,12 +481,7 @@ function WarehouseEditorDialog({
           </DialogFooter>
         </form>
 
-        {values.representative && warehouse === null ? (
-          <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-            Сначала сохраните новый склад, затем откройте его снова, чтобы
-            настроить опорные склады.
-          </p>
-        ) : values.representative && warehouse?.representative ? (
+        {persistedRepresentative && warehouse ? (
           <WarehouseSupportLinksEditor
             accessToken={accessToken}
             warehouse={warehouse}
@@ -289,11 +489,54 @@ function WarehouseEditorDialog({
             onSaved={onSupportSaved}
             onConflict={onSupportConflict}
           />
+        ) : values.representative && warehouse === null ? (
+          <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+            Сначала сохраните новый объект, затем откройте его снова, чтобы
+            настроить опорные объекты.
+          </p>
         ) : values.representative && warehouse ? (
           <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-            Сохраните признак представительского склада и откройте форму снова,
-            чтобы настроить логистическое обслуживание.
+            Сохраните тип представительского объекта и откройте форму снова,
+            чтобы настроить опорные объекты.
           </p>
+        ) : null}
+
+        {warehouse ? (
+          <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+            <p className="text-sm font-medium">Действия</p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={pending}
+                onClick={() => onScheduleTimeZone(warehouse)}
+              >
+                Сменить часовой пояс
+              </Button>
+              {warehouse.lifecycleState === "ACTIVE" ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={pending}
+                  onClick={() => onLifecycleTransition(warehouse)}
+                >
+                  Начать вывод
+                </Button>
+              ) : warehouse.lifecycleState === "DRAINING" ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={pending}
+                  onClick={() => onLifecycleTransition(warehouse)}
+                >
+                  Завершить вывод
+                </Button>
+              ) : null}
+            </div>
+          </div>
         ) : null}
       </DialogContent>
     </Dialog>
@@ -361,8 +604,9 @@ function TimeZoneScheduleDialog({
         <DialogHeader>
           <DialogTitle>Запланировать смену часового пояса</DialogTitle>
           <DialogDescription>
-            Для склада «{warehouse.name}» новая зона начнёт действовать только с
-            указанного момента. Уже рассчитанные операции и отчёты не изменятся.
+            Для объекта «{warehouse.name}» новая зона начнёт действовать только
+            с указанного момента. Уже рассчитанные операции и отчёты не
+            изменятся.
           </DialogDescription>
         </DialogHeader>
 
@@ -372,14 +616,12 @@ function TimeZoneScheduleDialog({
               <FieldLabel htmlFor="warehouse-scheduled-time-zone">
                 Новая временная зона
               </FieldLabel>
-              <Input
+              <TimeZoneSelect
                 id="warehouse-scheduled-time-zone"
                 value={timeZone}
-                maxLength={64}
-                placeholder="Europe/Samara"
-                onChange={(event) => setTimeZone(event.target.value)}
-                aria-invalid={formError !== null}
-                required
+                onValueChange={setTimeZone}
+                invalid={formError !== null}
+                className="w-full"
               />
             </Field>
             <Field data-invalid={formError !== null || undefined}>
@@ -399,7 +641,7 @@ function TimeZoneScheduleDialog({
                 id="warehouse-time-zone-effective-from-hint"
                 className="text-xs text-muted-foreground"
               >
-                Формат RFC 3339 с часовым смещением склада.
+                Формат RFC 3339 с часовым смещением объекта.
               </p>
             </Field>
           </FieldGroup>
@@ -431,14 +673,10 @@ function WarehouseActions({
   warehouse,
   pending,
   onEdit,
-  onScheduleTimeZone,
-  onLifecycleTransition,
 }: {
   warehouse: WarehouseInfo
   pending: boolean
   onEdit: (warehouse: WarehouseInfo) => void
-  onScheduleTimeZone: (warehouse: WarehouseInfo) => void
-  onLifecycleTransition: (warehouse: WarehouseInfo) => void
 }) {
   return (
     <div className="flex flex-wrap gap-2">
@@ -451,36 +689,6 @@ function WarehouseActions({
       >
         Изменить
       </Button>
-      <Button
-        type="button"
-        size="sm"
-        variant="ghost"
-        disabled={pending}
-        onClick={() => onScheduleTimeZone(warehouse)}
-      >
-        Сменить часовой пояс
-      </Button>
-      {warehouse.lifecycleState === "ACTIVE" ? (
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          disabled={pending}
-          onClick={() => onLifecycleTransition(warehouse)}
-        >
-          Начать вывод
-        </Button>
-      ) : warehouse.lifecycleState === "DRAINING" ? (
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          disabled={pending}
-          onClick={() => onLifecycleTransition(warehouse)}
-        >
-          Завершить вывод
-        </Button>
-      ) : null}
     </div>
   )
 }
@@ -535,13 +743,17 @@ export function WarehouseSettingsPage() {
           longitude: input.longitude,
           timeZone: input.timeZone,
           sortOrder: input.sortOrder,
+          production: input.production,
+          mainWarehouse: input.mainWarehouse,
+          representativeParentWarehouseId:
+            input.representativeParentWarehouseId,
           representative: input.representative,
         }
         return createWarehouse(accessToken, crypto.randomUUID(), createInput)
       }
 
       if (editor === null) {
-        throw new Error("Склад не выбран.")
+        throw new Error("Объект не выбран.")
       }
 
       return replaceWarehouse(accessToken, editor.id, editor.version, input)
@@ -550,7 +762,7 @@ export function WarehouseSettingsPage() {
       await refreshAfterMutation()
       setEditor(null)
       setServerError(null)
-      toast.success("Склад сохранён.")
+      toast.success("Объект сохранён.")
     },
     onError: async (error) => {
       const message = getWarehouseMutationError(error)
@@ -568,7 +780,7 @@ export function WarehouseSettingsPage() {
   const lifecycleMutation = useMutation({
     mutationFn: async () => {
       if (accessToken === null || lifecycleTransition === null) {
-        throw new Error("Сессия завершена или склад не выбран.")
+        throw new Error("Сессия завершена или объект не выбран.")
       }
 
       if (lifecycleTransition.lifecycleState === "ACTIVE") {
@@ -587,7 +799,7 @@ export function WarehouseSettingsPage() {
         )
       }
 
-      throw new Error("Неактивный склад уже завершил жизненный цикл.")
+      throw new Error("Неактивный объект уже завершил жизненный цикл.")
     },
     onSuccess: async () => {
       await refreshAfterMutation()
@@ -596,8 +808,8 @@ export function WarehouseSettingsPage() {
       setServerError(null)
       toast.success(
         completed
-          ? "Склад переведён в неактивное состояние."
-          : "Начат вывод склада из работы."
+          ? "Объект переведён в неактивное состояние."
+          : "Начат вывод объекта из работы."
       )
     },
     onError: async (error) => {
@@ -616,7 +828,7 @@ export function WarehouseSettingsPage() {
   const timeZoneMutation = useMutation({
     mutationFn: async (input: { timeZone: string; effectiveFrom: string }) => {
       if (accessToken === null || timeZoneSchedule === null) {
-        throw new Error("Сессия завершена или склад не выбран.")
+        throw new Error("Сессия завершена или объект не выбран.")
       }
 
       return scheduleWarehouseTimeZone(
@@ -655,6 +867,10 @@ export function WarehouseSettingsPage() {
     () => warehousesQuery.data ?? [],
     [warehousesQuery.data]
   )
+  const warehousesById = useMemo(
+    () => new Map(warehouses.map((warehouse) => [warehouse.id, warehouse])),
+    [warehouses]
+  )
   const filterOptions = useMemo(
     () => getWarehouseFilterOptions(warehouses),
     [warehouses]
@@ -668,10 +884,10 @@ export function WarehouseSettingsPage() {
     return (
       <Card size="sm">
         <CardHeader>
-          <CardTitle>Склады</CardTitle>
+          <CardTitle>Объекты</CardTitle>
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground">
-          Управление складами доступно только системному администратору.
+          Управление объектами доступно только системному администратору.
         </CardContent>
       </Card>
     )
@@ -688,287 +904,311 @@ export function WarehouseSettingsPage() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4">
-      <PageToolbar>
-        <PageToolbarContent className="max-w-xl">
-          <Input
-            type="search"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Поиск по названию или городу"
-            aria-label="Поиск складов"
-          />
-        </PageToolbarContent>
-        <PageToolbarActions className="w-full sm:w-auto">
-          <WarehouseFiltersToggle
-            open={filtersOpen}
-            controls="warehouse-settings-filters"
-            onOpenChange={setFiltersOpen}
-          />
-          <Button type="button" onClick={() => openEditor("new")}>
-            Создать склад
-          </Button>
-        </PageToolbarActions>
-      </PageToolbar>
-      <div id="warehouse-settings-filters" hidden={!filtersOpen}>
-        <WarehouseSettingsFilters
-          filters={filters}
-          options={filterOptions}
-          onChange={setFilters}
-        />
-      </div>
-
-      {warehousesQuery.isLoading ? (
-        <p className="text-sm text-muted-foreground">Загрузка складов…</p>
-      ) : warehousesQuery.isError ? (
-        <Card size="sm">
-          <CardHeader>
-            <CardTitle>Не удалось загрузить склады</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3 text-sm">
-            <p role="alert" className="text-destructive">
-              {getWarehouseMutationError(warehousesQuery.error)}
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => void warehousesQuery.refetch()}
-            >
-              Повторить
+    <TooltipProvider>
+      <div className="flex h-full min-h-0 flex-col gap-4">
+        <PageToolbar>
+          <PageToolbarContent className="max-w-xl">
+            <Input
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Поиск по коду города, городу, типу или объекту представительства"
+              aria-label="Поиск объектов"
+            />
+          </PageToolbarContent>
+          <PageToolbarActions className="w-full sm:w-auto">
+            <WarehouseFiltersToggle
+              open={filtersOpen}
+              controls="warehouse-settings-filters"
+              onOpenChange={setFiltersOpen}
+            />
+            <Button type="button" onClick={() => openEditor("new")}>
+              Создать объект
             </Button>
-          </CardContent>
-        </Card>
-      ) : (
-        <>
-          <OperationsListGrid
-            className="hidden min-h-0 flex-1 overflow-auto md:block"
-            items={visibleWarehouses}
-            columns={[
-              {
-                id: "name",
-                label: "Название",
-                getSortValue: (warehouse) => warehouse.name,
-                render: (warehouse) => (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span>{warehouse.name}</span>
-                    {warehouse.representative ? (
-                      <Badge variant="outline">Представительский</Badge>
-                    ) : null}
-                    {warehouse.latitude === null ||
-                    warehouse.longitude === null ? (
-                      <Badge variant="outline">Нет координат</Badge>
-                    ) : null}
-                  </div>
-                ),
-              },
-              {
-                id: "city",
-                label: "Город",
-                getSortValue: (warehouse) => warehouse.city,
-                render: (warehouse) => warehouse.city,
-              },
-              {
-                id: "timeZone",
-                label: "Временная зона",
-                getSortValue: (warehouse) => warehouse.timeZone,
-                render: (warehouse) => warehouse.timeZone,
-              },
-              {
-                id: "sortOrder",
-                label: "Порядок",
-                getSortValue: (warehouse) => warehouse.sortOrder,
-                render: (warehouse) => warehouse.sortOrder ?? "—",
-              },
-              {
-                id: "status",
-                label: "Статус",
-                getSortValue: (warehouse) => warehouse.lifecycleState,
-                render: (warehouse) => {
-                  const presentation =
-                    warehouseLifecyclePresentation[warehouse.lifecycleState]
-                  return (
-                    <Badge variant={presentation.badge}>
-                      {presentation.label}
-                    </Badge>
-                  )
-                },
-              },
-              {
-                id: "actions",
-                label: "Действия",
-                getSortValue: () => null,
-                cellClassName: "w-72",
-                render: (warehouse) => (
-                  <WarehouseActions
-                    warehouse={warehouse}
-                    pending={isMutating}
-                    onEdit={openEditor}
-                    onScheduleTimeZone={(selected) => {
-                      setServerError(null)
-                      setTimeZoneSchedule(selected)
-                    }}
-                    onLifecycleTransition={(selected) => {
-                      setServerError(null)
-                      setLifecycleTransition(selected)
-                    }}
-                  />
-                ),
-              },
-            ]}
+          </PageToolbarActions>
+        </PageToolbar>
+        <div id="warehouse-settings-filters" hidden={!filtersOpen}>
+          <WarehouseSettingsFilters
+            filters={filters}
+            options={filterOptions}
+            onChange={setFilters}
           />
+        </div>
 
-          <div className="flex min-h-0 flex-col gap-3 overflow-y-auto md:hidden">
-            {visibleWarehouses.map((warehouse) => (
-              <Card key={warehouse.id} size="sm">
-                <CardHeader>
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <CardTitle>{warehouse.name}</CardTitle>
-                      {warehouse.representative ? (
-                        <Badge variant="outline">Представительский</Badge>
-                      ) : null}
-                      {warehouse.latitude === null ||
-                      warehouse.longitude === null ? (
-                        <Badge variant="outline">Нет координат</Badge>
-                      ) : null}
+        {warehousesQuery.isLoading ? (
+          <p className="text-sm text-muted-foreground">Загрузка объектов…</p>
+        ) : warehousesQuery.isError ? (
+          <Card size="sm">
+            <CardHeader>
+              <CardTitle>Не удалось загрузить объекты</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3 text-sm">
+              <p role="alert" className="text-destructive">
+                {getWarehouseMutationError(warehousesQuery.error)}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void warehousesQuery.refetch()}
+              >
+                Повторить
+              </Button>
+            </CardContent>
+          </Card>
+        ) : (
+          <>
+            <OperationsListGrid
+              className="hidden min-h-0 flex-1 overflow-auto md:block"
+              items={visibleWarehouses}
+              columns={[
+                {
+                  id: "name",
+                  label: "Код города",
+                  getSortValue: (warehouse) => warehouse.name,
+                  render: (warehouse) => (
+                    <div className="flex items-center gap-2">
+                      <span>{warehouse.name}</span>
+                      <WarehouseProblemIndicator warehouse={warehouse} />
                     </div>
-                    <Badge
-                      variant={
-                        warehouseLifecyclePresentation[warehouse.lifecycleState]
-                          .badge
-                      }
-                    >
-                      {
-                        warehouseLifecyclePresentation[warehouse.lifecycleState]
-                          .label
-                      }
-                    </Badge>
-                  </div>
-                </CardHeader>
-                <CardContent className="flex flex-col gap-3 text-sm">
-                  <p className="text-muted-foreground">
-                    {warehouse.city} · {warehouse.timeZone} · порядок{" "}
-                    {warehouse.sortOrder ?? "—"}
-                  </p>
-                  <WarehouseActions
-                    warehouse={warehouse}
-                    pending={isMutating}
-                    onEdit={openEditor}
-                    onScheduleTimeZone={(selected) => {
-                      setServerError(null)
-                      setTimeZoneSchedule(selected)
-                    }}
-                    onLifecycleTransition={(selected) => {
-                      setServerError(null)
-                      setLifecycleTransition(selected)
-                    }}
-                  />
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </>
-      )}
+                  ),
+                },
+                {
+                  id: "city",
+                  label: "Город",
+                  getSortValue: (warehouse) => warehouse.city,
+                  render: (warehouse) => warehouse.city,
+                },
+                {
+                  id: "type",
+                  label: "Тип",
+                  getSortValue: (warehouse) => {
+                    const parentId = warehouse.representativeParentWarehouseId
+                    const parent = parentId
+                      ? warehousesById.get(parentId)
+                      : undefined
+                    return [
+                      warehouse.production ? "Производство" : "",
+                      warehouse.mainWarehouse ? "Основной склад" : "",
+                      parent
+                        ? ["Представительский склад:", parent.name].join(" ")
+                        : "",
+                    ].join(" ")
+                  },
+                  render: (warehouse) => {
+                    const parentId = warehouse.representativeParentWarehouseId
+                    return (
+                      <WarehouseClassification
+                        warehouse={warehouse}
+                        representativeParent={
+                          parentId ? warehousesById.get(parentId) : undefined
+                        }
+                      />
+                    )
+                  },
+                },
+                {
+                  id: "timeZone",
+                  label: "Временная зона",
+                  getSortValue: (warehouse) => warehouse.timeZone,
+                  render: (warehouse) => warehouse.timeZone,
+                },
+                {
+                  id: "sortOrder",
+                  label: "Порядок",
+                  getSortValue: (warehouse) => warehouse.sortOrder,
+                  render: (warehouse) => warehouse.sortOrder ?? "—",
+                },
+                {
+                  id: "status",
+                  label: "Статус",
+                  getSortValue: (warehouse) => warehouse.lifecycleState,
+                  render: (warehouse) => {
+                    const presentation =
+                      warehouseLifecyclePresentation[warehouse.lifecycleState]
+                    return (
+                      <Badge variant={presentation.badge}>
+                        {presentation.label}
+                      </Badge>
+                    )
+                  },
+                },
+                {
+                  id: "actions",
+                  label: "Действия",
+                  getSortValue: () => null,
+                  cellClassName: "w-28",
+                  render: (warehouse) => (
+                    <WarehouseActions
+                      warehouse={warehouse}
+                      pending={isMutating}
+                      onEdit={openEditor}
+                    />
+                  ),
+                },
+              ]}
+            />
 
-      {editor !== null ? (
-        <WarehouseEditorDialog
-          key={editor === "new" ? "new" : editor.id}
-          warehouse={editor === "new" ? null : editor}
-          pending={saveMutation.isPending}
-          serverError={serverError}
-          accessToken={accessToken}
-          warehouses={warehouses}
-          onOpenChange={(open) => {
-            if (!open) {
+            <div className="flex min-h-0 flex-col gap-3 overflow-y-auto md:hidden">
+              {visibleWarehouses.map((warehouse) => (
+                <Card key={warehouse.id} size="sm">
+                  <CardHeader>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <CardTitle>{warehouse.name}</CardTitle>
+                        <WarehouseProblemIndicator warehouse={warehouse} />
+                      </div>
+                      <Badge
+                        variant={
+                          warehouseLifecyclePresentation[
+                            warehouse.lifecycleState
+                          ].badge
+                        }
+                      >
+                        {
+                          warehouseLifecyclePresentation[
+                            warehouse.lifecycleState
+                          ].label
+                        }
+                      </Badge>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-3 text-sm">
+                    <WarehouseClassification
+                      warehouse={warehouse}
+                      representativeParent={
+                        warehouse.representativeParentWarehouseId
+                          ? warehousesById.get(
+                              warehouse.representativeParentWarehouseId
+                            )
+                          : undefined
+                      }
+                    />
+                    <p className="text-muted-foreground">
+                      {warehouse.city} · {warehouse.timeZone} · порядок{" "}
+                      {warehouse.sortOrder ?? "—"}
+                    </p>
+                    <WarehouseActions
+                      warehouse={warehouse}
+                      pending={isMutating}
+                      onEdit={openEditor}
+                    />
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </>
+        )}
+
+        {editor !== null ? (
+          <WarehouseEditorDialog
+            key={editor === "new" ? "new" : editor.id}
+            warehouse={editor === "new" ? null : editor}
+            pending={saveMutation.isPending}
+            serverError={serverError}
+            accessToken={accessToken}
+            warehouses={warehouses}
+            onOpenChange={(open) => {
+              if (!open) {
+                setEditor(null)
+                setServerError(null)
+              }
+            }}
+            onSave={(input) => saveMutation.mutate(input)}
+            onSupportSaved={async () => {
+              await refreshAfterMutation()
               setEditor(null)
               setServerError(null)
-            }
-          }}
-          onSave={(input) => saveMutation.mutate(input)}
-          onSupportSaved={async () => {
-            await refreshAfterMutation()
-            setEditor(null)
-            setServerError(null)
-          }}
-          onSupportConflict={refreshAfterConflict}
-        />
-      ) : null}
-
-      {timeZoneSchedule ? (
-        <TimeZoneScheduleDialog
-          key={`${timeZoneSchedule.id}-${timeZoneSchedule.version}`}
-          warehouse={timeZoneSchedule}
-          pending={timeZoneMutation.isPending}
-          serverError={serverError}
-          onOpenChange={(open) => {
-            if (!open) {
-              setTimeZoneSchedule(null)
+            }}
+            onSupportConflict={refreshAfterConflict}
+            onScheduleTimeZone={(selected) => {
+              setEditor(null)
               setServerError(null)
-            }
-          }}
-          onSchedule={(timeZone, effectiveFrom) =>
-            timeZoneMutation.mutate({ timeZone, effectiveFrom })
-          }
-        />
-      ) : null}
-
-      {lifecycleTransition ? (
-        <AlertDialog
-          open
-          onOpenChange={(open) => {
-            if (!open && !lifecycleMutation.isPending) {
-              setLifecycleTransition(null)
+              setTimeZoneSchedule(selected)
+            }}
+            onLifecycleTransition={(selected) => {
+              setEditor(null)
               setServerError(null)
+              setLifecycleTransition(selected)
+            }}
+          />
+        ) : null}
+
+        {timeZoneSchedule ? (
+          <TimeZoneScheduleDialog
+            key={`${timeZoneSchedule.id}-${timeZoneSchedule.version}`}
+            warehouse={timeZoneSchedule}
+            pending={timeZoneMutation.isPending}
+            serverError={serverError}
+            onOpenChange={(open) => {
+              if (!open) {
+                setTimeZoneSchedule(null)
+                setServerError(null)
+              }
+            }}
+            onSchedule={(timeZone, effectiveFrom) =>
+              timeZoneMutation.mutate({ timeZone, effectiveFrom })
             }
-          }}
-        >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>
-                {lifecycleTransition.lifecycleState === "ACTIVE"
-                  ? "Начать вывод склада из работы?"
-                  : "Завершить вывод склада из работы?"}
-              </AlertDialogTitle>
-              <AlertDialogDescription>
-                {lifecycleTransition.lifecycleState === "ACTIVE" ? (
-                  <>
-                    Склад «{lifecycleTransition.name}» перестанет принимать
-                    новые входящие операции, но исходящие операции останутся
-                    доступны для освобождения склада. Переход необратим.
-                  </>
-                ) : (
-                  <>
-                    Склад «{lifecycleTransition.name}» станет окончательно
-                    неактивным. Команда выполнится только после подтверждения
-                    готовности сервисами имущества, инвентаризации, логистики,
-                    ремонтов и заданий. Переход необратим.
-                  </>
-                )}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            {serverError ? <FieldError>{serverError}</FieldError> : null}
-            <AlertDialogFooter>
-              <AlertDialogCancel disabled={lifecycleMutation.isPending}>
-                Отмена
-              </AlertDialogCancel>
-              <AlertDialogAction
-                variant="destructive"
-                disabled={lifecycleMutation.isPending}
-                onClick={(event) => {
-                  event.preventDefault()
-                  lifecycleMutation.mutate()
-                }}
-              >
-                {lifecycleMutation.isPending
-                  ? "Выполняем…"
-                  : lifecycleTransition.lifecycleState === "ACTIVE"
-                    ? "Начать вывод"
-                    : "Завершить вывод"}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      ) : null}
-    </div>
+          />
+        ) : null}
+
+        {lifecycleTransition ? (
+          <AlertDialog
+            open
+            onOpenChange={(open) => {
+              if (!open && !lifecycleMutation.isPending) {
+                setLifecycleTransition(null)
+                setServerError(null)
+              }
+            }}
+          >
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  {lifecycleTransition.lifecycleState === "ACTIVE"
+                    ? "Начать вывод объекта из работы?"
+                    : "Завершить вывод объекта из работы?"}
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  {lifecycleTransition.lifecycleState === "ACTIVE" ? (
+                    <>
+                      Объект «{lifecycleTransition.name}» перестанет принимать
+                      новые входящие операции, но исходящие операции останутся
+                      доступны для освобождения объекта. Переход необратим.
+                    </>
+                  ) : (
+                    <>
+                      Объект «{lifecycleTransition.name}» станет окончательно
+                      неактивным. Команда выполнится только после подтверждения
+                      готовности сервисами имущества, инвентаризации, логистики,
+                      ремонтов и заданий. Переход необратим.
+                    </>
+                  )}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              {serverError ? <FieldError>{serverError}</FieldError> : null}
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={lifecycleMutation.isPending}>
+                  Отмена
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  variant="destructive"
+                  disabled={lifecycleMutation.isPending}
+                  onClick={(event) => {
+                    event.preventDefault()
+                    lifecycleMutation.mutate()
+                  }}
+                >
+                  {lifecycleMutation.isPending
+                    ? "Выполняем…"
+                    : lifecycleTransition.lifecycleState === "ACTIVE"
+                      ? "Начать вывод"
+                      : "Завершить вывод"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        ) : null}
+      </div>
+    </TooltipProvider>
   )
 }

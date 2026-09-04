@@ -99,10 +99,10 @@ class AuthFlywayConfigurationTest {
 
     @Test
     void taskBoardClientHasOnlyWorkerAndWarehouseIdentityScopes() throws IOException {
-        assertTaskBoardClient(load("application.yaml"), 4);
-        assertTaskBoardClient(load("application-dev.yaml"), 4);
-        assertTaskBoardClient(load("application-test.yaml"), 4);
-        assertTaskBoardClient(load("application-warehouse-client.yaml"), 4);
+        assertTaskBoardClient(load("application.yaml"), 5);
+        assertTaskBoardClient(load("application-dev.yaml"), 5);
+        assertTaskBoardClient(load("application-test.yaml"), 5);
+        assertTaskBoardClient(load("application-warehouse-client.yaml"), 5);
     }
 
     @Test
@@ -110,23 +110,23 @@ class AuthFlywayConfigurationTest {
         assertAssetClient(
                 load("application.yaml"),
                 "${ASSET_WAREHOUSE_CLIENT_ENABLED:false}",
-                "${ASSET_WAREHOUSE_CLIENT_REVISION:4}");
+                "${ASSET_WAREHOUSE_CLIENT_REVISION:5}");
         assertAssetClient(
                 load("application-dev.yaml"),
                 "${ASSET_WAREHOUSE_CLIENT_ENABLED:false}",
-                "${ASSET_WAREHOUSE_CLIENT_REVISION:4}");
-        assertAssetClient(load("application-test.yaml"), false, 4);
+                "${ASSET_WAREHOUSE_CLIENT_REVISION:5}");
+        assertAssetClient(load("application-test.yaml"), false, 5);
         assertAssetClient(
                 load("application-asset-client.yaml"),
                 "${ASSET_WAREHOUSE_CLIENT_ENABLED:false}",
-                "${ASSET_WAREHOUSE_CLIENT_REVISION:4}");
+                "${ASSET_WAREHOUSE_CLIENT_REVISION:5}");
     }
 
     @Test
     void inventoryClientIsDisabledAndExactInBaseDevelopmentAndFocusedTestProfiles() throws IOException {
-        assertInventoryClient(load("application.yaml"), "${INVENTORY_CLIENT_REVISION:6}");
-        assertInventoryClient(load("application-dev.yaml"), "${INVENTORY_CLIENT_REVISION:6}");
-        assertInventoryClient(load("application-inventory-client.yaml"), 6);
+        assertInventoryClient(load("application.yaml"), "${INVENTORY_CLIENT_REVISION:7}");
+        assertInventoryClient(load("application-dev.yaml"), "${INVENTORY_CLIENT_REVISION:7}");
+        assertInventoryClient(load("application-inventory-client.yaml"), 7);
     }
 
     @Test
@@ -141,6 +141,54 @@ class AuthFlywayConfigurationTest {
         assertLogisticsPlannerClient(load("application.yaml"), "${LOGISTICS_PLANNER_CLIENT_REVISION:1}");
         assertLogisticsPlannerClient(load("application-dev.yaml"), "${LOGISTICS_PLANNER_CLIENT_REVISION:1}");
         assertLogisticsPlannerClient(load("application-planner-client.yaml"), 1);
+    }
+
+    @Test
+    void dedicatedManagerAndAdminClientsStayLeastPrivilegeInInteractiveProfiles() throws IOException {
+        assertDedicatedInteractiveClients(load("application.yaml"));
+        assertDedicatedInteractiveClients(load("application-dev.yaml"));
+        assertDedicatedInteractiveClients(load("application-test.yaml"));
+    }
+
+    private void assertDedicatedInteractiveClients(PropertySource<?> source) {
+        assertDedicatedInteractiveClient(
+                source,
+                "rwms-rental-manager-web",
+                "rental.manage",
+                "/manager/auth/callback");
+        assertDedicatedInteractiveClient(
+                source,
+                "rwms-rental-manager-android",
+                "rental.manage",
+                "/auth/rental-manager/callback");
+        assertDedicatedInteractiveClient(
+                source,
+                "rwms-admin-web",
+                "admin.manage",
+                "/admin/auth/callback");
+    }
+
+    private void assertDedicatedInteractiveClient(
+            PropertySource<?> source,
+            String clientId,
+            String applicationScope,
+            String callbackPath) {
+        int index = clientIndex(source, clientId);
+        String prefix = "rwms.auth.oauth.clients[" + index + "]";
+        assertThat(source.getProperty(prefix + ".enabled")).isEqualTo(true);
+        assertThat(source.getProperty(prefix + ".authentication-methods[0]")).isEqualTo("none");
+        assertThat(source.getProperty(prefix + ".grant-types[0]")).isEqualTo("authorization_code");
+        assertThat(source.getProperty(prefix + ".grant-types[1]")).isEqualTo("refresh_token");
+        assertThat(source.getProperty(prefix + ".scopes[0]")).isEqualTo("openid");
+        assertThat(source.getProperty(prefix + ".scopes[1]")).isEqualTo("profile");
+        assertThat(source.getProperty(prefix + ".scopes[2]")).isEqualTo("offline_access");
+        assertThat(source.getProperty(prefix + ".scopes[3]")).isEqualTo(applicationScope);
+        assertThat(source.getProperty(prefix + ".scopes[4]")).isNull();
+        assertThat(source.getProperty(prefix + ".require-proof-key")).isEqualTo(true);
+        assertThat(source.getProperty(prefix + ".allowed-principal-types[0]")).isEqualTo("USER");
+        assertThat(source.getProperty(prefix + ".audiences[0]")).isEqualTo("rwms-services");
+        assertThat(String.valueOf(source.getProperty(prefix + ".redirect-uris[0]")))
+                .contains(callbackPath);
     }
 
     private void assertAssetClient(
@@ -159,8 +207,9 @@ class AuthFlywayConfigurationTest {
         assertThat(source.getProperty(prefix + ".scopes[2]")).isEqualTo("warehouse.operation.mark");
         assertThat(source.getProperty(prefix + ".scopes[3]")).isEqualTo("warehouse.lifecycle.read");
         assertThat(source.getProperty(prefix + ".scopes[4]")).isEqualTo("warehouse.lifecycle.confirm");
-        assertThat(source.getProperty(prefix + ".scopes[5]")).isEqualTo("media.asset-import");
-        assertThat(source.getProperty(prefix + ".scopes[6]")).isNull();
+        assertThat(source.getProperty(prefix + ".scopes[5]")).isEqualTo("media.asset");
+        assertThat(source.getProperty(prefix + ".scopes[6]")).isEqualTo("media.asset-import");
+        assertThat(source.getProperty(prefix + ".scopes[7]")).isNull();
         assertThat(source.getProperty(prefix + ".audiences[0]")).isEqualTo("rwms-services");
         assertThat(source.getProperty(prefix + ".audiences[1]")).isNull();
         assertThat(source.getProperty(prefix + ".secret-environment"))
@@ -182,15 +231,16 @@ class AuthFlywayConfigurationTest {
         assertThat(source.getProperty(prefix + ".grant-types[0]")).isEqualTo("client_credentials");
         assertThat(source.getProperty(prefix + ".scopes[0]"))
                 .isEqualTo("worker-credentials.manage");
-        assertThat(source.getProperty(prefix + ".scopes[1]"))
-                .isEqualTo("warehouse.identity.read");
+        assertThat(source.getProperty(prefix + ".scopes[1]")).isEqualTo("media.task-board");
         assertThat(source.getProperty(prefix + ".scopes[2]"))
-                .isEqualTo("warehouse.timezone.read");
+                .isEqualTo("warehouse.identity.read");
         assertThat(source.getProperty(prefix + ".scopes[3]"))
-                .isEqualTo("warehouse.lifecycle.read");
+                .isEqualTo("warehouse.timezone.read");
         assertThat(source.getProperty(prefix + ".scopes[4]"))
+                .isEqualTo("warehouse.lifecycle.read");
+        assertThat(source.getProperty(prefix + ".scopes[5]"))
                 .isEqualTo("warehouse.lifecycle.confirm");
-        assertThat(source.getProperty(prefix + ".scopes[5]")).isNull();
+        assertThat(source.getProperty(prefix + ".scopes[6]")).isNull();
         assertThat(source.getProperty(prefix + ".audiences[0]")).isEqualTo("rwms-services");
     }
 
@@ -212,7 +262,9 @@ class AuthFlywayConfigurationTest {
         assertThat(source.getProperty(prefix + ".scopes[5]")).isEqualTo("maintenance.inventory");
         assertThat(source.getProperty(prefix + ".scopes[6]")).isEqualTo("logistics.inventory");
         assertThat(source.getProperty(prefix + ".scopes[7]")).isEqualTo("media.inventory");
-        assertThat(source.getProperty(prefix + ".scopes[8]")).isNull();
+        assertThat(source.getProperty(prefix + ".scopes[8]"))
+                .isEqualTo("task-board.inventory-calendar.read");
+        assertThat(source.getProperty(prefix + ".scopes[9]")).isNull();
         assertThat(source.getProperty(prefix + ".audiences[0]")).isEqualTo("rwms-services");
         assertThat(source.getProperty(prefix + ".audiences[1]")).isNull();
         assertThat(source.getProperty(prefix + ".secret-environment")).isEqualTo("INVENTORY_CLIENT_SECRET");

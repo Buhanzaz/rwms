@@ -7,6 +7,12 @@ import { isRequestVisibleOnDate } from '../../domain/request-dates';
 import type { LogisticsRequest, WarehouseWorkspace, UUID } from '../../domain/types';
 import { formatDate, formatDeliveryPrice } from '../../utils/format';
 import { formatIsoDate, parseIsoDate } from '../../components/date-value';
+import {
+  customerDeliveryPurposeFromRequest,
+  customerDeliveryPurposeLabel,
+  customerLegalTypeFromRequest,
+  customerLegalTypeLabel,
+} from '../../utils/customer-presentation';
 
 /** Tri-state operator answer before trailer access has been explicitly confirmed. */
 type TrailerAgreement = '' | 'true' | 'false';
@@ -95,7 +101,7 @@ function RequestPlanningCard({ request, planningDate, busy, onSave, onSplit, onS
       <header className="planning-request-card__head">
         <span>
           <span className="planning-request-card__title">
-            <Badge tone={request.type === 'DELIVERY' ? 'accent' : 'warning'}>{request.type === 'DELIVERY' ? 'Доставка' : 'Вывоз'}</Badge>
+            <Badge tone={request.type === 'DELIVERY' ? 'accent' : 'warning'}>{request.type === 'DELIVERY' ? customerDeliveryPurposeLabel(customerDeliveryPurposeFromRequest(request)) : 'Вывоз'}</Badge>
             <strong>· {deliveryReference(request.name)}</strong>
           </span>
           <small>{request.address_label || 'Адрес не подписан'}</small>
@@ -109,6 +115,7 @@ function RequestPlanningCard({ request, planningDate, busy, onSave, onSplit, onS
         <span><Truck size={13} /> <strong>{request.quantity}</strong> БК</span>
         <span><CalendarCheck2 size={13} /> {formatDate(planningDate)}</span>
         <span><ShieldCheck size={13} /> {request.status}</span>
+        <span>Тип клиента: <strong>{customerLegalTypeLabel(customerLegalTypeFromRequest(request))}</strong></span>
         <span><Banknote size={13} /> Стоимость: <strong>{formatDeliveryPrice(request.delivery_price_rubles)}</strong></span>
       </div>
       {request.assignment_type === 'CONTRACTOR_HANDOFF' ? <p className="planning-request-card__assignment"><UserRoundCheck size={13} aria-hidden="true" />Передано наёмному водителю: <strong>{request.assigned_contractor_name}</strong></p> : null}
@@ -157,10 +164,12 @@ function RequestPlanningCard({ request, planningDate, busy, onSave, onSplit, onS
 }
 
 /** Dispatcher preparation board for all deliveries and pickups visible on one planning day. */
-export function PlanningDayRequests({ workspace, planningDate, busy, onPlanningDateChange, onSave, onSplit, onSelect }: {
+export function PlanningDayRequests({ workspace, planningDate, busy, loadingMore = false, onLoadMore = () => Promise.resolve(), onPlanningDateChange, onSave, onSplit, onSelect }: {
   workspace: WarehouseWorkspace;
   planningDate: string;
   busy: boolean;
+  loadingMore?: boolean;
+  onLoadMore?: () => Promise<void>;
   onPlanningDateChange: (date: string) => void;
   onSave: (requestId: UUID, input: RequestPlanningDetailsInput) => Promise<void>;
   onSplit: (requestId: UUID, quantities: number[]) => Promise<void>;
@@ -195,6 +204,10 @@ export function PlanningDayRequests({ workspace, planningDate, busy, onPlanningD
             onSelect={onSelect}
           />
         ))}
+      </div>
+      <div className="toolbar-row" role="status" aria-live="polite">
+        <span>Показано заявок: {requests.length} из {workspace.request_total}</span>
+        {workspace.request_next_cursor ? <Button type="button" size="sm" disabled={busy || loadingMore} onClick={() => void onLoadMore()}>{loadingMore ? 'Загружаем…' : 'Загрузить ещё заявки'}</Button> : null}
       </div>
       {!requests.length ? <EmptyState title="На выбранный день доставок и вывозов нет" description="Выберите другую дату или согласуйте новую дату в разделе «Доставки»." /> : null}
     </section>

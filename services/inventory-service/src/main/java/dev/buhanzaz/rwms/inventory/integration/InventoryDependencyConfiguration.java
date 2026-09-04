@@ -58,6 +58,10 @@ class InventoryDependencyConfiguration {
                 validated,
                 "inventory-warehouse-lifecycle-confirm",
                 "warehouse.lifecycle.confirm"),
+            registration(
+                validated,
+                "inventory-task-board-calendar",
+                "task-board.inventory-calendar.read"),
             registration(validated, "inventory-asset", "asset.inventory"),
             registration(validated, "inventory-maintenance", "maintenance.inventory"),
             registration(validated, "inventory-logistics", "logistics.inventory"),

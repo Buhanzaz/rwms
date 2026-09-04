@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AvailableWarehouse } from '../src/domain/types';
@@ -20,7 +20,7 @@ const transfers = vi.hoisted(() => ({
   createTransferContractor: vi.fn(),
   createTransferDraft: vi.fn<(input: CreateTransferDraftInput) => Promise<CreatedTransferDraft>>(),
   loadTransferCargoCatalog: vi.fn<(accessToken: string, warehouseId: string) => Promise<TransferCargoCatalog>>(),
-  loadTransferRouteVehicles: vi.fn<(warehouseId: string) => Promise<TransferRouteVehicle[]>>(),
+  loadTransferRouteVehicles: vi.fn<(warehouseId: string, planningDate: string) => Promise<TransferRouteVehicle[]>>(),
   loadTransferDrivers: vi.fn<(warehouseId: string) => Promise<TransferDriver[]>>(),
   estimateTransferArrival: vi.fn<(input: {
     sourceWarehouseId: string;
@@ -137,6 +137,17 @@ async function setDeparture(dialog: HTMLElement, user: ReturnType<typeof userEve
   await within(dialog).findByText(/3 ч 50 мин/);
 }
 
+async function selectCalendarDate(
+  dialog: HTMLElement,
+  label: string,
+  dateLabel: RegExp,
+  user: ReturnType<typeof userEvent.setup>,
+) {
+  await user.click(within(dialog).getByRole('button', { name: label }));
+  const calendar = within(dialog).getByRole('dialog', { name: `Календарь: ${label}` });
+  await user.click(within(calendar).getByRole('button', { name: dateLabel }));
+}
+
 describe('standalone transfer draft dialog', () => {
   beforeEach(() => {
     auth.restorePanelUser.mockReset();
@@ -168,7 +179,7 @@ describe('standalone transfer draft dialog', () => {
   it('stays inside logistics and offers the shared RWMS login when no USER session exists', async () => {
     auth.restorePanelUser.mockResolvedValue(null);
     auth.beginPanelLogin.mockResolvedValue(undefined);
-    window.history.replaceState(null, '', '/logistics-simulator/?day=2026-08-30');
+    window.history.replaceState(null, '', '/logistics-panel/?day=2026-08-30');
     const user = userEvent.setup();
     renderDialog();
 
@@ -177,7 +188,7 @@ describe('standalone transfer draft dialog', () => {
     expect(screen.queryByRole('link', { name: 'Создать перемещение' })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Войти в RWMS' }));
 
-    expect(auth.beginPanelLogin).toHaveBeenCalledWith('/logistics-simulator/?day=2026-08-30');
+    expect(auth.beginPanelLogin).toHaveBeenCalledWith('/logistics-panel/?day=2026-08-30');
   });
 
   it('creates an empty transfer with exact calculated arrival and keeps unavailable warehouses visible', async () => {
@@ -219,6 +230,39 @@ describe('standalone transfer draft dialog', () => {
     expect(onCreated).toHaveBeenCalledWith({ id: 'transfer-1', state: 'DRAFT' });
   });
 
+  it('keeps route vehicles fenced to the selected planning date when an older load resolves late', async () => {
+    auth.restorePanelUser.mockResolvedValue({ access_token: 'panel-token' });
+    const user = userEvent.setup();
+    let resolveOldDate!: (vehicles: TransferRouteVehicle[]) => void;
+    let resolveCurrentDate!: (vehicles: TransferRouteVehicle[]) => void;
+    transfers.loadTransferRouteVehicles
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveOldDate = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveCurrentDate = resolve; }));
+    renderDialog();
+
+    const dialog = await screen.findByRole('dialog', { name: 'Создать перемещение' });
+    await waitFor(() => expect(transfers.loadTransferRouteVehicles).toHaveBeenCalledWith(LOCAL_SPB_ID, '2026-08-30'));
+    await selectCalendarDate(dialog, 'Плановая дата', /31 августа 2026/u, user);
+    await waitFor(() => expect(transfers.loadTransferRouteVehicles).toHaveBeenCalledWith(LOCAL_SPB_ID, '2026-08-31'));
+    expect(within(dialog).getByLabelText('Автомобиль рейса')).toBeDisabled();
+
+    await act(() => Promise.resolve(resolveCurrentDate([{
+      id: '56565656-5656-4565-8565-565656565656',
+      name: 'Машина на 31 августа',
+      registrationNumber: 'В123ВВ 178',
+      capacity: 1,
+    }])));
+    await waitFor(() => expect(within(dialog).getByLabelText('Автомобиль рейса')).toHaveValue('56565656-5656-4565-8565-565656565656'));
+
+    await act(() => Promise.resolve(resolveOldDate([{
+      id: VEHICLE_ID,
+      name: 'Устаревшая машина',
+      registrationNumber: 'А123АА 178',
+      capacity: 2,
+    }])));
+    expect(within(dialog).getByLabelText('Автомобиль рейса')).toHaveValue('56565656-5656-4565-8565-565656565656');
+  });
+
   it('reveals RWMS cabin fields behind the checkbox, recalculates furniture and submits the requirement', async () => {
     auth.restorePanelUser.mockResolvedValue({ access_token: 'panel-token' });
     transfers.createTransferDraft.mockResolvedValue({ id: 'transfer-cargo', state: 'DRAFT' });
@@ -227,7 +271,7 @@ describe('standalone transfer draft dialog', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Создать перемещение' });
 
     expect(within(dialog).queryByLabelText('Бытовка 1')).not.toBeInTheDocument();
-    await user.click(within(dialog).getByLabelText('Перевозить бытовки'));
+    await user.click(await within(dialog).findByLabelText('Перевозить бытовки'));
     const cabin = await within(dialog).findByLabelText('Бытовка 1');
     expect(transfers.loadTransferCargoCatalog).toHaveBeenCalledWith('panel-token', SPB_ID);
     await user.selectOptions(within(cabin).getByLabelText('Тип бытовки 1'), TYPE_ID);
@@ -287,7 +331,7 @@ describe('standalone transfer draft dialog', () => {
     await waitFor(() => expect(within(dialog).getByLabelText('Водитель рейса')).toBeEnabled());
     await user.selectOptions(within(dialog).getByLabelText('Водитель рейса'), DRIVER_ID);
     await user.click(within(dialog).getByLabelText('Переместить водителя на склад назначения'));
-    fireEvent.change(within(dialog).getByLabelText('Назначение действует по'), { target: { value: '2026-09-03' } });
+    await selectCalendarDate(dialog, 'Назначение действует по', /^четверг, 3 сентября 2026 г\.$/u, user);
     await setDeparture(dialog, user);
     await user.click(within(dialog).getByRole('button', { name: 'Создать черновик' }));
 
@@ -379,7 +423,8 @@ describe('standalone transfer draft dialog', () => {
     await setDeparture(dialog, user);
 
     await user.click(within(dialog).getByRole('button', { name: 'Создать черновик' }));
-    expect(await within(dialog).findByText('Ответ потерян')).toBeVisible();
+    expect(await within(dialog).findByText(/^Ответ потерян\. Повторите действие\. Если ошибка сохранится, свяжитесь с администратором\.$/u)).toBeVisible();
+    expect(dialog).toBeVisible();
     await user.click(within(dialog).getByRole('button', { name: 'Создать черновик' }));
 
     await waitFor(() => expect(transfers.createTransferDraft).toHaveBeenCalledTimes(2));
@@ -402,8 +447,11 @@ describe('standalone transfer draft dialog', () => {
     await setDeparture(dialog, user);
 
     await user.click(within(dialog).getByRole('button', { name: 'Создать черновик' }));
-    expect(await within(dialog).findByText('Ответ потерян')).toBeVisible();
-    await user.type(within(dialog).getByLabelText('Комментарий логиста'), 'Изменённый состав намерения');
+    expect(await within(dialog).findByText(/^Ответ потерян\. Повторите действие\. Если ошибка сохранится, свяжитесь с администратором\.$/u)).toBeVisible();
+    expect(dialog).toBeVisible();
+    fireEvent.change(within(dialog).getByLabelText('Комментарий логиста'), {
+      target: { value: 'Изменённый состав намерения' },
+    });
     await user.click(within(dialog).getByRole('button', { name: 'Создать черновик' }));
 
     await waitFor(() => expect(transfers.createTransferDraft).toHaveBeenCalledTimes(2));

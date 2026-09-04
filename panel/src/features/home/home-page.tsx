@@ -344,8 +344,8 @@ function HomeContent({
     staleTime: 60_000,
   })
   const settingsQuery = useQuery({
-    queryKey: kpiSettingsKeys.warehouse(warehouseId),
-    queryFn: () => getKpiSettings(accessToken, warehouseId),
+    queryKey: kpiSettingsKeys.settings,
+    queryFn: () => getKpiSettings(accessToken),
     staleTime: 60_000,
   })
   const activeRepairSourceIds = useMemo(

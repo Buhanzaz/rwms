@@ -65,6 +65,9 @@ const WAREHOUSE: WarehouseInfo = {
   lifecycleState: "ACTIVE",
   sortOrder: 0,
   representative: false,
+  production: true,
+  mainWarehouse: false,
+  representativeParentWarehouseId: null,
 }
 
 const MSK_WAREHOUSE: WarehouseInfo = {
@@ -176,59 +179,45 @@ beforeAll(() => {
 })
 
 describe("AppSidebar collapsed desktop navigation", () => {
-  it("keeps repairs, movement and the task board in repair-cycle order", () => {
+  it("keeps repairs and the task board in repair-cycle order", () => {
     renderSidebar({ open: true })
 
     const estimates = screen.getByRole("link", { name: "Сметы" })
     const repairs = screen.getByRole("link", { name: "Ремонты" })
-    const movement = screen.getByRole("link", { name: "Перемещение" })
     const taskBoard = screen.getByRole("link", { name: "Доска задач" })
 
     expect(repairs.getAttribute("href")).toBe("/repairs")
-    expect(movement.getAttribute("href")).toBe("/logistics/tasks")
     expect(taskBoard.getAttribute("href")).toBe("/task-board")
     expect(
       estimates.compareDocumentPosition(repairs) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
     expect(
-      repairs.compareDocumentPosition(movement) &
+      repairs.compareDocumentPosition(taskBoard) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
-    expect(
-      movement.compareDocumentPosition(taskBoard) &
-        Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy()
-    expect(screen.queryByText("Задания водителей")).toBeNull()
+    expect(screen.queryByRole("link", { name: "Перемещение" })).toBeNull()
   })
 
-  it("groups chat, clients and orders in Rental for every signed-in user", () => {
-    const first = renderSidebar()
-    expect(screen.getByText("Аренда")).toBeTruthy()
-    const chat = screen.getByRole("link", { name: "Чат" })
-    const clients = screen.getByRole("link", { name: "Клиенты" })
-    const orders = screen.getByRole("link", { name: "Заказы" })
+  it("keeps manager and legacy logistics workspaces out of RWMS navigation", () => {
+    renderSidebar()
 
+    expect(screen.queryByText("Аренда")).toBeNull()
+    expect(screen.queryByRole("link", { name: "Чат" })).toBeNull()
+    expect(screen.queryByRole("link", { name: "Клиенты" })).toBeNull()
+    expect(screen.queryByRole("link", { name: "Заказы" })).toBeNull()
+    expect(screen.queryByRole("link", { name: "Доска логистики" })).toBeNull()
+    expect(screen.queryByRole("link", { name: "Задания" })).toBeNull()
     expect(
-      chat.compareDocumentPosition(clients) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy()
+      screen.getByRole("link", { name: "Возврат из аренды" })
+    ).not.toBeNull()
     expect(
-      clients.compareDocumentPosition(orders) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy()
-    expect(screen.queryByRole("link", { name: "Бронирование" })).toBeNull()
-    expect(clients.getAttribute("href")).toBe("/clients")
-    expect(orders.getAttribute("href")).toBe("/orders")
-
-    first.unmount()
-    renderSidebar({
-      currentUser: { ...CURRENT_USER, rentalAccess: false },
-    })
-
-    expect(screen.getByText("Аренда")).toBeTruthy()
-    expect(screen.getByRole("link", { name: "Чат" })).toBeTruthy()
-    expect(screen.queryByRole("link", { name: "Бронирование" })).toBeNull()
-    expect(screen.getByRole("link", { name: "Клиенты" })).toBeTruthy()
-    expect(screen.getByRole("link", { name: "Заказы" })).toBeTruthy()
+      screen.getByRole("link", { name: "Отгрузка в аренду" })
+    ).not.toBeNull()
+    expect(screen.getByRole("link", { name: "Перемещения" })).not.toBeNull()
+    expect(
+      screen.getByRole("link", { name: "Работа с претензиями" })
+    ).not.toBeNull()
   })
 
   it("restores the desktop sidebar state after a reload", async () => {
@@ -289,8 +278,8 @@ describe("AppSidebar collapsed desktop navigation", () => {
     expect(writeOffsButton.className).toContain(
       "group-data-[collapsible=icon]:h-9!"
     )
-    const ordersButton = screen.getByRole("link", { name: "Заказы" })
-    expect(ordersButton.className).toContain(
+    const warehouseButton = screen.getByRole("link", { name: "Склад" })
+    expect(warehouseButton.className).toContain(
       "group-data-[collapsible=icon]:w-9!"
     )
     expect(writeOffsButton.className).toContain(
@@ -302,7 +291,7 @@ describe("AppSidebar collapsed desktop navigation", () => {
     expect(
       document
         .querySelector('[data-slot="sidebar-header"]')
-        ?.querySelector('[data-slot="sidebar-menu-item"]')?.className
+        ?.querySelector('[aria-label="BLOCKBOX: Панель WMS"]')?.className
     ).toContain("items-center")
     document
       .querySelectorAll<HTMLElement>('[data-slot="sidebar-group-label"]')
@@ -314,13 +303,13 @@ describe("AppSidebar collapsed desktop navigation", () => {
     const expandIndicators = document.querySelectorAll<HTMLElement>(
       '[data-slot="sidebar-collapsed-expand-indicator"]'
     )
-    expect(expandIndicators).toHaveLength(3)
+    expect(expandIndicators).toHaveLength(2)
     expect(expandIndicators[0].className).toContain("size-[18px]")
     expect(expandIndicators[0].className).not.toContain("bg-sidebar-accent")
     const menuSeparators = document.querySelectorAll<HTMLElement>(
       '[data-slot="sidebar-separator"]'
     )
-    expect(menuSeparators).toHaveLength(4)
+    expect(menuSeparators).toHaveLength(3)
     expect(menuSeparators[0].className).toContain(
       "group-data-[collapsible=icon]:block"
     )
@@ -359,18 +348,12 @@ describe("AppSidebar collapsed desktop navigation", () => {
     })
   })
 
-  it("shows the settings label on hover in the collapsed sidebar", async () => {
-    const user = userEvent.setup()
+  it("does not expose settings navigation in the ordinary panel", () => {
     renderSidebar()
 
-    await user.hover(screen.getByRole("button", { name: "Настройки" }))
-    await waitFor(() => {
-      const tooltip = document.querySelector<HTMLElement>(
-        '[data-slot="tooltip-content"]'
-      )
-      expect(tooltip).not.toBeNull()
-      expect(tooltip?.textContent).toContain("Настройки")
-    })
+    expect(screen.queryByRole("button", { name: "Настройки" })).toBeNull()
+    expect(document.querySelector('[href^="/settings"]')).toBeNull()
+    expect(document.querySelector('[href^="/admin"]')).toBeNull()
   })
 
   it("shows and changes the warehouse name from the collapsed rail", async () => {
@@ -384,15 +367,12 @@ describe("AppSidebar collapsed desktop navigation", () => {
     expect(collapsedWarehouseSelector?.className).toContain("ml-0")
     expect(collapsedWarehouseSelector?.className).toContain("h-9")
     expect(collapsedWarehouseSelector?.className).toContain("w-9")
-    const brand = screen.getByText("RWMS panel")
-    expect(brand.className).toContain("font-bold")
-    expect(screen.getByTestId("rwms-logo-mark").className).toContain(
-      "bg-[#1775a7]"
-    )
-    expect(screen.getByTestId("rwms-logo-mark").className).toContain(
-      "group-data-[collapsible=icon]:size-9"
-    )
-    expect(screen.queryByText("WMS Panel")).toBeNull()
+    const brand = screen.getByRole("link", {
+      name: "BLOCKBOX: Панель WMS",
+    })
+    expect(brand.className).toContain("items-center")
+    expect(screen.getByRole("img", { name: "BLOCKBOX" })).toBeTruthy()
+    expect(screen.getByText("Панель WMS")).toBeTruthy()
     expect(
       document
         .querySelector('[data-slot="sidebar-header"]')
@@ -428,21 +408,11 @@ describe("AppSidebar collapsed desktop navigation", () => {
       selector.closest('[data-slot="sidebar-group"]')?.className
     ).toContain("pb-0")
     expect(
-      screen
-        .getByRole("link", { name: "Чат" })
-        .closest('[data-slot="sidebar-group"]')?.className
-    ).toContain("py-0")
-    expect(
-      screen
-        .getByRole("link", { name: "Чат" })
-        .closest('[data-slot="sidebar-group"]')?.className
-    ).toContain("mt-2")
-    expect(
       document.querySelector('[data-slot="sidebar-content"]')?.className
     ).toContain("gap-1")
   })
 
-  it("opens right-side flyouts for write-offs and settings and follows their links", async () => {
+  it("opens right-side flyouts for inventory and write-offs and follows their links", async () => {
     const user = userEvent.setup()
     renderSidebar()
 
@@ -480,26 +450,7 @@ describe("AppSidebar collapsed desktop navigation", () => {
       )
     })
 
-    await user.click(screen.getByRole("button", { name: "Настройки" }))
-
-    const settingsFlyout = await screen.findByLabelText("Меню «Настройки»")
-    expect(settingsFlyout.getAttribute("data-side")).toBe("right")
-    expect(settingsFlyout.className).toContain("shadow-md")
-    expect(settingsFlyout.className).not.toContain("shadow-lg")
-
-    const settingsLinks = within(settingsFlyout)
-    expect(
-      settingsLinks.getByRole("link", { name: "Склады" }).getAttribute("href")
-    ).toBe("/settings/warehouses")
-
-    await user.click(
-      settingsLinks.getByRole("link", { name: "Настройка Доски задач" })
-    )
-    await waitFor(() => {
-      expect(screen.getByTestId("location").textContent).toBe(
-        "/settings/task-board"
-      )
-    })
+    expect(screen.queryByRole("button", { name: "Настройки" })).toBeNull()
   })
 
   it("keeps an icon rail accessible on tablet with saved collapsed state", async () => {

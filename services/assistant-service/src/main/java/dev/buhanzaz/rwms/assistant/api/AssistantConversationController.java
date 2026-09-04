@@ -50,7 +50,7 @@ public class AssistantConversationController {
   @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
   public List<AssistantApiModels.ConversationResponse> list(
       @AuthenticationPrincipal Jwt jwt, @RequestParam(required = false) UUID rentalOrderId) {
-    UUID owner = authorizer.requireRentalUser(jwt);
+    UUID owner = authorizer.requireRentalManager(jwt);
     return rentalOrderId == null
         ? conversations.list(owner)
         : conversations.list(owner, rentalOrderId, jwt.getTokenValue());
@@ -63,7 +63,7 @@ public class AssistantConversationController {
   public AssistantApiModels.CreateConversationResponse create(
       @AuthenticationPrincipal Jwt jwt,
       @Valid @RequestBody AssistantApiModels.CreateConversationRequest request) {
-    UUID owner = authorizer.requireRentalUser(jwt);
+    UUID owner = authorizer.requireRentalManager(jwt);
     return conversations.create(owner, request, jwt.getTokenValue());
   }
 
@@ -71,13 +71,13 @@ public class AssistantConversationController {
   public AssistantApiModels.ConversationDetailResponse detail(
       @AuthenticationPrincipal Jwt jwt, @PathVariable UUID conversationId) {
     return conversations.detail(
-        authorizer.requireRentalUser(jwt), conversationId, jwt.getTokenValue());
+        authorizer.requireRentalManager(jwt), conversationId, jwt.getTokenValue());
   }
 
   @DeleteMapping("/{conversationId}")
   @ResponseStatus(HttpStatus.NO_CONTENT)
   public void archive(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID conversationId) {
-    conversations.archive(authorizer.requireRentalUser(jwt), conversationId);
+    conversations.archive(authorizer.requireRentalManager(jwt), conversationId);
   }
 
   @PostMapping(
@@ -88,7 +88,7 @@ public class AssistantConversationController {
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID conversationId,
       @Valid @RequestBody AssistantApiModels.TurnRequest request) {
-    UUID owner = authorizer.requireRentalUser(jwt);
+    UUID owner = authorizer.requireRentalManager(jwt);
     SseEmitter emitter = new SseEmitter(sse.timeout().toMillis());
     turns.stream(owner, conversationId, request, jwt.getTokenValue(), emitter);
     return emitter;
@@ -105,7 +105,7 @@ public class AssistantConversationController {
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody AssistantApiModels.CabinSelectionRequest request) {
     return conversations.replaceSelection(
-        authorizer.requireRentalUser(jwt),
+        authorizer.requireRentalManager(jwt),
         conversationId,
         idempotencyKey,
         request,

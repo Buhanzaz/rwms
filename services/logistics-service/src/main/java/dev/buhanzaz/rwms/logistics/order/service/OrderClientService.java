@@ -185,7 +185,7 @@ public class OrderClientService {
     String normalizedName = normalizeName(displayName);
     String normalizedPhone = normalizePhone(requestedPhone);
     String contactPerson = normalizeOptionalText(requestedContactPerson, 255, "contactPerson");
-    if (expectedType == ClientType.LEGAL_ENTITY && contactPerson == null) {
+    if (expectedType.requiresContactPerson() && contactPerson == null) {
       throw new IllegalArgumentException("contactPerson is required for this client type");
     }
     String normalizedEmail = normalizeEmail(requestedEmail);
@@ -235,7 +235,7 @@ public class OrderClientService {
     String normalizedName = normalizeName(displayName);
     String normalizedPhone = normalizePhone(requestedPhone);
     String contactPerson = normalizeOptionalText(requestedContactPerson, 255, "contactPerson");
-    if (type == ClientType.LEGAL_ENTITY && contactPerson == null) {
+    if (type.requiresContactPerson() && contactPerson == null) {
       throw new IllegalArgumentException("contactPerson is required for this client type");
     }
     String normalizedEmail = normalizeEmail(requestedEmail);
@@ -255,7 +255,11 @@ public class OrderClientService {
                 source == null ? "" : source,
                 contactsChecksum(additionalContacts)));
     UUID scopedKey = OrderCommandChecksum.scopedKey(idempotencyKey, scope);
-    transactionLock.acquire("order-client:idempotency:" + actor.subjectId() + ":" + scopedKey);
+    transactionLock.acquire(
+        "order-client:idempotency:"
+            + actor.subjectId()
+            + ":"
+            + scopedKey);
     OrderClient replay =
         clients
             .findByCreatedBySubjectIdAndCreationIdempotencyKey(actor.subjectId(), scopedKey)
@@ -357,8 +361,8 @@ public class OrderClientService {
 
   private boolean isVisible(OrderActor actor, OrderClient client) {
     return actor.globalAdministrator()
-        || actor.subjectId().equals(client.getResponsibleManagerId())
-        || visibleThroughWarehouseOrder(actor, client.getId());
+            || actor.subjectId().equals(client.getResponsibleManagerId())
+            || visibleThroughWarehouseOrder(actor, client.getId());
   }
 
   private boolean visibleThroughWarehouseOrder(OrderActor actor, UUID clientId) {
@@ -378,7 +382,9 @@ public class OrderClientService {
       OrderActor actor) {
     if (actor.globalAdministrator()) return builder.conjunction();
     Predicate own = builder.equal(root.get("responsibleManagerId"), actor.subjectId());
-    if (!actor.localAdministrator() || actor.readableWarehouses().isEmpty()) return own;
+    if (!actor.localAdministrator() || actor.readableWarehouses().isEmpty()) {
+      return own;
+    }
     var subquery = query.subquery(Integer.class);
     var order = subquery.from(RentalOrder.class);
     subquery.select(builder.literal(1));

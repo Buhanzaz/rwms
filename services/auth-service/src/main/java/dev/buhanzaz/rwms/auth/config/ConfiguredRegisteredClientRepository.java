@@ -9,7 +9,9 @@ import org.springframework.security.oauth2.server.authorization.client.Registere
  *
  * <p>A client disabled in declarative auth configuration is invisible to authorization-server
  * lookups even if its historical row remains in the database. Keeping the row preserves audit and
- * revision data while preventing new authorization, refresh, or client-credentials use.</p>
+ * revision data while preventing new authorization, refresh, or client-credentials use. Returned
+ * registrations must also retain the configured scope set, so a database row changed between
+ * provisioner runs cannot broaden a client's token authority.</p>
  */
 @RequiredArgsConstructor
 final class ConfiguredRegisteredClientRepository implements RegisteredClientRepository {
@@ -28,7 +30,8 @@ final class ConfiguredRegisteredClientRepository implements RegisteredClientRepo
     }
 
     /**
-     * Finds a client by storage identifier only when it is enabled in current configuration.
+     * Finds a client by storage identifier only when it remains enabled and scope-consistent with
+     * current configuration.
      *
      * @param id persistent registered-client identifier
      * @return the enabled client, or {@code null} when it is absent or disabled
@@ -36,11 +39,12 @@ final class ConfiguredRegisteredClientRepository implements RegisteredClientRepo
     @Override
     public RegisteredClient findById(String id) {
         RegisteredClient client = delegate.findById(id);
-        return enabled(client) ? client : null;
+        return usable(client) ? client : null;
     }
 
     /**
-     * Finds a client by public client identifier only when it is enabled in current configuration.
+     * Finds a client by public client identifier only when it remains enabled and scope-consistent
+     * with current configuration.
      *
      * @param clientId OAuth client identifier supplied by a protocol request
      * @return the enabled client, or {@code null} when it is absent or disabled
@@ -50,13 +54,15 @@ final class ConfiguredRegisteredClientRepository implements RegisteredClientRepo
         if (properties.find(clientId).filter(OAuthClientProperties.Client::enabled).isEmpty()) {
             return null;
         }
-        return delegate.findByClientId(clientId);
+        RegisteredClient client = delegate.findByClientId(clientId);
+        return usable(client) ? client : null;
     }
 
-    private boolean enabled(RegisteredClient client) {
+    private boolean usable(RegisteredClient client) {
         return client != null
                 && properties.find(client.getClientId())
                         .filter(OAuthClientProperties.Client::enabled)
+                        .filter(configuration -> configuration.scopes().equals(client.getScopes()))
                         .isPresent();
     }
 }

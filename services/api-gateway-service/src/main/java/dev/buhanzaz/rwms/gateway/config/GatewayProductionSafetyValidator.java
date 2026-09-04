@@ -80,6 +80,10 @@ public class GatewayProductionSafetyValidator {
             "rwms.gateway.routes.logistics-uri",
             routes.getLogisticsUri()),
         downstreamTarget(
+            "logistics planner target",
+            "rwms.gateway.routes.logistics-planner-uri",
+            routes.getLogisticsPlannerUri()),
+        downstreamTarget(
             "dossier target", "rwms.gateway.routes.dossier-uri", routes.getDossierUri()),
         downstreamTarget(
             "analytics target", "rwms.gateway.routes.analytics-uri", routes.getAnalyticsUri()),

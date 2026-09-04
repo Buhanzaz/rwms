@@ -37,8 +37,8 @@ public class AdminUserController {
      * @return administrative projections of all interactive users
      */
     @GetMapping
-    List<AdminUserResponse> list() {
-        return users.listUsers();
+    List<AdminUserResponse> list(Authentication authentication) {
+        return users.listUsers(authentication);
     }
 
     /**
@@ -48,8 +48,8 @@ public class AdminUserController {
      * @return requested administrative projection
      */
     @GetMapping("/{id}")
-    AdminUserResponse get(@PathVariable UUID id) {
-        return users.getUser(id);
+    AdminUserResponse get(@PathVariable UUID id, Authentication authentication) {
+        return users.getUser(id, authentication);
     }
 
     /**

@@ -95,6 +95,8 @@ class GatewaySseConcurrencyIntegrationTest {
     registry.add("rwms.gateway.routes.media-uri", GatewaySseConcurrencyIntegrationTest::origin);
     registry.add("rwms.gateway.routes.inventory-uri", GatewaySseConcurrencyIntegrationTest::origin);
     registry.add("rwms.gateway.routes.logistics-uri", GatewaySseConcurrencyIntegrationTest::origin);
+    registry.add(
+        "rwms.gateway.routes.logistics-planner-uri", GatewaySseConcurrencyIntegrationTest::origin);
     registry.add("rwms.gateway.routes.dossier-uri", GatewaySseConcurrencyIntegrationTest::origin);
     registry.add("rwms.gateway.routes.analytics-uri", GatewaySseConcurrencyIntegrationTest::origin);
     registry.add("rwms.gateway.routes.assistant-uri", GatewaySseConcurrencyIntegrationTest::origin);

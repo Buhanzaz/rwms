@@ -1,13 +1,15 @@
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Add01Icon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
 import { toast } from "sonner"
 
+import { OperationsListGrid } from "@/components/operations-list-grid"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
-  CardAction,
   CardContent,
   CardDescription,
   CardFooter,
@@ -30,9 +32,9 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { DriverEditorDialog } from "@/features/settings/logistics/driver-editor-dialog"
-import { InventoryPlanningSettingsCard } from "@/features/settings/logistics/inventory-planning-settings-card"
-import { RepairCapacitySettingsCard } from "@/features/settings/logistics/repair-capacity-settings-card"
 import { ShipmentTaskSettingsCard } from "@/features/settings/logistics/shipment-task-settings-card"
+import { CredentialPasswordDialog } from "@/features/settings/task-board/settings-editor-dialogs"
+import { SettingsDeleteDialog } from "@/features/settings/task-board/settings-delete-dialog"
 import {
   taskBoardSettingsClient,
   taskBoardSettingsKeys,
@@ -51,10 +53,12 @@ import {
   participationPolicyLabels,
 } from "@/features/settings/task-board/model/task-board-settings"
 import { taskBoardSettingsErrorMessage } from "@/features/settings/task-board/task-board-settings-errors"
+import { workerCredentialToggleAction } from "@/features/settings/task-board/worker-credential-action"
 import { useAuth } from "@/features/auth/use-auth"
 import { useWarehouse } from "@/hooks/use-warehouse"
 
 type DriverQueueEditorProps = {
+  section: LogisticsSettingsSection
   queue: WorkQueueDto
   primaryClass: WorkerClassDto
   classes: WorkerClassDto[]
@@ -65,10 +69,22 @@ type DriverQueueEditorProps = {
   onSave: (request: DriverQueueRequest) => Promise<void>
 }
 
+export type LogisticsSettingsSection = "all" | "drivers" | "classes"
+
 type DriverQueueSetupProps = {
   classes: WorkerClassDto[]
   pending: boolean
   onConnect: (primaryClassId: string) => Promise<void>
+}
+
+type DriverConfirmation = {
+  kind: "credentials" | "worker"
+  worker: WorkerDto
+}
+
+type DriverActionCommand = {
+  execute: () => Promise<unknown>
+  success: string
 }
 
 function isQualifiedFor(worker: WorkerDto, workerClassId: string) {
@@ -81,7 +97,7 @@ function isQualifiedFor(worker: WorkerDto, workerClassId: string) {
 function driverCredentialIssueMessage(worker: WorkerDto) {
   if (worker.credentialStatus !== "ERROR") return null
 
-  return "Доступ в приложение не настроен. Нажмите «Редактировать», проверьте логин и укажите пароль ещё раз."
+  return "Доступ в приложение не настроен. Нажмите «Изменить», проверьте логин и укажите пароль ещё раз."
 }
 
 function DriverQueueSetup({
@@ -94,18 +110,18 @@ function DriverQueueSetup({
   )
 
   return (
-    <Card size="sm">
+    <Card size="sm" className="bg-muted/65">
       <CardHeader>
-        <CardTitle>Подключить очередь перемещений</CardTitle>
+        <CardTitle>Подключить водителей</CardTitle>
         <CardDescription>
-          Склад получит свою очередь водителей на основе единого системного
+          Объект получит рабочую очередь водителей на основе единого системного
           определения. Пользователи и классы не копируются.
         </CardDescription>
       </CardHeader>
       <CardContent>
         <Field>
           <FieldLabel htmlFor="logistics-primary-class">
-            Основной класс водителей
+            Класс водителей
           </FieldLabel>
           <Select value={selectedClassId} onValueChange={setSelectedClassId}>
             <SelectTrigger id="logistics-primary-class" className="w-full">
@@ -160,6 +176,7 @@ function canonicalBindings(queue: WorkQueueDto): QueueBindingRequest[] {
 }
 
 function DriverQueueEditor({
+  section,
   queue,
   primaryClass,
   classes,
@@ -225,259 +242,304 @@ function DriverQueueEditor({
 
   return (
     <div className="flex flex-col gap-4">
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle>{queue.name}</CardTitle>
-          <CardDescription>
-            Очередь водителей настраивается отдельно для выбранного склада.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap items-center gap-2">
-          <Badge>Основной класс</Badge>
-          <span className="font-medium">{primaryClass.name}</span>
-        </CardContent>
-      </Card>
-
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle>Водители</CardTitle>
-          <CardDescription>
-            Уже связанные пользователи. Для водителей бригада не требуется.
-          </CardDescription>
-          <CardAction>
-            <Button type="button" size="sm" onClick={onCreateDriver}>
-              Создать водителя
-            </Button>
-          </CardAction>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          {driverWorkers.length > 0 ? (
-            driverWorkers.map((worker) => (
-              <div
-                key={worker.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3"
-              >
-                <div className="flex flex-col gap-1">
-                  <span className="font-medium">{worker.displayName}</span>
-                  <span className="text-sm text-muted-foreground">
-                    {worker.appLogin ?? "Мобильный логин не настроен"}
-                  </span>
-                  {driverCredentialIssueMessage(worker) ? (
-                    <span className="text-sm text-destructive">
-                      {driverCredentialIssueMessage(worker)}
-                    </span>
-                  ) : null}
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => onEditDriver(worker)}
-                  >
-                    Редактировать
-                  </Button>
-                  <Badge variant={worker.active ? "secondary" : "outline"}>
-                    {worker.active ? "Активен" : "Отключён"}
-                  </Badge>
-                  <Badge
-                    variant={
-                      worker.credentialStatus === "ERROR"
-                        ? "destructive"
-                        : "outline"
-                    }
-                  >
-                    {credentialStatusLabels[worker.credentialStatus]}
-                  </Badge>
-                </div>
-              </div>
-            ))
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              У основного класса пока нет квалифицированных пользователей.
-            </p>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle>Дополнительные классы</CardTitle>
-          <CardDescription>
-            Прикрепляется существующий класс рабочих. Отдельное задание или
-            копия класса не создаются.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor="logistics-additional-class">
-                Класс рабочих
-              </FieldLabel>
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <Select
-                  value={selectedClassId}
-                  onValueChange={setSelectedClassId}
-                >
-                  <SelectTrigger
-                    id="logistics-additional-class"
-                    className="w-full"
-                  >
-                    <SelectValue placeholder="Выберите существующий класс" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {availableClasses.map((workerClass) => (
-                        <SelectItem key={workerClass.id} value={workerClass.id}>
-                          {workerClass.name}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={!selectedClassId}
-                  onClick={attachClass}
-                >
-                  Прикрепить дополнительный класс
-                </Button>
-              </div>
-              {availableClasses.length === 0 ? (
-                <FieldDescription>
-                  Все доступные классы уже прикреплены.
-                </FieldDescription>
-              ) : null}
-            </Field>
-          </FieldGroup>
-
-          {secondaryBindings.length > 0 ? (
-            <FieldGroup>
-              {secondaryBindings.map((binding) => {
-                const workerClass = classes.find(
-                  (item) => item.id === binding.workerClassId
-                )
-                if (!workerClass) return null
-
-                return (
-                  <Field
-                    key={binding.workerClassId}
-                    className="rounded-lg border p-3"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="font-medium">{workerClass.name}</span>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => detachClass(workerClass.id)}
-                      >
-                        Открепить
-                      </Button>
-                    </div>
-                    <FieldGroup>
-                      <Field>
-                        <FieldLabel
-                          htmlFor={`logistics-policy-${workerClass.id}`}
-                        >
-                          Участие
-                        </FieldLabel>
-                        <Select
-                          value={binding.participationPolicy}
-                          onValueChange={(value) =>
-                            updateSecondary(workerClass.id, {
-                              participationPolicy: value as ParticipationPolicy,
-                            })
-                          }
-                        >
-                          <SelectTrigger
-                            id={`logistics-policy-${workerClass.id}`}
-                            className="w-full"
-                          >
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectGroup>
-                              {(["OPTIONAL", "REQUIRED"] as const).map(
-                                (policy) => (
-                                  <SelectItem key={policy} value={policy}>
-                                    {participationPolicyLabels[policy]}
-                                  </SelectItem>
-                                )
-                              )}
-                            </SelectGroup>
-                          </SelectContent>
-                        </Select>
-                      </Field>
-                      <Field orientation="horizontal">
-                        <Checkbox
-                          id={`logistics-notify-${workerClass.id}`}
-                          checked={binding.notifyOnPrimaryTake}
-                          onCheckedChange={(value) =>
-                            updateSecondary(workerClass.id, {
-                              notifyOnPrimaryTake: value === true,
-                            })
-                          }
-                        />
-                        <FieldLabel
-                          htmlFor={`logistics-notify-${workerClass.id}`}
-                        >
-                          Отправлять задание прикреплённому классу после
-                          принятия задания водителем
-                        </FieldLabel>
-                      </Field>
-                    </FieldGroup>
-                  </Field>
-                )
-              })}
-            </FieldGroup>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              Дополнительные классы не прикреплены.
-            </p>
-          )}
-        </CardContent>
-        <CardFooter className="justify-end">
-          <Button
-            type="button"
-            disabled={pending}
-            onClick={() =>
-              void onSave({
-                expectedVersion: queue.version,
-                active: queue.active,
-                hidden: queue.hidden,
-                collapsed: queue.collapsed,
-                holdingPeriodMinutes: queue.holdingPeriodMinutes,
-                notificationThreshold: queue.notificationThreshold,
-                notifyWhenThresholdReached: queue.notifyWhenThresholdReached,
-                resultPhotoMinCount: queue.resultPhotoMinCount,
-                bindings: bindings.map((binding, order) => ({
-                  ...binding,
-                  order,
-                  participationPolicy:
-                    order === 0 ? "PRIMARY" : binding.participationPolicy,
-                  notifyOnPrimaryTake:
-                    order === 0 ? false : binding.notifyOnPrimaryTake,
-                })),
-              })
+      {section !== "classes" ? (
+        <section
+          aria-label="Водители"
+          className="flex min-h-0 flex-1 flex-col gap-3"
+        >
+          <div
+            className={
+              section === "drivers"
+                ? "absolute top-0 right-0 z-10 flex h-9 items-center"
+                : "flex justify-end"
             }
           >
-            {pending ? "Сохраняем…" : "Сохранить настройки логистики"}
-          </Button>
-        </CardFooter>
-      </Card>
+            <Button type="button" size="sm" onClick={onCreateDriver}>
+              <HugeiconsIcon
+                icon={Add01Icon}
+                data-icon="inline-start"
+                aria-hidden="true"
+              />
+              Создать водителя
+            </Button>
+          </div>
+          {driverWorkers.length > 0 ? (
+            <OperationsListGrid
+              className="min-h-0 flex-1 overflow-auto bg-muted/70"
+              items={driverWorkers}
+              columns={[
+                {
+                  id: "name",
+                  label: "Водитель",
+                  getSortValue: (item) => item.displayName,
+                  render: (item) => item.displayName,
+                },
+                {
+                  id: "classes",
+                  label: "Классы",
+                  getSortValue: (item) => item.qualifications.length,
+                  render: (item) =>
+                    item.qualifications
+                      .filter((qualification) => qualification.active)
+                      .map((qualification) => qualification.workerClass.name)
+                      .join(", ") || "—",
+                },
+                {
+                  id: "login",
+                  label: "Логин",
+                  getSortValue: (item) => item.appLogin,
+                  render: (item) => item.appLogin ?? "—",
+                },
+                {
+                  id: "status",
+                  label: "Статус",
+                  getSortValue: (item) => (item.active ? 1 : 0),
+                  render: (item) => (
+                    <Badge variant={item.active ? "secondary" : "outline"}>
+                      {item.active ? "Активен" : "Отключён"}
+                    </Badge>
+                  ),
+                },
+                {
+                  id: "credentials",
+                  label: "Учётные данные",
+                  getSortValue: (item) =>
+                    credentialStatusLabels[item.credentialStatus],
+                  render: (item) => (
+                    <div className="flex flex-col gap-1">
+                      <Badge
+                        variant={
+                          item.credentialStatus === "ERROR"
+                            ? "destructive"
+                            : "secondary"
+                        }
+                      >
+                        {credentialStatusLabels[item.credentialStatus]}
+                      </Badge>
+                      {driverCredentialIssueMessage(item) ? (
+                        <span className="text-xs text-destructive">
+                          {driverCredentialIssueMessage(item)}
+                        </span>
+                      ) : null}
+                    </div>
+                  ),
+                },
+                {
+                  id: "actions",
+                  label: "Действия",
+                  getSortValue: () => null,
+                  render: (item) => (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => onEditDriver(item)}
+                    >
+                      Изменить
+                    </Button>
+                  ),
+                },
+              ]}
+            />
+          ) : (
+            <div className="flex min-h-36 items-center justify-center rounded-lg border bg-muted/55 px-4 text-center text-sm text-muted-foreground">
+              Водители пока не добавлены.
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      {section !== "drivers" ? (
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>Дополнительные классы</CardTitle>
+            <CardDescription>
+              Прикрепляется существующий класс рабочих. Отдельное задание или
+              копия класса не создаются.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="logistics-additional-class">
+                  Класс рабочих
+                </FieldLabel>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Select
+                    value={selectedClassId}
+                    onValueChange={setSelectedClassId}
+                  >
+                    <SelectTrigger
+                      id="logistics-additional-class"
+                      className="w-full"
+                    >
+                      <SelectValue placeholder="Выберите существующий класс" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {availableClasses.map((workerClass) => (
+                          <SelectItem
+                            key={workerClass.id}
+                            value={workerClass.id}
+                          >
+                            {workerClass.name}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={!selectedClassId}
+                    onClick={attachClass}
+                  >
+                    Прикрепить дополнительный класс
+                  </Button>
+                </div>
+                {availableClasses.length === 0 ? (
+                  <FieldDescription>
+                    Все доступные классы уже прикреплены.
+                  </FieldDescription>
+                ) : null}
+              </Field>
+            </FieldGroup>
+
+            {secondaryBindings.length > 0 ? (
+              <FieldGroup>
+                {secondaryBindings.map((binding) => {
+                  const workerClass = classes.find(
+                    (item) => item.id === binding.workerClassId
+                  )
+                  if (!workerClass) return null
+
+                  return (
+                    <Field
+                      key={binding.workerClassId}
+                      className="rounded-lg border p-3"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-medium">{workerClass.name}</span>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => detachClass(workerClass.id)}
+                        >
+                          Открепить
+                        </Button>
+                      </div>
+                      <FieldGroup>
+                        <Field>
+                          <FieldLabel
+                            htmlFor={`logistics-policy-${workerClass.id}`}
+                          >
+                            Участие
+                          </FieldLabel>
+                          <Select
+                            value={binding.participationPolicy}
+                            onValueChange={(value) =>
+                              updateSecondary(workerClass.id, {
+                                participationPolicy:
+                                  value as ParticipationPolicy,
+                              })
+                            }
+                          >
+                            <SelectTrigger
+                              id={`logistics-policy-${workerClass.id}`}
+                              className="w-full"
+                            >
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                {(["OPTIONAL", "REQUIRED"] as const).map(
+                                  (policy) => (
+                                    <SelectItem key={policy} value={policy}>
+                                      {participationPolicyLabels[policy]}
+                                    </SelectItem>
+                                  )
+                                )}
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                        </Field>
+                        <Field orientation="horizontal">
+                          <Checkbox
+                            id={`logistics-notify-${workerClass.id}`}
+                            checked={binding.notifyOnPrimaryTake}
+                            onCheckedChange={(value) =>
+                              updateSecondary(workerClass.id, {
+                                notifyOnPrimaryTake: value === true,
+                              })
+                            }
+                          />
+                          <FieldLabel
+                            htmlFor={`logistics-notify-${workerClass.id}`}
+                          >
+                            Отправлять задание прикреплённому классу после
+                            принятия задания водителем
+                          </FieldLabel>
+                        </Field>
+                      </FieldGroup>
+                    </Field>
+                  )
+                })}
+              </FieldGroup>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Дополнительные классы не прикреплены.
+              </p>
+            )}
+          </CardContent>
+          <CardFooter className="justify-end">
+            <Button
+              type="button"
+              disabled={pending}
+              onClick={() =>
+                void onSave({
+                  expectedVersion: queue.version,
+                  active: queue.active,
+                  hidden: queue.hidden,
+                  collapsed: queue.collapsed,
+                  holdingPeriodMinutes: queue.holdingPeriodMinutes,
+                  notificationThreshold: queue.notificationThreshold,
+                  notifyWhenThresholdReached: queue.notifyWhenThresholdReached,
+                  resultPhotoMinCount: queue.resultPhotoMinCount,
+                  bindings: bindings.map((binding, order) => ({
+                    ...binding,
+                    order,
+                    participationPolicy:
+                      order === 0 ? "PRIMARY" : binding.participationPolicy,
+                    notifyOnPrimaryTake:
+                      order === 0 ? false : binding.notifyOnPrimaryTake,
+                  })),
+                })
+              }
+            >
+              {pending ? "Сохраняем…" : "Сохранить настройки логистики"}
+            </Button>
+          </CardFooter>
+        </Card>
+      ) : null}
     </div>
   )
 }
 
-export function LogisticsSettingsPage() {
+export function LogisticsSettingsPage({
+  section = "all",
+}: {
+  section?: LogisticsSettingsSection
+} = {}) {
   const queryClient = useQueryClient()
   const { accessToken, currentUser } = useAuth()
   const { selectedWarehouse } = useWarehouse()
   const [driverEditor, setDriverEditor] = useState<WorkerDto | "new" | null>(
     null
   )
+  const [passwordDriver, setPasswordDriver] = useState<WorkerDto | null>(null)
+  const [driverConfirmation, setDriverConfirmation] =
+    useState<DriverConfirmation | null>(null)
   const warehouseId = selectedWarehouse?.id ?? ""
   const explicitAccess = currentUser?.warehouseAccesses.find(
     (access) => access.warehouseId === warehouseId
@@ -589,6 +651,19 @@ export function LogisticsSettingsPage() {
     },
     onError: (error) => toast.error(taskBoardSettingsErrorMessage(error)),
   })
+  const driverActionMutation = useMutation({
+    mutationFn: (command: DriverActionCommand) => command.execute(),
+    onSuccess: async (_result, command) => {
+      setDriverEditor(null)
+      setPasswordDriver(null)
+      setDriverConfirmation(null)
+      toast.success(command.success)
+      await queryClient.invalidateQueries({
+        queryKey: taskBoardSettingsKeys.workers(warehouseId),
+      })
+    },
+    onError: (error) => toast.error(taskBoardSettingsErrorMessage(error)),
+  })
 
   if (!selectedWarehouse) {
     return (
@@ -611,25 +686,16 @@ export function LogisticsSettingsPage() {
     )
   }
 
-  const independentSettings = (
-    <>
-      <ShipmentTaskSettingsCard
-        accessToken={accessToken!}
-        warehouseId={warehouseId}
-        warehouseName={selectedWarehouse.name}
-      />
-      <RepairCapacitySettingsCard
-        accessToken={accessToken!}
-        warehouseId={warehouseId}
-        warehouseName={selectedWarehouse.name}
-      />
-      <InventoryPlanningSettingsCard
-        accessToken={accessToken!}
-        warehouseId={warehouseId}
-        warehouseName={selectedWarehouse.name}
-      />
-    </>
-  )
+  const independentSettings =
+    section === "all" ? (
+      <>
+        <ShipmentTaskSettingsCard
+          accessToken={accessToken!}
+          warehouseId={warehouseId}
+          warehouseName={selectedWarehouse.name}
+        />
+      </>
+    ) : null
 
   const queryError =
     queuesQuery.error ?? classesQuery.error ?? workersQuery.error
@@ -733,9 +799,10 @@ export function LogisticsSettingsPage() {
     return (
       <div className="flex flex-col gap-4">
         <Alert variant="destructive">
-          <AlertTitle>Не определён основной класс водителей</AlertTitle>
+          <AlertTitle>Не определён класс водителей</AlertTitle>
           <AlertDescription>
-            У логистической очереди должен быть ровно один основной класс.
+            У логистической очереди должна быть ровно одна связь с классом
+            водителей.
           </AlertDescription>
         </Alert>
         {independentSettings}
@@ -747,6 +814,7 @@ export function LogisticsSettingsPage() {
     <div className="flex flex-col gap-4">
       <DriverQueueEditor
         key={`${queue.id}:${queue.version}`}
+        section={section}
         queue={queue}
         primaryClass={primaryBindings[0].workerClass}
         classes={classesQuery.data ?? []}
@@ -755,11 +823,13 @@ export function LogisticsSettingsPage() {
         onCreateDriver={() => {
           createDriverMutation.reset()
           updateDriverMutation.reset()
+          driverActionMutation.reset()
           setDriverEditor("new")
         }}
         onEditDriver={(worker) => {
           createDriverMutation.reset()
           updateDriverMutation.reset()
+          driverActionMutation.reset()
           setDriverEditor(worker)
         }}
         onSave={async (request) => {
@@ -787,13 +857,67 @@ export function LogisticsSettingsPage() {
                 : null
               : updateDriverMutation.error
                 ? taskBoardSettingsErrorMessage(updateDriverMutation.error)
-                : null
+                : driverActionMutation.error
+                  ? taskBoardSettingsErrorMessage(driverActionMutation.error)
+                  : null
           }
           onClose={() => {
             createDriverMutation.reset()
             updateDriverMutation.reset()
             setDriverEditor(null)
           }}
+          onResetPassword={
+            driverEditor === "new"
+              ? undefined
+              : () => {
+                  setDriverEditor(null)
+                  driverActionMutation.reset()
+                  setPasswordDriver(driverEditor)
+                }
+          }
+          onDisableCredentials={
+            driverEditor === "new" ||
+            workerCredentialToggleAction(driverEditor.credentialStatus) !==
+              "DISABLE"
+              ? undefined
+              : () => {
+                  setDriverEditor(null)
+                  driverActionMutation.reset()
+                  setDriverConfirmation({
+                    kind: "credentials",
+                    worker: driverEditor,
+                  })
+                }
+          }
+          onEnableCredentials={
+            driverEditor === "new" ||
+            workerCredentialToggleAction(driverEditor.credentialStatus) !==
+              "ENABLE"
+              ? undefined
+              : () =>
+                  driverActionMutation.mutate({
+                    execute: () =>
+                      taskBoardSettingsClient.enableWorkerCredentials(
+                        accessToken!,
+                        warehouseId,
+                        driverEditor.id,
+                        driverEditor.version
+                      ),
+                    success: "Вход водителя включён.",
+                  })
+          }
+          onDelete={
+            driverEditor === "new"
+              ? undefined
+              : () => {
+                  setDriverEditor(null)
+                  driverActionMutation.reset()
+                  setDriverConfirmation({
+                    kind: "worker",
+                    worker: driverEditor,
+                  })
+                }
+          }
           onSave={async (request) => {
             if (driverEditor === "new") {
               await createDriverMutation.mutateAsync(request)
@@ -802,6 +926,85 @@ export function LogisticsSettingsPage() {
             await updateDriverMutation.mutateAsync({
               worker: driverEditor,
               request,
+            })
+          }}
+        />
+      ) : null}
+      {passwordDriver ? (
+        <CredentialPasswordDialog
+          key={passwordDriver.id}
+          worker={passwordDriver}
+          pending={driverActionMutation.isPending}
+          error={
+            driverActionMutation.error
+              ? taskBoardSettingsErrorMessage(driverActionMutation.error)
+              : null
+          }
+          onClose={() => {
+            driverActionMutation.reset()
+            setPasswordDriver(null)
+          }}
+          onSave={async (password) => {
+            await driverActionMutation.mutateAsync({
+              execute: () =>
+                taskBoardSettingsClient.resetWorkerCredentials(
+                  accessToken!,
+                  warehouseId,
+                  passwordDriver.id,
+                  passwordDriver.version,
+                  password
+                ),
+              success: "Пароль водителя изменён.",
+            })
+          }}
+        />
+      ) : null}
+      {driverConfirmation ? (
+        <SettingsDeleteDialog
+          title={
+            driverConfirmation.kind === "credentials"
+              ? "Отключить вход водителя?"
+              : "Удалить водителя?"
+          }
+          description={
+            driverConfirmation.kind === "credentials"
+              ? "Водитель больше не сможет входить в приложение. Профиль и история сохранятся."
+              : "Если водитель уже используется, сервис отклонит удаление и предложит деактивацию."
+          }
+          confirmLabel={
+            driverConfirmation.kind === "credentials" ? "Отключить" : "Удалить"
+          }
+          pending={driverActionMutation.isPending}
+          error={
+            driverActionMutation.error
+              ? taskBoardSettingsErrorMessage(driverActionMutation.error)
+              : null
+          }
+          onClose={() => {
+            driverActionMutation.reset()
+            setDriverConfirmation(null)
+          }}
+          onConfirm={async () => {
+            const { kind, worker } = driverConfirmation
+            await driverActionMutation.mutateAsync({
+              execute: () =>
+                kind === "credentials"
+                  ? taskBoardSettingsClient.disableWorkerCredentials(
+                      accessToken!,
+                      warehouseId,
+                      worker.id,
+                      worker.version
+                    )
+                  : taskBoardSettingsClient.deleteWorker(
+                      accessToken!,
+                      warehouseId,
+                      worker.id,
+                      worker.version
+                    ),
+              success:
+                kind === "credentials"
+                  ? "Вход водителя отключён."
+                  : "Водитель удалён.",
             })
           }}
         />

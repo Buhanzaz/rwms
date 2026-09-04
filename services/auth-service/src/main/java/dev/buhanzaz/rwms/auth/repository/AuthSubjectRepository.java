@@ -27,12 +27,7 @@ public interface AuthSubjectRepository extends JpaRepository<AuthSubject, UUID> 
      */
     Optional<AuthSubject> findByExternalWorkerId(String externalWorkerId);
 
-    /**
-     * Lists subjects of one principal type in stable login-name order.
-     *
-     * @param principalType identity kind to list
-     * @return matching subjects ordered by login name
-     */
+    /** Lists subjects of one principal type in stable login order. */
     List<AuthSubject> findAllByPrincipalTypeOrderByUsername(PrincipalType principalType);
 
     /**

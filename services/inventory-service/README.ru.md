@@ -23,6 +23,21 @@ completion/statistics, final planning, а также publication intent, attempt
 команды используют определённые контрактом expected-version и idempotency fields; вызывающая
 сторона должна обработать канонический конфликт `409`, а не отправлять изменившийся повтор.
 
+`GET`/`PUT /api/inventory/v1/planning-settings/{warehouseId}` содержат только holidays: read несёт
+ровно `warehouseId`, `settingsRevision`, `updatedAt` и `holidays`, а PUT —
+`expectedSettingsRevision` и `holidays`. Обычный вызов использует действующую USER-политику
+`rwms.write` и warehouse-MANAGE; изолированная admin-web альтернатива — точный токен
+`rwms-admin-web` с единственным `admin.manage` для `SYSTEM_ADMIN` или `WMS_ADMIN`. Исторические
+колонки capacity/weekdays остаются инертным transitional storage и не являются ни публичными
+настройками, ни входом планирования.
+
+Для каждого нового final plan inventory читает private effective object work calendar task-board с
+единственным service credential `task-board.inventory-calendar.read`. Он объединяет `daysOff`
+task-board с holidays inventory, назначает AUTO-работы на ближайшую общую рабочую дату без
+суточного лимита бытовок и проверяет MANUAL-даты только по этому календарю и порядку. Снимок
+schedule/timezone и fingerprint fenced plan; изменившийся календарь даёт stale-plan conflict.
+V28 безопасно помечает уже активные draft heads как `STALE` и не меняет completed history.
+
 `POST /api/inventory/v1/sessions/{inventoryId}/refresh` — MANAGE-команда восстановления активной
 сессии, в которой устарел живой состав бытовок или производная сверка. Она проверяет переданную
 ревизию сессии до свежего read-only asset capture и повторно под локальной блокировкой применения.

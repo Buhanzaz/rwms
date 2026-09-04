@@ -32,6 +32,7 @@ import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -326,25 +327,25 @@ class DriverTaskWorkflowStoreTest {
     task.moveToCurrent(1, boardEntryId, "WAITING");
     task.observeBoardTask(
         boardTaskId, 2, boardEntryId, "WAITING", scheduledDate, "SCHEDULED", "ACTIVE", null);
-    task.markManualPromotionHold(5);
+    task.markRepairPlaceReleasePending();
     when(tasks.findForUpdate(taskId)).thenReturn(Optional.of(task));
 
     DriverTaskWorkflowStore.Work next = store.nextWork(taskId).orElseThrow();
 
     assertThat(next)
         .isEqualTo(
-            new DriverTaskWorkflowStore.ManualReservationReleaseWork(
+            new DriverTaskWorkflowStore.ReservationReleaseWork(
                 taskId, warehouseId, repairId, allocationId, 0));
 
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
     LogisticsDependencyGateway.RepairPlaceAllocation released =
         new LogisticsDependencyGateway.RepairPlaceAllocation(
             allocationId, 1, warehouseId, repairId, cabinId, "RELEASED", null, null, 3, now, now);
-    store.confirmManualReservationRelease(taskId, released);
+    store.confirmReservationRelease(taskId, released);
 
     assertThat(task.getRepairPlaceAllocationId()).isNull();
     assertThat(task.getRepairPlaceAllocationVersion()).isNull();
-    assertThat(task.hasManualPromotionHold()).isTrue();
+    assertThat(task.hasPendingRepairPlaceRelease()).isFalse();
     verify(tasks).saveAndFlush(task);
   }
 
@@ -730,6 +731,120 @@ class DriverTaskWorkflowStoreTest {
   }
 
   @Test
+  void currentTransferStartsItsFirstPendingCabinLine() {
+    UUID taskId = UUID.randomUUID();
+    UUID documentId = UUID.randomUUID();
+    UUID lineId = UUID.randomUUID();
+    UUID driverId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    LogisticsDocument document =
+        LogisticsDocument.createTransfer(
+            warehouseId,
+            UUID.randomUUID(),
+            LocalDate.now(ZoneOffset.UTC),
+            UUID.randomUUID(),
+            UUID.randomUUID());
+    ReflectionTestUtils.setField(document, "id", documentId);
+    LogisticsDocumentLine line =
+        LogisticsDocumentLine.create(document, 1, cabinId, 0, null);
+    ReflectionTestUtils.setField(line, "id", lineId);
+    DriverLogisticsTask task =
+        currentTransferTask(taskId, documentId, lineId, warehouseId, cabinId, driverId, false);
+    when(tasks.findForUpdate(taskId)).thenReturn(Optional.of(task));
+    when(documents.findByIdAndDocumentType(documentId, LogisticsDocumentType.TRANSFER))
+        .thenReturn(Optional.of(document));
+    when(documentLines.findAllByDocument_IdOrderByLineNumber(documentId))
+        .thenReturn(List.of(line));
+
+    assertThat(store.nextWork(taskId))
+        .contains(
+            new DriverTaskWorkflowStore.TransferDepartureWork(
+                taskId,
+                driverId,
+                documentId,
+                lineId,
+                document.getVersion(),
+                line.getVersion()));
+  }
+
+  @Test
+  void sharedTransferWithoutAnOwnedDriverKeepsTheExistingTaskBoardStatusFlow() {
+    UUID taskId = UUID.randomUUID();
+    UUID documentId = UUID.randomUUID();
+    UUID lineId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    DriverLogisticsTask task =
+        currentTransferTask(taskId, documentId, lineId, warehouseId, cabinId, null, false);
+    when(tasks.findForUpdate(taskId)).thenReturn(Optional.of(task));
+
+    assertThat(store.nextWork(taskId))
+        .hasValueSatisfying(
+            work -> assertThat(work).isInstanceOf(DriverTaskWorkflowStore.StatusWork.class));
+    verify(documents, never())
+        .findByIdAndDocumentType(documentId, LogisticsDocumentType.TRANSFER);
+    verify(documentLines, never()).findAllByDocument_IdOrderByLineNumber(documentId);
+  }
+
+  @Test
+  void completedBoardTaskFreezesCabinCoverBeforeTransferArrival() {
+    UUID taskId = UUID.randomUUID();
+    UUID documentId = UUID.randomUUID();
+    UUID lineId = UUID.randomUUID();
+    UUID driverId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    LogisticsDocument document =
+        LogisticsDocument.createTransfer(
+            warehouseId,
+            UUID.randomUUID(),
+            LocalDate.now(ZoneOffset.UTC),
+            UUID.randomUUID(),
+            UUID.randomUUID());
+    ReflectionTestUtils.setField(document, "id", documentId);
+    document.beginTransferDeparture();
+    document.markTransferInTransit();
+    LogisticsDocumentLine line =
+        LogisticsDocumentLine.create(document, 1, cabinId, 0, null);
+    ReflectionTestUtils.setField(line, "id", lineId);
+    line.beginDeparture();
+    line.markDeparted();
+    DriverLogisticsTask task =
+        currentTransferTask(taskId, documentId, lineId, warehouseId, cabinId, driverId, true);
+    when(tasks.findForUpdate(taskId)).thenReturn(Optional.of(task));
+    when(documents.findByIdAndDocumentType(documentId, LogisticsDocumentType.TRANSFER))
+        .thenReturn(Optional.of(document));
+    when(documentLines.findAllByDocument_IdOrderByLineNumber(documentId))
+        .thenReturn(List.of(line));
+
+    DriverTaskWorkflowStore.CoverWork cover =
+        (DriverTaskWorkflowStore.CoverWork) store.nextWork(taskId).orElseThrow();
+    store.confirmCover(
+        taskId,
+        new LogisticsDependencyGateway.CabinCoverChange(
+            cabinId,
+            warehouseId,
+            task.getCompletionMediaId(),
+            task.getCompletionMediaGeneration(),
+            task.getCompletionEntryId(),
+            1,
+            OffsetDateTime.now(ZoneOffset.UTC)));
+
+    DriverTaskWorkflowStore.TransferArrivalWork arrival =
+        (DriverTaskWorkflowStore.TransferArrivalWork) store.nextWork(taskId).orElseThrow();
+
+    assertThat(cover.cabinId()).isEqualTo(cabinId);
+    assertThat(arrival.taskId()).isEqualTo(taskId);
+    assertThat(arrival.actorId()).isEqualTo(driverId);
+    assertThat(arrival.documentId()).isEqualTo(documentId);
+    assertThat(arrival.lineId()).isEqualTo(lineId);
+    assertThat(arrival.mediaId()).isEqualTo(task.getCompletionMediaId());
+    assertThat(arrival.mediaGeneration()).isEqualTo(task.getCompletionMediaGeneration());
+    verify(tasks).saveAndFlush(task);
+  }
+
+  @Test
   void groupedShipmentCompletesOnlyAfterEveryCabinCoverAndRetriesTheSameMemberSafely() {
     UUID taskId = UUID.randomUUID();
     UUID firstCabinId = UUID.randomUUID();
@@ -812,6 +927,58 @@ class DriverTaskWorkflowStoreTest {
             UUID.randomUUID(),
             "a".repeat(64));
     ReflectionTestUtils.setField(task, "id", taskId);
+    return task;
+  }
+
+  private static DriverLogisticsTask currentTransferTask(
+      UUID taskId,
+      UUID documentId,
+      UUID lineId,
+      UUID warehouseId,
+      UUID cabinId,
+      UUID driverId,
+      boolean done) {
+    DriverLogisticsTask task =
+        DriverLogisticsTask.createGroupedDocument(
+            warehouseId,
+            cabinId,
+            documentId,
+            DriverTaskKind.TRANSFER,
+            LocalDate.now(ZoneOffset.UTC),
+            1,
+            3,
+            "Межскладское перемещение",
+            null,
+            "1 бытовка",
+            UUID.randomUUID(),
+            driverId == null
+                ? DriverTaskAudienceMode.WAREHOUSE_DRIVERS
+                : DriverTaskAudienceMode.ASSIGNED_DRIVER,
+            driverId,
+            driverId == null ? null : "Петров Алексей",
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            "d".repeat(64));
+    ReflectionTestUtils.setField(task, "id", taskId);
+    task.addGroupedDocumentMember(lineId, cabinId, "БТ-172", 1);
+    UUID boardTaskId = UUID.randomUUID();
+    UUID entryId = UUID.randomUUID();
+    task.registerBoardTask(boardTaskId, 0, entryId, "WAITING", "SCHEDULED", null);
+    task.moveToCurrent(1, entryId, "WAITING");
+    if (done) {
+      task.observeBoardTask(
+          boardTaskId,
+          2,
+          entryId,
+          "DONE",
+          task.getScheduledDate(),
+          "CURRENT",
+          "DONE",
+          OffsetDateTime.now(ZoneOffset.UTC));
+      task.captureEvidence(UUID.randomUUID(), UUID.randomUUID(), 2, entryId);
+    }
+    ReflectionTestUtils.setField(
+        task, "nextAttemptAt", OffsetDateTime.now(ZoneOffset.UTC).minusSeconds(1));
     return task;
   }
 

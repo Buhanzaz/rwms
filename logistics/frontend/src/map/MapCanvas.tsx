@@ -12,6 +12,7 @@ import type {
   FeatureCollection,
   LineString,
   MultiPolygon,
+  Point,
   Polygon,
 } from 'geojson';
 import type {
@@ -72,6 +73,7 @@ const SOURCE_IDS = [
   'rwms-active',
   'rwms-candidates',
   'rwms-selected',
+  'rwms-requests',
   'rwms-truck-restrictions',
   'rwms-slot-route-before',
   'rwms-slot-route-after',
@@ -79,6 +81,7 @@ const SOURCE_IDS = [
 ] as const;
 const TRUCK_RESTRICTION_MIN_ZOOM = 8;
 const TRAVEL_TIME_CONTOUR_MAX_CONCURRENCY = 4;
+const MAP_VIEWPORT_KEY_PREFIX = 'rwms:logistics:map-viewport:';
 const TRUCK_RESTRICTION_LAYER_IDS = [
   'rwms-truck-restrictions-lines',
   'rwms-truck-restrictions-points',
@@ -91,6 +94,43 @@ const EMPTY_TRUCK_RESTRICTION_STATE: TruckRestrictionLayerState = {
   truncated: false,
   error: null,
 };
+
+/** Per-warehouse browser view; it never participates in route feasibility or persistence. */
+interface MapViewportPreference {
+  longitude: number;
+  latitude: number;
+  zoom: number;
+}
+
+function readMapViewport(warehouseId: UUID): MapViewportPreference | null {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(`${MAP_VIEWPORT_KEY_PREFIX}${warehouseId}`) ?? 'null') as unknown;
+    if (!parsed || typeof parsed !== 'object') return null;
+    const value = parsed as Partial<MapViewportPreference>;
+    if (
+      !Number.isFinite(value.longitude)
+      || !Number.isFinite(value.latitude)
+      || !Number.isFinite(value.zoom)
+      || (value.longitude as number) < -180
+      || (value.longitude as number) > 180
+      || (value.latitude as number) < -90
+      || (value.latitude as number) > 90
+      || (value.zoom as number) < 0
+      || (value.zoom as number) > 24
+    ) return null;
+    return value as MapViewportPreference;
+  } catch {
+    return null;
+  }
+}
+
+function writeMapViewport(warehouseId: UUID, viewport: MapViewportPreference): void {
+  try {
+    window.localStorage.setItem(`${MAP_VIEWPORT_KEY_PREFIX}${warehouseId}`, JSON.stringify(viewport));
+  } catch {
+    // The current in-memory map remains usable when browser storage is blocked.
+  }
+}
 
 /** Load every contour origin without flooding the shared Valhalla worker pool. */
 async function loadTravelTimeContourFeatures(
@@ -220,6 +260,15 @@ function candidateFeatures(events: OptimizationTraceEvent[]): Feature<LineString
 
 function selectedFeatures(selection: MapSelection, workspace: WarehouseWorkspace, plan: RoutePlan | null): Feature[] {
   if (!selection) return [];
+  if (selection.kind === 'request') {
+    const request = workspace.requests.find((candidate) => candidate.id === selection.id);
+    if (!request) return [];
+    return [{
+      type: 'Feature',
+      properties: { requestId: request.id },
+      geometry: { type: 'Point', coordinates: [request.longitude, request.latitude] },
+    }];
+  }
   if (selection.kind === 'cycle' && plan) {
     const cycle = plan.driver_routes.flatMap((route) => route.cycles).find((candidate) => candidate.id === selection.id);
     if (!cycle) return [];
@@ -234,6 +283,25 @@ function selectedFeatures(selection: MapSelection, workspace: WarehouseWorkspace
     ];
   }
   return [];
+}
+
+function requestPointFeatures(
+  requests: WarehouseWorkspace['requests'],
+  unassignedRequestIds: ReadonlySet<UUID>,
+): Array<Feature<Point>> {
+  return requests.map((request) => {
+    const unassigned = request.status === 'UNASSIGNED' || unassignedRequestIds.has(request.id);
+    return {
+      type: 'Feature',
+      properties: {
+        requestId: request.id,
+        requestType: request.type,
+        glyph: `${request.type === 'DELIVERY' ? 'Д' : 'В'}${unassigned ? '!' : ''}`,
+        unassigned,
+      },
+      geometry: { type: 'Point', coordinates: [request.longitude, request.latitude] },
+    };
+  });
 }
 
 function markerElement(kind: 'warehouse' | 'delivery' | 'pickup' | 'truck', label: string, selected: boolean): HTMLElement {
@@ -316,6 +384,9 @@ function addOverlaySources(map: MapLibreMap): void {
       map.addSource(id, {
         type: 'geojson',
         data: EMPTY_COLLECTION,
+        ...(id === 'rwms-requests'
+          ? { cluster: true, clusterMaxZoom: 13, clusterRadius: 48 }
+          : {}),
         ...(id === 'rwms-truck-restrictions'
           ? { attribution: '<a href="https://www.openstreetmap.org/copyright" target="_blank">© OpenStreetMap contributors</a>' }
           : {}),
@@ -330,6 +401,11 @@ function addOverlaySources(map: MapLibreMap): void {
   addLayer({ id: 'rwms-candidates-line', type: 'line', source: 'rwms-candidates', paint: { 'line-color': ['case', ['get', 'rejected'], '#fb7185', '#fbbf24'], 'line-width': 2, 'line-opacity': 0.48, 'line-dasharray': [2, 2] } });
   addLayer({ id: 'rwms-corridor-line', type: 'line', source: 'rwms-corridor', paint: { 'line-color': '#38bdf8', 'line-width': 18, 'line-opacity': 0.1 } });
   addLayer({ id: 'rwms-selected-fill', type: 'fill', source: 'rwms-selected', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': '#fbbf24', 'fill-opacity': 0.22 } });
+  addLayer({ id: 'rwms-request-clusters', type: 'circle', source: 'rwms-requests', filter: ['has', 'point_count'], paint: { 'circle-color': '#2563eb', 'circle-radius': ['step', ['get', 'point_count'], 18, 25, 22, 100, 27], 'circle-stroke-color': '#dbeafe', 'circle-stroke-width': 2, 'circle-opacity': 0.92 } });
+  addLayer({ id: 'rwms-request-cluster-count', type: 'symbol', source: 'rwms-requests', filter: ['has', 'point_count'], layout: { 'text-field': '{point_count_abbreviated}', 'text-size': 12 }, paint: { 'text-color': '#f8fafc' } });
+  addLayer({ id: 'rwms-request-points', type: 'circle', source: 'rwms-requests', filter: ['!', ['has', 'point_count']], paint: { 'circle-color': ['case', ['==', ['get', 'requestType'], 'DELIVERY'], '#38bdf8', '#fb923c'], 'circle-radius': ['case', ['get', 'unassigned'], 10, 8], 'circle-stroke-color': ['case', ['get', 'unassigned'], '#fb7185', '#07101d'], 'circle-stroke-width': ['case', ['get', 'unassigned'], 4, 2], 'circle-opacity': 0.94 } });
+  addLayer({ id: 'rwms-request-labels', type: 'symbol', source: 'rwms-requests', filter: ['!', ['has', 'point_count']], layout: { 'text-field': ['get', 'glyph'], 'text-size': 10, 'text-allow-overlap': true }, paint: { 'text-color': '#07101d' } });
+  addLayer({ id: 'rwms-selected-request', type: 'circle', source: 'rwms-selected', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-color': '#fbbf24', 'circle-radius': 12, 'circle-stroke-color': '#f8fafc', 'circle-stroke-width': 3, 'circle-opacity': 0.96 } });
   addLayer({ id: 'rwms-slot-pickup-candidates-points', type: 'circle', source: 'rwms-slot-pickup-candidates', filter: ['==', ['geometry-type'], 'Point'], layout: { visibility: 'none' }, paint: { 'circle-color': ['case', ['==', ['get', 'selected'], true], '#5ee2b2', '#fb923c'], 'circle-radius': 7, 'circle-stroke-color': '#07101d', 'circle-stroke-width': 2 } });
   addLayer({ id: 'rwms-slot-pickup-candidates-lines', type: 'line', source: 'rwms-slot-pickup-candidates', filter: ['!=', ['geometry-type'], 'Point'], layout: { visibility: 'none' }, paint: { 'line-color': '#fb923c', 'line-width': 3, 'line-opacity': 0.8, 'line-dasharray': [2, 2] } });
   addLayer({
@@ -422,9 +498,16 @@ export function MapCanvas({
   const travelTimeContourAbortRef = useRef<AbortController | null>(null);
   const truckRestrictionLookupRef = useRef<ReturnType<typeof truckRestrictionLookup>>(new Map());
   const truckRestrictionMetadataRef = useRef<TruckRestrictionMetadata | null>(null);
-  const fittedWarehouseIdRef = useRef<UUID | null>(null);
+  const initialViewportRef = useRef(readMapViewport(workspace.warehouse.id));
+  const initialMapPositionRef = useRef(initialViewportRef.current ?? {
+    longitude: workspace.warehouse.longitude,
+    latitude: workspace.warehouse.latitude,
+    zoom: 11,
+  });
+  const fittedWarehouseIdRef = useRef<UUID | null>(workspace.warehouse.id);
   const fittedPendingWarehouseIdRef = useRef<UUID | null>(null);
   const fittedPlanIdRef = useRef<UUID | null>(null);
+  const suppressCurrentPlanFitRef = useRef(initialViewportRef.current !== null);
   const pannedRequestIdRef = useRef<UUID | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const [layersOpen, setLayersOpen] = useState(false);
@@ -467,11 +550,12 @@ export function MapCanvas({
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
     let fellBack = false;
+    const initialViewport = initialMapPositionRef.current;
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: styleUrl || BLANK_STYLE,
-      center: [37.6176, 55.7558],
-      zoom: 8.6,
+      center: [initialViewport.longitude, initialViewport.latitude],
+      zoom: initialViewport.zoom,
       attributionControl: false,
       canvasContextAttributes: { preserveDrawingBuffer: true },
     });
@@ -509,6 +593,23 @@ export function MapCanvas({
       mapRef.current = null;
     };
   }, [onMapError, styleUrl]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    const persistViewport = () => {
+      const center = map.getCenter();
+      writeMapViewport(workspace.warehouse.id, {
+        longitude: center.lng,
+        latitude: center.lat,
+        zoom: map.getZoom(),
+      });
+    };
+    map.on('moveend', persistViewport);
+    return () => {
+      map.off('moveend', persistViewport);
+    };
+  }, [mapReady, workspace.warehouse.id]);
 
   const loadTruckRestrictions = useCallback(async () => {
     const map = mapRef.current;
@@ -680,7 +781,51 @@ export function MapCanvas({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
+    const onRequestClick = (event: maplibregl.MapLayerMouseEvent) => {
+      const requestId = featureProperty(event.features?.[0], 'requestId');
+      if (!requestId) return;
+      event.preventDefault();
+      event.originalEvent.stopPropagation();
+      onSelect({ kind: 'request', id: requestId });
+    };
+    const onClusterClick = (event: maplibregl.MapLayerMouseEvent) => {
+      const renderedFeature = event.features?.[0];
+      const clusterId = featureNumberProperty(renderedFeature, 'cluster_id');
+      const geometry = renderedFeature?.geometry;
+      if (clusterId === null || geometry?.type !== 'Point') return;
+      event.preventDefault();
+      event.originalEvent.stopPropagation();
+      const source = map.getSource<GeoJSONSource>('rwms-requests');
+      if (!source) return;
+      const center = geometry.coordinates as [number, number];
+      void source.getClusterExpansionZoom(clusterId).then((zoom) => {
+        map.easeTo({ center, zoom, duration: 350 });
+      });
+    };
+    const onPointerEnter = () => { map.getCanvas().style.cursor = 'pointer'; };
+    const onPointerLeave = () => { map.getCanvas().style.cursor = ''; };
+    map.on('click', 'rwms-request-points', onRequestClick);
+    map.on('click', 'rwms-request-clusters', onClusterClick);
+    map.on('mouseenter', 'rwms-request-points', onPointerEnter);
+    map.on('mouseleave', 'rwms-request-points', onPointerLeave);
+    map.on('mouseenter', 'rwms-request-clusters', onPointerEnter);
+    map.on('mouseleave', 'rwms-request-clusters', onPointerLeave);
+    return () => {
+      map.off('click', 'rwms-request-points', onRequestClick);
+      map.off('click', 'rwms-request-clusters', onClusterClick);
+      map.off('mouseenter', 'rwms-request-points', onPointerEnter);
+      map.off('mouseleave', 'rwms-request-points', onPointerLeave);
+      map.off('mouseenter', 'rwms-request-clusters', onPointerEnter);
+      map.off('mouseleave', 'rwms-request-clusters', onPointerLeave);
+      map.getCanvas().style.cursor = '';
+    };
+  }, [mapReady, onSelect]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
     const onClick = (event: maplibregl.MapMouseEvent) => {
+      if (event.defaultPrevented) return;
       if (planningCheck?.active) onPlanningCheckPoint({ longitude: event.lngLat.lng, latitude: event.lngLat.lat });
       else if (mapTool === 'ADD_DELIVERY' || mapTool === 'ADD_PICKUP') onPlacePoint('request', event.lngLat.lng, event.lngLat.lat);
       else if (mapTool === 'SELECT') onSelect(null);
@@ -735,20 +880,76 @@ export function MapCanvas({
     () => new Set(plan?.unassigned.map((item) => item.request?.id ?? item.task.request_id) ?? []),
     [plan],
   );
+  const mappedRequests = useMemo(
+    () => requestsForPlanningDate.filter((request) => {
+      const visibleByKind = request.type === 'DELIVERY' ? layers.deliveries : layers.pickups;
+      const unassigned = request.status === 'UNASSIGNED' || unassignedRequestIds.has(request.id);
+      return visibleByKind && (!unassigned || layers.unassigned);
+    }),
+    [layers.deliveries, layers.pickups, layers.unassigned, requestsForPlanningDate, unassignedRequestIds],
+  );
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    setSource(map, 'rwms-requests', featureCollection(requestPointFeatures(mappedRequests, unassignedRequestIds)));
+  }, [mapReady, mappedRequests, unassignedRequestIds]);
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
     setSource(map, 'rwms-corridor', featureCollection(allRoutes));
     setSource(map, 'rwms-routes', featureCollection(allRoutes));
     setSource(map, 'rwms-candidates', featureCollection(candidateFeatures(traceEvents)));
-    setSource(map, 'rwms-selected', featureCollection(selectedFeatures(selected, workspace, plan)));
+    setSource(map, 'rwms-selected', featureCollection(
+      selected?.kind === 'request' && !selectedRequest
+        ? []
+        : selectedFeatures(selected, workspace, plan),
+    ));
 
     const { traveled, active } = simulation && plan
       ? deriveSimulationRouteLayers(plan, simulation)
       : { traveled: [], active: [] };
     setSource(map, 'rwms-traveled', featureCollection(traveled));
     setSource(map, 'rwms-active', featureCollection(active));
-  }, [allRoutes, mapReady, plan, selected, simulation, traceEvents, workspace]);
+  }, [allRoutes, mapReady, plan, selected, selectedRequest, simulation, traceEvents, workspace]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady || !selectedRequest) return;
+    let dragging = false;
+    const onDragStart = (event: maplibregl.MapLayerMouseEvent) => {
+      if (featureProperty(event.features?.[0], 'requestId') !== selectedRequest.id) return;
+      event.originalEvent.preventDefault();
+      event.originalEvent.stopPropagation();
+      dragging = true;
+      map.dragPan.disable();
+      map.getCanvas().style.cursor = 'grabbing';
+    };
+    const onDrag = (event: maplibregl.MapMouseEvent) => {
+      if (!dragging) return;
+      setSource(map, 'rwms-selected', featureCollection([{
+        type: 'Feature',
+        properties: { requestId: selectedRequest.id },
+        geometry: { type: 'Point', coordinates: [event.lngLat.lng, event.lngLat.lat] },
+      }]));
+    };
+    const onDragEnd = (event: maplibregl.MapMouseEvent) => {
+      if (!dragging) return;
+      dragging = false;
+      map.dragPan.enable();
+      map.getCanvas().style.cursor = '';
+      onRequestMoveDraft(selectedRequest.id, event.lngLat.lng, event.lngLat.lat);
+    };
+    map.on('mousedown', 'rwms-selected-request', onDragStart);
+    map.on('mousemove', onDrag);
+    map.on('mouseup', onDragEnd);
+    return () => {
+      map.off('mousedown', 'rwms-selected-request', onDragStart);
+      map.off('mousemove', onDrag);
+      map.off('mouseup', onDragEnd);
+      if (dragging) map.dragPan.enable();
+      map.getCanvas().style.cursor = '';
+    };
+  }, [mapReady, onRequestMoveDraft, selectedRequest]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -764,7 +965,15 @@ export function MapCanvas({
     if (!map || !mapReady || fittedWarehouseIdRef.current === workspace.warehouse.id) return;
     fittedWarehouseIdRef.current = workspace.warehouse.id;
     fittedPlanIdRef.current = null;
-    map.easeTo({ center: [workspace.warehouse.longitude, workspace.warehouse.latitude], zoom: 11, duration: 550 });
+    suppressCurrentPlanFitRef.current = true;
+    const savedViewport = readMapViewport(workspace.warehouse.id);
+    map.easeTo({
+      center: savedViewport
+        ? [savedViewport.longitude, savedViewport.latitude]
+        : [workspace.warehouse.longitude, workspace.warehouse.latitude],
+      zoom: savedViewport?.zoom ?? 11,
+      duration: 550,
+    });
   }, [mapReady, workspace.warehouse.id, workspace.warehouse.latitude, workspace.warehouse.longitude]);
 
   useEffect(() => {
@@ -786,6 +995,15 @@ export function MapCanvas({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady || !plan || fittedPlanIdRef.current === plan.id) return;
+    if (plan.warehouse_id !== workspace.warehouse.id) {
+      fittedPlanIdRef.current = plan.id;
+      return;
+    }
+    if (suppressCurrentPlanFitRef.current) {
+      suppressCurrentPlanFitRef.current = false;
+      fittedPlanIdRef.current = plan.id;
+      return;
+    }
     const bounds = new maplibregl.LngLatBounds();
     let pointCount = 0;
     allRoutes.forEach((feature) => feature.geometry.coordinates.forEach((coordinates) => {
@@ -796,7 +1014,7 @@ export function MapCanvas({
       fittedPlanIdRef.current = plan.id;
       map.fitBounds(bounds, { padding: { top: 74, bottom: 74, left: 74, right: 290 }, maxZoom: 12, duration: 450 });
     }
-  }, [allRoutes, mapReady, plan]);
+  }, [allRoutes, mapReady, plan, workspace.warehouse.id]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -833,26 +1051,6 @@ export function MapCanvas({
         .setPopup(new maplibregl.Popup({ offset: 18 }).setText('Новый адрес для проверки слотов'))
         .addTo(map));
     }
-    requestsForPlanningDate.forEach((request) => {
-      const visible = request.type === 'DELIVERY' ? layers.deliveries : layers.pickups;
-      const isUnassigned = request.status === 'UNASSIGNED' || unassignedRequestIds.has(request.id);
-      if (!visible || (isUnassigned && !layers.unassigned)) return;
-      const element = markerElement(request.type === 'DELIVERY' ? 'delivery' : 'pickup', `${request.type === 'DELIVERY' ? 'Доставка' : 'Вывоз'}: ${request.name}`, selected?.kind === 'request' && selected.id === request.id);
-      if (isUnassigned) {
-        element.classList.add('map-marker--unassigned');
-        element.style.borderColor = '#fb7185';
-        element.setAttribute('aria-label', `Нераспределённая ${request.type === 'DELIVERY' ? 'доставка' : 'точка вывоза'}: ${request.name}`);
-        const markerLabel = element.querySelector('span');
-        if (markerLabel) markerLabel.textContent = `${request.type === 'DELIVERY' ? 'Д' : 'В'}!`;
-      }
-      element.addEventListener('click', (event) => { event.stopPropagation(); onSelect({ kind: 'request', id: request.id }); });
-      const marker = new maplibregl.Marker({ element, anchor: 'bottom', draggable: selected?.kind === 'request' && selected.id === request.id }).setLngLat([request.longitude, request.latitude]).addTo(map);
-      marker.on('dragend', () => {
-        const point = marker.getLngLat();
-        onRequestMoveDraft(request.id, point.lng, point.lat);
-      });
-      markers.push(marker);
-    });
     if (layers.trucks && simulation) {
       simulation.vehicles.forEach((vehicle) => {
         const coordinates = vehicle.position.geometry.coordinates;
@@ -865,7 +1063,7 @@ export function MapCanvas({
     }
     markersRef.current = markers;
     return () => markers.forEach((marker) => marker.remove());
-  }, [layers.deliveries, layers.pickups, layers.trucks, layers.unassigned, layers.warehouse, mapReady, onRequestMoveDraft, onSelect, pendingWarehousePoint, planningCheck?.active, planningCheck?.point, requestsForPlanningDate, selected, simulation, unassignedRequestIds, workspace.warehouse.id, workspace.warehouse.timezone, workspace.warehouses]);
+  }, [layers.trucks, layers.warehouse, mapReady, onSelect, pendingWarehousePoint, planningCheck?.active, planningCheck?.point, selected, simulation, workspace.warehouse.id, workspace.warehouse.timezone, workspace.warehouses]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -877,8 +1075,13 @@ export function MapCanvas({
       ['rwms-routes-line', layers.routes],
       ['rwms-traveled-line', layers.traveled],
       ['rwms-active-line', layers.activeLeg],
+      ['rwms-request-clusters', layers.deliveries || layers.pickups],
+      ['rwms-request-cluster-count', layers.deliveries || layers.pickups],
+      ['rwms-request-points', layers.deliveries || layers.pickups],
+      ['rwms-request-labels', layers.deliveries || layers.pickups],
       ['rwms-selected-fill', layers.selected],
       ['rwms-selected-line', layers.selected],
+      ['rwms-selected-request', layers.selected],
       ['rwms-truck-restrictions-lines', layers.truckRestrictions],
       ['rwms-truck-restrictions-points', layers.truckRestrictions],
       ['rwms-truck-restrictions-line-labels', layers.truckRestrictions],

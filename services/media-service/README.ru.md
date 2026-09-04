@@ -443,6 +443,23 @@ retries 1s/2s/4s; validation terminal на фактической попытке
 использует source processing-job UUID key для валидного запроса либо
 deterministic UUIDv5 в OID namespace от SHA-256 raw bytes для невалидного.
 
+## Приватное подтверждение фотографий при создании бытовки
+
+`POST /api/internal/media/v1/assets/cabin-creation-snapshots` — узкое чтение, которым asset-service
+завершает свой intent создания бытовки с обязательными фотографиями. Оно принимает только точный
+SERVICE JWT (`sub=client_id=asset-service`, audience `rwms-services`, единственный scope
+`media.asset`) и ограниченный список identity бытовки/склада. Маршрут переиспользует каноническую
+текущую projection CABIN photo library и не читает и не записывает asset database.
+
+Для каждой запрошенной бытовки с current binding ответ возвращает active gallery folder, полный
+logical image count, текущую READY-обложку и упорядоченные READY images текущего generation. Для
+каждого изображения раскрываются только opaque media ID, generation, zero-based association index
+и immutable finalized checksum исходника, content type и длина в байтах. Имена файлов, object-store
+locations, signed URLs и bytes исключены. Отсутствующий owner proof, незавершённая/обрабатываемая
+gallery, несовпадение folder или отсутствие READY-обложки остаются явными, чтобы asset-service
+работал fail-closed. Новая media schema этой projection не нужна: finalized metadata и canonical
+cabin-library association уже владеют proof.
+
 ## Ограниченное восстановление processing
 
 Processing consumer разделяет malformed Kafka input, transient outage
@@ -524,6 +541,28 @@ generations. Ответ содержит лишь подтверждённые o
 policy. Это read-only операция: она не делает upload, не меняет owner binding,
 event/outbox/Kafka consumer и не вызывает object storage.
 
+`POST /api/internal/media/v1/logistics/contractor-task-executions/{entryId}/workers/{workerId}/evidence/{evidenceId}`
+— точный ingress доказательства подрядчика, которым пользуется
+logistics-service. Требуется та же точная SERVICE identity/scope,
+`Idempotency-Key` обязан совпадать с зарезервированным `evidenceId`, а
+`warehouseId` — единственный query-параметр. Запрос содержит один ограниченный
+JPEG или WebP с известным `Content-Length` и lowercase
+`X-Content-SHA256`. Media-service выводит один стабильный opaque media ID,
+записывает указанного подрядчика как actor `WORKER` и повторно проверяет current
+task-board upload audience перед create и finalize. Байты потоково пишутся в
+существующее приватное versioned storage и проверяются по длине, checksum, MIME
+sniff, object version и ETag. Точный повтор возвращает только
+`{mediaId,generation,status}` и никогда не создаёт второй asset и не раскрывает
+object path, upload session, URL или credential.
+
+`GET /api/internal/media/v1/logistics/contractor-task-executions/{entryId}/workers/{workerId}/assets/{mediaId}/generations/{generation}/variants/{variant}/content`
+— парный private stream SMALL/MEDIUM/LARGE. Он использует существующий точный
+task-board worker read proof и pinned generation, сворачивает любое
+несовпадение owner, worker, warehouse, media, generation или variant в opaque
+`404` и отдаёт immutable WebP с `private, no-store`. Это не общий media path;
+любое последующее expiring browser-facing представление подрядчика принадлежит
+logistics и никогда не передаёт его service credential.
+
 `POST /api/internal/media/v1/logistics/cabin-presentations/snapshots` использует
 ту же точную SERVICE identity/scope. Он принимает от одного до ста уникальных
 CABIN ID одного warehouse и возвращает только current canonical bindings,
@@ -538,10 +577,18 @@ object-store coordinates, signed URL, filename, MIME type или processing data
 
 `GET /api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content`
 — парный private byte stream. `variant` ровно `SMALL` или `LARGE`; в запросе
-обязательны CABIN, warehouse и current generation. Любое несовпадение scope,
-owner, warehouse, state, generation или variant даёт одинаковый opaque 404.
-Публичного logistics presentation-media route нет: последующий browser-facing
-proxy принадлежит logistics.
+обязательны CABIN, warehouse и generation, закреплённые immutable
+presentation snapshot. Media проверяет retained canonical association и точную
+строку generation/variant, затем передаёт закреплённую MinIO object version;
+asset при этом не обязан оставаться current, READY или non-deleted. Trusted
+граница logistics отвечает за membership: только logistics может вызвать этот
+route и обязан передать tuple `{cabinId,warehouseId,mediaId,generation,variant}`
+из current snapshot. Поэтому предикат association `media_generation >=
+generation` сохраняет историческую generation после последующей обработки или
+soft deletion. Любое несовпадение scope, association, cabin, warehouse, media,
+generation или variant даёт одинаковый opaque 404. Публичного logistics
+presentation-media route нет: последующий browser-facing proxy принадлежит
+logistics.
 
 ## Структурный архитектурный гейт
 

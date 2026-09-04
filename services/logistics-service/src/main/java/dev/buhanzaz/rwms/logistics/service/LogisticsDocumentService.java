@@ -592,6 +592,23 @@ public class LogisticsDocumentService {
             expectedLineVersion));
   }
 
+  /** Starts one version-fenced transfer that contains no physical cabin lines. */
+  @Transactional
+  public CreateResult departTransfer(
+      UUID subjectId,
+      UUID idempotencyKey,
+      UUID correlationId,
+      UUID documentId,
+      long expectedDocumentVersion) {
+    return result(
+        transferCoordinator.departTransfer(
+            subjectId,
+            idempotencyKey,
+            correlationId,
+            documentId,
+            expectedDocumentVersion));
+  }
+
   /**
    * Freezes exact media generations before asking media-service for ownership truth, then lets the
    * durable relay verify the in-transit snapshot and invoke the one permitted destination
@@ -617,6 +634,23 @@ public class LogisticsDocumentService {
             expectedDocumentVersion,
             expectedLineVersion,
             request));
+  }
+
+  /** Records arrival of a zero-cabin transfer and starts its resource/furniture completion. */
+  @Transactional
+  public CreateResult arriveTransfer(
+      UUID subjectId,
+      UUID idempotencyKey,
+      UUID correlationId,
+      UUID documentId,
+      long expectedDocumentVersion) {
+    return result(
+        transferCoordinator.arriveTransfer(
+            subjectId,
+            idempotencyKey,
+            correlationId,
+            documentId,
+            expectedDocumentVersion));
   }
 
   public TransferArrivalPreflightView transferArrivalPreflight(
@@ -675,6 +709,22 @@ public class LogisticsDocumentService {
 
   public List<LogisticsDocumentView> list(LogisticsDocumentType type, UUID warehouseId) {
     return readProjection.list(type, warehouseId);
+  }
+
+  /** Returns one deterministic, bounded document page for a warehouse list endpoint. */
+  public LogisticsDocumentPage page(
+      LogisticsDocumentType type, UUID warehouseId, int pageNumber, int pageSize) {
+    return readProjection.page(type, warehouseId, pageNumber, pageSize);
+  }
+
+  /** Returns one exact warehouse-local operation day; transfers include both directions. */
+  public LogisticsDocumentPage page(
+      LogisticsDocumentType type,
+      UUID warehouseId,
+      LocalDate scheduledDate,
+      int pageNumber,
+      int pageSize) {
+    return readProjection.page(type, warehouseId, scheduledDate, pageNumber, pageSize);
   }
 
   public LogisticsDocument document(UUID id, LogisticsDocumentType type) {

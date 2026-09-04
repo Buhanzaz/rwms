@@ -108,6 +108,29 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
     taskBoard.registerDriverShiftPlan(idempotencyKey, sourceShiftId, plan);
   }
 
+  public PlanningReplacementResult replacePlanningAssignments(
+      UUID sourcePlanId, UUID idempotencyKey, PlanningReplacementSnapshot replacement) {
+    return taskBoard.replacePlanningAssignments(sourcePlanId, idempotencyKey, replacement);
+  }
+
+  @Override
+  public PlanningReplanPrepareResult preparePlanningReschedule(
+      UUID sourcePlanId, UUID idempotencyKey, PlanningReplanPrepareSnapshot request) {
+    return taskBoard.preparePlanningReschedule(sourcePlanId, idempotencyKey, request);
+  }
+
+  @Override
+  public PlanningReplanCommitResult commitPlanningReschedule(
+      UUID holdId, UUID idempotencyKey) {
+    return taskBoard.commitPlanningReschedule(holdId, idempotencyKey);
+  }
+
+  @Override
+  public PlanningReplanReleaseResult releasePlanningReschedule(
+      UUID holdId, UUID idempotencyKey) {
+    return taskBoard.releasePlanningReschedule(holdId, idempotencyKey);
+  }
+
   public WorkerOperationalAssignment createWorkerOperationalAssignment(
       UUID transferId,
       UUID workerId,
@@ -627,6 +650,34 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       int priority,
       DriverTaskAudience driverAudience,
       DriverTaskWorkerContent workerContent) {
+    return registerDriverTask(
+        warehouseId,
+        externalTaskId,
+        sourceId,
+        title,
+        unitNumber,
+        description,
+        queueDefinitionId,
+        scheduledDate,
+        priority,
+        driverAudience,
+        workerContent,
+        null);
+  }
+
+  public DriverBoardTask registerDriverTask(
+      UUID warehouseId,
+      UUID externalTaskId,
+      UUID sourceId,
+      String title,
+      String unitNumber,
+      String description,
+      UUID queueDefinitionId,
+      LocalDate scheduledDate,
+      int priority,
+      DriverTaskAudience driverAudience,
+      DriverTaskWorkerContent workerContent,
+      DriverTaskPlannerLineage plannerLineage) {
     return taskBoard.registerDriverTask(
         warehouseId,
         externalTaskId,
@@ -638,7 +689,8 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         scheduledDate,
         priority,
         driverAudience,
-        workerContent);
+        workerContent,
+        plannerLineage);
   }
 
   public DriverBoardTask updateDriverTaskBeforeStart(
@@ -661,6 +713,35 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
 
   public DriverBoardTask readDriverTask(UUID externalTaskId) {
     return taskBoard.readDriverTask(externalTaskId);
+  }
+
+  public ContractorTaskExecution readContractorTaskExecution(UUID workerId, UUID externalTaskId) {
+    return taskBoard.readContractorTaskExecution(workerId, externalTaskId);
+  }
+
+  public ContractorTaskActionResult applyContractorTaskAction(
+      UUID workerId,
+      UUID externalTaskId,
+      UUID entryId,
+      UUID idempotencyKey,
+      String action,
+      long expectedVersion,
+      UUID evidenceId) {
+    return taskBoard.applyContractorTaskAction(
+        workerId, externalTaskId, entryId, idempotencyKey, action, expectedVersion, evidenceId);
+  }
+
+  public ContractorEvidenceReservation reserveContractorTaskEvidence(
+      UUID workerId,
+      UUID externalTaskId,
+      UUID entryId,
+      UUID evidenceId,
+      OffsetDateTime capturedAt,
+      String contentType,
+      long sizeBytes,
+      String sha256) {
+    return taskBoard.reserveContractorTaskEvidence(
+        workerId, externalTaskId, entryId, evidenceId, capturedAt, contentType, sizeBytes, sha256);
   }
 
   public DriverBoardTask cancelDriverTask(UUID externalTaskId, long expectedTaskVersion) {
@@ -976,6 +1057,29 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   public MediaContent readCabinPresentationMedia(
       UUID warehouseId, UUID cabinId, UUID mediaId, long generation, String variant) {
     return media.readCabinPresentationMedia(warehouseId, cabinId, mediaId, generation, variant);
+  }
+
+  public ContractorEvidenceMediaReceipt uploadContractorTaskEvidence(
+      UUID warehouseId,
+      UUID workerId,
+      UUID entryId,
+      UUID evidenceId,
+      String contentType,
+      String sha256,
+      byte[] bytes) {
+    return media.uploadContractorTaskEvidence(
+        warehouseId, workerId, entryId, evidenceId, contentType, sha256, bytes);
+  }
+
+  public MediaContent readContractorTaskMedia(
+      UUID warehouseId,
+      UUID workerId,
+      UUID entryId,
+      UUID mediaId,
+      long generation,
+      String variant) {
+    return media.readContractorTaskMedia(
+        warehouseId, workerId, entryId, mediaId, generation, variant);
   }
 
   private static String strip(String value) {

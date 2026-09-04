@@ -69,4 +69,5 @@ public class RepairComplexityColorsService {
         value.getCapitalColor(),
         value.getUpdatedAt());
   }
+
 }

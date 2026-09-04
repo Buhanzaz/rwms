@@ -2,7 +2,6 @@ package dev.buhanzaz.rwms.taskboard.service;
 
 import dev.buhanzaz.rwms.taskboard.domain.GroupKpiDayState;
 import dev.buhanzaz.rwms.taskboard.repository.GroupKpiDayStateRepository;
-import dev.buhanzaz.rwms.taskboard.repository.WarehouseKpiSettingsRepository;
 import dev.buhanzaz.rwms.taskboard.repository.WorkerGroupRepository;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -19,19 +18,19 @@ public class GroupKpiEvidenceScheduler {
   private static final Logger log = LoggerFactory.getLogger(GroupKpiEvidenceScheduler.class);
 
   private final GroupKpiDayStateRepository days;
-  private final WarehouseKpiSettingsRepository settings;
   private final WorkerGroupRepository groups;
   private final GroupKpiEvidenceService evidence;
+  private final WarehouseKpiClock clock;
 
   public GroupKpiEvidenceScheduler(
       GroupKpiDayStateRepository days,
-      WarehouseKpiSettingsRepository settings,
       WorkerGroupRepository groups,
-      GroupKpiEvidenceService evidence) {
+      GroupKpiEvidenceService evidence,
+      WarehouseKpiClock clock) {
     this.days = days;
-    this.settings = settings;
     this.groups = groups;
     this.evidence = evidence;
+    this.clock = clock;
   }
 
   @Scheduled(fixedDelayString = "${rwms.kpi.evidence-refresh-delay:PT15S}")
@@ -42,21 +41,18 @@ public class GroupKpiEvidenceScheduler {
         days.findAllByNextTransitionAtLessThanEqualOrderByNextTransitionAtAsc(at)) {
       targets.add(new GroupRef(day.getWarehouseId(), day.getWorkerGroupId()));
     }
-    settings.findAll().stream()
-        .filter(value -> value.getDataAvailableFrom() != null)
-        .forEach(
-            warehouse ->
-                groups
-                    .findAllByWarehouseIdAndActiveTrueOrderByNameAsc(warehouse.getWarehouseId())
-                    .stream()
-                    .filter(
-                        group ->
-                            !evidence.hasDay(
-                                warehouse.getWarehouseId(), group.getId(), at))
-                    .map(
-                        group ->
-                            new GroupRef(warehouse.getWarehouseId(), group.getId()))
-                    .forEach(targets::add));
+    var activeGroups = groups.findAll().stream().filter(group -> group.isActive()).toList();
+    var configuredWarehouses =
+        activeGroups.stream()
+            .map(group -> group.getWarehouseId())
+            .distinct()
+            .filter(this::hasKpiHistory)
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    activeGroups.stream()
+        .filter(group -> configuredWarehouses.contains(group.getWarehouseId()))
+        .filter(group -> !evidence.hasDay(group.getWarehouseId(), group.getId(), at))
+        .map(group -> new GroupRef(group.getWarehouseId(), group.getId()))
+        .forEach(targets::add);
 
     for (GroupRef target : targets) {
       try {
@@ -68,6 +64,15 @@ public class GroupKpiEvidenceScheduler {
             target.groupId(),
             exception);
       }
+    }
+  }
+
+  private boolean hasKpiHistory(UUID warehouseId) {
+    try {
+      return clock.dataAvailableFrom(warehouseId).isPresent();
+    } catch (RuntimeException exception) {
+      log.warn("Could not resolve KPI settings for warehouse {}", warehouseId, exception);
+      return false;
     }
   }
 

@@ -43,6 +43,9 @@ public class SecurityConfiguration {
           authorize
               .requestMatchers("/api/internal/task-board/v1/logistics/**")
               .hasAuthority("SCOPE_task-board.logistics");
+          authorize
+              .requestMatchers("/api/internal/task-board/v1/inventory/**")
+              .hasAuthority("SCOPE_task-board.inventory-calendar.read");
           authorize.requestMatchers("/api/internal/**").authenticated();
           authorize
               .requestMatchers("/api/worker/v1/**")
@@ -95,8 +98,7 @@ public class SecurityConfiguration {
             HttpHeaders.CONTENT_TYPE,
             HttpHeaders.IF_NONE_MATCH,
             CorrelationIdFilter.HEADER_NAME,
-            "Idempotency-Key",
-            "Last-Event-ID"));
+            "Idempotency-Key"));
     configuration.setExposedHeaders(
         List.of(CorrelationIdFilter.HEADER_NAME, HttpHeaders.ETAG, HttpHeaders.RETRY_AFTER));
     var source = new UrlBasedCorsConfigurationSource();

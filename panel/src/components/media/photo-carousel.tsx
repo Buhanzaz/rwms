@@ -364,7 +364,7 @@ export function PhotoCarousel({
               onRequestFullscreen !== undefined &&
               !hasRequestedFullscreenUrl(photo, fullscreenQuality)
             const image = fullscreenPending ? (
-              <div className="flex h-full w-full items-center justify-center text-sm text-white/70">
+              <div className="flex h-full w-full items-center justify-center text-sm text-primary-foreground/70">
                 Загрузка полноэкранной фотографии...
               </div>
             ) : (
@@ -426,7 +426,7 @@ export function PhotoCarousel({
               type="button"
               aria-label="Предыдущее фото"
               className={cn(
-                "absolute inset-y-0 left-0 flex w-1/5 items-center justify-start bg-gradient-to-r from-black/60 via-black/25 to-transparent pl-3 text-white transition-opacity",
+                "absolute inset-y-0 left-0 flex w-1/5 items-center justify-start bg-gradient-to-r from-primary/60 via-primary/25 to-transparent pl-3 text-primary-foreground transition-opacity",
                 hideEdgeControlsOnMobile && "hidden lg:flex",
                 controlsClass
               )}
@@ -441,7 +441,7 @@ export function PhotoCarousel({
               type="button"
               aria-label="Следующее фото"
               className={cn(
-                "absolute inset-y-0 right-0 flex w-1/5 items-center justify-end bg-gradient-to-l from-black/60 via-black/25 to-transparent pr-3 text-white transition-opacity",
+                "absolute inset-y-0 right-0 flex w-1/5 items-center justify-end bg-gradient-to-l from-primary/60 via-primary/25 to-transparent pr-3 text-primary-foreground transition-opacity",
                 hideEdgeControlsOnMobile && "hidden lg:flex",
                 controlsClass
               )}
@@ -457,7 +457,7 @@ export function PhotoCarousel({
                 <span
                   key={photo.id}
                   className={cn(
-                    "size-1.5 rounded-full bg-white/80 shadow",
+                    "size-1.5 rounded-full bg-primary-foreground/80 shadow",
                     index === safeActiveIndex ? "opacity-100" : "opacity-40"
                   )}
                 />
@@ -555,7 +555,7 @@ function PhotoFullscreenViewer({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="!fixed !inset-0 !top-0 !left-0 !h-dvh !max-h-dvh !w-screen !max-w-none !translate-x-0 !translate-y-0 overflow-hidden rounded-none border-0 bg-black p-0 text-white"
+        className="!fixed !inset-0 !top-0 !left-0 !h-dvh !max-h-dvh !w-screen !max-w-none !translate-x-0 !translate-y-0 overflow-hidden rounded-none border-0 bg-primary p-0 text-primary-foreground"
         onKeyDown={(event) => {
           if (event.defaultPrevented) return
           if (event.key === "ArrowLeft") {
@@ -575,7 +575,7 @@ function PhotoFullscreenViewer({
             перелистывания.
           </DialogDescription>
         </DialogHeader>
-        <div className="absolute top-4 left-4 z-40 rounded-full bg-white/15 px-4 py-2 text-sm font-medium text-white backdrop-blur">
+        <div className="absolute top-4 left-4 z-40 rounded-full bg-primary-foreground/15 px-4 py-2 text-sm font-medium text-primary-foreground backdrop-blur">
           {title}
         </div>
         <Button
@@ -583,7 +583,7 @@ function PhotoFullscreenViewer({
           size="icon"
           variant="ghost"
           aria-label="Закрыть"
-          className="absolute top-4 right-4 z-40 rounded-full bg-white/15 text-white hover:bg-white/25 hover:text-white"
+          className="absolute top-4 right-4 z-40 rounded-full bg-primary-foreground/15 text-primary-foreground hover:bg-primary-foreground/25 hover:text-primary-foreground"
           onClick={() => handleOpenChange(false)}
         >
           <HugeiconsIcon icon={Cancel01Icon} />
@@ -604,7 +604,7 @@ function PhotoFullscreenViewer({
               >
                 {onRequestPhoto &&
                 !hasRequestedFullscreenUrl(photo, quality) ? (
-                  <div className="text-sm text-white/70">
+                  <div className="text-sm text-primary-foreground/70">
                     Загрузка полноэкранной фотографии...
                   </div>
                 ) : (
@@ -640,7 +640,7 @@ function PhotoFullscreenViewer({
                 type="button"
                 aria-label="Предыдущее фото"
                 data-slot="photo-fullscreen-previous"
-                className="pointer-events-auto absolute inset-y-0 left-0 z-30 flex w-1/5 items-center justify-start bg-gradient-to-r from-black/70 via-black/30 to-transparent pl-5 text-white opacity-100 transition-opacity focus-visible:pointer-events-auto focus-visible:opacity-100 lg:pointer-events-none lg:opacity-0 lg:group-focus-within/fullscreen-carousel:pointer-events-auto lg:group-focus-within/fullscreen-carousel:opacity-100 lg:group-hover/fullscreen-carousel:pointer-events-auto lg:group-hover/fullscreen-carousel:opacity-100"
+                className="pointer-events-auto absolute inset-y-0 left-0 z-30 flex w-1/5 items-center justify-start bg-gradient-to-r from-primary/70 via-primary/30 to-transparent pl-5 text-primary-foreground opacity-100 transition-opacity focus-visible:pointer-events-auto focus-visible:opacity-100 lg:pointer-events-none lg:opacity-0 lg:group-focus-within/fullscreen-carousel:pointer-events-auto lg:group-focus-within/fullscreen-carousel:opacity-100 lg:group-hover/fullscreen-carousel:pointer-events-auto lg:group-hover/fullscreen-carousel:opacity-100"
                 onClick={(event) => {
                   event.stopPropagation()
                   goPrev()
@@ -655,7 +655,7 @@ function PhotoFullscreenViewer({
                 type="button"
                 aria-label="Следующее фото"
                 data-slot="photo-fullscreen-next"
-                className="pointer-events-auto absolute inset-y-0 right-0 z-30 flex w-1/5 items-center justify-end bg-gradient-to-l from-black/70 via-black/30 to-transparent pr-5 text-white opacity-100 transition-opacity focus-visible:pointer-events-auto focus-visible:opacity-100 lg:pointer-events-none lg:opacity-0 lg:group-focus-within/fullscreen-carousel:pointer-events-auto lg:group-focus-within/fullscreen-carousel:opacity-100 lg:group-hover/fullscreen-carousel:pointer-events-auto lg:group-hover/fullscreen-carousel:opacity-100"
+                className="pointer-events-auto absolute inset-y-0 right-0 z-30 flex w-1/5 items-center justify-end bg-gradient-to-l from-primary/70 via-primary/30 to-transparent pr-5 text-primary-foreground opacity-100 transition-opacity focus-visible:pointer-events-auto focus-visible:opacity-100 lg:pointer-events-none lg:opacity-0 lg:group-focus-within/fullscreen-carousel:pointer-events-auto lg:group-focus-within/fullscreen-carousel:opacity-100 lg:group-hover/fullscreen-carousel:pointer-events-auto lg:group-hover/fullscreen-carousel:opacity-100"
                 onClick={(event) => {
                   event.stopPropagation()
                   goNext()
@@ -670,22 +670,22 @@ function PhotoFullscreenViewer({
           ) : null}
         </Carousel>
 
-        <div className="absolute bottom-8 left-1/2 z-40 flex -translate-x-1/2 flex-col items-center gap-2 text-white">
+        <div className="absolute bottom-8 left-1/2 z-40 flex -translate-x-1/2 flex-col items-center gap-2 text-primary-foreground">
           <div
             aria-live="polite"
             aria-atomic="true"
-            className="rounded-full bg-white/15 px-3 py-1 text-xs backdrop-blur"
+            className="rounded-full bg-primary-foreground/15 px-3 py-1 text-xs backdrop-blur"
           >
             {safeIndex + 1} / {photos.length}
           </div>
           {showToolbar ? (
-            <div className="flex items-center gap-1 rounded-full bg-white/15 px-3 py-2 backdrop-blur">
+            <div className="flex items-center gap-1 rounded-full bg-primary-foreground/15 px-3 py-2 backdrop-blur">
               <Button
                 type="button"
                 size="icon"
                 variant="ghost"
                 aria-label="Предыдущее фото"
-                className="rounded-full text-white hover:bg-white/20 hover:text-white"
+                className="rounded-full text-primary-foreground hover:bg-primary-foreground/20 hover:text-primary-foreground"
                 disabled={photos.length < 2}
                 onClick={(event) => {
                   event.stopPropagation()
@@ -699,7 +699,7 @@ function PhotoFullscreenViewer({
                 size="icon"
                 variant="ghost"
                 aria-label="Следующее фото"
-                className="rounded-full text-white hover:bg-white/20 hover:text-white"
+                className="rounded-full text-primary-foreground hover:bg-primary-foreground/20 hover:text-primary-foreground"
                 disabled={photos.length < 2}
                 onClick={(event) => {
                   event.stopPropagation()
@@ -713,7 +713,7 @@ function PhotoFullscreenViewer({
                 size="icon"
                 variant="ghost"
                 aria-label={zoomed ? "Уменьшить фото" : "Увеличить фото"}
-                className="rounded-full text-white hover:bg-white/20 hover:text-white"
+                className="rounded-full text-primary-foreground hover:bg-primary-foreground/20 hover:text-primary-foreground"
                 onClick={(event) => {
                   event.stopPropagation()
                   toggleZoom()

@@ -44,7 +44,6 @@ import dev.buhanzaz.rwms.driver.core.ui.DriverKpiColorRange
 import dev.buhanzaz.rwms.driver.core.ui.DriverScreenScaffold
 import dev.buhanzaz.rwms.driver.core.ui.cabinNumberForDisplay
 import dev.buhanzaz.rwms.driver.core.ui.driverKpiTimeColor
-import java.time.LocalDate
 import kotlinx.coroutines.delay
 
 /** Renders one task, its evidence and the actions allowed by the synchronized server state. */
@@ -123,13 +122,13 @@ fun TaskDetailScreen(
         sourceType = detail?.source?.type,
         driverAudienceMode = task?.driverAudienceMode,
         scheduledDate = detail?.scheduledDate ?: task?.scheduledDate,
-        today = LocalDate.now(),
+        today = state.warehouseDate,
     )
     val canClaimExtraTask = canClaimFutureLogisticsTask(
         sourceType = detail?.source?.type,
         driverAudienceMode = task?.driverAudienceMode,
         scheduledDate = detail?.scheduledDate ?: task?.scheduledDate,
-        today = LocalDate.now(),
+        today = state.warehouseDate,
     )
     val context = LocalContext.current
     LaunchedEffect(timerSnapshot?.nextTransitionAt, timerSnapshot?.serverTime) {
@@ -168,7 +167,7 @@ fun TaskDetailScreen(
             )
         else -> ordinaryActionPresentation
     }
-    LaunchedEffect(readyEvidenceCount) { viewModel.refresh() }
+    LaunchedEffect(readyEvidenceCount, state.warehouseDate) { viewModel.refresh() }
     DriverScreenScaffold(title = detail?.title ?: state.task?.title ?: "Задание", onBack = onBack) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding),
@@ -518,13 +517,17 @@ private fun DriverTripDetailsBlock(
         trip.longitude?.let { "долгота $it" },
     ).joinToString(" · ").ifBlank { "не указаны" }
     val cabins = driverTripCabinPresentations(trip)
+    val operationLabel = driverTripOperationLabel(
+        operationType = trip.operationType,
+        customerDeliveryPurpose = trip.customerDeliveryPurpose,
+    )
     Column(
         modifier = Modifier.padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text("Ходка №${trip.tripNumber}", style = MaterialTheme.typography.titleLarge)
         Text("Задание №${trip.taskNumber}", style = MaterialTheme.typography.titleMedium)
-        Text("Операция: ${driverTripOperationLabel(trip.operationType)}")
+        Text("Операция: $operationLabel")
         Text("Клиент: ${trip.clientName}")
         Text("Адрес: ${trip.address?.takeIf(String::isNotBlank) ?: "не указан"}")
         Text("Координаты: $coordinates")

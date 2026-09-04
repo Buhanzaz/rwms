@@ -43,8 +43,7 @@ function rawPlan(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function installRouter(options: { partialWorkspaceOnce?: boolean; acceptingRequests?: boolean } = {}) {
-  let partialPending = options.partialWorkspaceOnce ?? false;
+function installRouter(options: { acceptingRequests?: boolean } = {}) {
   let accepting = options.acceptingRequests ?? true;
   let ensureCalls = 0;
   const warehouse = warehouseFixture();
@@ -65,11 +64,7 @@ function installRouter(options: { partialWorkspaceOnce?: boolean; acceptingReque
     const method = init?.method ?? 'GET';
     if (url === '/api/warehouses') return response([warehouse]);
     if (url === '/api/warehouses/available') return response([]);
-    if (url === '/api/warehouses/warehouse-1/workspace' && partialPending) {
-      partialPending = false;
-      return response({ code: 'RWMS_WORKSPACE_SYNC_INCOMPLETE', detail: 'Одна заявка не обновлена', failures: [{ id: 'request-2' }] }, 422);
-    }
-    if (url === '/api/warehouses/warehouse-1/workspace' || url === '/api/warehouses/warehouse-1/workspace?refresh_rwms=false') return response(workspace);
+    if (url === `/api/warehouses/warehouse-1/workspace?planning_date=${TEST_PLANNING_DATE}&request_limit=250`) return response(workspace);
     if (url === `/api/warehouses/warehouse-1/plans/ensure?date=${TEST_PLANNING_DATE}` && method === 'POST') {
       ensureCalls += 1;
       return response(rawPlan({ version: ensureCalls }));
@@ -109,7 +104,7 @@ describe('warehouse automatic planning', () => {
 
     expect(
       await screen.findByRole('button', { name: 'Склад логистической группы' }),
-    ).toHaveTextContent('Склад СПб — Санкт-Петербург');
+    ).toHaveTextContent('Склад СПб');
     expect(screen.getByTestId('common-map')).toBeVisible();
     await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) =>
       url === `/api/warehouses/warehouse-1/plans/ensure?date=${TEST_PLANNING_DATE}`
@@ -120,12 +115,16 @@ describe('warehouse automatic planning', () => {
     expect(screen.queryByRole('button', { name: /Сохранить план/ })).not.toBeInTheDocument();
   });
 
-  it('falls back to persisted workspace state and visibly reports an incomplete automatic refresh', async () => {
-    const fetchMock = installRouter({ partialWorkspaceOnce: true });
+  it('loads the dated projection with one pure bounded GET and no refresh command', async () => {
+    const fetchMock = installRouter();
     renderApp();
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('RWMS не обновил доставки и вывозы: 1');
-    expect(fetchMock.mock.calls.some(([url]) => url === '/api/warehouses/warehouse-1/workspace?refresh_rwms=false')).toBe(true);
+    await screen.findByRole('button', { name: 'Склад логистической группы' });
+    const workspaceCalls = fetchMock.mock.calls.filter(([url]) => requestUrl(url).includes('/workspace?'));
+    expect(workspaceCalls).toHaveLength(1);
+    expect(workspaceCalls[0]?.[0]).toBe(`/api/warehouses/warehouse-1/workspace?planning_date=${TEST_PLANNING_DATE}&request_limit=250`);
+    expect(workspaceCalls[0]?.[1]?.method ?? 'GET').toBe('GET');
+    expect(fetchMock.mock.calls.some(([url]) => requestUrl(url).includes('/rwms/refresh'))).toBe(false);
     expect(screen.getByTestId('common-map')).toBeVisible();
   });
 
@@ -142,6 +141,9 @@ describe('warehouse automatic planning', () => {
     await user.click(screen.getByRole('button', { name: 'Сохранить условия' }));
 
     const refreshButton = await screen.findByRole('button', { name: 'Обновить маршруты' });
+    const planningDetailsCall = fetchMock.mock.calls.find(([url]) => url === '/api/requests/request-1/planning-details');
+    const planningDetailsBody = planningDetailsCall?.[1]?.body;
+    expect(JSON.parse(typeof planningDetailsBody === 'string' ? planningDetailsBody : '{}')).toMatchObject({ expected_version: 1 });
     expect(fetchMock.mock.calls.filter(([url]) =>
       url === `/api/warehouses/warehouse-1/plans/ensure?date=${TEST_PLANNING_DATE}`).length).toBe(1);
     await user.click(refreshButton);

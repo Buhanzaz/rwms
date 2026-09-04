@@ -5,6 +5,8 @@ import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiMod
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningAssignmentType;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverAudienceMode;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftPlanRequest;
+import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftRouteOperationKind;
+import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftRouteOperationRequest;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftTrailerRequest;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftVehicleConfiguration;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftVehicleRequest;
@@ -93,6 +95,8 @@ class RentalOrderPlanningIntegrationServiceTest {
   private final LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
   private final CustomerDeliverySlotStore customerDeliverySlots =
       mock(CustomerDeliverySlotStore.class);
+  private final TransferRouteCargoEnricher transferRouteCargoEnricher =
+      mock(TransferRouteCargoEnricher.class);
   private final RentalOrderPlanningIntegrationService service =
       new RentalOrderPlanningIntegrationService(
           orders,
@@ -103,12 +107,15 @@ class RentalOrderPlanningIntegrationServiceTest {
           rentalOrders,
           lifecycle,
           dependencies,
-          customerDeliverySlots);
+          customerDeliverySlots,
+          transferRouteCargoEnricher);
 
   private final RentalOrder order = mock(RentalOrder.class);
 
   @BeforeEach
   void setUp() {
+    when(transferRouteCargoEnricher.enrich(any()))
+        .thenAnswer(invocation -> invocation.getArgument(0));
     OffsetDateTime effectiveFrom = OffsetDateTime.now(ZoneOffset.UTC).minusDays(1);
     when(dependencies.warehouseTimeZoneAt(eq(WAREHOUSE_ID), any()))
         .thenReturn(
@@ -120,6 +127,20 @@ class RentalOrderPlanningIntegrationServiceTest {
     when(order.getStatus()).thenReturn(RentalOrderStatus.SAVED);
     when(orders.findPlanningCandidateById(ORDER_ID)).thenReturn(Optional.of(order));
     when(lines.findAssignedRentalShipmentAssetIds(eq(ORDER_ID), any())).thenReturn(List.of());
+    when(driverTasks.findAllBySourceTypeAndSourceIdIn(
+            eq(DriverTaskSourceType.LOGISTICS_DOCUMENT),
+            org.mockito.ArgumentMatchers.<List<UUID>>any()))
+        .thenAnswer(
+            invocation ->
+                invocation.<List<UUID>>getArgument(1).stream()
+                    .map(RentalOrderPlanningIntegrationServiceTest::plannerShipmentTask)
+                    .toList());
+    when(rentalOrders.rentalShipmentAdmissionWarehouse(any(), eq(ORDER_ID), any(), any()))
+        .thenAnswer(
+            invocation -> {
+              UUID requestedSource = invocation.getArgument(3);
+              return requestedSource == null ? order.getWarehouseId() : requestedSource;
+            });
   }
 
   @Test
@@ -143,7 +164,7 @@ class RentalOrderPlanningIntegrationServiceTest {
         .thenReturn(List.of(order));
     var firstReservation = reservation(UNIT_ONE);
     var secondReservation = reservation(UNIT_TWO);
-    when(reads.readUnits(order)).thenReturn(List.of(firstReservation, secondReservation));
+    when(reads.readUnitsForShipment(order)).thenReturn(List.of(firstReservation, secondReservation));
     when(lines.findAssignedRentalShipmentAssetIds(ORDER_ID, List.of(UNIT_ONE, UNIT_TWO)))
         .thenReturn(List.of(UNIT_ONE));
 
@@ -154,6 +175,12 @@ class RentalOrderPlanningIntegrationServiceTest {
       assertThat(request.orderId()).isEqualTo(ORDER_ID);
       assertThat(request.sourceRevision()).matches("^[0-9a-f]{64}$");
       assertThat(request.unitIds()).containsExactly(UNIT_TWO);
+      assertThat(request.unitReservations())
+          .singleElement()
+          .satisfies(reservation -> {
+            assertThat(reservation.unitId()).isEqualTo(UNIT_TWO);
+            assertThat(reservation.inventorySourceWarehouseId()).isEqualTo(WAREHOUSE_ID);
+          });
       assertThat(request.quantity()).isEqualTo(1);
       assertThat(request.latitude()).isEqualByComparingTo("55.751244");
       assertThat(request.dateOptions()).extracting(option -> option.date())
@@ -168,6 +195,36 @@ class RentalOrderPlanningIntegrationServiceTest {
     var replay = service.feed(WAREHOUSE_ID, first, second);
     assertThat(replay.requests().getFirst().sourceRevision())
         .isEqualTo(response.requests().getFirst().sourceRevision());
+  }
+
+  @Test
+  void feedRevisionChangesWhenThePhysicalInventorySourceChanges() {
+    LocalDate date = LocalDate.now(MOSCOW).plusDays(2);
+    OrderClient client = mock(OrderClient.class);
+    when(client.getDisplayName()).thenReturn("ООО Ромашка");
+    when(order.getOrderNumber()).thenReturn("А-142");
+    when(order.getClient()).thenReturn(client);
+    when(order.getDeliveryAddress()).thenReturn("Москва, Тестовая улица, 1");
+    when(order.getLatitude()).thenReturn(new BigDecimal("55.751244"));
+    when(order.getLongitude()).thenReturn(new BigDecimal("37.618423"));
+    when(order.getCreatedAt()).thenReturn(OffsetDateTime.parse("2026-08-20T08:00:00Z"));
+    when(order.getDesiredDeliveryWindows())
+        .thenReturn(List.of(DesiredDeliveryWindow.create(date, date)));
+    when(orders.findAllPlanningCandidates(WAREHOUSE_ID, RentalOrderStatus.SAVED))
+        .thenReturn(List.of(order));
+    when(reads.readUnitsForShipment(order))
+        .thenReturn(
+            List.of(reservation(UNIT_ONE, WAREHOUSE_ID)),
+            List.of(reservation(UNIT_ONE, REPRESENTATIVE_WAREHOUSE_ID)));
+
+    var local = service.feed(WAREHOUSE_ID, date, date).requests().getFirst();
+    var remote = service.feed(WAREHOUSE_ID, date, date).requests().getFirst();
+
+    assertThat(local.sourceRevision()).isNotEqualTo(remote.sourceRevision());
+    assertThat(local.unitReservations().getFirst().inventorySourceWarehouseId())
+        .isEqualTo(WAREHOUSE_ID);
+    assertThat(remote.unitReservations().getFirst().inventorySourceWarehouseId())
+        .isEqualTo(REPRESENTATIVE_WAREHOUSE_ID);
   }
 
   @Test
@@ -187,7 +244,7 @@ class RentalOrderPlanningIntegrationServiceTest {
     when(orders.findAllPlanningCandidates(WAREHOUSE_ID, RentalOrderStatus.SAVED))
         .thenReturn(List.of(order));
     var unitReservation = reservation(UNIT_ONE);
-    when(reads.readUnits(order)).thenReturn(List.of(unitReservation));
+    when(reads.readUnitsForShipment(order)).thenReturn(List.of(unitReservation));
     when(slot.getDeliveryDate()).thenReturn(date);
     when(slot.getKind()).thenReturn(CustomerDeliverySlotKind.FIXED_WINDOW);
     when(slot.getWindowStart()).thenReturn(LocalTime.of(9, 0));
@@ -231,7 +288,7 @@ class RentalOrderPlanningIntegrationServiceTest {
     when(orders.findAllPlanningCandidates(WAREHOUSE_ID, RentalOrderStatus.SAVED))
         .thenReturn(List.of(order));
     var unitReservation = reservation(UNIT_ONE);
-    when(reads.readUnits(order)).thenReturn(List.of(unitReservation));
+    when(reads.readUnitsForShipment(order)).thenReturn(List.of(unitReservation));
     when(slot.getDeliveryDate()).thenReturn(date);
     when(slot.getKind()).thenReturn(CustomerDeliverySlotKind.FIXED_WINDOW);
     when(slot.getWindowStart()).thenReturn(LocalTime.of(9, 0));
@@ -267,7 +324,7 @@ class RentalOrderPlanningIntegrationServiceTest {
     when(orders.findAllPlanningCandidates(WAREHOUSE_ID, RentalOrderStatus.SAVED))
         .thenReturn(List.of(), List.of(order));
     var unitReservation = reservation(UNIT_ONE);
-    when(reads.readUnits(order)).thenReturn(List.of(unitReservation));
+    when(reads.readUnitsForShipment(order)).thenReturn(List.of(unitReservation));
     when(slot.getDeliveryDate()).thenReturn(date);
     when(slot.getKind()).thenReturn(CustomerDeliverySlotKind.FIXED_WINDOW);
     when(slot.getWindowStart()).thenReturn(LocalTime.of(12, 0));
@@ -309,7 +366,7 @@ class RentalOrderPlanningIntegrationServiceTest {
     when(orders.findAllPlanningCandidates(WAREHOUSE_ID, RentalOrderStatus.SAVED))
         .thenReturn(List.of(order));
     var unitReservation = reservation(UNIT_ONE);
-    when(reads.readUnits(order)).thenReturn(List.of(unitReservation));
+    when(reads.readUnitsForShipment(order)).thenReturn(List.of(unitReservation));
     when(slot.getDeliveryDate()).thenReturn(date);
     when(slot.getKind()).thenReturn(CustomerDeliverySlotKind.DURING_DAY);
     when(slot.getWindowStart()).thenReturn(LocalTime.of(9, 0));
@@ -344,7 +401,7 @@ class RentalOrderPlanningIntegrationServiceTest {
     when(orders.findAllPlanningCandidates(WAREHOUSE_ID, RentalOrderStatus.SAVED))
         .thenReturn(List.of(order));
     var unitReservation = reservation(UNIT_ONE);
-    when(reads.readUnits(order)).thenReturn(List.of(unitReservation));
+    when(reads.readUnitsForShipment(order)).thenReturn(List.of(unitReservation));
 
     var response = service.feed(WAREHOUSE_ID, second, second);
 
@@ -362,7 +419,7 @@ class RentalOrderPlanningIntegrationServiceTest {
     when(order.getDesiredDeliveryWindows())
         .thenReturn(List.of(DesiredDeliveryWindow.create(tomorrow, tomorrow)));
     var unitReservation = reservation(UNIT_ONE);
-    when(reads.readUnits(order)).thenReturn(List.of(unitReservation));
+    when(reads.readUnitsForShipment(order)).thenReturn(List.of(unitReservation));
 
     var response =
         service.apply(
@@ -370,13 +427,15 @@ class RentalOrderPlanningIntegrationServiceTest {
             request(
                 List.of(
                     new PlanningAssignmentRequest(
-                        ORDER_ID, 7L, tomorrow, DRIVER_ID, "Водитель 1", List.of(UNIT_ONE)))));
+                        ORDER_ID, 7L, tomorrow, DRIVER_ID, "Водитель 1", List.of(UNIT_ONE))),
+                List.of(shiftPlan(tomorrow))));
 
     assertThat(response.applied()).isEmpty();
     assertThat(response.rejected()).singleElement().satisfies(rejected ->
         assertThat(rejected.code()).isEqualTo("PLANNING_DATE_LOCKED"));
     verify(lifecycle, never()).prepareDocument(any(), any(), any(), any());
     verify(rentalOrders, never()).createRentalShipment(any(), any(), any(), any(), any(), any());
+    verify(dependencies, never()).registerDriverShiftPlan(any(), any(), any());
   }
 
   @Test
@@ -385,7 +444,7 @@ class RentalOrderPlanningIntegrationServiceTest {
     when(order.getDesiredDeliveryWindows())
         .thenReturn(List.of(DesiredDeliveryWindow.create(tomorrow, tomorrow)));
     var unitReservation = reservation(UNIT_ONE);
-    when(reads.readUnits(order)).thenReturn(List.of(unitReservation));
+    when(reads.readUnitsForShipment(order)).thenReturn(List.of(unitReservation));
     when(lifecycle.prepareDocument(any(), any(), any(), any())).thenReturn(mockAdmission());
     when(rentalOrders.createRentalShipment(any(), any(), any(), any(), any(), any()))
         .thenReturn(documentResult(UUID.randomUUID()));
@@ -451,7 +510,7 @@ class RentalOrderPlanningIntegrationServiceTest {
     when(order.getDesiredDeliveryWindows())
         .thenReturn(List.of(DesiredDeliveryWindow.create(tomorrow, tomorrow)));
     var unitReservation = reservation(UNIT_ONE);
-    when(reads.readUnits(order)).thenReturn(List.of(unitReservation));
+    when(reads.readUnitsForShipment(order)).thenReturn(List.of(unitReservation));
     when(lifecycle.prepareDocument(any(), any(), any(), any())).thenReturn(mockAdmission());
     when(rentalOrders.createRentalShipment(any(), any(), any(), any(), any(), any()))
         .thenReturn(documentResult(UUID.randomUUID()));
@@ -478,6 +537,88 @@ class RentalOrderPlanningIntegrationServiceTest {
         .createRentalShipment(any(), eq(ORDER_ID), any(), any(), shipment.capture(), any());
     assertThat(shipment.getValue().warehouseDriverPool()).isTrue();
     assertThat(shipment.getValue().driverWorkerId()).isNull();
+    assertThat(shipment.getValue().inventorySourceWarehouseId()).isNull();
+  }
+
+  @Test
+  void explicitInventorySourceIsForwardedToTheCanonicalShipmentOwnerAndAdmission() {
+    LocalDate scheduled = LocalDate.now(MOSCOW).plusDays(3);
+    when(order.getDesiredDeliveryWindows())
+        .thenReturn(List.of(DesiredDeliveryWindow.create(scheduled, scheduled)));
+    when(reads.readUnitsForShipment(order)).thenReturn(List.of(reservation(UNIT_ONE)));
+    when(lifecycle.prepareDocument(any(), any(), any(), any())).thenReturn(mockAdmission());
+    when(rentalOrders.createRentalShipment(any(), any(), any(), any(), any(), any()))
+        .thenReturn(documentResult(UUID.randomUUID()));
+
+    var response =
+        service.apply(
+            UUID.randomUUID(),
+            request(
+                List.of(
+                    new PlanningAssignmentRequest(
+                        ORDER_ID,
+                        null,
+                        WAREHOUSE_ID,
+                        7L,
+                        scheduled,
+                        PlanningAssignmentType.ROUTE_PLAN,
+                        PlanningDriverAudienceMode.ASSIGNED_DRIVER,
+                        DRIVER_ID,
+                        "Водитель 1",
+                        List.of(UNIT_ONE)))));
+
+    assertThat(response.rejected()).isEmpty();
+    ArgumentCaptor<CreateOrderRentalShipmentRequest> shipment =
+        ArgumentCaptor.forClass(CreateOrderRentalShipmentRequest.class);
+    verify(rentalOrders)
+        .createRentalShipment(any(), eq(ORDER_ID), any(), any(), shipment.capture(), any());
+    assertThat(shipment.getValue().inventorySourceWarehouseId()).isEqualTo(WAREHOUSE_ID);
+    verify(rentalOrders)
+        .rentalShipmentAdmissionWarehouse(
+            any(), eq(ORDER_ID), eq(scheduled), eq(WAREHOUSE_ID));
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<AdmissionRequirement>> requirements =
+        ArgumentCaptor.forClass(List.class);
+    verify(lifecycle)
+        .prepareDocument(any(), eq("CREATE_RENTAL_ORDER_SHIPMENT"), any(), requirements.capture());
+    assertThat(requirements.getValue())
+        .singleElement()
+        .satisfies(value -> assertThat(value.warehouseId()).isEqualTo(WAREHOUSE_ID));
+  }
+
+  @Test
+  void assignmentRejectsASelectedCabinThatDoesNotBelongToTheRequestedSource() {
+    LocalDate scheduled = LocalDate.now(MOSCOW).plusDays(3);
+    when(order.getDesiredDeliveryWindows())
+        .thenReturn(List.of(DesiredDeliveryWindow.create(scheduled, scheduled)));
+    when(reads.readUnitsForShipment(order)).thenReturn(List.of(reservation(UNIT_ONE, WAREHOUSE_ID)));
+
+    var response =
+        service.apply(
+            UUID.randomUUID(),
+            request(
+                List.of(
+                    new PlanningAssignmentRequest(
+                        ORDER_ID,
+                        null,
+                        REPRESENTATIVE_WAREHOUSE_ID,
+                        7L,
+                        scheduled,
+                        PlanningAssignmentType.ROUTE_PLAN,
+                        PlanningDriverAudienceMode.ASSIGNED_DRIVER,
+                        DRIVER_ID,
+                        "Водитель 1",
+                        List.of(UNIT_ONE)))));
+
+    assertThat(response.applied()).isEmpty();
+    assertThat(response.rejected())
+        .singleElement()
+        .satisfies(
+            rejected ->
+                assertThat(rejected.code()).isEqualTo("INVENTORY_SOURCE_WAREHOUSE_MISMATCH"));
+    verify(rentalOrders, never())
+        .rentalShipmentAdmissionWarehouse(any(), any(), any(), any());
+    verify(lifecycle, never()).prepareDocument(any(), any(), any(), any());
   }
 
   @Test
@@ -531,23 +672,24 @@ class RentalOrderPlanningIntegrationServiceTest {
     assertThat(response.applied()).singleElement().satisfies(applied -> {
       assertThat(applied.documentId()).isEqualTo(priorResult.response().id());
       assertThat(applied.replayed()).isTrue();
+      assertThat(applied.orderVersion()).isEqualTo(7L);
     });
-    verify(orders, never()).findPlanningCandidateById(any());
+    verify(orders).findPlanningCandidateById(ORDER_ID);
     verify(lifecycle, never()).prepareDocument(any(), any(), any(), any());
     verify(dependencies).registerDriverShiftPlan(any(), any(), any());
   }
 
   @Test
-  void registersShiftPlanBeforeCreatingShipmentAndPreservesTheExactSnapshot() {
+  void registersShiftPlanOnlyAfterCreatingShipmentAndPreservesTheExactSnapshot() {
     LocalDate scheduled = LocalDate.now(MOSCOW).plusDays(3);
     LogisticsDependencyGateway.OrderUnitReservation unitReservation = reservation(UNIT_ONE);
     when(order.getDesiredDeliveryWindows())
         .thenReturn(List.of(DesiredDeliveryWindow.create(scheduled, scheduled)));
-    when(reads.readUnits(order)).thenReturn(List.of(unitReservation));
+    when(reads.readUnitsForShipment(order)).thenReturn(List.of(unitReservation));
     when(lifecycle.prepareDocument(any(), any(), any(), any())).thenReturn(mockAdmission());
     when(rentalOrders.createRentalShipment(any(), any(), any(), any(), any(), any()))
         .thenReturn(documentResult(UUID.randomUUID()));
-    PlanningDriverShiftPlanRequest shiftPlan = shiftPlan(scheduled);
+    PlanningDriverShiftPlanRequest shiftPlan = shiftPlanWithOperations(scheduled);
 
     var response =
         service.apply(
@@ -565,12 +707,12 @@ class RentalOrderPlanningIntegrationServiceTest {
         ArgumentCaptor.forClass(LogisticsDependencyGateway.DriverShiftPlanSnapshot.class);
     InOrder sequence = inOrder(dependencies, rentalOrders);
     sequence
+        .verify(rentalOrders)
+        .createRentalShipment(any(), eq(ORDER_ID), any(), any(), any(), any());
+    sequence
         .verify(dependencies)
         .registerDriverShiftPlan(
             registrationKey.capture(), registeredSourceShiftId.capture(), snapshot.capture());
-    sequence
-        .verify(rentalOrders)
-        .createRentalShipment(any(), eq(ORDER_ID), any(), any(), any(), any());
     assertThat(registrationKey.getValue()).isNotNull();
     assertThat(registeredSourceShiftId.getValue()).isEqualTo(shiftPlan.sourceShiftId());
     assertThat(snapshot.getValue())
@@ -593,53 +735,30 @@ class RentalOrderPlanningIntegrationServiceTest {
     assertThat(snapshot.getValue().vehicle().configurationType())
         .isEqualTo("TRUCK_WITH_TRAILER");
     assertThat(snapshot.getValue().trailer().registrationNumber()).isEqualTo("В456ВВ78");
+    assertThat(snapshot.getValue().operations())
+        .extracting(LogisticsDependencyGateway.DriverShiftRouteOperation::kind)
+        .containsExactly("DEPOT_LOAD", "DELIVERY", "DEPOT_RETURN");
+    assertThat(snapshot.getValue().operations().get(1).plannedArrival())
+        .isEqualTo(scheduled.atTime(9, 0).atOffset(ZoneOffset.UTC));
   }
 
   @Test
   void rootShiftCanApplyARepresentativeOrderThroughAnEligibleSupportEdge() {
     LocalDate scheduled = LocalDate.now(MOSCOW).plusDays(3);
+    UUID supportLinkId = UUID.randomUUID();
     when(order.getWarehouseId()).thenReturn(REPRESENTATIVE_WAREHOUSE_ID);
     when(order.getDesiredDeliveryWindows())
         .thenReturn(List.of(DesiredDeliveryWindow.create(scheduled, scheduled)));
-    var unitReservation = reservation(UNIT_ONE);
-    when(reads.readUnits(order)).thenReturn(List.of(unitReservation));
+    var unitReservation = reservation(UNIT_ONE, REPRESENTATIVE_WAREHOUSE_ID);
+    when(reads.readUnitsForShipment(order)).thenReturn(List.of(unitReservation));
     when(dependencies.warehouseTimeZoneAt(eq(REPRESENTATIVE_WAREHOUSE_ID), any()))
         .thenReturn(
             new LogisticsDependencyGateway.WarehouseTimeZone(
                 REPRESENTATIVE_WAREHOUSE_ID,
                 MOSCOW.getId(),
                 OffsetDateTime.now(ZoneOffset.UTC).minusDays(1)));
-    var rootIdentity =
-        new LogisticsDependencyGateway.WarehouseIdentity(
-            WAREHOUSE_ID, 1, true, "Санкт-Петербург", null, MOSCOW.getId());
-    var representativeIdentity =
-        new LogisticsDependencyGateway.WarehouseIdentity(
-            REPRESENTATIVE_WAREHOUSE_ID,
-            1,
-            true,
-            "Великий Новгород",
-            null,
-            MOSCOW.getId());
     when(dependencies.listWarehouseSupportNetwork(WAREHOUSE_ID))
-        .thenReturn(
-            List.of(
-                new LogisticsDependencyGateway.WarehouseSupportLink(
-                    UUID.randomUUID(),
-                    1,
-                    rootIdentity,
-                    representativeIdentity,
-                    1,
-                    true,
-                    true,
-                    true,
-                    true,
-                    true,
-                    true,
-                    Set.of(scheduled.getDayOfWeek()),
-                    Set.of(),
-                    Set.of(),
-                    null,
-                    null)));
+        .thenReturn(List.of(supportLink(supportLinkId, scheduled, true, Set.of())));
     when(lifecycle.prepareDocument(any(), any(), any(), any())).thenReturn(mockAdmission());
     when(rentalOrders.createRentalShipment(any(), any(), any(), any(), any(), any()))
         .thenReturn(documentResult(UUID.randomUUID()));
@@ -657,7 +776,7 @@ class RentalOrderPlanningIntegrationServiceTest {
                         DRIVER_ID,
                         "Водитель 1",
                         List.of(UNIT_ONE))),
-                List.of(shiftPlan(scheduled))));
+                List.of(crossWarehouseShiftPlan(scheduled, WAREHOUSE_ID, supportLinkId))));
 
     assertThat(response.rejected()).isEmpty();
     assertThat(response.applied()).hasSize(1);
@@ -671,7 +790,126 @@ class RentalOrderPlanningIntegrationServiceTest {
         .satisfies(
             admission ->
                 assertThat(admission.warehouseId()).isEqualTo(REPRESENTATIVE_WAREHOUSE_ID));
-    verify(dependencies).registerDriverShiftPlan(any(), any(), any());
+    ArgumentCaptor<LogisticsDependencyGateway.DriverShiftPlanSnapshot> snapshot =
+        ArgumentCaptor.forClass(LogisticsDependencyGateway.DriverShiftPlanSnapshot.class);
+    verify(dependencies).registerDriverShiftPlan(any(), any(), snapshot.capture());
+    assertThat(snapshot.getValue().warehouseId()).isEqualTo(WAREHOUSE_ID);
+    assertThat(snapshot.getValue().operations())
+        .extracting(LogisticsDependencyGateway.DriverShiftRouteOperation::kind)
+        .containsExactly(
+            "ORIGIN_START",
+            "INBOUND_POSITIONING",
+            "DEPOT_LOAD",
+            "DELIVERY",
+            "DEPOT_RETURN",
+            "RETURN_POSITIONING");
+    assertThat(snapshot.getValue().operations().get(1).warehouseId())
+        .isEqualTo(REPRESENTATIVE_WAREHOUSE_ID);
+    assertThat(snapshot.getValue().operations().getLast().warehouseId())
+        .isEqualTo(WAREHOUSE_ID);
+  }
+
+  @Test
+  void crossWarehouseShiftRejectsAPlannerSuppliedLinkThatIsNotTheExactActiveEdge() {
+    LocalDate scheduled = LocalDate.now(MOSCOW).plusDays(3);
+    UUID actualLinkId = UUID.randomUUID();
+    when(dependencies.listWarehouseSupportNetwork(WAREHOUSE_ID))
+        .thenReturn(List.of(supportLink(actualLinkId, scheduled, true, Set.of())));
+    PlanningAssignmentRequest assignment =
+        new PlanningAssignmentRequest(
+            ORDER_ID,
+            REPRESENTATIVE_WAREHOUSE_ID,
+            7L,
+            scheduled,
+            DRIVER_ID,
+            "Водитель 1",
+            List.of(UNIT_ONE));
+
+    assertThatThrownBy(
+            () ->
+                service.apply(
+                    UUID.randomUUID(),
+                    request(
+                        List.of(assignment),
+                        List.of(
+                            crossWarehouseShiftPlan(
+                                scheduled, WAREHOUSE_ID, UUID.randomUUID())))))
+        .isInstanceOf(OrderProblemException.class)
+        .hasMessageContaining("не разрешает этот рейс");
+    verify(rentalOrders, never()).replayRentalShipment(any(), any(), any(), any());
+    verify(dependencies, never()).registerDriverShiftPlan(any(), any(), any());
+  }
+
+  @Test
+  void crossWarehouseShiftRejectsAnEmptyLegacyRouteSnapshotBeforeSideEffects() {
+    LocalDate scheduled = LocalDate.now(MOSCOW).plusDays(3);
+    PlanningAssignmentRequest assignment =
+        new PlanningAssignmentRequest(
+            ORDER_ID,
+            REPRESENTATIVE_WAREHOUSE_ID,
+            7L,
+            scheduled,
+            DRIVER_ID,
+            "Водитель 1",
+            List.of(UNIT_ONE));
+    PlanningDriverShiftPlanRequest local = shiftPlan(scheduled);
+    PlanningDriverShiftPlanRequest missingRoute =
+        new PlanningDriverShiftPlanRequest(
+            local.sourceShiftId(),
+            local.sourcePlanId(),
+            local.sourcePlanVersion(),
+            local.warehouseId(),
+            WAREHOUSE_ID,
+            UUID.randomUUID(),
+            local.driverId(),
+            local.driverName(),
+            local.workDate(),
+            local.vehicle(),
+            local.trailer(),
+            local.tripCount(),
+            local.routeDistanceMeters());
+
+    assertThatThrownBy(
+            () ->
+                service.apply(
+                    UUID.randomUUID(),
+                    request(List.of(assignment), List.of(missingRoute))))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("origin, inbound, and return positioning");
+    verify(rentalOrders, never()).replayRentalShipment(any(), any(), any(), any());
+    verify(dependencies, never()).registerDriverShiftPlan(any(), any(), any());
+  }
+
+  @Test
+  void crossWarehouseShiftRejectsAnExcludedSupportCalendarDate() {
+    LocalDate scheduled = LocalDate.now(MOSCOW).plusDays(3);
+    UUID supportLinkId = UUID.randomUUID();
+    when(dependencies.listWarehouseSupportNetwork(WAREHOUSE_ID))
+        .thenReturn(
+            List.of(supportLink(supportLinkId, scheduled, true, Set.of(scheduled))));
+    PlanningAssignmentRequest assignment =
+        new PlanningAssignmentRequest(
+            ORDER_ID,
+            REPRESENTATIVE_WAREHOUSE_ID,
+            7L,
+            scheduled,
+            DRIVER_ID,
+            "Водитель 1",
+            List.of(UNIT_ONE));
+
+    assertThatThrownBy(
+            () ->
+                service.apply(
+                    UUID.randomUUID(),
+                    request(
+                        List.of(assignment),
+                        List.of(
+                            crossWarehouseShiftPlan(
+                                scheduled, WAREHOUSE_ID, supportLinkId)))))
+        .isInstanceOf(OrderProblemException.class)
+        .hasMessageContaining("не разрешает этот рейс");
+    verify(rentalOrders, never()).replayRentalShipment(any(), any(), any(), any());
+    verify(dependencies, never()).registerDriverShiftPlan(any(), any(), any());
   }
 
   @Test
@@ -681,7 +919,7 @@ class RentalOrderPlanningIntegrationServiceTest {
     when(order.getDesiredDeliveryWindows())
         .thenReturn(List.of(DesiredDeliveryWindow.create(scheduled, scheduled)));
     var unitReservation = reservation(UNIT_ONE);
-    when(reads.readUnits(order)).thenReturn(List.of(unitReservation));
+    when(reads.readUnitsForShipment(order)).thenReturn(List.of(unitReservation));
     when(dependencies.warehouseTimeZoneAt(eq(REPRESENTATIVE_WAREHOUSE_ID), any()))
         .thenReturn(
             new LogisticsDependencyGateway.WarehouseTimeZone(
@@ -717,7 +955,15 @@ class RentalOrderPlanningIntegrationServiceTest {
   @Test
   void exactShiftPlanReplayUsesTheSameRegistrationKeyAcrossBatchRetries() {
     LocalDate scheduled = LocalDate.now(MOSCOW).plusDays(3);
-    ApplyPlanningAssignmentsRequest command = request(List.of(), List.of(shiftPlan(scheduled)));
+    var priorResult = documentResult(UUID.randomUUID());
+    when(rentalOrders.replayRentalShipment(any(), eq(ORDER_ID), any(), any()))
+        .thenReturn(new LogisticsDocumentService.CreateResult(priorResult.response(), true));
+    ApplyPlanningAssignmentsRequest command =
+        request(
+            List.of(
+                new PlanningAssignmentRequest(
+                    ORDER_ID, 7L, scheduled, DRIVER_ID, "Водитель 1", List.of(UNIT_ONE))),
+            List.of(shiftPlan(scheduled)));
 
     service.apply(UUID.randomUUID(), command);
     service.apply(UUID.randomUUID(), command);
@@ -729,8 +975,14 @@ class RentalOrderPlanningIntegrationServiceTest {
   }
 
   @Test
-  void taskBoardShiftPlanFailureStopsBeforeAnyShipmentOutcome() {
+  void taskBoardShiftPlanFailureOccursOnlyAfterTheShipmentWasApplied() {
     LocalDate scheduled = LocalDate.now(MOSCOW).plusDays(3);
+    when(order.getDesiredDeliveryWindows())
+        .thenReturn(List.of(DesiredDeliveryWindow.create(scheduled, scheduled)));
+    when(reads.readUnitsForShipment(order)).thenReturn(List.of(reservation(UNIT_ONE)));
+    when(lifecycle.prepareDocument(any(), any(), any(), any())).thenReturn(mockAdmission());
+    when(rentalOrders.createRentalShipment(any(), any(), any(), any(), any(), any()))
+        .thenReturn(documentResult(UUID.randomUUID()));
     doThrow(new IllegalStateException("task-board unavailable"))
         .when(dependencies)
         .registerDriverShiftPlan(any(), any(), any());
@@ -751,8 +1003,50 @@ class RentalOrderPlanningIntegrationServiceTest {
                         List.of(shiftPlan(scheduled)))))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("task-board unavailable");
-    verify(rentalOrders, never()).replayRentalShipment(any(), any(), any(), any());
-    verify(rentalOrders, never()).createRentalShipment(any(), any(), any(), any(), any(), any());
+    InOrder sequence = inOrder(rentalOrders, dependencies);
+    sequence
+        .verify(rentalOrders)
+        .createRentalShipment(any(), eq(ORDER_ID), any(), any(), any(), any());
+    sequence.verify(dependencies).registerDriverShiftPlan(any(), any(), any());
+  }
+
+  @Test
+  void mixedAssignmentOutcomeDoesNotPublishAnAuthoritativeDriverShift() {
+    LocalDate scheduled = LocalDate.now(MOSCOW).plusDays(3);
+    when(order.getDesiredDeliveryWindows())
+        .thenReturn(List.of(DesiredDeliveryWindow.create(scheduled, scheduled)));
+    when(reads.readUnitsForShipment(order))
+        .thenReturn(List.of(reservation(UNIT_ONE), reservation(UNIT_TWO)));
+    when(lifecycle.prepareDocument(any(), any(), any(), any())).thenReturn(mockAdmission());
+    when(rentalOrders.createRentalShipment(any(), any(), any(), any(), any(), any()))
+        .thenReturn(documentResult(UUID.randomUUID()));
+
+    var response =
+        service.apply(
+            UUID.randomUUID(),
+            request(
+                List.of(
+                    new PlanningAssignmentRequest(
+                        ORDER_ID,
+                        7L,
+                        scheduled,
+                        DRIVER_ID,
+                        "Водитель 1",
+                        List.of(UNIT_ONE)),
+                    new PlanningAssignmentRequest(
+                        ORDER_ID,
+                        6L,
+                        scheduled,
+                        DRIVER_ID,
+                        "Водитель 1",
+                        List.of(UNIT_TWO))),
+                List.of(shiftPlan(scheduled))));
+
+    assertThat(response.applied()).hasSize(1);
+    assertThat(response.rejected())
+        .singleElement()
+        .satisfies(rejected -> assertThat(rejected.code()).isEqualTo("ORDER_VERSION_CONFLICT"));
+    verify(dependencies, never()).registerDriverShiftPlan(any(), any(), any());
   }
 
   @Test
@@ -792,7 +1086,7 @@ class RentalOrderPlanningIntegrationServiceTest {
     var firstReservation = reservation(UNIT_ONE);
     var secondReservation = reservation(UNIT_TWO);
     var thirdReservation = reservation(UNIT_THREE);
-    when(reads.readUnits(order))
+    when(reads.readUnitsForShipment(order))
         .thenReturn(List.of(firstReservation, secondReservation, thirdReservation));
     var admission = mockAdmission();
     when(lifecycle.prepareDocument(any(), any(), any(), any())).thenReturn(admission);
@@ -853,6 +1147,9 @@ class RentalOrderPlanningIntegrationServiceTest {
     when(task.getPlannedDriverWorkerId()).thenReturn(DRIVER_ID);
     when(task.getPlannedDriverNameSnapshot()).thenReturn("Водитель 1");
     when(task.getState()).thenReturn(DriverTaskState.SCHEDULED);
+    UUID externalTaskId = UUID.randomUUID();
+    when(task.getExternalTaskId()).thenReturn(externalTaskId);
+    when(task.getVersion()).thenReturn(6L);
     when(documents
             .findAllByDocumentTypeAndWarehouseIdAndScheduledDateAndRequestedBySubjectIdOrderByCreatedAtAscIdAsc(
                 eq(LogisticsDocumentType.SHIPMENT), eq(WAREHOUSE_ID), eq(scheduled), any()))
@@ -861,12 +1158,16 @@ class RentalOrderPlanningIntegrationServiceTest {
     when(driverTasks.findAllBySourceTypeAndSourceIdIn(
             DriverTaskSourceType.LOGISTICS_DOCUMENT, List.of(documentId)))
         .thenReturn(List.of(task));
+    when(orders.findAllWithClientByIdIn(List.of(ORDER_ID))).thenReturn(List.of(order));
 
     var response = service.assignmentStatuses(WAREHOUSE_ID, scheduled);
 
     assertThat(response.assignments()).singleElement().satisfies(status -> {
       assertThat(status.orderId()).isEqualTo(ORDER_ID);
+      assertThat(status.orderVersion()).isEqualTo(7L);
       assertThat(status.documentId()).isEqualTo(documentId);
+      assertThat(status.externalTaskId()).isEqualTo(externalTaskId);
+      assertThat(status.taskVersion()).isEqualTo(6L);
       assertThat(status.unitIds()).containsExactly(UNIT_ONE);
       assertThat(status.driverAudienceMode()).isEqualTo(PlanningDriverAudienceMode.ASSIGNED_DRIVER);
       assertThat(status.driverWorkerId()).isEqualTo(DRIVER_ID);
@@ -946,11 +1247,203 @@ class RentalOrderPlanningIntegrationServiceTest {
         247_500L);
   }
 
+  private static PlanningDriverShiftPlanRequest shiftPlanWithOperations(LocalDate workDate) {
+    PlanningDriverShiftPlanRequest local = shiftPlan(workDate);
+    OffsetDateTime routeStart = workDate.atTime(8, 30).atOffset(ZoneOffset.UTC);
+    return new PlanningDriverShiftPlanRequest(
+        local.sourceShiftId(),
+        local.sourcePlanId(),
+        local.sourcePlanVersion(),
+        local.warehouseId(),
+        local.routeOriginWarehouseId(),
+        local.supportWarehouseLinkId(),
+        local.driverId(),
+        local.driverName(),
+        local.workDate(),
+        local.vehicle(),
+        local.trailer(),
+        local.tripCount(),
+        local.routeDistanceMeters(),
+        List.of(
+            new PlanningDriverShiftRouteOperationRequest(
+                1,
+                PlanningDriverShiftRouteOperationKind.DEPOT_LOAD,
+                WAREHOUSE_ID,
+                null,
+                "Склад Санкт-Петербург",
+                routeStart,
+                routeStart.plusMinutes(15),
+                0,
+                1),
+            new PlanningDriverShiftRouteOperationRequest(
+                2,
+                PlanningDriverShiftRouteOperationKind.DELIVERY,
+                null,
+                UUID.fromString("10000000-0000-0000-0000-000000000014"),
+                "Клиент",
+                routeStart.plusMinutes(30),
+                routeStart.plusMinutes(60),
+                1,
+                0),
+            new PlanningDriverShiftRouteOperationRequest(
+                3,
+                PlanningDriverShiftRouteOperationKind.DEPOT_RETURN,
+                WAREHOUSE_ID,
+                null,
+                "Склад Санкт-Петербург",
+                routeStart.plusMinutes(90),
+                routeStart.plusMinutes(90),
+                0,
+                0)));
+  }
+
+  private static PlanningDriverShiftPlanRequest crossWarehouseShiftPlan(
+      LocalDate workDate, UUID routeOriginWarehouseId, UUID supportWarehouseLinkId) {
+    PlanningDriverShiftPlanRequest local = shiftPlan(workDate);
+    OffsetDateTime originDeparture = workDate.atTime(7, 0).atOffset(ZoneOffset.UTC);
+    return new PlanningDriverShiftPlanRequest(
+        local.sourceShiftId(),
+        local.sourcePlanId(),
+        local.sourcePlanVersion(),
+        local.warehouseId(),
+        routeOriginWarehouseId,
+        supportWarehouseLinkId,
+        local.driverId(),
+        local.driverName(),
+        local.workDate(),
+        local.vehicle(),
+        local.trailer(),
+        local.tripCount(),
+        local.routeDistanceMeters(),
+        List.of(
+            new PlanningDriverShiftRouteOperationRequest(
+                1,
+                PlanningDriverShiftRouteOperationKind.ORIGIN_START,
+                routeOriginWarehouseId,
+                null,
+                "Склад Санкт-Петербург",
+                originDeparture,
+                originDeparture,
+                0,
+                0),
+            new PlanningDriverShiftRouteOperationRequest(
+                2,
+                PlanningDriverShiftRouteOperationKind.INBOUND_POSITIONING,
+                REPRESENTATIVE_WAREHOUSE_ID,
+                null,
+                "Склад Великий Новгород",
+                originDeparture.plusHours(1),
+                originDeparture,
+                0,
+                0),
+            new PlanningDriverShiftRouteOperationRequest(
+                3,
+                PlanningDriverShiftRouteOperationKind.DEPOT_LOAD,
+                REPRESENTATIVE_WAREHOUSE_ID,
+                null,
+                "Склад Великий Новгород",
+                originDeparture.plusHours(1),
+                originDeparture.plusMinutes(75),
+                0,
+                1),
+            new PlanningDriverShiftRouteOperationRequest(
+                4,
+                PlanningDriverShiftRouteOperationKind.DELIVERY,
+                null,
+                UUID.fromString("10000000-0000-0000-0000-000000000014"),
+                "Клиент",
+                originDeparture.plusMinutes(90),
+                originDeparture.plusMinutes(105),
+                1,
+                0),
+            new PlanningDriverShiftRouteOperationRequest(
+                5,
+                PlanningDriverShiftRouteOperationKind.DEPOT_RETURN,
+                REPRESENTATIVE_WAREHOUSE_ID,
+                null,
+                "Склад Великий Новгород",
+                originDeparture.plusHours(2),
+                originDeparture.plusHours(2),
+                0,
+                0),
+            new PlanningDriverShiftRouteOperationRequest(
+                6,
+                PlanningDriverShiftRouteOperationKind.RETURN_POSITIONING,
+                routeOriginWarehouseId,
+                null,
+                "Склад Санкт-Петербург",
+                originDeparture.plusHours(3),
+                originDeparture.plusHours(2),
+                0,
+                0)));
+  }
+
+  private static LogisticsDependencyGateway.WarehouseSupportLink supportLink(
+      UUID supportLinkId,
+      LocalDate allowedDate,
+      boolean allowDrivers,
+      Set<LocalDate> excludedDates) {
+    var rootIdentity =
+        new LogisticsDependencyGateway.WarehouseIdentity(
+            WAREHOUSE_ID, 1, true, "Санкт-Петербург", null, MOSCOW.getId());
+    var representativeIdentity =
+        new LogisticsDependencyGateway.WarehouseIdentity(
+            REPRESENTATIVE_WAREHOUSE_ID,
+            1,
+            true,
+            "Великий Новгород",
+            null,
+            MOSCOW.getId());
+    return new LogisticsDependencyGateway.WarehouseSupportLink(
+        supportLinkId,
+        1,
+        rootIdentity,
+        representativeIdentity,
+        1,
+        allowDrivers,
+        true,
+        true,
+        true,
+        true,
+        true,
+        Set.of(allowedDate.getDayOfWeek()),
+        Set.of(),
+        excludedDates,
+        null,
+        null);
+  }
+
   private static LogisticsDependencyGateway.OrderUnitReservation reservation(UUID unitId) {
-    LogisticsDependencyGateway.OrderUnitReservation reservation =
-        mock(LogisticsDependencyGateway.OrderUnitReservation.class);
-    when(reservation.unitId()).thenReturn(unitId);
-    return reservation;
+    return reservation(unitId, WAREHOUSE_ID);
+  }
+
+  private static DriverLogisticsTask plannerShipmentTask(UUID documentId) {
+    DriverLogisticsTask task = mock(DriverLogisticsTask.class);
+    when(task.getKind()).thenReturn(DriverTaskKind.SHIPMENT);
+    when(task.getExternalTaskId())
+        .thenReturn(
+            UUID.nameUUIDFromBytes(
+                ("planner-task:" + documentId)
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    when(task.getVersion()).thenReturn(4L);
+    return task;
+  }
+
+  private static LogisticsDependencyGateway.OrderUnitReservation reservation(
+      UUID unitId, UUID warehouseId) {
+    return new LogisticsDependencyGateway.OrderUnitReservation(
+        UUID.randomUUID(),
+        0,
+        ORDER_ID,
+        unitId,
+        warehouseId,
+        "HELD",
+        null,
+        null,
+        null,
+        null,
+        false,
+        null);
   }
 
   private static LogisticsWarehouseLifecycle.AdmissionTicket mockAdmission() {

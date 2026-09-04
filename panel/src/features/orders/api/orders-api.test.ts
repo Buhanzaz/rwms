@@ -62,6 +62,7 @@ const orderDetailResponse = {
   version: 5,
   number: "ORD-000003",
   status: "DRAFT",
+  customerDeliveryPurpose: "RENTAL_DELIVERY",
   client: clientResponse,
   managerId: MANAGER_ID,
   managerDisplayName: "development-admin",
@@ -92,6 +93,7 @@ describe("parseOrderDetail", () => {
       version: 0,
       number: "ORD-000003",
       status: "DRAFT",
+      customerDeliveryPurpose: "RENTAL_DELIVERY",
       client: clientResponse,
       managerId: "00000000-0000-0000-0000-0000000000d8",
       managerDisplayName: "development-admin",
@@ -127,6 +129,23 @@ describe("parseOrderDetail", () => {
       .canExtendRentalTerms
 
     expect(() => parseOrderDetail(response)).toThrow(
+      "Сервис логистики вернул некорректный ответ модуля бронирований."
+    )
+  })
+
+  it("requires the current rental delivery purpose in order projections", () => {
+    const { customerDeliveryPurpose: _purpose, ...missingPurpose } =
+      orderDetailResponse
+
+    expect(() => parseOrderDetail(missingPurpose)).toThrow(
+      "Сервис логистики вернул некорректный ответ модуля бронирований."
+    )
+    expect(() =>
+      parseOrderDetail({
+        ...orderDetailResponse,
+        customerDeliveryPurpose: "SALE_DELIVERY",
+      })
+    ).toThrow(
       "Сервис логистики вернул некорректный ответ модуля бронирований."
     )
   })
@@ -200,6 +219,7 @@ describe("parseOrderDetail", () => {
         {
           documentId: "1b14d50d-4b0b-4a4d-9aaf-b29cd877fcd3",
           documentType: "RETURN",
+          customerDeliveryPurpose: null,
           state: "DRAFT",
           scheduledDate: null,
           actualAt: null,
@@ -212,6 +232,61 @@ describe("parseOrderDetail", () => {
     })
 
     expect(order.movements[0]?.scheduledDate).toBeNull()
+    expect(order.movements[0]?.customerDeliveryPurpose).toBeNull()
+  })
+
+  it("requires a customer delivery purpose only for shipment movements", () => {
+    const shipmentMovement = {
+      documentId: "1b14d50d-4b0b-4a4d-9aaf-b29cd877fcd3",
+      documentType: "SHIPMENT",
+      customerDeliveryPurpose: "CUSTOMER_RELOCATION",
+      state: "DRAFT",
+      scheduledDate: null,
+      actualAt: null,
+      rentalShipmentId: null,
+      createdAt: "2026-07-19T19:49:56.046806Z",
+      updatedAt: "2026-07-19T20:49:56.046806Z",
+      cabins: [],
+    }
+
+    expect(
+      parseOrderDetail({
+        ...orderDetailResponse,
+        movements: [shipmentMovement],
+      }).movements[0]?.customerDeliveryPurpose
+    ).toBe("CUSTOMER_RELOCATION")
+    expect(() =>
+      parseOrderDetail({
+        ...orderDetailResponse,
+        movements: [{ ...shipmentMovement, customerDeliveryPurpose: null }],
+      })
+    ).toThrow(
+      "Сервис логистики вернул некорректный ответ модуля бронирований."
+    )
+    const { customerDeliveryPurpose: _purpose, ...missingPurposeMovement } =
+      shipmentMovement
+    expect(() =>
+      parseOrderDetail({
+        ...orderDetailResponse,
+        movements: [missingPurposeMovement],
+      })
+    ).toThrow(
+      "Сервис логистики вернул некорректный ответ модуля бронирований."
+    )
+    expect(() =>
+      parseOrderDetail({
+        ...orderDetailResponse,
+        movements: [
+          {
+            ...shipmentMovement,
+            documentType: "RETURN",
+            customerDeliveryPurpose: "RENTAL_DELIVERY",
+          },
+        ],
+      })
+    ).toThrow(
+      "Сервис логистики вернул некорректный ответ модуля бронирований."
+    )
   })
 
   it("creates only manager-owned order fields", async () => {

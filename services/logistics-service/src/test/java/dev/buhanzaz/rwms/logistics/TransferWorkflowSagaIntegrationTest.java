@@ -31,6 +31,7 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsLineState;
 import dev.buhanzaz.rwms.logistics.domain.TransferPlanState;
+import dev.buhanzaz.rwms.logistics.domain.TransferPlanSnapshot;
 import dev.buhanzaz.rwms.logistics.domain.TransferReservationReadiness;
 import dev.buhanzaz.rwms.logistics.domain.TransferResourceRepositionMode;
 import dev.buhanzaz.rwms.logistics.driver.service.DocumentDriverTaskPlanner;
@@ -43,6 +44,7 @@ import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsExternalAttemptClaimService;
+import dev.buhanzaz.rwms.logistics.service.LogisticsNotFoundException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycleStore.AdmissionRequirement;
 import dev.buhanzaz.rwms.logistics.service.TransferProcessor;
@@ -128,6 +130,167 @@ class TransferWorkflowSagaIntegrationTest {
     when(driverTaskContent.build(
             any(LogisticsDocument.class), any(List.class)))
         .thenReturn(DriverTaskWorkerContent.empty());
+    when(driverTaskContent.build(
+            any(LogisticsDocument.class), any(TransferPlanSnapshot.class)))
+        .thenReturn(DriverTaskWorkerContent.empty());
+  }
+
+  @Test
+  void executesResourceOnlyTransferThroughWholeTransferLifecycle() {
+    LocalDate scheduledDate = OffsetDateTime.now(ZoneOffset.UTC).toLocalDate();
+    OffsetDateTime departure = scheduledDate.atTime(8, 0).atOffset(ZoneOffset.UTC);
+    OffsetDateTime arrival = departure.plusHours(4);
+    UUID tripVehicle = UUID.randomUUID();
+    UUID repositionedVehicle = UUID.randomUUID();
+    TransferPlanRequest plan =
+        new TransferPlanRequest(
+            departure,
+            arrival,
+            null,
+            null,
+            tripVehicle,
+            new TransferResourceRepositionRequest(
+                null, TransferResourceRepositionMode.NONE, null),
+            new TransferResourceRepositionRequest(
+                repositionedVehicle, TransferResourceRepositionMode.PERMANENT, null),
+            List.of(),
+            List.of());
+    var created =
+        documents.createTransfer(
+            SUBJECT,
+            UUID.randomUUID(),
+            CORRELATION,
+            new CreateTransferRequest(
+                ORIGIN, DESTINATION, scheduledDate, List.of(), List.of(), plan));
+    UUID confirmKey = UUID.randomUUID();
+    var admission =
+        warehouseLifecycle.disabledTicket(
+            SUBJECT,
+            "CONFIRM_TRANSFER_PLAN",
+            confirmKey,
+            List.of(
+                new AdmissionRequirement(ORIGIN, WarehouseOperationDirection.OUTGOING),
+                new AdmissionRequirement(DESTINATION, WarehouseOperationDirection.INCOMING)));
+    documents.confirmTransferPlan(
+        SUBJECT,
+        confirmKey,
+        CORRELATION,
+        created.response().id(),
+        created.response().version(),
+        admission);
+
+    assertThat(
+            LogisticsExternalAttemptTestClaims.drainTransferPlan(
+                claims, transferPlanProcessor, jdbc))
+        .isOne();
+    assertThat(documents.getTransferPlan(created.response().id()).reservationReadiness())
+        .isEqualTo(TransferReservationReadiness.RESERVED);
+    verify(driverTaskPlanner)
+        .planTransferCargo(
+            any(LogisticsDocument.class),
+            eq(
+                "Ресурсное перемещение: автомобиль рейса, перемещение автомобиля"),
+            eq(DriverTaskWorkerContent.empty()));
+
+    var beforeDeparture =
+        documents.get(created.response().id(), LogisticsDocumentType.TRANSFER);
+    UUID departureKey = UUID.randomUUID();
+    var departed =
+        documents.departTransfer(
+            SUBJECT,
+            departureKey,
+            CORRELATION,
+            created.response().id(),
+            beforeDeparture.version());
+    var departureReplay =
+        documents.departTransfer(
+            SUBJECT,
+            departureKey,
+            CORRELATION,
+            created.response().id(),
+            beforeDeparture.version());
+
+    assertThat(departed.response().state()).isEqualTo(LogisticsDocumentState.IN_TRANSIT);
+    assertThat(departureReplay.replayed()).isTrue();
+    assertThat(
+            jdbc.queryForList(
+                "select status from vehicle_operational_assignment where transfer_id=?",
+                created.response().id()))
+        .allSatisfy(row -> assertThat(row.get("status")).isEqualTo("IN_TRANSIT"));
+
+    var beforeArrival =
+        documents.get(created.response().id(), LogisticsDocumentType.TRANSFER);
+    var completed =
+        documents.arriveTransfer(
+            SUBJECT,
+            UUID.randomUUID(),
+            CORRELATION,
+            created.response().id(),
+            beforeArrival.version());
+
+    assertThat(completed.response().state()).isEqualTo(LogisticsDocumentState.COMPLETED);
+    assertThat(
+            jdbc.queryForList(
+                "select vehicle_id, status from vehicle_operational_assignment where transfer_id=?",
+                created.response().id()))
+        .satisfiesExactlyInAnyOrder(
+            row -> {
+              assertThat(row.get("vehicle_id")).isEqualTo(tripVehicle);
+              assertThat(row.get("status")).isEqualTo("COMPLETED");
+            },
+            row -> {
+              assertThat(row.get("vehicle_id")).isEqualTo(repositionedVehicle);
+              assertThat(row.get("status")).isEqualTo("ACTIVE");
+            });
+  }
+
+  @Test
+  void rejectsWholeTransferDepartureForLegacyEmptyDocumentWithoutPlan() {
+    LocalDate scheduledDate = OffsetDateTime.now(ZoneOffset.UTC).toLocalDate();
+    var created =
+        documents.createTransfer(
+            SUBJECT,
+            UUID.randomUUID(),
+            CORRELATION,
+            new CreateTransferRequest(
+                ORIGIN,
+                DESTINATION,
+                scheduledDate,
+                List.of(new TransferLineRequest(ASSET, 7)),
+                List.of()));
+    jdbc.update(
+        "update logistics_external_attempt set line_id=null where document_id=?",
+        created.response().id());
+    jdbc.update(
+        "delete from logistics_document_line where document_id=?",
+        created.response().id());
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_document_line where document_id=?",
+                Long.class,
+                created.response().id()))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from transfer_plan where document_id=?",
+                Long.class,
+                created.response().id()))
+        .isZero();
+
+    assertThatThrownBy(
+            () ->
+                documents.departTransfer(
+                    SUBJECT,
+                    UUID.randomUUID(),
+                    CORRELATION,
+                    created.response().id(),
+                    created.response().version()))
+        .isInstanceOf(LogisticsNotFoundException.class);
+    assertThat(
+            documents
+                .get(created.response().id(), LogisticsDocumentType.TRANSFER)
+                .state())
+        .isEqualTo(LogisticsDocumentState.DRAFT);
   }
 
   @Test
@@ -262,6 +425,25 @@ class TransferWorkflowSagaIntegrationTest {
     assertThat(confirmed.response().readinessDetail())
         .isEqualTo("RESERVATION_IN_PROGRESS");
     assertThat(replay.replayed()).isTrue();
+    assertThat(
+            jdbc.queryForList(
+                """
+                select vehicle_id, mode, status
+                from vehicle_operational_assignment
+                where transfer_id=?
+                """,
+                created.response().id()))
+        .satisfiesExactlyInAnyOrder(
+            row -> {
+              assertThat(row.get("vehicle_id")).isEqualTo(tripVehicle);
+              assertThat(row.get("mode")).isEqualTo("TRIP_ONLY");
+              assertThat(row.get("status")).isEqualTo("PLANNED");
+            },
+            row -> {
+              assertThat(row.get("vehicle_id")).isEqualTo(repositionedVehicle);
+              assertThat(row.get("mode")).isEqualTo("PERMANENT");
+              assertThat(row.get("status")).isEqualTo("PLANNED");
+            });
     var physical = documents.get(created.response().id(), LogisticsDocumentType.TRANSFER);
     assertThat(physical.lines())
         .extracting(line -> line.assetId())
@@ -472,6 +654,11 @@ class TransferWorkflowSagaIntegrationTest {
         .isEqualTo(LogisticsDocumentState.CANCELLED);
     assertThat(documents.getTransferPlan(physical.id()).reservationReadiness())
         .isEqualTo(TransferReservationReadiness.RELEASED);
+    assertThat(
+            jdbc.queryForList(
+                "select status from vehicle_operational_assignment where transfer_id=?",
+                physical.id()))
+        .allSatisfy(row -> assertThat(row.get("status")).isEqualTo("CANCELLED"));
     assertThat(
             LogisticsExternalAttemptTestClaims.drainTransferPlan(
                 claims, transferPlanProcessor, jdbc))

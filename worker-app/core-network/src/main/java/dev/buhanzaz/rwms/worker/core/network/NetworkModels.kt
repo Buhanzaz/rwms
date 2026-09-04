@@ -12,6 +12,15 @@ data class WorkerIdentityDto(
     val displayName: String,
 )
 
+/** Canonical media owner coordinates issued only for the authenticated worker profile. */
+@Serializable
+data class WorkerProfileAvatarScopeDto(
+    val ownerType: String,
+    val ownerId: String,
+    val warehouseId: String,
+    val context: String,
+)
+
 @Serializable
 /**
  * Public-worker-gateway response/read payload for WorkerGroupSummaryDto. It is a transport boundary model, not persisted domain state.
@@ -436,7 +445,8 @@ data class CreateUploadSessionRequestDto(
     val ownerId: String,
     val warehouseId: String,
     val context: String = "WORK_RESULT",
-    val clientReferenceId: String,
+    val clientReferenceId: String? = null,
+    val folderId: String? = null,
     val fileName: String,
     val contentType: String? = null,
     val contentLength: Long? = null,
@@ -523,6 +533,13 @@ data class MediaAssetDto(
     val sizeBytes: Long?,
     val createdAt: String,
     val variants: List<SafeMediaVariantDto>,
+)
+
+/** One bounded owner-scoped media page returned by media-service. */
+@Serializable
+data class MediaAssetPageDto(
+    val items: List<MediaAssetDto>,
+    val next: String? = null,
 )
 
 @Serializable

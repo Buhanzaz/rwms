@@ -29,6 +29,7 @@ import dev.buhanzaz.rwms.driver.core.network.SubmitClosingReportRequestDto
 import dev.buhanzaz.rwms.driver.core.network.TodayDriverShiftDto
 import dev.buhanzaz.rwms.driver.core.network.UpdateInspectionItemRequestDto
 import dev.buhanzaz.rwms.driver.core.network.gatewayFailureDisposition
+import dev.buhanzaz.rwms.driver.core.network.gatewayProblemUserMessage
 import dev.buhanzaz.rwms.driver.core.network.isProvenGatewayTransportFailure
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -187,7 +188,7 @@ class DriverSyncCoordinator @Inject constructor(
                 }
                 if (error.disposition == GatewayFailureDisposition.USER_ACTION_REQUIRED) {
                     return DriverSyncOutcome.UserActionRequired(
-                        error.problem.detail ?: "Нужно обновить доступ рабочего",
+                        gatewayProblemUserMessage(error.problem),
                     )
                 }
                 reconcileFeedAfterBlockedMedia(userId, context)
@@ -213,7 +214,7 @@ class DriverSyncCoordinator @Inject constructor(
                         null,
                         "Фото требует действия; задания обновлены по данным RWMS",
                     )
-                    return DriverSyncOutcome.Failed(error.message ?: "Не удалось загрузить фотографию")
+                    return DriverSyncOutcome.Failed(SAFE_EVIDENCE_UPLOAD_FAILURE_MESSAGE)
                 }
                 reconcileFeedAfterBlockedMedia(userId, context)
                 updateProgress(
@@ -225,7 +226,7 @@ class DriverSyncCoordinator @Inject constructor(
                     null,
                     "Фото ожидает повторной отправки; задания обновлены по данным RWMS",
                 )
-                return DriverSyncOutcome.Retry(error.message ?: "Не удалось загрузить фотографию")
+                return DriverSyncOutcome.Retry(SAFE_EVIDENCE_UPLOAD_RETRY_MESSAGE)
             }
             if (mediaResult.outcome != null) {
                 // An upload can be delayed by media processing or a transient
@@ -318,13 +319,9 @@ class DriverSyncCoordinator @Inject constructor(
         } catch (error: RetryableSyncException) {
             DriverSyncOutcome.Retry(error.message ?: "Сеть недоступна")
         } catch (error: TerminalSyncException) {
-            DriverSyncOutcome.Failed(error.message ?: "Не удалось синхронизировать данные")
+            DriverSyncOutcome.Failed(error.message ?: SAFE_SYNC_FAILURE_MESSAGE)
         } catch (error: Throwable) {
-            if (error.isProvenGatewayTransportFailure()) {
-                DriverSyncOutcome.Retry(error.message ?: "Сеть недоступна")
-            } else {
-                DriverSyncOutcome.Failed(error.message ?: "Не удалось синхронизировать данные")
-            }
+            driverSyncOutcomeForUnexpectedFailure(error)
         }
     }
 
@@ -336,11 +333,12 @@ class DriverSyncCoordinator @Inject constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: GatewayProblemException) {
+            val userMessage = gatewayProblemUserMessage(error.problem)
             when (error.disposition) {
                 GatewayFailureDisposition.AUTHENTICATION_REQUIRED -> throw error
                 GatewayFailureDisposition.RETRYABLE -> {
-                    localStore.markOutboxRetry(operation, error.problem.detail ?: error.problem.title)
-                    throw RetryableSyncException(error.problem.detail ?: error.problem.title, error)
+                    localStore.markOutboxRetry(operation, userMessage)
+                    throw RetryableSyncException(userMessage, error)
                 }
                 GatewayFailureDisposition.USER_ACTION_REQUIRED,
                 GatewayFailureDisposition.CONFLICT,
@@ -348,20 +346,18 @@ class DriverSyncCoordinator @Inject constructor(
                 -> {
                     resolveTerminalShiftProblem(userId, operation, error)
                     if (error.disposition == GatewayFailureDisposition.USER_ACTION_REQUIRED) {
-                        throw UserActionRequiredSyncException(
-                            error.problem.detail ?: "Нужно обновить доступ водителя",
-                        )
+                        throw UserActionRequiredSyncException(userMessage)
                     }
-                    throw TerminalSyncException(error.problem.detail ?: error.problem.title, error)
+                    throw TerminalSyncException(userMessage, error)
                 }
             }
         } catch (error: Throwable) {
             if (error.isProvenGatewayTransportFailure()) {
-                localStore.markOutboxRetry(operation, error.message ?: "network")
-                throw RetryableSyncException("Не удалось передать состояние смены", error)
+                localStore.markOutboxRetry(operation, SAFE_SHIFT_RETRY_MESSAGE)
+                throw RetryableSyncException(SAFE_SHIFT_RETRY_MESSAGE, error)
             }
-            localStore.markOutboxRetry(operation, error.message ?: "protocol")
-            throw TerminalSyncException("Не удалось передать состояние смены", error)
+            localStore.markOutboxRetry(operation, SAFE_SHIFT_FAILURE_MESSAGE)
+            throw TerminalSyncException(SAFE_SHIFT_FAILURE_MESSAGE, error)
         }
     }
 
@@ -485,11 +481,12 @@ class DriverSyncCoordinator @Inject constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: GatewayProblemException) {
+            val userMessage = gatewayProblemUserMessage(error.problem)
             when (error.disposition) {
                 GatewayFailureDisposition.AUTHENTICATION_REQUIRED -> throw error
                 GatewayFailureDisposition.RETRYABLE -> {
-                    localStore.markOutboxRetry(operation, error.problem.detail ?: error.problem.title)
-                    throw RetryableSyncException(error.problem.detail ?: error.problem.title, error)
+                    localStore.markOutboxRetry(operation, userMessage)
+                    throw RetryableSyncException(userMessage, error)
                 }
                 GatewayFailureDisposition.USER_ACTION_REQUIRED,
                 GatewayFailureDisposition.CONFLICT,
@@ -497,19 +494,17 @@ class DriverSyncCoordinator @Inject constructor(
                 -> {
                     resolveTerminalActionProblem(userId, operation, error)
                     if (error.disposition == GatewayFailureDisposition.USER_ACTION_REQUIRED) {
-                        throw UserActionRequiredSyncException(
-                            error.problem.detail ?: "Нужно обновить доступ рабочего",
-                        )
+                        throw UserActionRequiredSyncException(userMessage)
                     }
                 }
             }
         } catch (error: Throwable) {
             if (error.isProvenGatewayTransportFailure()) {
-                localStore.markOutboxRetry(operation, error.message ?: "network")
-                throw RetryableSyncException("Не удалось передать действие", error)
+                localStore.markOutboxRetry(operation, SAFE_ACTION_RETRY_MESSAGE)
+                throw RetryableSyncException(SAFE_ACTION_RETRY_MESSAGE, error)
             }
-            localStore.markOutboxRetry(operation, error.message ?: "network")
-            throw TerminalSyncException("Не удалось передать действие", error)
+            localStore.markOutboxRetry(operation, SAFE_ACTION_FAILURE_MESSAGE)
+            throw TerminalSyncException(SAFE_ACTION_FAILURE_MESSAGE, error)
         }
     }
 
@@ -543,11 +538,12 @@ class DriverSyncCoordinator @Inject constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: GatewayProblemException) {
+            val userMessage = gatewayProblemUserMessage(error.problem)
             when (error.disposition) {
                 GatewayFailureDisposition.AUTHENTICATION_REQUIRED -> throw error
                 GatewayFailureDisposition.RETRYABLE -> {
-                    localStore.markOutboxRetry(operation, error.problem.detail ?: error.problem.title)
-                    throw RetryableSyncException(error.problem.detail ?: error.problem.title, error)
+                    localStore.markOutboxRetry(operation, userMessage)
+                    throw RetryableSyncException(userMessage, error)
                 }
                 GatewayFailureDisposition.USER_ACTION_REQUIRED,
                 GatewayFailureDisposition.CONFLICT,
@@ -555,19 +551,17 @@ class DriverSyncCoordinator @Inject constructor(
                 -> {
                     resolveTerminalEvidenceReservationProblem(userId, operation, pending, error)
                     if (error.disposition == GatewayFailureDisposition.USER_ACTION_REQUIRED) {
-                        throw UserActionRequiredSyncException(
-                            error.problem.detail ?: "Нужно обновить доступ рабочего",
-                        )
+                        throw UserActionRequiredSyncException(userMessage)
                     }
                 }
             }
         } catch (error: Throwable) {
             if (error.isProvenGatewayTransportFailure()) {
-                localStore.markOutboxRetry(operation, error.message ?: "network")
-                throw RetryableSyncException("Не удалось зарезервировать фото", error)
+                localStore.markOutboxRetry(operation, SAFE_EVIDENCE_RESERVATION_RETRY_MESSAGE)
+                throw RetryableSyncException(SAFE_EVIDENCE_RESERVATION_RETRY_MESSAGE, error)
             }
-            localStore.markOutboxRetry(operation, error.message ?: "network")
-            throw TerminalSyncException("Не удалось зарезервировать фото", error)
+            localStore.markOutboxRetry(operation, SAFE_EVIDENCE_RESERVATION_FAILURE_MESSAGE)
+            throw TerminalSyncException(SAFE_EVIDENCE_RESERVATION_FAILURE_MESSAGE, error)
         }
     }
 
@@ -617,7 +611,7 @@ class DriverSyncCoordinator @Inject constructor(
             "REVIEW_REQUIRED",
             null,
             null,
-            error.problem.detail ?: error.problem.title,
+            gatewayProblemUserMessage(error.problem),
             System.currentTimeMillis(),
         )
         localStore.markOutboxComplete(operation.operationId)
@@ -770,7 +764,7 @@ class DriverSyncCoordinator @Inject constructor(
             operationId = operation.operationId,
             entryId = operation.entryId,
             code = error.problem.code,
-            message = error.problem.detail ?: error.problem.title,
+            message = gatewayProblemUserMessage(error.problem),
             currentVersion = error.problem.currentVersion,
             currentEntryJson = error.problem.currentEntry?.let(json::encodeToString),
         )
@@ -806,17 +800,23 @@ class DriverSyncCoordinator @Inject constructor(
 internal fun driverSyncOutcomeForGatewayProblem(error: GatewayProblemException): DriverSyncOutcome =
     when (error.disposition) {
         GatewayFailureDisposition.AUTHENTICATION_REQUIRED ->
-            DriverSyncOutcome.AuthenticationRequired(error.problem.detail ?: "Требуется повторный вход")
+            DriverSyncOutcome.AuthenticationRequired(gatewayProblemUserMessage(error.problem))
         GatewayFailureDisposition.USER_ACTION_REQUIRED ->
-            DriverSyncOutcome.UserActionRequired(error.problem.detail ?: "Нужно обновить доступ рабочего")
+            DriverSyncOutcome.UserActionRequired(gatewayProblemUserMessage(error.problem))
         GatewayFailureDisposition.CONFLICT ->
-            DriverSyncOutcome.Conflict(
-                error.problem.detail ?: "Данные задания изменились на RWMS. Обновите список задач.",
-            )
+            DriverSyncOutcome.Conflict(gatewayProblemUserMessage(error.problem))
         GatewayFailureDisposition.RETRYABLE ->
-            DriverSyncOutcome.Retry(error.problem.detail ?: "RWMS временно недоступен")
+            DriverSyncOutcome.Retry(gatewayProblemUserMessage(error.problem))
         GatewayFailureDisposition.TERMINAL ->
-            DriverSyncOutcome.Failed(error.problem.detail ?: "Не удалось синхронизировать данные")
+            DriverSyncOutcome.Failed(gatewayProblemUserMessage(error.problem))
+    }
+
+/** Converts an untyped failure to a fixed outcome without exposing its exception text. */
+internal fun driverSyncOutcomeForUnexpectedFailure(error: Throwable): DriverSyncOutcome =
+    if (error.isProvenGatewayTransportFailure()) {
+        DriverSyncOutcome.Retry(SAFE_SYNC_RETRY_MESSAGE)
+    } else {
+        DriverSyncOutcome.Failed(SAFE_SYNC_FAILURE_MESSAGE)
     }
 
 /** A reservation response outside the narrow retry set is terminal for automatic replay. */
@@ -889,6 +889,26 @@ internal fun cachedFeedMatchesContext(
 }
 
 private const val MAX_FEED_PAGES = 100
+private const val SAFE_SYNC_RETRY_MESSAGE =
+    "Нет соединения с RWMS. Проверьте сеть и повторите попытку."
+private const val SAFE_SYNC_FAILURE_MESSAGE =
+    "Не удалось синхронизировать данные. Обновите список заданий и повторите попытку."
+private const val SAFE_SHIFT_RETRY_MESSAGE =
+    "Не удалось передать состояние смены. Проверьте сеть и повторите попытку."
+private const val SAFE_SHIFT_FAILURE_MESSAGE =
+    "Не удалось обновить смену. Синхронизируйте данные и повторите действие."
+private const val SAFE_ACTION_RETRY_MESSAGE =
+    "Не удалось передать действие. Проверьте сеть и повторите попытку."
+private const val SAFE_ACTION_FAILURE_MESSAGE =
+    "Не удалось передать действие. Синхронизируйте задание и повторите попытку."
+private const val SAFE_EVIDENCE_RESERVATION_RETRY_MESSAGE =
+    "Не удалось зарезервировать фотографию. Проверьте сеть и повторите попытку."
+private const val SAFE_EVIDENCE_RESERVATION_FAILURE_MESSAGE =
+    "Не удалось зарезервировать фотографию. Синхронизируйте задание и повторите попытку."
+private const val SAFE_EVIDENCE_UPLOAD_RETRY_MESSAGE =
+    "Не удалось отправить фотографию. Проверьте сеть и повторите попытку."
+private const val SAFE_EVIDENCE_UPLOAD_FAILURE_MESSAGE =
+    "Не удалось отправить фотографию. Проверьте файл и повторите попытку."
 private const val SHIFT_BRIEFING_SEEN = "BRIEFING_SEEN"
 private const val SHIFT_MEDICAL_CHECK = "MEDICAL_CHECK"
 private const val SHIFT_INSPECTION_ITEM = "INSPECTION_ITEM"

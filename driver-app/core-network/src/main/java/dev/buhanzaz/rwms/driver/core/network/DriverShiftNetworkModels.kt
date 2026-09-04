@@ -17,7 +17,26 @@ data class TodayDriverShiftDto(
     val inspection: DriverVehicleInspectionDto? = null,
     val taskSummary: DriverShiftTaskSummaryDto? = null,
     val closingReport: DriverShiftClosingReportDto? = null,
+    val operations: List<DriverShiftRouteOperationDto> = emptyList(),
     val photos: List<DriverShiftPhotoDto> = emptyList(),
+)
+
+/**
+ * One immutable exact-time stop or positioning leg in the plan-version execution order. Optional
+ * source identities associate existing task or transfer work without defining another command.
+ */
+@Serializable
+data class DriverShiftRouteOperationDto(
+    val sequence: Int,
+    val kind: String,
+    val warehouseId: String? = null,
+    val sourceTaskId: String? = null,
+    val sourceTransferId: String? = null,
+    val locationLabel: String,
+    val plannedArrival: String,
+    val plannedDeparture: String,
+    val loadBefore: Int,
+    val loadAfter: Int,
 )
 
 /** Authoritative shift status, fencing version, work date and audit timestamps. */
@@ -101,7 +120,7 @@ data class WeatherHazardDto(
     val description: String,
 )
 
-/** Immutable vehicle and optional trailer snapshot supplied by the logistics plan. */
+/** Immutable vehicle, effective cabin-load capacity, and optional trailer snapshot from the plan. */
 @Serializable
 data class DriverShiftVehicleDto(
     val id: String,
@@ -111,6 +130,7 @@ data class DriverShiftVehicleDto(
     val manufacturer: String? = null,
     val model: String? = null,
     val configurationType: String,
+    val cabinCapacity: Int? = null,
     val startOdometer: Long? = null,
     val trailer: DriverShiftTrailerDto? = null,
 )

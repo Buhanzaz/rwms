@@ -56,7 +56,7 @@ class RentalOrderTermsService {
       return new RentalOrderCommandOutcome(reads.visibleDetail(actor, replay.getOrder()), true);
     }
 
-    RentalOrder order = store.lockedOrder(orderId);
+    RentalOrder order = store.lockedOrder(actor, orderId);
     access.requireRentalTermExtension(actor, order);
     RentalOrderProblems.requireVersion(order, request.expectedVersion());
     List<RentalOrderUnitTerm> terms =

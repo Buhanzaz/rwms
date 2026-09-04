@@ -433,8 +433,8 @@ function TaskBoardWarehousePage() {
     return entry?.unitNumber ?? entry?.title ?? "выбранной бытовки"
   }, [boardQuery.data, highlightedTaskId])
   const kpiSettingsQuery = useQuery({
-    queryKey: kpiSettingsKeys.warehouse(warehouseId ?? "none"),
-    queryFn: () => getKpiSettings(accessToken!, warehouseId!),
+    queryKey: kpiSettingsKeys.settings,
+    queryFn: () => getKpiSettings(accessToken!),
     enabled: Boolean(accessToken && warehouseId),
     staleTime: 60_000,
   })

@@ -83,6 +83,17 @@ decorative **Workspace** heading. The selected warehouse label carries its
 live local time and canonical IANA timezone; switching warehouses immediately
 recalculates that clock from the selected warehouse, not from a browser-global
 timezone.
+The planning date is initialized from that same selected-warehouse metadata
+before workspace, automatic planning or day-status queries are enabled. A
+warehouse switch invalidates the previous context first, so a cached workspace
+cannot mutate the former UTC/browser date.
+Browser persistence is deliberately limited to presentation preferences: the
+exact selected warehouse, one planning date and map viewport per warehouse,
+the application and left-menu sections, the shift filter, the map tool and map
+layers. Reload restores those choices, while plans, requests, shifts and every
+operational decision remain server-owned. When a representative warehouse is
+active, updates to its group's root plan do not recenter the map over the root
+depot.
 
 The supported flow selects an automatically reconciled canonical RWMS warehouse,
 creates warehouse-scoped resources and delivery/pickup work, checks dynamic slots,
@@ -94,7 +105,11 @@ cloning and JSON workspace import/export do not exist.
 The deterministic workload generator remains a test/development API, but the
 warehouse details view does not expose **Test for 3 days**, **Connect warehouse**
 or **Refresh from WMS** controls. Normal warehouse and RWMS order refresh is
-automatic.
+automatic. A separate fail-closed
+[`driver-fixture-bridge`](../tools/driver-fixture-bridge/README.md) can publish
+only an already confirmed, wholly generator-owned route into canonical
+task-board DriverApp tasks in an explicit dev/test environment. It defaults to
+dry-run and is not a production publication path.
 The shared planning date filters both the request list and map markers. Until
 the dispatcher selects one date, a request appears on every customer-approved
 date; afterwards it appears only on the selected logistics date. Clicking a
@@ -134,8 +149,24 @@ drivers** from a merely unassigned request and offers an explicit contractor
 handoff. Contractor profiles are reusable and have no availability dates. The
 dispatcher selects the planning date in the header and can either form a trip
 automatically from eligible unassigned work or select requests manually. Each
-handoff records the concrete active worker but deliberately creates no simulator
-vehicle, shift or route cycle and removes those requests from automatic planning.
+real-RWMS handoff first persists a durable command and request reservation; its
+remote apply runs outside the database transaction and is retried with the same
+idempotency identity. Only complete success removes requests from automatic
+planning. A mixed upstream result remains pending for reconciliation and never
+pretends that every request was assigned. The handoff records the concrete
+active worker but deliberately creates no simulator vehicle, shift or route
+cycle. A successful canonical handoff also returns and projects its durable
+command UUID, each request's zero-based immutable command sequence and exact
+task-board task UUIDs. The **Contractors** section groups requests by one
+command, requires a fully loaded projection with one unique contiguous
+sequence, and restores task order from that sequence after reload. Missing,
+duplicated or mixed identities leave the route visibly not ready and never
+create a share; a generated-only local assignment has no share action. Only an
+explicit **Copy route** click creates or idempotently replays the expiring
+canonical logistics share with the current RWMS USER token. Its idempotency key
+is the handoff command UUID and its deterministic expiry is derived from the
+planning date; if clipboard access is unavailable, the same-origin URL remains
+selectable for manual copying.
 Selecting an unassigned list card highlights its marker and pans the map while
 preserving the current zoom. Backend/domain failures pass through one
 user-facing Russian error mapper; raw HTTP status text, exception bodies and
@@ -164,7 +195,14 @@ pickup candidates. Global map-layer switches own optional visual isochrones.
 `POST /api/planning/slot-holds` retains one versioned result
 for ten minutes by default; confirmation rechecks source/day-plan versions and
 increments the plan version atomically. The selected hourly isochrone tier
-contributes the displayed delivery price.
+contributes the displayed delivery price. Separate warehouse-owned
+`FORBIDDEN`, `NO_TRAILER` and `SPECIAL_PRICE` MultiPolygon policies respectively
+exclude a point, force a solo-vehicle profile or replace the price only after
+the exact road route remains within the farthest ordinary isochrone. Current
+mutable demand and active holds are classified in bounded bulk queries, so a
+policy edit participates in the next availability calculation rather than only
+in newly entered addresses; confirmed plan workload remains occupied immutable
+history.
 
 The before/after route layers cover the complete affected driver day. Exact
 directed schedule simulation remains authoritative. Pickup markers expose
@@ -242,7 +280,9 @@ timezone-aware; a warehouse's canonical timezone is authoritative and
 `Europe/Moscow` is only the configured fallback. The tariff list starts at 60
 minutes and advances in contiguous one-hour steps. Exact one-way truck time
 selects the first covering price; the final configured tier is the hard order
-acceptance boundary. No active delivery-zone or request-zone model remains.
+acceptance boundary. Ordinary delivery polygons and request-to-zone ownership
+do not return; exceptional access/price policies are separate versioned,
+warehouse-owned MultiPolygons and never extend normal delivery reach.
 
 ## Logistics rules
 
@@ -267,15 +307,15 @@ acceptance boundary. No active delivery-zone or request-zone model remains.
   pickup-only work when no delivery can use that time. The one-way **Close
   request acceptance** command persists the closure and recalculates the same
   delivery-priority model against the final request set. Closed dates are
-  removed from newly published customer-slot capacity. When RWMS sync is
-  enabled, the same idempotent close command automatically applies the assigned
-  RWMS delivery slices from the exact final plan; retrying close retries that
-  application and republishes the committed capacity generation without
-  rebuilding a different plan. Deterministic warehouse, order, cabin and driver
-  mapping is validated before capacity publishing can commit the pending
-  closure. If a later remote call fails after the local snapshot was
-  committed, the browser reloads the authoritative closed state and reports the
-  external exchange as requiring a retry instead of showing a false open day.
+  removed from newly published customer-slot capacity. Closing archives only a
+  mutable preliminary head, preserves a confirmed or historical revision and
+  never publishes an unconfirmed assignment to RWMS. With RWMS sync enabled,
+  assignment publication is a separate version-fenced command for the exact
+  `CONFIRMED` plan. Deterministic warehouse, order, cabin and driver mapping is
+  validated before the remote effect; an exact retry reuses the same
+  plan/version idempotency key. A later remote failure is reconciled through
+  the read-only publication status and an explicit retry, not through another
+  close command.
   A newly loaded plan also replaces the previous plan-result notification, so
   the operator sees only the current route and unassigned counts.
 - A driver's next cycle starts no earlier than the preceding depot return plus
@@ -407,15 +447,30 @@ routing or basemap key is required; the optional address workflow uses the two
 server-side keys described above.
 
 On the current VPS, Nginx publishes the workspace at
-<https://77-90-158-90.sslip.io/logistics-simulator/>. This path-based reverse
-proxy build uses `VITE_APP_BASE_PATH=/logistics-simulator/` and
-`VITE_API_BASE_URL=/logistics-simulator/api`; the backend remains loopback-only.
+<https://77-90-158-90.sslip.io/logistics-panel/>. This path-based reverse
+proxy build uses `VITE_APP_BASE_PATH=/logistics-panel/` and
+`VITE_API_BASE_URL=/logistics-panel/api`; the backend remains loopback-only.
 The frontend container serves the same prefixed SPA and API paths directly, and
 returns `404` for a missing hashed asset instead of falling back to HTML. This
 keeps direct runtime smoke tests equivalent to the URLs embedded in the bundle.
 The `/logistics/**` namespace remains owned by the primary RWMS panel and must
 not redirect to or be shadowed by the standalone simulator. The public Nginx
 locations are recorded in `deploy/nginx-public-path.conf`.
+
+Loopback binding is not an authentication boundary. The browser restores the
+existing `rwms-panel` OIDC `USER` session and sends a fresh Bearer token to
+every operator API request and planning-event stream. FastAPI validates the
+RS256 signature through JWKS, exact issuer and audience, expiry, panel client,
+`rwms.read` scope and warehouse grants before loading or mutating operational
+data. Only health and generated API documentation remain anonymous. On the VPS
+`AUTH_ISSUER` is mandatory and must equal the public issuer in signed tokens;
+the backend-reachable `AUTH_JWKS_URL` may remain private.
+
+If a separately opened tab has no session-scoped token copy, the workspace
+immediately starts the normal `rwms-panel` authorization redirect. The shared
+RWMS Auth session can complete SSO and the common callback returns to the exact
+standalone logistics path; access and refresh tokens are not copied to
+`localStorage` merely to share them between tabs.
 
 ### VPS-only RWMS bridge
 
@@ -425,8 +480,11 @@ persistent external `rwms-logistics-private` bridge. Create that bridge once
 with fixed gateway `172.21.0.1`, deploy
 `deploy/nginx-rwms-private-bridge.conf` as an Nginx configuration, and start
 with both Compose files. The Nginx listeners are bound only to that Docker
-gateway and proxy only `/oauth2/token` and
+gateway and proxy only `/oauth2/token`, `/oauth2/jwks` and
 `/api/internal/logistics/v1/planning/` to loopback-bound RWMS services.
+The VPS overlay defaults `AUTH_JWKS_URL` to the exact private JWKS route
+`http://172.21.0.1:19002/oauth2/jwks`; `host.docker.internal` is not a supported
+VPS route for token verification.
 
 The host firewall must permit TCP from `172.21.0.0/16` only to those two gateway
 listeners. Do not bind the RWMS service ports or this bridge to the public VPS
@@ -519,9 +577,20 @@ make openapi
 | `PLANNER_DEFAULT_SEED` | `20260822` | Default deterministic tie-break seed |
 | `VITE_MAP_STYLE_URL` | empty | Frontend build arg; optional MapLibre style, empty enables grid mode |
 | `VITE_API_BASE_URL` | `/api` | Frontend build arg for the same-origin browser API prefix |
-| `VITE_APP_BASE_PATH` | `/` | Vite base; use `/logistics-simulator/` on the VPS with API `/logistics-simulator/api` |
+| `VITE_APP_BASE_PATH` | `/` | Vite base; use `/logistics-panel/` on the VPS with API `/logistics-panel/api` |
+| `AUTH_ISSUER` | `http://localhost:8088/auth` | Exact trusted JWT `iss`; mandatory explicit value in the VPS overlay |
+| `AUTH_JWKS_URL` | issuer `/oauth2/jwks` (VPS overlay: private bridge) | Backend-reachable JWKS used for RS256 signature verification |
+| `AUTH_AUDIENCE` | `rwms-services` | Required operator-token audience |
+| `AUTH_PANEL_CLIENT_ID` | `rwms-panel` | Only interactive panel USER tokens from this client are accepted |
+| `AUTH_JWKS_TIMEOUT_SECONDS` | `5` | Bounded JWKS fetch timeout from 0 to 30 seconds |
 | `RWMS_SYNC_ENABLED` | `false` | Explicitly enables authenticated RWMS import/apply operations |
+| `RWMS_DEMAND_SYNC_INTERVAL_SECONDS` | `60` | Server-owned demand-ingestion cadence, validated from 5 to 3600 seconds |
+| `RWMS_DEMAND_SYNC_BATCH_SIZE` | `25` | Number of routing-ready warehouses processed per fenced ingestion page, from 1 to 100 |
 | `RWMS_CAPACITY_PUBLISH_ENABLED` | `false` | Publishes generated delivery/pickup, shift and tariff facts for RWMS slot/price calculation; requires RWMS sync |
+| `RWMS_CAPACITY_RETRY_INTERVAL_SECONDS` | `15` | Poll interval for durable retry of due capacity generations; validated from 1 to 300 seconds |
+| `RWMS_REQUEST_RESCHEDULE_RETRY_INTERVAL_SECONDS` | `15` | Poll interval for due owner-backed unassigned-delivery recovery, from 1 to 300 seconds |
+| `RWMS_REQUEST_RESCHEDULE_RETRY_BATCH_SIZE` | `10` | Maximum leased reschedule holds claimed in one `SKIP LOCKED` batch, from 1 to 100 |
+| `RWMS_REQUEST_RESCHEDULE_RETRY_MAX_ATTEMPTS` | `8` | Failed owner-phase attempts before the persisted hold is quarantined, from 1 to 100 |
 | `RWMS_LOGISTICS_BASE_URL` | empty | Private base URL of the RWMS logistics-service planning boundary |
 | `RWMS_TOKEN_URL` | empty | Private OAuth2 token endpoint used for client credentials |
 | `RWMS_CLIENT_ID` | `logistics-planner` | Dedicated client with only `logistics.planning` scope |
@@ -548,9 +617,11 @@ warehouse manually.
 
 The selected warehouse is resolved to one non-transitive planning root. A main
 warehouse and its directly served, routing-ready representative warehouses share
-the same dated plan and root resources, while every regional request retains its
-canonical `serviceWarehouseId`. Exact link exclusions, allowed dates and
-recurring weekdays are applied for the planning date; selecting a representative
+the same dated plan, while every regional request retains its canonical
+`serviceWarehouseId`. The planner evaluates local resources owned by every
+admitted member and all calendar-eligible support warehouses. Each candidate
+retains its physical route origin; exact link exclusions, allowed dates and
+recurring weekdays are applied for the planning date. Selecting a representative
 changes the visible map context without creating a duplicate day plan.
 The header selector renders the current root first, its direct representatives
 as indented rows, and then the other routable roots. Selecting a representative
@@ -558,6 +629,17 @@ keeps planning commands on the root while opening that warehouse's own context.
 Depot stops and driver timelines are always labelled from the persisted plan's
 `warehouse_id`, so opening a representative cannot relabel a physical root-depot
 start as an arrival at the representative warehouse.
+The first successful workspace read establishes the notification baseline for
+that exact planning root and member set; it never calls existing regional RWMS
+requests “new”. Later reads notify only request IDs that appeared after that
+baseline. Changing to a different group establishes a new baseline instead of
+replaying its historical demand as alerts.
+The shift view keeps its **All / Active / Inactive** filter across reloads. The
+editor mirrors the server's recurring and overnight overlap rule to identify
+an existing driver or vehicle conflict before submission; backend version,
+locking and overlap fences remain authoritative. A shift retained by plan
+history cannot be deleted; the conflict directs the operator to make it
+inactive instead.
 
 Planning reads and commands remain on the simulator's same-origin FastAPI. The
 in-map **Create transfer** action is the narrow exception: it opens a local
@@ -609,25 +691,39 @@ Contractors are a separate dispatcher fallback: the optimizer never fabricates
 their vehicle, capacity, shift or internal route. The **Contractors** section
 uses task-board's warehouse-owned catalog to create, edit, deactivate or delete
 unused reusable profiles. Profile dialogs contain no dates. **Form trip** assigns
-eligible work for the date currently selected in the header; **Distribute
-manually** submits an explicit set of that day's unassigned deliveries/pickups.
+eligible supported work for the date currently selected in the header;
+**Distribute manually** submits an explicit set of that day's unassigned work.
+Generated/local pickups remain eligible. A real RWMS pickup is excluded from
+automatic selection and disabled in manual selection because the canonical
+assignment contract does not yet support contractor pickup handoff; supported
+deliveries in the same batch are still assigned.
 
-`GET /api/warehouses/{warehouse_id}/workspace` refreshes the authoritative
-31-day demand horizon before returning the workspace whenever synchronization
-is enabled. Orders are upserted by stable `(warehouse, RWMS, orderId)` identity
-with their versions and cabin unit IDs. Coordinates are authoritative when
-both coordinates and an address exist; an address-only row fails explicitly
-with `COORDINATES_REQUIRED` instead of using a fabricated point. Valid sibling
-orders remain durable if another row fails, while
-`RWMS_WORKSPACE_SYNC_INCOMPLETE` prevents the partial result from being called
-current. An unchanged poll preserves the current mutable root-plan identity.
-A complete poll invalidates mutable group plans only when at least one order
-was imported or updated; an incomplete poll preserves the last plan and defers
-regeneration until the next complete refresh. `refresh_rwms=false` reads that
-last durable projection for an explicit recovery view.
+`GET /api/warehouses/{warehouse_id}/workspace` is a side-effect-free read of
+one exact warehouse-local planning date. It returns at most `request_limit`
+requests (250 by default, 1000 maximum), a stable UUID cursor and the total;
+the browser accumulates pages only within the same response generation and
+renders their map points through one clustered GeoJSON source. A separate
+server-owned worker holds a PostgreSQL advisory fence, reconciles the warehouse
+directory and imports each routing-ready warehouse's authoritative 31-day
+horizon in bounded keyset pages. Orders are upserted by stable
+`(warehouse, RWMS, orderId)` identity with versions and cabin unit IDs.
+Address-only rows use the existing server geocoder, valid siblings commit, and
+directory/import transactions finish before support-network HTTP and automatic
+planning. A later group-resolution or planner failure therefore cannot roll
+back already imported demand.
 
-Creating or changing an authoritative request invalidates only plans on its
-old and new allowed dates. The backend then rebuilds missing draft plans for
+The successful warehouse/date response is a complete snapshot of still-unplanned
+demand. A previously imported `READY` or `UNASSIGNED` RWMS request omitted from
+that inclusive range is retained with its dates, payload and task identities but
+is moved to `CANCELLED`; only mutable plan heads are archived. Confirmed plan
+references and requests that already crossed the planning boundary are never
+rewound. If the same source identity reappears, its retained request and tasks
+return to `READY` without duplication. A source row that is present but fails
+local validation is not mistaken for an omission.
+
+Creating or changing an authoritative request archives only mutable plan heads
+on its old and new allowed dates. Confirmed plans and historical revisions are
+never deleted by request mutation. The backend then rebuilds missing draft plans for
 complete dates; opening a date idempotently ensures its draft as well. There is
 no manual route-build action for the initial draft. Changing planning details
 on an existing draft exposes the explicit **Refresh routes** action described
@@ -642,24 +738,36 @@ places a pickup before a delivery.
 
 The selected day is read through
 `GET /api/warehouses/{warehouse_id}/planning-days/{date}`. **Close delivery
-acceptance** calls the idempotent matching `/close` endpoint, recalculates that
-day and, when synchronization is enabled, automatically applies assigned RWMS
-deliveries from the final plan. The exact plan/version is the optimistic and
-idempotency fence; a stale version fails instead of overwriting a newer plan.
-Low-level plan apply/status endpoints remain available only for audited
-recovery and diagnostics and are not exposed as a routine exchange dialog.
+acceptance** calls the idempotent matching `/close` endpoint and recalculates
+that day, but it never publishes an unconfirmed plan. One warehouse/date has a
+single non-archived revision head; a successful reoptimization archives its
+expected predecessor and records `supersedesPlanId`. Confirming a plan
+atomically fixes each assigned flexible request to that date and archives
+competing mutable plans on alternative dates. Only the separately confirmed
+exact plan/version may cross `/rwms/apply`; a stale version fails instead of
+overwriting a newer plan.
 
-Capacity publication is a separate opt-in and requires synchronization.
+Capacity publication is a separate opt-in and requires synchronization. A
+daytime or overnight shift is publishable only when its break is shorter than
+its complete interval; periods may cross a month boundary but contain at most
+31 dates. `end < start` ends on the next local day and equality is invalid. The
+form, API, application service, capacity DTO and DB enforce these invariants
+before the snapshot is built.
 Warehouse resource mutations and generated-workload replacement publish one
 versioned complete snapshot of generated delivery/pickup demand, active
 period-based shifts, vehicle capacity and that warehouse's complete hourly tariff list. Each committed
 mutation advances a warehouse capacity generation, so retries are idempotent
 and delayed older generations are rejected. Manual requests and imported RWMS
 orders are not re-published as generated demand; replacing capacity never
-deletes a real RWMS booking. The simulator commits generated workload first;
-an unavailable optional RWMS capacity projection is reported as `FAILED` with
-an operator warning and never rolls back or converts test demand into an RWMS
-order. `POST
+deletes a real RWMS booking. Regeneration deletes a saved plan only when every
+referenced request is generator-owned. A real, mixed or confirmed plan causes
+an explicit conflict before any test request or plan changes. The simulator
+commits local work and a durable `PENDING` publication record in one
+transaction. An unavailable optional RWMS capacity projection becomes
+`FAILED` with a safe error code and operator warning; it never rolls back local
+work or converts test demand into an RWMS order. A leased worker automatically
+retries only the latest due generation with bounded backoff, while a delayed
+older success cannot hide newer pending work. `POST
 /api/warehouses/{warehouse_id}/rwms/capacity` is an operational reconciliation
 endpoint, not a panel button.
 
@@ -669,11 +777,17 @@ commits the exact command snapshot before the idempotent remote call.
 
 ## Valhalla and OpenStreetMap truck routing
 
-The default `ROUTING_PROVIDER=valhalla` uses a bounded Haversine matrix only to
-prefilter candidate combinations. A candidate is not feasible until every leg
-has been independently requested from private Valhalla with `costing=truck`
-and the leg's `EffectiveTruckProfile`. Exact Valhalla distance and duration are
-then used to reschedule windows, shift finish and objective cost. The saved
+The default `ROUTING_PROVIDER=valhalla` builds sparse exact directed submatrices
+of at most 32 points for deterministic time-window and overlapping spatial
+partitions; it never allocates one full `N×N` day matrix. A candidate is not
+feasible until every used leg has been requested from private Valhalla with
+`costing=truck` and the leg's `EffectiveTruckProfile`. Sparse-matrix preparation
+and candidate optimization have consecutive bounded intervals of the configured
+optimization duration. Successful matrix preparation therefore cannot consume
+the first exact candidate's complete search interval. An interrupted candidate
+is discarded and only a fully validated best-known plan may be returned. Exact
+Valhalla distance and duration reschedule windows, shift finish and objective
+cost. The saved
 GeoJSON and profile snapshot power route cards, map lines, diagnostics and
 simulation. The browser rejects an invalid segment geometry or a plan reference
 to a missing task; it never invents a straight line, zero coordinate or
@@ -762,7 +876,8 @@ make test-valhalla-truck
 pattern instead of pretending to be a universal VRP solver. It:
 
 1. validates dated shifts/resources and splits ready requests;
-2. builds the deterministic travel matrix;
+2. builds bounded exact sparse travel submatrices for stable temporal and
+   spatial candidate partitions;
 3. prioritizes deliveries by hard/last-date, manual priority, scarce dates and
    narrow windows, then batches equal-priority work nearest-first;
 4. schedules every candidate just in time from the depot, shifts its routed
@@ -787,6 +902,44 @@ The engine stops predictably at the configured time/iteration limit and
 returns the best valid plan found. The optimization seed is stored with the
 run.
 
+## Dynamic day operations
+
+The existing planner is also the recovery engine for a selected warehouse-local
+day. A versioned `PlanningDayPolicy` persists `DELIVERIES_AND_PICKUPS`,
+`DELIVERIES_ONLY`, or `PICKUPS_ONLY` at the root of a planning group; the
+constraint applies to every represented warehouse and to slot/capacity
+publication. A mode change on an empty day creates no artificial transfer. A
+conflict with planned work creates a durable `LogisticsEvent`, structured
+`LogisticsNotice`, human action, and versioned `RecoveryProposal`; it does not
+silently alter a customer commitment.
+
+Breakdowns, delays, unavailable drivers, cancellations, blocked tasks, and
+mode changes use one sequence: fact, impact analysis, recommendation,
+dispatcher decision, and explicit partial replan. Delay contacts use only
+acceptance, rejection, or unreachable outcomes and fence the shared proposal.
+The dispatcher enters an event time explicitly: its date comes from the opened
+day and it is interpreted in the planning-root warehouse IANA timezone, never
+in the browser timezone or a global Moscow default.
+Existing RWMS base tasks are read-only, low-priority return-to-base candidates.
+See [`dynamic_operations.py`](backend/app/api/dynamic_operations.py),
+[`operations.py`](backend/app/models/operations.py),
+[`dynamic_impacts.py`](backend/app/services/dynamic_impacts.py), and
+[`dynamic_recovery.py`](backend/app/services/dynamic_recovery.py).
+
+The day-operations workspace has no separate “System journal”. Structured
+notices and immutable dispatcher decisions remain durable on the backend. The
+UI merges them chronologically into the existing notification center and a
+read-only **Settings → Journal** view. Unfinished human decisions remain in the
+action queue and calculated changes remain in proposals. The UI shows an
+explicit warning when the server truncates the available history window.
+
+Rescheduling an existing unassigned RWMS delivery never opens manual time
+entry. The dispatcher selects a date, the backend asks the order owner for all
+currently feasible slots on that date, and exactly one returned slot can then
+be selected and confirmed as agreed with the customer. Apply rechecks the
+local request, source plan, order, customer session, and slot versions; it never silently
+changes the customer commitment.
+
 ## Development workload APIs and reproducibility
 
 For a configurable load, choose **Request generator**. Set the first date, a
@@ -805,9 +958,16 @@ the complete run fails explicitly. Equal tariff settings, routing graph, input
 and seed reproduce the same business values. Stable external identities prevent
 a repeated generator run from creating duplicate logical visits.
 
-**Delete workload** removes generated requests and saved plans only for the
-selected warehouse date. The date control, request list and map display the
-same filtered work; delivery and pickup markers open their request details.
+**Delete workload** removes generated requests and saved unconfirmed plan
+revisions only for the selected planning-group root and exact date. An
+unconfirmed mixed plan is disposable derived state: the command removes that
+revision but preserves every manual or RWMS request so the remaining demand can
+be planned again. A confirmed plan fences the command with
+`WORKLOAD_GENERATOR_PLAN_CONFLICT`. Automatic regeneration is stricter and
+refuses any mixed plan instead of treating business demand as generator-owned.
+This is the same root-owned plan shown while a representative warehouse is
+open. The date control, request list and map display the same filtered work;
+delivery and pickup markers open their request details.
 Warehouse settings store one to twelve independent non-negative whole-ruble
 prices for contiguous hourly isochrone bands. The last band is the maximum
 delivery distance by exact road time. The resolved tariff is

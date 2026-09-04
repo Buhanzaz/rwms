@@ -42,6 +42,7 @@ import org.testcontainers.utility.DockerImageName;
     properties = {
       "spring.jpa.hibernate.ddl-auto=validate",
       "rwms.platform.kafka.enabled=true",
+      "spring.cloud.function.definition=logisticsInbound",
       "spring.cloud.stream.kafka.binder.auto-create-topics=true",
       "spring.cloud.stream.kafka.default.producer.sync=true",
       "spring.cloud.stream.kafka.binder.configuration.request.timeout.ms=1000",

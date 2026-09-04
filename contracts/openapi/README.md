@@ -16,6 +16,7 @@ is no cross-domain aggregate API schema.
 - `maintenance-service.yaml`
 - `inventory-service.yaml`
 - `logistics-service.yaml`
+- `logistics-planner-service.yaml`
 - `dossier-service.yaml`
 - `analytics-service.yaml`
 - `assistant-service.yaml`

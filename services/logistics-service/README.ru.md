@@ -22,14 +22,29 @@ document/workflow state, но не агрегатами кабин, оборуд
 используют определённые контрактом `Idempotency-Key` и expected-version field/parameter; callers
 должны обработать канонический конфликт, а не отправлять изменившийся retry.
 
+Списки возвратов, отгрузок и перемещений сохраняют array в теле ответа, но ограничены параметрами
+`page` и `size` (`0/50` по умолчанию, максимум 100). Заголовки ответа `X-RWMS-*` передают страницу,
+размер, итоги и признак продолжения. `scheduledDate` ограничивает активное операционное чтение одним
+точным warehouse-local днём; список перемещений включает документы, где выбранный склад является
+источником или назначением. Отсутствие даты сохранено только для ограниченных relationship lookup.
+Строки документов одной страницы читаются одним batch-запросом.
+
+Подмножество clients, inquiries, presentations и orders аренды также принимает только выделенный
+credential `rwms-rental-manager-web` или `rwms-rental-manager-android` с `RENTAL_MANAGER`,
+`rentalAccess=true`, подписанной компанией и ровно `rental.manage` как application scope. Поиск
+бытовок и выбор склада сохраняют существующие явные grants уровня `EDIT`. Смешанные application
+scopes запрещены, а возвраты, отгрузки, перемещения и остальные операционные API по-прежнему
+требуют обычные RWMS scopes.
+
 ### Граница бронирования CustomerApp
 
 Выделенная граница `/api/logistics/customer/v1/**` принимает только JWT типа `USER` с ролью
 `CUSTOMER`, scope `customer.rental` и client identity `rwms-customer-android`. Клиент создаёт один
 профиль физического или юридического лица, выбирает доступный склад и работает с принадлежащей
 logistics rental session. Склад доступен, только пока warehouse-service считает его активным, у
-него есть валидные координаты и он либо представительский, либо обычный склад, явно включённый в
-реестр logistics delivery-depot. Представительскому складу не нужна дублирующая запись реестра.
+него есть полная координатная пара в допустимом диапазоне, отличная от зарезервированного
+placeholder `0,0`, и он либо представительский, либо обычный склад, явно включённый в реестр
+logistics delivery-depot. Представительскому складу не нужна дублирующая запись реестра.
 Координаты warehouse-service авторитетны и для ответа CustomerApp, и для route origin, поэтому
 начальная камера карты и маршрут слота начинаются на выбранном в session складе. Доступность и holds бытовок, фотографии и
 положительные остатки мебели остаются во владении asset-service; клиентский каталог отдаёт только
@@ -65,17 +80,18 @@ terminal-session и её booking не переоткрываются и не п�
 
 Для обычного склада предложения доставки используют фиксированные warehouse-local окна
 `09:00-12:00`, `12:00-15:00` и `15:00-18:00`, а также один вариант `DURING_DAY` на весь
-настроенный день доставки. Представительский склад показывает только `DURING_DAY`: локальные
-опубликованные смены по-прежнему проверяются тем же route-capacity planner, а при отсутствии
-локально выполнимого плана день может остаться гибким вариантом с подтверждением логистом только
-при активной прямой входящей support-связи, разрешённой на эту дату, пересекающей клиентский день
-и допускающей либо водителей вместе с автомобилями, либо fallback на подрядчика. Исключённая дата
-имеет приоритет над явной разрешённой датой и недельным расписанием. При hold этот fallback
-проверяется заново, не создаёт фиктивную смену или внешнее резервирование ресурса и никогда не
-открывает фиксированное окно; обычный склад без локальной ёмкости по-прежнему закрывается.
+настроенный день доставки. Представительский склад показывает только `DURING_DAY`, и этот вариант
+требует того же подтверждённого факта выполнимого route-capacity, что и обычный склад. Support link
+и её календарь описывают topology планирования, но не зарезервированного водителя или автомобиль,
+поэтому сами по себе не создают обещание клиенту. Пока durable token внешней capacity отсутствует,
+и обычный, и представительский склады остаются fail-closed без подтверждённой мощности.
 [`CustomerDeliverySlotService`](src/main/java/dev/buhanzaz/rwms/logistics/customer/service/CustomerDeliverySlotService.java)
 сохраняет предложенную и удержанную ёмкость и через private Valhalla truck matrix рассчитывает
-точное дорожное время. `travelZoneHours` остаётся информационной неограниченной полосой от склада и
+точное дорожное время. День с числом клиентских/нагрузочных точек больше тридцати разбивается на
+точные направленные provider-блоки `32 x 32`, из которых собирается одна матрица; до 128 точек
+расчёт остаётся точным. Превышение этого ограниченного online-предела возвращает типизированную
+ошибку `CUSTOMER_DELIVERY_WORKLOAD_LIMIT`, а не молча сообщает об отсутствии доступных дат.
+`travelZoneHours` остаётся информационной неограниченной полосой от склада и
 не определяет ни допустимость, ни цену. Настроенные tiers изохрон ограничивают покрытие доставки
 только после нахождения точного дорожного маршрута. Каждый фиксированный или дневной
 вариант проверяется по маршруту и ёмкости до выдачи клиенту. `kind`, `window_start` и `window_end`
@@ -101,8 +117,16 @@ route. Любое изменение бытовок, вместимости об
 осей одиночной машины или автопоезда, с которыми Valhalla проверила truck-route. Одностороннее
 дорожное время выбирает первый настроенный часовой тариф изохроны, который его покрывает; самый
 дальний настроенный tier является границей доставки, поэтому за его пределами offer не создаётся.
-Новые offers публикуют выбранный tier в `priceIsochroneMinutes` и оставляют `priceZoneId=null`;
-исторические quotes спецзон сохраняют записанную цену и nullable zone ID. Transport
+Дополнительно к этой обычной границе проверяются warehouse-owned исключительные полигоны:
+`FORBIDDEN` запрещает search и hold, `NO_TRAILER` принудительно использует профиль одиночной машины,
+а `SPECIAL_PRICE` заменяет обычную цену только после доказанного точного дорожного маршрута внутри
+самой дальней изохроны. Внутри одного вида политики выбирается наименьший покрывающий полигон, а при
+равенстве — стабильный UUID source zone. ID, версии и geometry политик входят в workload fingerprint;
+при новом расчёте текущие изменяемые заявки и активные holds переклассифицируются, а нагрузка
+подтверждённого плана остаётся занятой неизменяемой историей; hold старой ревизии нельзя подтвердить
+после изменения политики. Обычный offer публикует выбранный tier в
+`priceIsochroneMinutes` с `priceZoneId=null`; special-price offer, наоборот, публикует source zone и
+оставляет tier null. Transport
 contract сохраняет возможность `false` search-time подтверждений для совместимых клиентов, которым
 нужны только предварительные даты; текущий CustomerApp собирает оба факта и, когда требуется,
 вместимость объекта в модальном окне после связки адреса/точки и до запроса слотов. Финальный hold объединяет совместимые search-time
@@ -121,8 +145,80 @@ Terminal-результат подтверждает или освобождае
 retry с тем же intent повторно использует исходный domain idempotency key и восстанавливает
 потерянный ответ в
 [`CustomerCheckoutService`](src/main/java/dev/buhanzaz/rwms/logistics/customer/service/CustomerCheckoutService.java),
-а не browser rollback. Scheduled recovery за один проход обрабатывает старейший детерминированный
-batch не более чем из 100 pending-корзин.
+а не browser rollback. Recovery presentation booking и customer checkout использует durable
+расписание из
+[`V75`](src/main/resources/db/migration/V75__bounded_customer_booking_recovery.sql): короткие leases,
+ограниченные `SKIP LOCKED` страницы (50 presentation bookings и 100 checkout receipts),
+экспоненциальную задержку от двух секунд с максимумом пять минут и quarantine после восьмой ошибки.
+Remote effects выполняются после claim transaction; terminal local write требует точный живой lease
+и очищает active lease, расписание следующей попытки и quarantine metadata. Customer checkout
+сбрасывает recovery counter, а presentation booking сохраняет число попыток как terminal history.
+Все проверки due, expiry и terminal fencing используют время PostgreSQL, а не часы application
+node.
+
+Завершённый checkout CustomerApp можно отменить или перенести только пока rental order остаётся
+`SAVED`, а существующий order editability guard доказывает, что shipment и furniture work не
+начались. Обе команды требуют точное принадлежащее клиенту booking, `Idempotency-Key` и версию
+session. Отмена сначала отменяет нетронутую локальную подготовку shipment/furniture и сохраняет
+durable checkpoint `customer_booking_mutation`; затем существующий recovery отмены заказа
+освобождает asset holds/reservations. Только его durable результат `CANCELLED` разрешает logistics
+освободить подтверждённый slot и перевести session в `CANCELLED`. Ограниченные leases по времени БД,
+retry и quarantine восстанавливают потерянный ответ без browser rollback. С момента создания
+checkpoint до завершения каждая обычная команда заказа сначала блокирует ту же строку rental order
+и отклоняется при открытой отмене клиента; только recovery, владеющий отменой заказа, обходит эту
+проверку допуска. Поэтому planner или параллельная пользовательская команда не могут снова начать
+работу в окне до создания durable order mutation. Политика штрафа не выдумывается:
+`cancellationFeeRubles` остаётся null. Поиск переноса повторно использует точные
+бытовки, адрес, подтверждения, truck routing, capacity fingerprint и тарифные правила оформленного
+заказа, исключая текущий подтверждённый slot из нагрузки. Подтверждение блокирует обе даты
+мощности, повторно проверяет свежий offer, меняет только дату доставки заказа, подтверждает замену и
+освобождает старый slot в одной локальной транзакции; любой конфликт или ошибка persistence
+сохраняет прежнюю дату заказа и slot. Запланированный shipment draft уже не редактируется, а
+неприменённый результат planner содержит предыдущую версию заказа и revision желаемой даты, поэтому
+после успешного переноса он отклоняется и не оставляет исполняемый план на старую дату. Каждая
+успешная замена slot повышает версию заказа, даже когда внутри того же дня меняется только
+временное окно. Исходные корзина, выбор бытовок и мебели никогда не переоткрываются. См.
+[`CustomerBookingLifecycleService`](src/main/java/dev/buhanzaz/rwms/logistics/customer/service/CustomerBookingLifecycleService.java),
+[`RentalOrderCustomerLifecycleService`](src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderCustomerLifecycleService.java)
+и
+[`V80`](src/main/resources/db/migration/V80__customer_booking_cancellation_and_reschedule.sql).
+
+### Границы владельца для восстановления плана
+
+Приватная граница `logistics.planning` экспортирует обязательный нормализованный `ClientType`
+вместе с nullable историческими именем и телефоном контакта; все три факта входят в
+`sourceRevision`, а тип клиента никогда не выводится из display name. `SOLE_PROPRIETOR` является
+бизнес-клиентом и использует тот же инвариант контактного лица, что и `LEGAL_ENTITY`. Начальный
+`GET /api/internal/logistics/v1/planning/orders/{orderId}/reschedule-options` принимает текущий
+order fence, сам находит авторитетную booked session и возвращает её версию вместе со свежими
+route-feasible slot offers, не освобождая подтверждённый slot. Соответствующий идемпотентный
+`POST .../reschedule` требует fences заказа, session и выбранного offer, а также записанные решение
+диспетчера, actor и причину; он повторно использует существующую атомарную транзакцию lifecycle для
+order/session/old-slot/new-slot, а не browser saga.
+
+`GET /api/internal/logistics/v1/planning/base-tasks` — read-only, изолированное по складу
+представление уже опубликованных общих `SCHEDULED` задач перемещения, ремонта и transfer. Оно не
+создаёт и не захватывает задачу. Выполнимое будущее общее назначение может нести приблизительный
+`provisionalEta` из точных plan ID/version. Ответы apply и status возвращают durable external task
+ID и версию task, поэтому planner может под version fence обновить или инвалидировать ETA через
+`PUT .../provisional-eta`. Preview виден только будущему незахваченному заданию
+`WAREHOUSE_DRIVERS` и очищается при назначении, claim/start, отмене или замене источника; это не GPS
+и не dynamic ETA.
+
+### Безопасная основа retention
+
+Утверждённая политика: пять лет после закрытия для business/audit/proof фактов; 90 дней online и
+затем один год в private archive для terminal inbox/outbox transport; 30 дней для GPS telemetry,
+если она появится. `/api/logistics/v1/retention/**` является user/admin-границей под существующей
+проверкой глобальной роли `SYSTEM_ADMIN`/`WMS_ADMIN` и scope `rwms.write`; machine identity planner
+не может устанавливать или снимать compliance fences. Audit subject берётся только из JWT
+аутентифицированного пользователя, не принимается в request body, а private object key манифеста
+является write-only. Сейчас сервис предоставляет только неразрушающий dry-run, durable legal holds
+и immutable archive manifests/checksum verification. Удаление по умолчанию выключено, purge
+executor отсутствует. Экспорт в внешний зашифрованный private bucket и deletion executor с двойным
+подтверждением остаются явными будущими инфраструктурными решениями. См.
+[`V82`](src/main/resources/db/migration/V82__planning_commitments_and_retention_foundation.sql) и
+[`LogisticsRetentionService`](src/main/java/dev/buhanzaz/rwms/logistics/retention/LogisticsRetentionService.java).
 
 «Мои заказы» считает бытовку прибывшей только по точному shipment-заданию
 `LOGISTICS_DOCUMENT`: совпавшим document line/member и terminal-state `COMPLETED`. Прибывшую
@@ -157,6 +253,26 @@ Transfer может содержать только мебель. Регистр
 строки обратного рейса. Под стабильными блокировками asset/repair она атомарно создаёт связанный
 обычный concrete-line transfer обратно на склад-источник, назначает того же водителя рейса и не
 учитывает этот груз после выгрузки в исходящей вместимости.
+
+Владение каталогом автомобилей остаётся вне logistics, а оперативное местоположение автомобиля и
+его дорожный резерв принадлежат logistics-service. Подтверждение transfer под стабильными
+per-vehicle блокировками сохраняет отдельные назначения автомобиля рейса и временного/постоянного
+перемещения. Запланированное назначение или состояние «в пути» блокирует пересекающееся
+использование; склад назначения становится оперативным только после фактического прибытия, а
+отменённый до старта transfer сохраняет terminal-историю без изменения домашнего склада каталога.
+Transfer без строк бытовок проходит version-fenced whole-transfer команды `depart`/`arrive`, поэтому
+workflow водителя, автомобиля или отдельной мебели нельзя завершить с выдуманной строкой бытовки.
+Private planning endpoint возвращает полную живую цепочку происхождения, необходимую для исключения
+устаревшего домашнего склада каталога и корректного временного возврата.
+
+Planning feed маршрута возвращает каждую всё ещё доступную бытовку вместе с её
+физическим складом-источником и включает это сопоставление в `sourceRevision`;
+`orderVersion` остаётся отдельным command fence. При применении плана отдельно
+сохраняются склад обслуживания, физический источник, начало маршрута и точная
+разрешённая календарём опорная связь. Текущее местонахождение каждого выбранного
+резерва проверяется повторно, а смена водителя регистрируется только после того,
+как все назначения этого водителя и дня успешно применены или replayed без
+отказа.
 
 `POST /api/logistics/v1/historical-rental-movements` фиксирует одну прошлую отгрузку или возврат
 прямо из карточки бытовки. Команда принимает доступного пользователю клиента логистики, текущую
@@ -207,7 +323,10 @@ Public board и detail задания показывают всю ходку: о
 обычной manager-проверки warehouse access с `rwms.read` detail задания `ASSIGNED_DRIVER` может
 читать только `WORKER` со scope `driver.tasks`, у которого `worker_id` равен сохранённому
 `plannedDriverWorkerId`; session `sub` не является identity рабочего, а `worker.tasks` и
-`UNASSIGNED` такого доступа не дают. DriverApp-водитель того же склада может предварительно читать
+`UNASSIGNED` такого доступа не дают. Точно назначенный водитель может выполнять
+такое задание на другом физическом складе без изменения своего домашнего склада;
+task-board определяет физическое место entry только по серверным данным.
+DriverApp-водитель того же склада может предварительно читать
 общее задание `WAREHOUSE_DRIVERS` только на дату позже текущего warehouse-local дня, а затем
 зарезервировать его отдельной claim-командой. Task-board проверяет активную квалификацию водителя и
 версионно ограждает конкурирующие попытки; claim не начинает выполнение и недоступен для задания
@@ -220,9 +339,37 @@ Public board и detail задания показывают всю ходку: о
 boundary, сохраняет его дату и пожелания клиента; shipment, return и transfer используют
 одинаковое групповое поведение.
 
+Для уже опубликованного плана действует более строгий recovery-протокол владельца и task-board.
+Междневный согласованный перенос и подтверждённая владельцем отмена сохраняют одну saga владельца
+logistics и проходят `PENDING -> PREPARED -> OWNER_COMMITTED -> BOARD_COMMITTED -> COMPLETE`.
+`PREPARE` task-board замораживает точную исходную lineage; затем logistics либо атомарно фиксирует
+согласованный клиентский слот, либо доказывает, что заказ, shipment-документ и локальное задание
+водителя уже находятся в `CANCELLED`. Только после этого owner fence task-board атомарно сохраняет
+удалённого участника как tombstone и переводит всех оставшихся участников на replacement version.
+Освободить hold можно только до `OWNER_COMMITTED`; дальнейшее восстановление движется только вперёд,
+а все remote-вызовы выполняются вне длинной локальной транзакции с повторной проверкой локальных
+версий. Внутренняя граница отмены —
+`POST /api/internal/logistics/v1/planning/assignments/{sourcePlanId}/withdraw-cancelled` с точным
+`Idempotency-Key`. Flyway
+[`V84`](src/main/resources/db/migration/V84__published_plan_reschedule_saga.sql) хранит saga и
+lineage tombstone, а
+[`V85`](src/main/resources/db/migration/V85__published_cancellation_withdrawal.sql) добавляет явный
+тип операции и запрещает две незавершённые recovery одного source plan.
+До task-board `PREPARE` заблокированная клиентская сессия также запрещает любое другое
+незавершённое изменение опубликованной доставки того же бронирования/заказа, включая
+`QUARANTINED`; для admission конечными считаются только `COMPLETE` и `RELEASED`. Расчёт маршрута и
+ёмкости выполняется без локальной транзакции, после чего короткая owner-commit transaction повторно
+проверяет версии сессии, заказа, слота и workload. Миграция
+[`V87`](src/main/resources/db/migration/V87__freeze_customer_booking_reschedule_receipt.sql)
+сохраняет неизменяемый успешный ответ клиенту в существующем command receipt, поэтому точный replay
+и восстановление после `OWNER_COMMITTED` не собирают его из более нового mutable-состояния.
+
 Публичная доска водителей показывает только текущие и будущие даты в часовом поясе склада.
 Просроченная активная карточка task-board включается в сегодняшнюю колонку, а публичные команды
-перемещения и планирования капремонта отклоняют дату раньше этого же warehouse-local дня. Отдельно
+перемещения и планирования капремонта отклоняют дату раньше этого же warehouse-local дня. Доска
+показывает вместимость ремонтных мест без настройки задержки автозаполнения: перенос входящего
+ремонтного задания из `CURRENT` в `SCHEDULED` сразу освобождает reservation и запускает
+capacity-aware заполнение очереди в той же команде. Отдельно
 relay каждые 30 секунд перепроверяет не более 100 строк `RECONCILIATION_REQUIRED`, только если их
 checkpoint относится к общей legacy-ошибке либо stage-specific task-board dependency
 configuration/permanent rejection. Ошибки регистрации, статуса и evidence получают
@@ -272,9 +419,9 @@ key и запросом использует те же bytes и deadlines, а и
 local transactions, а receipt является evidence эффекта/replay, а не дубликатом авторитетной
 asset-owned selection.
 
-`POST /api/logistics/v1/clients` создаёт rental client логистики типа `INDIVIDUAL` или
-`LEGAL_ENTITY`. Name/FIO и основной телефон обязательны; для юридических лиц обязательно также
-контактное лицо. Любое количество проверенных дополнительных контактов имя/телефон может оставаться
+`POST /api/logistics/v1/clients` создаёт rental client логистики типа `INDIVIDUAL`,
+`SOLE_PROPRIETOR` или `LEGAL_ENTITY`. Name/FIO и основной телефон обязательны; для обоих типов
+бизнес-клиента обязательно также контактное лицо. Любое количество проверенных дополнительных контактов имя/телефон может оставаться
 client-owned; order-owned дополнительные контакты хранятся отдельно. Email, комментарий и источник
 необязательны, а identity и
 display-name snapshot ответственного менеджера берутся только из authenticated write actor.
@@ -352,18 +499,79 @@ claim общая доставка показывается с авторитет
 решение диспетчера для одного конкретного `ASSIGNED_DRIVER`: завтра разрешено,
 а внутренний snapshot автомобиля, смены или route cycle не требуется и не
 выдумывается. Оба пути повторно используют владельца rental shipment, fence
-версии заказа и идемпотентную семантику команды.
+версии заказа и идемпотентную семантику команды. Каждое применённое назначение теперь возвращает
+точный принадлежащий документу `externalTaskId` и при создании, и при replay, поэтому caller не
+выводит identity задания из заказа, документа или planner-local ID.
+
+Диспетчер с доступом EDIT может явно создать ограниченный маршрут подрядчика через
+`POST /api/logistics/v1/warehouses/{warehouseId}/contractor-route-shares`. Одна durable capability
+создаётся или отзывается только после того, как warehouse-service подтвердит принадлежность склада
+из path подписанной компании пользователя; глобальная роль или подставленный UUID склада не могут
+обойти эту tenant-границу. Capability
+привязывает одного точного активного работника `CONTRACTOR` к одному–пятидесяти точным logistics
+`externalTaskId`, истекает не позднее чем через тридцать дней, поддерживает точный subject-scoped
+idempotent replay и отзывается с `expectedVersion`. Domain-separated HMAC token возвращается только
+в составе same-origin Panel path `/contractor-routes/{signed-token}`; anonymous no-store JSON
+boundary остаётся `/api/logistics/public/v1/contractor-route-shares/**`. Каждое anonymous-чтение
+повторно доказывает сохранённые identity DriverLogisticsTask/document/order и точное live-назначение
+работника в task-board. Адрес, координаты, контакт и сводка груза приходят из logistics;
+упорядоченные works/materials/comments/source-media шагов и ограниченная evidence metadata — live
+из task-board. Invalid, expired, revoked, cross-worker и reassigned capability возвращают один
+неразличимый 404. Точные действия `START`/`COMPLETE` сохраняют version fence task-board и
+`Idempotency-Key` caller-а; перед `START` logistics повторно читает каждое общее задание в
+сохранённом порядке позиций и разрешает только первый шаг, статус которого не `DONE` и не
+`CANCELLED`. Task-board остаётся финальным transition fence. `COMPLETE` принимает только READY
+evidence identity того же шага. Публичный evidence endpoint принимает только ограниченные
+JPEG/WebP-байты, у которых
+`Idempotency-Key` равен `evidenceId`, фактическая длина укладывается в лимит формата, а строчная
+`X-Content-SHA256` совпадает с телом. Сначала он резервирует точную декларацию в task-board, затем
+передаёт те же байты в media-service; remote calls не заключаются в database transaction
+logistics, а точный retry сходится к тем же evidence/media identity. Live metadata `RESERVED`,
+`UPLOADING` и `READY` позволяет polling.
+До чтения anonymous evidence body через MVC exact-path ingress filter требует точный content type
+JPEG или WebP и предел формата 15 MiB/1 MiB. Прямой non-chunked request должен содержать один
+canonical неотрицательный `Content-Length`. Для chunked relay общего gateway сам gateway
+перезаписывает `X-RWMS-Contractor-Evidence-Length` уже проверенной длиной browser request, а
+logistics принимает ровно эту одну внутреннюю декларацию; duplicate, invalid, переданный caller-ом
+private header в прямом non-chunked request и не совпадающие декларации отклоняются. Отсутствующая
+canonical длина возвращает Problem Details 411, а превышенный объявленный размер — canonical 413
+без вызова route application service. После binding application service по-прежнему проверяет
+фактические байты, digest и положительный размер.
+Capability-scoped SMALL/LARGE paths получают только
+доказанные task source media, source media точного шага и точное READY evidence. Binary proxy перед
+private read media-service повторно доказывает token, назначение, шаг, membership, generation и
+variant; он возвращает no-store WebP и сводит любое несовпадение identity к 404. Upload credentials,
+object locators, service credentials и общий board никогда не публикуются.
 
 Та же apply-команда может передавать `driverShiftPlans` для конкретного назначенного симулятором
 водителя и рабочей даты. Logistics проверяет уникальность source shift и пары водитель/рабочая
-дата, затем публикует все планы до применения отдельных shipment assignments через idempotent
+дата и полную форму исполнимого маршрута. Сначала она независимо применяет или replay-ит все
+shipment assignments, затем публикует смену водителя, только если ни одно маршрутное назначение
+этого водителя/даты не отклонено. Публикация использует idempotent
 `PUT /api/internal/task-board/v1/driver-shift-plans/{sourceShiftId}`. Snapshot содержит identity и
-версию плана, склад, display snapshot водителя, назначенный автомобиль и необязательный прицеп,
-начальный одометр, число ходок и точное неокруглённое `routeDistanceMeters`. Владельцем созданной
-daily shift является task-board; logistics не хранит второй aggregate смены. Сгенерированные и
+версию плана, физический склад старта, exact evidence опорной связи, display snapshot водителя,
+назначенный автомобиль и необязательный прицеп, начальный одометр, число ходок, точное
+неокруглённое `routeDistanceMeters` и непрерывную последовательность операций. Операции сохраняют
+старт/погрузку/разгрузку склада, клиентские доставку/вывоз, межскладской перегон, точные плановые
+прибытие/отправление и цепочку загрузки каждого шага. Владельцем созданной daily shift и её
+неизменяемых дочерних операций является task-board; logistics не хранит второй aggregate смены.
+Сгенерированные и
 ручные jobs остаются только в симуляторе, потому что assignment apply по-прежнему принимает лишь
 доставки с source `RWMS`. Private-вызов использует существующие service credentials logistics с
 отдельным least-privilege scope `task-board.driver-shifts.plan`.
+
+Перед регистрацией смены logistics дополняет точный межскладской перегон всеми
+перемещениями `CONFIRMED`/`RESERVED`/`READY`, у которых совпадают источник, назначение, водитель,
+автомобиль и плановые отправление/прибытие. Планировщик не выдумывает transfer-груз, а оценка
+кандидатов не меняет остатки. Каждое найденное перемещение добавляет парные операции
+`TRANSFER_LOAD`/`TRANSFER_UNLOAD` с каноническим `sourceTransferId`; цепочка загрузки считает
+бытовки, поэтому transfer только с мебелью намеренно не меняет cabin load. В неизменяемом snapshot
+передаётся точная эффективная вместимость автомобиля. Когда назначенное transfer-задание становится
+`CURRENT`, durable relay задания водителя вызывает существующий version-fenced departure; после
+task-board completion evidence тот же relay сначала фиксирует обложку бытовки, а затем применяет
+фактический arrival. Производные стабильные ключи делают retries безопасными. Для общего
+warehouse-pool transfer без доказанного владельцем водителя сохраняется прежний task-board-only
+жизненный цикл: logistics не угадывает исполнителя.
 
 `GET /api/internal/logistics/v1/planning/warehouses` публикует только факты активных складов от
 warehouse-service: `{warehouseId,name,city,address,timeZone}`; принадлежащий owner-у адрес nullable.
@@ -394,12 +602,13 @@ source conflict.
 склада, а response не публикует устаревшую source identity. Команда содержит типизированные
 координаты сгенерированных доставок и вывозов, жёсткие локальные окна, количество бытовок, время
 обслуживания, priority, mandatory/trailer-факты, анонимные датированные смены с локальными
-началом/концом, перерывом и вместимостью одна или две бытовки, а также от одного до двенадцати
-упорядоченных тарифов изохрон. Tariffs начинаются с 60 минут и идут без пропусков с шагом 60 минут
+началом/концом, перерывом и вместимостью одна или две бытовки, от одного до двенадцати
+упорядоченных тарифов изохрон, до 500 полигонов `SPECIAL_PRICE` и до 500 суммарных полигонов
+`FORBIDDEN`/`NO_TRAILER`. Tariffs начинаются с 60 минут и идут без пропусков с шагом 60 минут
 до максимум 720 минут; каждый tier хранит фактическую неотрицательную цену в рублях. Цену и
-дальнюю границу доставки определяет дорожное время Valhalla, а не принадлежность полигону или
-расстояние по прямой. Допустимость прицепа остаётся фактом точного vehicle route и ёмкости задания,
-а не политикой тарифной зоны.
+дальнюю границу обычной доставки определяет дорожное время Valhalla, а не принадлежность полигону
+или расстояние по прямой. Исключительный полигон может заменить цену внутри этой границы или
+ужесточить доступ, но никогда не расширяет обычное покрытие.
 
 Identity заказа, клиента, бытовки и персональные данные водителя не передаются. Idempotency key,
 64-символьная source revision и warehouse-local монотонный `sourceGeneration` защищают exact replay
@@ -412,7 +621,7 @@ Apply назначений принимает только доставки с s
 остаются в симуляторе. См.
 [`WarehouseCapacitySnapshotService`](src/main/java/dev/buhanzaz/rwms/logistics/customer/capacity/service/WarehouseCapacitySnapshotService.java)
 и
-[`V74__normalize_warehouse_isochrone_tariffs.sql`](src/main/resources/db/migration/V74__normalize_warehouse_isochrone_tariffs.sql).
+[`V76__restore_exceptional_delivery_zone_policies.sql`](src/main/resources/db/migration/V76__restore_exceptional_delivery_zone_policies.sql).
 
 Replacement повторно использует те же presentation/booking или прямую команду заказа. Warehouse
 manager может заменить только запрошенные бытовки до старта с точным количеством client selection;
@@ -423,6 +632,18 @@ reservations, затем обновляет тот же заказ, document mem
 до завершения обычного movement task. Обычное редактирование прекращается после окончательной даты
 ходки или furniture task; replacement остаётся доступен для конкретной бытовки до старта её
 ходки.
+
+Отмена заказа и удаление бытовки сначала сохраняют logistics-owned durable mutation command, а
+только затем выполняют asset effects. Освобождение бытовок и замена order-wide мебели используют
+разные детерминированные idempotency keys и фиксируют receipts в отдельных коротких transactions;
+финальный локальный переход заказа, публичный command receipt и завершение recovery коммитятся
+атомарно. Scheduler выбирает наступившие команды по времени PostgreSQL ограниченными страницами
+`SKIP LOCKED` и пятиминутными token leases, повторяет transient failures с exponential backoff и
+помещает в quarantine восьмую неудачную попытку либо явный permanent/configuration rejection. Пока
+команда pending или quarantined, конкурирующие изменения заказа и replacement работают fail closed.
+Quarantine наблюдаем, но пока требует проверенной эксплуатационной процедуры; отдельный operator
+requeue endpoint этим изменением не добавлен. Exact caller, который пересекается с завершением между
+lookup и подготовкой intent, получает сохранённый завершённый replay.
 
 Интерактивные panel и Android-клиенты обращаются к этому namespace только через публичный маршрут
 `/api/logistics/**` в `api-gateway-service`. Им нельзя напрямую вызывать host этого модуля или
@@ -551,10 +772,12 @@ port. Его неизменённый constructor собирает шесть ow
 | Coordinators rental-order shipment/completion и reconciliation | Document hooks для rental shipment, terminal return и команды reconciliation request |
 | Политики document admission, idempotency, attempts, reads и binding | Узкие leaves warehouse, replay, external-attempt, projection и active-order |
 | `RentalOrderService` | Стабильный order facade над reads, creation, lifecycle, reservations, terms и shipment hand-off |
+| `RentalOrderMutationRecoveryService`, `RentalOrderMutationLocalStore` | Durable intent отмены/удаления бытовки, per-step asset receipts, leasing по времени БД, bounded retry/quarantine и атомарное локальное завершение вне transactions удалённых вызовов |
 | `RentalOrderUnitReplacementService` | Direct и presentation replacement через ordered batch checkpoints, pre-start отмену driver task и сходимость order/document members |
-| `RentalOrderPlanningIntegrationService` | Versioned feed с подтверждённой ценой и idempotent применение route plan либо явной передачи подрядчику через существующего владельца rental shipment без общего состояния БД |
+| `RentalOrderPlanningIntegrationService` | Versioned feed с подтверждённой ценой и физическим источником каждой бытовки; idempotent применение route plan или подрядчика проверяет точные source/support evidence и публикует смену только после успешных назначений без общего состояния БД |
+| `ContractorRouteShareService`, `ContractorRouteShareStore`, `ContractorRouteShareTokenService` | Явная warehouse-authorized, истекающая и отзывная capability точного маршрута подрядчика; неизменяемые local task identities, live task-board execution, локальное order enrichment, точный replay create/evidence, ограниченный task-board-first media ingestion и membership-checked no-store public proxy START/COMPLETE/media без второго route aggregate |
 | `PlanningResourceDirectoryService` | Проверенные least-privilege warehouse и active primary-driver resources от их exact domain owners без local projection |
-| `WarehouseCapacitySnapshotService` | Per-warehouse idempotent замена capacity, monotonic generation fencing и canonical persistence упорядоченных часовых тарифов изохрон |
+| `WarehouseCapacitySnapshotService`, `CustomerDeliveryPriceClassifier` | Per-warehouse idempotent замена capacity, monotonic generation fencing, часовые тарифы изохрон и детерминированная классификация исключительных политик цены/доступа |
 | `FutureDriverTaskClaimService` | Future-only preview/claim общего задания с проверкой квалификации и versions в task-board; выполнение не запускается |
 | `ClientDeliveryDatePolicy` | Warehouse-local окно обычного public confirmation со второго по пятый день |
 | `ShipmentFurnitureTaskService` | Полный состав мебели всех active units заказа, readiness существующих movement tasks и replacement recovery checkpoints |
@@ -656,6 +879,12 @@ Migration
 клиента значениями `INDIVIDUAL` и `LEGAL_ENTITY`. Если переклассификация столкнётся с существующим
 юридическим лицом по нормализованному телефону, она останавливается до update и сохраняет все
 записи для ручного разрешения.
+
+Migration
+[`V86__restore_sole_proprietor_client_type.sql`](src/main/resources/db/migration/V86__restore_sole_proprietor_client_type.sql)
+расширяет актуальный constraint типов клиента, поэтому новые `SOLE_PROPRIETOR` снова сохраняются со
+своим нормализованным юридическим типом. Она не откатывает V43 и не переписывает исторических
+клиентов, которых V43 правдиво переклассифицировала в `LEGAL_ENTITY`.
 
 Migration
 [`V44__driver_task_audience_and_document_driver.sql`](src/main/resources/db/migration/V44__driver_task_audience_and_document_driver.sql)
@@ -779,8 +1008,33 @@ opaque IDs.
 [`V74__normalize_warehouse_isochrone_tariffs.sql`](src/main/resources/db/migration/V74__normalize_warehouse_isochrone_tariffs.sql)
 переносит четыре фиксированные цены snapshot в нормализованные дочерние часовые tariffs, разрешает
 непрерывные tiers с пятого по двенадцатый и удаляет фиксированные price columns вместе с активными
-таблицами price/restriction zones. Исторические цена customer slot и `price_zone_id` сохраняются;
-новые quotes всегда используют настроенный tier от 60 до 720 минут.
+таблицами price/restriction zones. Исторические цена customer slot и `price_zone_id` сохраняются.
+[`V75__bounded_customer_booking_recovery.sql`](src/main/resources/db/migration/V75__bounded_customer_booking_recovery.sql)
+добавляет retry time, lease и quarantine для presentation bookings и customer checkout с receipt.
+Старые pending-строки ниже retry ceiling становятся due; строки с восемью и более попытками сразу
+попадают в quarantine без ещё одного remote replay. Частичные due indexes поддерживают bounded claims.
+[`V76__restore_exceptional_delivery_zone_policies.sql`](src/main/resources/db/migration/V76__restore_exceptional_delivery_zone_policies.sql)
+возвращает отдельные price/restriction projections, source-version/count поля и provenance hold, не
+возрождая обычные полигоны доставки. Поскольку V74 удалила прежнюю активную geometry, V76 начинает
+эти projections пустыми; восстановить старые полигоны существующей среды можно только из отдельной
+резервной копии, а не из этой migration.
+[`V77__durable_rental_order_mutation_recovery.sql`](src/main/resources/db/migration/V77__durable_rental_order_mutation_recovery.sql)
+добавляет durable command отмены/удаления бытовки, immutable intent и step keys, последовательность
+receipts, fence одной открытой команды, due index, конечный lease, retry и terminal quarantine.
+[`V78__vehicle_operational_assignments.sql`](src/main/resources/db/migration/V78__vehicle_operational_assignments.sql)
+добавляет versioned резервы автомобиля на рейс и историю временного/постоянного оперативного
+базирования, уникальность в рамках transfer, ограничения одного активного базирования и интервалов,
+planning indexes и idempotency operations целого transfer для departure/arrival без бытовок.
+[`V79__transfer_route_cargo_lookup.sql`](src/main/resources/db/migration/V79__transfer_route_cargo_lookup.sql)
+добавляет частичный упорядоченный индекс для сопоставления подтверждённого, зарезервированного и
+workflow-ready transfer-груза с точным перегоном водитель/автомобиль без изменения состояния
+перемещения.
+
+[`V81__contractor_route_shares.sql`](src/main/resources/db/migration/V81__contractor_route_shares.sql)
+добавляет принадлежащий logistics жизненный цикл contractor capability, creator-scoped receipt
+идемпотентности, fence ревизии token и упорядоченное неизменяемое membership точных заданий. Он не
+хранит task-board execution snapshot, адрес, контакт, груз или media URL и не содержит
+cross-database foreign key.
 
 Logistics вместе фиксирует facts, projection checkpoints и transactional outbox. Kafka delivery —
 at-least-once: aggregate IDs являются record keys, event IDs — dedupe identities, а consumers хранят
@@ -809,9 +1063,9 @@ stores. [`LogisticsTransactionLock`](src/main/java/dev/buhanzaz/rwms/logistics/r
 
 [`LogisticsRecoveryObservationStore`](src/main/java/dev/buhanzaz/rwms/logistics/eventing/LogisticsRecoveryObservationStore.java)
 — отдельный read-only technical SQL adapter для recovery-метрик. Он читает только scalar counts и
-oldest timestamps из принадлежащих logistics таблиц outbox, DLT, warehouse marks и inbound gaps;
-он никогда не выполняет claim, retry, publish или resolve и не возвращает identifier, payload, topic
-или error text.
+oldest timestamps из принадлежащих logistics таблиц outbox, DLT, warehouse marks, customer-booking
+recovery и inbound gaps; он никогда не выполняет claim, retry, publish или resolve и не возвращает
+identifier, payload, topic или error text.
 
 [`LogisticsExternalAttemptClaimService`](src/main/java/dev/buhanzaz/rwms/logistics/service/LogisticsExternalAttemptClaimService.java)
 выдаёт lease ровно одному due external attempt через стабильную ограниченную pessimistic skip-locked
@@ -829,8 +1083,10 @@ capability перед записью completion или failure, поэтому �
 owner должен оставаться меньше worker pool, чтобы сохранить remote-call slot другого owner.
 Fixed-name gauges показывают backlog/oldest/terminal для main outbox, sanitized DLT и warehouse
 marks; backlog/oldest для rental-inquiry outbox; open/oldest inbound gaps и blocked checkpoints; а
-также active/oldest/max-retry/reconciliation-required external attempts и active/queue состояние
-executor. Empty state и future age дают zero, а ошибка доступа к базе — `NaN`. Claim counters и
+также backlog/oldest/quarantined для recovery presentation-booking и customer-checkout;
+pending/quarantined для recovery отмены/удаления бытовки rental order;
+active/oldest/max-retry/reconciliation-required external attempts и active/queue состояние executor.
+Empty state и future age дают zero, а ошибка доступа к базе — `NaN`. Claim counters и
 latency timers используют только закрытые labels `owner` и `state`; ни одна метрика не содержит
 attempt IDs, topics, payloads или free-form exceptions. Rental-inquiry outbox сейчас имеет только
 `PENDING` и `PUBLISHED`: у него всё ещё нет terminal/reviewed recovery state, и это остаётся
@@ -839,7 +1095,10 @@ follow-up work, а не выдуманным terminal gauge.
 Base-конфигурация требует явное значение `LOGISTICS_KAFKA_ENABLED`; только профиль `dev` сохраняет
 явный optional default `false`. Canonical primary outputs упорядочены строго как return, shipment,
 transfer и `rwms.logistics.rental-inquiry.events.v1`; sanitized DLT bindings остаются отдельным
-точным набором. Вне явных `dev`/`test` startup требует включённую Kafka, explicit non-loopback
+точным набором. `LOGISTICS_KAFKA_FUNCTION_DEFINITION` по умолчанию пуст, поэтому отключённый
+локальный consumer не создаёт предупреждение о несуществующей функции. Окружение с включённой
+Kafka обязано задать точное значение `logisticsInbound`; non-local startup fence отклоняет пустое,
+другое или составное definition. Вне явных `dev`/`test` startup требует включённую Kafka, explicit non-loopback
 brokers, отключённое topic auto-creation, synchronous `acks=all`, producer idempotence, положительные
 request/delivery/max-block timeouts, где delivery не короче request, сумма max-block и delivery
 короче outbox lease, включённый rental-inquiry outbox и все beans main-outbox, sanitized-DLT,
@@ -873,15 +1132,23 @@ default. Основной API использует stateless OAuth2/JWT; dev aut
 две позиции реестра используют `LOGISTICS_CUSTOMER_DEPOT_0_*` и
 `LOGISTICS_CUSTOMER_DEPOT_1_*`; для каждой обязательны `ENABLED=true`, `WAREHOUSE_ID`, `LATITUDE` и
 `LONGITUDE`. Выключенные позиции игнорируются, а пустой реестр, повтор UUID склада или неверные
-конфигурационные координаты приводят к fail-closed. Эти позиции включают обычные склады и проверяют
-общую конфигурацию маршрутизации; runtime route origin всегда берётся из warehouse-service.
-Активный представительский склад с валидными owner-held координатами обнаруживается автоматически
-и не требует дополнительной позиции реестра. Прежние single-depot настройки `LOGISTICS_CUSTOMER_WAREHOUSE_ID`,
+конфигурационные координаты, включая точный placeholder `0,0`, приводят к fail-closed. Эти позиции
+включают обычные склады и проверяют общую конфигурацию маршрутизации; runtime route origin всегда
+берётся из warehouse-service. Активный представительский склад с валидными owner-held
+координатами, отличными от `0,0`, обнаруживается автоматически и не требует дополнительной позиции
+реестра. Существующие owner или local directory строки `0,0` остаются только немаршрутизируемыми
+identity facts и не могут открыть customer delivery или planner capacity. Прежние single-depot настройки `LOGISTICS_CUSTOMER_WAREHOUSE_ID`,
 `LOGISTICS_CUSTOMER_DEPOT_LATITUDE` и `LOGISTICS_CUSTOMER_DEPOT_LONGITUDE` больше не читаются.
 `LOGISTICS_CUSTOMER_SERVICE_MINUTES`, горизонт бронирования, сроки offer/hold и размеры/массы
 грузовика задают общую модель ёмкости и route profile; текущая доступность водителей и вместимость
 машин берутся только из опубликованных симулятором смен. Точные имена и defaults находятся в
-`application.yaml`. Valhalla должна оставаться private и в Compose
+`application.yaml`. Обязательная `LOGISTICS_CUSTOMER_ROUTING_DATA_VERSION` должна идентифицировать
+точный набор tiles/restrictions Valhalla; её меняют при каждом изменении этих данных графа. Версия
+входит в каждый ключ кеша матриц, а `LOGISTICS_CUSTOMER_ROUTING_CACHE_TTL` задаёт индивидуальное
+истечение с default `15m`, требованием положительного значения и максимумом 24 часа. Process-local
+кеш хранит не более 512 записей в порядке обращений, при заполнении удаляет только наименее недавно
+использованную запись и переиспользует один JDK HTTP client на весь lifecycle компонента. Routing
+остаётся только грузовым и fail-closed. Valhalla должна оставаться private и в Compose
 логистического симулятора публикуется на host только через loopback.
 
 ## Наблюдаемость и эксплуатация
@@ -911,8 +1178,8 @@ unproven warehouse-bound public creates в этом режиме намерен�
 `@RestController` через merged-аннотации Spring и требует точного равенства множеств method/path без
 дубликатов. Нормализуются только имена placeholders и необязательный завершающий slash. Этот же тест
 исполняет реальную owner security filter chain с отключённым dev auth bypass: Bearer-операции должны
-отклонять неаутентифицированный запрос, а анонимно могут проходить только четыре контрактные операции
-под `/api/logistics/public/v1/client-presentations/**`.
+отклонять неаутентифицированный запрос, а без Bearer token могут проходить только явно помеченные
+контрактом anonymous-операции в signed-capability namespaces `/api/logistics/public/**`.
 
 Запуск focused gate из корня репозитория:
 

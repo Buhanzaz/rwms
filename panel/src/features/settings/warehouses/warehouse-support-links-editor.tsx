@@ -1,5 +1,7 @@
 import { useRef, useState } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
+import { Delete02Icon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
 import { toast } from "sonner"
 
 import {
@@ -265,8 +267,10 @@ function LoadedWarehouseSupportLinksEditor({
                   </CardTitle>
                   <Button
                     type="button"
-                    size="sm"
-                    variant="ghost"
+                    size="icon"
+                    variant="destructive"
+                    aria-label={`Удалить опорный склад ${index + 1}`}
+                    title="Удалить"
                     disabled={replaceMutation.isPending}
                     onClick={() =>
                       setDrafts((current) =>
@@ -274,7 +278,7 @@ function LoadedWarehouseSupportLinksEditor({
                       )
                     }
                   >
-                    Удалить
+                    <HugeiconsIcon icon={Delete02Icon} aria-hidden="true" />
                   </Button>
                 </div>
               </CardHeader>

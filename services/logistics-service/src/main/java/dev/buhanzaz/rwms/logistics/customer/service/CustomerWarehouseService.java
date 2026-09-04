@@ -87,7 +87,8 @@ public class CustomerWarehouseService {
         && warehouse.latitude().compareTo(java.math.BigDecimal.valueOf(90)) <= 0
         && warehouse.longitude() != null
         && warehouse.longitude().compareTo(java.math.BigDecimal.valueOf(-180)) >= 0
-        && warehouse.longitude().compareTo(java.math.BigDecimal.valueOf(180)) <= 0;
+        && warehouse.longitude().compareTo(java.math.BigDecimal.valueOf(180)) <= 0
+        && (warehouse.latitude().signum() != 0 || warehouse.longitude().signum() != 0);
   }
 
   private Map<UUID, CustomerDeliveryProperties.Validated> validatedDepots() {

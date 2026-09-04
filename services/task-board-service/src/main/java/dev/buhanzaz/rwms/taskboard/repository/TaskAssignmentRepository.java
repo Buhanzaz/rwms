@@ -41,4 +41,6 @@ public interface TaskAssignmentRepository extends JpaRepository<TaskAssignment, 
       UUID entryId, Collection<AssignmentStatus> statuses);
 
   boolean existsByQueueEntryIdInAndStartedAtIsNotNull(Collection<UUID> entryIds);
+
+  boolean existsByQueueEntryIdIn(Collection<UUID> entryIds);
 }

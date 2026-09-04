@@ -79,8 +79,11 @@ public class UserAdministrationService {
      * @return user representations including current warehouse access grants
      */
     @Transactional(readOnly = true)
-    public List<AdminUserResponse> listUsers() {
-        return subjects.findAllByPrincipalTypeOrderByUsername(PrincipalType.USER).stream()
+    public List<AdminUserResponse> listUsers(Authentication actor) {
+        AuthSubject current = currentSubject(actor);
+        requireUserAdministrator(current);
+        List<AuthSubject> visible = subjects.findAllByPrincipalTypeOrderByUsername(PrincipalType.USER);
+        return visible.stream()
                 .map(this::adminResponse)
                 .sorted(java.util.Comparator.comparing(AdminUserResponse::username, String.CASE_INSENSITIVE_ORDER))
                 .toList();
@@ -93,8 +96,9 @@ public class UserAdministrationService {
      * @return administrative user representation
      */
     @Transactional(readOnly = true)
-    public AdminUserResponse getUser(UUID id) {
-        return adminResponse(user(id));
+    public AdminUserResponse getUser(UUID id, Authentication actor) {
+        AuthSubject current = currentSubject(actor);
+        return adminResponse(visibleUser(id, current));
     }
 
     /**
@@ -127,12 +131,15 @@ public class UserAdministrationService {
      * @return available display identities in first-occurrence order
      */
     @Transactional(readOnly = true)
-    public List<ActorDisplayResponse> actorDisplays(List<UUID> subjectIds) {
+    public List<ActorDisplayResponse> actorDisplays(
+            List<UUID> subjectIds,
+            Authentication authentication) {
         if (subjectIds.size() > MAX_ACTOR_DISPLAY_SUBJECTS) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "За один запрос можно получить не более " + MAX_ACTOR_DISPLAY_SUBJECTS + " авторов");
         }
+        requireUserAdministrator(currentSubject(authentication));
         var requestedIds = new LinkedHashSet<>(subjectIds);
         Map<UUID, AuthSubject> foundSubjects = subjects.findAllById(requestedIds).stream()
                 .collect(java.util.stream.Collectors.toMap(AuthSubject::getId, subject -> subject));
@@ -154,6 +161,7 @@ public class UserAdministrationService {
     @Transactional
     public AdminUserResponse create(CreateUserRequest request, Authentication actor) {
         AuthSubject current = currentSubject(actor);
+        requireUserAdministrator(current);
         checkSystemAdminBoundary(current, null, request.globalRole());
         String username = normalizedUsername(request.username());
         ensureUsernameAvailable(username, null);
@@ -197,8 +205,8 @@ public class UserAdministrationService {
      */
     @Transactional
     public AdminUserResponse update(UUID id, UpdateUserRequest request, Authentication actor) {
-        AuthSubject subject = user(id);
         AuthSubject current = currentSubject(actor);
+        AuthSubject subject = visibleUser(id, current);
         checkSystemAdminBoundary(current, subject, request.globalRole());
         checkVersion(subject, request.expectedVersion());
         String username = normalizedUsername(request.username());
@@ -283,8 +291,8 @@ public class UserAdministrationService {
             String password,
             int expectedVersion,
             Authentication actor) {
-        AuthSubject subject = user(id);
         AuthSubject current = currentSubject(actor);
+        AuthSubject subject = visibleUser(id, current);
         checkSystemAdminBoundary(current, subject, subject.getGlobalRole());
         checkVersion(subject, expectedVersion);
         long streamVersion = eventStore.lockCurrentVersion(
@@ -321,8 +329,8 @@ public class UserAdministrationService {
             List<WarehouseAccessRequest> requestedAccesses,
             int expectedVersion,
             Authentication actor) {
-        AuthSubject subject = user(id);
         AuthSubject current = currentSubject(actor);
+        AuthSubject subject = visibleUser(id, current);
         checkSystemAdminBoundary(current, subject, subject.getGlobalRole());
         checkVersion(subject, expectedVersion);
         List<CanonicalWarehouseAccess> canonicalAccesses = canonicalAccesses(requestedAccesses);
@@ -356,8 +364,8 @@ public class UserAdministrationService {
      */
     @Transactional
     public void delete(UUID id, Authentication actor) {
-        AuthSubject subject = user(id);
         AuthSubject current = currentSubject(actor);
+        AuthSubject subject = visibleUser(id, current);
         if (subject.getId().equals(current.getId())) {
             throw conflict("Нельзя удалить текущего пользователя");
         }
@@ -467,6 +475,21 @@ public class UserAdministrationService {
         return subjects.findById(id)
                 .filter(subject -> subject.getPrincipalType() == PrincipalType.USER)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Пользователь не найден"));
+    }
+
+    /** Loads a user only after independently enforcing the administrator role. */
+    private AuthSubject visibleUser(UUID id, AuthSubject actor) {
+        requireUserAdministrator(actor);
+        return user(id);
+    }
+
+    /** Keeps administration invariants intact when the service is invoked outside HTTP routing. */
+    private void requireUserAdministrator(AuthSubject actor) {
+        if (actor.getGlobalRole() != UserGlobalRole.SYSTEM_ADMIN
+                && actor.getGlobalRole() != UserGlobalRole.WMS_ADMIN) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN, "Недостаточно прав для управления пользователями");
+        }
     }
 
     /** Determines whether changing this subject would remove the last active system administrator. */

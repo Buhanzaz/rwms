@@ -7,6 +7,7 @@ import dev.buhanzaz.rwms.worker.core.auth.WorkerAuthRepository
 import dev.buhanzaz.rwms.worker.core.auth.WorkerAuthUiState
 import dev.buhanzaz.rwms.worker.core.database.WorkerLocalStore
 import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayClient
+import dev.buhanzaz.rwms.worker.core.network.safeWorkerUserMessage
 import dev.buhanzaz.rwms.worker.core.sync.RealtimeHandles
 import dev.buhanzaz.rwms.worker.core.sync.WorkerProjectionWriter
 import dev.buhanzaz.rwms.worker.core.sync.WorkerRealtimeCoordinator
@@ -110,7 +111,9 @@ class WorkerAppViewModel @Inject constructor(
                 .onFailure { error ->
                     if (activeUserId == null) {
                         mutableState.value = WorkerAppUiState.Connecting(
-                            error.message ?: "Не удалось связаться с RWMS. Проверьте сеть и повторите.",
+                            error.safeWorkerUserMessage(
+                                "Не удалось подключиться к RWMS. Обновите данные и повторите попытку.",
+                            ),
                         )
                     }
                 }

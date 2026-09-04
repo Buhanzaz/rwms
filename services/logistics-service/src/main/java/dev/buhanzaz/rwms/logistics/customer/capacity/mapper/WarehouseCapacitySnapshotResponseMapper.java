@@ -20,6 +20,10 @@ public interface WarehouseCapacitySnapshotResponseMapper {
   @Mapping(
       target = "isochroneTariffCount",
       expression = "java(snapshot.getIsochroneTariffs().size())")
+  @Mapping(target = "priceZoneCount", expression = "java(snapshot.getPriceZones().size())")
+  @Mapping(
+      target = "restrictionZoneCount",
+      expression = "java(snapshot.getRestrictionZones().size())")
   PlanningCapacitySnapshotResponse toResponse(
       WarehouseCapacitySnapshot snapshot, boolean replayed);
 

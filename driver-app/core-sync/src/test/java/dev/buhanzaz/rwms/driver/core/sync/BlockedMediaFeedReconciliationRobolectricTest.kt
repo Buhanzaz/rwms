@@ -123,7 +123,11 @@ class BlockedMediaFeedReconciliationRobolectricTest {
 
         val outcome = coordinator.sync(USER_ID)
 
-        assertThat(outcome).isEqualTo(DriverSyncOutcome.Retry("Media session unavailable"))
+        assertThat(outcome).isEqualTo(
+            DriverSyncOutcome.Retry(
+                "Не удалось отправить фотографию. Проверьте сеть и повторите попытку.",
+            ),
+        )
         assertThat(uploader.calls).isEqualTo(1)
         assertThat(api.feedCalls.get()).isEqualTo(1)
         assertThat(database.taskDao().task(USER_ID, ENTRY_ID)).isNull()

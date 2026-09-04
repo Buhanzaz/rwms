@@ -54,7 +54,7 @@ class AuthEventStoreMigrationIntegrationTest {
     void cleanInstallAppliesAllMigrationsAndRepeatIsNoOp() {
         Flyway flyway = flyway(MIGRATION_LOCATION);
 
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(5);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(9);
         flyway.validate();
         assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -70,6 +70,8 @@ class AuthEventStoreMigrationIntegrationTest {
                 "sanitized_dead_letter",
                 "inbox_message",
                 "consumer_aggregate_checkpoint",
+                "company",
+                "customer_registration_throttle",
                 "version_gap_quarantine",
                 "replay_operation_audit");
         assertThat(jdbc.queryForObject("select count(*) from domain_event", Integer.class)).isZero();
@@ -99,14 +101,14 @@ class AuthEventStoreMigrationIntegrationTest {
                 .load();
         adopted.baseline();
 
-        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(4);
+        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(8);
         adopted.validate();
         assertThat(adopted.migrate().migrationsExecuted).isZero();
 
         assertThat(seededRowDigests()).containsExactlyInAnyOrderEntriesOf(before);
         assertThat(jdbc.queryForObject("select count(*) from event_stream_head", Integer.class)).isEqualTo(2);
-        assertThat(jdbc.queryForObject("select count(*) from domain_event", Integer.class)).isEqualTo(3);
-        assertThat(jdbc.queryForObject("select count(*) from outbox_event", Integer.class)).isOne();
+        assertThat(jdbc.queryForObject("select count(*) from domain_event", Integer.class)).isEqualTo(5);
+        assertThat(jdbc.queryForObject("select count(*) from outbox_event", Integer.class)).isEqualTo(3);
         assertThat(jdbc.queryForObject(
                         "select count(*) from projection_checkpoint where projection_name='auth-live-v1'",
                         Integer.class))
@@ -140,24 +142,24 @@ class AuthEventStoreMigrationIntegrationTest {
                                 + "where aggregate_type='USER_AUTHORIZATION' and aggregate_id=?",
                         Long.class,
                         USER_ID.toString()))
-                .isEqualTo(8L);
+                .isEqualTo(9L);
         assertThat(jdbc.queryForObject(
                         "select current_version from event_stream_head "
                                 + "where aggregate_type='WORKER_ACCESS' and aggregate_id=?",
                         Long.class,
                         WORKER_ID.toString()))
-                .isEqualTo(4L);
+                .isEqualTo(5L);
         assertThat(jdbc.queryForObject(
                         "select aggregate_version from projection_checkpoint "
                                 + "where projection_name='auth-live-v1' and aggregate_type='USER_AUTHORIZATION' "
                                 + "and aggregate_id=?",
                         Long.class,
                         USER_ID.toString()))
-                .isEqualTo(8L);
+                .isEqualTo(9L);
         assertThat(jdbc.queryForMap(
                         "select version, mobile_app_access, rental_access from auth_subject where id=?",
                         USER_ID))
-                .containsEntry("version", 8)
+                .containsEntry("version", 9)
                 .containsEntry("mobile_app_access", true)
                 .containsEntry("rental_access", true);
         assertThat(jdbc.queryForObject(
@@ -166,7 +168,7 @@ class AuthEventStoreMigrationIntegrationTest {
                                 + "and aggregate_id=?",
                         Long.class,
                         WORKER_ID.toString()))
-                .isEqualTo(4L);
+                .isEqualTo(5L);
     }
 
     @Test
@@ -204,8 +206,8 @@ class AuthEventStoreMigrationIntegrationTest {
         assertThat(jdbc.queryForObject(
                         "select count(*) from domain_event where not baseline and occurred_at is not null",
                         Integer.class))
-                .isOne();
-        assertThat(jdbc.queryForObject("select count(*) from outbox_event", Integer.class)).isOne();
+                .isEqualTo(3);
+        assertThat(jdbc.queryForObject("select count(*) from outbox_event", Integer.class)).isEqualTo(3);
     }
 
     @Test
@@ -728,7 +730,7 @@ class AuthEventStoreMigrationIntegrationTest {
         seedVersionTwoRows();
         Flyway adopted = configuration(MIGRATION_LOCATION).baselineVersion("2").load();
         adopted.baseline();
-        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(4);
+        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(8);
     }
 
     private void seedVersionTwoRows() {
@@ -798,7 +800,7 @@ class AuthEventStoreMigrationIntegrationTest {
                 "insert into domain_event(event_id, aggregate_type, aggregate_id, aggregate_version, "
                         + "event_type, event_version, occurred_at, recorded_at, correlation_id, causation_id, "
                         + "actor_ref, payload, payload_sha256, baseline) "
-                        + "values (?, 'USER_AUTHORIZATION', ?, 9, ?, ?, "
+                        + "values (?, 'USER_AUTHORIZATION', ?, 10, ?, ?, "
                         + "case when ? then null else now() end, now(), ?, null, null, ?::jsonb, ?, ?)",
                 eventId,
                 USER_ID.toString(),

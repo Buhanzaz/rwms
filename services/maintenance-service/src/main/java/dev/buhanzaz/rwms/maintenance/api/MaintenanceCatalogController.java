@@ -39,18 +39,17 @@ public class MaintenanceCatalogController {
   @GetMapping("/versions")
   public ResponseEntity<PageResponse<CatalogVersionResponse>> versions(
       @AuthenticationPrincipal Jwt jwt,
-      @RequestParam UUID warehouseId,
       @RequestParam(defaultValue = "0") @Min(0) int page,
       @RequestParam(defaultValue = "50") @Min(1) @Max(200) int size,
       @RequestParam(required = false) CatalogVersionState lifecycle,
       @RequestHeader(name = HttpHeaders.IF_NONE_MATCH, required = false) String ifNoneMatch) {
-    access.requireRead(jwt, warehouseId);
-    List<CatalogVersionResponse> values = service.catalogVersions(warehouseId).stream()
+    access.requireGlobalRead(jwt);
+    List<CatalogVersionResponse> values = service.catalogVersions().stream()
         .filter(value -> lifecycle == null || value.lifecycle() == lifecycle)
         .toList();
     PageResponse<CatalogVersionResponse> response = page(values, page, size);
     return ConditionalGet.response(
-        "catalog-versions:" + warehouseId + ':' + page + ':' + size + ':' + lifecycle,
+        "catalog-versions:" + page + ':' + size + ':' + lifecycle,
         response,
         ifNoneMatch);
   }
@@ -59,20 +58,16 @@ public class MaintenanceCatalogController {
   public CatalogVersionResponse replaceCatalog(
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID id,
-      @RequestParam UUID warehouseId,
       @Valid @RequestBody ChangeCatalogRequest request) {
-    access.requireEdit(jwt, warehouseId);
-    requireWarehouse(id, warehouseId);
-    return service.changeCatalog(id, warehouseId, request);
+    access.requireGlobalManage(jwt);
+    return service.changeCatalog(id, request);
   }
 
   @GetMapping("/versions/{id}/nodes")
   public List<CatalogNodeResponse> nodes(
       @AuthenticationPrincipal Jwt jwt,
-      @PathVariable UUID id,
-      @RequestParam UUID warehouseId) {
-    access.requireRead(jwt, warehouseId);
-    requireWarehouse(id, warehouseId);
+      @PathVariable UUID id) {
+    access.requireGlobalRead(jwt);
     return service.catalogNodes(id);
   }
 
@@ -80,20 +75,16 @@ public class MaintenanceCatalogController {
   public CatalogVersionResponse replaceNodes(
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID id,
-      @RequestParam UUID warehouseId,
       @Valid @RequestBody ReplaceCatalogNodesRequest request) {
-    access.requireEdit(jwt, warehouseId);
-    requireWarehouse(id, warehouseId);
-    return service.replaceCatalogNodes(id, warehouseId, request);
+    access.requireGlobalManage(jwt);
+    return service.replaceCatalogNodes(id, request);
   }
 
   @GetMapping("/versions/{id}/links")
   public List<CatalogLinkResponse> links(
       @AuthenticationPrincipal Jwt jwt,
-      @PathVariable UUID id,
-      @RequestParam UUID warehouseId) {
-    access.requireRead(jwt, warehouseId);
-    requireWarehouse(id, warehouseId);
+      @PathVariable UUID id) {
+    access.requireGlobalRead(jwt);
     return service.catalogLinks(id);
   }
 
@@ -101,21 +92,18 @@ public class MaintenanceCatalogController {
   public CatalogVersionResponse replaceLinks(
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID id,
-      @RequestParam UUID warehouseId,
       @Valid @RequestBody ReplaceCatalogLinksRequest request) {
-    access.requireEdit(jwt, warehouseId);
-    requireWarehouse(id, warehouseId);
-    return service.replaceCatalogLinks(id, warehouseId, request);
+    access.requireGlobalManage(jwt);
+    return service.replaceCatalogLinks(id, request);
   }
 
   @PostMapping("/versions")
   public ResponseEntity<CatalogVersionResponse> createCatalog(
       @AuthenticationPrincipal Jwt jwt,
-      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
-      @Valid @RequestBody CreateCatalogRequest request) {
-    access.requireManage(jwt, request.warehouseId());
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey) {
+    access.requireGlobalManage(jwt);
     MaintenanceApplicationService.CreateResult<CatalogVersionResponse> result =
-        service.createCatalog(access.subjectId(jwt), idempotencyKey, request);
+        service.createGlobalCatalog(access.subjectId(jwt), idempotencyKey);
     ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.CREATED);
     if (result.replayed()) response.header("Idempotency-Replayed", "true");
     return response.body(result.response());
@@ -125,11 +113,9 @@ public class MaintenanceCatalogController {
   public ResponseEntity<CatalogVersionResponse> fork(
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID id,
-      @RequestParam UUID warehouseId,
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody VersionCommand request) {
-    access.requireManage(jwt, warehouseId);
-    requireWarehouse(id, warehouseId);
+    access.requireGlobalManage(jwt);
     MaintenanceApplicationService.CreateResult<CatalogVersionResponse> result =
         service.forkCatalog(access.subjectId(jwt), idempotencyKey, id, request);
     ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.CREATED);
@@ -141,21 +127,14 @@ public class MaintenanceCatalogController {
   public ResponseEntity<CatalogVersionResponse> activate(
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID id,
-      @RequestParam UUID warehouseId,
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody VersionCommand request) {
-    access.requireManage(jwt, warehouseId);
-    requireWarehouse(id, warehouseId);
+    access.requireGlobalManage(jwt);
     MaintenanceApplicationService.CreateResult<CatalogVersionResponse> result =
-        service.activateCatalog(
-            access.subjectId(jwt), idempotencyKey, id, warehouseId, request);
+        service.activateCatalog(access.subjectId(jwt), idempotencyKey, id, request);
     ResponseEntity.BodyBuilder response = ResponseEntity.ok();
     if (result.replayed()) response.header("Idempotency-Replayed", "true");
     return response.body(result.response());
-  }
-
-  private void requireWarehouse(UUID id, UUID warehouseId) {
-    service.catalogVersion(id, warehouseId);
   }
 
   private static <T> PageResponse<T> page(List<T> values, int page, int size) {

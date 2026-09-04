@@ -70,4 +70,27 @@ describe('notification history', () => {
     expect(latestAction).toHaveBeenCalledOnce();
     expect(firstAction).not.toHaveBeenCalled();
   });
+
+  it('hydrates server history silently with its original timestamp while keeping toast defaults', () => {
+    const createdAt = '2026-09-01T10:15:00Z';
+    useUiStore.getState().toast({
+      tone: 'info',
+      replacementKey: 'logistics-notice-1',
+      title: 'Событие логистики',
+      createdAt,
+      visible: false,
+      read: true,
+    });
+    useUiStore.getState().toast({ tone: 'success', title: 'Новое событие' });
+
+    expect(useUiStore.getState().notifications[0]).toMatchObject({
+      createdAt,
+      visible: false,
+      read: true,
+    });
+    expect(useUiStore.getState().notifications[1]).toMatchObject({
+      visible: true,
+      read: false,
+    });
+  });
 });

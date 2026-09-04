@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.worker
 
+import android.graphics.Bitmap
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -12,7 +13,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -30,6 +30,7 @@ import dev.buhanzaz.rwms.worker.core.database.WorkerLocalStore
 import dev.buhanzaz.rwms.worker.core.database.WorkerOutboxEntity
 import dev.buhanzaz.rwms.worker.core.sync.WorkerSyncScheduler
 import dev.buhanzaz.rwms.worker.core.ui.WorkerScreenScaffold
+import dev.buhanzaz.rwms.worker.core.ui.WorkerOutlinedButton as OutlinedButton
 import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -171,6 +172,7 @@ fun WorkerDownloadsScreen(
     userId: String,
     onMenu: () -> Unit,
     profileMonogram: String,
+    profileAvatar: Bitmap? = null,
     onProfile: () -> Unit,
     viewModel: WorkerDownloadsViewModel = hiltViewModel(),
 ) {
@@ -180,6 +182,7 @@ fun WorkerDownloadsScreen(
         title = "Загрузки",
         onMenu = onMenu,
         profileMonogram = profileMonogram,
+        profileAvatar = profileAvatar,
         onProfile = onProfile,
     ) { padding ->
         if (state.items.isEmpty()) {

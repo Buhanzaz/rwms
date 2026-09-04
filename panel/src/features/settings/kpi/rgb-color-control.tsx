@@ -1,7 +1,7 @@
 import { Input } from "@/components/ui/input"
 import { normalizeRgb } from "@/features/settings/kpi/domain/kpi-settings"
 
-const PICKER_FALLBACK = "#808080"
+const PICKER_FALLBACK = "#ABB6B9"
 
 export function RgbColorControl({
   label,

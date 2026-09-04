@@ -161,10 +161,12 @@ final class OAuthWarehouseExistenceClient implements WarehouseExistenceClient {
             try {
                 responseId = UUID.fromString(id.textValue());
             } catch (IllegalArgumentException exception) {
-                throw WarehouseValidationException.badGateway("Warehouse existence response id is malformed");
+                throw WarehouseValidationException.badGateway(
+                        "Warehouse existence response identifier is malformed");
             }
             if (!responseId.toString().equals(id.textValue())) {
-                throw WarehouseValidationException.badGateway("Warehouse existence response id is not canonical");
+                throw WarehouseValidationException.badGateway(
+                        "Warehouse existence response identifier is not canonical");
             }
             if (!requestedId.equals(responseId)) {
                 throw WarehouseValidationException.badGateway("Warehouse Service returned a different warehouse id");

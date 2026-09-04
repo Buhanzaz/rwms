@@ -3,6 +3,9 @@ HELP.md
 build/
 node_modules/
 dist/
+panel/dist-admin/
+panel/dist-manager/
+**/__pycache__/
 *.log
 *.class
 local.properties

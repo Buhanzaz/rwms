@@ -16,6 +16,9 @@ const firstWarehouse: WarehouseInfo = {
   lifecycleState: "ACTIVE",
   sortOrder: null,
   representative: false,
+  production: true,
+  mainWarehouse: false,
+  representativeParentWarehouseId: null,
 }
 
 const secondWarehouse: WarehouseInfo = {

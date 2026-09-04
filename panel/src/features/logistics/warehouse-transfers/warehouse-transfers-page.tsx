@@ -7,7 +7,7 @@ import {
 } from "@tanstack/react-query"
 import { Add01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { useNavigate, useSearchParams } from "react-router-dom"
+import { useNavigate } from "react-router-dom"
 
 import { getEquipmentItems } from "@/api/equipment-api"
 import type { WarehouseInfo } from "@/api/warehouse-api"
@@ -67,6 +67,7 @@ import {
   FieldSet,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { SingleDayPicker } from "@/components/ui/single-day-picker"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Select,
@@ -88,6 +89,10 @@ import {
   LogisticsFiltersToggle,
   type LogisticsDocumentFiltersState,
 } from "@/features/logistics/logistics-document-filters"
+import {
+  currentBusinessDate,
+  useLogisticsDay,
+} from "@/features/logistics/use-logistics-day"
 import {
   getAssetRentalItem,
   listAssetRentalItems,
@@ -191,14 +196,6 @@ function formatSchedule(date: string) {
   return formatDate(date)
 }
 
-function localCalendarDate() {
-  const now = new Date()
-  const year = now.getFullYear()
-  const month = String(now.getMonth() + 1).padStart(2, "0")
-  const day = String(now.getDate()).padStart(2, "0")
-  return `${year}-${month}-${day}`
-}
-
 function cabinFurnitureRequirements(
   cabin: Pick<RentalItemDto, "contentsItems">,
   furnitureIds?: ReadonlySet<string>
@@ -262,13 +259,17 @@ function transferRouteLabel(
   )}`
 }
 
-function matchesDateRange(
-  value: string,
-  filters: LogisticsDocumentFiltersState<string>
+function transferDirectionLabel(
+  document: Pick<TransferDocument, "warehouseId" | "destinationWarehouseId">,
+  selectedWarehouseId: string | null | undefined
 ) {
-  if (filters.dateFrom && value < filters.dateFrom) return false
-  if (filters.dateTo && value > filters.dateTo) return false
-  return true
+  if (document.warehouseId === selectedWarehouseId) {
+    return "Перемещение со склада"
+  }
+  if (document.destinationWarehouseId === selectedWarehouseId) {
+    return "Перемещение на склад"
+  }
+  return "Межскладское перемещение"
 }
 
 function needsFurnitureReadiness(document: TransferDocument) {
@@ -308,10 +309,16 @@ function equipmentMovementLineLabel(line: { equipmentName: string | null }) {
 
 export function WarehouseTransfersPage() {
   const { accessToken, currentUser } = useAuth()
-  const { selectedWarehouseId, warehouses, setSelectedWarehouseId } =
-    useWarehouse()
+  const {
+    selectedWarehouse,
+    selectedWarehouseId,
+    warehouses,
+    setSelectedWarehouseId,
+  } = useWarehouse()
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
+  const { searchParams, selectedDate, setSelectedDate } = useLogisticsDay(
+    selectedWarehouse?.timeZone
+  )
   const queryClient = useQueryClient()
   const [search, setSearch] = useState("")
   const [filters, setFilters] = useState(EMPTY_FILTERS)
@@ -388,9 +395,14 @@ export function WarehouseTransfersPage() {
     )
 
   const query = useQuery({
-    queryKey: [...WAREHOUSE_TRANSFERS_QUERY_KEY, selectedWarehouseId],
-    queryFn: () => listWarehouseTransfers(accessToken!, selectedWarehouseId!),
-    enabled: Boolean(accessToken && selectedWarehouseId),
+    queryKey: [
+      ...WAREHOUSE_TRANSFERS_QUERY_KEY,
+      selectedWarehouseId,
+      selectedDate,
+    ],
+    queryFn: () =>
+      listWarehouseTransfers(accessToken!, selectedWarehouseId!, selectedDate),
+    enabled: Boolean(accessToken && selectedWarehouseId && selectedDate),
     refetchInterval: 5_000,
   })
   const detailQuery = useQuery({
@@ -502,13 +514,13 @@ export function WarehouseTransfersPage() {
       ) {
         return false
       }
-      if (!matchesDateRange(document.scheduledDate, filters)) return false
       if (!needle) return true
       return [
         document.id,
         document.warehouseId,
         document.destinationWarehouseId,
         transferRouteLabel(document, warehouses),
+        document.driverSnapshot,
         TRANSFER_STATE_LABELS[document.state],
         ...document.lines.flatMap((line) => [line.id, line.assetId]),
       ]
@@ -526,8 +538,17 @@ export function WarehouseTransfersPage() {
   function applyTransferProjection(projection: TransferDocument) {
     if (selectedWarehouseId) {
       queryClient.setQueryData<TransferDocument[]>(
-        [...WAREHOUSE_TRANSFERS_QUERY_KEY, selectedWarehouseId],
+        [
+          ...WAREHOUSE_TRANSFERS_QUERY_KEY,
+          selectedWarehouseId,
+          selectedDate,
+        ],
         (current) => {
+          if (projection.scheduledDate !== selectedDate) {
+            return current?.filter(
+              (document) => document.id !== projection.id
+            )
+          }
           if (!current) return [projection]
           return current.some((document) => document.id === projection.id)
             ? current.map((document) =>
@@ -820,7 +841,18 @@ export function WarehouseTransfersPage() {
           filters={filters}
           stateOptions={stateOptions}
           dateLabel="Перемещение"
+          leadingControl={
+            <SingleDayPicker
+              label="Календарь"
+              hideLabel
+              value={selectedDate}
+              disabled={!selectedWarehouse}
+              className="w-full sm:w-56"
+              onValueChange={setSelectedDate}
+            />
+          }
           showSchedule={false}
+          showDateRange={false}
           extraFilters={[
             {
               label: "Маршрут",
@@ -932,20 +964,12 @@ export function WarehouseTransfersPage() {
                 getSortValue: (document) =>
                   `${document.warehouseId}:${document.destinationWarehouseId}`,
                 render: (document) => (
-                  <span>
-                    {warehouseLabel(
-                      warehouses.find(
-                        (warehouse) => warehouse.id === document.warehouseId
-                      )
-                    )}
-                    {" → "}
-                    {warehouseLabel(
-                      warehouses.find(
-                        (warehouse) =>
-                          warehouse.id === document.destinationWarehouseId
-                      )
-                    )}
-                  </span>
+                  <div className="grid gap-1">
+                    <span className="text-xs text-muted-foreground">
+                      {transferDirectionLabel(document, selectedWarehouseId)}
+                    </span>
+                    <span>{transferRouteLabel(document, warehouses)}</span>
+                  </div>
                 ),
               },
               {
@@ -959,6 +983,13 @@ export function WarehouseTransfersPage() {
                     {TRANSFER_STATE_LABELS[document.state]}
                   </Badge>
                 ),
+              },
+              {
+                id: "driver",
+                label: "Водитель",
+                className: "min-w-48",
+                getSortValue: (document) => document.driverSnapshot ?? "",
+                render: (document) => document.driverSnapshot ?? "Не назначен",
               },
               {
                 id: "actions",
@@ -975,21 +1006,10 @@ export function WarehouseTransfersPage() {
             <Card key={document.id} size="sm">
               <CardHeader>
                 <CardTitle>
-                  Межскладское перемещение ·{" "}
-                  {warehouseLabel(
-                    warehouses.find(
-                      (warehouse) => warehouse.id === document.warehouseId
-                    )
-                  )}
+                  {transferDirectionLabel(document, selectedWarehouseId)}
                 </CardTitle>
                 <CardDescription>
-                  →{" "}
-                  {warehouseLabel(
-                    warehouses.find(
-                      (warehouse) =>
-                        warehouse.id === document.destinationWarehouseId
-                    )
-                  )}
+                  {transferRouteLabel(document, warehouses)}
                   {` · ${formatSchedule(document.scheduledDate)}`}
                 </CardDescription>
                 <CardAction>
@@ -1004,6 +1024,9 @@ export function WarehouseTransfersPage() {
                   const furniture = furnitureGate(current)
                   return (
                     <div className="grid gap-3">
+                      <p className="text-sm">
+                        Водитель: {current.driverSnapshot ?? "Не назначен"}
+                      </p>
                       {transferPlanByDocumentId.get(current.id) ? (
                         <TransferPlanSummary
                           accessToken={accessToken!}
@@ -1068,6 +1091,7 @@ export function WarehouseTransfersPage() {
               ? requestedDestinationWarehouseId
               : initialDestinationWarehouseId
           }
+          initialScheduledDate={selectedDate}
           existingDocument={editingPlanDocument}
           existingPlan={
             editingPlanDocumentId
@@ -1095,6 +1119,7 @@ export function WarehouseTransfersPage() {
           currentUser={currentUser}
           warehouseId={selectedWarehouseId}
           warehouses={warehouses}
+          initialScheduledDate={selectedDate}
           onOpenChange={(open) => !open && setCreateMode(null)}
         />
       ) : null}
@@ -1632,12 +1657,14 @@ function CreateTransferDialog({
   currentUser,
   warehouseId,
   warehouses,
+  initialScheduledDate,
   onOpenChange,
 }: {
   accessToken: string
   currentUser: ReturnType<typeof useAuth>["currentUser"]
   warehouseId: string
   warehouses: WarehouseInfo[]
+  initialScheduledDate: string
   onOpenChange: (open: boolean) => void
 }) {
   const queryClient = useQueryClient()
@@ -1649,8 +1676,14 @@ function CreateTransferDialog({
       warehouse.id !== warehouseId &&
       hasWarehouseAccess(currentUser, warehouse.id, "EDIT")
   )
+  const sourceWarehouse = warehouses.find(
+    (warehouse) => warehouse.id === warehouseId
+  )
+  const sourceBusinessDate = sourceWarehouse
+    ? currentBusinessDate(sourceWarehouse.timeZone)
+    : null
   const [destinationWarehouseId, setDestinationWarehouseId] = useState("")
-  const [scheduledDate, setScheduledDate] = useState("")
+  const [scheduledDate, setScheduledDate] = useState(initialScheduledDate)
   const [lines, setLines] = useState<TransferLineDraft[]>(() => [emptyLine()])
   const [editingLineKey, setEditingLineKey] = useState<string | null>(null)
   const [validationError, setValidationError] = useState<string | null>(null)
@@ -1700,7 +1733,11 @@ function CreateTransferDialog({
       }),
     onSuccess: (result) => {
       queryClient.setQueryData<TransferDocument[]>(
-        [...WAREHOUSE_TRANSFERS_QUERY_KEY, warehouseId],
+        [
+          ...WAREHOUSE_TRANSFERS_QUERY_KEY,
+          warehouseId,
+          result.scheduledDate,
+        ],
         (current) => [
           result,
           ...(current ?? []).filter((item) => item.id !== result.id),
@@ -1753,9 +1790,13 @@ function CreateTransferDialog({
       return
     }
 
+    if (!sourceBusinessDate) {
+      setValidationError("Не удалось определить часовой пояс склада-отправителя.")
+      return
+    }
     if (
       !/^\d{4}-\d{2}-\d{2}$/.test(scheduledDate) ||
-      scheduledDate < localCalendarDate()
+      scheduledDate < sourceBusinessDate
     ) {
       setValidationError("Для перемещения укажите дату, начиная с сегодняшней.")
       return
@@ -1845,22 +1886,17 @@ function CreateTransferDialog({
                 </FieldDescription>
               ) : null}
             </Field>
-            <Field data-invalid={Boolean(validationError) || undefined}>
-              <FieldLabel htmlFor="transfer-scheduled-date">
-                Дата задания
-              </FieldLabel>
-              <Input
-                id="transfer-scheduled-date"
-                type="date"
-                required
-                value={scheduledDate}
-                onChange={(event) => {
-                  setScheduledDate(event.target.value)
-                  attempt.current = null
-                  setValidationError(null)
-                }}
-              />
-            </Field>
+            <SingleDayPicker
+              id="transfer-scheduled-date"
+              label="Дата задания"
+              value={scheduledDate}
+              disabled={mutation.isPending}
+              onValueChange={(date) => {
+                setScheduledDate(date)
+                attempt.current = null
+                setValidationError(null)
+              }}
+            />
             <FieldSet disabled={mutation.isPending}>
               <FieldLegend variant="label">Бытовки и наполнение</FieldLegend>
               <FieldDescription>

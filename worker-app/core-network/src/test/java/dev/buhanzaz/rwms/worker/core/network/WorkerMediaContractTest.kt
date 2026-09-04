@@ -59,6 +59,27 @@ class WorkerMediaContractTest {
     }
 
     @Test
+    fun `profile avatar upload has a server-owned scope and no task evidence reference`() {
+        val folderId = "423e4567-e89b-12d3-a456-426614174000"
+        val request = CreateUploadSessionRequestDto(
+            ownerType = "TASK_BOARD_WORKER_PROFILE",
+            ownerId = "223e4567-e89b-12d3-a456-426614174000",
+            warehouseId = "323e4567-e89b-12d3-a456-426614174000",
+            context = "PROFILE_AVATAR",
+            folderId = folderId,
+            fileName = "avatar.jpg",
+            contentType = "image/jpeg",
+            contentLength = 128,
+            checksumSha256 = "a".repeat(64),
+        )
+
+        val encoded = json.parseToJsonElement(json.encodeToString(request)).jsonObject
+        assertThat(request.clientReferenceId).isNull()
+        assertThat(encoded.keys).doesNotContain("clientReferenceId")
+        assertThat(encoded["folderId"].toString()).isEqualTo("\"$folderId\"")
+    }
+
+    @Test
     fun `task source photo keeps gateway read paths for full screen viewer`() {
         val source = WorkerMediaReferenceDto(
             mediaId = "123e4567-e89b-12d3-a456-426614174000",

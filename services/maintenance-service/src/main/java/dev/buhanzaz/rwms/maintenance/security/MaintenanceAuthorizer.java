@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.maintenance.security;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
@@ -14,6 +15,9 @@ import org.springframework.stereotype.Component;
 @Component
 public class MaintenanceAuthorizer {
   private static final UUID DEV_SUBJECT = UUID.fromString("00000000-0000-0000-0000-0000000000d6");
+  private static final String ADMIN_WEB_CLIENT_ID = "rwms-admin-web";
+  private static final Set<String> INTERACTIVE_PROTOCOL_SCOPES =
+      Set.of("openid", "profile", "offline_access");
   private final boolean developmentPublicBypass;
 
   public MaintenanceAuthorizer(
@@ -36,6 +40,17 @@ public class MaintenanceAuthorizer {
   public void requireManage(Jwt jwt, UUID warehouseId) {
     requireUserScope(jwt, "rwms.write");
     requireWarehouse(jwt, warehouseId, AccessLevel.MANAGE);
+  }
+
+  /** Global catalog reads require an authenticated RWMS user but no warehouse selection. */
+  public void requireGlobalRead(Jwt jwt) {
+    requireUserScope(jwt, "rwms.read");
+  }
+
+  /** Global maintenance settings may be changed only by product administrators. */
+  public void requireGlobalManage(Jwt jwt) {
+    requireUserScope(jwt, "rwms.write");
+    requireGlobalRole(jwt, "WMS_ADMIN", "SYSTEM_ADMIN");
   }
 
   /** Warehouse managers may propose a disposition, but ordinary rental managers may not. */
@@ -106,11 +121,27 @@ public class MaintenanceAuthorizer {
 
   private void requireUserScope(Jwt jwt, String scope) {
     if (developmentPublicBypass) return;
+    if (isAdministrationApplication(jwt)) return;
     if (jwt == null
         || !"USER".equals(jwt.getClaimAsString("principal_type"))
         || !scopes(jwt).contains(scope)) {
       throw new AccessDeniedException("Required USER scope is missing");
     }
+  }
+
+  /** Accepts the isolated administration client only for a global administrator. */
+  private static boolean isAdministrationApplication(Jwt jwt) {
+    if (jwt == null
+        || !"USER".equals(jwt.getClaimAsString("principal_type"))
+        || !ADMIN_WEB_CLIENT_ID.equals(jwt.getClaimAsString("client_id"))) {
+      return false;
+    }
+    String role = jwt.getClaimAsString("global_role");
+    if (!"SYSTEM_ADMIN".equals(role) && !"WMS_ADMIN".equals(role)) return false;
+    return scopes(jwt).stream()
+        .filter(scope -> !INTERACTIVE_PROTOCOL_SCOPES.contains(scope))
+        .toList()
+        .equals(List.of("admin.manage"));
   }
 
   private void requireGlobalRole(Jwt jwt, String... allowedRoles) {

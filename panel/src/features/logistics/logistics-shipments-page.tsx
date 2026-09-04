@@ -5,7 +5,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query"
-import { Link, useNavigate, useSearchParams } from "react-router-dom"
+import { Link, useNavigate } from "react-router-dom"
 
 import { OperationsListGrid } from "@/components/operations-list-grid"
 import {
@@ -49,6 +49,7 @@ import {
   FieldGroup,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { SingleDayPicker } from "@/components/ui/single-day-picker"
 import { Skeleton } from "@/components/ui/skeleton"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
@@ -64,6 +65,12 @@ import {
 import { LogisticsDriverPicker } from "@/features/logistics/logistics-driver-picker"
 import { DesiredTripScheduleFields } from "@/features/logistics/desired-trip-schedule-fields"
 import { DRIVER_BOARD_QUERY_KEY } from "@/features/logistics/driver-board/driver-board-api"
+import {
+  CUSTOMER_DELIVERY_PURPOSES,
+  CUSTOMER_DELIVERY_PURPOSE_LABELS,
+  type CustomerDeliveryPurpose,
+} from "@/features/logistics/customer-delivery-purpose"
+import { calendarDatePartsInTimeZone } from "@/features/kpi/domain/kpi-period"
 import { CabinFurnitureSummary } from "@/features/logistics/order-tasks/cabin-furniture-summary"
 import { OrderCustomerOverview } from "@/features/logistics/order-tasks/order-customer-overview"
 import {
@@ -77,6 +84,7 @@ import {
   useLogisticsReferenceLabels,
   type LogisticsReferenceLabels,
 } from "@/features/logistics/use-logistics-reference-labels"
+import { useLogisticsDay } from "@/features/logistics/use-logistics-day"
 import {
   SHIPMENT_FURNITURE_READINESS_QUERY_KEY,
   SHIPMENTS_QUERY_KEY,
@@ -115,6 +123,7 @@ const FAILED_HISTORICAL_CANCELLABLE_STATES = new Set<ShipmentDocumentState>([
 type ShipmentFilters = LogisticsDocumentFiltersState<ShipmentDocumentState> & {
   counterparties: string[]
   drivers: string[]
+  purposes: CustomerDeliveryPurpose[]
 }
 
 type ShipmentConfirmationCommand = {
@@ -130,6 +139,7 @@ const EMPTY_FILTERS: ShipmentFilters = {
   dateTo: "",
   counterparties: [],
   drivers: [],
+  purposes: [],
 }
 
 function commandIdentity() {
@@ -148,6 +158,13 @@ function formatSchedule(date: string | null) {
 
 function formatOptionalDate(date: string | null | undefined) {
   return date ? formatDate(date) : "—"
+}
+
+function businessDateInTimeZone(timeZone: string) {
+  const { year, month, day } = calendarDatePartsInTimeZone(new Date(), timeZone)
+  return `${year.toString().padStart(4, "0")}-${month
+    .toString()
+    .padStart(2, "0")}-${day.toString().padStart(2, "0")}`
 }
 
 function shipmentDriverLabel(shipment: ShipmentDocument) {
@@ -169,22 +186,6 @@ function linkedReturnDriverLabel(
   if (state === "unavailable") return "Данные возврата недоступны"
   if (!document) return "Возврат не создан"
   return document.driverSnapshot ?? "Не назначен"
-}
-
-function matchesDateRange(
-  value: string | null,
-  filters: LogisticsDocumentFiltersState<string>
-) {
-  if (filters.schedule === "SCHEDULED" && value === null) return false
-  if (filters.schedule === "UNSCHEDULED" && value !== null) return false
-  if (!value) return !filters.dateFrom && !filters.dateTo
-  if (filters.dateFrom && value < filters.dateFrom) {
-    return false
-  }
-  if (filters.dateTo && value > filters.dateTo) {
-    return false
-  }
-  return true
 }
 
 function textFilterOptions(values: Iterable<string | null | undefined>) {
@@ -264,10 +265,12 @@ type ShipmentFurnitureMovementTaskReference =
 type LinkedDocumentReadState = "loading" | "available" | "unavailable"
 
 export function LogisticsShipmentsPage() {
-  const { selectedWarehouseId } = useWarehouse()
+  const { selectedWarehouse, selectedWarehouseId, warehouses } = useWarehouse()
   const { accessToken, currentUser } = useAuth()
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
+  const { searchParams, selectedDate, setSelectedDate } = useLogisticsDay(
+    selectedWarehouse?.timeZone
+  )
   const queryClient = useQueryClient()
   const [search, setSearch] = useState("")
   const [filters, setFilters] = useState(EMPTY_FILTERS)
@@ -288,12 +291,41 @@ export function LogisticsShipmentsPage() {
     useState<ReadonlySet<string>>(() => new Set())
   const commandKeys = useRef(new Map<string, string>())
   const selectedShipmentId = searchParams.get("shipmentId")
-  const queryKey = [...SHIPMENTS_QUERY_KEY, selectedWarehouseId] as const
+  const queryKey = [
+    ...SHIPMENTS_QUERY_KEY,
+    selectedWarehouseId,
+    selectedDate,
+  ] as const
+  const warehouseTimeZones = useMemo(
+    () =>
+      new Map(
+        warehouses.map((warehouse) => [warehouse.id, warehouse.timeZone] as const)
+      ),
+    [warehouses]
+  )
+
+  function currentBusinessDate(shipment: ShipmentDocument) {
+    const sourceWarehouseIds = new Set(
+      shipment.lines.map((line) => line.inventorySourceWarehouseId)
+    )
+    const sourceWarehouseId =
+      sourceWarehouseIds.size === 1
+        ? sourceWarehouseIds.values().next().value
+        : shipment.warehouseId
+    const timeZone =
+      (sourceWarehouseId
+        ? warehouseTimeZones.get(sourceWarehouseId)
+        : undefined) ??
+      warehouseTimeZones.get(shipment.warehouseId) ??
+      selectedWarehouse?.timeZone
+    return timeZone ? businessDateInTimeZone(timeZone) : null
+  }
 
   const query = useQuery({
     queryKey,
-    queryFn: () => listShipments(accessToken!, selectedWarehouseId!),
-    enabled: Boolean(accessToken && selectedWarehouseId),
+    queryFn: () =>
+      listShipments(accessToken!, selectedWarehouseId!, selectedDate),
+    enabled: Boolean(accessToken && selectedWarehouseId && selectedDate),
     refetchInterval: 5_000,
   })
   const returnsQuery = useQuery({
@@ -410,6 +442,14 @@ export function LogisticsShipmentsPage() {
       ),
     [query.data]
   )
+  const purposeOptions = useMemo(
+    () =>
+      CUSTOMER_DELIVERY_PURPOSES.map((purpose) => ({
+        value: purpose,
+        label: CUSTOMER_DELIVERY_PURPOSE_LABELS[purpose],
+      })),
+    []
+  )
   const rows = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ru")
     return (query.data ?? []).filter((shipment) => {
@@ -432,7 +472,12 @@ export function LogisticsShipmentsPage() {
       ) {
         return false
       }
-      if (!matchesDateRange(shipment.scheduledDate, filters)) return false
+      if (
+        filters.purposes.length > 0 &&
+        !filters.purposes.includes(shipment.customerDeliveryPurpose)
+      ) {
+        return false
+      }
       if (!needle) return true
       return [
         shipment.id,
@@ -444,6 +489,7 @@ export function LogisticsShipmentsPage() {
           ? referenceLabels.orderNumbers.get(shipment.rentalOrderId)
           : null,
         SHIPMENT_STATE_LABELS[shipment.state],
+        CUSTOMER_DELIVERY_PURPOSE_LABELS[shipment.customerDeliveryPurpose],
         ...shipment.lines.flatMap((line) => [
           line.id,
           line.assetId,
@@ -475,6 +521,9 @@ export function LogisticsShipmentsPage() {
 
   function applyServerProjection(shipment: ShipmentDocument) {
     queryClient.setQueryData<ShipmentDocument[]>(queryKey, (current) => {
+      if (shipment.scheduledDate !== selectedDate) {
+        return current?.filter((candidate) => candidate.id !== shipment.id)
+      }
       if (!current) return [shipment]
       const found = current.some((candidate) => candidate.id === shipment.id)
       return found
@@ -635,7 +684,14 @@ export function LogisticsShipmentsPage() {
       })
       return
     }
-    if (shipment.scheduledDate !== new Date().toISOString().slice(0, 10)) {
+    const businessDate = currentBusinessDate(shipment)
+    if (!businessDate) {
+      setCommandError(
+        "Не удалось определить локальную дату склада-источника. Обновите список складов и повторите попытку."
+      )
+      return
+    }
+    if (shipment.scheduledDate !== businessDate) {
       setShipmentDateDecisionTarget(shipment)
       return
     }
@@ -837,7 +893,7 @@ export function LogisticsShipmentsPage() {
         <PageToolbarContent className="max-w-xl">
           <Input
             aria-label="Поиск отгрузок"
-            placeholder="Заказ, бытовка, контрагент или водитель"
+            placeholder="Заказ, бытовка, контрагент, водитель или назначение"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
@@ -856,7 +912,29 @@ export function LogisticsShipmentsPage() {
           filters={filters}
           stateOptions={stateOptions}
           dateLabel="Отгрузка"
+          leadingControl={
+            <SingleDayPicker
+              label="Календарь"
+              hideLabel
+              value={selectedDate}
+              disabled={!selectedWarehouse}
+              className="w-full sm:w-56"
+              onValueChange={setSelectedDate}
+            />
+          }
+          showSchedule={false}
+          showDateRange={false}
           extraFilters={[
+            {
+              label: "Назначение",
+              options: purposeOptions,
+              selected: filters.purposes,
+              onApply: (purposes) =>
+                setFilters((current) => ({
+                  ...current,
+                  purposes: purposes as CustomerDeliveryPurpose[],
+                })),
+            },
             {
               label: "Контрагент",
               options: counterpartyOptions,
@@ -935,6 +1013,19 @@ export function LogisticsShipmentsPage() {
                 render: (shipment) => shipment.partySnapshot,
               },
               {
+                id: "customerDeliveryPurpose",
+                label: "Назначение",
+                className: "min-w-48",
+                getSortValue: (shipment) =>
+                  CUSTOMER_DELIVERY_PURPOSE_LABELS[
+                    shipment.customerDeliveryPurpose
+                  ],
+                render: (shipment) =>
+                  CUSTOMER_DELIVERY_PURPOSE_LABELS[
+                    shipment.customerDeliveryPurpose
+                  ],
+              },
+              {
                 id: "driver",
                 label: "Водитель",
                 className: "min-w-52",
@@ -977,7 +1068,12 @@ export function LogisticsShipmentsPage() {
               <CardHeader>
                 <CardTitle>{shipment.partySnapshot}</CardTitle>
                 <CardDescription>
-                  {formatSchedule(shipment.scheduledDate)}
+                  {
+                    CUSTOMER_DELIVERY_PURPOSE_LABELS[
+                      shipment.customerDeliveryPurpose
+                    ]
+                  }
+                  {` · ${formatSchedule(shipment.scheduledDate)}`}
                   {` · ${shipmentDriverLabel(shipment)}`}
                 </CardDescription>
                 <CardAction>
@@ -1048,6 +1144,7 @@ export function LogisticsShipmentsPage() {
       {shipmentDateDecisionTarget ? (
         <ShipmentDateDecisionDialog
           shipment={shipmentDateDecisionTarget}
+          businessDate={currentBusinessDate(shipmentDateDecisionTarget)}
           pending={confirmMutation.isPending}
           onOpenChange={(open) => !open && setShipmentDateDecisionTarget(null)}
           onKeepDate={() => {
@@ -1100,12 +1197,14 @@ export function LogisticsShipmentsPage() {
 
 function ShipmentDateDecisionDialog({
   shipment,
+  businessDate,
   pending,
   onOpenChange,
   onKeepDate,
   onReschedule,
 }: {
   shipment: ShipmentDocument
+  businessDate: string | null
   pending: boolean
   onOpenChange: (open: boolean) => void
   onKeepDate: () => void
@@ -1118,7 +1217,8 @@ function ShipmentDateDecisionDialog({
           <DialogTitle>Дата отгрузки отличается</DialogTitle>
           <DialogDescription>
             Назначенная дата: {formatDate(shipment.scheduledDate!)}. Сегодня{" "}
-            {formatDate(new Date().toISOString().slice(0, 10))}. Изменение
+            {businessDate ? formatDate(businessDate) : "не определено"}.
+            Изменение
             графика и подтверждение отгрузки выполняются отдельными командами.
           </DialogDescription>
         </DialogHeader>

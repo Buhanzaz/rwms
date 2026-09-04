@@ -490,16 +490,13 @@ describe("maintenance command access", () => {
       reworkSourceId: REPAIR_ID,
       reworkSourceVersion: "7",
     })
-    params.append(
-      "reworkLineage",
-      "55555555-5555-4555-8555-555555555555"
-    )
+    params.append("reworkLineage", "55555555-5555-4555-8555-555555555555")
 
     renderPage(`/repairs?${params.toString()}`, <RepairsPage />)
 
-    expect((await screen.findByTestId("selected-rental-item")).textContent).toBe(
-      RENTAL_ITEM_ID
-    )
+    expect(
+      (await screen.findByTestId("selected-rental-item")).textContent
+    ).toBe(RENTAL_ITEM_ID)
     expect(
       screen.getByRole("button", { name: "Сохранить черновик" })
     ).toBeTruthy()

@@ -150,6 +150,15 @@ function taskDescription(entry: TaskBoardEntryDto) {
   return entry.title === "MAINTENANCE_REPAIR" ? null : entry.title
 }
 
+function taskDescriptionLines(description: string | null) {
+  if (!description) return []
+
+  return description
+    .split(/\s+\/\s*|\s*\/\s+/u)
+    .map((line) => line.trim())
+    .filter(Boolean)
+}
+
 function ordinaryRepairComplexity(
   complexity: TaskBoardRepairComplexity | null | undefined
 ) {
@@ -249,7 +258,11 @@ function TaskBoardCardContent({
         <Badge variant={entry.status === "IN_PROGRESS" ? "default" : "outline"}>
           {statusLabels[entry.status]}
         </Badge>
-        {inDailyPlan ? <Badge variant="secondary">План на день</Badge> : null}
+        {inDailyPlan ? (
+          <span className="self-center text-xs font-medium text-foreground">
+            План на день
+          </span>
+        ) : null}
         {entry.entryType === "SHADOW" ? (
           <Badge variant="secondary">После предыдущего этапа</Badge>
         ) : null}
@@ -324,8 +337,9 @@ export const TaskBoardCardPreview = memo(function TaskBoardCardPreview({
   palette?: KpiPalette | null
   repairComplexity?: TaskBoardRepairComplexity | null
 }) {
-  const description = taskDescription(entry)
-  const unitLabel = entry.unitNumber ?? description ?? "Задание без номера"
+  const descriptionLines = taskDescriptionLines(taskDescription(entry))
+  const unitLabel =
+    entry.unitNumber ?? descriptionLines[0] ?? "Задание без номера"
   const {
     showTake,
     showEdit,
@@ -380,8 +394,12 @@ export const TaskBoardCardPreview = memo(function TaskBoardCardPreview({
             </Button>
           </div>
         </div>
-        {!collapsed && description ? (
-          <CardDescription>{description}</CardDescription>
+        {!collapsed && descriptionLines.length > 0 ? (
+          <CardDescription className="flex flex-col gap-1">
+            {descriptionLines.map((line, index) => (
+              <span key={`${line}:${index}`}>{line}</span>
+            ))}
+          </CardDescription>
         ) : null}
       </CardHeader>
       <TaskBoardCardContent
@@ -525,7 +543,7 @@ export const TaskBoardCard = memo(function TaskBoardCard({
     transform,
     transition,
   } = useSortable({ id: entry.id, disabled: !sortableEnabled })
-  const description = taskDescription(entry)
+  const descriptionLines = taskDescriptionLines(taskDescription(entry))
   const {
     showTake,
     showEdit,
@@ -536,7 +554,8 @@ export const TaskBoardCard = memo(function TaskBoardCard({
     showActions,
   } = cardActionVisibility(entry, mobile, canEdit)
   const appearance = kpiCardAppearance(entry, now, palette)
-  const unitLabel = entry.unitNumber ?? "Задание без номера"
+  const unitLabel =
+    entry.unitNumber ?? descriptionLines[0] ?? "Задание без номера"
   const futureAvailabilityId = `future-task-availability-${entry.id}`
   const sortableStyle = {
     ...appearance.style,
@@ -567,7 +586,11 @@ export const TaskBoardCard = memo(function TaskBoardCard({
       data-task-id={entry.taskId}
       data-entry-id={entry.id}
       data-dragging={isDragging || undefined}
-      aria-label={description ? `${unitLabel}: ${description}` : unitLabel}
+      aria-label={
+        descriptionLines.length > 0
+          ? `${unitLabel}: ${descriptionLines.join(", ")}`
+          : unitLabel
+      }
     >
       <CardHeader className="flex flex-col gap-2">
         <div className="flex w-full min-w-0 items-center justify-between gap-2">
@@ -621,8 +644,12 @@ export const TaskBoardCard = memo(function TaskBoardCard({
             </Button>
           </div>
         </div>
-        {!collapsed && description ? (
-          <CardDescription>{description}</CardDescription>
+        {!collapsed && descriptionLines.length > 0 ? (
+          <CardDescription className="flex flex-col gap-1">
+            {descriptionLines.map((line, index) => (
+              <span key={`${line}:${index}`}>{line}</span>
+            ))}
+          </CardDescription>
         ) : null}
         {futureAvailabilityEligible ? (
           <Field

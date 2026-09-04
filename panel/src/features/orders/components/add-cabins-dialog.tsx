@@ -17,6 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { useOrdersModule } from "@/features/orders/orders-module-context"
 
 function orderLinkedPath(
   basePath: "/assistant" | "/booking",
@@ -39,18 +40,26 @@ export function AddCabinsDialog({
   orderId: string
   onOpenChange: (open: boolean) => void
 }) {
+  const { capabilities } = useOrdersModule()
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Добавить бытовки</DialogTitle>
           <DialogDescription>
-            Выберите один из двух существующих способов. Клиент укажет желаемые
-            дату и срок аренды в представлении; результат будет добавлен в
-            текущий заказ.
+            {capabilities.manualBooking
+              ? "Выберите один из двух существующих способов. Клиент укажет желаемые дату и срок аренды в представлении; результат будет добавлен в текущий заказ."
+              : "Уточните параметры в связанном с заказом чате. Клиент укажет желаемые дату и срок аренды в представлении; результат будет добавлен в текущий заказ."}
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div
+          className={
+            capabilities.manualBooking
+              ? "grid gap-4 sm:grid-cols-2"
+              : "grid gap-4"
+          }
+        >
           <Card size="sm">
             <CardHeader>
               <CardTitle>Через AI-чат</CardTitle>
@@ -67,25 +76,27 @@ export function AddCabinsDialog({
               </Button>
             </CardFooter>
           </Card>
-          <Card size="sm">
-            <CardHeader>
-              <CardTitle>Обычное бронирование</CardTitle>
-              <CardDescription>
-                Подобрать бытовки и создать клиентское представление без чата.
-              </CardDescription>
-            </CardHeader>
-            <CardFooter>
-              <Button asChild variant="outline" className="w-full">
-                <Link to={orderLinkedPath("/booking", clientId, orderId)}>
-                  <HugeiconsIcon
-                    icon={PackageSearchIcon}
-                    data-icon="inline-start"
-                  />
-                  Открыть бронирование
-                </Link>
-              </Button>
-            </CardFooter>
-          </Card>
+          {capabilities.manualBooking ? (
+            <Card size="sm">
+              <CardHeader>
+                <CardTitle>Обычное бронирование</CardTitle>
+                <CardDescription>
+                  Подобрать бытовки и создать клиентское представление без чата.
+                </CardDescription>
+              </CardHeader>
+              <CardFooter>
+                <Button asChild variant="outline" className="w-full">
+                  <Link to={orderLinkedPath("/booking", clientId, orderId)}>
+                    <HugeiconsIcon
+                      icon={PackageSearchIcon}
+                      data-icon="inline-start"
+                    />
+                    Открыть бронирование
+                  </Link>
+                </Button>
+              </CardFooter>
+            </Card>
+          ) : null}
         </div>
       </DialogContent>
     </Dialog>

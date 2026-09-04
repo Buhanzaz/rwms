@@ -109,7 +109,9 @@ public class RentalItemHtmlImport {
       int unresolvedCount,
       int mediaLinkCount,
       int warningCount) {
-    if (warehouseId == null || actorSubjectId == null || idempotencyKey == null) {
+    if (warehouseId == null
+        || actorSubjectId == null
+        || idempotencyKey == null) {
       throw new IllegalArgumentException("HTML import identity is required");
     }
     if (sourceSha256 == null || !sourceSha256.matches("^[0-9a-f]{64}$")) {

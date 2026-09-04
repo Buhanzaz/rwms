@@ -157,7 +157,7 @@ export function RepairWorkCompletionDialog({
       if (initialTaskPlans) {
         return { taskPlans: initialTaskPlans, issues: [] }
       }
-      const snapshot = await getOperationalRepairEstimateCatalog(warehouseId)
+      const snapshot = await getOperationalRepairEstimateCatalog()
       const catalog = createRepairEstimateCatalogIndex(snapshot)
       const taskPlans = buildRepairEstimateTaskPlans(lines, catalog)
       return {

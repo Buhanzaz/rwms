@@ -81,7 +81,6 @@ public class DriverBoardService {
         (long) repairPlaces.size(),
         places.availableCount(),
         DriverQueueScheduler.inboundRepairPlaceAvailable(places),
-        places.automaticRefillDelayMinutes(),
         places.overCapacity(),
         repairPlaces,
         board.current().stream()
@@ -185,16 +184,15 @@ public class DriverBoardService {
     if ("CURRENT".equals(current.lane()) && "SCHEDULED".equals(moved.lane())) {
       local.markFixedDate(moved.scheduledDate());
       if (local.getKind().consumesRepairPlace()) {
-        LogisticsDependencyGateway.RepairPlaceProjection places =
-            dependencies.readRepairPlaces(request.warehouseId());
-        // A repair delivery additionally releases its reserved place. The timed hold prevents an
-        // immediate refill while that recoverable effect is being confirmed.
-        local.markManualPromotionHold(places.automaticRefillDelayMinutes());
+        // The legacy timestamp is retained only as a durable "release pending" marker. Queue
+        // scheduling never reads its deadline, and the marker is cleared with the reservation.
+        local.markRepairPlaceReleasePending();
       }
       tasks.saveAndFlush(local);
       if (local.getKind().consumesRepairPlace()) {
         processor.processUntilIdle(local.getId());
         local = tasks.findById(local.getId()).orElseThrow();
+        scheduler.reconcileAndPromote(request.warehouseId());
       }
     }
     if ("SCHEDULED".equals(current.lane())

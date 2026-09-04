@@ -7,11 +7,20 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Index;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
-/** Logistics-projected daily driver, vehicle and trip plan from which an actual shift is frozen. */
+/**
+ * Logistics-projected daily driver, vehicle and route plan from which an actual shift is frozen.
+ *
+ * <p>The plan warehouse remains the driver's physical route origin and execution scope. An
+ * immutable child operation snapshot carries any distinct warehouse served between positioning
+ * legs. Effective cabin capacity remains nullable for legacy plans and fences every capacity-aware
+ * route load when present.
+ */
 @Entity
 @Table(
     name = "driver_shift_plan",
@@ -21,7 +30,7 @@ import java.util.UUID;
           columnNames = "source_shift_id"),
       @UniqueConstraint(
           name = "uk_driver_shift_plan_driver_date",
-          columnNames = {"driver_id", "work_date"})
+          columnNames = {"active_driver_key", "work_date"})
     },
     indexes =
         @Index(
@@ -45,6 +54,9 @@ public class DriverShiftPlan extends AbstractVersionedEntity {
 
   @Column(name = "driver_id", nullable = false)
   private UUID driverId;
+
+  @Column(name = "active_driver_key")
+  private UUID activeDriverKey;
 
   @Column(name = "driver_name", nullable = false, length = 256)
   private String driverName;
@@ -74,6 +86,11 @@ public class DriverShiftPlan extends AbstractVersionedEntity {
   @Column(name = "configuration_type", nullable = false, length = 32)
   private VehicleConfigurationType configurationType;
 
+  @Min(1)
+  @Max(2)
+  @Column(name = "cabin_capacity")
+  private Integer cabinCapacity;
+
   @Column(name = "start_odometer")
   private Long startOdometer;
 
@@ -101,6 +118,12 @@ public class DriverShiftPlan extends AbstractVersionedEntity {
   @Column(name = "updated_at", nullable = false)
   private OffsetDateTime updatedAt;
 
+  @Column(name = "withdrawn_at")
+  private OffsetDateTime withdrawnAt;
+
+  @Column(name = "withdrawn_source_plan_version")
+  private Long withdrawnSourcePlanVersion;
+
   /** Initializes a reviewed source identity before first persistence. */
   public void initialize(UUID sourceShiftId, UUID sourcePlanId, OffsetDateTime now) {
     this.sourceShiftId = sourceShiftId;
@@ -124,6 +147,7 @@ public class DriverShiftPlan extends AbstractVersionedEntity {
       String manufacturer,
       String model,
       VehicleConfigurationType configurationType,
+      Integer cabinCapacity,
       Long startOdometer,
       UUID trailerId,
       String trailerName,
@@ -131,12 +155,13 @@ public class DriverShiftPlan extends AbstractVersionedEntity {
       int tripCount,
       long routeDistanceMeters,
       OffsetDateTime now) {
-    if (frozenShiftId != null)
+    if (frozenShiftId != null || withdrawnAt != null)
       throw new IllegalStateException("Driver shift plan is already frozen");
     this.sourcePlanVersion = sourcePlanVersion;
     this.requestFingerprint = fingerprint;
     this.warehouseId = warehouseId;
     this.driverId = driverId;
+    this.activeDriverKey = driverId;
     this.driverName = driverName.trim();
     this.workDate = workDate;
     this.vehicleId = vehicleId;
@@ -146,6 +171,7 @@ public class DriverShiftPlan extends AbstractVersionedEntity {
     this.vehicleManufacturer = trim(manufacturer);
     this.vehicleModel = trim(model);
     this.configurationType = configurationType;
+    this.cabinCapacity = cabinCapacity;
     this.startOdometer = startOdometer;
     this.trailerId = trailerId;
     this.trailerName = trim(trailerName);
@@ -155,9 +181,70 @@ public class DriverShiftPlan extends AbstractVersionedEntity {
     this.updatedAt = now;
   }
 
+  /** Preserves source compatibility for plan snapshots created before cabin capacity. */
+  public void replace(
+      long sourcePlanVersion,
+      String fingerprint,
+      UUID warehouseId,
+      UUID driverId,
+      String driverName,
+      LocalDate workDate,
+      UUID vehicleId,
+      String vehicleName,
+      String registrationNumber,
+      String vehicleType,
+      String manufacturer,
+      String model,
+      VehicleConfigurationType configurationType,
+      Long startOdometer,
+      UUID trailerId,
+      String trailerName,
+      String trailerRegistrationNumber,
+      int tripCount,
+      long routeDistanceMeters,
+      OffsetDateTime now) {
+    replace(
+        sourcePlanVersion,
+        fingerprint,
+        warehouseId,
+        driverId,
+        driverName,
+        workDate,
+        vehicleId,
+        vehicleName,
+        registrationNumber,
+        vehicleType,
+        manufacturer,
+        model,
+        configurationType,
+        null,
+        startOdometer,
+        trailerId,
+        trailerName,
+        trailerRegistrationNumber,
+        tripCount,
+        routeDistanceMeters,
+        now);
+  }
+
   /** Permanently binds this source plan to the first actual shift created from it. */
   public void freeze(UUID shiftId, OffsetDateTime now) {
+    if (withdrawnAt != null) throw new IllegalStateException("Driver shift plan is withdrawn");
     frozenShiftId = shiftId;
+    updatedAt = now;
+  }
+
+  /** Tombstones an unfrozen shift snapshot removed by an agreed cross-date reschedule. */
+  public void withdraw(long expectedPlanVersion, long replacementPlanVersion, OffsetDateTime now) {
+    if (withdrawnAt != null) return;
+    if (frozenShiftId != null
+        || sourcePlanVersion != expectedPlanVersion
+        || replacementPlanVersion <= expectedPlanVersion) {
+      throw new IllegalStateException("Driver shift plan cannot be withdrawn");
+    }
+    activeDriverKey = null;
+    withdrawnAt = now;
+    withdrawnSourcePlanVersion = replacementPlanVersion;
     updatedAt = now;
   }
 
@@ -225,6 +312,10 @@ public class DriverShiftPlan extends AbstractVersionedEntity {
     return configurationType;
   }
 
+  public Integer getCabinCapacity() {
+    return cabinCapacity;
+  }
+
   public Long getStartOdometer() {
     return startOdometer;
   }
@@ -251,5 +342,13 @@ public class DriverShiftPlan extends AbstractVersionedEntity {
 
   public UUID getFrozenShiftId() {
     return frozenShiftId;
+  }
+
+  public OffsetDateTime getWithdrawnAt() {
+    return withdrawnAt;
+  }
+
+  public Long getWithdrawnSourcePlanVersion() {
+    return withdrawnSourcePlanVersion;
   }
 }

@@ -106,7 +106,7 @@ func ParsePublicURL(raw string) (string, error) {
 // preflight command, independent of source ordering.
 func CanonicalPreflightSHA(assetImportID, warehouseID uuid.UUID, sources []Source) string {
 	canonical := canonicalSources(sources)
-	value := make([]string, 0, len(canonical)+2)
+	value := make([]string, 0, len(canonical)+3)
 	value = append(value, assetImportID.String(), warehouseID.String())
 	for _, source := range canonical {
 		value = append(value, source.SourceRowID.String()+":"+source.PublicKey)
@@ -118,7 +118,7 @@ func CanonicalPreflightSHA(assetImportID, warehouseID uuid.UUID, sources []Sourc
 // bindings, independent of their input ordering.
 func CanonicalActivationSHA(jobID uuid.UUID, bindings []ActivationBinding) string {
 	canonical := canonicalBindings(bindings)
-	value := make([]string, 0, len(canonical)+1)
+	value := make([]string, 0, len(canonical)+2)
 	value = append(value, jobID.String())
 	for _, binding := range canonical {
 		value = append(value, binding.SourceRowID.String()+":"+binding.CabinID.String())
@@ -135,7 +135,7 @@ func CanonicalRetrySHA(jobID, key uuid.UUID) string {
 // source-key replacements, independent of input ordering.
 func CanonicalReplaceSourcesSHA(jobID uuid.UUID, replacements []SourceReplacement) string {
 	canonical := canonicalReplacements(replacements)
-	value := make([]string, 0, len(canonical)+1)
+	value := make([]string, 0, len(canonical)+2)
 	value = append(value, jobID.String())
 	for _, replacement := range canonical {
 		value = append(value, replacement.SourceRowID.String()+":"+replacement.PublicKey)

@@ -21,7 +21,7 @@ function json(value: unknown) {
 afterEach(() => vi.unstubAllGlobals())
 
 describe("repair complexity colors API", () => {
-  it("uses the same-origin maintenance setting with warehouse authorization context", async () => {
+  it("uses the global same-origin maintenance setting without warehouse context", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       json({
         version: 3,
@@ -34,14 +34,14 @@ describe("repair complexity colors API", () => {
     )
     vi.stubGlobal("fetch", fetchMock)
 
-    await getRepairComplexityColors("token", "warehouse-1")
+    await getRepairComplexityColors("token")
 
     const endpoint = new URL(String(fetchMock.mock.calls[0]?.[0]))
     expect(endpoint.origin).toBe("https://panel.example.test")
     expect(endpoint.pathname).toBe(
       "/api/maintenance/v1/settings/repair-complexity-colors"
     )
-    expect(endpoint.searchParams.get("warehouseId")).toBe("warehouse-1")
+    expect(endpoint.searchParams.has("warehouseId")).toBe(false)
   })
 
   it("sends optimistic version and all four colors", async () => {
@@ -57,7 +57,7 @@ describe("repair complexity colors API", () => {
     )
     vi.stubGlobal("fetch", fetchMock)
 
-    await saveRepairComplexityColors("token", "warehouse-1", {
+    await saveRepairComplexityColors("token", {
       version: 3,
       lightColor: "#16A34A",
       mediumColor: "#EAB308",

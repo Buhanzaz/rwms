@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.buhanzaz.rwms.worker.core.media.EncryptedEvidenceFileStore
 import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayClient
+import dev.buhanzaz.rwms.worker.core.network.safeWorkerUserMessage
 import dev.buhanzaz.rwms.worker.core.ui.decodeWorkerBitmap
 import dev.buhanzaz.rwms.worker.core.ui.readWorkerImageBytes
 import javax.inject.Inject
@@ -74,7 +75,11 @@ class TaskMediaThumbnailViewModel @Inject constructor(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
-                TaskMediaThumbnail.Failed(error.message ?: "Не удалось загрузить фото")
+                TaskMediaThumbnail.Failed(
+                    error.safeWorkerUserMessage(
+                        "Не удалось загрузить фотографию. Повторите попытку.",
+                    ),
+                )
             }
             if (path !in admittedPaths || requestedGenerations[path] != generation) {
                 if (next is TaskMediaThumbnail.Ready && !next.bitmap.isRecycled) {
@@ -108,7 +113,11 @@ class TaskMediaThumbnailViewModel @Inject constructor(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
-                TaskMediaThumbnail.Failed(error.message ?: "Не удалось открыть локальное фото")
+                TaskMediaThumbnail.Failed(
+                    error.safeWorkerUserMessage(
+                        "Не удалось открыть локальную фотографию. Повторите попытку.",
+                    ),
+                )
             }
             if (encryptedPath !in admittedPaths || requestedGenerations[encryptedPath] != generation) {
                 if (next is TaskMediaThumbnail.Ready && !next.bitmap.isRecycled) next.bitmap.recycle()

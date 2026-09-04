@@ -28,29 +28,15 @@ export type InventoryAggregatePublicationState =
 export type InventoryAssetOutcomeStatus =
   "FREE" | "REPAIR" | "CAPITAL_REPAIR" | "RENTED"
 
-export type InventoryWeekday =
-  | "MONDAY"
-  | "TUESDAY"
-  | "WEDNESDAY"
-  | "THURSDAY"
-  | "FRIDAY"
-  | "SATURDAY"
-  | "SUNDAY"
-
 export type InventoryPlanningSettings = {
   warehouseId: string
   settingsRevision: number
-  movementDailyCapacity: number
-  repairDailyCapacity: number
-  workingWeekdays: InventoryWeekday[]
+  updatedAt: string | null
   holidays: string[]
 }
 
 export type UpdateInventoryPlanningSettingsRequest = {
   expectedSettingsRevision: number
-  movementDailyCapacity: number
-  repairDailyCapacity: number
-  workingWeekdays: InventoryWeekday[]
   holidays: string[]
 }
 

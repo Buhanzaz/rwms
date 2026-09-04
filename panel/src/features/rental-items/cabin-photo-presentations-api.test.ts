@@ -4,6 +4,7 @@ import {
   createCabinPhotoPresentation,
   getPublicCabinPhotoPresentation,
 } from "@/features/rental-items/cabin-photo-presentations-api"
+import { ApiError } from "@/lib/api-client"
 
 const CABIN_ID = "11111111-1111-4111-8111-111111111111"
 const WAREHOUSE_ID = "22222222-2222-4222-8222-222222222222"
@@ -93,5 +94,55 @@ describe("cabin photo presentation API", () => {
         linoleum: true,
       })
     )
+  })
+
+  it("maps a public gallery transport failure without exposing browser text", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockRejectedValue(new TypeError("Failed to fetch photo.internal"))
+    )
+
+    await expect(
+      getPublicCabinPhotoPresentation("public-token")
+    ).rejects.toMatchObject({
+      status: 0,
+      code: "NETWORK_ERROR",
+      message:
+        "Не удалось связаться с сервером. Проверьте подключение и повторите попытку.",
+      diagnosticMessage: "Failed to fetch photo.internal",
+    })
+  })
+
+  it("maps malformed successful public gallery JSON to a typed safe error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("<html>internal proxy response</html>", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+    )
+
+    let failure: unknown
+    try {
+      await getPublicCabinPhotoPresentation("public-token")
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).toBeInstanceOf(ApiError)
+    expect(failure).toMatchObject({
+      status: 502,
+      code: "INVALID_API_RESPONSE",
+      message:
+        "Сервис вернул некорректные данные. Обновите страницу или повторите попытку позже.",
+    })
+    const apiFailure = failure as ApiError
+    expect(apiFailure.message).not.toMatch(/html|internal|proxy|</i)
+    expect(apiFailure.diagnosticMessage).toMatch(/json|unexpected|valid/i)
+    expect(apiFailure.diagnosticMessage).not.toBe(apiFailure.message)
   })
 })

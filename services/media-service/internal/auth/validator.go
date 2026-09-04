@@ -127,7 +127,7 @@ func (validator *Validator) Validate(ctx context.Context, authorization string) 
 		return Principal{}, ErrForbidden
 	}
 	subject, err := uuid.Parse(subjectRaw)
-	if err != nil {
+	if err != nil || subject == uuid.Nil || subject.String() != subjectRaw {
 		return Principal{}, ErrForbidden
 	}
 	scopes, err := parseScopes(claims)

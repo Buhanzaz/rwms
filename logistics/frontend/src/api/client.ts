@@ -5,6 +5,7 @@ import type {
   LogisticsRequest,
   PlanningSettings,
   IsochroneTariff,
+  PolicyZoneInput,
   RequestDateOption,
   RoutePlan,
   RoutingCargoPlacementSnapshot,
@@ -15,6 +16,7 @@ import type {
   Vehicle,
   VehicleLoadConfigurationType,
   WarehouseWorkspace,
+  WarehousePolicyZone,
 } from '../domain/types';
 import {
   normalizeOptimizationRun,
@@ -30,9 +32,26 @@ import {
   normalizeSlotAvailabilityResponse,
   type SlotAvailabilityInput,
 } from '../features/slot-availability/types';
+import { restorePanelUser } from '../auth/panel-oidc';
+import type { components } from './schema';
 
 const configuredApiPrefix = import.meta.env.VITE_API_BASE_URL?.trim();
 const API_PREFIX = configuredApiPrefix?.replace(/\/+$/, '') || '/api';
+
+/** Resolves the current renewable USER access token for one simulator request. */
+export type SimulatorAccessTokenProvider = () => Promise<string | null>;
+
+const defaultAccessTokenProvider: SimulatorAccessTokenProvider = async () => {
+  const user = await restorePanelUser();
+  return user?.access_token ?? null;
+};
+
+let accessTokenProvider: SimulatorAccessTokenProvider = defaultAccessTokenProvider;
+
+/** Installs a scoped token source; tests use this seam without weakening production OIDC. */
+export function setSimulatorAccessTokenProvider(provider: SimulatorAccessTokenProvider | null): void {
+  accessTokenProvider = provider ?? defaultAccessTokenProvider;
+}
 
 /** Resolve a standalone-simulator endpoint against its configured deployment prefix. */
 export function simulatorApiUrl(path: string): string {
@@ -49,20 +68,69 @@ export interface ProblemDetails {
   code?: unknown;
   errors?: unknown;
   failures?: unknown;
+  request_id?: unknown;
+  hold_id?: unknown;
+  quarantine_count?: unknown;
 }
 
-function problemMessage(problem: ProblemDetails | null, fallback: string): string {
-  if (typeof problem?.detail === 'string') return problem.detail;
-  if (Array.isArray(problem?.detail)) {
-    const messages: string[] = [];
-    for (const item of problem.detail as unknown[]) {
-      if (!item || typeof item !== 'object') continue;
-      const message = (item as Record<string, unknown>).msg;
-      if (typeof message === 'string') messages.push(message);
-    }
-    if (messages.length) return messages.join('; ');
-  }
-  return typeof problem?.title === 'string' ? problem.title : fallback;
+const PUBLIC_ERROR_FORBIDDEN_TEXT = /\b(?:HTTP(?:\/\d(?:\.\d)?)?|backend|exception|traceback|stack\s*trace|sql(?:alchemy)?|pydantic|validation\s+error|rms\s+logistics\s+service|valhalla|nginx|uvicorn|fastapi)\b/iu;
+const INTERNAL_ERROR_CODE = /\b(?!RWMS\b)[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/u;
+const RUSSIAN_ACTION = /(?:войдите|выберите|измените|обновите|проверьте|повторите|перенесите|добавьте|укажите|исправьте|дождитесь|обратитесь|согласуйте|освободите|свяжитесь|перезагрузите|включите|выключите|заполните|назначьте|создайте|разделите|уменьшите|увеличьте|подтвердите|снимите)/iu;
+const PROBLEM_CODE_MESSAGES: Readonly<Record<string, string>> = {
+  DELIVERY_FORBIDDEN_ZONE: 'Адрес находится в зоне, где обслуживание запрещено. Измените адрес или границу исключения.',
+  DELIVERY_OUTSIDE_ISOCHRONE: 'Адрес находится дальше предельной изохроны склада. Выберите другой склад или адрес.',
+  POLICY_ZONE_VALUES_INVALID: 'Для особой цены укажите стоимость доставки и вывоза, а для ограничений удалите цены.',
+};
+
+function safeRussianProblemText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.replace(/\s+/gu, ' ').trim();
+  if (
+    !normalized
+    || normalized.length > 500
+    || !/[\u0400-\u04ff]/u.test(normalized)
+    || PUBLIC_ERROR_FORBIDDEN_TEXT.test(normalized)
+    || INTERNAL_ERROR_CODE.test(normalized)
+    || /(?:https?:\/\/|[{}[\]]|<\/?[a-z][^>]*>)/iu.test(normalized)
+  ) return null;
+  return normalized;
+}
+
+function statusAction(status: number): string {
+  if (status === 0) return 'Проверьте соединение и повторите действие.';
+  if (status === 401) return 'Войдите в RWMS и повторите действие.';
+  if (status === 403) return 'Обратитесь к администратору за необходимыми правами.';
+  if (status === 404) return 'Обновите страницу и выберите доступный объект.';
+  if (status === 409) return 'Обновите данные и повторите действие.';
+  if (status === 429) return 'Подождите немного и повторите действие.';
+  if (status === 400 || status === 422) return 'Проверьте введённые данные и повторите действие.';
+  return 'Повторите действие. Если ошибка сохранится, свяжитесь с администратором.';
+}
+
+function statusMessage(status: number): string {
+  if (status === 0) return `Сервис логистики недоступен. ${statusAction(status)}`;
+  if (status === 401) return `Сессия RWMS недоступна. ${statusAction(status)}`;
+  if (status === 403) return `Недостаточно прав для этого действия. ${statusAction(status)}`;
+  if (status === 404) return `Запрошенные данные не найдены. ${statusAction(status)}`;
+  if (status === 409) return `Данные уже изменились. ${statusAction(status)}`;
+  if (status === 429) return `Сервис получил слишком много запросов. ${statusAction(status)}`;
+  if (status === 400 || status === 422) return `Запрос содержит недопустимые данные. ${statusAction(status)}`;
+  return `Не удалось выполнить действие. ${statusAction(status)}`;
+}
+
+function actionableProblemText(value: string, status: number): string {
+  const punctuation = /[.!?]$/u.test(value) ? value : `${value}.`;
+  return RUSSIAN_ACTION.test(value) ? punctuation : `${punctuation} ${statusAction(status)}`;
+}
+
+function problemMessage(status: number, problem: ProblemDetails | null, fallback: string): string {
+  // FastAPI validation arrays and all raw diagnostics stay in `problem`; they are never presentation text.
+  const code = typeof problem?.code === 'string' ? problem.code : null;
+  if (code && PROBLEM_CODE_MESSAGES[code]) return PROBLEM_CODE_MESSAGES[code];
+  const candidate = safeRussianProblemText(problem?.detail)
+    ?? safeRussianProblemText(problem?.title)
+    ?? safeRussianProblemText(fallback);
+  return candidate ? actionableProblemText(candidate, status) : statusMessage(status);
 }
 
 export class ApiError extends Error {
@@ -71,12 +139,38 @@ export class ApiError extends Error {
   readonly problem: ProblemDetails | null;
 
   constructor(status: number, problem: ProblemDetails | null, fallback: string) {
-    super(problemMessage(problem, fallback));
+    const code = typeof problem?.code === 'string' ? problem.code : null;
+    const localizedProblem = code && PROBLEM_CODE_MESSAGES[code]
+      ? { ...(problem ?? {}), title: PROBLEM_CODE_MESSAGES[code] }
+      : problem;
+    super(problemMessage(status, localizedProblem, fallback));
     this.name = 'ApiError';
     this.status = status;
-    this.code = typeof problem?.code === 'string' ? problem.code : null;
-    this.problem = problem;
+    this.code = code;
+    this.problem = localizedProblem;
   }
+}
+
+function authenticationRequired(detail = 'Войдите в RWMS, чтобы продолжить работу с логистикой.'): ApiError {
+  return new ApiError(401, {
+    type: 'urn:rwms:problem:authentication-required',
+    title: 'Требуется вход в RWMS',
+    status: 401,
+    detail,
+    code: 'AUTHENTICATION_REQUIRED',
+  }, detail);
+}
+
+/** Returns a fresh or silently renewed panel USER token and never fabricates a session. */
+export async function requireSimulatorAccessToken(): Promise<string> {
+  let token: string | null;
+  try {
+    token = await accessTokenProvider();
+  } catch {
+    throw authenticationRequired('Не удалось проверить сессию RWMS. Войдите снова и повторите действие.');
+  }
+  if (!token?.trim()) throw authenticationRequired();
+  return token;
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
@@ -96,11 +190,12 @@ async function parseResponse<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, init: RequestInit = {}, authenticated = true): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   headers.set('Accept', 'application/json, application/problem+json');
   try {
+    if (authenticated) headers.set('Authorization', `Bearer ${await requireSimulatorAccessToken()}`);
     const response = await fetch(simulatorApiUrl(path), { ...init, headers });
     return await parseResponse<T>(response);
   } catch (error: unknown) {
@@ -197,15 +292,31 @@ function jsonBody(value: unknown): string {
   return JSON.stringify(value);
 }
 
-/** Persisted acceptance state for one warehouse and planning date. */
-export interface PlanningDayStatus {
-  warehouse_id: UUID;
-  date: string;
-  accepting_requests: boolean;
-  closed_at: string | null;
-  closed_by: string | null;
-  plan_id: UUID | null;
-}
+/** Persisted acceptance and dynamic-operation summary for one warehouse day. */
+export type PlanningDayStatus = components['schemas']['PlanningDayStatusRead'];
+
+/** Optimizer directions permitted by the versioned policy for one warehouse day. */
+export type PlanningDayMode = components['schemas']['PlanningDayMode'];
+/** Complete server-owned operational projection for the selected warehouse day. */
+export type PlanningDayOperations = components['schemas']['PlanningDayOperationsRead'];
+/** Version-fenced day-mode command. */
+export type PlanningDayModeUpdate = components['schemas']['PlanningDayModeUpdate'];
+/** Result of changing a day mode without inventing client-side conflicts. */
+export type PlanningDayModeResult = components['schemas']['PlanningDayModeResult'];
+/** Supported operational fact accepted by the impact-analysis endpoint. */
+export type LogisticsEventInput = components['schemas']['LogisticsEventCreate'];
+/** Server-derived notices, actions and proposals created for one fact. */
+export type LogisticsEventResult = components['schemas']['LogisticsEventResult'];
+/** Immutable dispatcher choice that becomes a server-side planning constraint. */
+export type LogisticsDecisionInput = components['schemas']['LogisticsHumanDecisionCreate'];
+/** Recorded dispatcher choice returned by the operations boundary. */
+export type LogisticsDecision = components['schemas']['LogisticsHumanDecisionRead'];
+/** One pending or historical dispatcher action. */
+export type LogisticsAction = components['schemas']['LogisticsHumanActionRead'];
+/** One structured system comment. */
+export type LogisticsNotice = components['schemas']['LogisticsNoticeRead'];
+/** One recovery candidate with explicit agreement and application state. */
+export type RecoveryProposal = components['schemas']['RecoveryProposalRead'];
 
 export interface WarehouseUpdateInput {
   loading_minutes?: number;
@@ -219,18 +330,22 @@ export interface WarehouseUpdateInput {
   isochrone_tariffs?: IsochroneTariff[];
 }
 
-/** Request body for generating reproducible workload in one warehouse. */
+/** Bounded request slice for one header-selected planning date. */
+export interface WarehouseWorkspacePageInput {
+  planningDate: string;
+  requestLimit?: number;
+  requestCursor?: UUID | null;
+}
+
+export const WORKSPACE_REQUEST_PAGE_LIMIT = 250;
+
+/** Request body for generating a random workload in one warehouse. */
 export interface WorkloadGenerationInput {
   start_date: string;
   days: number;
   deliveries_per_day: number;
   pickups_per_day: number;
   alternative_dates_count: number;
-  cargo_length_mm: number;
-  cargo_width_mm: number;
-  cargo_height_mm: number;
-  cargo_weight_kg: number;
-  seed: number;
 }
 
 /** Daily breakdown returned by the workload-generation endpoint. */
@@ -243,7 +358,6 @@ export interface WorkloadGenerationDailyCount {
 /** Result of a workload-generation command. */
 export interface WorkloadGenerationResult {
   warehouse_id: UUID;
-  seed: number;
   start_date: string;
   end_date: string;
   created_requests: number;
@@ -380,7 +494,6 @@ export interface LogisticsRequestInput {
   service_minutes: number;
   priority: number;
   mandatory: boolean;
-  status: LogisticsRequest['status'];
   split_allowed: boolean;
   notes: string;
   date_options: RequestDateOption[];
@@ -389,6 +502,15 @@ export interface LogisticsRequestInput {
 export interface RequestScheduleInput {
   date: string | null;
   add_if_missing?: boolean;
+}
+
+export interface RequestDateOptionInput {
+  date: string;
+  priority: number;
+  window_start: string | null;
+  window_end: string | null;
+  is_hard: boolean;
+  travel_zone_hours?: number | null;
 }
 
 /** Assignment mode for a contractor route on the planning date selected in the header. */
@@ -402,6 +524,8 @@ export interface ContractorDispatchResult {
   mode: ContractorDispatchMode;
   assigned_request_ids: UUID[];
   assigned_count: number;
+  contractor_handoff_command_id: UUID | null;
+  external_task_ids: UUID[];
 }
 
 /** Atomic dispatcher preparation required before a request can enter planning. */
@@ -417,6 +541,21 @@ export interface RequestPlanningDetailsInput {
   contact_phone: string;
 }
 
+/** One fresh owner-calculated delivery slot offered for an existing RWMS order. */
+export type RequestRescheduleSlotRead = components['schemas']['RequestRescheduleSlotRead'];
+
+/** Version fences and all currently feasible slots for the operator-selected date. */
+export type RequestRescheduleOptionsRead = components['schemas']['RequestRescheduleOptionsRead'];
+
+export type RequestRescheduleOptionsInput = components['schemas']['RequestRescheduleOptionsQuery'];
+
+export type RequestRescheduleInput = components['schemas']['RequestRescheduleApply'];
+
+export type RequestRescheduleRetryInput = components['schemas']['RequestRescheduleRetry'];
+
+/** Owner-confirmed delivery commitment and converged local request projection. */
+export type RequestRescheduleResultRead = components['schemas']['RequestRescheduleResultRead'];
+
 export interface ManualChangeInput {
   expected_version: number;
   change_type: 'MOVE_TASK' | 'REORDER_TASK' | 'REMOVE_TASK' | 'LOCK_CYCLE' | 'LOCK_TASK' | 'SPLIT_CYCLE' | 'MERGE_CYCLES';
@@ -425,7 +564,6 @@ export interface ManualChangeInput {
   target_cycle_id?: UUID;
   target_sequence?: number;
   locked?: boolean;
-  changed_by: 'local-admin';
   reason: string;
 }
 
@@ -590,7 +728,7 @@ function normalizeValidationWithDiagnostics(
 }
 
 export const api = {
-  health: () => request<{ status: string }>('/health'),
+  health: () => request<{ status: string }>('/health', {}, false),
 
   calculateSlotAvailability: async (input: SlotAvailabilityInput, signal?: AbortSignal) =>
     normalizeSlotAvailabilityResponse(await request<unknown>('/planning/slot-availability', {
@@ -653,14 +791,35 @@ export const api = {
 
   listWarehouses: async () => (await request<RawWarehouse[]>('/warehouses')).map((warehouse) => normalizeWarehouse(warehouse)),
   listAvailableWarehouses: () => request<AvailableWarehouse[]>('/warehouses/available'),
-  updateWarehouse: async (id: UUID, input: WarehouseUpdateInput) => normalizeWarehouse(await request<RawWarehouse>(`/warehouses/${id}`, {
+  updateWarehouse: async (id: UUID, input: WarehouseUpdateInput, expectedVersion: number) => normalizeWarehouse(await request<RawWarehouse>(`/warehouses/${id}`, {
     method: 'PATCH',
-    body: jsonBody(input),
+    body: jsonBody({ ...input, expected_version: expectedVersion }),
   })),
-  getWarehouseWorkspace: (id: UUID, refreshRwms = true) => {
-    const query = refreshRwms ? '' : '?refresh_rwms=false';
-    return request<WarehouseWorkspace>(`/warehouses/${id}/workspace${query}`);
+  getWarehouseWorkspace: (id: UUID, input: WarehouseWorkspacePageInput) => {
+    const query = new URLSearchParams({
+      planning_date: input.planningDate,
+      request_limit: String(input.requestLimit ?? WORKSPACE_REQUEST_PAGE_LIMIT),
+    });
+    if (input.requestCursor) query.set('request_cursor', input.requestCursor);
+    return request<WarehouseWorkspace>(`/warehouses/${id}/workspace?${query.toString()}`);
   },
+  listPolicyZones: (warehouseId: UUID) =>
+    request<WarehousePolicyZone[]>(`/warehouses/${warehouseId}/policy-zones`),
+  createPolicyZone: (warehouseId: UUID, input: PolicyZoneInput, idempotencyKey: UUID) =>
+    request<WarehousePolicyZone>(`/warehouses/${warehouseId}/policy-zones`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: jsonBody(input),
+    }),
+  updatePolicyZone: (warehouseId: UUID, zoneId: UUID, input: PolicyZoneInput, expectedVersion: number) =>
+    request<WarehousePolicyZone>(`/warehouses/${warehouseId}/policy-zones/${zoneId}`, {
+      method: 'PATCH',
+      body: jsonBody({ ...input, expected_version: expectedVersion }),
+    }),
+  deletePolicyZone: (warehouseId: UUID, zoneId: UUID, expectedVersion: number) =>
+    request<void>(`/warehouses/${warehouseId}/policy-zones/${zoneId}?expected_version=${encodeURIComponent(String(expectedVersion))}`, {
+      method: 'DELETE',
+    }),
   generateWorkload: (warehouseId: UUID, input: WorkloadGenerationInput) =>
     request<WorkloadGenerationResult>(`/warehouses/${warehouseId}/generate-workload`, { method: 'POST', body: jsonBody(input) }),
   deleteGeneratedWorkload: (warehouseId: UUID, date: string) =>
@@ -669,47 +828,108 @@ export const api = {
     request<PlanningDayStatus>(`/warehouses/${warehouseId}/planning-days/${encodeURIComponent(date)}`),
   closePlanningDay: (warehouseId: UUID, date: string) =>
     request<PlanningDayStatus>(`/warehouses/${warehouseId}/planning-days/${encodeURIComponent(date)}/close`, { method: 'POST' }),
+  getPlanningDayOperations: (warehouseId: UUID, date: string) =>
+    request<PlanningDayOperations>(`/warehouses/${warehouseId}/planning-days/${encodeURIComponent(date)}/operations`),
+  updatePlanningDayMode: (
+    warehouseId: UUID,
+    date: string,
+    input: PlanningDayModeUpdate,
+    idempotencyKey: UUID,
+  ) => request<PlanningDayModeResult>(`/warehouses/${warehouseId}/planning-days/${encodeURIComponent(date)}/mode`, {
+    method: 'PUT',
+    headers: { 'Idempotency-Key': idempotencyKey },
+    body: jsonBody(input),
+  }),
+  createLogisticsEvent: (
+    warehouseId: UUID,
+    date: string,
+    input: LogisticsEventInput,
+    idempotencyKey: UUID,
+  ) => request<LogisticsEventResult>(`/warehouses/${warehouseId}/planning-days/${encodeURIComponent(date)}/events`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey },
+    body: jsonBody(input),
+  }),
+  decideLogisticsAction: (
+    actionId: UUID,
+    input: LogisticsDecisionInput,
+    idempotencyKey: UUID,
+  ) => request<LogisticsDecision>(`/logistics-actions/${actionId}/decisions`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey },
+    body: jsonBody(input),
+  }),
+  applyRecoveryProposal: (proposalId: UUID, expectedVersion: number, idempotencyKey: UUID) =>
+    request<RecoveryProposal>(`/recovery-proposals/${proposalId}/apply`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: jsonBody({ expected_version: expectedVersion }),
+    }),
 
   listAvailableDrivers: (warehouseId: UUID) => request<AvailableDriver[]>(`/warehouses/${warehouseId}/available-drivers`),
-  createDriver: (warehouseId: UUID, input: DriverInput) =>
-    request<Driver>(`/warehouses/${warehouseId}/drivers`, { method: 'POST', body: jsonBody(input) }),
-  updateDriver: (id: UUID, input: Partial<DriverInput>) =>
-    request<Driver>(`/drivers/${id}`, { method: 'PATCH', body: jsonBody(input) }),
-  deleteDriver: (id: UUID) => request<void>(`/drivers/${id}`, { method: 'DELETE' }),
+  createDriver: (warehouseId: UUID, input: DriverInput, idempotencyKey: UUID) =>
+    request<Driver>(`/warehouses/${warehouseId}/drivers`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: jsonBody(input) }),
+  updateDriver: (id: UUID, input: Partial<DriverInput>, expectedVersion: number) =>
+    request<Driver>(`/drivers/${id}`, { method: 'PATCH', body: jsonBody({ ...input, expected_version: expectedVersion }) }),
+  deleteDriver: (id: UUID, expectedVersion: number) => request<void>(`/drivers/${id}?expected_version=${encodeURIComponent(String(expectedVersion))}`, { method: 'DELETE' }),
 
-  updateVehicle: (id: UUID, input: Partial<VehicleInput>) =>
-    request<Vehicle>(`/vehicles/${id}`, { method: 'PATCH', body: jsonBody(input) }),
-  createVehicleConfiguration: (warehouseId: UUID, input: VehicleConfigurationInput) =>
-    request<Vehicle>(`/warehouses/${warehouseId}/vehicle-configurations`, { method: 'POST', body: jsonBody(input) }),
-  updateVehicleConfiguration: (id: UUID, input: VehicleConfigurationInput) =>
-    request<Vehicle>(`/vehicles/${id}/configuration`, { method: 'PUT', body: jsonBody(input) }),
-  deleteVehicle: (id: UUID) => request<void>(`/vehicles/${id}`, { method: 'DELETE' }),
+  updateVehicle: (id: UUID, input: Partial<VehicleInput>, expectedVersion: number) =>
+    request<Vehicle>(`/vehicles/${id}`, { method: 'PATCH', body: jsonBody({ ...input, expected_version: expectedVersion }) }),
+  createVehicleConfiguration: (warehouseId: UUID, input: VehicleConfigurationInput, idempotencyKey: UUID) =>
+    request<Vehicle>(`/warehouses/${warehouseId}/vehicle-configurations`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: jsonBody(input) }),
+  updateVehicleConfiguration: (id: UUID, input: VehicleConfigurationInput, expectedVersion: number) =>
+    request<Vehicle>(`/vehicles/${id}/configuration`, { method: 'PUT', body: jsonBody({ ...input, vehicle: { ...input.vehicle, expected_version: expectedVersion } }) }),
+  deleteVehicle: (id: UUID, expectedVersion: number) => request<void>(`/vehicles/${id}?expected_version=${encodeURIComponent(String(expectedVersion))}`, { method: 'DELETE' }),
 
-  createTrailer: (warehouseId: UUID, input: TrailerInput) =>
-    request<Trailer>(`/warehouses/${warehouseId}/trailers`, { method: 'POST', body: jsonBody(input) }),
-  updateTrailer: (id: UUID, input: Partial<TrailerInput>) =>
-    request<Trailer>(`/trailers/${id}`, { method: 'PATCH', body: jsonBody(input) }),
-  deleteTrailer: (id: UUID) => request<void>(`/trailers/${id}`, { method: 'DELETE' }),
+  createTrailer: (warehouseId: UUID, input: TrailerInput, idempotencyKey: UUID) =>
+    request<Trailer>(`/warehouses/${warehouseId}/trailers`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: jsonBody(input) }),
+  updateTrailer: (id: UUID, input: Partial<TrailerInput>, expectedVersion: number) =>
+    request<Trailer>(`/trailers/${id}`, { method: 'PATCH', body: jsonBody({ ...input, expected_version: expectedVersion }) }),
+  deleteTrailer: (id: UUID, expectedVersion: number) => request<void>(`/trailers/${id}?expected_version=${encodeURIComponent(String(expectedVersion))}`, { method: 'DELETE' }),
 
-  createShift: (warehouseId: UUID, input: ShiftInput) =>
-    request<DriverShift>(`/warehouses/${warehouseId}/shifts`, { method: 'POST', body: jsonBody(input) }),
-  updateShift: (id: UUID, input: Partial<ShiftInput>) =>
-    request<DriverShift>(`/shifts/${id}`, { method: 'PATCH', body: jsonBody(input) }),
-  deleteShift: (id: UUID) => request<void>(`/shifts/${id}`, { method: 'DELETE' }),
+  createShift: (warehouseId: UUID, input: ShiftInput, idempotencyKey: UUID) =>
+    request<DriverShift>(`/warehouses/${warehouseId}/shifts`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: jsonBody(input) }),
+  updateShift: (id: UUID, input: Partial<ShiftInput>, expectedVersion: number) =>
+    request<DriverShift>(`/shifts/${id}`, { method: 'PATCH', body: jsonBody({ ...input, expected_version: expectedVersion }) }),
+  deleteShift: (id: UUID, expectedVersion: number) => request<void>(`/shifts/${id}?expected_version=${encodeURIComponent(String(expectedVersion))}`, { method: 'DELETE' }),
 
-  createRequest: (warehouseId: UUID, input: LogisticsRequestInput) =>
-    request<LogisticsRequest>(`/warehouses/${warehouseId}/requests`, { method: 'POST', body: jsonBody(input) }),
-  updateRequest: (id: UUID, input: Partial<LogisticsRequestInput>) =>
-    request<LogisticsRequest>(`/requests/${id}`, { method: 'PATCH', body: jsonBody(input) }),
-  scheduleRequest: (id: UUID, input: RequestScheduleInput) =>
-    request<LogisticsRequest>(`/requests/${id}/schedule`, { method: 'POST', body: jsonBody(input) }),
-  deleteRequest: (id: UUID) => request<void>(`/requests/${id}`, { method: 'DELETE' }),
-  splitRequest: (id: UUID, partQuantities?: number[]) => request<LogisticsRequest>(`/requests/${id}/split`, {
+  createRequest: (warehouseId: UUID, input: LogisticsRequestInput, idempotencyKey: UUID) =>
+    request<LogisticsRequest>(`/warehouses/${warehouseId}/requests`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: jsonBody(input) }),
+  updateRequest: (id: UUID, input: Partial<LogisticsRequestInput>, expectedVersion: number) =>
+    request<LogisticsRequest>(`/requests/${id}`, { method: 'PATCH', body: jsonBody({ ...input, expected_version: expectedVersion }) }),
+  createRequestDateOption: (requestId: UUID, input: RequestDateOptionInput, idempotencyKey: UUID) =>
+    request<RequestDateOption>(`/requests/${requestId}/date-options`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: jsonBody(input) }),
+  updateRequestDateOption: (optionId: UUID, input: Partial<RequestDateOptionInput>, expectedVersion: number) =>
+    request<RequestDateOption>(`/request-date-options/${optionId}`, { method: 'PATCH', body: jsonBody({ ...input, expected_version: expectedVersion }) }),
+  deleteRequestDateOption: (optionId: UUID, expectedVersion: number) =>
+    request<void>(`/request-date-options/${optionId}?expected_version=${encodeURIComponent(String(expectedVersion))}`, { method: 'DELETE' }),
+  scheduleRequest: (id: UUID, input: RequestScheduleInput, expectedVersion: number) =>
+    request<LogisticsRequest>(`/requests/${id}/schedule`, { method: 'POST', body: jsonBody({ ...input, expected_version: expectedVersion }) }),
+  deleteRequest: (id: UUID, expectedVersion: number) => request<void>(`/requests/${id}?expected_version=${encodeURIComponent(String(expectedVersion))}`, { method: 'DELETE' }),
+  splitRequest: (id: UUID, partQuantities: number[] | undefined, expectedVersion: number) => request<LogisticsRequest>(`/requests/${id}/split`, {
     method: 'POST',
-    ...(partQuantities ? { body: jsonBody({ part_quantities: partQuantities }) } : {}),
+    body: jsonBody({ expected_version: expectedVersion, ...(partQuantities ? { part_quantities: partQuantities } : {}) }),
   }),
-  saveRequestPlanningDetails: (id: UUID, input: RequestPlanningDetailsInput) =>
-    request<LogisticsRequest>(`/requests/${id}/planning-details`, { method: 'POST', body: jsonBody(input) }),
+  saveRequestPlanningDetails: (id: UUID, input: RequestPlanningDetailsInput, expectedVersion: number) =>
+    request<LogisticsRequest>(`/requests/${id}/planning-details`, { method: 'POST', body: jsonBody({ ...input, expected_version: expectedVersion }) }),
+  getRequestRescheduleOptions: (id: UUID, input: RequestRescheduleOptionsInput, signal?: AbortSignal) =>
+    request<RequestRescheduleOptionsRead>(`/requests/${id}/reschedule-options`, {
+      method: 'POST',
+      body: jsonBody(input),
+      ...(signal ? { signal } : {}),
+    }),
+  rescheduleRequest: (id: UUID, input: RequestRescheduleInput, idempotencyKey: UUID) =>
+    request<RequestRescheduleResultRead>(`/requests/${id}/reschedule`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: jsonBody(input),
+    }),
+  retryRequestReschedule: (id: UUID, input: RequestRescheduleRetryInput, idempotencyKey: UUID) =>
+    request<RequestRescheduleResultRead>(`/requests/${id}/reschedule-retry`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: jsonBody(input),
+    }),
   assignRequestToContractor: (id: UUID, contractorWorkerId: UUID) =>
     request<LogisticsRequest>(`/requests/${id}/contractor-assignment`, {
       method: 'POST',
@@ -778,11 +998,11 @@ export const api = {
       body: jsonBody({ expected_version: expectedVersion }),
     }), workspace),
   manualChange: async (planId: UUID, input: ManualChangeInput, workspace: WarehouseWorkspace, currentPlan: RoutePlan) => {
-    const { expected_version, change_type, changed_by, reason, ...payload } = input;
+    const { expected_version, change_type, reason, ...payload } = input;
     return normalizeValidationWithDiagnostics(
       await request<unknown>(`/plans/${planId}/manual-change`, {
         method: 'POST',
-        body: jsonBody({ expected_version, change_type, payload, reason, changed_by }),
+        body: jsonBody({ expected_version, change_type, payload, reason }),
       }),
       workspace,
       currentPlan,
@@ -818,20 +1038,139 @@ export const api = {
   }).then((value) => normalizeValidationWithDiagnostics(value, workspace, currentPlan)),
 };
 
-export async function getWarehouseWorkspace(warehouseId: UUID): Promise<WarehouseWorkspace> {
+export async function getWarehouseWorkspace(
+  warehouseId: UUID,
+  input: WarehouseWorkspacePageInput,
+): Promise<WarehouseWorkspace> {
+  return normalizeWorkspace(await api.getWarehouseWorkspace(warehouseId, input));
+}
+
+/** One decoded server-sent optimizer event. */
+export interface OptimizationStreamEvent {
+  id: string | null;
+  event: string;
+  data: string;
+}
+
+/** Callbacks for one authenticated optimizer event-stream connection. */
+interface OptimizationStreamHandlers {
+  onEvent: (event: OptimizationStreamEvent) => void;
+  onError?: (error: unknown) => void;
+}
+
+function dispatchOptimizationFrame(
+  frame: string,
+  onEvent: (event: OptimizationStreamEvent) => void,
+): void {
+  let id: string | null = null;
+  let event = 'message';
+  const data: string[] = [];
+  for (const line of frame.split('\n')) {
+    if (!line || line.startsWith(':')) continue;
+    const separator = line.indexOf(':');
+    const field = separator < 0 ? line : line.slice(0, separator);
+    const value = separator < 0 ? '' : line.slice(separator + 1).replace(/^ /, '');
+    if (field === 'id') id = value;
+    else if (field === 'event') event = value || 'message';
+    else if (field === 'data') data.push(value);
+  }
+  if (data.length) onEvent({ id, event, data: data.join('\n') });
+}
+
+function dispatchOptimizationFrames(
+  buffer: string,
+  onEvent: (event: OptimizationStreamEvent) => void,
+): string {
+  const normalized = buffer.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+  const frames = normalized.split('\n\n');
+  const remainder = frames.pop() ?? '';
+  frames.forEach((frame) => dispatchOptimizationFrame(frame, onEvent));
+  return remainder;
+}
+
+async function consumeOptimizationStream(
+  body: ReadableStream<Uint8Array>,
+  signal: AbortSignal,
+  onEvent: (event: OptimizationStreamEvent) => void,
+): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
   try {
-    return normalizeWorkspace(await api.getWarehouseWorkspace(warehouseId));
-  } catch (error: unknown) {
-    if (!(error instanceof ApiError) || error.code !== 'RWMS_WORKSPACE_SYNC_INCOMPLETE') throw error;
-    const failureCount = Array.isArray(error.problem?.failures) ? error.problem.failures.length : 0;
-    const rwmsRefreshWarning = failureCount > 0
-      ? `RWMS не обновил доставки и вывозы: ${failureCount}. Показаны последние сохранённые данные; автоматическая синхронизация повторится.`
-      : 'RWMS обновил рабочую область не полностью. Показаны последние сохранённые данные; автоматическая синхронизация повторится.';
-    const workspace = normalizeWorkspace(await api.getWarehouseWorkspace(warehouseId, false));
-    return { ...workspace, rwms_refresh_warning: rwmsRefreshWarning };
+    while (!signal.aborted) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      buffer = dispatchOptimizationFrames(buffer, onEvent);
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) dispatchOptimizationFrame(buffer.replaceAll('\r\n', '\n').replaceAll('\r', '\n'), onEvent);
+  } finally {
+    reader.releaseLock();
   }
 }
 
-export function optimizationStreamUrl(runId: UUID): string {
-  return `${API_PREFIX}/optimization-runs/${runId}/stream`;
+function waitForStreamReconnect(signal: AbortSignal, delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const timer = window.setTimeout(done, delayMs);
+    signal.addEventListener('abort', done, { once: true });
+    function done() {
+      window.clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    }
+  });
+}
+
+/** Opens an authenticated optimizer event stream without exposing the bearer in the URL. */
+export function startOptimizationEventStream(
+  runId: UUID,
+  handlers: OptimizationStreamHandlers,
+): () => void {
+  const controller = new AbortController();
+  void (async () => {
+    let lastEventId: string | null = null;
+    let retryDelayMs = 1_000;
+    while (!controller.signal.aborted) {
+      try {
+        const token = await requireSimulatorAccessToken();
+        if (controller.signal.aborted) return;
+        const headers = new Headers({
+          Accept: 'text/event-stream',
+          Authorization: `Bearer ${token}`,
+          'Cache-Control': 'no-cache',
+        });
+        if (lastEventId) headers.set('Last-Event-ID', lastEventId);
+        const response = await fetch(simulatorApiUrl(`/optimization-runs/${runId}/stream`), {
+          method: 'GET',
+          headers,
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        if (!response.ok) await parseResponse<never>(response);
+        if (!response.body) throw new Error('Поток событий оптимизации недоступен');
+        await consumeOptimizationStream(response.body, controller.signal, (event) => {
+          if (event.id) lastEventId = event.id;
+          handlers.onEvent(event);
+          if (event.event === 'run_terminal') controller.abort();
+        });
+        retryDelayMs = 1_000;
+      } catch (error: unknown) {
+        if (controller.signal.aborted) return;
+        if (error instanceof ApiError && error.status < 500) {
+          handlers.onError?.(error);
+          return;
+        }
+      }
+      if (!controller.signal.aborted) {
+        await waitForStreamReconnect(controller.signal, retryDelayMs);
+        retryDelayMs = Math.min(retryDelayMs * 2, 8_000);
+      }
+    }
+  })();
+  return () => controller.abort();
 }

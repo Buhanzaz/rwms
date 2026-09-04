@@ -13,7 +13,10 @@ public class WarehouseOutboxRecoveryService {
   }
 
   public WarehouseOutboxRecoveryStore.RecoveryResult recover(
-      UUID eventId, long expectedReviewVersion, UUID reviewedBySubjectId, String reason) {
+      UUID eventId,
+      long expectedReviewVersion,
+      UUID reviewedBySubjectId,
+      String reason) {
     return store.recover(eventId, expectedReviewVersion, reviewedBySubjectId, reason);
   }
 }

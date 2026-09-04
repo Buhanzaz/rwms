@@ -8,10 +8,13 @@ from datetime import date
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.main import create_app
+from app.models import Trailer
+from tests.auth import admin_access_token_verifier
 from tests.factories import make_warehouse
 
 pytestmark = pytest.mark.integration
@@ -20,7 +23,7 @@ pytestmark = pytest.mark.integration
 def _application(session: AsyncSession) -> FastAPI:
     """Bind HTTP requests to the rollback-isolated integration session."""
 
-    application = create_app()
+    application = create_app(access_token_verifier=admin_access_token_verifier())
 
     async def session_override() -> AsyncIterator[AsyncSession]:
         """Share one test transaction across endpoint calls."""
@@ -117,11 +120,13 @@ async def test_full_vehicle_configuration_and_cargo_flow(db_session: AsyncSessio
         trailer = await client.post(
             f"/api/warehouses/{warehouse.id}/trailers",
             json=_trailer_payload(),
+            headers={"Idempotency-Key": "truck-flow-trailer"},
         )
         assert trailer.status_code == 201, trailer.text
         vehicle = await client.post(
             f"/api/warehouses/{warehouse.id}/vehicle-configurations",
             json=_vehicle_payload(trailer.json()["id"]),
+            headers={"Idempotency-Key": "truck-flow-vehicle"},
         )
         assert vehicle.status_code == 201, vehicle.text
         assert len(vehicle.json()["load_profiles"]) == 4
@@ -147,6 +152,7 @@ async def test_full_vehicle_configuration_and_cargo_flow(db_session: AsyncSessio
                 "trailer_access_allowed": True,
                 "date_options": [{"date": date(2026, 8, 30).isoformat()}],
             },
+            headers={"Idempotency-Key": "truck-flow-request"},
         )
         assert request.status_code == 201, request.text
         assert request.json()["mandatory"] is True
@@ -177,11 +183,92 @@ async def test_vehicle_cannot_reference_another_warehouse_trailer(
         foreign_trailer = await client.post(
             f"/api/warehouses/{second.id}/trailers",
             json=_trailer_payload("FOREIGN"),
+            headers={"Idempotency-Key": "foreign-trailer"},
         )
         assert foreign_trailer.status_code == 201
         rejected = await client.post(
             f"/api/warehouses/{first.id}/vehicle-configurations",
             json=_vehicle_payload(foreign_trailer.json()["id"]),
+            headers={"Idempotency-Key": "foreign-vehicle"},
         )
     assert rejected.status_code == 422
     assert rejected.json()["code"] == "TRAILER_WAREHOUSE_MISMATCH"
+
+
+@pytest.mark.asyncio
+async def test_retryable_create_replays_and_rejects_changed_payload(
+    db_session: AsyncSession,
+) -> None:
+    """One actor/key creates once, replays the resource, and conflicts on payload drift."""
+
+    warehouse = await make_warehouse(db_session)
+    url = f"/api/warehouses/{warehouse.id}/trailers"
+    headers = {"Idempotency-Key": "stable-trailer-create"}
+    async with AsyncClient(
+        transport=ASGITransport(app=_application(db_session)),
+        base_url="http://test",
+    ) as client:
+        created = await client.post(url, json=_trailer_payload(), headers=headers)
+        replayed = await client.post(url, json=_trailer_payload(), headers=headers)
+        changed = await client.post(
+            url,
+            json=_trailer_payload("CHANGED"),
+            headers=headers,
+        )
+
+    assert created.status_code == 201, created.text
+    assert replayed.status_code == 201, replayed.text
+    assert replayed.json() == created.json()
+    assert changed.status_code == 409, changed.text
+    assert changed.json()["code"] == "IDEMPOTENCY_KEY_CONFLICT"
+    assert (
+        await db_session.scalar(
+            select(func.count(Trailer.id)).where(Trailer.warehouse_id == warehouse.id)
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_stale_trailer_update_and_delete_are_version_fenced(
+    db_session: AsyncSession,
+) -> None:
+    """A stale editor cannot overwrite or delete a newer catalog aggregate revision."""
+
+    warehouse = await make_warehouse(db_session)
+    url = f"/api/warehouses/{warehouse.id}/trailers"
+    async with AsyncClient(
+        transport=ASGITransport(app=_application(db_session)),
+        base_url="http://test",
+    ) as client:
+        created = await client.post(
+            url,
+            json=_trailer_payload(),
+            headers={"Idempotency-Key": "versioned-trailer-create"},
+        )
+        trailer_id = created.json()["id"]
+        updated = await client.patch(
+            f"/api/trailers/{trailer_id}",
+            json={"expected_version": 1, "name": "Updated trailer"},
+        )
+        stale_update = await client.patch(
+            f"/api/trailers/{trailer_id}",
+            json={"expected_version": 1, "name": "Stale label"},
+        )
+        stale_delete = await client.delete(
+            f"/api/trailers/{trailer_id}",
+            params={"expected_version": 1},
+        )
+        deleted = await client.delete(
+            f"/api/trailers/{trailer_id}",
+            params={"expected_version": 2},
+        )
+
+    assert created.status_code == 201, created.text
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["version"] == 2
+    assert stale_update.status_code == 409
+    assert stale_update.json()["code"] == "CATALOG_VERSION_CONFLICT"
+    assert stale_delete.status_code == 409
+    assert stale_delete.json()["code"] == "CATALOG_VERSION_CONFLICT"
+    assert deleted.status_code == 204, deleted.text

@@ -50,6 +50,7 @@ class AuthInventoryServiceClientIntegrationTest {
         assertExactToken("maintenance.inventory");
         assertExactToken("logistics.inventory");
         assertExactToken("media.inventory");
+        assertExactToken("task-board.inventory-calendar.read");
     }
 
     @Test
@@ -59,6 +60,7 @@ class AuthInventoryServiceClientIntegrationTest {
         assertInvalidScope(tokenRequest("rwms.write"));
         assertInvalidScope(tokenRequest("asset.internal"));
         assertInvalidScope(tokenRequest("task-board.task-sync"));
+        assertInvalidScope(tokenRequest("task-board.inventory-calendar.read asset.inventory"));
         assertInvalidScope(tokenRequest("media.write"));
         assertInvalidScope(tokenRequest("logistics.write"));
     }

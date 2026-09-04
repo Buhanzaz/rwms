@@ -1,12 +1,16 @@
+import { userFacingApiMessage } from "@/lib/user-facing-error"
+
 export class ApiError extends Error {
   readonly status: number
   readonly code: string | null
+  readonly diagnosticMessage: string
 
   constructor(message: string, status: number, code: string | null = null) {
-    super(message)
+    super(userFacingApiMessage({ detail: message, status, code }))
     this.name = "ApiError"
     this.status = status
     this.code = code
+    this.diagnosticMessage = message
   }
 }
 
@@ -29,7 +33,7 @@ function asErrorEnvelope(value: unknown): ErrorEnvelope | null {
 }
 
 async function readErrorDetails(response: Response) {
-  const fallback = `Запрос завершился с ошибкой ${response.status}`
+  const fallback = `HTTP response status ${response.status}`
   const text = await response.text().catch(() => "")
 
   try {
@@ -58,11 +62,28 @@ export async function apiErrorFromResponse(
   return new ApiError(error.message, response.status, error.code)
 }
 
-export async function bearerRequest<T>(
+/** Converts transport and parsing failures into a safe panel API error. */
+export function apiErrorFromRequestFailure(cause: unknown): ApiError {
+  if (cause instanceof ApiError) return cause
+  const aborted = errorLikeProperty(cause, "name") === "AbortError"
+  return new ApiError(
+    diagnosticMessage(cause),
+    0,
+    aborted ? "REQUEST_ABORTED" : "NETWORK_ERROR"
+  )
+}
+
+/** Converts an invalid success payload into a safe panel API error. */
+export function invalidApiResponseError(cause: unknown): ApiError {
+  if (cause instanceof ApiError) return cause
+  return new ApiError(diagnosticMessage(cause), 502, "INVALID_API_RESPONSE")
+}
+
+async function bearerResponse(
   accessToken: string,
   input: string | URL,
   init: RequestInit = {}
-): Promise<T> {
+) {
   if (!accessToken.trim()) {
     throw new Error("Не получен токен доступа.")
   }
@@ -75,15 +96,72 @@ export async function bearerRequest<T>(
     headers.set("Content-Type", "application/json")
   }
 
-  const response = await fetch(input, { ...init, headers })
+  let response: Response
+  try {
+    response = await fetch(input, { ...init, headers })
+  } catch (error) {
+    throw apiErrorFromRequestFailure(error)
+  }
 
   if (!response.ok) {
     throw await apiErrorFromResponse(response)
   }
 
+  return response
+}
+
+async function successBody<T>(response: Response): Promise<T> {
   if (response.status === 204) {
     return undefined as T
   }
 
-  return (await response.json()) as T
+  try {
+    return (await response.json()) as T
+  } catch (error) {
+    throw invalidApiResponseError(error)
+  }
+}
+
+/** Returns a parsed bearer response together with its contract metadata headers. */
+export async function bearerRequestWithResponse<T>(
+  accessToken: string,
+  input: string | URL,
+  init: RequestInit = {}
+) {
+  const response = await bearerResponse(accessToken, input, init)
+  return { data: await successBody<T>(response), response }
+}
+
+export async function bearerRequest<T>(
+  accessToken: string,
+  input: string | URL,
+  init: RequestInit = {}
+): Promise<T> {
+  return (await bearerRequestWithResponse<T>(accessToken, input, init)).data
+}
+
+function diagnosticMessage(cause: unknown): string {
+  const message = errorLikeProperty(cause, "message")
+  if (message) return message
+  return typeof cause === "string" && cause.trim()
+    ? cause
+    : "Unknown transport failure"
+}
+
+function errorLikeProperty(
+  cause: unknown,
+  property: "message" | "name"
+): string | null {
+  if (
+    (typeof cause !== "object" && typeof cause !== "function") ||
+    cause === null
+  ) {
+    return null
+  }
+  try {
+    const value = Reflect.get(cause, property)
+    return typeof value === "string" && value.trim() ? value : null
+  } catch {
+    return null
+  }
 }

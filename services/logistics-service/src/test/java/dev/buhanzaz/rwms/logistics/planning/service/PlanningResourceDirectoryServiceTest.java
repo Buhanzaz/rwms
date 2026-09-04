@@ -63,6 +63,53 @@ class PlanningResourceDirectoryServiceTest {
   }
 
   @Test
+  void preservesNullIslandIdentityButMarksItNotReadyForRouting() {
+    LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
+    UUID zeroAxisWarehouseId = UUID.randomUUID();
+    WarehouseIdentity nullIsland =
+        new WarehouseIdentity(
+            WAREHOUSE,
+            4,
+            true,
+            "Склад без координат",
+            "Город",
+            null,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            "Europe/Moscow",
+            false);
+    WarehouseIdentity zeroAxis =
+        new WarehouseIdentity(
+            zeroAxisWarehouseId,
+            1,
+            true,
+            "Склад на экваторе",
+            "Город",
+            null,
+            BigDecimal.ZERO,
+            new BigDecimal("31.200000"),
+            "Europe/Moscow",
+            false);
+    when(dependencies.listWarehouseIdentities()).thenReturn(List.of(nullIsland, zeroAxis));
+
+    var resources = new PlanningResourceDirectoryService(dependencies).warehouses();
+
+    assertThat(resources)
+        .filteredOn(warehouse -> warehouse.warehouseId().equals(WAREHOUSE))
+        .singleElement()
+        .satisfies(
+            warehouse -> {
+              assertThat(warehouse.latitude()).isEqualByComparingTo("0");
+              assertThat(warehouse.longitude()).isEqualByComparingTo("0");
+              assertThat(warehouse.routingReady()).isFalse();
+            });
+    assertThat(resources)
+        .filteredOn(warehouse -> warehouse.warehouseId().equals(zeroAxisWarehouseId))
+        .singleElement()
+        .satisfies(warehouse -> assertThat(warehouse.routingReady()).isTrue());
+  }
+
+  @Test
   void exposesOnDemandContractorWithoutDatesAndPreservesIncomingStaffInterval() {
     LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
     WarehouseIdentity warehouse =

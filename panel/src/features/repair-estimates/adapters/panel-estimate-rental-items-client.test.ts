@@ -65,6 +65,7 @@ function returnDocument(
     id: "0f38fbbc-98c8-4fbd-94a3-68e37dd2ec1e",
     version: 3,
     documentType: "RETURN",
+    customerDeliveryPurpose: null,
     state: "INSPECTION_REQUIRED",
     warehouseId: WAREHOUSE_ID,
     destinationWarehouseId: null,

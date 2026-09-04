@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rwms.local/contracts/events/auth/auth-events-v1.schema.json",
   "title": "RWMS auth-service event facts v1",
-  "description": "Sanitized F4A authorization facts. Baseline facts are service-local and are never published.",
+  "description": "Sanitized F4A authorization facts. Baseline facts are service-local and are never published. Optional entitlement fields preserve validation of legacy v1 facts while current producers populate them.",
   "type": "object",
   "required": [
     "envelopeVersion",
@@ -146,6 +146,14 @@
       "properties": {
         "subjectId": {"type": "string", "format": "uuid"},
         "active": {"type": "boolean"},
+        "mobileAppAccess": {
+          "type": "boolean",
+          "description": "Manager mobile entitlement. Legacy v1 facts may omit it."
+        },
+        "rentalAccess": {
+          "type": "boolean",
+          "description": "Persisted rental entitlement. Legacy v1 facts may omit it."
+        },
         "globalRole": {"enum": ["SYSTEM_ADMIN", "WMS_ADMIN", "WAREHOUSE_MANAGER", "RENTAL_MANAGER", "CUSTOMER", "VIEWER"]},
         "profileRevision": {"type": "string", "format": "uuid"},
         "warehouseAccess": {"type": "array", "items": {"$ref": "#/$defs/warehouseGrant"}}

@@ -8,25 +8,33 @@ import (
 )
 
 // CabinPresentationSnapshotRecord is the deliberately narrow projection used
-// by logistics to assemble a cabin presentation. It contains no object-store
-// locator, filename, content type, or other media metadata.
+// by logistics presentation and asset creation-proof reads. Besides opaque
+// display references it carries only the immutable finalized source facts
+// needed by the asset proof; it contains no object-store locator, filename,
+// signed URL or raw bytes.
 type CabinPresentationSnapshotRecord struct {
-	CabinID      uuid.UUID
-	CoverMediaID *uuid.UUID
-	PhotoCount   int64
-	Photos       []CabinPresentationPhotoRecord
+	CabinID        uuid.UUID
+	ActiveFolderID *uuid.UUID
+	CoverMediaID   *uuid.UUID
+	PhotoCount     int64
+	Photos         []CabinPresentationPhotoRecord
 }
 
-// CabinPresentationPhotoRecord names one currently displayable cabin image and
-// only the derived variants that may be requested through the private stream.
-// SortOrder is the zero-based cover-first presentation position, not the
-// retained CABIN association order.
+// CabinPresentationPhotoRecord names one currently displayable cabin image,
+// the derived variants that may be requested through the private stream and
+// the immutable finalized source facts used by asset-service. SortOrder is the
+// zero-based cover-first presentation position; PhotoIndex is the retained
+// CABIN association order used to match a creation manifest.
 type CabinPresentationPhotoRecord struct {
-	MediaID    uuid.UUID
-	Generation int
-	SortOrder  int64
-	HasSmall   bool
-	HasLarge   bool
+	MediaID             uuid.UUID
+	Generation          int
+	SortOrder           int64
+	PhotoIndex          int64
+	SourceChecksum      string
+	SourceContentType   string
+	SourceContentLength int64
+	HasSmall            bool
+	HasLarge            bool
 }
 
 // ReadCabinPresentationSnapshots returns a stable, bounded read projection for
@@ -69,11 +77,13 @@ func (repository *Repository) ReadCabinPresentationSnapshots(
 	defer tx.Rollback(ctx)
 
 	rows, err := tx.Query(ctx, `/* media_logistics_cabin_presentation_bindings */
-		select binding.owner_id
+		select binding.owner_id,library.active_gallery_folder_id
 		from unnest($2::text[]) with ordinality as requested(owner_id, position)
 		join media_owner_binding binding
 		  on binding.owner_type='CABIN' and binding.owner_id=requested.owner_id
 		 and binding.warehouse_id=$1 and binding.active
+		left join media_cabin_photo_library library
+		  on library.cabin_id::text=binding.owner_id
 		join media_consumer_aggregate_checkpoint checkpoint
 		  on checkpoint.consumer_name=binding.proof_consumer_name
 		 and checkpoint.aggregate_type=binding.proof_aggregate_type
@@ -90,13 +100,16 @@ func (repository *Repository) ReadCabinPresentationSnapshots(
 		return err
 	}
 	authorized := make([]string, 0, len(cabinIDs))
+	activeFolderIDs := make(map[string]*uuid.UUID, len(cabinIDs))
 	for rows.Next() {
 		var ownerID string
-		if err := rows.Scan(&ownerID); err != nil {
+		var activeFolderID *uuid.UUID
+		if err := rows.Scan(&ownerID, &activeFolderID); err != nil {
 			rows.Close()
 			return err
 		}
 		authorized = append(authorized, ownerID)
+		activeFolderIDs[ownerID] = activeFolderID
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -113,8 +126,9 @@ func (repository *Repository) ReadCabinPresentationSnapshots(
 		}
 		byCabinID[ownerID] = len(records)
 		records = append(records, CabinPresentationSnapshotRecord{
-			CabinID: cabinID,
-			Photos:  make([]CabinPresentationPhotoRecord, 0),
+			CabinID:        cabinID,
+			ActiveFolderID: activeFolderIDs[ownerID],
+			Photos:         make([]CabinPresentationPhotoRecord, 0),
 		})
 	}
 	if len(authorized) == 0 {
@@ -129,6 +143,8 @@ func (repository *Repository) ReadCabinPresentationSnapshots(
 			select photo.cabin_id::text as cabin_id,asset.media_id,
 				asset.current_generation,photo.media_generation,
 				asset.processing_status,photo.sort_order as association_sort_order,
+				asset.source_checksum_sha256,asset.finalized_content_type,
+				asset.finalized_size_bytes,
 				photo.attached_at,(asset.media_id=library.cover_media_id) as is_cover
 			from media_cabin_photo photo
 			join media_cabin_photo_library library on library.cabin_id=photo.cabin_id
@@ -144,6 +160,8 @@ func (repository *Repository) ReadCabinPresentationSnapshots(
 		), ready_photos as materialized (
 			select image.cabin_id,image.media_id,image.current_generation,
 				image.association_sort_order,image.attached_at,image.is_cover,
+				image.source_checksum_sha256,image.finalized_content_type,
+				image.finalized_size_bytes,
 				bool_or(variant.variant='SMALL') as has_small,
 				bool_or(variant.variant='LARGE') as has_large
 			from image_assets image
@@ -153,10 +171,16 @@ func (repository *Repository) ReadCabinPresentationSnapshots(
 				 and variant.object_version_id<>''
 			where image.media_generation=image.current_generation
 			  and image.processing_status='READY' and image.current_generation>0
+			  and image.source_checksum_sha256 is not null
+			  and image.finalized_content_type in ('image/jpeg','image/png','image/webp')
+			  and image.finalized_size_bytes>0
 			group by image.cabin_id,image.media_id,image.current_generation,
-				image.association_sort_order,image.attached_at,image.is_cover
+				image.association_sort_order,image.attached_at,image.is_cover,
+				image.source_checksum_sha256,image.finalized_content_type,
+				image.finalized_size_bytes
 		), ranked_photos as (
-			select cabin_id,media_id,current_generation,
+			select cabin_id,media_id,current_generation,association_sort_order,
+				source_checksum_sha256,finalized_content_type,finalized_size_bytes,
 			(row_number() over (
 				partition by cabin_id
 				order by is_cover desc,association_sort_order,attached_at,media_id
@@ -166,6 +190,8 @@ func (repository *Repository) ReadCabinPresentationSnapshots(
 		)
 		select counts.cabin_id,counts.photo_count,ranked.media_id,
 			ranked.current_generation,ranked.presentation_sort_order,
+			ranked.association_sort_order,ranked.source_checksum_sha256,
+			ranked.finalized_content_type,ranked.finalized_size_bytes,
 			ranked.is_cover,ranked.has_small,ranked.has_large
 		from counts
 		left join ranked_photos ranked on ranked.cabin_id=counts.cabin_id
@@ -182,8 +208,11 @@ func (repository *Repository) ReadCabinPresentationSnapshots(
 		var mediaID *uuid.UUID
 		var generation *int
 		var sortOrder *int64
+		var photoIndex, sourceContentLength *int64
+		var sourceChecksum, sourceContentType *string
 		var isCover, hasSmall, hasLarge *bool
 		if err := rows.Scan(&ownerID, &photoCount, &mediaID, &generation, &sortOrder,
+			&photoIndex, &sourceChecksum, &sourceContentType, &sourceContentLength,
 			&isCover, &hasSmall, &hasLarge); err != nil {
 			rows.Close()
 			return err
@@ -195,19 +224,26 @@ func (repository *Repository) ReadCabinPresentationSnapshots(
 		}
 		records[index].PhotoCount = photoCount
 		if mediaID == nil {
-			if generation != nil || sortOrder != nil || isCover != nil || hasSmall != nil || hasLarge != nil {
+			if generation != nil || sortOrder != nil || photoIndex != nil || sourceChecksum != nil ||
+				sourceContentType != nil || sourceContentLength != nil || isCover != nil ||
+				hasSmall != nil || hasLarge != nil {
 				rows.Close()
 				return ErrConflict
 			}
 			continue
 		}
-		if generation == nil || sortOrder == nil || isCover == nil || hasSmall == nil || hasLarge == nil ||
-			*mediaID == uuid.Nil || *generation <= 0 || (!*hasSmall && !*hasLarge) {
+		if generation == nil || sortOrder == nil || photoIndex == nil || sourceChecksum == nil ||
+			sourceContentType == nil || sourceContentLength == nil || isCover == nil ||
+			hasSmall == nil || hasLarge == nil || *mediaID == uuid.Nil || *generation <= 0 ||
+			*photoIndex < 0 || *sourceChecksum == "" || *sourceContentLength <= 0 ||
+			(!*hasSmall && !*hasLarge) {
 			rows.Close()
 			return ErrConflict
 		}
 		photo := CabinPresentationPhotoRecord{
 			MediaID: *mediaID, Generation: *generation, SortOrder: *sortOrder,
+			PhotoIndex: *photoIndex, SourceChecksum: *sourceChecksum,
+			SourceContentType: *sourceContentType, SourceContentLength: *sourceContentLength,
 			HasSmall: *hasSmall, HasLarge: *hasLarge,
 		}
 		records[index].Photos = append(records[index].Photos, photo)

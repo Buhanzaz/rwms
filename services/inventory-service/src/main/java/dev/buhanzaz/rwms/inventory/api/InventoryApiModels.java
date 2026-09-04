@@ -268,17 +268,12 @@ public final class InventoryApiModels {
 
   public record PlanningSettingsUpdateRequest(
       @Min(0) long expectedSettingsRevision,
-      @Min(1) @Max(1000) int movementDailyCapacity,
-      @Min(1) @Max(1000) int repairDailyCapacity,
-      @NotNull @Size(min = 1, max = 7) List<@NotBlank String> workingWeekdays,
       @NotNull @Size(max = 3660) List<@NotNull LocalDate> holidays) {}
 
   public record PlanningSettingsView(
       UUID warehouseId,
       long settingsRevision,
-      int movementDailyCapacity,
-      int repairDailyCapacity,
-      List<String> workingWeekdays,
+      OffsetDateTime updatedAt,
       List<LocalDate> holidays) {}
 
   public record PrepareFinalPlanRequest(

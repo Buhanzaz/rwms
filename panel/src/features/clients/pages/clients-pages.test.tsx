@@ -72,6 +72,7 @@ const order = {
   version: 2,
   number: "ORD-000042",
   status: "SAVED" as const,
+  customerDeliveryPurpose: "RENTAL_DELIVERY" as const,
   client,
   managerId: client.responsibleManagerId,
   managerDisplayName: "Мария Менеджер",
@@ -227,13 +228,27 @@ describe("client pages", () => {
       <ClientDetailPage />
     )
 
-    expect(await screen.findByText("ORD-000042")).toBeTruthy()
+    expect(await screen.findByRole("link", { name: "ORD-000042" })).toBeTruthy()
     expect(
       screen.getByRole("link", { name: "ORD-000042" }).getAttribute("href")
     ).toBe(`/orders/${ORDER_ID}`)
+    const mobileOrderCard = screen.getByRole("link", {
+      name: "Открыть заказ ORD-000042",
+    })
+    expect(mobileOrderCard.getAttribute("href")).toBe(`/orders/${ORDER_ID}`)
+    expect(mobileOrderCard.className).toContain("md:hidden")
+    expect(within(mobileOrderCard).getByText("Сохранён")).toBeTruthy()
+    expect(
+      within(mobileOrderCard).getByText("Москва, Складская, 1")
+    ).toBeTruthy()
+    const desktopOrders = screen.getByRole("table")
+    expect(desktopOrders.className).toContain("hidden")
+    expect(desktopOrders.className).toContain("md:table")
     expect(screen.getByText("Не указан")).toBeTruthy()
     expect(screen.getByText(client.responsibleManagerId)).toBeTruthy()
-    expect(screen.getByText("Москва, Складская, 1")).toBeTruthy()
+    expect(
+      within(screen.getByRole("table")).getByText("Москва, Складская, 1")
+    ).toBeTruthy()
     expect(screen.getByText("Основной телефон")).toBeTruthy()
     expect(screen.getByText("Контактное лицо")).toBeTruthy()
     expect(screen.getByText("Пётр Петров")).toBeTruthy()
@@ -250,7 +265,9 @@ describe("client pages", () => {
       screen.getByRole("link", { name: /Создать заказ/ }).getAttribute("href")
     ).toBe(`/orders/new?clientId=${CLIENT_ID}`)
 
-    const orderRow = screen.getByLabelText("Открыть заказ ORD-000042")
+    const orderRow = screen.getByRole("row", {
+      name: "Открыть заказ ORD-000042",
+    })
     fireEvent.keyDown(orderRow, { key: "Enter" })
     expect(
       (await screen.findByLabelText("Текущий маршрут")).textContent

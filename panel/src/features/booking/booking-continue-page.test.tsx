@@ -186,6 +186,7 @@ function order() {
     version: 3,
     number: "З-101",
     status: "DRAFT",
+    customerDeliveryPurpose: "RENTAL_DELIVERY",
     client: {
       id: CLIENT_ID,
       version: 1,

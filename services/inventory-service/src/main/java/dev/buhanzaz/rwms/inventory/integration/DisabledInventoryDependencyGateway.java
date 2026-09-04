@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.inventory.integration;
 
 import dev.buhanzaz.rwms.inventory.service.InventoryException;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -27,6 +28,11 @@ final class DisabledInventoryDependencyGateway implements InventoryDependencyGat
   @Override
   public WarehouseAdmission warehouseAdmission(
       UUID warehouseId, WarehouseOperationDirection direction) {
+    throw unavailable();
+  }
+
+  @Override
+  public WorkCalendarSnapshot workCalendarSnapshot(UUID warehouseId, LocalDate from, LocalDate through) {
     throw unavailable();
   }
 

@@ -42,6 +42,9 @@ import tools.jackson.databind.ObjectMapper;
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
 public class RentalInquiryCabinSelectionStore {
+  private static final String DOWNSTREAM_KEY_DOMAIN =
+      "rwms:logistics:rental-inquiry-cabin-selection:v1";
+
   private final RentalInquiryRepository inquiries;
   private final RentalInquirySelectionReceiptRepository receipts;
   private final RentalSettingsService settings;
@@ -67,7 +70,9 @@ public class RentalInquiryCabinSelectionStore {
         hash(write(new SelectionFingerprint(inquiryId, request.warehouseId(), ids)));
 
     RentalInquirySelectionReceipt existing =
-        receipts.findByPublicKeyForUpdate(actor.subjectId(), publicIdempotencyKey).orElse(null);
+        receipts
+            .findByPublicKeyForUpdate(actor.subjectId(), publicIdempotencyKey)
+            .orElse(null);
     if (existing != null) {
       if (!existing.matchesRequest(requestHash)) {
         throw conflict(
@@ -79,7 +84,8 @@ public class RentalInquiryCabinSelectionStore {
 
     RentalInquirySelectionReceipt active =
         receipts
-            .findByInquiryAndStateForUpdate(inquiryId, RentalInquirySelectionReceiptState.PREPARED)
+            .findByInquiryAndStateForUpdate(
+                inquiryId, RentalInquirySelectionReceiptState.PREPARED)
             .orElse(null);
     if (active != null) {
       if (!active.commandExpiredAt(timestamp)) {
@@ -110,6 +116,7 @@ public class RentalInquiryCabinSelectionStore {
                 inquiryId,
                 actor.subjectId(),
                 publicIdempotencyKey,
+                downstreamKey(actor.subjectId(), publicIdempotencyKey),
                 requestHash,
                 request.warehouseId(),
                 commandType,
@@ -132,7 +139,8 @@ public class RentalInquiryCabinSelectionStore {
     OffsetDateTime timestamp = now();
     RentalInquiry inquiry = requiredForUpdate(prepared.inquiryId());
     requireOwnedActive(actor, inquiry);
-    RentalInquirySelectionReceipt receipt = requiredReceiptForUpdate(prepared.receiptId());
+    RentalInquirySelectionReceipt receipt =
+        requiredReceiptForUpdate(prepared.receiptId());
     requirePreparedIdentity(actor, prepared, receipt);
     requireReceiptAuthority(actor, inquiry, receipt);
     if (receipt.getState() == RentalInquirySelectionReceiptState.COMPLETED) {
@@ -161,7 +169,8 @@ public class RentalInquiryCabinSelectionStore {
     OffsetDateTime timestamp = now();
     RentalInquiry inquiry = requiredForUpdate(prepared.inquiryId());
     requireOwnedActive(actor, inquiry);
-    RentalInquirySelectionReceipt receipt = requiredReceiptForUpdate(prepared.receiptId());
+    RentalInquirySelectionReceipt receipt =
+        requiredReceiptForUpdate(prepared.receiptId());
     requirePreparedIdentity(actor, prepared, receipt);
     requireReceiptAuthority(actor, inquiry, receipt);
     if (receipt.getState() == RentalInquirySelectionReceiptState.COMPLETED) {
@@ -237,7 +246,8 @@ public class RentalInquiryCabinSelectionStore {
         || !prepared.inquiryId().equals(receipt.getInquiryId())
         || !prepared.warehouseId().equals(receipt.getWarehouseId())
         || !actor.subjectId().equals(receipt.getSubjectId())
-        || !prepared.idempotencyKey().equals(receipt.getPublicIdempotencyKey())
+        || !prepared.publicIdempotencyKey().equals(receipt.getPublicIdempotencyKey())
+        || !prepared.downstreamIdempotencyKey().equals(receipt.getDownstreamIdempotencyKey())
         || !prepared.exactRequestBody().equals(receipt.getDownstreamRequestBody())
         || prepared.commandType() != receipt.getCommandType()
         || !prepared.commandExpiresAt().equals(receipt.getCommandExpiresAt())
@@ -318,6 +328,7 @@ public class RentalInquiryCabinSelectionStore {
               receipt.getCommandExpiresAt(),
               receipt.getHoldExpiresAt(),
               receipt.getPublicIdempotencyKey(),
+              receipt.getDownstreamIdempotencyKey(),
               receipt.getDownstreamRequestBody(),
               readIds(receipt)),
           response);
@@ -401,6 +412,16 @@ public class RentalInquiryCabinSelectionStore {
     }
   }
 
+  private static UUID downstreamKey(UUID subjectId, UUID publicIdempotencyKey) {
+    String material =
+        DOWNSTREAM_KEY_DOMAIN
+            + '\u001f'
+            + subjectId
+            + '\u001f'
+            + publicIdempotencyKey;
+    return UUID.nameUUIDFromBytes(material.getBytes(StandardCharsets.UTF_8));
+  }
+
   private OffsetDateTime now() {
     return OffsetDateTime.now(clock).truncatedTo(ChronoUnit.MICROS);
   }
@@ -442,7 +463,8 @@ public class RentalInquiryCabinSelectionStore {
       RentalInquirySelectionCommandType commandType,
       OffsetDateTime commandExpiresAt,
       OffsetDateTime expiresAt,
-      UUID idempotencyKey,
+      UUID publicIdempotencyKey,
+      UUID downstreamIdempotencyKey,
       String exactRequestBody,
       List<UUID> rentalItemIds) {}
 
@@ -465,6 +487,7 @@ public class RentalInquiryCabinSelectionStore {
               receipt.getCommandExpiresAt(),
               receipt.getHoldExpiresAt(),
               receipt.getPublicIdempotencyKey(),
+              receipt.getDownstreamIdempotencyKey(),
               receipt.getDownstreamRequestBody(),
               ids),
           null,

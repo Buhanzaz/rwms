@@ -114,3 +114,8 @@ var V19 []byte
 //
 //go:embed V20__driver_shift_media_owner.sql
 var V20 []byte
+
+// V22 contains the immutable Worker profile-avatar owner migration bytes.
+//
+//go:embed V22__task_board_worker_profile_avatar_owner.sql
+var V22 []byte

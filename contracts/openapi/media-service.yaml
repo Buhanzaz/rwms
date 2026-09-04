@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Media Service API
-  version: 1.18.0
+  version: 1.22.0
   license: { name: UNLICENSED }
   description: >-
     Stateful Go media API. PostgreSQL owns metadata and replay state; MinIO
@@ -65,7 +65,9 @@ paths:
         supplies a UUID ownerId. Structured logistics owners supply documentId
         plus lineId and media-service alone derives their internal composite
         identity. LOGISTICS_CUSTOMER_PROFILE instead supplies the authoritative
-        customer-profile UUID as ownerId. LOGISTICS_SHIPMENT and
+        customer-profile UUID as ownerId. TASK_BOARD_WORKER_PROFILE requires
+        task-board-service with exactly media.task-board and uses the active
+        worker UUID as ownerId. LOGISTICS_SHIPMENT and
         LOGISTICS_CUSTOMER_PROFILE proofs bind exactly one CustomerApp subject;
         only that customer can use the bound media scope. Exact
         proofEventId/canonical-body replay is safe. After the first accepted
@@ -304,6 +306,35 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '503': { $ref: '#/components/responses/Unavailable' }
+  /api/internal/media/v1/assets/cabin-creation-snapshots:
+    post:
+      summary: Read current CABIN photo-completion proof for asset-service
+      operationId: readAssetCabinCreationSnapshots
+      description: >-
+        Requires only a SERVICE JWT with sub=client_id=asset-service, audience rwms-services and
+        exactly media.asset. This private read reuses the canonical active CABIN photo-library
+        projection and returns the current active folder, full logical image count, current READY
+        image identities/generations plus their association index and immutable finalized source
+        checksum/content type/byte length, and current READY cover. It exposes no filename,
+        object-store locator, signed URL or bytes. Missing owner proof omits the cabin; processing,
+        folder and cover state remain explicit so asset-service can fail closed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CabinPresentationSnapshotRequest' }
+      responses:
+        '200':
+          description: Bounded current creation-proof snapshots in request order.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CabinCreationSnapshotPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/Unavailable' }
   /api/internal/media/v1/logistics/references/validate:
     post:
       summary: Validate opaque READY media references for one logistics owner
@@ -333,6 +364,91 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /api/internal/media/v1/logistics/contractor-task-executions/{entryId}/workers/{workerId}/evidence/{evidenceId}:
+    post:
+      summary: Stream and finalize one exact contractor task evidence image
+      operationId: uploadLogisticsContractorTaskEvidence
+      description: >-
+        Requires only a SERVICE JWT with sub=client_id=logistics-service,
+        audience rwms-services and exactly media.logistics. The path binds one
+        task-board entry, contractor worker and reserved evidence ID; the
+        required Idempotency-Key must equal evidenceId. Media-service rechecks
+        the current task-board upload audience for that exact worker and
+        warehouse before create and finalize, streams one declared JPEG or
+        WebP to private versioned storage, verifies Content-Length and
+        X-Content-SHA256 against the immutable object, and records the worker
+        as the evidence actor. Exact retries return the same logical media
+        asset and never expose an upload session, object key, storage URL or
+        service credential.
+      parameters:
+        - $ref: '#/components/parameters/ContractorTaskEntryId'
+        - $ref: '#/components/parameters/ContractorWorkerId'
+        - $ref: '#/components/parameters/ContractorEvidenceId'
+        - $ref: '#/components/parameters/WarehouseId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/ContentSHA256'
+        - $ref: '#/components/parameters/ContentLength'
+      requestBody:
+        required: true
+        content:
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/webp: { schema: { type: string, format: binary } }
+      responses:
+        '201':
+          description: New exact evidence asset was streamed and finalized for asynchronous processing.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContractorTaskEvidenceReceipt' }
+        '200':
+          description: Exact evidence ID and immutable request replay.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContractorTaskEvidenceReceipt' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '415': { $ref: '#/components/responses/UnsupportedMedia' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /api/internal/media/v1/logistics/contractor-task-executions/{entryId}/workers/{workerId}/assets/{mediaId}/generations/{generation}/variants/{variant}/content:
+    get:
+      summary: Stream one exact contractor task image derivative
+      operationId: getLogisticsContractorTaskExecutionVariantContent
+      description: >-
+        Requires only a SERVICE JWT with sub=client_id=logistics-service,
+        audience rwms-services and exactly media.logistics. Media-service
+        rechecks the current task-board read audience for the exact entry,
+        worker and warehouse, then streams only the requested SMALL, MEDIUM or
+        LARGE generation from a private immutable object version. The route is
+        not a general media reader: every owner, worker, warehouse, media,
+        generation or variant mismatch is an opaque 404, and no object-store
+        locator, signed URL or public media path is returned.
+      parameters:
+        - $ref: '#/components/parameters/ContractorTaskEntryId'
+        - $ref: '#/components/parameters/ContractorWorkerId'
+        - $ref: '#/components/parameters/MediaId'
+        - $ref: '#/components/parameters/ContractorTaskGeneration'
+        - $ref: '#/components/parameters/ContractorTaskVariant'
+        - $ref: '#/components/parameters/WarehouseId'
+      responses:
+        '200':
+          description: Exact immutable task-board image derivative bytes.
+          headers:
+            Cache-Control: { schema: { const: 'private, no-store' } }
+            Content-Length: { schema: { type: integer, minimum: 1 } }
+            Content-Disposition: { schema: { type: string, pattern: '^inline;' } }
+            X-Content-Type-Options: { schema: { const: nosniff } }
+          content:
+            image/webp: { schema: { type: string, format: binary } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '503': { $ref: '#/components/responses/Unavailable' }
   /api/internal/media/v1/logistics/cabin-presentations/snapshots:
     post:
@@ -410,16 +526,23 @@ paths:
         '503': { $ref: '#/components/responses/Unavailable' }
   /api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content:
     get:
-      summary: Stream one opaque current CABIN presentation variant for logistics
+      summary: Stream one opaque retained CABIN presentation variant for logistics
       operationId: getLogisticsCabinPresentationVariantContent
       description: >-
         Requires only a SERVICE JWT with sub=client_id=logistics-service,
         audience rwms-services and exactly media.logistics. variant is exactly
-        SMALL or LARGE. The service verifies the canonical cabin association,
-        cabinId, warehouseId, READY state, exact current generation and variant
-        existence before streaming immutable bytes. Every scope, owner,
-        warehouse, state, generation and variant mismatch is a uniform 404;
-        no object-store locator or public media route is exposed.
+        SMALL or LARGE. After logistics has validated immutable presentation
+        membership, media-service verifies the retained canonical CABIN
+        association, cabinId, warehouseId, exact requested media_variant
+        generation and variant, then streams that row's pinned MinIO object
+        version. The retained association's media_generation is at least the
+        pinned generation: trusted logistics presentation membership guarantees
+        that the requested tuple was issued by a current snapshot. The read
+        deliberately does not require the media asset to remain current, READY
+        or non-deleted; creation snapshots remain active-folder, READY and
+        current-generation only. Every scope, association, cabin, warehouse,
+        media, generation and variant mismatch is a uniform 404. No object-store
+        locator or public media route is exposed.
       parameters:
         - $ref: '#/components/parameters/MediaId'
         - $ref: '#/components/parameters/CabinPresentationVariant'
@@ -428,7 +551,7 @@ paths:
         - $ref: '#/components/parameters/CabinPresentationGeneration'
       responses:
         '200':
-          description: Exact immutable current-generation derived image bytes.
+          description: Exact immutable presentation-generation derived image bytes.
           headers:
             Cache-Control: { schema: { const: 'private, no-store' } }
             Content-Length: { schema: { type: integer, minimum: 1 } }
@@ -448,7 +571,8 @@ paths:
       description: >-
         Requires USER with rwms.write and warehouse EDIT, CustomerApp USER with
         exactly customer.rental for its subject-bound LOGISTICS_SHIPMENT or
-        LOGISTICS_CUSTOMER_PROFILE owner, or WORKER with exactly
+        LOGISTICS_CUSTOMER_PROFILE owner, or WORKER with exactly worker.tasks
+        for its own TASK_BOARD_WORKER_PROFILE/PROFILE_AVATAR, or with exactly
         one of worker.tasks or driver.tasks only for TASK_BOARD_ENTRY/WORK_RESULT,
         or specifically driver.tasks for DRIVER_SHIFT/SHIFT_EVIDENCE, and a
         current owner proof containing its worker_id. Only proven canonical owner/context
@@ -623,8 +747,9 @@ paths:
         folderId is the media-owned association gallery folder, so a completed
         inventory batch is returned as one folder while all earlier direct,
         task-evidence and inventory folders remain separately grouped.
-        CustomerApp may list only its exact subject-bound shipment or profile
-        avatar owner; manager and worker identities cannot read profile avatars.
+        CustomerApp may list only its exact subject-bound shipment or customer
+        profile avatar owner. A WORKER may list only its own
+        TASK_BOARD_WORKER_PROFILE/PROFILE_AVATAR under the matching warehouse.
         A DRIVER WORKER may list DRIVER_SHIFT/SHIFT_EVIDENCE only with
         driver.tasks, the matching warehouse and worker_id in the active
         current proof's readerWorkerIds; missing, inactive or quarantined proof
@@ -822,6 +947,18 @@ components:
       in: header
       required: true
       schema: { type: string, format: uuid }
+    ContentSHA256:
+      name: X-Content-SHA256
+      in: header
+      required: true
+      description: Lowercase SHA-256 of the exact binary request body.
+      schema: { type: string, pattern: '^[0-9a-f]{64}$' }
+    ContentLength:
+      name: Content-Length
+      in: header
+      required: true
+      description: Exact positive body length, additionally bounded by MEDIA_MAX_UPLOAD_BYTES.
+      schema: { type: integer, format: int64, minimum: 1 }
     UploadSessionId:
       name: uploadSessionId
       in: path
@@ -903,9 +1040,58 @@ components:
       name: generation
       in: query
       required: true
-      description: Current media generation; it is represented as an int64 at the boundary and must fit the stored generation range.
+      description: Media generation pinned by an immutable logistics presentation; it is represented as an int64 at the boundary and must fit the stored generation range.
       schema: { type: integer, format: int64, minimum: 1, maximum: 2147483647 }
+    ContractorTaskEntryId:
+      name: entryId
+      in: path
+      required: true
+      description: Exact task-board entry whose proof owns the media.
+      schema: { type: string, format: uuid }
+    ContractorWorkerId:
+      name: workerId
+      in: path
+      required: true
+      description: Exact contractor worker admitted by the task-board proof.
+      schema: { type: string, format: uuid }
+    ContractorEvidenceId:
+      name: evidenceId
+      in: path
+      required: true
+      description: Reserved evidence UUID and permanent logical client reference.
+      schema: { type: string, format: uuid }
+    ContractorTaskGeneration:
+      name: generation
+      in: path
+      required: true
+      description: Exact persisted media generation.
+      schema: { type: integer, format: int64, minimum: 1, maximum: 2147483647 }
+    ContractorTaskVariant:
+      name: variant
+      in: path
+      required: true
+      description: Exact derived image variant permitted to the contractor execution proxy.
+      schema: { enum: [SMALL, MEDIUM, LARGE] }
   schemas:
+    ContractorTaskEvidenceReceipt:
+      type: object
+      additionalProperties: false
+      required: [mediaId, generation, status]
+      properties:
+        mediaId:
+          description: Opaque stable media identity derived from the exact task, worker and evidence IDs.
+          type: string
+          format: uuid
+        generation:
+          description: Zero while asynchronous processing is pending; positive when a generation exists.
+          type: integer
+          minimum: 0
+        status:
+          enum: [PROCESSING, READY, FAILED]
+    NullableUuid:
+      oneOf:
+        - { type: string, format: uuid }
+        - { type: 'null' }
     AssetImportPreflightRequest:
       type: object
       additionalProperties: false
@@ -1017,6 +1203,7 @@ components:
         - LOGISTICS_SHIPMENT
         - LOGISTICS_TRANSFER
         - LOGISTICS_CUSTOMER_PROFILE
+        - TASK_BOARD_WORKER_PROFILE
         - TASK_BOARD_ENTRY
         - DRIVER_SHIFT
     MediaOwnerContext:
@@ -1085,6 +1272,14 @@ components:
             anyOf:
               - required: [documentId]
               - required: [lineId]
+        - required: [ownerId]
+          properties:
+            ownerType: { const: TASK_BOARD_WORKER_PROFILE }
+          not:
+            anyOf:
+              - required: [documentId]
+              - required: [lineId]
+              - required: [authorizedSubjectId]
     ServiceOwnerProof:
       type: object
       additionalProperties: false
@@ -1133,6 +1328,14 @@ components:
             anyOf:
               - required: [documentId]
               - required: [lineId]
+        - required: [ownerId]
+          properties:
+            ownerType: { const: TASK_BOARD_WORKER_PROFILE }
+          not:
+            anyOf:
+              - required: [documentId]
+              - required: [lineId]
+              - required: [authorizedSubjectId]
     OpaqueReadyMediaReference:
       type: object
       additionalProperties: false
@@ -1344,6 +1547,58 @@ components:
           maxItems: 2
           uniqueItems: true
           items: { enum: [SMALL, LARGE] }
+    CabinCreationSnapshotPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CabinCreationSnapshot' }
+    CabinCreationSnapshot:
+      type: object
+      additionalProperties: false
+      required:
+        - cabinId
+        - warehouseId
+        - activeFolderId
+        - coverMediaId
+        - photoCount
+        - readyPhotos
+      properties:
+        cabinId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        activeFolderId: { $ref: '#/components/schemas/NullableUuid' }
+        coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
+        photoCount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Full current logical IMAGE count in activeFolderId, including non-READY images.
+        readyPhotos:
+          type: array
+          maxItems: 100
+          description: READY current-generation images in cover-first order.
+          items: { $ref: '#/components/schemas/CabinCreationReadyPhoto' }
+    CabinCreationReadyPhoto:
+      type: object
+      additionalProperties: false
+      required: [mediaId, generation, photoIndex, checksumSha256, contentType, contentLength]
+      properties:
+        mediaId: { type: string, format: uuid }
+        generation: { type: integer, minimum: 1 }
+        photoIndex:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Original CABIN association sort order used as the creation-manifest index.
+        checksumSha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: Immutable finalized source checksum, never an object-store locator.
+        contentType: { type: string, enum: [image/jpeg, image/png, image/webp] }
+        contentLength: { type: integer, format: int64, minimum: 1 }
     SetCabinCoverFromTaskEvidenceRequest:
       type: object
       additionalProperties: false
@@ -1477,6 +1732,11 @@ components:
         - required: [ownerId]
           properties:
             ownerType: { const: LOGISTICS_CUSTOMER_PROFILE }
+            context: { const: PROFILE_AVATAR }
+          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }, { required: [clientReferenceId] }] }
+        - required: [ownerId]
+          properties:
+            ownerType: { const: TASK_BOARD_WORKER_PROFILE }
             context: { const: PROFILE_AVATAR }
           not: { anyOf: [{ required: [documentId] }, { required: [lineId] }, { required: [clientReferenceId] }] }
         - required: [ownerId, clientReferenceId]

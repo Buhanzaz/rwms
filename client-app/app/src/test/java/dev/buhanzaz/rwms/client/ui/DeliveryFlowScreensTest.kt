@@ -60,7 +60,7 @@ class DeliveryFlowScreensTest {
         composeRule.onNodeWithTag("delivery-date-2026-09-01").assertExists()
         composeRule.onNodeWithTag("delivery-date-2026-09-02").assertExists()
         composeRule.onNodeWithTag("delivery-date-2026-09-03").assertDoesNotExist()
-        composeRule.onNodeWithText("Стоимость доставки: 12500 ₽ · Особая зона доставки").assertExists()
+        composeRule.onNodeWithText("Стоимость доставки: 12 500 ₽ · Особая зона доставки").assertExists()
         val priceBounds = composeRule.onNodeWithTag("delivery-price").fetchSemanticsNode().boundsInRoot
         val firstDateBounds = composeRule.onNodeWithTag("delivery-date-2026-09-01")
             .fetchSemanticsNode().boundsInRoot
@@ -90,7 +90,7 @@ class DeliveryFlowScreensTest {
             }
         }
 
-        composeRule.onNodeWithText("Тариф для этой точки не определён").assertExists()
+        composeRule.onNodeWithText("Не рассчитана").assertExists()
         composeRule.onNodeWithText("Стоимость доставки: 0 ₽").assertDoesNotExist()
         composeRule.onNodeWithTag("delivery-date-2026-09-01").assertExists()
     }
@@ -265,6 +265,7 @@ class DeliveryFlowScreensTest {
         }
 
         composeRule.onNodeWithText("Невский проспект, 1").assertExists()
+        composeRule.onNodeWithText("12 500 ₽").assertExists()
         composeRule.onNodeWithText("В течение дня. Точное время подтвердит логист").assertExists()
         composeRule.onNodeWithTag("delivery-confirmation-screen")
             .performScrollToNode(hasText("Бытовка cabin-1 — 3 мес."))

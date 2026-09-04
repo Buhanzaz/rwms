@@ -6,34 +6,25 @@ import type {
   Driver,
   DriverShift,
   LogisticsRequest,
-  Trailer,
   Vehicle,
   VehicleLoadConfigurationType,
   Warehouse,
 } from '../domain/types';
 import type {
-  DriverInput,
   LogisticsRequestInput,
-  AvailableDriver,
   ShiftInput,
   VehicleInput,
   VehicleLoadProfileInput,
   WarehouseUpdateInput,
 } from '../api/client';
 import { Button, CheckboxField, Field, Modal, SelectField } from './ui';
-import { TruckConfigurationPreview } from '../features/vehicles/TruckConfigurationPreview';
-import { DateRangePicker } from './DatePicker';
-
-const optionalUuidSchema = z.string().trim().refine(
-  (value) => value === '' || /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value),
-  'Укажите корректный UUID',
-);
-
+import { DatePicker, DateRangePicker } from './DatePicker';
+import { formatDate, nextDate } from '../utils/format';
+import { warehouseLocation } from '../domain/warehouse-presentation';
 
 const warehouseSchema = z.object({
   loading_minutes: z.number().int().min(0),
   unloading_minutes: z.number().int().min(0),
-  turnaround_minutes: z.number().int().min(0),
   working_day_start: z.string().min(4),
   working_day_end: z.string().min(4),
 }).refine((value) => value.working_day_end > value.working_day_start, {
@@ -54,24 +45,20 @@ export function WarehouseDialog({ warehouse, busy, onClose, onSubmit }: {
     defaultValues: {
       loading_minutes: warehouse.loading_minutes,
       unloading_minutes: warehouse.unloading_minutes,
-      turnaround_minutes: warehouse.turnaround_minutes,
       working_day_start: warehouse.working_day_start,
       working_day_end: warehouse.working_day_end,
     },
   });
   return (
-    <Modal title="Настроить склад" description={`${warehouse.address} · ${warehouse.timezone}`} onClose={onClose}>
+    <Modal title="Настройки склада" description={warehouseLocation(warehouse)} onClose={onClose}>
       <form className="form-grid" onSubmit={handleSubmit((values) => onSubmit({
         loading_minutes: values.loading_minutes,
         unloading_minutes: values.unloading_minutes,
-        turnaround_minutes: values.turnaround_minutes,
         working_day_start: values.working_day_start,
         working_day_end: values.working_day_end,
       }))}>
-        <div className="span-2 detail-item"><small>Связь с RWMS</small><strong>{warehouse.name}</strong><span>{warehouse.address}</span></div>
-        <Field label="Загрузка, мин" type="number" {...register('loading_minutes', { valueAsNumber: true })} />
-        <Field label="Выгрузка, мин" type="number" {...register('unloading_minutes', { valueAsNumber: true })} />
-        <Field label="Оборот на складе, мин" type="number" {...register('turnaround_minutes', { valueAsNumber: true })} />
+        <Field label="Среднее время загрузки, мин" type="number" {...register('loading_minutes', { valueAsNumber: true })} />
+        <Field label="Среднее время выгрузки, мин" type="number" {...register('unloading_minutes', { valueAsNumber: true })} />
         <Field label="Начало дня" type="time" {...register('working_day_start')} />
         <Field label="Конец дня" type="time" {...register('working_day_end')} error={errors.working_day_end?.message} />
         <div className="span-2 toolbar-row" style={{ justifyContent: 'flex-end', margin: '8px 0 0' }}><Button type="button" onClick={onClose}>Отмена</Button><Button type="submit" variant="primary" disabled={busy}>{busy ? 'Сохраняем…' : 'Сохранить'}</Button></div>
@@ -101,9 +88,6 @@ const loadProfileLabels: Record<VehicleLoadConfigurationType, string> = {
 
 const catalogSchema = z.object({
   name: z.string().trim().min(1, 'Введите название'),
-  external_worker_id: optionalUuidSchema,
-  rwms_assignment_mode: z.enum(['ASSIGNED_DRIVER', 'WAREHOUSE_DRIVERS']),
-  passport_details: z.string(),
   registration_number: z.string(),
   capacity: z.number().int().min(1, 'Вместимость должна быть не меньше 1').max(2, 'Для MVP вместимость не может превышать 2'),
   average_speed_city: z.number().positive(),
@@ -146,10 +130,6 @@ const catalogSchema = z.object({
     configuration_type: z.enum(loadConfigurationTypes),
     max_actual_axle_load_kg: nullablePositiveInteger,
   })),
-}).superRefine((value, context) => {
-  if (value.rwms_assignment_mode === 'ASSIGNED_DRIVER' && !value.external_worker_id) {
-    context.addIssue({ code: 'custom', path: ['external_worker_id'], message: 'Выберите водителя RWMS' });
-  }
 });
 type CatalogValues = z.infer<typeof catalogSchema>;
 
@@ -161,24 +141,20 @@ const optionalNumber = (value: unknown): number | null => typeof value !== 'stri
 const optionalNumberRegistration = () => ({ setValueAs: optionalNumber } as const);
 const optionalBoolean = (value: unknown): boolean | null => value === 'true' ? true : value === 'false' ? false : null;
 
-export function CatalogDialog({ kind, value, trailers = [], availableDrivers = [], busy, onClose, onSubmit }: {
-  kind: 'driver' | 'vehicle';
-  value?: Driver | Vehicle | undefined;
-  trailers?: Trailer[];
-  availableDrivers?: AvailableDriver[];
+export function CatalogDialog({ value, busy, onClose, onSubmit }: {
+  value?: Vehicle | undefined;
   busy: boolean;
   onClose: () => void;
-  onSubmit: (input: DriverInput | VehicleEditorInput) => Promise<void>;
+  onSubmit: (input: VehicleEditorInput) => Promise<void>;
 }) {
-  const driver = kind === 'driver' ? value as Driver | undefined : undefined;
-  const vehicle = kind === 'vehicle' ? value as Vehicle | undefined : undefined;
+  const vehicle = value;
   const existingProfiles = vehicle?.load_profiles ?? [];
-  const { register, handleSubmit, watch, setValue, formState: { errors } } = useForm<CatalogValues>({
+  const { register, handleSubmit, watch, setValue, formState: { errors, dirtyFields } } = useForm<CatalogValues>({
     resolver: zodResolver(catalogSchema),
     defaultValues: {
-      name: value?.name ?? (kind === 'driver' ? 'Водители склада' : ''), external_worker_id: driver?.external_worker_id ?? '', rwms_assignment_mode: driver?.rwms_assignment_mode ?? 'WAREHOUSE_DRIVERS', passport_details: driver?.passport_details ?? '', registration_number: vehicle?.registration_number ?? '',
-      capacity: vehicle?.capacity ?? 2, average_speed_city: vehicle?.average_speed_city ?? 35, average_speed_region: vehicle?.average_speed_region ?? 65,
-      notes: value?.notes ?? '', active: value?.active ?? true,
+      name: vehicle?.name ?? '', registration_number: vehicle?.registration_number ?? '',
+      capacity: vehicle?.capacity ?? 1, average_speed_city: vehicle?.average_speed_city ?? 35, average_speed_region: vehicle?.average_speed_region ?? 65,
+      notes: vehicle?.notes ?? '', active: vehicle?.active ?? true,
       vehicle_type: vehicle?.vehicle_type ?? '', manufacturer: vehicle?.manufacturer ?? '', model: vehicle?.model ?? '', is_hgv: vehicle?.is_hgv ?? null,
       tare_weight_kg: vehicle?.tare_weight_kg ?? null, max_gross_weight_kg: vehicle?.max_gross_weight_kg ?? null,
       length_mm: vehicle?.length_mm ?? null, width_mm: vehicle?.width_mm ?? null, height_mm: vehicle?.height_mm ?? null,
@@ -200,102 +176,118 @@ export function CatalogDialog({ kind, value, trailers = [], availableDrivers = [
   });
   const values = watch();
   const active = values.active;
-  const canUseTrailer = values.can_use_trailer;
-  const selectedTrailer = trailers.find((trailer) => trailer.id === values.default_trailer_id) ?? null;
-  const previewProfiles = values.load_profiles.flatMap((profile) => profile.max_actual_axle_load_kg === null ? [] : [{
-    configuration_type: profile.configuration_type,
-    max_actual_axle_load_kg: profile.max_actual_axle_load_kg,
-  }]);
-  const submit = (formValues: CatalogValues) => kind === 'driver'
-    ? onSubmit({
-      external_worker_id: formValues.rwms_assignment_mode === 'ASSIGNED_DRIVER' ? formValues.external_worker_id || null : null,
-      rwms_assignment_mode: formValues.rwms_assignment_mode,
-      passport_details: formValues.passport_details,
-      notes: formValues.notes,
-      active: formValues.active,
-    })
-    : onSubmit({
-      name: formValues.name,
-      registration_number: formValues.registration_number,
-      capacity: formValues.capacity,
-      active: formValues.active,
-      average_speed_city: formValues.average_speed_city,
-      average_speed_region: formValues.average_speed_region,
-      notes: formValues.notes,
-      vehicle_type: formValues.vehicle_type.trim() || null,
-      manufacturer: formValues.manufacturer.trim() || null,
-      model: formValues.model.trim() || null,
-      is_hgv: formValues.is_hgv,
-      tare_weight_kg: formValues.tare_weight_kg,
-      max_gross_weight_kg: formValues.max_gross_weight_kg,
-      length_mm: formValues.length_mm,
-      width_mm: formValues.width_mm,
-      height_mm: formValues.height_mm,
-      axle_count: formValues.axle_count,
-      max_axle_load_kg: formValues.max_axle_load_kg,
-      payload_capacity_kg: formValues.payload_capacity_kg,
-      platform_length_mm: formValues.platform_length_mm,
-      platform_width_mm: formValues.platform_width_mm,
-      platform_height_from_ground_mm: formValues.platform_height_from_ground_mm,
-      max_platform_payload_kg: formValues.max_platform_payload_kg,
-      max_cargo_length_mm: formValues.max_cargo_length_mm,
-      max_cargo_width_mm: formValues.max_cargo_width_mm,
-      max_cargo_height_mm: formValues.max_cargo_height_mm,
-      max_cargo_weight_kg: formValues.max_cargo_weight_kg,
-      can_use_trailer: formValues.can_use_trailer,
-      default_trailer_id: formValues.default_trailer_id || null,
-      combined_length_with_trailer_mm: formValues.combined_length_with_trailer_mm,
-      coupling_length_mm: formValues.coupling_length_mm,
-      height_safety_margin_mm: formValues.height_safety_margin_mm,
-      width_safety_margin_mm: formValues.width_safety_margin_mm,
-      weight_safety_margin_kg: formValues.weight_safety_margin_kg,
-      load_profiles: formValues.load_profiles.flatMap((profile) => profile.max_actual_axle_load_kg === null ? [] : [{
+  const preserveVehicleValue = <K extends keyof Vehicle & keyof CatalogValues>(key: K, current: CatalogValues[K]): CatalogValues[K] => {
+    if (dirtyFields[key]) return current;
+    const existing = vehicle?.[key];
+    return existing === undefined ? current : existing as unknown as CatalogValues[K];
+  };
+  const submit = (formValues: CatalogValues) => {
+    const loadProfiles = formValues.load_profiles.flatMap((profile, index) => {
+      const existing = existingProfiles.find((candidate) => candidate.configuration_type === profile.configuration_type);
+      const maxActualAxleLoad = dirtyFields.load_profiles?.[index]?.max_actual_axle_load_kg
+        ? profile.max_actual_axle_load_kg
+        : existing?.max_actual_axle_load_kg ?? profile.max_actual_axle_load_kg;
+      return maxActualAxleLoad === null ? [] : [{
         configuration_type: profile.configuration_type,
-        max_actual_axle_load_kg: profile.max_actual_axle_load_kg,
-      }]),
+        max_actual_axle_load_kg: maxActualAxleLoad,
+      }];
     });
+    return onSubmit({
+      name: preserveVehicleValue('name', formValues.name),
+      registration_number: preserveVehicleValue('registration_number', formValues.registration_number),
+      capacity: preserveVehicleValue('capacity', formValues.capacity),
+      active: preserveVehicleValue('active', formValues.active),
+      average_speed_city: preserveVehicleValue('average_speed_city', formValues.average_speed_city),
+      average_speed_region: preserveVehicleValue('average_speed_region', formValues.average_speed_region),
+      notes: preserveVehicleValue('notes', formValues.notes),
+      vehicle_type: preserveVehicleValue('vehicle_type', formValues.vehicle_type).trim() || null,
+      manufacturer: preserveVehicleValue('manufacturer', formValues.manufacturer).trim() || null,
+      model: preserveVehicleValue('model', formValues.model).trim() || null,
+      is_hgv: preserveVehicleValue('is_hgv', formValues.is_hgv),
+      tare_weight_kg: preserveVehicleValue('tare_weight_kg', formValues.tare_weight_kg),
+      max_gross_weight_kg: preserveVehicleValue('max_gross_weight_kg', formValues.max_gross_weight_kg),
+      length_mm: preserveVehicleValue('length_mm', formValues.length_mm),
+      width_mm: preserveVehicleValue('width_mm', formValues.width_mm),
+      height_mm: preserveVehicleValue('height_mm', formValues.height_mm),
+      axle_count: preserveVehicleValue('axle_count', formValues.axle_count),
+      max_axle_load_kg: preserveVehicleValue('max_axle_load_kg', formValues.max_axle_load_kg),
+      payload_capacity_kg: preserveVehicleValue('payload_capacity_kg', formValues.payload_capacity_kg),
+      platform_length_mm: preserveVehicleValue('platform_length_mm', formValues.platform_length_mm),
+      platform_width_mm: preserveVehicleValue('platform_width_mm', formValues.platform_width_mm),
+      platform_height_from_ground_mm: preserveVehicleValue('platform_height_from_ground_mm', formValues.platform_height_from_ground_mm),
+      max_platform_payload_kg: preserveVehicleValue('max_platform_payload_kg', formValues.max_platform_payload_kg),
+      max_cargo_length_mm: preserveVehicleValue('max_cargo_length_mm', formValues.max_cargo_length_mm),
+      max_cargo_width_mm: preserveVehicleValue('max_cargo_width_mm', formValues.max_cargo_width_mm),
+      max_cargo_height_mm: preserveVehicleValue('max_cargo_height_mm', formValues.max_cargo_height_mm),
+      max_cargo_weight_kg: preserveVehicleValue('max_cargo_weight_kg', formValues.max_cargo_weight_kg),
+      can_use_trailer: preserveVehicleValue('can_use_trailer', formValues.can_use_trailer),
+      default_trailer_id: preserveVehicleValue('default_trailer_id', formValues.default_trailer_id) || null,
+      combined_length_with_trailer_mm: preserveVehicleValue('combined_length_with_trailer_mm', formValues.combined_length_with_trailer_mm),
+      coupling_length_mm: preserveVehicleValue('coupling_length_mm', formValues.coupling_length_mm),
+      height_safety_margin_mm: preserveVehicleValue('height_safety_margin_mm', formValues.height_safety_margin_mm),
+      width_safety_margin_mm: preserveVehicleValue('width_safety_margin_mm', formValues.width_safety_margin_mm),
+      weight_safety_margin_kg: preserveVehicleValue('weight_safety_margin_kg', formValues.weight_safety_margin_kg),
+      load_profiles: loadProfiles,
+    });
+  };
   return (
-    <Modal wide={kind === 'vehicle'} title={`${value ? 'Изменить' : 'Добавить'} ${kind === 'driver' ? 'водителя' : 'машину'}`} onClose={onClose}>
+    <Modal wide title={`${value ? 'Изменить' : 'Добавить'} транспортное средство`} onClose={onClose}>
       <form className="form-grid" onSubmit={handleSubmit(submit)}>
-        {kind === 'vehicle' ? <Field className="span-2" label="Название" {...register('name')} error={errors.name?.message} /> : null}
-        {kind === 'driver' ? <>
-          <SelectField className="span-2" label="Назначение в RWMS" {...register('rwms_assignment_mode')}>
-            <option value="WAREHOUSE_DRIVERS">Общий пул квалифицированных водителей склада</option>
-            <option value="ASSIGNED_DRIVER">Конкретный водитель</option>
-          </SelectField>
-          {values.rwms_assignment_mode === 'ASSIGNED_DRIVER' ? <SelectField className="span-2" label="Водитель RWMS" {...register('external_worker_id')} error={errors.external_worker_id?.message}>
-            <option value="">Выберите водителя</option>
-            {driver?.external_worker_id && !availableDrivers.some((candidate) => candidate.worker_id === driver.external_worker_id) ? <option value={driver.external_worker_id}>{driver.name} · текущая связь</option> : null}
-            {availableDrivers.map((candidate) => <option key={candidate.worker_id} value={candidate.worker_id}>{candidate.display_name}</option>)}
-          </SelectField> : <div className="span-2 explanation">Планы автоматически публикуются для всех активных работников склада с квалификацией «Водители».</div>}
-          <label className="field span-2"><span className="field__label">Паспортные данные водителя</span><textarea className="input" {...register('passport_details')} /><span className="field__hint">Используются только в тестовом сообщении, когда для доставки или вывоза явно включено такое оповещение.</span></label>
-        </> : <>
+        <Field className="span-2" label="Название" {...register('name')} error={errors.name?.message} />
+        <>
+          <Field label="Марка авто" {...register('manufacturer')} />
           <Field label="Госномер" {...register('registration_number')} />
-          <Field label="Вместимость" type="number" min="1" {...register('capacity', { valueAsNumber: true })} error={errors.capacity?.message} hint="Допустимо 1–2 бытовки" />
-          <Field label="Скорость в городе" type="number" {...register('average_speed_city', { valueAsNumber: true })} />
-          <Field label="Скорость в области" type="number" {...register('average_speed_region', { valueAsNumber: true })} />
+          <Field label="Вместимость, бытовок" type="number" min="1" {...register('capacity', { valueAsNumber: true })} error={errors.capacity?.message} hint="Количество бытовок на одну машину" />
+          <Field
+            label="Грузоподъёмность, т"
+            type="number"
+            min="0.1"
+            step="0.1"
+            value={values.payload_capacity_kg === null ? '' : values.payload_capacity_kg / 1_000}
+            onChange={(event) => setValue('payload_capacity_kg', optionalNumber(event.target.value) === null ? null : Math.round(Number(event.target.value) * 1_000), { shouldValidate: true })}
+            error={errors.payload_capacity_kg?.message}
+          />
+          <Field
+            label="Габариты (длина), м"
+            type="number"
+            min="0.1"
+            step="0.1"
+            value={values.length_mm === null ? '' : values.length_mm / 1_000}
+            onChange={(event) => setValue('length_mm', optionalNumber(event.target.value) === null ? null : Math.round(Number(event.target.value) * 1_000), { shouldValidate: true })}
+            error={errors.length_mm?.message}
+          />
+          <Field
+            label="Габариты (ширина), м"
+            type="number"
+            min="0.1"
+            step="0.1"
+            value={values.width_mm === null ? '' : values.width_mm / 1_000}
+            onChange={(event) => setValue('width_mm', optionalNumber(event.target.value) === null ? null : Math.round(Number(event.target.value) * 1_000), { shouldValidate: true })}
+            error={errors.width_mm?.message}
+          />
+          <Field
+            label="Габариты (высота), м"
+            type="number"
+            min="0.1"
+            step="0.1"
+            value={values.height_mm === null ? '' : values.height_mm / 1_000}
+            onChange={(event) => setValue('height_mm', optionalNumber(event.target.value) === null ? null : Math.round(Number(event.target.value) * 1_000), { shouldValidate: true })}
+            error={errors.height_mm?.message}
+          />
 
-          <details className="span-2" open>
-            <summary><strong>Грузовая маршрутизация · машина</strong></summary>
-            <p className="field__hint">Заполняйте фактические данные из документов. Если критическое значение неизвестно, оставьте поле пустым — безопасный маршрут не будет выдуман.</p>
+          <details className="span-2">
+            <summary><strong>Дополнительные настройки</strong></summary>
+            <p className="field__hint">Маршрутизация использует эти эксплуатационные данные. Заполняйте их по документам; неизвестные критические параметры не будут подменены.</p>
             <div className="form-grid" style={{ marginTop: 10 }}>
               <Field label="Тип транспорта" {...register('vehicle_type')} />
               <SelectField label="Грузовой автомобиль" {...register('is_hgv', { setValueAs: optionalBoolean })}><option value="">Не указано</option><option value="true">Да</option><option value="false">Нет</option></SelectField>
-              <Field label="Производитель" {...register('manufacturer')} />
               <Field label="Модель" {...register('model')} />
               <Field label="Собственная масса машины, кг" type="number" min="1" {...register('tare_weight_kg', optionalNumberRegistration())} error={errors.tare_weight_kg?.message} />
               <Field label="Максимальная полная масса машины, кг" type="number" min="1" {...register('max_gross_weight_kg', optionalNumberRegistration())} error={errors.max_gross_weight_kg?.message} />
-              <Field label="Длина машины, мм" type="number" min="1" {...register('length_mm', optionalNumberRegistration())} error={errors.length_mm?.message} />
-              <Field label="Ширина машины, мм" type="number" min="1" {...register('width_mm', optionalNumberRegistration())} error={errors.width_mm?.message} />
-              <Field label="Высота машины, мм" type="number" min="1" {...register('height_mm', optionalNumberRegistration())} error={errors.height_mm?.message} />
               <Field label="Количество осей машины" type="number" min="1" {...register('axle_count', optionalNumberRegistration())} error={errors.axle_count?.message} />
               <Field label="Допустимая нагрузка на ось машины, кг" type="number" min="1" {...register('max_axle_load_kg', optionalNumberRegistration())} error={errors.max_axle_load_kg?.message} />
-              <Field label="Грузоподъёмность машины, кг" type="number" min="1" {...register('payload_capacity_kg', optionalNumberRegistration())} error={errors.payload_capacity_kg?.message} />
             </div>
-          </details>
 
-          <details className="span-2" open>
-            <summary><strong>Платформа и допустимый груз</strong></summary>
             <div className="form-grid" style={{ marginTop: 10 }}>
               <Field label="Длина платформы машины, мм" type="number" min="1" {...register('platform_length_mm', optionalNumberRegistration())} error={errors.platform_length_mm?.message} />
               <Field label="Ширина платформы машины, мм" type="number" min="1" {...register('platform_width_mm', optionalNumberRegistration())} error={errors.platform_width_mm?.message} />
@@ -306,60 +298,19 @@ export function CatalogDialog({ kind, value, trailers = [], availableDrivers = [
               <Field label="Максимальная высота груза на машине, мм" type="number" min="1" {...register('max_cargo_height_mm', optionalNumberRegistration())} error={errors.max_cargo_height_mm?.message} />
               <Field label="Максимальная масса груза на машине, кг" type="number" min="1" {...register('max_cargo_weight_kg', optionalNumberRegistration())} error={errors.max_cargo_weight_kg?.message} />
             </div>
-          </details>
-
-          <details className="span-2" open>
-            <summary><strong>Прицеп и запасы безопасности</strong></summary>
             <div className="form-grid" style={{ marginTop: 10 }}>
-              <SelectField label="Машина может использовать прицеп" {...register('can_use_trailer', { setValueAs: optionalBoolean })}><option value="">Не указано</option><option value="true">Да</option><option value="false">Нет</option></SelectField>
-              <SelectField label="Основной прицеп" disabled={canUseTrailer !== true} {...register('default_trailer_id')}><option value="">Не назначен</option>{trailers.map((trailer) => <option key={trailer.id} value={trailer.id}>{trailer.name} · {trailer.registration_number || 'без номера'}</option>)}</SelectField>
+              <SelectField label="Транспорт поддерживает работу с прицепом" {...register('can_use_trailer', { setValueAs: optionalBoolean })}><option value="">Не указано</option><option value="true">Да</option><option value="false">Нет</option></SelectField>
               <Field label="Точная полная длина автопоезда, мм" type="number" min="1" {...register('combined_length_with_trailer_mm', optionalNumberRegistration())} error={errors.combined_length_with_trailer_mm?.message} />
               <Field label="Длина сцепки, мм" type="number" min="1" {...register('coupling_length_mm', optionalNumberRegistration())} error={errors.coupling_length_mm?.message} hint="Используется только если точная полная длина не задана" />
               <Field label="Запас по высоте, мм" type="number" min="0" {...register('height_safety_margin_mm', { valueAsNumber: true })} error={errors.height_safety_margin_mm?.message} />
               <Field label="Запас по ширине, мм" type="number" min="0" {...register('width_safety_margin_mm', { valueAsNumber: true })} error={errors.width_safety_margin_mm?.message} />
               <Field label="Запас по массе, кг" type="number" min="0" {...register('weight_safety_margin_kg', { valueAsNumber: true })} error={errors.weight_safety_margin_kg?.message} />
             </div>
-          </details>
-
-          <details className="span-2" open>
-            <summary><strong>Фактические осевые нагрузки</strong></summary>
-            <p className="field__hint">Это проверенные эксплуатационные значения для каждой конфигурации. Система не делит общую массу на количество осей.</p>
             <div className="form-grid" style={{ marginTop: 10 }}>
               {values.load_profiles.map((profile, index) => <Field key={profile.configuration_type} label={`${loadProfileLabels[profile.configuration_type]}, кг`} type="number" min="1" {...register(`load_profiles.${index}.max_actual_axle_load_kg`, optionalNumberRegistration())} error={errors.load_profiles?.[index]?.max_actual_axle_load_kg?.message} />)}
             </div>
           </details>
-
-          <details className="span-2" open>
-            <summary><strong>Бытовка для предпросмотра</strong></summary>
-            <p className="field__hint">Эти четыре поля не сохраняются. В реальном рейсе размеры и масса берутся из назначенной доставки или вывоза.</p>
-            <div className="form-grid" style={{ marginTop: 10 }}>
-              <Field label="Длина бытовки для предпросмотра, мм" type="number" min="1" {...register('preview_cargo_length_mm', optionalNumberRegistration())} />
-              <Field label="Ширина бытовки для предпросмотра, мм" type="number" min="1" {...register('preview_cargo_width_mm', optionalNumberRegistration())} />
-              <Field label="Высота бытовки для предпросмотра, мм" type="number" min="1" {...register('preview_cargo_height_mm', optionalNumberRegistration())} />
-              <Field label="Масса бытовки для предпросмотра, кг" type="number" min="1" {...register('preview_cargo_weight_kg', optionalNumberRegistration())} />
-            </div>
-          </details>
-
-          <TruckConfigurationPreview
-            vehicle={{
-              length_mm: values.length_mm,
-              width_mm: values.width_mm,
-              height_mm: values.height_mm,
-              tare_weight_kg: values.tare_weight_kg,
-              platform_length_mm: values.platform_length_mm,
-              platform_height_from_ground_mm: values.platform_height_from_ground_mm,
-              can_use_trailer: values.can_use_trailer === true,
-              combined_length_with_trailer_mm: values.combined_length_with_trailer_mm,
-              coupling_length_mm: values.coupling_length_mm,
-              height_safety_margin_mm: values.height_safety_margin_mm,
-              width_safety_margin_mm: values.width_safety_margin_mm,
-              weight_safety_margin_kg: values.weight_safety_margin_kg,
-            }}
-            trailer={selectedTrailer}
-            cargo={{ length_mm: values.preview_cargo_length_mm, width_mm: values.preview_cargo_width_mm, height_mm: values.preview_cargo_height_mm, weight_kg: values.preview_cargo_weight_kg }}
-            profiles={previewProfiles}
-          />
-        </>}
+        </>
         <label className="field span-2"><span className="field__label">Заметки</span><textarea className="input" {...register('notes')} /></label>
         <div className="span-2"><CheckboxField label="Активен" checked={active} onChange={(checked) => setValue('active', checked)} /></div>
         <div className="span-2 toolbar-row" style={{ justifyContent: 'flex-end', margin: '8px 0 0' }}><Button type="button" onClick={onClose}>Отмена</Button><Button type="submit" variant="primary" disabled={busy}>Сохранить</Button></div>
@@ -368,16 +319,77 @@ export function CatalogDialog({ kind, value, trailers = [], availableDrivers = [
   );
 }
 
+const MAX_SHIFT_RANGE_DAYS = 31;
+
+function shiftDurationMinutes(startTime: string, endTime: string): number {
+  const [startHours = 0, startMinutes = 0] = startTime.split(':').map(Number);
+  const [endHours = 0, endMinutes = 0] = endTime.split(':').map(Number);
+  const start = startHours * 60 + startMinutes;
+  const end = endHours * 60 + endMinutes;
+  if (end === start) return 0;
+  return end > start ? end - start : end + 24 * 60 - start;
+}
+
+function inclusiveDateRangeDays(dateFrom: string, dateTo: string): number {
+  const parse = (value: string) => {
+    const [year = 0, month = 0, day = 0] = value.split('-').map(Number);
+    return Date.UTC(year, month - 1, day);
+  };
+  return Math.floor((parse(dateTo) - parse(dateFrom)) / 86_400_000) + 1;
+}
+
 const shiftSchema = z.object({
   driver_id: z.string().min(1, 'Выберите водителя'), vehicle_id: z.string().min(1, 'Выберите машину'), date_from: z.string().date(), date_to: z.string().date(),
   start_time: z.string(), end_time: z.string(), break_minutes: z.number().int().min(0), active: z.boolean(),
 })
-  .refine((value) => value.end_time > value.start_time, { path: ['end_time'], message: 'Конец смены должен быть позже начала' })
-  .refine((value) => value.date_to >= value.date_from, { path: ['date_to'], message: 'Конец периода должен быть не раньше начала' });
+  .refine((value) => value.end_time !== value.start_time, {
+    path: ['end_time'],
+    message: 'Окончание смены должно отличаться от начала',
+  })
+  .refine((value) => {
+    const durationMinutes = shiftDurationMinutes(value.start_time, value.end_time);
+    return durationMinutes > 0 && value.break_minutes < durationMinutes;
+  }, { path: ['break_minutes'], message: 'Перерыв должен быть короче смены' })
+  .refine((value) => value.date_to >= value.date_from, { path: ['date_to'], message: 'Конец периода должен быть не раньше начала' })
+  .refine((value) => inclusiveDateRangeDays(value.date_from, value.date_to) <= MAX_SHIFT_RANGE_DAYS, {
+    path: ['date_to'],
+    message: 'Период смены не может быть длиннее 31 дня',
+  });
 type ShiftValues = z.infer<typeof shiftSchema>;
 
-export function ShiftDialog({ shift, warehouse, drivers, vehicles, busy, onClose, onSubmit }: {
-  shift?: DriverShift | undefined; warehouse: Warehouse; drivers: Driver[]; vehicles: Vehicle[]; busy: boolean; onClose: () => void; onSubmit: (input: ShiftInput) => Promise<void>;
+/** Mirrors the backend's positive half-open overlap rule for bounded recurring shifts. */
+function shiftRangesOverlap(
+  left: Pick<ShiftValues, 'date_from' | 'date_to' | 'start_time' | 'end_time'>,
+  right: Pick<DriverShift, 'date_from' | 'date_to' | 'start_time' | 'end_time'>,
+): boolean {
+  const dayMilliseconds = 86_400_000;
+  const dateValue = (value: string) => {
+    const [year = 0, month = 0, day = 0] = value.split('-').map(Number);
+    return Date.UTC(year, month - 1, day);
+  };
+  const minuteValue = (value: string) => {
+    const [hours = 0, minutes = 0] = value.split(':').map(Number);
+    return hours * 60 + minutes;
+  };
+  const intervals = (value: typeof left) => {
+    const result: Array<readonly [number, number]> = [];
+    const startMinute = minuteValue(value.start_time);
+    const endMinute = minuteValue(value.end_time);
+    for (let day = dateValue(value.date_from); day <= dateValue(value.date_to); day += dayMilliseconds) {
+      const start = day + startMinute * 60_000;
+      let end = day + endMinute * 60_000;
+      if (end < start) end += dayMilliseconds;
+      result.push([start, end]);
+    }
+    return result;
+  };
+  return intervals(left).some(([leftStart, leftEnd]) => intervals(right).some(
+    ([rightStart, rightEnd]) => Math.max(leftStart, rightStart) < Math.min(leftEnd, rightEnd),
+  ));
+}
+
+export function ShiftDialog({ shift, warehouse, drivers, vehicles, shifts = [], busy, onClose, onSubmit }: {
+  shift?: DriverShift | undefined; warehouse: Warehouse; drivers: Driver[]; vehicles: Vehicle[]; shifts?: DriverShift[]; busy: boolean; onClose: () => void; onSubmit: (input: ShiftInput) => Promise<void>;
 }) {
   const { register, handleSubmit, watch, setValue, formState: { errors } } = useForm<ShiftValues>({
     resolver: zodResolver(shiftSchema),
@@ -388,6 +400,25 @@ export function ShiftDialog({ shift, warehouse, drivers, vehicles, busy, onClose
     },
   });
   const active = watch('active');
+  const values = watch();
+  const overnight = values.end_time < values.start_time;
+  const rangeDays = inclusiveDateRangeDays(values.date_from, values.date_to);
+  const rangeReady = /^\d{4}-\d{2}-\d{2}$/.test(values.date_from) && /^\d{4}-\d{2}-\d{2}$/.test(values.date_to);
+  const actualEndDate = rangeReady && overnight ? nextDate(values.date_to, 1) : values.date_to;
+  const shiftConflict = active && rangeReady && values.start_time !== values.end_time
+    ? shifts.find((candidate) => (
+        candidate.active
+        && candidate.id !== shift?.id
+        && (candidate.driver_id === values.driver_id || candidate.vehicle_id === values.vehicle_id)
+        && shiftRangesOverlap(values, candidate)
+      ))
+    : undefined;
+  const conflictDriver = shiftConflict?.driver_id === values.driver_id
+    ? drivers.find((driver) => driver.id === values.driver_id)
+    : null;
+  const conflictVehicle = !conflictDriver && shiftConflict?.vehicle_id === values.vehicle_id
+    ? vehicles.find((vehicle) => vehicle.id === values.vehicle_id)
+    : null;
   const submit = (values: ShiftValues) => onSubmit({
     driver_id: values.driver_id, vehicle_id: values.vehicle_id, date_from: values.date_from, date_to: values.date_to,
     start_time: values.start_time, end_time: values.end_time,
@@ -402,9 +433,18 @@ export function ShiftDialog({ shift, warehouse, drivers, vehicles, busy, onClose
         {errors.date_to?.message ? <span className="span-2 field__error">{errors.date_to.message}</span> : null}
         <Field label="Начало" type="time" {...register('start_time')} />
         <Field label="Окончание" type="time" {...register('end_time')} error={errors.end_time?.message} />
-        <Field className="span-2" label="Перерыв, мин" type="number" {...register('break_minutes', { valueAsNumber: true })} />
+        <Field className="span-2" label="Перерыв, мин" type="number" {...register('break_minutes', { valueAsNumber: true })} error={errors.break_minutes?.message} />
         <div className="span-2"><CheckboxField label="Смена активна" checked={active} onChange={(checked) => setValue('active', checked)} /></div>
-        <div className="span-2 toolbar-row" style={{ justifyContent: 'flex-end', margin: '8px 0 0' }}><Button type="button" onClick={onClose}>Отмена</Button><Button type="submit" variant="primary" disabled={busy}>Сохранить смену</Button></div>
+        <div className="span-2 detail-item" role="status" aria-live="polite">
+          <small>Фактический диапазон</small>
+          <strong>{rangeReady ? `${formatDate(values.date_from)} ${values.start_time} — ${formatDate(actualEndDate)} ${values.end_time}` : 'Выберите начало и конец периода'}</strong>
+          <span>{active ? 'Смена активна' : 'Смена неактивна'}{rangeReady ? ` · ${rangeDays} календарных дней${overnight ? ' · каждое окончание на следующий день' : ''}` : ''}</span>
+        </div>
+        {shiftConflict ? <div className="span-2 error-panel" role="alert">
+          <strong>{conflictDriver ? 'Смены водителя пересекаются' : 'Машина уже занята в смене'}</strong>
+          <p>{conflictDriver ? `У ${conflictDriver.name} уже есть активная смена` : `${conflictVehicle?.name ?? 'Выбранная машина'} уже назначена на активную смену`} {formatDate(shiftConflict.date_from)}–{formatDate(shiftConflict.date_to)}, {shiftConflict.start_time.slice(0, 5)}–{shiftConflict.end_time.slice(0, 5)}. Измените период, время или ресурс.</p>
+        </div> : null}
+        <div className="span-2 toolbar-row" style={{ justifyContent: 'flex-end', margin: '8px 0 0' }}><Button type="button" onClick={onClose}>Отмена</Button><Button type="submit" variant="primary" disabled={busy || Boolean(shiftConflict)}>Сохранить смену</Button></div>
       </form>
     </Modal>
   );
@@ -415,7 +455,7 @@ const dateOptionSchema = z.object({ date: z.string().date(), priority: z.number(
   .refine((value) => !value.window_start || !value.window_end || value.window_end > value.window_start, { message: 'Конец окна должен быть позже начала', path: ['window_end'] });
 const requestSchema = z.object({
   type: z.enum(['DELIVERY', 'PICKUP']), name: z.string().trim().min(1, 'Введите название'), address_label: z.string(), latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180),
-  quantity: z.number().int().positive(), service_minutes: z.number().int().min(0), priority: z.number().int(), status: z.enum(['DRAFT', 'READY', 'PLANNED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'UNASSIGNED']),
+  quantity: z.number().int().positive(), service_minutes: z.number().int().min(0), priority: z.number().int(),
   mandatory: z.boolean(),
   trailer_access_allowed: nullableBoolean,
   include_driver_passport_in_notification: z.boolean(),
@@ -436,7 +476,7 @@ export function RequestDialog({ request, point, initialAddress, type, defaultDat
     resolver: zodResolver(requestSchema),
     defaultValues: {
       type: request?.type ?? type, name: request?.name ?? '', address_label: initialAddress ?? request?.address_label ?? '', latitude: point?.latitude ?? request?.latitude ?? 55.75, longitude: point?.longitude ?? request?.longitude ?? 37.62,
-      quantity: request?.quantity ?? 1, service_minutes: request?.service_minutes ?? 30, priority: request?.priority ?? 0, mandatory: request?.mandatory ?? false, status: request?.status ?? 'READY', split_allowed: request?.split_allowed ?? true, notes: request?.notes ?? '',
+      quantity: request?.quantity ?? 1, service_minutes: request?.service_minutes ?? 30, priority: request?.priority ?? 0, mandatory: request?.mandatory ?? false, split_allowed: request?.split_allowed ?? true, notes: request?.notes ?? '',
       trailer_access_allowed: request?.trailer_access_allowed ?? null,
       include_driver_passport_in_notification: request?.include_driver_passport_in_notification ?? false,
       contact_name: request?.contact_name ?? '',
@@ -451,13 +491,29 @@ export function RequestDialog({ request, point, initialAddress, type, defaultDat
   const mandatory = watch('mandatory');
   const requestType = watch('type');
   const includePassport = watch('include_driver_passport_in_notification');
+  const cargoFromOrder = request && [
+    request.cargo_length_mm,
+    request.cargo_width_mm,
+    request.cargo_height_mm,
+    request.cargo_weight_kg,
+  ].every((value) => value != null)
+    ? `${(request.cargo_length_mm! / 1_000).toFixed(1)} × ${(request.cargo_width_mm! / 1_000).toFixed(1)} × ${(request.cargo_height_mm! / 1_000).toFixed(1)} м · ${(request.cargo_weight_kg! / 1_000).toFixed(1)} т`
+    : null;
+  const submit = (values: RequestValues) => onSubmit({
+    ...values,
+    // Cargo is owned by the customer order. Preserve the canonical values
+    // when editing a request instead of treating logistics as their editor.
+    cargo_length_mm: request?.cargo_length_mm ?? null,
+    cargo_width_mm: request?.cargo_width_mm ?? null,
+    cargo_height_mm: request?.cargo_height_mm ?? null,
+    cargo_weight_kg: request?.cargo_weight_kg ?? null,
+  });
   return (
     <Modal wide title={request ? requestType === 'DELIVERY' ? 'Изменить доставку' : 'Изменить вывоз' : type === 'DELIVERY' ? 'Новая доставка' : 'Новый вывоз'} description="Стоимость доставки рассчитывается по изохроне склада" onClose={onClose}>
-      <form className="form-grid" onSubmit={handleSubmit(onSubmit)}>
+      <form className="form-grid" onSubmit={handleSubmit(submit)}>
         <input type="hidden" {...register('latitude', { valueAsNumber: true })} />
         <input type="hidden" {...register('longitude', { valueAsNumber: true })} />
         <SelectField label="Тип" {...register('type')}><option value="DELIVERY">Доставка</option><option value="PICKUP">Вывоз</option></SelectField>
-        <SelectField label="Статус" {...register('status')}><option value="READY">Готова</option><option value="DRAFT">Черновик</option><option value="CANCELLED">Отменена</option></SelectField>
         <Field className="span-2" label="Название / номер" {...register('name')} error={errors.name?.message} />
         <Field className="span-2" label="Адрес (подпись)" {...register('address_label')} />
         <Field label="Количество бытовок" type="number" min="1" {...register('quantity', { valueAsNumber: true })} />
@@ -473,11 +529,11 @@ export function RequestDialog({ request, point, initialAddress, type, defaultDat
           <CheckboxField label={requestType === 'DELIVERY' ? 'Обязательная доставка' : 'Обязательный вывоз'} checked={mandatory} onChange={(checked) => setValue('mandatory', checked)} />
           <CheckboxField label="Оповещение с паспортными данными водителя" checked={includePassport} onChange={(checked) => setValue('include_driver_passport_in_notification', checked)} />
         </div>
-        <div className="span-2 entity-card__row"><strong>Фактические параметры одной бытовки</strong><span className="field__hint">Без полного набора безопасный грузовой маршрут не рассчитывается</span></div>
-        <Field label="Длина бытовки, мм" type="number" min="1" {...register('cargo_length_mm', optionalNumberRegistration())} error={errors.cargo_length_mm?.message} />
-        <Field label="Ширина бытовки, мм" type="number" min="1" {...register('cargo_width_mm', optionalNumberRegistration())} error={errors.cargo_width_mm?.message} />
-        <Field label="Высота бытовки, мм" type="number" min="1" {...register('cargo_height_mm', optionalNumberRegistration())} error={errors.cargo_height_mm?.message} />
-        <Field label="Масса бытовки, кг" type="number" min="1" {...register('cargo_weight_kg', optionalNumberRegistration())} error={errors.cargo_weight_kg?.message} />
+        <div className="span-2 detail-item">
+          <small>Параметры из заказа клиента</small>
+          <strong>{cargoFromOrder ?? 'Ожидаем параметры бытовки из заказа'}</strong>
+          <span>Логист выбирает заказ, а габариты и масса поступают из него автоматически.</span>
+        </div>
         <Field label="Приоритет" type="number" {...register('priority', { valueAsNumber: true })} />
         <div className="field"><span className="field__label">Разбиение</span><CheckboxField label="Разрешить части по вместимости" checked={splitAllowed} onChange={(checked) => setValue('split_allowed', checked)} /></div>
         <label className="field span-2"><span className="field__label">Заметки</span><textarea className="input" {...register('notes')} /></label>
@@ -488,7 +544,7 @@ export function RequestDialog({ request, point, initialAddress, type, defaultDat
             {fields.map((field, index) => (
               <div className="entity-card" key={field.id}>
                 <div className="form-grid">
-                  <Field label="Дата" type="date" {...register(`date_options.${index}.date`)} />
+                  <DatePicker label="Дата" value={watch(`date_options.${index}.date`)} onChange={(date) => setValue(`date_options.${index}.date`, date, { shouldValidate: true })} />
                   <Field label="Приоритет даты" type="number" {...register(`date_options.${index}.priority`, { valueAsNumber: true })} />
                   <Field label="Начало окна" type="time" {...register(`date_options.${index}.window_start`, { setValueAs: (value: string) => value || null })} />
                   <Field label="Конец окна" type="time" {...register(`date_options.${index}.window_end`, { setValueAs: (value: string) => value || null })} error={errors.date_options?.[index]?.window_end?.message} />

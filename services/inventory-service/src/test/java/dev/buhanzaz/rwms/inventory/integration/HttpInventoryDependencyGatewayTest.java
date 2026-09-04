@@ -46,6 +46,7 @@ class HttpInventoryDependencyGatewayTest {
   private final AtomicReference<String> timeZoneAuthorization = new AtomicReference<>();
   private final AtomicReference<String> readinessWorkAuthorization = new AtomicReference<>();
   private final AtomicReference<String> readinessConfirmAuthorization = new AtomicReference<>();
+  private final AtomicReference<String> calendarAuthorization = new AtomicReference<>();
   private final AtomicReference<UUID> responseWarehouseId = new AtomicReference<>();
   private final AtomicReference<Boolean> assetPresent = new AtomicReference<>(true);
   private final AtomicReference<String> reconciliationResponse = new AtomicReference<>();
@@ -108,6 +109,7 @@ class HttpInventoryDependencyGatewayTest {
     noWorkAuthorization.set(null);
     noWorkIdempotencyKey.set(null);
     noWorkBody.set(null);
+    calendarAuthorization.set(null);
     server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     server.createContext(
         "/api/internal/asset/v1/inventory/number-resolutions", this::resolveNumber);
@@ -138,6 +140,8 @@ class HttpInventoryDependencyGatewayTest {
         "/api/internal/warehouse/v1/warehouses", this::warehouseOperation);
     server.createContext(
         "/api/internal/warehouse/v1/lifecycle/readiness-work", this::warehouseReadinessWork);
+    server.createContext(
+        "/api/internal/task-board/v1/inventory/warehouses", this::taskBoardWorkCalendar);
     server.start();
     String base = "http://127.0.0.1:" + server.getAddress().getPort();
     OAuth2AuthorizedClientManager authorizedClients = mock(OAuth2AuthorizedClientManager.class);
@@ -195,6 +199,12 @@ class HttpInventoryDependencyGatewayTest {
                         "inventory-warehouse-lifecycle-confirm",
                         "inventory-warehouse-lifecycle-confirm-token",
                         "warehouse.lifecycle.confirm");
+                case "inventory-task-board-calendar" ->
+                    authorizedClient(
+                        base,
+                        "inventory-task-board-calendar",
+                        "inventory-task-board-calendar-token",
+                        "task-board.inventory-calendar.read");
                 default -> null;
               };
             });
@@ -205,6 +215,7 @@ class HttpInventoryDependencyGatewayTest {
             URI.create(base + "/oauth2/token"),
             "inventory-service",
             "secret",
+            URI.create(base),
             URI.create(base),
             URI.create(base),
             URI.create(base),
@@ -304,6 +315,23 @@ class HttpInventoryDependencyGatewayTest {
         .isEqualTo("Bearer inventory-warehouse-lifecycle-confirm-token");
     assertThat(mapper.readTree(requestBody.get()).path("expectedVersion").asLong())
         .isEqualTo(11);
+  }
+
+  @Test
+  void readsTaskBoardCalendarOnlyWithItsExactServiceScope() {
+    UUID warehouseId = UUID.randomUUID();
+    responseWarehouseId.set(warehouseId);
+
+    InventoryDependencyGateway.WorkCalendarSnapshot snapshot =
+        gateway.workCalendarSnapshot(
+            warehouseId, java.time.LocalDate.of(2026, 9, 7), java.time.LocalDate.of(2026, 9, 8));
+
+    assertThat(snapshot.calendarFingerprint()).isEqualTo("a".repeat(64));
+    assertThat(snapshot.dates())
+        .extracting(InventoryDependencyGateway.WorkCalendarDate::scheduleVersion)
+        .containsExactly(4L, 4L);
+    assertThat(calendarAuthorization.get())
+        .isEqualTo("Bearer inventory-task-board-calendar-token");
   }
 
   @Test
@@ -789,6 +817,34 @@ class HttpInventoryDependencyGatewayTest {
         {"items":[{"warehouseId":"%s","warehouseVersion":11,
                     "lifecycleState":"DRAINING"}],"nextAfter":null}
         """.formatted(responseWarehouseId.get()));
+  }
+
+  private void taskBoardWorkCalendar(HttpExchange exchange) throws IOException {
+    calendarAuthorization.set(exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION));
+    assertThat(exchange.getRequestMethod()).isEqualTo("GET");
+    assertThat(exchange.getRequestURI().getPath())
+        .isEqualTo(
+            "/api/internal/task-board/v1/inventory/warehouses/"
+                + responseWarehouseId.get()
+                + "/work-calendar");
+    assertThat(exchange.getRequestURI().getRawQuery())
+        .isEqualTo("from=2026-09-07&through=2026-09-08");
+    respond(
+        exchange,
+        200,
+        """
+        {"warehouseId":"%s","from":"2026-09-07","through":"2026-09-08",
+         "calendarFingerprint":"%s","dates":[
+          {"date":"2026-09-07","working":false,"timeZone":"Europe/Moscow",
+           "timeZoneEffectiveFrom":"2026-09-01T00:00:00Z",
+           "scheduleId":"00000000-0000-0000-0000-000000000701","scheduleVersion":4,
+           "scheduleEffectiveFrom":"2026-09-01"},
+          {"date":"2026-09-08","working":true,"timeZone":"Europe/Moscow",
+           "timeZoneEffectiveFrom":"2026-09-01T00:00:00Z",
+           "scheduleId":"00000000-0000-0000-0000-000000000701","scheduleVersion":4,
+           "scheduleEffectiveFrom":"2026-09-01"}
+         ]}
+        """.formatted(responseWarehouseId.get(), "a".repeat(64)));
   }
 
   private void resolveNumber(HttpExchange exchange) throws IOException {

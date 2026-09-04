@@ -59,7 +59,7 @@ class AuthFlywayMigrationIntegrationTest {
     void cumulativeBaselineMigratesCleanDatabaseAndRepeatIsNoOp() {
         Flyway flyway = flyway(MIGRATION_LOCATION);
 
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(5);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(9);
         flyway.validate();
         assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -72,7 +72,9 @@ class AuthFlywayMigrationIntegrationTest {
                         "auth_subject",
                         "auth_subject_credential",
                         "auth_subject_pii",
+                        "company",
                         "consumer_aggregate_checkpoint",
+                        "customer_registration_throttle",
                         "domain_event",
                         "event_stream_head",
                         "flyway_schema_history",
@@ -88,7 +90,7 @@ class AuthFlywayMigrationIntegrationTest {
                         "user_warehouse_access_note",
                         "version_gap_quarantine");
         assertThat(columnCounts()).containsAllEntriesOf(Map.of(
-                "auth_subject", 17,
+                "auth_subject", 18,
                 "user_warehouse_access", 9,
                 "oauth2_registered_client", 13,
                 "oauth2_authorization", 33,
@@ -128,6 +130,44 @@ class AuthFlywayMigrationIntegrationTest {
                 .containsEntry("description", "rental access")
                 .containsEntry("script", "V6__rental_access.sql")
                 .containsEntry("success", true);
+        assertThat(jdbc.queryForMap(
+                        "select version, description, script, success from flyway_schema_history "
+                                + "where version='7'"))
+                .containsEntry("version", "7")
+                .containsEntry("description", "customer registration throttle")
+                .containsEntry("script", "V7__customer_registration_throttle.sql")
+                .containsEntry("success", true);
+        assertThat(jdbc.queryForMap(
+                        "select version, description, script, success from flyway_schema_history "
+                                + "where version='8'"))
+                .containsEntry("version", "8")
+                .containsEntry("description", "company foundation")
+                .containsEntry("script", "V8__company_foundation.sql")
+                .containsEntry("success", true);
+        assertThat(jdbc.queryForMap(
+                        "select version, description, script, success from flyway_schema_history "
+                                + "where version='9'"))
+                .containsEntry("version", "9")
+                .containsEntry("description", "system administrators are unbound")
+                .containsEntry("script", "V9__system_administrators_are_unbound.sql")
+                .containsEntry("success", true);
+        assertThat(jdbc.queryForMap(
+                        "select version, description, script, success from flyway_schema_history "
+                                + "where version='10'"))
+                .containsEntry("version", "10")
+                .containsEntry("description", "restore subject company boundary")
+                .containsEntry("script", "V10__restore_subject_company_boundary.sql")
+                .containsEntry("success", true);
+        assertThat(jdbc.queryForList(
+                        "select constraint_name from information_schema.table_constraints "
+                                + "where table_schema='public' and table_name='customer_registration_throttle'",
+                        String.class))
+                .contains(
+                        "pk_customer_registration_throttle",
+                        "ck_customer_registration_throttle_scope",
+                        "ck_customer_registration_throttle_fingerprint",
+                        "ck_customer_registration_throttle_count",
+                        "ck_customer_registration_throttle_window");
         assertV3Schema();
         assertThat(jdbc.queryForObject("select count(*) from auth_subject", Integer.class)).isZero();
         assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isZero();
@@ -171,7 +211,7 @@ class AuthFlywayMigrationIntegrationTest {
                 .authority(new SimpleGrantedAuthority("SCOPE_worker.tasks"))
                 .build());
 
-        assertThat(flyway(MIGRATION_LOCATION).migrate().migrationsExecuted).isEqualTo(3);
+        assertThat(flyway(MIGRATION_LOCATION).migrate().migrationsExecuted).isEqualTo(5);
 
         assertThat(clients.findByClientId("rwms-worker")).isNull();
         assertThat(clients.findByClientId("rwms-worker-android")).isNotNull();
@@ -188,24 +228,24 @@ class AuthFlywayMigrationIntegrationTest {
                 "update auth_subject set global_role='WAREHOUSE_MANAGER' where id=?",
                 managerId);
 
-        assertThat(flyway(MIGRATION_LOCATION).migrate().migrationsExecuted).isEqualTo(4);
+        assertThat(flyway(MIGRATION_LOCATION).migrate().migrationsExecuted).isEqualTo(6);
 
         assertThat(jdbc.queryForMap(
                         "select version, mobile_app_access from auth_subject where id=?",
                         managerId))
-                .containsEntry("version", 1)
+                .containsEntry("version", 2)
                 .containsEntry("mobile_app_access", true);
         assertThat(jdbc.queryForMap(
                         "select current_version, last_event_id from event_stream_head "
                                 + "where aggregate_type='USER_AUTHORIZATION' and aggregate_id=?",
                         managerId.toString()))
-                .containsEntry("current_version", 1L);
+                .containsEntry("current_version", 2L);
         assertThat(jdbc.queryForObject(
                         "select count(*) from domain_event "
                                 + "where aggregate_type='USER_AUTHORIZATION' and aggregate_id=?",
                         Integer.class,
                         managerId.toString()))
-                .isEqualTo(2);
+                .isEqualTo(3);
         assertThat(jdbc.queryForObject(
                         "select payload->>'mobileAppAccess' from domain_event "
                                 + "where aggregate_type='USER_AUTHORIZATION' and aggregate_id=? "
@@ -219,7 +259,7 @@ class AuthFlywayMigrationIntegrationTest {
                                 + "and status='PENDING'",
                         Integer.class,
                         managerId.toString()))
-                .isOne();
+                .isEqualTo(2);
         assertThatThrownBy(() -> jdbc.update(
                         "update auth_subject set global_role='VIEWER' where id=?",
                         managerId))
@@ -244,7 +284,9 @@ class AuthFlywayMigrationIntegrationTest {
         jdbc.update("update auth_subject set global_role='RENTAL_MANAGER' where id=?", rentalManagerId);
         jdbc.update("update auth_subject set global_role='WAREHOUSE_MANAGER' where id=?", warehouseManagerId);
 
-        assertThat(flyway(MIGRATION_LOCATION).migrate().migrationsExecuted).isOne();
+        Flyway rentalAccessMigration = configuration(MIGRATION_LOCATION).target("6").load();
+        assertThat(rentalAccessMigration.migrate().migrationsExecuted).isOne();
+        rentalAccessMigration.validate();
 
         assertThat(rentalAccess(systemAdminId)).isTrue();
         assertThat(rentalAccess(wmsAdminId)).isTrue();
@@ -384,7 +426,7 @@ class AuthFlywayMigrationIntegrationTest {
                 .baselineDescription("Auth post-F1C schema")
                 .load();
         adopted.baseline();
-        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(4);
+        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(8);
         adopted.validate();
         assertThat(adopted.migrate().migrationsExecuted).isZero();
 
@@ -638,7 +680,7 @@ class AuthFlywayMigrationIntegrationTest {
                                 + "where event_type='auth.user-authorization.changed.v1' "
                                 + "and status='PENDING'",
                         Integer.class))
-                .isOne();
+                .isEqualTo(2);
     }
 
     private String digest(String table) {

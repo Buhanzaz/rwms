@@ -2,7 +2,7 @@ import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { CalendarDays } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { DayPicker, type DateRange } from 'react-day-picker';
+import { DayPicker, type DateRange, type Matcher } from 'react-day-picker';
 import 'react-day-picker/style.css';
 import { formatIsoDate, parseIsoDate } from './date-value';
 import { Button } from './ui';
@@ -58,11 +58,13 @@ export function DateRangePicker({ from, to, onChange, label, disabled = false }:
 }
 
 /** Controlled Russian-language calendar that preserves an ISO date without timezone drift. */
-export function DatePicker({ value, onChange, label, disabled = false, className = '' }: {
+export function DatePicker({ value, onChange, label, disabled = false, disabledDates, className = '' }: {
   value: string;
   onChange: (value: string) => void;
   label: string;
   disabled?: boolean;
+  /** Dates that the owning workflow has closed or otherwise made unavailable. */
+  disabledDates?: Matcher | Matcher[];
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -105,7 +107,11 @@ export function DatePicker({ value, onChange, label, disabled = false, className
             mode="single"
             locale={ru}
             {...(selected ? { selected, defaultMonth: selected } : {})}
+            {...(disabledDates ? { disabled: disabledDates } : {})}
             showOutsideDays
+            labels={{
+              labelDayButton: (date) => format(date, 'EEEE, d MMMM yyyy г.', { locale: ru }),
+            }}
             onSelect={(date) => {
               if (!date) return;
               onChange(formatIsoDate(date));

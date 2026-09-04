@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 
+import { validateReleaseManifest } from "./release-trust.mjs";
+
 const releaseFile = new URL("../release.json", import.meta.url);
 const templateFile = new URL("../src/index.html", import.meta.url);
 const outputDirectory = new URL("../.site/", import.meta.url);
@@ -10,8 +12,10 @@ const outputWorker = new URL("worker.mjs", outputDirectory);
 const outputFavicon = new URL("favicon.ico", outputDirectory);
 const publicPage = new URL("index.html", publicDirectory);
 const publicFavicon = new URL("favicon.ico", publicDirectory);
+const trustPolicyFile = new URL("../release-trust-policy.json", import.meta.url);
 
 const release = JSON.parse(await readFile(releaseFile, "utf8"));
+const trustPolicy = JSON.parse(await readFile(trustPolicyFile, "utf8"));
 validateRelease(release);
 
 const template = await readFile(templateFile, "utf8");
@@ -32,100 +36,10 @@ await writeFile(publicFavicon, "");
 await publishArtifact(release, [artifactOutput, publicArtifactOutput]);
 
 function validateRelease(candidate) {
-  const requiredTextFields = [
-    "applicationName",
-    "packageName",
-    "versionName",
-    "minimumAndroidVersion",
-    "publicGateway",
-    "artifactPath",
-  ];
-
-  for (const field of requiredTextFields) {
-    if (typeof candidate[field] !== "string" || candidate[field].trim() === "") {
-      throw new Error("release.json field '" + field + "' must be a non-empty string.");
-    }
+  validateReleaseManifest(candidate, trustPolicy);
+  if (candidate.minimumAndroidVersion !== "Android 6.0") {
+    throw new Error("release.json minimumAndroidVersion must be Android 6.0.");
   }
-
-  if (!Number.isInteger(candidate.versionCode) || candidate.versionCode <= 0) {
-    throw new Error("release.json field 'versionCode' must be a positive integer.");
-  }
-
-  const expectedArtifactPath =
-    "/downloads/rwms-worker-" + encodeURIComponent(candidate.versionName) + ".apk";
-
-  if (candidate.artifactPath !== expectedArtifactPath) {
-    throw new Error(
-      "release.json field 'artifactPath' must be the versioned WorkerApp APK path.",
-    );
-  }
-
-  if (candidate.packageName !== "dev.buhanzaz.rwms.worker") {
-    throw new Error("release.json must describe the WorkerApp package.");
-  }
-
-  const publicGateway = validateHttpsUrl(candidate.publicGateway, "publicGateway");
-
-  if (
-    publicGateway.pathname !== "/" ||
-    publicGateway.search !== "" ||
-    publicGateway.hash !== ""
-  ) {
-    throw new Error(
-      "release.json field 'publicGateway' must be an HTTPS origin without path, query or fragment.",
-    );
-  }
-
-  if (candidate.status === "pending") {
-    for (const field of ["downloadUrl", "sha256", "publishedAt"]) {
-      if (candidate[field] !== null) {
-        throw new Error(
-          "A pending release must keep '" + field + "' null until the APK is published.",
-        );
-      }
-    }
-    return;
-  }
-
-  if (candidate.status !== "published") {
-    throw new Error("release.json status must be either 'pending' or 'published'.");
-  }
-
-  const downloadUrl = validateHttpsUrl(candidate.downloadUrl, "downloadUrl");
-
-  if (
-    downloadUrl.pathname !== candidate.artifactPath ||
-    downloadUrl.search !== "" ||
-    downloadUrl.hash !== ""
-  ) {
-    throw new Error(
-      "A published release URL must be the exact versioned APK asset URL without query or fragment.",
-    );
-  }
-
-  if (!/^[a-f0-9]{64}$/.test(candidate.sha256)) {
-    throw new Error("A published release must provide a lowercase SHA-256 checksum.");
-  }
-
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(candidate.publishedAt)) {
-    throw new Error("A published release must use an ISO publication date.");
-  }
-}
-
-function validateHttpsUrl(value, field) {
-  let parsed;
-
-  try {
-    parsed = new URL(value);
-  } catch {
-    throw new Error("release.json field '" + field + "' must be an absolute HTTPS URL.");
-  }
-
-  if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
-    throw new Error("release.json field '" + field + "' must be a credential-free HTTPS URL.");
-  }
-
-  return parsed;
 }
 
 function releaseArtifactStoragePath(release) {

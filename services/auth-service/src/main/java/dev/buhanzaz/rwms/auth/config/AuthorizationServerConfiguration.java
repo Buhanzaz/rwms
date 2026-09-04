@@ -258,7 +258,7 @@ public class AuthorizationServerConfiguration {
                                 .authenticationProviders(providers -> providers.add(
                                         0, new PublicPkceClientAuthenticationProvider(clients))))
                         .authorizationEndpoint(endpoint -> endpoint.authenticationProviders(
-                                publicMobileAuthorizationCodeValidators()))
+                                publicPkceAuthorizationCodeValidators()))
                         .tokenEndpoint(tokenEndpoint -> tokenEndpoint.authenticationProviders(
                                 downstreamClientCredentialsValidators()))
                         .oidc(Customizer.withDefaults()))
@@ -271,33 +271,36 @@ public class AuthorizationServerConfiguration {
         return http.build();
     }
 
-    private Consumer<List<AuthenticationProvider>> publicMobileAuthorizationCodeValidators() {
+    private Consumer<List<AuthenticationProvider>> publicPkceAuthorizationCodeValidators() {
         return providers -> providers.forEach(provider -> {
             if (provider
                     instanceof OAuth2AuthorizationCodeRequestAuthenticationProvider authorizationCode) {
                 authorizationCode.setAuthenticationValidator(
                         new OAuth2AuthorizationCodeRequestAuthenticationValidator()
-                                .andThen(AuthorizationServerConfiguration::validateMobilePkceS256));
+                                .andThen(AuthorizationServerConfiguration::validatePublicPkceS256));
             }
         });
     }
 
     /**
-     * Requires the Android public clients to use the S256 PKCE transformation.
+     * Requires dedicated public application clients to use the S256 PKCE transformation.
      *
      * <p>Plain PKCE is intentionally not accepted for these clients: S256 prevents a party that
      * observes an authorization request from recovering the verifier needed at token exchange.</p>
      *
      * @param context authorization-code request validation context
-     * @throws OAuth2AuthorizationCodeRequestAuthenticationException when an Android client omits
+     * @throws OAuth2AuthorizationCodeRequestAuthenticationException when a dedicated client omits
      *     S256
      */
-    static void validateMobilePkceS256(
+    static void validatePublicPkceS256(
             OAuth2AuthorizationCodeRequestAuthenticationContext context) {
         String clientId = context.getRegisteredClient().getClientId();
         if (!OAuthClientProperties.WORKER_ANDROID_CLIENT_ID.equals(clientId)
                 && !OAuthClientProperties.DRIVER_ANDROID_CLIENT_ID.equals(clientId)
                 && !OAuthClientProperties.MANAGER_ANDROID_CLIENT_ID.equals(clientId)
+                && !OAuthClientProperties.RENTAL_MANAGER_WEB_CLIENT_ID.equals(clientId)
+                && !OAuthClientProperties.RENTAL_MANAGER_ANDROID_CLIENT_ID.equals(clientId)
+                && !OAuthClientProperties.ADMIN_WEB_CLIENT_ID.equals(clientId)
                 && !OAuthClientProperties.CUSTOMER_ANDROID_CLIENT_ID.equals(clientId)) {
             return;
         }
@@ -535,7 +538,9 @@ public class AuthorizationServerConfiguration {
                         })
                         .requestMatchers("/api/admin/eventing/**")
                         .hasRole("SYSTEM_ADMIN")
-                        .requestMatchers("/api/admin/**").hasAnyRole("SYSTEM_ADMIN", "WMS_ADMIN")
+                        .requestMatchers("/api/admin/**")
+                        .access((authentication, context) ->
+                                adminApplicationAccess(authentication.get()))
                         .requestMatchers("/api/**").authenticated()
                         .anyRequest().denyAll())
                 .oauth2ResourceServer(resourceServer -> resourceServer
@@ -608,6 +613,21 @@ public class AuthorizationServerConfiguration {
         return path != null
                 && ("/auth/actuator".equals(path)
                         || path.startsWith("/auth/actuator/"));
+    }
+
+    /** Requires the dedicated administration client, scope, user principal, and administrator role. */
+    private static AuthorizationDecision adminApplicationAccess(Authentication authentication) {
+        Set<String> authorities = authentication.getAuthorities().stream()
+                .map(GrantedAuthority::getAuthority)
+                .collect(java.util.stream.Collectors.toSet());
+        boolean administratorRole = authorities.contains("ROLE_SYSTEM_ADMIN")
+                || authorities.contains("ROLE_WMS_ADMIN");
+        return new AuthorizationDecision(
+                authentication.isAuthenticated()
+                        && authorities.contains("ROLE_USER")
+                        && authorities.contains("CLIENT_" + OAuthClientProperties.ADMIN_WEB_CLIENT_ID)
+                        && authorities.contains("SCOPE_admin.manage")
+                        && administratorRole);
     }
 
     /**
@@ -715,7 +735,8 @@ public class AuthorizationServerConfiguration {
             }
             validateClientPrincipal(
                     clientId, subject.getPrincipalType(), oauthClients);
-            validateCustomerClientRole(clientId, subject.getGlobalRole());
+            validateInteractiveClientAccess(
+                    clientId, subject.getGlobalRole(), subject.isRentalAccess());
             if (OAuthClientProperties.MANAGER_ANDROID_CLIENT_ID.equals(clientId)
                     && (subject.getPrincipalType() != PrincipalType.USER
                             || !subject.getGlobalRole().isManagerAppEligible()
@@ -928,22 +949,65 @@ public class AuthorizationServerConfiguration {
     }
 
     /**
-     * Keeps customer accounts and the customer OAuth client mutually exclusive.
+     * Enforces the authoritative role boundary for each dedicated interactive application.
      *
-     * <p>A CUSTOMER subject cannot obtain panel or manager scopes, and an administrative USER
-     * cannot exchange an authorization code or refresh token through the customer client.
+     * <p>Customer and rental-manager subjects cannot obtain panel, logistics, or administration
+     * scopes through another client. Conversely, broader administrative roles cannot use the
+     * customer or rental-manager clients to cross application boundaries.
      *
      * @param clientId registered OAuth client identifier
      * @param globalRole authoritative user role, or {@code null} for non-user subjects
-     * @throws OAuth2AuthenticationException when the customer boundary would be crossed
+     * @throws OAuth2AuthenticationException when an application role boundary would be crossed
      */
-    void validateCustomerClientRole(String clientId, UserGlobalRole globalRole) {
+    void validateInteractiveClientRole(String clientId, UserGlobalRole globalRole) {
         boolean customerClient = OAuthClientProperties.CUSTOMER_ANDROID_CLIENT_ID.equals(clientId);
         boolean customerRole = globalRole == UserGlobalRole.CUSTOMER;
         if (customerClient != customerRole) {
             throw new OAuth2AuthenticationException(
                     new OAuth2Error("access_denied"),
                     "Customer accounts and customer OAuth client are isolated",
+                    null);
+        }
+        if (customerClient) {
+            return;
+        }
+        boolean rentalManagerClient =
+                OAuthClientProperties.RENTAL_MANAGER_WEB_CLIENT_ID.equals(clientId)
+                        || OAuthClientProperties.RENTAL_MANAGER_ANDROID_CLIENT_ID.equals(clientId);
+        if (rentalManagerClient != (globalRole == UserGlobalRole.RENTAL_MANAGER)) {
+            if (rentalManagerClient || globalRole == UserGlobalRole.RENTAL_MANAGER) {
+                throw new OAuth2AuthenticationException(
+                        new OAuth2Error("access_denied"),
+                        "Rental managers may use only the dedicated manager applications",
+                        null);
+            }
+        }
+        boolean adminClient = OAuthClientProperties.ADMIN_WEB_CLIENT_ID.equals(clientId);
+        boolean adminRole = globalRole == UserGlobalRole.SYSTEM_ADMIN
+                || globalRole == UserGlobalRole.WMS_ADMIN;
+        if (adminClient && !adminRole) {
+            throw new OAuth2AuthenticationException(
+                    new OAuth2Error("access_denied"),
+                    "Administration application access is not allowed for this user",
+                    null);
+        }
+    }
+
+    /**
+     * Applies mutable application entitlements after the immutable role/client boundary. A rental
+     * manager whose rental access was explicitly revoked cannot obtain a fresh or refreshed token
+     * for either dedicated manager application.
+     */
+    void validateInteractiveClientAccess(
+            String clientId, UserGlobalRole globalRole, boolean rentalAccess) {
+        validateInteractiveClientRole(clientId, globalRole);
+        boolean rentalManagerClient =
+                OAuthClientProperties.RENTAL_MANAGER_WEB_CLIENT_ID.equals(clientId)
+                        || OAuthClientProperties.RENTAL_MANAGER_ANDROID_CLIENT_ID.equals(clientId);
+        if (rentalManagerClient && !rentalAccess) {
+            throw new OAuth2AuthenticationException(
+                    new OAuth2Error("access_denied"),
+                    "Rental manager application access is revoked",
                     null);
         }
     }

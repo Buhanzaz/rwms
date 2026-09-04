@@ -71,7 +71,6 @@ describe("RentalClientPicker", () => {
 
     expect(await screen.findByText(RECENT_CLIENT.displayName)).toBeTruthy()
     expect(screen.queryByText("Тип контрагента")).toBeNull()
-    expect(screen.queryByText("Компания")).toBeNull()
     expect(screen.queryByText("Клиент")).toBeNull()
   })
 

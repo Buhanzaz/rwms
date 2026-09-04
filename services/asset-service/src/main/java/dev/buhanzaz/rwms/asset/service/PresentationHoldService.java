@@ -482,9 +482,7 @@ public class PresentationHoldService {
     int from = (int) Math.min(offset, available.size());
     int to = Math.min(from + size, available.size());
     List<RentalItemResponse> content =
-        available.subList(from, to).stream()
-            .map(item -> assets.rentalItem(item.getId()))
-            .toList();
+        available.subList(from, to).stream().map(item -> assets.rentalItem(item.getId())).toList();
     long pages =
         available.isEmpty() ? 0 : (available.size() + (long) size - 1) / size;
     return new RentalItemPage(content, page, size, available.size(), pages);

@@ -11,7 +11,6 @@ const setting = {
   warehouseId,
   version: 4,
   repairPlaceCount: 6,
-  automaticRefillDelayMinutes: 5,
   createdAt: "2026-07-25T09:00:00Z",
   updatedAt: "2026-07-25T10:00:00Z",
 }
@@ -51,7 +50,6 @@ describe("repair capacity API", () => {
       ...setting,
       version: 5,
       repairPlaceCount: 8,
-      automaticRefillDelayMinutes: 15,
     }
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -61,7 +59,6 @@ describe("repair capacity API", () => {
       updateRepairCapacity("access-token", warehouseId, {
         expectedVersion: 4,
         repairPlaceCount: 8,
-        automaticRefillDelayMinutes: 15,
       })
     ).resolves.toEqual(saved)
 
@@ -76,7 +73,6 @@ describe("repair capacity API", () => {
     expect(JSON.parse(String(init?.body))).toEqual({
       expectedVersion: 4,
       repairPlaceCount: 8,
-      automaticRefillDelayMinutes: 15,
     })
   })
 
@@ -91,7 +87,6 @@ describe("repair capacity API", () => {
     const request = updateRepairCapacity("access-token", warehouseId, {
       expectedVersion: 4,
       repairPlaceCount: 8,
-      automaticRefillDelayMinutes: 15,
     })
 
     await expect(request).rejects.toBeInstanceOf(ApiError)

@@ -24,18 +24,11 @@ class WorkerSseClient(
     private val json: Json,
 ) {
     /**
-     * Opens an invalidation-only stream and forwards the last local event ID when one exists.
-     * Consumers still refresh through REST: reconnect is not proof that the server replayed data.
+     * Opens a fresh invalidation-only stream. Reconnect has no cursor semantics; the coordinator
+     * requests an authoritative REST refresh instead of attempting event replay.
      */
-    fun events(lastEventId: String?): Flow<WorkerInvalidationEventDto> = callbackFlow {
-        val endpoint = publicBaseUrl.newBuilder()
-            .addPathSegments("api/task-board/worker/v1/events")
-            .build()
-        val request = Request.Builder()
-            .url(endpoint)
-            .header("Accept", "text/event-stream")
-            .apply { if (!lastEventId.isNullOrBlank()) header("Last-Event-ID", lastEventId) }
-            .build()
+    fun events(): Flow<WorkerInvalidationEventDto> = callbackFlow {
+        val request = workerSseRequest(publicBaseUrl)
         val eventSource = EventSources.createFactory(client).newEventSource(request, object : EventSourceListener() {
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
                 runCatching { json.decodeFromString<WorkerInvalidationEventDto>(data) }
@@ -53,6 +46,16 @@ class WorkerSseClient(
         awaitClose { eventSource.cancel() }
     }
 }
+
+/** Builds the worker stream request without a replay cursor or replay header. */
+internal fun workerSseRequest(publicBaseUrl: HttpUrl): Request = Request.Builder()
+    .url(
+        publicBaseUrl.newBuilder()
+            .addPathSegments("api/task-board/worker/v1/events")
+            .build(),
+    )
+    .header("Accept", "text/event-stream")
+    .build()
 
 fun requireSameOriginApiPath(path: String): String {
     require(UPLOAD_CONTENT_PATH.matches(path)) {

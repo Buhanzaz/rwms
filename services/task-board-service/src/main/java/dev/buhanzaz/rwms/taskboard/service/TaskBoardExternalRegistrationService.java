@@ -12,9 +12,10 @@ import dev.buhanzaz.rwms.taskboard.eventing.WorkerFeedRevisionStore;
 import dev.buhanzaz.rwms.taskboard.repository.*;
 import dev.buhanzaz.rwms.taskboard.service.WarehouseLifecycleFence.AdmissionPermit;
 import dev.buhanzaz.rwms.taskboard.service.WarehouseLifecycleGateway.OperationDirection;
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
-import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -26,6 +27,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -46,7 +48,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 class TaskBoardExternalRegistrationService {
   static final String LOGISTICS_SOURCE_CLIENT_ID = "logistics-service";
   private static final String MAINTENANCE_SOURCE_CLIENT_ID = "maintenance-service";
-  private static final ZoneId DEFAULT_SCHEDULE_ZONE = ZoneId.of("Europe/Moscow");
 
   private final BoardTaskRepository tasks;
   private final QueueEntryRepository entries;
@@ -66,6 +67,8 @@ class TaskBoardExternalRegistrationService {
   private final DriverTaskAudienceService driverAudiences;
   private final TaskBoardEntryOwnerProofService ownerProofs;
   private final JdbcTemplate jdbc;
+  private final WarehouseTimeZoneGateway timeZones;
+  private final Clock clock;
 
   TaskBoardExternalRegistrationService(
       BoardTaskRepository tasks,
@@ -85,7 +88,9 @@ class TaskBoardExternalRegistrationService {
       WorkerFeedRevisionStore workerFeedRevisions,
       DriverTaskAudienceService driverAudiences,
       TaskBoardEntryOwnerProofService ownerProofs,
-      JdbcTemplate jdbc) {
+      JdbcTemplate jdbc,
+      WarehouseTimeZoneGateway timeZones,
+      ObjectProvider<Clock> clockProvider) {
     this.tasks = tasks;
     this.entries = entries;
     this.registry = registry;
@@ -104,6 +109,8 @@ class TaskBoardExternalRegistrationService {
     this.driverAudiences = driverAudiences;
     this.ownerProofs = ownerProofs;
     this.jdbc = jdbc;
+    this.timeZones = Objects.requireNonNull(timeZones);
+    this.clock = clockProvider.getIfAvailable(Clock::systemUTC);
   }
 
   /**
@@ -132,12 +139,15 @@ class TaskBoardExternalRegistrationService {
         null,
         TaskLane.SCHEDULED,
         null,
+        null,
         admissionDirection);
   }
 
   BoardTaskRegistrationDto registerExternalTask(
       String sourceClientId, RegisterExternalTaskRequest request) {
     TaskSourceReferenceDto source = sourceReferenceFor(sourceClientId, request.source());
+    PlannerTaskLineageDto plannerLineage =
+        plannerLineageFor(sourceClientId, source, request.plannerLineage(), request);
     DriverTaskAudienceDto driverAudience =
         driverAudiences.normalizeRegistration(sourceClientId, source, request.driverAudience());
     CreateBoardTaskRequest createRequest =
@@ -162,6 +172,7 @@ class TaskBoardExternalRegistrationService {
             source,
             request.lane() == null ? TaskLane.SCHEDULED : request.lane(),
             driverAudience,
+            plannerLineage,
             OperationDirection.INCOMING);
     return inLifecycleMutation(
         () -> registrationDto(requireTask(task.getWarehouseId(), task.getId())));
@@ -181,6 +192,7 @@ class TaskBoardExternalRegistrationService {
         null,
         null,
         TaskLane.SCHEDULED,
+        null,
         null,
         OperationDirection.INCOMING);
   }
@@ -202,6 +214,7 @@ class TaskBoardExternalRegistrationService {
         null,
         TaskLane.SCHEDULED,
         null,
+        null,
         OperationDirection.INCOMING);
   }
 
@@ -215,6 +228,7 @@ class TaskBoardExternalRegistrationService {
       TaskSourceReferenceDto sourceReference,
       TaskLane taskLane,
       DriverTaskAudienceDto driverAudience,
+      PlannerTaskLineageDto plannerLineage,
       OperationDirection admissionDirection) {
     TaskLane effectiveLane = taskLane == null ? TaskLane.SCHEDULED : taskLane;
     if (effectiveLane == TaskLane.CURRENT
@@ -234,6 +248,7 @@ class TaskBoardExternalRegistrationService {
                     sourceReference,
                     effectiveLane,
                     driverAudience,
+                    plannerLineage,
                     suppliedFingerprint));
     if (existingTask != null) {
       return existingTask;
@@ -252,6 +267,7 @@ class TaskBoardExternalRegistrationService {
                 sourceReference,
                 effectiveLane,
                 driverAudience,
+                plannerLineage,
                 admission));
   }
 
@@ -265,6 +281,7 @@ class TaskBoardExternalRegistrationService {
       TaskSourceReferenceDto sourceReference,
       TaskLane effectiveLane,
       DriverTaskAudienceDto driverAudience,
+      PlannerTaskLineageDto plannerLineage,
       AdmissionPermit admission) {
     warehouseLifecycleFence.terminalizeAdmission(admission);
     if (request.externalTaskId() != null) {
@@ -277,6 +294,7 @@ class TaskBoardExternalRegistrationService {
               sourceReference,
               effectiveLane,
               driverAudience,
+              plannerLineage,
               suppliedFingerprint);
       if (existingTask != null) {
         return existingTask;
@@ -287,7 +305,7 @@ class TaskBoardExternalRegistrationService {
         resolveRoute(warehouseId, request.route(), allowRepeatedQueues, sourceClientId);
     requireRoutePurpose(routeSteps, sourceReference);
     queuePositions.lockQueuePositions(warehouseId, routeSteps.stream().map(ResolvedRouteStep::queue).toList());
-    LocalDate scheduledDate = scheduleDate(request);
+    LocalDate scheduledDate = scheduleDate(warehouseId, request);
     Set<QueueEntry> existingEntries = new LinkedHashSet<>();
     routeSteps.stream()
         .map(ResolvedRouteStep::queue)
@@ -351,7 +369,11 @@ class TaskBoardExternalRegistrationService {
               request.externalTaskId(),
               sourceClientId,
               sourceReference == null ? null : sourceReference.type(),
-              sourceReference == null ? null : sourceReference.sourceId()));
+              sourceReference == null ? null : sourceReference.sourceId(),
+              plannerLineage == null ? null : plannerLineage.sourcePlanId(),
+              plannerLineage == null ? null : plannerLineage.sourcePlanVersion(),
+              plannerLineage == null ? null : plannerLineage.sourcePlanWarehouseId(),
+              plannerLineage == null ? null : plannerLineage.sourcePlanDate()));
     }
     int route = 0;
     for (var resolved : routeSteps) {
@@ -418,6 +440,7 @@ class TaskBoardExternalRegistrationService {
       TaskSourceReferenceDto sourceReference,
       TaskLane effectiveLane,
       DriverTaskAudienceDto driverAudience,
+      PlannerTaskLineageDto plannerLineage,
       String suppliedFingerprint) {
     if (request.externalTaskId() == null) {
       return null;
@@ -468,6 +491,7 @@ class TaskBoardExternalRegistrationService {
     }
     if (warehouseId.equals(task.getWarehouseId()) && fingerprintMatches) {
       requireExactSourceReference(task, sourceClientId, sourceReference);
+      requireExactPlannerLineage(task, plannerLineage);
       return task;
     }
     throw new ConflictException("Задача с externalTaskId уже существует с другими данными");
@@ -542,6 +566,51 @@ class TaskBoardExternalRegistrationService {
           "Источник задания не соответствует сервису-владельцу");
     }
     return source;
+  }
+
+  private PlannerTaskLineageDto plannerLineageFor(
+      String sourceClientId,
+      TaskSourceReferenceDto source,
+      PlannerTaskLineageDto plannerLineage,
+      RegisterExternalTaskRequest request) {
+    if (plannerLineage == null) return null;
+    if (!LOGISTICS_SOURCE_CLIENT_ID.equals(sourceClientId)
+        || source == null
+        || source.type() != TaskSourceType.LOGISTICS_DRIVER_TASK
+        || request.scheduledDate() == null
+        || !request.scheduledDate().equals(plannerLineage.sourcePlanDate())) {
+      throw new IllegalArgumentException(
+          "Planner lineage is allowed only for a dated logistics driver task");
+    }
+    return plannerLineage;
+  }
+
+  /**
+   * Fences a replay to the exact durable planner lineage after source ownership was verified.
+   *
+   * <p>A manager-originated task intentionally has no synchronization-source row, so an absent
+   * requested lineage is equivalent only for that owner-free replay. Any supplied lineage still
+   * requires an existing source row and an exact match of every lineage fence.
+   */
+  private void requireExactPlannerLineage(
+      BoardTask task, PlannerTaskLineageDto requested) {
+    var registered = taskSyncSources.findById(task.getId());
+    if (requested == null && registered.isEmpty()) {
+      return;
+    }
+    TaskSyncSource source =
+        registered.orElseThrow(
+            () -> new ConflictException("Не найден источник синхронизации задачи"));
+    boolean matches =
+        requested == null
+            ? source.getSourcePlanId() == null
+            : requested.sourcePlanId().equals(source.getSourcePlanId())
+                && requested.sourcePlanVersion().equals(source.getSourcePlanVersion())
+                && requested.sourcePlanWarehouseId().equals(source.getSourcePlanWarehouseId())
+                && requested.sourcePlanDate().equals(source.getSourcePlanDate());
+    if (!matches) {
+      throw new ConflictException("Планировочный источник задачи нельзя заменить");
+    }
   }
 
   private void requireExactSourceReference(
@@ -635,10 +704,15 @@ class TaskBoardExternalRegistrationService {
   }
 
 
-  private LocalDate scheduleDate(CreateBoardTaskRequest request) {
+  LocalDate scheduleDate(UUID warehouseId, CreateBoardTaskRequest request) {
     if (request.scheduledDate() != null) return request.scheduledDate();
-    if (request.deadlineAt() != null) return request.deadlineAt().toLocalDate();
-    return LocalDate.now(DEFAULT_SCHEDULE_ZONE);
+    Instant effectiveInstant =
+        request.deadlineAt() == null ? clock.instant() : request.deadlineAt().toInstant();
+    return warehouseBusinessDate(warehouseId, effectiveInstant);
+  }
+
+  LocalDate warehouseBusinessDate(UUID warehouseId, Instant instant) {
+    return instant.atZone(timeZones.timeZoneAt(warehouseId, instant).timeZone()).toLocalDate();
   }
 
   private int priority(Integer value) {
@@ -659,7 +733,7 @@ class TaskBoardExternalRegistrationService {
   }
 
   private OffsetDateTime now() {
-    return OffsetDateTime.now(ZoneOffset.UTC);
+    return OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
   }
 
 
@@ -705,11 +779,7 @@ class TaskBoardExternalRegistrationService {
 
 
   private void publishTaskAvailabilityAfterCommit(BoardTask task) {
-    boolean visibleToday =
-        task.getLane() == TaskLane.CURRENT
-            || Objects.equals(
-                task.getScheduledDate(), LocalDate.now(DEFAULT_SCHEDULE_ZONE));
-    if (!visibleToday) return;
+    if (!isVisibleToday(task)) return;
 
     List<TaskAvailabilityNotification> notifications =
         entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId()).stream()
@@ -752,6 +822,12 @@ class TaskBoardExternalRegistrationService {
     } else {
       dispatch.run();
     }
+  }
+
+  boolean isVisibleToday(BoardTask task) {
+    return task.getLane() == TaskLane.CURRENT
+        || Objects.equals(
+            task.getScheduledDate(), warehouseBusinessDate(task.getWarehouseId(), clock.instant()));
   }
 
   private Set<UUID> eligibleWorkerIds(

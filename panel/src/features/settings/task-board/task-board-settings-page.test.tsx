@@ -310,7 +310,7 @@ describe("TaskBoardSettingsPage navigation", () => {
   it("shows the global queue catalog first without a warehouse queue tab", async () => {
     renderPage()
 
-    await screen.findByRole("radio", { name: "Каталог очередей" })
+    await screen.findByRole("radio", { name: "Доски задач" })
 
     const navigation = screen.getByRole("navigation", {
       name: "Разделы настройки доски задач",
@@ -318,7 +318,7 @@ describe("TaskBoardSettingsPage navigation", () => {
     const sectionButtons = within(navigation).getAllByRole("radio")
 
     expect(sectionButtons.map((button) => button.textContent)).toEqual([
-      "Каталог очередей",
+      "Доски задач",
       "Классы",
       "Бригады",
       "Рабочие",
@@ -391,7 +391,7 @@ describe("TaskBoardSettingsPage navigation", () => {
 
     renderPage()
 
-    await screen.findByRole("radio", { name: "Каталог очередей" })
+    await screen.findByRole("radio", { name: "Доски задач" })
     expect(screen.getByText("Перемещения")).toBeTruthy()
   })
 
@@ -416,7 +416,8 @@ describe("TaskBoardSettingsPage navigation", () => {
     renderPage()
 
     expect(await screen.findByText(workerClass.name)).toBeTruthy()
-    expect(screen.getByText("Основной")).toBeTruthy()
+    expect(screen.queryByText("Основной")).toBeNull()
+    expect(screen.queryByText("Вторичный")).toBeNull()
   })
 
   it("reorders global definitions from the table and keeps holding queues terminal", async () => {
@@ -474,9 +475,15 @@ describe("TaskBoardSettingsPage navigation", () => {
     mocks.listQueueDefinitions.mockResolvedValue([definition])
     renderPage()
 
-    await user.click(await screen.findByRole("button", { name: "Удалить" }))
-    const dialog = await screen.findByRole("alertdialog")
-    await user.click(within(dialog).getByRole("button", { name: "Удалить" }))
+    await user.click(await screen.findByRole("button", { name: "Изменить" }))
+    const editor = await screen.findByRole("dialog", {
+      name: "Очередь каталога",
+    })
+    await user.click(within(editor).getByRole("button", { name: "Удалить" }))
+    const confirmation = await screen.findByRole("alertdialog")
+    await user.click(
+      within(confirmation).getByRole("button", { name: "Удалить" })
+    )
 
     await waitFor(() =>
       expect(mocks.deleteQueueDefinition).toHaveBeenCalledWith(
@@ -542,7 +549,11 @@ describe("TaskBoardSettingsPage workforce operations", () => {
 
     renderPage()
     await user.click(await screen.findByRole("radio", { name: "Бригады" }))
-    await user.click(screen.getByRole("button", { name: "Отключить работу" }))
+    await user.click(screen.getByRole("button", { name: "Изменить" }))
+    const editor = await screen.findByRole("dialog", { name: "Бригада" })
+    await user.click(
+      within(editor).getByRole("button", { name: "Отключить работу" })
+    )
     await user.type(
       screen.getByRole("textbox", { name: "Причина" }),
       "Пересменка"
@@ -571,7 +582,11 @@ describe("TaskBoardSettingsPage workforce operations", () => {
     await user.click(await screen.findByRole("radio", { name: "Бригады" }))
 
     expect(screen.getByText("Пересменка")).toBeTruthy()
-    await user.click(screen.getByRole("button", { name: "Включить работу" }))
+    await user.click(screen.getByRole("button", { name: "Изменить" }))
+    const editor = await screen.findByRole("dialog", { name: "Бригада" })
+    await user.click(
+      within(editor).getByRole("button", { name: "Включить работу" })
+    )
 
     await waitFor(() =>
       expect(mocks.enableGroup).toHaveBeenCalledWith(
@@ -582,5 +597,32 @@ describe("TaskBoardSettingsPage workforce operations", () => {
         null
       )
     )
+  })
+
+  it("keeps worker credential and deletion actions inside the editor", async () => {
+    const user = userEvent.setup()
+    mocks.listClasses.mockResolvedValue([classFixture()])
+    mocks.listWorkers.mockResolvedValue([
+      {
+        ...workerFixture(),
+        appLogin: "ivan.petrov",
+        credentialStatus: "ACTIVE",
+      },
+    ])
+
+    renderPage()
+    await user.click(await screen.findByRole("radio", { name: "Рабочие" }))
+
+    expect(screen.queryByRole("button", { name: "Сменить пароль" })).toBeNull()
+    await user.click(screen.getByRole("button", { name: "Изменить" }))
+
+    const editor = await screen.findByRole("dialog", { name: "Рабочий" })
+    expect(
+      within(editor).getByRole("button", { name: "Сменить пароль" })
+    ).toBeTruthy()
+    expect(
+      within(editor).getByRole("button", { name: "Отключить вход" })
+    ).toBeTruthy()
+    expect(within(editor).getByRole("button", { name: "Удалить" })).toBeTruthy()
   })
 })

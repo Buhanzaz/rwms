@@ -56,6 +56,8 @@ class LogisticsDocumentTest {
 
     assertThat(document.getPartySnapshot()).isEqualTo("Арендатор");
     assertThat(document.getDriverSnapshot()).isEqualTo("Водитель");
+    assertThat(document.getCustomerDeliveryPurpose())
+        .isEqualTo(CustomerDeliveryPurpose.RENTAL_DELIVERY);
 
     document.scheduleShipment("Водитель", LocalDate.parse("2026-07-01"));
     document.beginShipmentPreparation();
@@ -65,6 +67,22 @@ class LogisticsDocumentTest {
     assertThatThrownBy(document::cancel)
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("cannot be cancelled");
+  }
+
+  @Test
+  void nonCustomerMovementsDoNotAcquireACustomerDeliveryPurpose() {
+    LogisticsDocument rentalReturn =
+        LogisticsDocument.createReturn(WAREHOUSE, SUBJECT, CORRELATION);
+    LogisticsDocument transfer =
+        LogisticsDocument.createTransfer(
+            WAREHOUSE,
+            DESTINATION,
+            LocalDate.parse("2026-09-03"),
+            SUBJECT,
+            CORRELATION);
+
+    assertThat(rentalReturn.getCustomerDeliveryPurpose()).isNull();
+    assertThat(transfer.getCustomerDeliveryPurpose()).isNull();
   }
 
   @Test

@@ -265,7 +265,7 @@ export function FullscreenPhotoViewer({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="!fixed !inset-0 !top-0 !left-0 !h-svh !max-h-none !w-screen !max-w-none !translate-x-0 !translate-y-0 overflow-hidden overscroll-contain rounded-none border-0 bg-black p-0 text-white"
+        className="!fixed !inset-0 !top-0 !left-0 !h-svh !max-h-none !w-screen !max-w-none !translate-x-0 !translate-y-0 overflow-hidden overscroll-contain rounded-none border-0 bg-primary p-0 text-primary-foreground"
         onKeyDown={(event) => {
           if (event.defaultPrevented) return
           if (event.key === "+" || event.key === "=") {
@@ -312,7 +312,7 @@ export function FullscreenPhotoViewer({
         </DialogHeader>
 
         <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-3 p-4 [padding-top:max(1rem,env(safe-area-inset-top))]">
-          <div className="max-w-[calc(100vw-5rem)] truncate rounded-full bg-black/55 px-4 py-2 text-sm font-medium backdrop-blur">
+          <div className="max-w-[calc(100vw-5rem)] truncate rounded-full bg-primary/55 px-4 py-2 text-sm font-medium backdrop-blur">
             {title}
           </div>
           <Button
@@ -320,7 +320,7 @@ export function FullscreenPhotoViewer({
             size="icon"
             variant="ghost"
             aria-label="Закрыть просмотр"
-            className="pointer-events-auto shrink-0 rounded-full bg-black/55 text-white hover:bg-white/20 hover:text-white"
+            className="pointer-events-auto shrink-0 rounded-full bg-primary/55 text-primary-foreground hover:bg-primary-foreground/20 hover:text-primary-foreground"
             onClick={() => handleOpenChange(false)}
           >
             <HugeiconsIcon icon={Cancel01Icon} aria-hidden="true" />
@@ -332,7 +332,7 @@ export function FullscreenPhotoViewer({
           data-slot="fullscreen-photo-stage"
           aria-label="Область масштабирования фотографии"
           className={cn(
-            "flex h-svh w-screen touch-none items-center justify-center overflow-hidden bg-black select-none",
+            "flex h-svh w-screen touch-none items-center justify-center overflow-hidden bg-primary select-none",
             scale > MIN_SCALE && (dragging ? "cursor-grabbing" : "cursor-grab")
           )}
           onDoubleClick={() =>
@@ -347,7 +347,7 @@ export function FullscreenPhotoViewer({
           onWheel={handleWheel}
         >
           {loading ? (
-            <p className="text-sm text-white/70">Загрузка фотографий...</p>
+            <p className="text-sm text-primary-foreground/70">Загрузка фотографий...</p>
           ) : activePhoto ? (
             <img
               src={activePhoto.src}
@@ -365,20 +365,20 @@ export function FullscreenPhotoViewer({
               }}
             />
           ) : (
-            <p className="px-6 text-center text-sm text-white/70">
+            <p className="px-6 text-center text-sm text-primary-foreground/70">
               {emptyLabel}
             </p>
           )}
         </div>
 
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center p-4 [padding-bottom:max(1rem,env(safe-area-inset-bottom))]">
-          <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-1 rounded-full bg-black/60 p-2 backdrop-blur">
+          <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-1 rounded-full bg-primary/60 p-2 backdrop-blur">
             <Button
               type="button"
               size="icon"
               variant="ghost"
               aria-label="Предыдущее фото"
-              className="rounded-full text-white hover:bg-white/20 hover:text-white"
+              className="rounded-full text-primary-foreground hover:bg-primary-foreground/20 hover:text-primary-foreground"
               disabled={photos.length < 2}
               onClick={() => changePhoto(-1)}
             >
@@ -396,19 +396,19 @@ export function FullscreenPhotoViewer({
               size="icon"
               variant="ghost"
               aria-label="Следующее фото"
-              className="rounded-full text-white hover:bg-white/20 hover:text-white"
+              className="rounded-full text-primary-foreground hover:bg-primary-foreground/20 hover:text-primary-foreground"
               disabled={photos.length < 2}
               onClick={() => changePhoto(1)}
             >
               <HugeiconsIcon icon={ArrowRight01Icon} aria-hidden="true" />
             </Button>
-            <span className="mx-1 h-6 w-px bg-white/20" aria-hidden="true" />
+            <span className="mx-1 h-6 w-px bg-primary-foreground/20" aria-hidden="true" />
             <Button
               type="button"
               size="icon"
               variant="ghost"
               aria-label="Уменьшить фото"
-              className="rounded-full text-white hover:bg-white/20 hover:text-white"
+              className="rounded-full text-primary-foreground hover:bg-primary-foreground/20 hover:text-primary-foreground"
               disabled={scale <= MIN_SCALE}
               onClick={() => changeScale(-SCALE_STEP)}
             >
@@ -417,7 +417,7 @@ export function FullscreenPhotoViewer({
             <button
               type="button"
               aria-label="Сбросить масштаб"
-              className="min-w-14 rounded-full px-2 py-2 text-xs tabular-nums outline-none hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-white"
+              className="min-w-14 rounded-full px-2 py-2 text-xs tabular-nums outline-none hover:bg-primary-foreground/20 focus-visible:ring-2 focus-visible:ring-primary-foreground"
               onClick={resetView}
             >
               {Math.round(scale * 100)}%
@@ -427,7 +427,7 @@ export function FullscreenPhotoViewer({
               size="icon"
               variant="ghost"
               aria-label="Увеличить фото"
-              className="rounded-full text-white hover:bg-white/20 hover:text-white"
+              className="rounded-full text-primary-foreground hover:bg-primary-foreground/20 hover:text-primary-foreground"
               disabled={scale >= MAX_SCALE}
               onClick={() => changeScale(SCALE_STEP)}
             >

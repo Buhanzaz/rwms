@@ -1,0 +1,9 @@
+{
+  "name": "rwms-driver-download",
+  "version": "0.1.20",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --test scripts/release-trust.test.mjs && node scripts/verify-release.mjs"
+  }
+}

@@ -67,6 +67,34 @@ logistics-owned public photo snapshot. It returns identity/version/warehouse fen
 dimensions, finishing, category, ordered characteristic names and nullable linoleum; status,
 rental type, passport JSON, comments, tags and equipment are excluded.
 
+## Mandatory-photo cabin creation
+
+`POST /api/asset/v1/rental-item-creation-intents` is the interactive cabin-creation command when
+the caller has selected mandatory source photos. In one asset transaction it creates the ordinary
+`FREE` rental item, a durable pending intent and an asset-owned `CABIN_CREATION` operation lease.
+That lease excludes the new cabin from availability until the intent reaches a terminal state;
+the existing rental-item create endpoint remains available and unchanged for creation without a
+photo intent. Creation retries use the user-scoped `Idempotency-Key` and must carry the same
+payload.
+
+The request contains an ordered one-to-twenty-photo manifest of index, SHA-256, content type and
+content length. The intent stores that manifest, one stable upload command UUID per position, a
+gallery folder UUID and a canonical manifest hash; it stores neither source filenames nor media
+bytes. Pending intents can be listed by an authorized warehouse or read by ID, so an interrupted
+client can reconstruct the exact remaining upload work.
+
+Completion uses `expectedVersion` and a stable idempotency key. Before releasing the creation
+lease, asset-service reads
+`POST /api/internal/media/v1/assets/cabin-creation-snapshots` with its service identity and exact
+`media.asset` scope. The media call runs outside the asset database transaction. The final asset
+transaction rechecks the intent and accepts only the same cabin, warehouse and active folder with
+the exact planned number and manifest of current `READY` gallery photos and a current cover.
+Failure is fail-closed and leaves the lease active. Explicit abandonment also uses
+`expectedVersion`; it changes an incomplete `FREE` cabin to the existing non-rentable
+`WAREHOUSE` status, emits the ordinary rental-item/lease events, marks the intent abandoned and
+then releases only that intent's creation lease. Flyway V45 owns the intent and ordered-manifest
+tables, constraints and lookup indexes.
+
 ## Order furniture and cabin replacement
 
 `equipment_catalog_item.maximum_per_cabin` is the nullable asset-owned limit for one equipment

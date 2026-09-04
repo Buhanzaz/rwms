@@ -55,6 +55,7 @@ class AuthAssetServiceClientIntegrationTest {
                         "warehouse.operation.mark",
                         "warehouse.lifecycle.read",
                         "warehouse.lifecycle.confirm",
+                        "media.asset",
                         "media.asset-import");
     }
 
@@ -65,6 +66,7 @@ class AuthAssetServiceClientIntegrationTest {
         assertExactToken("warehouse.operation.mark");
         assertExactToken("warehouse.lifecycle.read");
         assertExactToken("warehouse.lifecycle.confirm");
+        assertExactToken("media.asset");
         assertExactToken("media.asset-import");
     }
 
@@ -72,6 +74,7 @@ class AuthAssetServiceClientIntegrationTest {
     void rejectsOmittedCombinedForeignAndUserScopes() throws Exception {
         assertInvalidScope(tokenRequest(null));
         assertInvalidScope(tokenRequest("warehouse.read media.asset-import"));
+        assertInvalidScope(tokenRequest("media.asset media.asset-import"));
         assertInvalidScope(tokenRequest("rwms.write"));
         assertInvalidScope(tokenRequest("asset.inventory"));
         assertInvalidScope(tokenRequest("media.maintenance"));

@@ -1,4 +1,8 @@
-import { ApiError } from "@/lib/api-client"
+import {
+  apiErrorFromRequestFailure,
+  apiErrorFromResponse,
+  invalidApiResponseError,
+} from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 import {
   cabinMediaOwner,
@@ -70,6 +74,8 @@ export type MediaUploadCommandKeys = Readonly<{
 }>
 
 export interface MediaClient {
+  /** Computes the exact lowercase SHA-256 used by media upload validation. */
+  calculateChecksumSha256(file: Blob): Promise<string>
   createUploadSession(
     accessToken: string,
     owner: ServiceMediaOwner,
@@ -184,6 +190,14 @@ export class HttpMediaClient implements MediaClient {
       } satisfies ObjectUrlFactory)
   }
 
+  async calculateChecksumSha256(file: Blob) {
+    const checksumSha256 = await this.#sha256(file)
+    if (!SHA256.test(checksumSha256)) {
+      throw new Error("SHA-256 media checksum is invalid")
+    }
+    return checksumSha256
+  }
+
   async createUploadSession(
     accessToken: string,
     owner: ServiceMediaOwner,
@@ -203,7 +217,9 @@ export class HttpMediaClient implements MediaClient {
         }),
       }
     )
-    return parseUploadSession(session, this.#baseUrl.origin)
+    return parseMediaApiResponse(() =>
+      parseUploadSession(session, this.#baseUrl.origin)
+    )
   }
 
   async uploadSessionContent(
@@ -213,16 +229,20 @@ export class HttpMediaClient implements MediaClient {
     idempotencyKey: string,
     onProgress?: MediaUploadProgressListener
   ) {
-    const contentUrl = requireSameOriginPath(
-      session.contentUploadUrl,
-      this.#baseUrl.origin,
-      UPLOAD_CONTENT_PATH
+    const contentUrl = parseMediaApiResponse(() =>
+      requireSameOriginPath(
+        session.contentUploadUrl,
+        this.#baseUrl.origin,
+        UPLOAD_CONTENT_PATH
+      )
     )
     if (
       contentUrl.pathname !==
       `/api/media/v1/upload-sessions/${session.uploadSessionId}/content`
     ) {
-      throw new Error("Media content path does not match its upload session")
+      throw invalidApiResponseError(
+        new Error("Media content path does not match its upload session")
+      )
     }
     const init: RequestInit = {
       method: "PUT",
@@ -232,16 +252,15 @@ export class HttpMediaClient implements MediaClient {
       },
       body: file,
     }
-    return parseUploadedObject(
-      onProgress
-        ? await this.#requestJsonWithProgress<unknown>(
-            accessToken,
-            contentUrl,
-            init,
-            onProgress
-          )
-        : await this.#requestJson<unknown>(accessToken, contentUrl, init)
-    )
+    const response = onProgress
+      ? await this.#requestJsonWithProgress<unknown>(
+          accessToken,
+          contentUrl,
+          init,
+          onProgress
+        )
+      : await this.#requestJson<unknown>(accessToken, contentUrl, init)
+    return parseMediaApiResponse(() => parseUploadedObject(response))
   }
 
   async finalizeUploadSession(
@@ -250,19 +269,19 @@ export class HttpMediaClient implements MediaClient {
     uploadedObject: UploadedObject,
     idempotencyKey: string
   ) {
-    return parseMediaAsset(
-      await this.#requestJson<unknown>(
-        accessToken,
-        this.#apiUrl(
-          `v1/upload-sessions/${encodeURIComponent(sessionId)}/complete`
-        ),
-        {
-          method: "POST",
-          headers: { "Idempotency-Key": idempotencyKey },
-          body: JSON.stringify(uploadedObject),
-        }
+    const response = await this.#requestJson<unknown>(
+      accessToken,
+      this.#apiUrl(
+        `v1/upload-sessions/${encodeURIComponent(sessionId)}/complete`
       ),
-      this.#baseUrl.origin
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey },
+        body: JSON.stringify(uploadedObject),
+      }
+    )
+    return parseMediaApiResponse(() =>
+      parseMediaAsset(response, this.#baseUrl.origin)
     )
   }
 
@@ -286,10 +305,7 @@ export class HttpMediaClient implements MediaClient {
       throw new Error("Некорректная папка медиафайлов.")
     }
     onProgress?.({ loadedBytes: 0, totalBytes: file.size, percentage: 0 })
-    const checksumSha256 = await this.#sha256(file)
-    if (!SHA256.test(checksumSha256)) {
-      throw new Error("SHA-256 media checksum is invalid")
-    }
+    const checksumSha256 = await this.calculateChecksumSha256(file)
     const session = await this.createUploadSession(
       accessToken,
       owner,
@@ -318,7 +334,9 @@ export class HttpMediaClient implements MediaClient {
       finalizeKey
     )
     if (asset.id !== session.mediaId) {
-      throw new Error("Media service returned a mismatched asset")
+      throw invalidApiResponseError(
+        new Error("Media service returned a mismatched asset")
+      )
     }
     return { session, uploadedObject, asset }
   }
@@ -333,10 +351,9 @@ export class HttpMediaClient implements MediaClient {
     if (options.limit !== undefined)
       url.searchParams.set("limit", `${options.limit}`)
     if (options.cursor) url.searchParams.set("cursor", options.cursor)
-    return parseMediaPage(
-      await this.#requestJson<unknown>(accessToken, url),
-      this.#baseUrl.origin,
-      owner
+    const response = await this.#requestJson<unknown>(accessToken, url)
+    return parseMediaApiResponse(() =>
+      parseMediaPage(response, this.#baseUrl.origin, owner)
     )
   }
 
@@ -354,17 +371,16 @@ export class HttpMediaClient implements MediaClient {
     ) {
       throw new Error("Invalid cabin cover request")
     }
-    return parseCabinCoverPage(
-      await this.#requestJson<unknown>(
-        accessToken,
-        this.#apiUrl("v1/cabin-covers"),
-        {
-          method: "POST",
-          body: JSON.stringify({ warehouseId, cabinIds }),
-        }
-      ),
-      this.#baseUrl.origin,
-      warehouseId
+    const response = await this.#requestJson<unknown>(
+      accessToken,
+      this.#apiUrl("v1/cabin-covers"),
+      {
+        method: "POST",
+        body: JSON.stringify({ warehouseId, cabinIds }),
+      }
+    )
+    return parseMediaApiResponse(() =>
+      parseCabinCoverPage(response, this.#baseUrl.origin, warehouseId)
     )
   }
 
@@ -385,13 +401,15 @@ export class HttpMediaClient implements MediaClient {
     owner: ServiceMediaOwner,
     variant: MediaVariant | PlaybackMediaVariant
   ) {
-    const url = requireSameOriginPath(
-      variant.contentPath,
-      this.#baseUrl.origin,
-      VARIANT_CONTENT_PATH,
-      true
+    const url = parseMediaApiResponse(() =>
+      requireSameOriginPath(
+        variant.contentPath,
+        this.#baseUrl.origin,
+        VARIANT_CONTENT_PATH,
+        true
+      )
     )
-    requireExactOwnerQuery(url, owner)
+    parseMediaApiResponse(() => requireExactOwnerQuery(url, owner))
     return this.#createObjectUrl(accessToken, url, variant.contentType)
   }
 
@@ -406,13 +424,13 @@ export class HttpMediaClient implements MediaClient {
       `v1/assets/${encodeURIComponent(mediaId)}/deletion`
     )
     setOwnerQuery(url, owner)
-    return parseMediaAsset(
-      await this.#requestJson<unknown>(accessToken, url, {
-        method: "POST",
-        headers: { "Idempotency-Key": idempotencyKey },
-        body: JSON.stringify({ expectedVersion }),
-      }),
-      this.#baseUrl.origin
+    const response = await this.#requestJson<unknown>(accessToken, url, {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify({ expectedVersion }),
+    })
+    return parseMediaApiResponse(() =>
+      parseMediaAsset(response, this.#baseUrl.origin)
     )
   }
 
@@ -434,7 +452,12 @@ export class HttpMediaClient implements MediaClient {
       init,
       "application/json"
     )
-    return (await response.json()) as T
+    parseMediaApiResponse(() => requireJsonContentType(response))
+    try {
+      return (await response.json()) as T
+    } catch (error) {
+      throw invalidApiResponseError(error)
+    }
   }
 
   async #requestJsonWithProgress<T>(
@@ -450,16 +473,25 @@ export class HttpMediaClient implements MediaClient {
     const headers = new Headers(init.headers)
     headers.set("Authorization", `Bearer ${accessToken}`)
     headers.set("Accept", "application/json")
-    const response = await this.#progressUpload(
-      input,
-      { ...init, headers },
-      onProgress
-    )
-    if (!response.ok) {
-      const problem = await readProblemDetail(response)
-      throw new ApiError(problem.message, response.status, problem.code)
+    let response: Response
+    try {
+      response = await this.#progressUpload(
+        input,
+        { ...init, headers },
+        onProgress
+      )
+    } catch (error) {
+      throw apiErrorFromRequestFailure(error)
     }
-    return (await response.json()) as T
+    if (!response.ok) {
+      throw await apiErrorFromResponse(response)
+    }
+    parseMediaApiResponse(() => requireJsonContentType(response))
+    try {
+      return (await response.json()) as T
+    } catch (error) {
+      throw invalidApiResponseError(error)
+    }
   }
 
   async #request(
@@ -482,10 +514,14 @@ export class HttpMediaClient implements MediaClient {
     ) {
       headers.set("Content-Type", "application/json")
     }
-    const response = await this.#fetch(input, { ...init, headers })
+    let response: Response
+    try {
+      response = await this.#fetch(input, { ...init, headers })
+    } catch (error) {
+      throw apiErrorFromRequestFailure(error)
+    }
     if (!response.ok) {
-      const problem = await readProblemDetail(response)
-      throw new ApiError(problem.message, response.status, problem.code)
+      throw await apiErrorFromResponse(response)
     }
     return response
   }
@@ -501,13 +537,22 @@ export class HttpMediaClient implements MediaClient {
       { method: "GET", cache: "no-store" },
       expectedContentType ?? "image/*,video/*"
     )
-    const blob = await response.blob()
+    let blob: Blob
+    try {
+      blob = await response.blob()
+    } catch (error) {
+      throw apiErrorFromRequestFailure(error)
+    }
     const contentType = response.headers.get("Content-Type") ?? blob.type
     if (
       !contentType ||
-      (expectedContentType && contentType !== expectedContentType)
+      (expectedContentType
+        ? contentType !== expectedContentType
+        : !MEDIA_CONTENT_TYPES.has(contentType))
     ) {
-      throw new Error("Media service returned an unexpected content type")
+      throw invalidApiResponseError(
+        new Error("Media service returned an unexpected content type")
+      )
     }
     const url = this.#objectUrls.create(blob)
     let disposed = false
@@ -588,6 +633,23 @@ function browserProgressUpload(
 
 export function createHttpMediaClient(options: HttpMediaClientOptions = {}) {
   return new HttpMediaClient(options)
+}
+
+function parseMediaApiResponse<T>(parse: () => T): T {
+  try {
+    return parse()
+  } catch (error) {
+    throw invalidApiResponseError(error)
+  }
+}
+
+function requireJsonContentType(response: Response) {
+  const contentType = response.headers.get("Content-Type") ?? ""
+  if (!contentType.toLowerCase().includes("json")) {
+    throw new Error(
+      `Media JSON response content type is ${contentType || "missing"}`
+    )
+  }
 }
 
 function normalizeBaseUrl(value: string) {
@@ -1036,24 +1098,6 @@ function requireExactContentType(value: unknown, expected: string) {
     throw new Error("Invalid media response field: contentType")
   }
   return result
-}
-
-async function readProblemDetail(response: Response) {
-  const fallback = `Запрос завершился с ошибкой ${response.status}`
-  const contentType = response.headers.get("Content-Type") ?? ""
-  if (!contentType.includes("json")) {
-    return { message: (await response.text()).trim() || fallback, code: null }
-  }
-  const body = (await response.json()) as {
-    detail?: unknown
-    message?: unknown
-    code?: unknown
-  }
-  const detail = body.detail ?? body.message
-  return {
-    message: typeof detail === "string" && detail.trim() ? detail : fallback,
-    code: typeof body.code === "string" && body.code.trim() ? body.code : null,
-  }
 }
 
 async function browserSha256(blob: Blob) {

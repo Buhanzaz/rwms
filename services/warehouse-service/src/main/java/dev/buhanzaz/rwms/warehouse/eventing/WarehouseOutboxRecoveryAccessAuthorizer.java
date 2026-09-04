@@ -19,7 +19,6 @@ import org.springframework.stereotype.Component;
 public final class WarehouseOutboxRecoveryAccessAuthorizer {
   private static final UUID DEVELOPMENT_SUBJECT =
       UUID.fromString("00000000-0000-0000-0000-0000000000d1");
-
   private final boolean developmentPublicBypass;
 
   public WarehouseOutboxRecoveryAccessAuthorizer(
@@ -30,8 +29,10 @@ public final class WarehouseOutboxRecoveryAccessAuthorizer {
         developmentAuthBypass && environment.matchesProfiles("dev") && !production;
   }
 
-  public UUID requireRecoveryAdministrator(Jwt jwt) {
-    if (developmentPublicBypass) return DEVELOPMENT_SUBJECT;
+  public RecoveryPrincipal requireRecoveryAdministrator(Jwt jwt) {
+    if (developmentPublicBypass) {
+      return new RecoveryPrincipal(DEVELOPMENT_SUBJECT);
+    }
     if (jwt == null || !"USER".equals(jwt.getClaimAsString("principal_type"))) {
       throw new AccessDeniedException("USER principal is required");
     }
@@ -42,12 +43,18 @@ public final class WarehouseOutboxRecoveryAccessAuthorizer {
     if (!"SYSTEM_ADMIN".equals(role) && !"WMS_ADMIN".equals(role)) {
       throw new AccessDeniedException("SYSTEM_ADMIN or WMS_ADMIN role is required");
     }
+    if (jwt.getSubject() == null || jwt.getSubject().isBlank()) {
+      throw new AccessDeniedException("USER token must contain a subject");
+    }
     try {
-      return UUID.fromString(jwt.getSubject());
+      return new RecoveryPrincipal(UUID.fromString(jwt.getSubject()));
     } catch (IllegalArgumentException exception) {
-      throw new AccessDeniedException("USER subject must be a UUID");
+      throw new AccessDeniedException("USER subject must be a UUID value");
     }
   }
+
+  /** Signed identity used as the recovery audit actor. */
+  public record RecoveryPrincipal(UUID subjectId) {}
 
   private static boolean exactlyRwmsWrite(Jwt jwt) {
     List<String> scopes = scopeValues(jwt);

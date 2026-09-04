@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import type { WorkloadGenerationInput } from '../../api/client';
+import { DatePicker } from '../../components/DatePicker';
 import { Button, Field, Modal } from '../../components/ui';
 import { formatDate, nextDate } from '../../utils/format';
 
@@ -12,11 +13,6 @@ const workloadSchema = z.object({
   deliveries_per_day: z.number().int('Укажите целое число').min(0, 'Минимум 0').max(10, 'Максимум 10 доставок в день'),
   pickups_per_day: z.number().int('Укажите целое число').min(0, 'Минимум 0').max(10, 'Максимум 10 вывозов в день'),
   alternative_dates_count: z.number().int('Укажите целое число').min(0, 'Минимум 0').max(3, 'Максимум 3 альтернативы'),
-  cargo_length_mm: z.number().int('Укажите целое число').min(1, 'Укажите длину груза').max(30_000, 'Максимум 30 м'),
-  cargo_width_mm: z.number().int('Укажите целое число').min(1, 'Укажите ширину груза').max(10_000, 'Максимум 10 м'),
-  cargo_height_mm: z.number().int('Укажите целое число').min(1, 'Укажите высоту груза').max(10_000, 'Максимум 10 м'),
-  cargo_weight_kg: z.number().int('Укажите целое число').min(1, 'Укажите массу груза').max(100_000, 'Максимум 100 т'),
-  seed: z.number().int('Seed должен быть целым числом'),
 }).superRefine((values, context) => {
   if (values.alternative_dates_count > values.days - 1) {
     context.addIssue({
@@ -27,7 +23,7 @@ const workloadSchema = z.object({
   }
 });
 
-/** Values submitted by the reproducible workload generator form. */
+/** Values submitted by the operator-facing workload generator form. */
 type WorkloadValues = z.infer<typeof workloadSchema>;
 
 function previewEndDate(startDate: string, days: number): string | null {
@@ -35,10 +31,9 @@ function previewEndDate(startDate: string, days: number): string | null {
   return nextDate(startDate, days - 1);
 }
 
-/** Form for generating deterministic delivery and pickup workload for the selected warehouse. */
-export function WorkloadGeneratorDialog({ planningDate, seed, busy, onClose, onSubmit }: {
+/** Form for generating random delivery and pickup workload for the selected warehouse. */
+export function WorkloadGeneratorDialog({ planningDate, busy, onClose, onSubmit }: {
   planningDate: string;
-  seed: number;
   busy: boolean;
   onClose: () => void;
   onSubmit: (input: WorkloadGenerationInput) => Promise<void>;
@@ -52,11 +47,6 @@ export function WorkloadGeneratorDialog({ planningDate, seed, busy, onClose, onS
       deliveries_per_day: 4,
       pickups_per_day: 4,
       alternative_dates_count: 0,
-      cargo_length_mm: 6_000,
-      cargo_width_mm: 2_400,
-      cargo_height_mm: 2_400,
-      cargo_weight_kg: 1_200,
-      seed,
     },
   });
   const values = watch();
@@ -81,25 +71,22 @@ export function WorkloadGeneratorDialog({ planningDate, seed, busy, onClose, onS
     <Modal
       wide
       title="Сгенерировать рабочую нагрузку"
-      description="Создаст воспроизводимые доставки и вывозы. Для выбранного дня или периода прежняя нагрузка генератора и все сохранённые планы этих дат удаляются атомарно; ручные и RWMS-операции, а также другие даты не затрагиваются."
+      description="Создаст случайные тестовые доставки и вывозы. Для выбранного дня или периода прежняя тестовая нагрузка и планы этих дат заменяются; остальные даты не затрагиваются."
       onClose={onClose}
     >
       <form className="form-grid" onSubmit={handleSubmit((values) => onSubmit(values))}>
-        <Field className="span-2" label="Дата начала" type="date" {...register('start_date')} error={errors.start_date?.message} />
+        <DatePicker
+          className="span-2"
+          label="Дата начала"
+          value={values.start_date}
+          onChange={(startDate) => setValue('start_date', startDate, { shouldDirty: true, shouldValidate: true })}
+          disabled={busy}
+        />
+        {errors.start_date?.message ? <span className="span-2 field__error">{errors.start_date.message}</span> : null}
         <Field label="Дней" type="number" min="1" max="31" {...register('days', { valueAsNumber: true })} error={errors.days?.message} />
         <Field label="Доставок в день" type="number" min="0" max="10" {...register('deliveries_per_day', { valueAsNumber: true })} error={errors.deliveries_per_day?.message} />
         <Field label="Вывозов в день" type="number" min="0" max="10" {...register('pickups_per_day', { valueAsNumber: true })} error={errors.pickups_per_day?.message} />
         <Field label="Альтернативных дат" type="number" min="0" max="3" {...register('alternative_dates_count', { valueAsNumber: true })} error={errors.alternative_dates_count?.message} hint="Не больше дней минус один" />
-        <Field label="Seed" type="number" step="1" {...register('seed', { valueAsNumber: true })} error={errors.seed?.message} />
-
-        <div className="span-2 section-heading">
-          <strong>Параметры одной грузовой единицы</strong>
-          <small>Генератор сохранит эти фактические габариты и массу для каждой доставки и вывоза.</small>
-        </div>
-        <Field label="Длина груза, мм" type="number" min="1" max="30000" {...register('cargo_length_mm', { valueAsNumber: true })} error={errors.cargo_length_mm?.message} />
-        <Field label="Ширина груза, мм" type="number" min="1" max="10000" {...register('cargo_width_mm', { valueAsNumber: true })} error={errors.cargo_width_mm?.message} />
-        <Field label="Высота груза, мм" type="number" min="1" max="10000" {...register('cargo_height_mm', { valueAsNumber: true })} error={errors.cargo_height_mm?.message} />
-        <Field label="Масса груза, кг" type="number" min="1" max="100000" {...register('cargo_weight_kg', { valueAsNumber: true })} error={errors.cargo_weight_kg?.message} />
 
         <div className="span-2 detail-grid" data-testid="workload-preview">
           <div className="detail-item"><small>Горизонт</small><strong>{endDate ? `${formatDate(values.start_date)} — ${formatDate(endDate)}` : 'Укажите период'}</strong></div>

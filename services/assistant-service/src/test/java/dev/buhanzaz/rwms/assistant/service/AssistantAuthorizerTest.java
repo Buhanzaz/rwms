@@ -4,42 +4,122 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
-import java.util.Map;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.oauth2.jwt.Jwt;
 
 class AssistantAuthorizerTest {
+  private static final UUID SUBJECT =
+      UUID.fromString("11111111-1111-4111-8111-111111111111");
   private final AssistantAuthorizer authorizer = new AssistantAuthorizer();
 
   @Test
-  void grantsOnlyRentalEnabledBearerSubjects() {
-    UUID subject = UUID.randomUUID();
+  void acceptsOnlyDedicatedWebAndAndroidManagerApplications() {
+    for (String clientId :
+        List.of("rwms-rental-manager-web", "rwms-rental-manager-android")) {
+      UUID subject =
+          authorizer.requireRentalManager(
+              jwt(
+                  SUBJECT.toString(),
+                  clientId,
+                  "RENTAL_MANAGER",
+                  "USER",
+                  "openid profile rental.manage",
+                  true));
 
-    assertThat(authorizer.requireRentalUser(jwt(subject, true))).isEqualTo(subject);
-    assertThat(authorizer.requireRentalUser(jwt(subject, "true"))).isEqualTo(subject);
+      assertThat(subject).isEqualTo(SUBJECT);
+    }
   }
 
   @Test
-  void rejectsBearerWithoutRentalAccessOrUuidSubject() {
-    assertThatThrownBy(() -> authorizer.requireRentalUser(jwt(UUID.randomUUID(), false)))
-        .isInstanceOf(AccessDeniedException.class);
-    assertThatThrownBy(() -> authorizer.requireRentalUser(jwt("not-a-uuid", true)))
+  void rejectsPanelUnknownMixedScopeAndWrongRoleTokens() {
+    assertDenied(
+        jwt(
+            SUBJECT.toString(),
+            "rwms-panel",
+            "RENTAL_MANAGER",
+            "USER",
+            "rwms.read rwms.write",
+            true));
+    assertDenied(
+        jwt(
+            SUBJECT.toString(),
+            "unknown-client",
+            "RENTAL_MANAGER",
+            "USER",
+            "rental.manage",
+            true));
+    assertDenied(
+        jwt(
+            SUBJECT.toString(),
+            "rwms-rental-manager-web",
+            "RENTAL_MANAGER",
+            "USER",
+            "rental.manage warehouse.read",
+            true));
+    assertDenied(
+        jwt(
+            SUBJECT.toString(),
+            "rwms-rental-manager-web",
+            "SYSTEM_ADMIN",
+            "USER",
+            "rental.manage",
+            true));
+  }
+
+  @Test
+  void rejectsMalformedSubjectAndInvalidApplicationClaims() {
+    assertDenied(
+        jwt(
+            "not-a-uuid",
+            "rwms-rental-manager-web",
+            "RENTAL_MANAGER",
+            "USER",
+            "rental.manage",
+            true));
+    assertDenied(
+        jwt(
+            SUBJECT.toString(),
+            "rwms-rental-manager-web",
+            "RENTAL_MANAGER",
+            "SERVICE",
+            "rental.manage",
+            true));
+    assertDenied(
+        jwt(
+            SUBJECT.toString(),
+            "rwms-rental-manager-web",
+            "RENTAL_MANAGER",
+            "USER",
+            "rental.manage",
+            false));
+  }
+
+  private void assertDenied(Jwt jwt) {
+    assertThatThrownBy(() -> authorizer.requireRentalManager(jwt))
         .isInstanceOf(AccessDeniedException.class);
   }
 
-  private static Jwt jwt(UUID subject, Object rentalAccess) {
-    return jwt(subject.toString(), rentalAccess);
-  }
-
-  private static Jwt jwt(String subject, Object rentalAccess) {
-    Instant now = Instant.now();
-    return new Jwt(
-        "test-token",
-        now,
-        now.plusSeconds(300),
-        Map.of("alg", "none"),
-        Map.of("sub", subject, "rentalAccess", rentalAccess));
+  private static Jwt jwt(
+      String subject,
+      String clientId,
+      String role,
+      String principalType,
+      String scope,
+      boolean rentalAccess) {
+    Jwt.Builder builder =
+        Jwt.withTokenValue("assistant-token")
+            .header("alg", "none")
+            .subject(subject)
+            .issuedAt(Instant.now())
+            .expiresAt(Instant.now().plusSeconds(300))
+            .claim("client_id", clientId)
+            .claim("global_role", role)
+            .claim("principal_type", principalType)
+            .claim("scope", scope)
+            .claim("rentalAccess", rentalAccess);
+    return builder.build();
   }
 }

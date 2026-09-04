@@ -10,11 +10,13 @@ import {
   scheduleWarehouseTimeZone,
   startWarehouseDraining,
   type WarehouseSupportLinkInput,
+  type WarehouseWriteInput,
 } from "@/api/warehouse-api"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 
 const WAREHOUSE_ID = "00000000-0000-4000-8000-000000000001"
 const IDEMPOTENCY_KEY = "00000000-0000-4000-8000-000000000002"
+const PRODUCTION_WAREHOUSE_ID = "00000000-0000-4000-8000-000000000004"
 
 const warehouseResponse = {
   id: WAREHOUSE_ID,
@@ -29,6 +31,18 @@ const warehouseResponse = {
   lifecycleState: "ACTIVE",
   sortOrder: 2,
   representative: false,
+  production: true,
+  mainWarehouse: false,
+  representativeParentWarehouseId: null,
+}
+
+const representativeWarehouseResponse = {
+  ...warehouseResponse,
+  id: "00000000-0000-4000-8000-000000000005",
+  production: false,
+  mainWarehouse: false,
+  representativeParentWarehouseId: PRODUCTION_WAREHOUSE_ID,
+  representative: true,
 }
 
 function jsonResponse(body: unknown, status = 200) {
@@ -54,7 +68,9 @@ describe("warehouse HTTP API", () => {
     vi.stubGlobal("fetch", fetchMock)
 
     await expect(listWarehouses("access-token")).resolves.toEqual([
-      warehouseResponse,
+      {
+        ...warehouseResponse,
+      },
     ])
 
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
@@ -63,6 +79,68 @@ describe("warehouse HTTP API", () => {
     const request = fetchMock.mock.calls[0]?.[1] as RequestInit
     expect(new Headers(request.headers).get("Authorization")).toBe(
       "Bearer access-token"
+    )
+  })
+
+  it("accepts the exact production and representative shapes", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse([
+            warehouseResponse,
+            representativeWarehouseResponse,
+          ])
+        )
+    )
+
+    await expect(listWarehouses("access-token")).resolves.toEqual([
+      warehouseResponse,
+      representativeWarehouseResponse,
+    ])
+  })
+
+  it.each([
+    [
+      "partial current object shape",
+      { ...warehouseResponse, production: undefined },
+    ],
+    [
+      "unexpected classification field",
+      { ...warehouseResponse, obsoleteClassification: "PRODUCTION" },
+    ],
+    [
+      "production with a parent",
+      {
+        ...warehouseResponse,
+        representativeParentWarehouseId: PRODUCTION_WAREHOUSE_ID,
+      },
+    ],
+    [
+      "production marked representative",
+      { ...warehouseResponse, representative: true },
+    ],
+    [
+      "representative without a parent",
+      {
+        ...representativeWarehouseResponse,
+        representativeParentWarehouseId: null,
+      },
+    ],
+    [
+      "representative without the current projection",
+      { ...representativeWarehouseResponse, representative: false },
+    ],
+    [
+      "extra field in the current object shape",
+      { ...warehouseResponse, unknown: true },
+    ],
+  ])("rejects %s", async (_caseName, response) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse([response])))
+
+    await expect(listWarehouses("access-token")).rejects.toThrow(
+      "некорректный ответ"
     )
   })
 
@@ -120,6 +198,9 @@ describe("warehouse HTTP API", () => {
       longitude: 30.3351,
       timeZone: "Europe/Moscow",
       sortOrder: 2,
+      production: false,
+      mainWarehouse: false,
+      representativeParentWarehouseId: PRODUCTION_WAREHOUSE_ID,
       representative: true,
     })
     await replaceWarehouse("access-token", WAREHOUSE_ID, 3, {
@@ -130,7 +211,10 @@ describe("warehouse HTTP API", () => {
       longitude: warehouseResponse.longitude,
       timeZone: warehouseResponse.timeZone,
       sortOrder: warehouseResponse.sortOrder,
-      representative: true,
+      production: true,
+      mainWarehouse: true,
+      representativeParentWarehouseId: null,
+      representative: false,
     })
     await startWarehouseDraining("access-token", WAREHOUSE_ID, 4)
     await completeWarehouseInactivation("access-token", WAREHOUSE_ID, 5)
@@ -154,6 +238,9 @@ describe("warehouse HTTP API", () => {
       longitude: 30.3351,
       timeZone: "Europe/Moscow",
       sortOrder: 2,
+      production: false,
+      mainWarehouse: false,
+      representativeParentWarehouseId: PRODUCTION_WAREHOUSE_ID,
       representative: true,
     })
 
@@ -166,7 +253,10 @@ describe("warehouse HTTP API", () => {
       longitude: warehouseResponse.longitude,
       timeZone: warehouseResponse.timeZone,
       sortOrder: warehouseResponse.sortOrder,
-      representative: true,
+      production: true,
+      mainWarehouse: true,
+      representativeParentWarehouseId: null,
+      representative: false,
       expectedVersion: 3,
     })
 
@@ -190,6 +280,51 @@ describe("warehouse HTTP API", () => {
       timeZone: "Europe/Samara",
       effectiveFrom: "2099-09-01T00:00:00+04:00",
     })
+  })
+
+  it("rejects incomplete and inconsistent object classifications before sending a command", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(warehouseResponse, 201))
+    vi.stubGlobal("fetch", fetchMock)
+
+    const incompleteInput = {
+      name: warehouseResponse.name,
+      city: warehouseResponse.city,
+      address: warehouseResponse.address,
+      latitude: warehouseResponse.latitude,
+      longitude: warehouseResponse.longitude,
+      timeZone: warehouseResponse.timeZone,
+      sortOrder: warehouseResponse.sortOrder,
+      representative: false,
+    }
+
+    await expect(
+      createWarehouse(
+        "access-token",
+        IDEMPOTENCY_KEY,
+        incompleteInput as unknown as WarehouseWriteInput
+      )
+    ).rejects.toThrow("не соответствуют контракту API")
+    await expect(
+      createWarehouse("access-token", IDEMPOTENCY_KEY, {
+        ...incompleteInput,
+        production: true,
+        mainWarehouse: false,
+        representativeParentWarehouseId: null,
+        representative: true,
+      })
+    ).rejects.toThrow("не соответствуют контракту API")
+    await expect(
+      createWarehouse("access-token", IDEMPOTENCY_KEY, {
+        ...incompleteInput,
+        production: false,
+        mainWarehouse: false,
+        representativeParentWarehouseId: null,
+        representative: false,
+      })
+    ).rejects.toThrow("не соответствуют контракту API")
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it("reads and atomically replaces directed support links", async () => {

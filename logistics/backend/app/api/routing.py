@@ -7,7 +7,8 @@ from fastapi import APIRouter, Query
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.api.dependencies import SessionDep, SettingsDep
+from app.api.authorization import require_external_warehouse_access
+from app.api.dependencies import CurrentUserDep, SessionDep, SettingsDep
 from app.errors import ApiError
 from app.models import Vehicle, Warehouse
 from app.routing.models import GeoPoint
@@ -22,6 +23,7 @@ from app.schemas.routing import (
     TruckRestrictionFeatureCollection,
     TruckRestrictionQuery,
 )
+from app.security import WarehouseAccessLevel
 from app.services.truck_restrictions import find_truck_restrictions
 from app.slot_planning.configuration import (
     truck_travel_time_provider,
@@ -46,9 +48,16 @@ async def estimate_transfer_arrival(
     payload: TransferArrivalEstimateRequest,
     session: SessionDep,
     settings: SettingsDep,
+    principal: CurrentUserDep,
 ) -> TransferArrivalEstimateRead:
     """Route one planned warehouse-to-warehouse leg without reserving any resource."""
 
+    require_external_warehouse_access(
+        principal, payload.source_warehouse_id, WarehouseAccessLevel.VIEW
+    )
+    require_external_warehouse_access(
+        principal, payload.destination_warehouse_id, WarehouseAccessLevel.VIEW
+    )
     if payload.source_warehouse_id == payload.destination_warehouse_id:
         raise ApiError(
             422,

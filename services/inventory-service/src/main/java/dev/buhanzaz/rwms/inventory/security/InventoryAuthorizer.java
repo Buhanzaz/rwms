@@ -17,6 +17,9 @@ import org.springframework.stereotype.Component;
 @Component
 public class InventoryAuthorizer {
   private static final UUID DEV_SUBJECT = UUID.fromString("00000000-0000-0000-0000-0000000000d7");
+  private static final String ADMIN_WEB_CLIENT_ID = "rwms-admin-web";
+  private static final Set<String> INTERACTIVE_PROTOCOL_SCOPES =
+      Set.of("openid", "profile", "offline_access");
   private final boolean developmentBypass;
 
   public InventoryAuthorizer(
@@ -83,11 +86,27 @@ public class InventoryAuthorizer {
 
   private void requireUserScope(Jwt jwt, String requiredScope) {
     if (developmentBypass) return;
+    if (isAdministrationApplication(jwt)) return;
     if (jwt == null
         || !"USER".equals(jwt.getClaimAsString("principal_type"))
         || !scopes(jwt).contains(requiredScope)) {
       throw new AccessDeniedException("Required USER scope is missing");
     }
+  }
+
+  /** Accepts the isolated administration client only for a global administrator. */
+  private static boolean isAdministrationApplication(Jwt jwt) {
+    if (jwt == null
+        || !"USER".equals(jwt.getClaimAsString("principal_type"))
+        || !ADMIN_WEB_CLIENT_ID.equals(jwt.getClaimAsString("client_id"))) {
+      return false;
+    }
+    String role = jwt.getClaimAsString("global_role");
+    if (!"SYSTEM_ADMIN".equals(role) && !"WMS_ADMIN".equals(role)) return false;
+    return scopes(jwt).stream()
+        .filter(scope -> !INTERACTIVE_PROTOCOL_SCOPES.contains(scope))
+        .toList()
+        .equals(List.of("admin.manage"));
   }
 
   private void requireWarehouse(Jwt jwt, UUID warehouseId, AccessLevel required) {

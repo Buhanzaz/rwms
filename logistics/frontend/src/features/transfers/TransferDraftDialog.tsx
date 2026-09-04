@@ -1,6 +1,7 @@
 import { ArrowRightLeft, LogIn, PackageOpen, Plus, Trash2, Truck, UserRound } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { beginPanelLogin, restorePanelUser } from '../../auth/panel-oidc';
+import { DatePicker } from '../../components/DatePicker';
 import { Button, CheckboxField, EmptyState, Field, Modal, SelectField, Spinner } from '../../components/ui';
 import type { AvailableWarehouse } from '../../domain/types';
 import { formatDistance, formatDuration, localDateTimeToIso } from '../../utils/format';
@@ -52,6 +53,13 @@ type LoadState<T> =
   | { status: 'loading' }
   | { status: 'ready'; value: T }
   | { status: 'error'; message: string };
+
+/** Vehicle load state fenced to the warehouse and planning date that produced it. */
+type VehicleLoadState =
+  | { status: 'idle'; contextKey: null }
+  | { status: 'loading'; contextKey: string }
+  | { status: 'ready'; contextKey: string; value: TransferRouteVehicle[] }
+  | { status: 'error'; contextKey: string; message: string };
 
 /** Calculation state kept separate from the canonical draft until a current result exists. */
 type EstimateState =
@@ -119,7 +127,7 @@ export function TransferDraftDialog({
   const [includeCabins, setIncludeCabins] = useState(false);
   const [groups, setGroups] = useState<CabinGroupDraft[]>([]);
   const [catalogState, setCatalogState] = useState<LoadState<TransferCargoCatalog>>({ status: 'idle' });
-  const [vehicleState, setVehicleState] = useState<LoadState<TransferRouteVehicle[]>>({ status: 'idle' });
+  const [vehicleState, setVehicleState] = useState<VehicleLoadState>({ status: 'idle', contextKey: null });
   const [selectedRouteVehicleId, setSelectedRouteVehicleId] = useState('');
   const [driverState, setDriverState] = useState<LoadState<TransferDriver[]>>({ status: 'idle' });
   const [selectedDriverId, setSelectedDriverId] = useState('');
@@ -144,13 +152,20 @@ export function TransferDraftDialog({
 
   const sourceWarehouse = warehouses.find((warehouse) => warehouse.warehouse_id === sourceWarehouseId) ?? null;
   const destinationWarehouse = warehouses.find((warehouse) => warehouse.warehouse_id === targetWarehouseId) ?? null;
+  const vehicleContextKey = sourceWarehouse?.local_warehouse_id && date
+    ? `${sourceWarehouse.local_warehouse_id}:${date}`
+    : null;
+  const vehicleStateIsCurrent = vehicleState.contextKey === vehicleContextKey;
+  const vehicleStatus = vehicleContextKey && !vehicleStateIsCurrent ? 'loading' : vehicleState.status;
   const cargoCatalog = catalogState.status === 'ready' ? catalogState.value : null;
-  const vehicles = vehicleState.status === 'ready' ? vehicleState.value : [];
+  const vehicles = vehicleStateIsCurrent && vehicleState.status === 'ready' ? vehicleState.value : [];
   const drivers = driverState.status === 'ready' ? driverState.value : [];
   const cabinCount = includeCabins ? groups.reduce((sum, group) => sum + group.quantity, 0) : 0;
   // Outbound cabins are unloaded before the return cargo is loaded. Capacity therefore belongs
   // to the reverse route leg and must not subtract cabins carried on the preceding leg.
-  const reverseCapacity = vehicles.find((vehicle) => vehicle.id === selectedRouteVehicleId)?.capacity ?? 0;
+  const selectedRouteVehicle = vehicles.find((vehicle) => vehicle.id === selectedRouteVehicleId) ?? null;
+  const currentRouteVehicleId = selectedRouteVehicle?.id ?? '';
+  const reverseCapacity = selectedRouteVehicle?.capacity ?? 0;
   const plannedDepartureAt = date && departureTime && sourceWarehouse
     ? localDateTimeToIso(date, departureTime, sourceWarehouse.timezone)
     : null;
@@ -236,23 +251,23 @@ export function TransferDraftDialog({
     const localWarehouseId = sourceWarehouse?.local_warehouse_id;
     setSelectedRouteVehicleId('');
     setEstimateState({ status: 'idle' });
-    if (!localWarehouseId) {
-      setVehicleState({ status: 'idle' });
+    if (!localWarehouseId || !date || !vehicleContextKey) {
+      setVehicleState({ status: 'idle', contextKey: null });
       return undefined;
     }
     let active = true;
-    setVehicleState({ status: 'loading' });
-    void loadTransferRouteVehicles(localWarehouseId)
+    setVehicleState({ status: 'loading', contextKey: vehicleContextKey });
+    void loadTransferRouteVehicles(localWarehouseId, date)
       .then((value) => {
         if (!active) return;
-        setVehicleState({ status: 'ready', value });
+        setVehicleState({ status: 'ready', contextKey: vehicleContextKey, value });
         setSelectedRouteVehicleId(value[0]?.id ?? '');
       })
       .catch((vehicleError: unknown) => {
-        if (active) setVehicleState({ status: 'error', message: errorMessage(vehicleError, 'Не удалось получить автомобили склада') });
+        if (active) setVehicleState({ status: 'error', contextKey: vehicleContextKey, message: errorMessage(vehicleError, 'Не удалось получить автомобили склада') });
       });
     return () => { active = false; };
-  }, [sourceWarehouse?.local_warehouse_id]);
+  }, [date, sourceWarehouse?.local_warehouse_id, vehicleContextKey]);
 
   useEffect(() => {
     const localWarehouseId = sourceWarehouse?.local_warehouse_id;
@@ -280,7 +295,7 @@ export function TransferDraftDialog({
       || !sourceWarehouseId
       || !targetWarehouseId
       || sourceWarehouseId === targetWarehouseId
-      || !selectedRouteVehicleId
+      || !currentRouteVehicleId
       || cabinCount > 2
     ) return undefined;
     let active = true;
@@ -289,7 +304,7 @@ export function TransferDraftDialog({
       sourceWarehouseId,
       destinationWarehouseId: targetWarehouseId,
       plannedDepartureAt,
-      vehicleId: selectedRouteVehicleId,
+      vehicleId: currentRouteVehicleId,
       cabinCount,
     })
       .then((value) => { if (active) setEstimateState({ status: 'ready', value }); })
@@ -297,7 +312,7 @@ export function TransferDraftDialog({
         if (active) setEstimateState({ status: 'error', message: errorMessage(estimateError, 'Не удалось рассчитать прибытие') });
       });
     return () => { active = false; };
-  }, [cabinCount, plannedDepartureAt, selectedRouteVehicleId, sourceWarehouseId, targetWarehouseId]);
+  }, [cabinCount, currentRouteVehicleId, plannedDepartureAt, sourceWarehouseId, targetWarehouseId]);
 
   const login = async () => {
     setError(null);
@@ -372,7 +387,7 @@ export function TransferDraftDialog({
       setError('Укажите плановое время отправления');
       return;
     }
-    if (vehicleState.status === 'loading' || estimateState.status === 'loading') {
+    if (vehicleStatus === 'loading' || estimateState.status === 'loading') {
       setError('Дождитесь загрузки автомобиля и расчёта планового прибытия');
       return;
     }
@@ -406,7 +421,7 @@ export function TransferDraftDialog({
           plannedArrivalAt,
           logisticsComment: comment.trim() || null,
           tripDriverId: selectedDriverId || null,
-          tripVehicleId: selectedRouteVehicleId || null,
+          tripVehicleId: currentRouteVehicleId || null,
           driverReposition: repositionDriver && selectedDriverId && destinationWarehouse
             ? {
                 resourceId: selectedDriverId,
@@ -460,7 +475,7 @@ export function TransferDraftDialog({
       description="Логист задаёт маршрут и требуемый груз здесь; RWMS получает готовый черновик подготовки."
       onClose={onClose}
       wide
-      footer={session.status === 'authenticated' ? <><Button onClick={onClose}>Отмена</Button><Button variant="primary" disabled={busy || routingWarehouses.length < 2 || vehicleState.status === 'loading' || estimateState.status === 'loading'} onClick={() => void submit()}>{busy ? 'Создаём…' : 'Создать черновик'}</Button></> : undefined}
+      footer={session.status === 'authenticated' ? <><Button onClick={onClose}>Отмена</Button><Button variant="primary" disabled={busy || routingWarehouses.length < 2 || vehicleStatus === 'loading' || estimateState.status === 'loading'} onClick={() => void submit()}>{busy ? 'Создаём…' : 'Создать черновик'}</Button></> : undefined}
     >
       {session.status === 'loading' ? <Spinner label="Проверяем сессию RWMS…" /> : null}
       {session.status === 'unauthenticated' ? (
@@ -487,9 +502,9 @@ export function TransferDraftDialog({
                 <option value="">Выберите склад</option>
                 {warehouses.map((warehouse) => <option key={warehouse.warehouse_id} value={warehouse.warehouse_id} disabled={!hasRoutingCoordinates(warehouse)}>{warehouseOptionLabel(warehouse)}</option>)}
               </SelectField>
-              <Field label="Плановая дата" type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+              <DatePicker label="Плановая дата" value={date} onChange={setDate} />
               <Field label="Плановое отправление" type="time" value={departureTime} onChange={(event) => setDepartureTime(event.target.value)} />
-              <SelectField label="Автомобиль рейса" value={selectedRouteVehicleId} disabled={vehicleState.status !== 'ready' || vehicles.length === 0} onChange={(event) => setSelectedRouteVehicleId(event.target.value)}>
+              <SelectField label="Автомобиль рейса" value={currentRouteVehicleId} disabled={vehicleStatus !== 'ready' || vehicles.length === 0} onChange={(event) => setSelectedRouteVehicleId(event.target.value)}>
                 <option value="">Не выбран</option>
                 {vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.name} · {vehicle.registrationNumber} · до {vehicle.capacity} бытовок</option>)}
               </SelectField>
@@ -500,7 +515,7 @@ export function TransferDraftDialog({
                 {estimateState.status === 'error' ? <span className="transfer-arrival__error">{estimateState.message}</span> : null}
                 {estimateState.status === 'idle' ? <span>{cabinCount > 2 ? 'В одном рейсе больше двух бытовок: требуется изменить состав или транспорт.' : sourceWarehouse?.local_warehouse_id ? 'Укажите время и расчётный автомобиль.' : 'Склад ещё не синхронизирован с локальным планировщиком.'}</span> : null}
               </div>
-              {vehicleState.status === 'error' ? <p className="field__error span-2">{vehicleState.message}</p> : null}
+              {vehicleStateIsCurrent && vehicleState.status === 'error' ? <p className="field__error span-2">{vehicleState.message}</p> : null}
             </div>
           </section>
 
@@ -516,7 +531,7 @@ export function TransferDraftDialog({
               </SelectField>
               <div className="field"><span className="field__label">После прибытия</span><CheckboxField label="Переместить водителя на склад назначения" checked={repositionDriver} disabled={!selectedDriverId} onChange={(checked) => { setRepositionDriver(checked); if (!checked) setRepositionUntilDate(''); }} /></div>
               {repositionDriver ? <SelectField label="Срок назначения" value={repositionMode} onChange={(event) => setRepositionMode(event.target.value as 'TEMPORARY' | 'PERMANENT')}><option value="TEMPORARY">Временно</option><option value="PERMANENT">Постоянно</option></SelectField> : null}
-              {repositionDriver && repositionMode === 'TEMPORARY' ? <Field label="Назначение действует по" type="date" min={date} value={repositionUntilDate} onChange={(event) => setRepositionUntilDate(event.target.value)} /> : null}
+              {repositionDriver && repositionMode === 'TEMPORARY' ? <DatePicker label="Назначение действует по" value={repositionUntilDate} {...(date ? { disabledDates: { before: new Date(`${date}T12:00:00`) } } : {})} onChange={setRepositionUntilDate} /> : null}
               {driverState.status === 'loading' ? <Spinner label="Загружаем доступных водителей…" /> : null}
               {driverState.status === 'error' ? <p className="field__error span-2">{driverState.message}</p> : null}
             </div>

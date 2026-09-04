@@ -36,7 +36,13 @@ from app.planner import (
     Warehouse,
     split_request,
 )
-from app.routing import GeoPoint, MockRoutingProvider, RoutingSettings
+from app.routing import (
+    GeoPoint,
+    MockRoutingProvider,
+    RouteGeometry,
+    RoutingSettings,
+    TravelMatrix,
+)
 
 MOSCOW = ZoneInfo("Europe/Moscow")
 PLANNING_DATE = date(2026, 8, 25)
@@ -174,6 +180,121 @@ class PassThroughCandidateEvaluator:
         return cycle
 
 
+class RecordingMatrixProvider:
+    """Record every square provider payload while delegating exact directed metrics."""
+
+    def __init__(self) -> None:
+        self.delegate = MockRoutingProvider(
+            RoutingSettings(seed=17, deterministic_noise_ratio=0, road_factor=1.1)
+        )
+        self.matrix_sizes: list[int] = []
+
+    async def get_matrix(
+        self,
+        points: list[GeoPoint],
+        departure_at: datetime | None,
+        *,
+        profile: object | None = None,
+    ) -> TravelMatrix:
+        """Record batch size and return the delegate's directed matrix."""
+
+        del profile
+        self.matrix_sizes.append(len(points))
+        return await self.delegate.get_matrix(points, departure_at)
+
+    async def get_route(
+        self,
+        points: list[GeoPoint],
+        departure_at: datetime | None,
+        *,
+        profile: object | None = None,
+    ) -> RouteGeometry:
+        """Delegate selected-route enrichment for protocol completeness."""
+
+        del profile
+        return await self.delegate.get_route(points, departure_at)
+
+
+class SlowMatrixProvider(RecordingMatrixProvider):
+    """Block one provider await long enough to exercise the hard planner fence."""
+
+    def __init__(self, delay_seconds: float = 1.0) -> None:
+        super().__init__()
+        self.delay_seconds = delay_seconds
+        self.started_batches = 0
+
+    async def get_matrix(
+        self,
+        points: list[GeoPoint],
+        departure_at: datetime | None,
+        *,
+        profile: object | None = None,
+    ) -> TravelMatrix:
+        """Sleep before delegating so ``asyncio.timeout`` must cancel the batch."""
+
+        self.started_batches += 1
+        await asyncio.sleep(self.delay_seconds)
+        return await super().get_matrix(points, departure_at, profile=profile)
+
+
+class SlowAfterFirstCandidateEvaluator(PassThroughCandidateEvaluator):
+    """Complete one exact candidate, then block the next candidate evaluation."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def route_candidate(
+        self,
+        cycle: RouteCycle,
+        *,
+        tasks: tuple[PlanningTask, ...],
+        vehicle: Vehicle,
+        shift: DriverShift,
+        settings: PlanningSettings,
+    ) -> RouteCycle:
+        """Return the first route and force the second external await to time out."""
+
+        self.calls += 1
+        if self.calls > 1:
+            await asyncio.sleep(1)
+        return await super().route_candidate(
+            cycle,
+            tasks=tasks,
+            vehicle=vehicle,
+            shift=shift,
+            settings=settings,
+        )
+
+
+class DelayedCandidateEvaluator(PassThroughCandidateEvaluator):
+    """Delay every exact candidate while retaining the verified route unchanged."""
+
+    def __init__(self, delay_seconds: float) -> None:
+        self.delay_seconds = delay_seconds
+        self.calls = 0
+
+    async def route_candidate(
+        self,
+        cycle: RouteCycle,
+        *,
+        tasks: tuple[PlanningTask, ...],
+        vehicle: Vehicle,
+        shift: DriverShift,
+        settings: PlanningSettings,
+    ) -> RouteCycle:
+        """Return the candidate after the configured external-routing delay."""
+
+        self.calls += 1
+        await asyncio.sleep(self.delay_seconds)
+        return await super().route_candidate(
+            cycle,
+            tasks=tasks,
+            vehicle=vehicle,
+            shift=shift,
+            settings=settings,
+        )
+
+
 def customer_stops(cycle: RouteCycle, stop_type: StopType) -> list[RouteStop]:
     return [stop for stop in cycle.stops if stop.stop_type is stop_type]
 
@@ -287,8 +408,8 @@ def test_travel_zone_band_does_not_change_planning() -> None:
     assert paired_request_ids(regrouped) == paired_request_ids(near_pair)
 
 
-def test_legacy_travel_zone_has_no_upper_routing_limit_but_requires_hard_window() -> None:
-    """A retained display band cannot impose a one-to-four-hour route restriction."""
+def test_travel_zone_band_is_informational_and_unbounded() -> None:
+    """A retained display band is valid without imposing a routing or window limit."""
 
     option = RequestDateOption(
         PLANNING_DATE,
@@ -298,14 +419,14 @@ def test_legacy_travel_zone_has_no_upper_routing_limit_but_requires_hard_window(
         travel_zone_hours=99,
     )
     assert option.travel_zone_hours == 99
-    with pytest.raises(ValueError, match="complete hard time window"):
-        RequestDateOption(
-            PLANNING_DATE,
-            window_start=aware(9),
-            window_end=aware(12),
-            is_hard=False,
-            travel_zone_hours=1,
-        )
+    date_only = RequestDateOption(
+        PLANNING_DATE,
+        is_hard=False,
+        travel_zone_hours=1,
+    )
+    assert date_only.window_start is None
+    assert date_only.window_end is None
+    assert date_only.travel_zone_hours == 1
 
 
 def test_quantity_two_delivery_never_pairs_with_another_delivery() -> None:
@@ -1008,6 +1129,7 @@ def test_delivery_reference_attaches_near_pickup_without_dropping_later_delivery
         cycles=delivery_result.cycles,
         task_by_id={task.id: task for task in tasks},
         max_evaluations=1_000,
+        deadline=float("inf"),
     )
 
     assert evaluated > 0
@@ -1580,6 +1702,170 @@ def test_same_snapshot_settings_and_seed_return_identical_semantics() -> None:
     assert run_plan(data, settings) == run_plan(data, settings)
 
 
+def test_large_day_uses_bounded_sparse_matrix_batches_and_is_repeatable() -> None:
+    """A dense day never requests or allocates the former full N-by-N matrix."""
+
+    requests = tuple(
+        replace(
+            request(
+                f"large-{index:03}",
+                TaskType.DELIVERY,
+                quantity=2,
+                lon=36.8 + (index % 18) * 0.07,
+                lat=55.0 + (index // 18) * 0.07,
+                priority=200 - index,
+            ),
+            service_minutes=20,
+        )
+        for index in range(180)
+    )
+    data = planning_input(requests)
+
+    first_provider = RecordingMatrixProvider()
+    first = asyncio.run(
+        HeuristicPlanner(first_provider).generate_plan(
+            data,
+            PlanningSettings(seed=17, max_optimization_seconds=10),
+            NullProgressPublisher(),
+        )
+    )
+    second_provider = RecordingMatrixProvider()
+    second = asyncio.run(
+        HeuristicPlanner(second_provider).generate_plan(
+            data,
+            PlanningSettings(seed=17, max_optimization_seconds=10),
+            NullProgressPublisher(),
+        )
+    )
+
+    full_point_count = len(first.tasks) + 1
+    assert len(first_provider.matrix_sizes) > 1
+    assert max(first_provider.matrix_sizes) <= 32
+    assert sum(size * size for size in first_provider.matrix_sizes) < full_point_count**2
+    assert first_provider.matrix_sizes == second_provider.matrix_sizes
+    assert first == second
+
+
+def test_slow_matrix_provider_is_cancelled_by_real_wall_clock_deadline() -> None:
+    """One provider await cannot run beyond the configured planner wall fence."""
+
+    provider = SlowMatrixProvider()
+    started = perf_counter()
+    result = asyncio.run(
+        HeuristicPlanner(provider).generate_plan(
+            planning_input((request("deadline", TaskType.DELIVERY),)),
+            PlanningSettings(seed=17, max_optimization_seconds=0.05),
+            NullProgressPublisher(),
+        )
+    )
+
+    assert perf_counter() - started < 0.5
+    assert result.timed_out
+    assert result.cycles == ()
+    assert provider.started_batches == 1
+    assert provider.matrix_sizes == []
+
+
+def test_routing_preparation_does_not_consume_optimization_budget() -> None:
+    """A completed matrix leaves a fresh bounded window for exact candidate routing."""
+
+    provider = SlowMatrixProvider(delay_seconds=0.35)
+    evaluator = DelayedCandidateEvaluator(delay_seconds=0.35)
+    started = perf_counter()
+
+    result = asyncio.run(
+        HeuristicPlanner(provider, evaluator).generate_plan(
+            planning_input((request("separate-phase-budget", TaskType.DELIVERY),)),
+            PlanningSettings(seed=17, max_optimization_seconds=0.5),
+            NullProgressPublisher(),
+        )
+    )
+
+    elapsed = perf_counter() - started
+    assert elapsed < 1.5
+    assert not result.timed_out
+    assert evaluator.calls == 1
+    assert [cycle.task_ids for cycle in result.cycles] == [("separate-phase-budget:part:1",)]
+    assert result.unassigned == ()
+
+
+def test_slow_exact_candidate_returns_last_fully_selected_projection() -> None:
+    """An exact-route timeout retains only cycles selected before the blocked await."""
+
+    evaluator = SlowAfterFirstCandidateEvaluator()
+    first = request("first", TaskType.DELIVERY, quantity=2, priority=10)
+    second = request("second", TaskType.DELIVERY, quantity=2, priority=1)
+    started = perf_counter()
+    result = asyncio.run(
+        HeuristicPlanner(RecordingMatrixProvider(), evaluator).generate_plan(
+            planning_input((first, second)),
+            PlanningSettings(seed=17, max_optimization_seconds=0.4),
+            NullProgressPublisher(),
+        )
+    )
+
+    assert perf_counter() - started < 0.8
+    assert result.timed_out
+    assert evaluator.calls == 2
+    assert [cycle.task_ids for cycle in result.cycles] == [("first:part:1",)]
+    assert [item.task.id for item in result.unassigned] == ["second:part:1"]
+
+
+def test_overnight_shift_routes_across_midnight_and_month_boundary() -> None:
+    """An August night shift can serve a September window and return before 06:00."""
+
+    planning_date = date(2026, 8, 31)
+    zone = ZoneInfo("Europe/Moscow")
+    night_request = replace(
+        request("night", TaskType.DELIVERY, lon=37.62, lat=55.71),
+        date_options=(
+            RequestDateOption(
+                planning_date,
+                priority=1,
+                window_start=datetime(2026, 8, 31, 23, 50, tzinfo=zone),
+                window_end=datetime(2026, 8, 31, 23, 59, tzinfo=zone),
+                is_hard=True,
+            ),
+        ),
+        created_at=datetime(2026, 8, 31, 20, tzinfo=zone),
+    )
+    vehicle = Vehicle("night-vehicle", "Night truck", capacity=2)
+    shift = DriverShift(
+        "night-shift",
+        "night-driver",
+        "Night driver",
+        vehicle.id,
+        datetime(2026, 8, 31, 22, tzinfo=zone),
+        datetime(2026, 9, 1, 6, tzinfo=zone),
+    )
+    data = PlanningInput(
+        warehouse_id="warehouse-1",
+        planning_date=planning_date,
+        warehouse=Warehouse(
+            "warehouse-1",
+            "Склад",
+            GeoPoint(37.6, 55.7, True),
+            5,
+            5,
+            5,
+        ),
+        requests=(night_request,),
+        shifts=(shift,),
+        vehicles=(vehicle,),
+    )
+
+    result = run_plan(data, PlanningSettings(seed=17))
+
+    assert result.unassigned == ()
+    assert result.cycles[0].planned_start.date() == planning_date
+    assert result.cycles[0].planned_finish <= shift.end_at
+    assert result.cycles[0].planned_finish.date() == date(
+        2026,
+        9,
+        1,
+    )
+
+
 def test_zero_search_budget_is_deterministic_and_returns_best_completed_plan() -> None:
     data = planning_input((request("d1", TaskType.DELIVERY),))
     settings = PlanningSettings(seed=9, max_optimization_seconds=0)
@@ -1593,16 +1879,15 @@ def test_zero_search_budget_is_deterministic_and_returns_best_completed_plan() -
     assert first.unassigned
 
 
-def test_exhausted_search_budget_keeps_the_best_candidate_already_found() -> None:
+def test_sub_matrix_search_budget_returns_without_an_unverified_candidate() -> None:
     data = planning_input((request("d1", TaskType.DELIVERY),))
     settings = PlanningSettings(seed=9, max_optimization_seconds=1 / 50_000)
 
     result = run_plan(data, settings)
 
     assert result.timed_out
-    assert len(result.cycles) == 1
-    assert result.cycles[0].task_ids == ("d1:part:1",)
-    assert not result.unassigned
+    assert result.cycles == ()
+    assert [item.task.id for item in result.unassigned] == ["d1:part:1"]
 
 
 def test_locked_cycle_is_byte_for_byte_unchanged_during_reoptimization() -> None:

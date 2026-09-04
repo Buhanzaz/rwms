@@ -44,7 +44,6 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -57,7 +56,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -482,10 +480,10 @@ fun DeliveryDatesScreen(
                     val tariffSource = DeliverySlotPolicy.deliveryTariffSource(state.slots)
                     Text(
                         text = deliveryPrice?.let { price ->
-                            "Стоимость доставки: $price ₽" +
+                            "Стоимость доставки: ${CustomerMoneyFormatter.wholeRubles(price)}" +
                                 tariffSource?.let { source -> " · $source" }.orEmpty()
                         }
-                            ?: "Тариф для этой точки не определён",
+                            ?: CustomerMoneyFormatter.wholeRubles(null),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = if (deliveryPrice == null) {
@@ -722,8 +720,7 @@ fun DeliveryConfirmationScreen(
                             )
                             ConfirmationFact(
                                 "Стоимость доставки",
-                                held.deliveryPriceRubles?.let { "$it ₽" }
-                                    ?: "Тариф не определён",
+                                CustomerMoneyFormatter.wholeRubles(held.deliveryPriceRubles),
                             )
                             DeliverySlotPolicy.deliveryTariffSource(listOf(held))?.let { source ->
                                 ConfirmationFact("Источник тарифа", source)
@@ -838,7 +835,10 @@ private fun DeliveryAddressPanel(
                 TextField(
                     value = address,
                     onValueChange = onAddress,
-                    modifier = Modifier.weight(1f).testTag("delivery-address-field"),
+                    modifier = Modifier
+                        .weight(1f)
+                        .figmaButtonShadow()
+                        .testTag("delivery-address-field"),
                     placeholder = { Text("Поиск адреса") },
                     leadingIcon = {
                         IconButton(onClick = onVoice, enabled = !geocoding) {
@@ -846,7 +846,7 @@ private fun DeliveryAddressPanel(
                         }
                     },
                     singleLine = true,
-                    shape = RoundedCornerShape(24.dp),
+                    shape = RoundedCornerShape(16.dp),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = { onSearch(address) }),
                     colors = TextFieldDefaults.colors(

@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter, useLocation } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -863,7 +869,9 @@ describe("task board warehouse access", () => {
     const futureToggle = await screen.findByRole("checkbox", {
       name: "Отобразить будущие подзадачи",
     })
-    await waitFor(() => expect(futureToggle.getAttribute("data-state")).toBe("checked"))
+    await waitFor(() =>
+      expect(futureToggle.getAttribute("data-state")).toBe("checked")
+    )
     expect(
       (await screen.findByTestId("visible-task-external-ids")).textContent
     ).toBe("route-real,route-shadow")

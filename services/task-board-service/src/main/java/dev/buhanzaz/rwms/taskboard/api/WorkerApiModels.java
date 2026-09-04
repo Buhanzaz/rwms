@@ -27,6 +27,10 @@ public final class WorkerApiModels {
 
   public record WorkerIdentity(UUID id, UUID warehouseId, String login, String displayName) {}
 
+  /** Media owner coordinates fixed by the authenticated worker profile. */
+  public record WorkerProfileAvatarScope(
+      String ownerType, UUID ownerId, UUID warehouseId, String context) {}
+
   public record WorkerGroupSummary(
       UUID id, String name, UUID workerClassId, String workerClassName) {}
 
@@ -96,7 +100,7 @@ public final class WorkerApiModels {
    * @param groups groups available to the worker
    * @param qualifications active worker qualifications
    * @param categories queue categories visible to the worker
-   * @param kpiPalette display palette issued by the warehouse
+   * @param kpiPalette display palette shared by every warehouse
    * @param serverTime authoritative server-time anchor
    * @param revision current worker-feed revision
    * @param offlineLease time-bounded lease for offline actions

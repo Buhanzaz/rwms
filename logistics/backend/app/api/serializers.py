@@ -1,5 +1,7 @@
 """Async response serialization that avoids hidden ORM lazy database access."""
 
+from uuid import UUID
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import LogisticsRequest
@@ -16,10 +18,12 @@ async def request_read(session: AsyncSession, request: LogisticsRequest) -> Logi
     del session
     return LogisticsRequestRead(
         id=request.id,
+        version=request.version,
         warehouse_id=request.warehouse_id,
         source_system=request.source_system,
         external_id=request.external_id,
         type=request.type,
+        customer_delivery_purpose=request.customer_delivery_purpose,
         name=request.name,
         address_label=request.address_label,
         latitude=request.latitude,
@@ -43,10 +47,14 @@ async def request_read(session: AsyncSession, request: LogisticsRequest) -> Logi
         assigned_contractor_phone=request.assigned_contractor_phone,
         assigned_at=request.assigned_at,
         assigned_by=request.assigned_by,
+        contractor_handoff_command_id=request.contractor_handoff_command_id,
+        contractor_handoff_sequence=request.contractor_handoff_sequence,
+        external_task_ids=[UUID(value) for value in request.contractor_external_task_ids],
         trailer_access_allowed=request.trailer_access_allowed,
         include_driver_passport_in_notification=(request.include_driver_passport_in_notification),
         contact_name=request.contact_name,
         contact_phone=request.contact_phone,
+        client_type=request.client_type,
         notes=request.notes,
         created_at=request.created_at,
         updated_at=request.updated_at,

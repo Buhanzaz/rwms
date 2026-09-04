@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { FloppyDiskIcon, Loading03Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
+import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -28,11 +30,17 @@ import type {
   RepairComplexityUpdate,
 } from "@/features/settings/kpi/api/repair-complexity-api"
 import {
+  getRepairComplexity,
+  repairComplexityKeys,
+  updateRepairComplexity,
+} from "@/features/settings/kpi/api/repair-complexity-api"
+import {
   formatRepairDuration,
   hoursAndMinutesToMinutes,
   splitMinutes,
   validateRepairComplexityBoundaries,
 } from "@/features/settings/kpi/domain/kpi-settings"
+import { ApiError } from "@/lib/api-client"
 
 type DisplayFormat = "MINUTES" | "HOURS"
 type BoundaryKey =
@@ -278,5 +286,110 @@ export function RepairComplexitySettingsCard({
         </CardFooter>
       </Card>
     </form>
+  )
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message.trim()
+    ? error.message
+    : fallback
+}
+
+/** Loads and saves the repair-complexity boundaries owned by one object. */
+export function WarehouseRepairComplexitySettingsCard({
+  accessToken,
+  warehouseId,
+}: {
+  accessToken: string
+  warehouseId: string
+}) {
+  const queryClient = useQueryClient()
+  const queryKey = repairComplexityKeys.warehouse(warehouseId)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const settingsQuery = useQuery({
+    queryKey,
+    queryFn: () => getRepairComplexity(accessToken, warehouseId),
+  })
+  const saveMutation = useMutation({
+    mutationFn: (input: RepairComplexityUpdate) =>
+      updateRepairComplexity(accessToken, warehouseId, input),
+    onSuccess: (saved) => {
+      queryClient.setQueryData(queryKey, saved)
+      setActionError(null)
+      toast.success("Границы сложности ремонта сохранены.")
+    },
+    onError: async (error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        const message =
+          "Настройка уже изменена другим пользователем. Данные обновлены — повторите сохранение."
+        setActionError(message)
+        toast.error(message)
+        await queryClient.invalidateQueries({ queryKey })
+        return
+      }
+
+      const message = errorMessage(
+        error,
+        "Не удалось сохранить границы сложности ремонта."
+      )
+      setActionError(message)
+      toast.error(message)
+    },
+  })
+
+  if (settingsQuery.isLoading) {
+    return (
+      <Card aria-label="Загрузка границ сложности ремонта">
+        <CardHeader>
+          <CardTitle>Сложность ремонта</CardTitle>
+          <CardDescription>Загружаем настройки объекта…</CardDescription>
+        </CardHeader>
+      </Card>
+    )
+  }
+
+  if (settingsQuery.isError || !settingsQuery.data) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Не удалось загрузить сложность ремонта</CardTitle>
+          <CardDescription>
+            Настройка не подменяется локальным значением.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <p role="alert" className="text-sm text-destructive">
+            {errorMessage(
+              settingsQuery.error,
+              "Сервис ремонтов временно недоступен."
+            )}
+          </p>
+        </CardContent>
+        <CardFooter>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={settingsQuery.isFetching}
+            onClick={() => void settingsQuery.refetch()}
+          >
+            {settingsQuery.isFetching ? "Повторяем…" : "Повторить"}
+          </Button>
+        </CardFooter>
+      </Card>
+    )
+  }
+
+  return (
+    <RepairComplexitySettingsCard
+      key={`${warehouseId}:${settingsQuery.data.version}:${settingsQuery.data.updatedAt}`}
+      setting={settingsQuery.data}
+      saving={saveMutation.isPending}
+      blocked={saveMutation.isPending}
+      actionError={actionError}
+      onSave={(input) => {
+        setActionError(null)
+        saveMutation.mutate(input)
+      }}
+    />
   )
 }

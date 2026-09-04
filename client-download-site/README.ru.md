@@ -26,6 +26,12 @@ checksum-факты.
 пакетов. Публикуйте страницу и проверенный APK только после авторизованного release-
 процесса, проверив сам APK.
 
+`release-trust-policy.json` является channel-specific allowlist сертификатов.
+`npm run check` требует non-debug package/version канала `PRODUCTION`, полное
+происхождение source, один signer в manifest и точное совпадение APK по SHA-256,
+package, version и signer из `aapt`/`apksigner`. Сертификат вне policy закрывает
+проверку с ошибкой; его ротация является отдельным reviewed-изменением policy.
+
 ## Runtime-путь
 
 Планируемая VPS-поверхность — `/client-download/`; неизменяемый путь APK берётся

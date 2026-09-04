@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.worker.feature.taskdetail
 
+import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -20,13 +21,11 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,7 +49,9 @@ import dev.buhanzaz.rwms.worker.core.database.TaskEvidenceEntity
 import dev.buhanzaz.rwms.worker.core.network.WorkerMediaReferenceDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerWorkDto
 import dev.buhanzaz.rwms.worker.core.ui.TaskStatusChip
+import dev.buhanzaz.rwms.worker.core.ui.WorkerButton as Button
 import dev.buhanzaz.rwms.worker.core.ui.WorkerKpiColorRange
+import dev.buhanzaz.rwms.worker.core.ui.WorkerOutlinedButton as OutlinedButton
 import dev.buhanzaz.rwms.worker.core.ui.WorkerScreenScaffold
 import dev.buhanzaz.rwms.worker.core.ui.cabinNumberForDisplay
 import dev.buhanzaz.rwms.worker.core.ui.workerRepairComplexityLabel
@@ -75,8 +76,11 @@ fun TaskDetailScreen(
     onGallery: (routeIndex: Int) -> Unit = {},
     onMenu: (() -> Unit)? = null,
     profileMonogram: String? = null,
+    profileAvatar: Bitmap? = null,
     onProfile: (() -> Unit)? = null,
     onCompletionQueued: () -> Unit = {},
+    takeSlingerOnOpen: Boolean = false,
+    autoTakeOnOpen: Boolean = false,
     viewModel: TaskDetailViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(userId, entryId) { viewModel.bind(userId, entryId) }
@@ -169,8 +173,42 @@ fun TaskDetailScreen(
         hasCurrentGroup = session?.currentGroupId != null,
         operationalAvailability = session?.operationalAvailability ?: "DISABLED",
     )
+    var automaticJoinRequested by remember(entryId, takeSlingerOnOpen) { mutableStateOf(false) }
+    var automaticTakeRequested by remember(entryId, autoTakeOnOpen) { mutableStateOf(false) }
     val footerActions = actionPresentation.actions.filter {
-        it == WorkerTaskAction.TAKE || it == WorkerTaskAction.JOIN || it == WorkerTaskAction.RESUME
+        it == WorkerTaskAction.TAKE ||
+            it == WorkerTaskAction.JOIN ||
+            it == WorkerTaskAction.RESUME
+    }
+    LaunchedEffect(
+        takeSlingerOnOpen,
+        actionPresentation.actions,
+        actionPresentation.actionsEnabled,
+    ) {
+        if (shouldAutomaticallyJoinSlingerTask(
+                takeSlingerOnOpen = takeSlingerOnOpen,
+                alreadyRequested = automaticJoinRequested,
+                presentation = actionPresentation,
+            )
+        ) {
+            automaticJoinRequested = true
+            viewModel.perform(WorkerTaskAction.JOIN.wireValue)
+        }
+    }
+    LaunchedEffect(
+        autoTakeOnOpen,
+        actionPresentation.actions,
+        actionPresentation.actionsEnabled,
+    ) {
+        if (shouldAutomaticallyTakeTask(
+                autoTakeOnOpen = autoTakeOnOpen,
+                alreadyRequested = automaticTakeRequested,
+                presentation = actionPresentation,
+            )
+        ) {
+            automaticTakeRequested = true
+            viewModel.perform(WorkerTaskAction.TAKE.wireValue)
+        }
     }
     LaunchedEffect(readyEvidenceCount) { viewModel.refresh() }
     val mediaTitle = cabinNumber ?: "Задание"
@@ -184,6 +222,7 @@ fun TaskDetailScreen(
         onBack = onBack,
         onMenu = onMenu,
         profileMonogram = profileMonogram,
+        profileAvatar = profileAvatar,
         onProfile = onProfile,
         bottomBar = {
             if (footerActions.isNotEmpty()) {
@@ -198,7 +237,7 @@ fun TaskDetailScreen(
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(bottom = 28.dp),
+            contentPadding = PaddingValues(top = 12.dp, bottom = 28.dp),
         ) {
             item {
                 TaskMediaPager(
@@ -396,6 +435,26 @@ fun TaskDetailScreen(
     }
 }
 
+/** Allows exactly one automatic JOIN after the worker accepts the interruption dialog. */
+internal fun shouldAutomaticallyJoinSlingerTask(
+    takeSlingerOnOpen: Boolean,
+    alreadyRequested: Boolean,
+    presentation: TaskActionPresentation,
+): Boolean = takeSlingerOnOpen &&
+    !alreadyRequested &&
+    presentation.actionsEnabled &&
+    WorkerTaskAction.JOIN in presentation.actions
+
+/** Automatically claims the one ordinary task opened as the application's root destination. */
+internal fun shouldAutomaticallyTakeTask(
+    autoTakeOnOpen: Boolean,
+    alreadyRequested: Boolean,
+    presentation: TaskActionPresentation,
+): Boolean = autoTakeOnOpen &&
+    !alreadyRequested &&
+    presentation.actionsEnabled &&
+    WorkerTaskAction.TAKE in presentation.actions
+
 /**
  * Renders only server-projected transfer facts and keeps the existing task action pipeline below
  * the card authoritative for take, pause, evidence and completion transitions.
@@ -406,7 +465,7 @@ internal fun TransferTaskCard(presentation: TransferTaskPresentation) {
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
             .testTag("transfer-task-card"),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            containerColor = MaterialTheme.colorScheme.surface,
         ),
     ) {
         Column(
@@ -524,39 +583,37 @@ private fun TaskEntryActionFooter(
     presentation: TaskActionPresentation,
     onAction: (WorkerTaskAction) -> Unit,
 ) {
-    Surface(
-        modifier = Modifier.fillMaxWidth().navigationBarsPadding().testTag("task-action-footer"),
-        tonalElevation = 3.dp,
-        shadowElevation = 6.dp,
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .testTag("task-action-footer"),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            presentation.message?.let { message ->
+        presentation.message?.let { message ->
+            Text(
+                message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        actions.forEach { action ->
+            Button(
+                onClick = { onAction(action) },
+                enabled = presentation.actionsEnabled,
+                modifier = Modifier.fillMaxWidth().testTag(
+                    "task-action-${action.wireValue.lowercase()}",
+                ),
+            ) {
                 Text(
-                    message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    when (action) {
+                        WorkerTaskAction.TAKE -> presentation.takeLabel
+                        WorkerTaskAction.JOIN -> presentation.joinLabel
+                        WorkerTaskAction.RESUME -> "Продолжить"
+                        else -> action.wireValue
+                    },
                 )
-            }
-            actions.forEach { action ->
-                Button(
-                    onClick = { onAction(action) },
-                    enabled = presentation.actionsEnabled,
-                    modifier = Modifier.fillMaxWidth().testTag(
-                        "task-action-${action.wireValue.lowercase()}",
-                    ),
-                ) {
-                    Text(
-                        when (action) {
-                            WorkerTaskAction.TAKE -> presentation.takeLabel
-                            WorkerTaskAction.JOIN -> presentation.joinLabel
-                            WorkerTaskAction.RESUME -> "Продолжить"
-                            else -> action.wireValue
-                        },
-                    )
-                }
             }
         }
     }
@@ -573,7 +630,7 @@ private fun TaskMetadataCard(
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).testTag("task-metadata"),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            containerColor = MaterialTheme.colorScheme.surface,
         ),
     ) {
         Column(
@@ -627,7 +684,7 @@ private fun TaskMediaPager(
             Card(
                 modifier = modifier.fillMaxWidth().height(208.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    containerColor = MaterialTheme.colorScheme.surface,
                 ),
             ) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

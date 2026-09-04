@@ -26,7 +26,9 @@ public class CustomerDeliverySlotStore {
   /** Replaces stale unheld offers for one inquiry without touching a live hold or confirmation. */
   @Transactional
   public List<CustomerDeliverySlot> replaceOffers(
-      UUID subjectId, UUID inquiryId, List<CustomerDeliverySlot> offers) {
+      UUID subjectId,
+      UUID inquiryId,
+      List<CustomerDeliverySlot> offers) {
     List<CustomerDeliverySlot> current =
         slots.findAllByInquiryIdAndStateInOrderByCreatedAtDesc(
             inquiryId, Set.of(CustomerDeliverySlotState.OFFERED));
@@ -95,9 +97,12 @@ public class CustomerDeliverySlotStore {
 
   /** Locks one offered slot for the hold command. */
   @Transactional(readOnly = true)
-  public CustomerDeliverySlot required(UUID subjectId, UUID inquiryId, UUID slotId) {
+  public CustomerDeliverySlot required(
+      UUID subjectId, UUID inquiryId, UUID slotId) {
     CustomerDeliverySlot slot =
-        slots.findById(slotId).orElseThrow(CustomerDeliverySlotStore::notFound);
+        slots
+            .findById(slotId)
+            .orElseThrow(CustomerDeliverySlotStore::notFound);
     if (!subjectId.equals(slot.getCustomerSubjectId()) || !inquiryId.equals(slot.getInquiryId())) {
       throw notFound();
     }
@@ -107,7 +112,11 @@ public class CustomerDeliverySlotStore {
   /** Confirms a held slot as durable order workload. */
   @Transactional
   public CustomerDeliverySlot confirm(
-      UUID subjectId, UUID inquiryId, UUID slotId, UUID bookingId, UUID orderId) {
+      UUID subjectId,
+      UUID inquiryId,
+      UUID slotId,
+      UUID bookingId,
+      UUID orderId) {
     CustomerDeliverySlot slot = locked(subjectId, inquiryId, slotId);
     slot.confirm(bookingId, orderId);
     return slots.saveAndFlush(slot);
@@ -147,7 +156,9 @@ public class CustomerDeliverySlotStore {
 
   private CustomerDeliverySlot locked(UUID subjectId, UUID inquiryId, UUID slotId) {
     CustomerDeliverySlot slot =
-        slots.findByIdForUpdate(slotId).orElseThrow(CustomerDeliverySlotStore::notFound);
+        slots
+            .findByIdForUpdate(slotId)
+            .orElseThrow(CustomerDeliverySlotStore::notFound);
     if (!subjectId.equals(slot.getCustomerSubjectId()) || !inquiryId.equals(slot.getInquiryId())) {
       throw notFound();
     }

@@ -48,6 +48,7 @@ public class GatewayProperties {
     @NotNull private URI mediaUri;
     @NotNull private URI inventoryUri;
     @NotNull private URI logisticsUri;
+    @NotNull private URI logisticsPlannerUri;
     @NotNull private URI dossierUri;
     @NotNull private URI analyticsUri;
     @NotNull private URI assistantUri;

@@ -24,6 +24,57 @@ class GatewayFailureTest {
     }
 
     @Test
+    fun `known dispositions map to fixed action oriented Russian messages`() {
+        val expected = mapOf(
+            (401 to "TASK_BOARD_UNAUTHORIZED") to "Сессия истекла. Войдите снова.",
+            (403 to "TASK_BOARD_FORBIDDEN") to
+                "Доступ к действию закрыт. Обновите права или обратитесь к руководителю.",
+            (409 to "TASK_BOARD_CONFLICT") to
+                "Данные изменились. Обновите список заданий и повторите действие.",
+            (429 to "HTTP_429") to
+                "Слишком много запросов. Подождите и повторите попытку.",
+            (503 to "TASK_BOARD_DEPENDENCY_UNAVAILABLE") to
+                "RWMS временно недоступен. Проверьте соединение и повторите попытку.",
+            (500 to "UNEXPECTED_FAILURE") to
+                "Не удалось выполнить действие. Обновите данные и повторите попытку.",
+        )
+
+        expected.forEach { (statusAndCode, message) ->
+            assertThat(gatewayProblemUserMessage(problem(statusAndCode.first, statusAndCode.second)))
+                .isEqualTo(message)
+        }
+    }
+
+    @Test
+    fun `known problem codes refine the safe message without rendering backend text`() {
+        assertThat(gatewayProblemUserMessage(problem(409, "MEDIA_UPLOAD_EXPIRED")))
+            .isEqualTo("Срок загрузки фотографии истёк. Запустите синхронизацию ещё раз.")
+        assertThat(gatewayProblemUserMessage(problem(404, "MEDIA_NOT_FOUND")))
+            .isEqualTo("Данные больше недоступны. Обновите список заданий.")
+        assertThat(gatewayProblemUserMessage(problem(400, "MEDIA_INVALID_REQUEST")))
+            .isEqualTo("Проверьте данные и повторите действие.")
+    }
+
+    @Test
+    fun `exception message never exposes malicious title or detail`() {
+        val problem = problem(
+            status = 418,
+            code = "UNKNOWN_BACKEND_FAILURE",
+            title = "Internal Server Error",
+            detail = MALICIOUS_DETAIL,
+        )
+
+        val error = GatewayProblemException(problem)
+
+        assertThat(error.message)
+            .isEqualTo("Не удалось выполнить действие. Обновите данные и повторите попытку.")
+        assertThat(error.message).doesNotContain("Internal Server Error")
+        assertThat(error.message).doesNotContain(MALICIOUS_DETAIL)
+        assertThat(error.problem).isSameInstanceAs(problem)
+        assertThat(error.problem.detail).isEqualTo(MALICIOUS_DETAIL)
+    }
+
+    @Test
     fun `malformed Problem Details keeps the response status typed and safe`() {
         val problem = "<html>gateway failure</html>".toResponseBody().toApiProblem(Json, 503)
 
@@ -56,5 +107,63 @@ class GatewayFailureTest {
             CancellationException("cancelled").apply { initCause(GatewayUnavailableException()) }
                 .isProvenGatewayTransportFailure(),
         ).isFalse()
+    }
+
+    @Test
+    fun `safe worker message keeps typed problem semantics through a wrapper`() {
+        val typed = GatewayProblemException(problem(409, "MEDIA_UPLOAD_EXPIRED"))
+        val wrapped = IllegalStateException(MALICIOUS_DETAIL, typed)
+
+        assertThat(wrapped.safeWorkerUserMessage("Не удалось открыть экран."))
+            .isEqualTo("Срок загрузки фотографии истёк. Запустите синхронизацию ещё раз.")
+    }
+
+    @Test
+    fun `safe worker message classifies transport outage without exposing its text`() {
+        val error = IOException("HTTP 502 from internal-media-service at /api/internal/media")
+
+        assertThat(error.safeWorkerUserMessage("Не удалось открыть экран."))
+            .isEqualTo("Нет соединения с RWMS. Проверьте сеть и повторите попытку.")
+    }
+
+    @Test
+    fun `safe worker message uses actionable fallback for arbitrary exception`() {
+        val fallback = "Не удалось открыть фотографию. Повторите попытку."
+
+        val message = IllegalStateException(MALICIOUS_DETAIL).safeWorkerUserMessage(fallback)
+
+        assertThat(message).isEqualTo(fallback)
+        assertThat(message).doesNotContain(MALICIOUS_DETAIL)
+    }
+
+    @Test
+    fun `safe worker message rethrows nested cancellation`() {
+        val cancellation = CancellationException("cancelled")
+        val wrapped = IllegalStateException(MALICIOUS_DETAIL, cancellation)
+
+        val thrown = runCatching {
+            wrapped.safeWorkerUserMessage("Не удалось выполнить действие.")
+        }.exceptionOrNull()
+
+        assertThat(thrown).isSameInstanceAs(cancellation)
+    }
+
+    private fun problem(
+        status: Int,
+        code: String,
+        title: String = "Raw backend title",
+        detail: String = MALICIOUS_DETAIL,
+    ) = ApiProblemDto(
+        type = "about:blank",
+        title = title,
+        status = status,
+        detail = detail,
+        code = code,
+    )
+
+    /** Malicious server-controlled text used to prove the presentation boundary is closed. */
+    private companion object {
+        const val MALICIOUS_DETAIL =
+            "Internal stack trace: SELECT secret FROM users; <script>alert('leak')</script>"
     }
 }

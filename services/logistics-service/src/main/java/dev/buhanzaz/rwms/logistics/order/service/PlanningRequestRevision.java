@@ -1,7 +1,10 @@
 package dev.buhanzaz.rwms.logistics.order.service;
 
+import dev.buhanzaz.rwms.logistics.domain.CustomerDeliveryPurpose;
+import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDateOption;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningUnitReservation;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -9,7 +12,6 @@ import java.security.NoSuchAlgorithmException;
 import java.time.OffsetDateTime;
 import java.util.HexFormat;
 import java.util.List;
-import java.util.UUID;
 
 /** Produces the deterministic revision of one complete route-planning source snapshot. */
 final class PlanningRequestRevision {
@@ -21,24 +23,34 @@ final class PlanningRequestRevision {
    */
   static String sha256(
       RentalOrder order,
-      List<UUID> availableUnitIds,
+      List<PlanningUnitReservation> availableUnitReservations,
       List<PlanningDateOption> dateOptions,
       Boolean trailerAccessAllowed,
       Long deliveryPriceRubles,
-      Integer priceIsochroneMinutes) {
+      Integer priceIsochroneMinutes,
+      ClientType clientType,
+      String contactName,
+      String contactPhone) {
     try {
       MessageDigest digest = MessageDigest.getInstance("SHA-256");
-      append(digest, "RWMS_PLANNING_REQUEST_V2");
+      append(digest, "RWMS_PLANNING_REQUEST_V5");
       appendNullable(digest, order.getId());
       appendNullable(digest, order.getVersion());
+      appendNullable(digest, CustomerDeliveryPurpose.RENTAL_DELIVERY);
       appendNullable(digest, order.getOrderNumber());
       appendNullable(
           digest, order.getClient() == null ? null : order.getClient().getDisplayName());
+      appendNullable(digest, clientType);
+      appendNullable(digest, contactName);
+      appendNullable(digest, contactPhone);
       appendNullable(digest, order.getDeliveryAddress());
       appendNullable(digest, decimal(order.getLatitude()));
       appendNullable(digest, decimal(order.getLongitude()));
-      append(digest, Integer.toString(availableUnitIds.size()));
-      for (UUID unitId : availableUnitIds) appendNullable(digest, unitId);
+      append(digest, Integer.toString(availableUnitReservations.size()));
+      for (PlanningUnitReservation reservation : availableUnitReservations) {
+        appendNullable(digest, reservation.unitId());
+        appendNullable(digest, reservation.inventorySourceWarehouseId());
+      }
       append(digest, Integer.toString(dateOptions.size()));
       for (PlanningDateOption option : dateOptions) {
         appendNullable(digest, option.date());

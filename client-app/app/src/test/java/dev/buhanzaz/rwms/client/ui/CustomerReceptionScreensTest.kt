@@ -32,7 +32,6 @@ class CustomerReceptionScreensTest {
                     busy = false,
                     onMenu = {},
                     onProfile = {},
-                    onRefresh = {},
                     onAccept = { _, _, _ -> },
                     onReport = { _, _, _, _, _ -> },
                 )

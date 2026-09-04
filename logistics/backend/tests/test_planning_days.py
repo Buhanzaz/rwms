@@ -26,8 +26,20 @@ async def test_close_day_is_one_way_and_idempotent(db_session: AsyncSession) -> 
     open_status = await get_planning_day_status(db_session, warehouse.id, planning_date)
     assert open_status.accepting_requests is True
 
-    first = await close_planning_day(db_session, planner, warehouse.id, planning_date)
-    repeated = await close_planning_day(db_session, planner, warehouse.id, planning_date)
+    first = await close_planning_day(
+        db_session,
+        planner,
+        warehouse.id,
+        planning_date,
+        closed_by="test-user",
+    )
+    repeated = await close_planning_day(
+        db_session,
+        planner,
+        warehouse.id,
+        planning_date,
+        closed_by="test-user",
+    )
 
     assert first.changed is True
     assert first.status.accepting_requests is False
@@ -61,7 +73,13 @@ async def test_mandatory_unassigned_work_prevents_day_closure(
     planner.generate_plan.return_value = None
     savepoint = await db_session.begin_nested()
     with pytest.raises(ApiError) as rejected:
-        await close_planning_day(db_session, planner, warehouse.id, planning_date)
+        await close_planning_day(
+            db_session,
+            planner,
+            warehouse.id,
+            planning_date,
+            closed_by="test-user",
+        )
     assert rejected.value.status_code == 409
     assert rejected.value.code == "MANDATORY_TASKS_UNASSIGNED"
     assert rejected.value.extra == {"task_ids": [str(request.tasks[0].id)]}

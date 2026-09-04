@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { setSimulatorAccessTokenProvider } from '../src/api/client';
 import {
   createTransferContractor,
   createTransferDraft,
@@ -124,7 +125,7 @@ describe('canonical transfer client', () => {
       }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     vi.stubGlobal('fetch', fetchMock);
 
-    expect(await loadTransferRouteVehicles('local-spb')).toEqual([{
+    expect(await loadTransferRouteVehicles('local-spb', '2026-08-30')).toEqual([{
       id: 'vehicle-1',
       name: 'SPB-04',
       registrationNumber: 'А123АА 178',
@@ -139,8 +140,12 @@ describe('canonical transfer client', () => {
     });
 
     expect(arrival.estimated_arrival_at).toBe('2026-08-30T09:20:00Z');
+    const [, vehiclesInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/warehouses/local-spb/workspace?planning_date=2026-08-30&request_limit=1');
+    expect(new Headers(vehiclesInit.headers).get('Authorization')).toBe('Bearer test-user-access-token');
     const [estimateUrl, estimateInit] = fetchMock.mock.calls[1] as [string, RequestInit];
     expect(estimateUrl).toBe('/api/routing/transfer-arrival-estimate');
+    expect(new Headers(estimateInit.headers).get('Authorization')).toBe('Bearer test-user-access-token');
     expect(JSON.parse(estimateInit.body as string)).toEqual({
       source_warehouse_id: 'spb',
       destination_warehouse_id: 'novgorod',
@@ -160,6 +165,29 @@ describe('canonical transfer client', () => {
       { workerId: 'worker-1', displayName: 'Петров Алексей' },
     ]);
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/warehouses/local-spb/available-drivers');
+    expect(new Headers((fetchMock.mock.calls[0]?.[1] as RequestInit).headers).get('Authorization')).toBe('Bearer test-user-access-token');
+  });
+
+  it.each([
+    ['автомобилей', () => loadTransferRouteVehicles('local-spb', '2026-08-30')],
+    ['водителей', () => loadTransferDrivers('local-spb')],
+    ['расчёта прибытия', () => estimateTransferArrival({
+      sourceWarehouseId: 'spb',
+      destinationWarehouseId: 'novgorod',
+      plannedDepartureAt: '2026-08-30T05:30:00Z',
+      vehicleId: 'vehicle-1',
+      cabinCount: 2,
+    })],
+  ])('does not request simulator %s without a panel session', async (_name, request) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    setSimulatorAccessTokenProvider(() => Promise.resolve(null));
+
+    await expect(request()).rejects.toMatchObject({
+      status: 401,
+      code: 'AUTHENTICATION_REQUIRED',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('creates a contractor through the public task-board boundary', async () => {

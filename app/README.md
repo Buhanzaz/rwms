@@ -49,6 +49,11 @@ foreign origin before Retrofit is invoked.
 Logistics document projections expose only the scheduled calendar date
 (`scheduledDate`); the manager client does not consume a legacy scheduling-time
 field.
+When the transfer editor opens, that date is initialized from the selected
+source warehouse's canonical IANA timezone at the injected server clock
+instant. Submission validates against the same warehouse-local date, never
+`LocalDate.now()` from the Android device; an unavailable warehouse identity or
+invalid timezone fails explicitly.
 
 ## Screens and ownership of local state
 
@@ -303,9 +308,24 @@ to claim an end-to-end production integration.
 
 ## Release integrity
 
+Every release artifact task fails closed unless `-PsigningPropertiesFile`
+points to a readable external file containing `storeFile`, `storePassword`,
+`keyAlias`, and `keyPassword`, and the referenced keystore is readable. Use
+[`signing.properties.example`](signing.properties.example) only as a key-name
+template; real signing material stays outside Git:
+
+```bash
+bash ./gradlew \
+  -PsigningPropertiesFile=/secure/path/rwms-manager-signing.properties \
+  assembleRelease
+```
+
 Build the exact reviewed source scope, then record the APK's package name,
 `versionCode`, `versionName`, signing certificate, and SHA-256 before it is
-published. Install that exact APK on a device/emulator, authenticate through the
+published. `manager-download-site/release-trust-policy.json` additionally pins
+which signing certificates are accepted for each `PRODUCTION` or
+`INTERNAL_TEST` channel; an empty production allowlist deliberately blocks a
+production publication. Install that exact APK on a device/emulator, authenticate through the
 intended public gateway, and verify the first profile/workspace request plus the
 changed manager flow. A debug APK, a successful Gradle task, or an HTTP 200 is
 not release evidence by itself.

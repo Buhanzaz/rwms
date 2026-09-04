@@ -46,10 +46,8 @@ describe('planner resource settings', () => {
     expect(screen.getByLabelText('Порог доли крюка')).toHaveValue(1.5);
     expect(screen.getByLabelText('Максимум ожидания между клиентами, мин')).toHaveValue(120);
     expect(screen.getByLabelText('Максимум ожидания между клиентами, мин')).toHaveAttribute('min', '0');
-    expect(screen.getByLabelText('Стандартная длина бытовки, мм')).toHaveValue(6000);
-    expect(screen.getByLabelText('Стандартная ширина бытовки, мм')).toHaveValue(2400);
-    expect(screen.getByLabelText('Стандартная высота бытовки, мм')).toHaveValue(2400);
-    expect(screen.getByLabelText('Стандартная масса бытовки, кг')).toHaveValue(1200);
+    expect(screen.queryByLabelText('Стандартная длина бытовки, мм')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Стандартная масса бытовки, кг')).not.toBeInTheDocument();
     expect(screen.getByLabelText('В каждом цикле доставки раньше вывозов')).toBeChecked();
     expect(screen.getByLabelText('В каждом цикле доставки раньше вывозов')).toBeDisabled();
     expect(screen.getByLabelText('Доставок в цикле')).toHaveAttribute('min', '1');
@@ -60,7 +58,7 @@ describe('planner resource settings', () => {
     expect(screen.getByRole('switch', { name: 'Разрешить переработку' })).toHaveAttribute('aria-checked', 'false');
     expect(screen.getByLabelText('Максимальная переработка, ч')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Настройки изохронов' })).toBeVisible();
-    expect(screen.getByText('Текущая конфигурация: 2 бытовки')).toBeVisible();
+    expect(screen.queryByText('Текущая конфигурация: 2 бытовки')).not.toBeInTheDocument();
     expect(screen.queryByText(/backend/iu)).not.toBeInTheDocument();
 
     await user.clear(input);

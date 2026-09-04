@@ -20,6 +20,8 @@ public record CustomerDeliveryProperties(
     boolean enabled,
     List<Depot> depots,
     String valhallaBaseUrl,
+    String routingDataVersion,
+    Duration routingCacheTtl,
     Duration connectTimeout,
     Duration readTimeout,
     int depotReloadMinutes,
@@ -53,6 +55,7 @@ public record CustomerDeliveryProperties(
     double truckWeightTons,
     double truckAxleLoadTons,
     int truckAxleCount) {
+  private static final Duration MAX_ROUTING_CACHE_TTL = Duration.ofHours(24);
 
   /** Returns all enabled depot profiles after validating shared and warehouse-local facts. */
   public Map<UUID, Validated> validatedDepots() {
@@ -64,6 +67,8 @@ public record CustomerDeliveryProperties(
     } catch (IllegalArgumentException exception) {
       throw new IllegalStateException("valhalla-base-url must be an absolute URI", exception);
     }
+    String validatedRoutingDataVersion = required(routingDataVersion, "routing-data-version");
+    Duration validatedRoutingCacheTtl = boundedRoutingCacheTtl(routingCacheTtl);
     if (depotReloadMinutes < 1
         || serviceMinutes < 1
         || pickupServiceMinutes < 1
@@ -111,13 +116,18 @@ public record CustomerDeliveryProperties(
       if (result.containsKey(warehouseId)) {
         throw new IllegalStateException("Customer delivery warehouse IDs must be unique");
       }
+      BigDecimal depotLatitude = depot.validatedLatitude();
+      BigDecimal depotLongitude = depot.validatedLongitude();
+      requireOperationalRouteOrigin(depotLatitude, depotLongitude);
       result.put(
           warehouseId,
           new Validated(
               warehouseId,
-              depot.validatedLatitude(),
-              depot.validatedLongitude(),
+              depotLatitude,
+              depotLongitude,
               valhalla,
+              validatedRoutingDataVersion,
+              validatedRoutingCacheTtl,
               positive(connectTimeout, "connect-timeout"),
               positive(readTimeout, "read-timeout"),
               depotReloadMinutes,
@@ -179,11 +189,16 @@ public record CustomerDeliveryProperties(
       UUID warehouseId, BigDecimal warehouseLatitude, BigDecimal warehouseLongitude) {
     if (warehouseId == null) throw new IllegalStateException("warehouse-id is required");
     Validated shared = validatedDepots().values().iterator().next();
+    BigDecimal depotLatitude = validatedLatitude(warehouseLatitude);
+    BigDecimal depotLongitude = validatedLongitude(warehouseLongitude);
+    requireOperationalRouteOrigin(depotLatitude, depotLongitude);
     return new Validated(
         warehouseId,
-        validatedLatitude(warehouseLatitude),
-        validatedLongitude(warehouseLongitude),
+        depotLatitude,
+        depotLongitude,
         shared.valhallaBaseUrl(),
+        shared.routingDataVersion(),
+        shared.routingCacheTtl(),
         shared.connectTimeout(),
         shared.readTimeout(),
         shared.depotReloadMinutes(),
@@ -231,6 +246,14 @@ public record CustomerDeliveryProperties(
     return value;
   }
 
+  private static Duration boundedRoutingCacheTtl(Duration value) {
+    Duration validated = positive(value, "routing-cache-ttl");
+    if (validated.compareTo(MAX_ROUTING_CACHE_TTL) > 0) {
+      throw new IllegalStateException("routing-cache-ttl must not exceed 24 hours");
+    }
+    return validated;
+  }
+
   private static BigDecimal validatedLatitude(BigDecimal latitude) {
     if (latitude == null
         || latitude.compareTo(BigDecimal.valueOf(-90)) < 0
@@ -247,6 +270,14 @@ public record CustomerDeliveryProperties(
       throw new IllegalStateException("Depot longitude is invalid");
     }
     return longitude;
+  }
+
+  /** Rejects the coordinate placeholder while preserving valid points on either zero axis. */
+  private static void requireOperationalRouteOrigin(
+      BigDecimal latitude, BigDecimal longitude) {
+    if (latitude.signum() == 0 && longitude.signum() == 0) {
+      throw new IllegalStateException("Depot route origin must not be 0,0");
+    }
   }
 
   /** One independently enabled physical depot in the customer-delivery registry. */
@@ -289,6 +320,8 @@ public record CustomerDeliveryProperties(
       BigDecimal depotLatitude,
       BigDecimal depotLongitude,
       URI valhallaBaseUrl,
+      String routingDataVersion,
+      Duration routingCacheTtl,
       Duration connectTimeout,
       Duration readTimeout,
       int depotReloadMinutes,

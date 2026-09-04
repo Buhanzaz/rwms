@@ -22,6 +22,7 @@ from app.routing.valhalla import (
     RoutingProviderUnavailableError,
     ValhallaRoutingProvider,
 )
+from tests.auth import admin_access_token_verifier
 
 
 def _polygon(offset: float) -> dict[str, object]:
@@ -297,7 +298,7 @@ def test_read_only_endpoint_echoes_provenance_and_maps_provider_failure(
             """Mirror the production provider lifecycle without external resources."""
 
     monkeypatch.setattr(routing_api, "ValhallaRoutingProvider", FakeProvider)
-    application = create_app()
+    application = create_app(access_token_verifier=admin_access_token_verifier())
     application.dependency_overrides[get_settings] = lambda: Settings(
         valhalla_enabled=True,
         valhalla_url="http://valhalla:8002",
@@ -348,7 +349,7 @@ def test_read_only_endpoint_echoes_provenance_and_maps_provider_failure(
 def test_read_only_endpoint_rejects_invalid_coordinate_and_disabled_provider() -> None:
     """Invalid origins are 422 and disabled Valhalla is an explicit 503 condition."""
 
-    application = create_app()
+    application = create_app(access_token_verifier=admin_access_token_verifier())
     application.dependency_overrides[get_settings] = lambda: Settings(valhalla_enabled=False)
     client = TestClient(application)
 

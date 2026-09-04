@@ -2047,21 +2047,17 @@ export function InventoryFinishPage() {
                 </CardTitle>
                 <CardDescription>
                   {finalPlan?.state === "STALE"
-                    ? "После подготовки плана состав или результаты инвентаризации изменились. Постройте новую версию: устаревшую нельзя сохранить или применить."
-                    : "Сервер возьмёт только текущий живой состав, найдёт уже существующие сметы и ремонты и предложит предварительные даты. До окончательного завершения рабочие доски не меняются."}
+                    ? "После подготовки плана изменились состав, результаты инвентаризации или рабочий календарь. Постройте новую версию: устаревшую нельзя сохранить или применить."
+                    : "Сервер возьмёт текущий живой состав, общий график объекта и праздничные даты, затем предложит ближайшие допустимые даты без искусственного лимита бытовок в день. До окончательного завершения рабочие доски не меняются."}
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-wrap gap-2">
-                <Badge variant="secondary">
-                  Перемещения:{" "}
-                  {planningSettingsQuery.data.movementDailyCapacity}
-                  /день
-                </Badge>
-                <Badge variant="secondary">
-                  Ремонты: {planningSettingsQuery.data.repairDailyCapacity}/день
+                <Badge variant="secondary">Без дневного лимита</Badge>
+                <Badge variant="outline">
+                  Праздничных дат: {planningSettingsQuery.data.holidays.length}
                 </Badge>
                 <Badge variant="outline">
-                  Настройки v{planningSettingsQuery.data.settingsRevision}
+                  Календарь v{planningSettingsQuery.data.settingsRevision}
                 </Badge>
               </CardContent>
               <CardFooter className="flex-col items-stretch gap-3 border-t">

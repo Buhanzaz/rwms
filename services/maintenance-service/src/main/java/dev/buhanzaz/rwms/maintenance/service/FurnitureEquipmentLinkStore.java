@@ -287,8 +287,8 @@ public class FurnitureEquipmentLinkStore {
   }
 
   @Transactional(readOnly = true)
-  public LinkPage list(UUID warehouseId, String state, int page, int size) {
-    if (warehouseId == null || page < 0 || size < 1 || size > 200) {
+  public LinkPage list(String state, int page, int size) {
+    if (page < 0 || size < 1 || size > 200) {
       throw new IllegalArgumentException("Furniture equipment link page is invalid");
     }
     String normalizedState = state == null ? null : state.trim().toUpperCase(java.util.Locale.ROOT);
@@ -298,21 +298,19 @@ public class FurnitureEquipmentLinkStore {
     long total = jdbc.queryForObject(
         """
         select count(*) from furniture_equipment_link_intent
-         where warehouse_id=? and (cast(? as varchar) is null or state=?)
+         where (cast(? as varchar) is null or state=?)
         """,
         Long.class,
-        warehouseId,
         normalizedState,
         normalizedState);
     List<LinkSnapshot> items = jdbc.query(
         """
         select * from furniture_equipment_link_intent
-         where warehouse_id=? and (cast(? as varchar) is null or state=?)
+         where (cast(? as varchar) is null or state=?)
          order by updated_at desc,node_id
          limit ? offset ?
         """,
         this::map,
-        warehouseId,
         normalizedState,
         normalizedState,
         size,
@@ -322,14 +320,12 @@ public class FurnitureEquipmentLinkStore {
 
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public ReviewResult review(
-      UUID warehouseId,
       UUID nodeId,
       long expectedReviewVersion,
       ReviewAction action,
       UUID reviewSubjectId,
       String reason) {
-    if (warehouseId == null
-        || nodeId == null
+    if (nodeId == null
         || expectedReviewVersion < 0
         || action == null
         || reviewSubjectId == null
@@ -342,9 +338,6 @@ public class FurnitureEquipmentLinkStore {
     LinkSnapshot row = findForUpdate(nodeId)
         .orElseThrow(() -> new MaintenanceNotFoundException(
             "Furniture equipment link intent not found"));
-    if (!warehouseId.equals(row.warehouseId())) {
-      throw new MaintenanceNotFoundException("Furniture equipment link intent not found");
-    }
     long nextReviewVersion = Math.addExact(expectedReviewVersion, 1);
     if (row.reviewVersion() == nextReviewVersion) {
       ReviewAudit replay = findReviewAudit(nodeId, nextReviewVersion).orElseThrow();

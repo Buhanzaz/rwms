@@ -22,6 +22,20 @@ public interface QueueEntryRepository extends JpaRepository<QueueEntry, UUID> {
   @Query("select entry from QueueEntry entry where entry.task.id = :taskId order by entry.routeIndex")
   List<QueueEntry> findAllByTaskIdForUpdate(@Param("taskId") UUID taskId);
 
+  /** Locks complete routes for a bounded task set before an all-or-nothing plan replacement. */
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      select entry
+      from QueueEntry entry
+      join fetch entry.task task
+      join fetch entry.queue queue
+      join fetch queue.definition definition
+      where task.id in :taskIds
+      order by task.externalTaskId, entry.routeIndex
+      """)
+  List<QueueEntry> findAllByTaskIdInForUpdate(@Param("taskIds") Collection<UUID> taskIds);
+
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select entry from QueueEntry entry where entry.id = :id")
   Optional<QueueEntry> findByIdForUpdate(@Param("id") UUID id);

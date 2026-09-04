@@ -19,8 +19,12 @@ import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacit
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityIsochroneTariff;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityJobRequest;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityPriceZoneRequest;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityRestrictionKind;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityRestrictionZoneRequest;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacitySnapshotResponse;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityTaskType;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningGeoJsonMultiPolygon;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.ReplacePlanningCapacitySnapshotRequest;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
 import java.math.BigDecimal;
@@ -34,6 +38,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import tools.jackson.databind.ObjectMapper;
 
 /** Covers atomic canonicalization and replay fencing for anonymous warehouse capacity. */
 class WarehouseCapacitySnapshotServiceTest {
@@ -41,6 +46,10 @@ class WarehouseCapacitySnapshotServiceTest {
       UUID.fromString("00000000-0000-0000-0000-000000000402");
   private static final UUID COMMAND =
       UUID.fromString("00000000-0000-0000-0000-000000000403");
+  private static final UUID PRICE_ZONE =
+      UUID.fromString("00000000-0000-0000-0000-000000000404");
+  private static final UUID RESTRICTION_ZONE =
+      UUID.fromString("00000000-0000-0000-0000-000000000405");
   private static final Clock CLOCK =
       Clock.fixed(Instant.parse("2026-08-26T20:00:00Z"), ZoneOffset.UTC);
 
@@ -55,8 +64,8 @@ class WarehouseCapacitySnapshotServiceTest {
     CustomerDeliveryCapacityFence capacityFence = mock(CustomerDeliveryCapacityFence.class);
     WarehouseCapacitySnapshotService service =
         new WarehouseCapacitySnapshotService(
-            repository, receipts, mapper, locks, capacityFence, CLOCK);
-    ReplacePlanningCapacitySnapshotRequest request = request("a".repeat(64), 2);
+            repository, receipts, mapper, locks, capacityFence, CLOCK, new ObjectMapper());
+    ReplacePlanningCapacitySnapshotRequest request = requestWithZones(9_000);
     when(repository.findByWarehouseIdForUpdate(WAREHOUSE)).thenReturn(Optional.empty());
     when(repository.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
     when(receipts.findById(COMMAND)).thenReturn(Optional.empty());
@@ -78,6 +87,8 @@ class WarehouseCapacitySnapshotServiceTest {
                   snapshot.getJobs().size(),
                   snapshot.getShifts().size(),
                   snapshot.getIsochroneTariffs().size(),
+                  snapshot.getPriceZones().size(),
+                  snapshot.getRestrictionZones().size(),
                   replayed,
                   snapshot.getUpdatedAt());
             });
@@ -94,6 +105,8 @@ class WarehouseCapacitySnapshotServiceTest {
                   receipt.getJobCount(),
                   receipt.getShiftCount(),
                   receipt.getIsochroneTariffCount(),
+                  receipt.getPriceZoneCount(),
+                  receipt.getRestrictionZoneCount(),
                   replayed,
                   receipt.getResponseUpdatedAt());
             });
@@ -118,13 +131,47 @@ class WarehouseCapacitySnapshotServiceTest {
             org.assertj.core.groups.Tuple.tuple(120, 15_000L),
             org.assertj.core.groups.Tuple.tuple(180, 20_000L),
             org.assertj.core.groups.Tuple.tuple(240, 25_000L));
+    assertThat(snapshot.getPriceZones())
+        .singleElement()
+        .satisfies(
+            zone -> {
+              assertThat(zone.getSourceZoneId()).isEqualTo(PRICE_ZONE);
+              assertThat(zone.getDeliveryPriceRubles()).isEqualTo(9_000);
+            });
+    assertThat(snapshot.getRestrictionZones())
+        .singleElement()
+        .satisfies(zone -> assertThat(zone.getSourceZoneId()).isEqualTo(RESTRICTION_ZONE));
+    assertThat(receiptCaptor.getValue().getPriceZoneCount()).isEqualTo(1);
+    assertThat(receiptCaptor.getValue().getRestrictionZoneCount()).isEqualTo(1);
 
     when(receipts.findById(COMMAND)).thenReturn(Optional.of(receiptCaptor.getValue()));
     PlanningCapacitySnapshotResponse replayed = service.replace(WAREHOUSE, COMMAND, request);
 
     assertThat(replayed.replayed()).isTrue();
     assertThat(replayed.jobCount()).isEqualTo(2);
+    assertThat(replayed.priceZoneCount()).isEqualTo(1);
+    assertThat(replayed.restrictionZoneCount()).isEqualTo(1);
     verify(capacityFence).acquireWarehouseCapacity(WAREHOUSE);
+  }
+
+  @Test
+  void normalizesOmittedPolicyArraysAndIncludesPolicyFactsInTheReplayChecksum() {
+    ReplacePlanningCapacitySnapshotRequest omitted =
+        new ReplacePlanningCapacitySnapshotRequest(
+            1,
+            "a".repeat(64),
+            List.of(),
+            List.of(),
+            tariffs(),
+            null,
+            null);
+
+    assertThat(omitted.priceZones()).isEmpty();
+    assertThat(omitted.restrictionZones()).isEmpty();
+
+    ReplacePlanningCapacitySnapshotRequest baseline = requestWithZones(9_000);
+    ReplacePlanningCapacitySnapshotRequest changed = requestWithZones(9_500);
+    assertThat(checksum(changed)).isNotEqualTo(checksum(baseline));
   }
 
   @Test
@@ -138,7 +185,7 @@ class WarehouseCapacitySnapshotServiceTest {
     CustomerDeliveryCapacityFence capacityFence = mock(CustomerDeliveryCapacityFence.class);
     WarehouseCapacitySnapshotService service =
         new WarehouseCapacitySnapshotService(
-            repository, receipts, mapper, locks, capacityFence, CLOCK);
+            repository, receipts, mapper, locks, capacityFence, CLOCK, new ObjectMapper());
     ReplacePlanningCapacitySnapshotRequest original = request("a".repeat(64), 1);
     List<PlanningCapacityJobRequest> sorted =
         original.jobs().stream()
@@ -181,7 +228,7 @@ class WarehouseCapacitySnapshotServiceTest {
     CustomerDeliveryCapacityFence capacityFence = mock(CustomerDeliveryCapacityFence.class);
     WarehouseCapacitySnapshotService service =
         new WarehouseCapacitySnapshotService(
-            repository, receipts, mapper, locks, capacityFence, CLOCK);
+            repository, receipts, mapper, locks, capacityFence, CLOCK, new ObjectMapper());
     ReplacePlanningCapacitySnapshotRequest activeRequest =
         request(2, "b".repeat(64), 1);
     WarehouseCapacitySnapshot active =
@@ -222,7 +269,7 @@ class WarehouseCapacitySnapshotServiceTest {
     CustomerDeliveryCapacityFence capacityFence = mock(CustomerDeliveryCapacityFence.class);
     WarehouseCapacitySnapshotService service =
         new WarehouseCapacitySnapshotService(
-            repository, receipts, mapper, locks, capacityFence, CLOCK);
+            repository, receipts, mapper, locks, capacityFence, CLOCK, new ObjectMapper());
     ReplacePlanningCapacitySnapshotRequest activeRequest = request(2, "b".repeat(64), 1);
     WarehouseCapacitySnapshot active =
         WarehouseCapacitySnapshot.create(
@@ -301,6 +348,53 @@ class WarehouseCapacitySnapshotServiceTest {
             .toList();
     return new ReplacePlanningCapacitySnapshotRequest(
         sourceGeneration, revision, values, List.of(), tariffs());
+  }
+
+  private static ReplacePlanningCapacitySnapshotRequest requestWithZones(long specialPrice) {
+    ReplacePlanningCapacitySnapshotRequest base = request("a".repeat(64), 2);
+    return new ReplacePlanningCapacitySnapshotRequest(
+        base.sourceGeneration(),
+        base.sourceRevision(),
+        base.jobs(),
+        base.shifts(),
+        base.isochroneTariffs(),
+        List.of(
+            new PlanningCapacityPriceZoneRequest(
+                PRICE_ZONE, 3, specialPrice, 4_500, geometry())),
+        List.of(
+            new PlanningCapacityRestrictionZoneRequest(
+                RESTRICTION_ZONE,
+                7,
+                PlanningCapacityRestrictionKind.NO_TRAILER,
+                geometry())));
+  }
+
+  private static String checksum(ReplacePlanningCapacitySnapshotRequest request) {
+    return WarehouseCapacityChecksum.sha256(
+        WAREHOUSE,
+        request,
+        request.jobs().stream()
+            .sorted(
+                java.util.Comparator.comparing(PlanningCapacityJobRequest::deliveryDate)
+                    .thenComparing(PlanningCapacityJobRequest::windowStart)
+                    .thenComparing(PlanningCapacityJobRequest::sourceJobId))
+            .toList(),
+        request.shifts(),
+        request.isochroneTariffs(),
+        request.priceZones(),
+        request.restrictionZones());
+  }
+
+  private static PlanningGeoJsonMultiPolygon geometry() {
+    return new PlanningGeoJsonMultiPolygon(
+        "MultiPolygon",
+        List.of(
+            List.of(
+                List.of(
+                    List.of(37.0, 55.0),
+                    List.of(38.0, 55.0),
+                    List.of(38.0, 56.0),
+                    List.of(37.0, 55.0)))));
   }
 
   private static List<PlanningCapacityIsochroneTariff> tariffs() {

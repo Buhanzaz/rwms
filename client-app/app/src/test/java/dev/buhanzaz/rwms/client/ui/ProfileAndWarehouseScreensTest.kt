@@ -2,7 +2,6 @@ package dev.buhanzaz.rwms.client.ui
 
 import android.app.Application
 import androidx.compose.ui.test.assertIsEnabled
-import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -38,7 +37,6 @@ class ProfileAndWarehouseScreensTest {
                 ProfileFormScreen(
                     existing = profile,
                     busy = false,
-                    selectedWarehouse = warehouse(),
                     onSave = { saved = it },
                 )
             }
@@ -57,21 +55,69 @@ class ProfileAndWarehouseScreensTest {
     }
 
     @Test
-    fun `avatar action explains and enforces warehouse requirement`() {
+    fun `avatar action remains available when profile opened before catalog selection`() {
         composeRule.setContent {
             CustomerTheme {
                 ProfileFormScreen(
                     existing = existingProfile(),
                     busy = false,
-                    selectedWarehouse = null,
                     onSave = {},
                 )
             }
         }
 
         composeRule.onNodeWithTag("profile-avatar-preview").assertExists()
-        composeRule.onNodeWithTag("profile-avatar-picker").assertIsNotEnabled()
-        composeRule.onNodeWithText("Чтобы загрузить аватар, сначала выберите склад.").assertExists()
+        composeRule.onNodeWithTag("profile-avatar-picker").assertIsEnabled()
+        composeRule.onNodeWithText("Чтобы загрузить аватар, сначала выберите склад.").assertDoesNotExist()
+    }
+
+    @Test
+    fun `registration contact draft creates only an individual profile`() {
+        var saved: CustomerProfile? = null
+        composeRule.setContent {
+            CustomerTheme {
+                ProfileFormScreen(
+                    existing = null,
+                    busy = false,
+                    onSave = { saved = it },
+                    registrationDraft = CustomerRegistrationProfileDraft(
+                        email = "client@example.test",
+                        phone = "+79990000000",
+                    ),
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Физическое лицо").assertExists()
+        composeRule.onNodeWithText("Юридическое лицо").assertDoesNotExist()
+        composeRule.onNodeWithTag("profile-first-name").performTextReplacement("Иван")
+        composeRule.onNodeWithTag("profile-last-name").performTextReplacement("Петров")
+        composeRule.onNodeWithTag("profile-screen").performScrollToNode(hasTestTag("profile-save"))
+        composeRule.onNodeWithTag("profile-save").assertIsEnabled().performClick()
+
+        composeRule.runOnIdle {
+            assertThat(saved?.entityType).isEqualTo(CustomerEntityType.INDIVIDUAL)
+            assertThat(saved?.email).isEqualTo("client@example.test")
+            assertThat(saved?.phone).isEqualTo("+79990000000")
+        }
+    }
+
+    @Test
+    fun `mandatory profile displays save failures`() {
+        composeRule.setContent {
+            CustomerTheme {
+                ProfileFormScreen(
+                    existing = null,
+                    busy = false,
+                    onSave = {},
+                    errorMessage = "Не удалось сохранить профиль",
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("profile-screen").performScrollToNode(hasTestTag("profile-error"))
+        composeRule.onNodeWithTag("profile-error").assertExists()
+        composeRule.onNodeWithText("Не удалось сохранить профиль").assertExists()
     }
 
     @Test

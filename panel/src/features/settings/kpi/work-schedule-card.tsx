@@ -28,9 +28,9 @@ import {
 import { Input } from "@/components/ui/input"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type {
+  KpiSettingsResponse,
   KpiWorkSchedule,
   SaveWorkScheduleInput,
-  WarehouseKpiSettings,
 } from "@/features/settings/kpi/api/kpi-settings-api"
 import {
   scheduleTimeline,
@@ -56,9 +56,7 @@ function scheduleDraft(
   const schedule = pendingSchedule ?? activeSchedule
   if (schedule) {
     return {
-      effectiveFrom: pendingSchedule
-        ? schedule.effectiveFrom
-        : today,
+      effectiveFrom: pendingSchedule ? schedule.effectiveFrom : today,
       shiftStart: schedule.shiftStart,
       shiftEnd: schedule.shiftEnd,
       daysOff: [...schedule.daysOff].sort((left, right) => left - right),
@@ -98,15 +96,17 @@ export function WorkScheduleCard({
   deleting,
   blocked,
   actionError,
+  hideVersion = false,
   onSave,
   onDeletePending,
 }: {
-  settings: WarehouseKpiSettings
+  settings: KpiSettingsResponse
   today: string
   saving: boolean
   deleting: boolean
   blocked: boolean
   actionError: string | null
+  hideVersion?: boolean
   onSave: (input: SaveWorkScheduleInput) => void
   onDeletePending: () => void
 }) {
@@ -145,12 +145,14 @@ export function WorkScheduleCard({
         <CardHeader>
           <CardTitle>Рабочий график</CardTitle>
           <CardDescription>
-            Общая смена, выходные и отдых выбранного склада. Часовой пояс{" "}
-            <strong>{settings.timeZone}</strong>.
+            Общая смена, выходные и перерывы для всех объектов. Каждый объект
+            применяет время в своём часовом поясе.
           </CardDescription>
-          <CardAction>
-            <Badge variant="outline">Версия {settings.version}</Badge>
-          </CardAction>
+          {!hideVersion ? (
+            <CardAction>
+              <Badge variant="outline">Версия {settings.version}</Badge>
+            </CardAction>
+          ) : null}
         </CardHeader>
         <CardContent className="flex flex-col gap-6">
           {settings.activeSchedule ? (
@@ -174,6 +176,8 @@ export function WorkScheduleCard({
                 </FieldLabel>
                 <Input
                   id="kpi-schedule-effective"
+                  name="kpi-schedule-effective"
+                  autoComplete="off"
                   type="date"
                   min={today}
                   value={draft.effectiveFrom}
@@ -192,6 +196,8 @@ export function WorkScheduleCard({
                 <FieldLabel htmlFor="kpi-shift-start">Начало смены</FieldLabel>
                 <Input
                   id="kpi-shift-start"
+                  name="kpi-shift-start"
+                  autoComplete="off"
                   type="time"
                   value={draft.shiftStart}
                   disabled={disabled}
@@ -207,6 +213,8 @@ export function WorkScheduleCard({
                 <FieldLabel htmlFor="kpi-shift-end">Окончание смены</FieldLabel>
                 <Input
                   id="kpi-shift-end"
+                  name="kpi-shift-end"
+                  autoComplete="off"
                   type="time"
                   value={draft.shiftEnd}
                   disabled={disabled}
@@ -228,7 +236,7 @@ export function WorkScheduleCard({
                 value={draft.daysOff.map(String)}
                 disabled={disabled}
                 className="flex-wrap"
-                aria-label="Выходные дни склада"
+                aria-label="Общие выходные дни"
                 onValueChange={(values) =>
                   setDraft((current) => ({
                     ...current,
@@ -265,7 +273,11 @@ export function WorkScheduleCard({
                     }))
                   }
                 >
-                  <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+                  <HugeiconsIcon
+                    icon={Add01Icon}
+                    data-icon="inline-start"
+                    aria-hidden="true"
+                  />
                   Добавить перерыв
                 </Button>
               </div>
@@ -286,6 +298,8 @@ export function WorkScheduleCard({
                         </FieldLabel>
                         <Input
                           id={`kpi-break-${index}-start`}
+                          name={`kpi-break-${index}-start`}
+                          autoComplete="off"
                           type="time"
                           value={entry.start}
                           disabled={disabled}
@@ -307,6 +321,8 @@ export function WorkScheduleCard({
                         </FieldLabel>
                         <Input
                           id={`kpi-break-${index}-end`}
+                          name={`kpi-break-${index}-end`}
+                          autoComplete="off"
                           type="time"
                           value={entry.end}
                           disabled={disabled}
@@ -324,7 +340,7 @@ export function WorkScheduleCard({
                       </Field>
                       <Button
                         type="button"
-                        variant="ghost"
+                        variant="destructive"
                         size="icon"
                         aria-label={`Удалить перерыв ${index + 1}`}
                         disabled={disabled}
@@ -337,7 +353,7 @@ export function WorkScheduleCard({
                           }))
                         }
                       >
-                        <HugeiconsIcon icon={Delete02Icon} />
+                        <HugeiconsIcon icon={Delete02Icon} aria-hidden="true" />
                       </Button>
                     </div>
                   ))}
@@ -390,21 +406,29 @@ export function WorkScheduleCard({
             </div>
           </div>
         </CardContent>
-        <CardFooter className="justify-between gap-3 border-t">
+        <CardFooter className="justify-between gap-3">
           {settings.pendingSchedule ? (
             <Button
               type="button"
-              variant="outline"
+              variant="destructive"
+              size="icon"
+              aria-label={
+                deleting ? "Удаление будущего графика…" : "Удалить будущий график"
+              }
+              title="Удалить будущий график"
               disabled={disabled}
               onClick={onDeletePending}
             >
-              <HugeiconsIcon icon={Delete02Icon} data-icon="inline-start" />
-              {deleting ? "Удаляем…" : "Удалить будущий график"}
+              <HugeiconsIcon
+                icon={deleting ? Loading03Icon : Delete02Icon}
+                className={deleting ? "animate-spin" : undefined}
+                aria-hidden="true"
+              />
             </Button>
           ) : (
             <span className="text-sm text-muted-foreground">
               При выборе сегодняшней даты график после активации применяется ко
-              всему текущему дню склада.
+              всему текущему локальному дню каждого объекта.
             </span>
           )}
           <Button type="submit" disabled={disabled}>
@@ -412,6 +436,7 @@ export function WorkScheduleCard({
               icon={saving ? Loading03Icon : FloppyDiskIcon}
               data-icon="inline-start"
               className={saving ? "animate-spin" : undefined}
+              aria-hidden="true"
             />
             {saving ? "Сохраняем…" : "Сохранить график"}
           </Button>

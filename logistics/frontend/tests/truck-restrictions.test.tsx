@@ -127,6 +127,10 @@ describe('truck restriction API', () => {
 
   it('preserves cancellation and maps an API failure to ApiError', async () => {
     const abortingFetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      if (init?.signal?.aborted) {
+        reject(new DOMException('Aborted', 'AbortError'));
+        return;
+      }
       init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
     }));
     vi.stubGlobal('fetch', abortingFetch);
@@ -140,7 +144,7 @@ describe('truck restriction API', () => {
     vi.stubGlobal('fetch', failingFetch);
     const failure = await api.getTruckRestrictions({ west: 37, south: 55, east: 38, north: 56 }).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(ApiError);
-    expect(failure).toMatchObject({ status: 503, message: 'OSM index unavailable' });
+    expect(failure).toMatchObject({ status: 503, message: 'Слой недоступен. Повторите действие. Если ошибка сохранится, свяжитесь с администратором.' });
   });
 });
 

@@ -425,6 +425,7 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(paths)
         .containsKeys(
             "/worker/v1/context",
+            "/worker/v1/profile/avatar-scope",
             "/worker/v1/feed",
             "/worker/v1/entries/{entryId}",
             "/worker/v1/events",
@@ -456,6 +457,7 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
             "AudienceSelector",
             "WorkerCategory",
             "WorkerContext",
+            "WorkerProfileAvatarScope",
             "WorkerFeed",
             "WorkerTaskDetail",
             "WorkerKpiPalette",
@@ -609,7 +611,11 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
             "/internal/task-board/v1/tasks/{externalTaskId}/cancel-if-pre-start",
             "/internal/task-board/v1/logistics/equipment-movement-tasks",
             "/internal/task-board/v1/logistics/equipment-movement-tasks/{externalTaskId}",
-            "/internal/task-board/v1/logistics/equipment-movement-tasks/{externalTaskId}/cancel");
+            "/internal/task-board/v1/logistics/equipment-movement-tasks/{externalTaskId}/cancel",
+            "/internal/task-board/v1/logistics/planning-assignments/{sourcePlanId}",
+            "/internal/task-board/v1/logistics/planning-replan-holds/{sourcePlanId}",
+            "/internal/task-board/v1/logistics/planning-replan-holds/{holdId}/commit",
+            "/internal/task-board/v1/logistics/planning-replan-holds/{holdId}/release");
     assertThat(paths)
         .doesNotContainKeys(
             "/internal/task-board/v1/logistics/preparation-tasks",
@@ -633,7 +639,15 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
         .containsKeys("source", "driverAudience")
         .doesNotContainKey("dailyCapacity");
     assertThat(schemas)
-        .containsKeys("DriverTaskAudienceMode", "DriverTaskAudience");
+        .containsKeys(
+            "DriverTaskAudienceMode",
+            "DriverTaskAudience",
+            "PlanningReplacementRequest",
+            "PlanningReplacementResponse",
+            "PlanningReplanPrepareRequest",
+            "PlanningReplanPrepareResponse",
+            "PlanningReplanCommitResponse",
+            "PlanningReplanReleaseResponse");
     assertThat(child(schemas, "DriverTaskAudienceMode").get("enum"))
         .isEqualTo(List.of("UNASSIGNED", "ASSIGNED_DRIVER", "WAREHOUSE_DRIVERS"));
     assertThat(child(schemas, "DriverTaskAudience").toString())

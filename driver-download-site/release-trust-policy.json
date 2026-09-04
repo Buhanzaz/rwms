@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "applicationId": "dev.buhanzaz.rwms.driver",
+  "artifactNamePrefix": "rwms-driver",
+  "productionSignerSha256Allowlist": [],
+  "internalTestSignerSha256Allowlist": [
+    "d5ad8435c5313961f5ca25d3deb6e6a5ee303a27614ad3384bf7cbae7e58473f"
+  ]
+}

@@ -613,14 +613,6 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     var unqualifiedWorker =
         workforce.createWorker(
             W1, worker("Не водитель", null, null, List.of()));
-    var wrongWarehouseDriver =
-        workforce.createWorker(
-            W2,
-            worker(
-                "Водитель другого склада",
-                null,
-                null,
-                List.of(new QualificationRequest(driverClass.id(), true, null))));
     var inactiveDriver =
         workforce.createWorker(
             W1,
@@ -644,6 +636,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                 null,
                 null,
                 List.of(new QualificationRequest(driverClass.id(), true, null))));
+    UUID inactiveDriverId = inactiveDriver.id();
     LocalDate date = LocalDate.of(2026, 8, 2);
     assertThatThrownBy(
             () ->
@@ -659,21 +652,19 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                             null))))
         .isInstanceOf(ConflictException.class)
         .hasMessageContaining("квалификации водителя");
-    for (var unavailableDriver : List.of(wrongWarehouseDriver, inactiveDriver)) {
-      assertThatThrownBy(
-              () ->
-                  board.registerExternalTask(
-                      "logistics-service",
-                      driverRegistration(
-                          movement.definitionId(),
-                          UUID.randomUUID(),
-                          date,
-                          new DriverTaskAudienceDto(
-                              DriverTaskAudienceMode.ASSIGNED_DRIVER,
-                              unavailableDriver.id(),
-                              null))))
-          .isInstanceOf(ConflictException.class);
-    }
+    assertThatThrownBy(
+            () ->
+                board.registerExternalTask(
+                    "logistics-service",
+                    driverRegistration(
+                        movement.definitionId(),
+                        UUID.randomUUID(),
+                        date,
+                        new DriverTaskAudienceDto(
+                            DriverTaskAudienceMode.ASSIGNED_DRIVER,
+                            inactiveDriverId,
+                            null))))
+        .isInstanceOf(ConflictException.class);
     BoardTaskRegistrationDto first =
         board.registerExternalTask(
             "logistics-service",
@@ -802,6 +793,197 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                     firstDriver.id()))
         .isInstanceOf(ConflictException.class)
         .hasMessageContaining("текущая группа");
+  }
+
+  @Test
+  void exactCrossWarehouseDriverTaskUsesHomeIdentityAndPhysicalTaskWarehouse() {
+    var driverClass = registry.createClass(workerClass("CROSS_WAREHOUSE_DRIVER_BOARD"));
+    QueueFixtureRequest driverQueueRequest =
+        queue(
+            "CROSS_WAREHOUSE_DRIVER_BOARD",
+            QueueType.MOVEMENT,
+            QueuePurpose.LOGISTICS_DRIVER,
+            List.of(
+                new QueueBindingRequest(
+                    driverClass.id(), 0, false, ParticipationPolicy.PRIMARY, false)));
+    var homeQueue =
+        QueueRegistryTestFixtures.create(registry, jdbc, W1, driverQueueRequest);
+    var representativeQueue =
+        QueueRegistryTestFixtures.create(registry, jdbc, W2, driverQueueRequest);
+    var assignedDriver =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Водитель опорного склада",
+                null,
+                null,
+                List.of(new QualificationRequest(driverClass.id(), true, null))));
+    var otherDriver =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Другой водитель опорного склада",
+                null,
+                null,
+                List.of(new QualificationRequest(driverClass.id(), true, null))));
+    jdbc.update(
+        "update worker set app_login='cross.warehouse.driver' where id=?",
+        assignedDriver.id());
+    jdbc.update(
+        "update worker set app_login='cross.warehouse.other' where id=?", otherDriver.id());
+    LocalDate scheduledDate = LocalDate.of(2026, 8, 31);
+
+    BoardTaskRegistrationDto assigned =
+        board.registerExternalTask(
+            "logistics-service",
+            driverRegistration(
+                W2,
+                representativeQueue.definitionId(),
+                UUID.randomUUID(),
+                scheduledDate,
+                new DriverTaskAudienceDto(
+                    DriverTaskAudienceMode.ASSIGNED_DRIVER, assignedDriver.id(), null)));
+    BoardTaskRegistrationDto foreign =
+        board.registerExternalTask(
+            "logistics-service",
+            driverRegistration(
+                W2,
+                representativeQueue.definitionId(),
+                UUID.randomUUID(),
+                scheduledDate,
+                new DriverTaskAudienceDto(
+                    DriverTaskAudienceMode.ASSIGNED_DRIVER, otherDriver.id(), null)));
+    BoardTaskRegistrationDto shared =
+        board.registerExternalTask(
+            "logistics-service",
+            driverRegistration(
+                W2,
+                representativeQueue.definitionId(),
+                UUID.randomUUID(),
+                scheduledDate,
+                new DriverTaskAudienceDto(
+                    DriverTaskAudienceMode.WAREHOUSE_DRIVERS, null, null)));
+    assigned =
+        board.setExternalTaskLane(
+            "logistics-service",
+            assigned.externalTaskId(),
+            new SetTaskLaneRequest(assigned.taskVersion(), TaskLane.CURRENT));
+    foreign =
+        board.setExternalTaskLane(
+            "logistics-service",
+            foreign.externalTaskId(),
+            new SetTaskLaneRequest(foreign.taskVersion(), TaskLane.CURRENT));
+    shared =
+        board.setExternalTaskLane(
+            "logistics-service",
+            shared.externalTaskId(),
+            new SetTaskLaneRequest(shared.taskVersion(), TaskLane.CURRENT));
+    UUID assignedTaskId = assigned.taskId();
+    UUID foreignTaskId = foreign.taskId();
+    UUID sharedTaskId = shared.taskId();
+    BoardEntryDto assignedEntry =
+        board.logisticsSnapshot(W2).current().stream()
+            .filter(candidate -> candidate.taskId().equals(assignedTaskId))
+            .findFirst()
+            .orElseThrow();
+
+    WorkerContext assignedContext =
+        workerBoard.context(MobileTaskSurface.DRIVER, assignedDriver.id(), W1);
+    assertThat(assignedContext.worker().warehouseId()).isEqualTo(W1);
+    assertThat(assignedContext.categories())
+        .extracting(WorkerCategory::queueId)
+        .contains(homeQueue.id(), representativeQueue.id());
+    assertThat(
+            workerBoard
+                .feed(MobileTaskSurface.DRIVER, assignedDriver.id(), W1, null, 50)
+                .feed()
+                .categories())
+        .flatExtracting(WorkerFeedCategory::entries)
+        .extracting(WorkerFeedEntry::taskId)
+        .contains(assignedTaskId)
+        .doesNotContain(foreignTaskId, sharedTaskId);
+    assertThat(
+            workerBoard
+                .feed(MobileTaskSurface.DRIVER, otherDriver.id(), W1, null, 50)
+                .feed()
+                .categories())
+        .flatExtracting(WorkerFeedCategory::entries)
+        .extracting(WorkerFeedEntry::taskId)
+        .contains(foreignTaskId)
+        .doesNotContain(assignedTaskId, sharedTaskId);
+    assertThatThrownBy(
+            () ->
+                workerBoard.detail(
+                    MobileTaskSurface.DRIVER,
+                    otherDriver.id(),
+                    W1,
+                    assignedEntry.id()))
+        .isInstanceOf(NotFoundException.class);
+    assertThat(
+            workerBoard
+                .detail(
+                    MobileTaskSurface.DRIVER,
+                    assignedDriver.id(),
+                    W1,
+                    assignedEntry.id())
+                .taskId())
+        .isEqualTo(assignedTaskId);
+
+    UUID takeOperation = UUID.randomUUID();
+    WorkerActionAppliedResult taken =
+        workerBoard.applyAction(
+            MobileTaskSurface.DRIVER,
+            assignedDriver.id(),
+            W1,
+            assignedEntry.id(),
+            takeOperation.toString(),
+            new WorkerActionRequest(
+                takeOperation,
+                WorkerAction.TAKE,
+                assignedEntry.version(),
+                null,
+                assignedContext.serverTime(),
+                assignedContext.offlineLease().id(),
+                null));
+    assertThat(taken.entry().status()).isEqualTo("IN_PROGRESS");
+    assertThat(
+            jdbc.queryForObject(
+                "select warehouse_id from board_task where id=?", UUID.class, assignedTaskId))
+        .isEqualTo(W2);
+    assertThat(
+            jdbc.queryForObject(
+                "select warehouse_id from worker where id=?", UUID.class, assignedDriver.id()))
+        .isEqualTo(W1);
+    assertThat(assignments.findAllByQueueEntryId(assignedEntry.id()))
+        .extracting(assignment -> assignment.getWorker().getId())
+        .containsExactly(assignedDriver.id());
+
+    WorkerContext evidenceContext =
+        workerBoard.context(MobileTaskSurface.DRIVER, assignedDriver.id(), W1);
+    assertThat(evidenceContext.revision()).isGreaterThan(assignedContext.revision());
+    UUID evidenceOperation = UUID.randomUUID();
+    UUID evidenceId = UUID.randomUUID();
+    workerBoard.reserveEvidence(
+        MobileTaskSurface.DRIVER,
+        assignedDriver.id(),
+        W1,
+        assignedEntry.id(),
+        evidenceOperation.toString(),
+        new EvidenceReservationRequest(
+            evidenceOperation,
+            evidenceId,
+            assignedEntry.routeIndex(),
+            evidenceContext.serverTime(),
+            evidenceContext.offlineLease().id(),
+            "image/jpeg",
+            128,
+            "b".repeat(64)));
+    assertThat(
+            jdbc.queryForObject(
+                "select warehouse_id from worker_task_evidence where evidence_id=?",
+                UUID.class,
+                evidenceId))
+        .isEqualTo(W2);
   }
 
   @Test
@@ -4568,7 +4750,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                   .header(
                       "Access-Control-Request-Headers",
                       "Authorization, Content-Type, X-Correlation-Id, "
-                          + "Idempotency-Key, If-None-Match, Last-Event-ID"))
+                          + "Idempotency-Key, If-None-Match"))
           .andExpect(status().isOk())
           .andExpect(header().string("Access-Control-Allow-Origin", origin))
           .andExpect(
@@ -5049,8 +5231,18 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
       UUID externalTaskId,
       LocalDate scheduledDate,
       DriverTaskAudienceDto driverAudience) {
+    return driverRegistration(
+        W1, queueDefinitionId, externalTaskId, scheduledDate, driverAudience);
+  }
+
+  private RegisterExternalTaskRequest driverRegistration(
+      UUID warehouseId,
+      UUID queueDefinitionId,
+      UUID externalTaskId,
+      LocalDate scheduledDate,
+      DriverTaskAudienceDto driverAudience) {
     return new RegisterExternalTaskRequest(
-        W1,
+        warehouseId,
         externalTaskId,
         "Переместить бытовку",
         "БЫТ-001",

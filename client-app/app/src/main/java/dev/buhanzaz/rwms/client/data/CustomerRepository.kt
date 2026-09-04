@@ -12,9 +12,10 @@ import java.io.IOException
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.encodeToString
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.asRequestBody
 import retrofit2.HttpException
@@ -25,6 +26,7 @@ class CustomerRepository @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val api: CustomerApi,
     private val json: Json,
+    private val workflowStore: CustomerWorkflowStore,
 ) {
     private val pendingIdempotencyKeys = ConcurrentHashMap<String, String>()
 
@@ -210,6 +212,71 @@ class CustomerRepository @Inject constructor(
     /** Lists real customer bookings independently of any logistics simulator scenario. */
     suspend fun bookings(): List<CustomerBooking> = call { api.bookings() }
 
+    /** Submits one service-owned cancellation with a process-durable command identity. */
+    suspend fun cancelBooking(booking: CustomerBooking): CustomerBooking {
+        val bookingId = booking.bookingId
+            ?: throw CustomerApiException(409, "Заказ ещё не готов к отмене")
+        requireBookingVersion(booking)
+        val operation = "booking-cancel:$bookingId:${booking.version}"
+        return durableIdempotent(
+            operation = operation,
+            reconcile = {
+                api.bookings().firstOrNull { current ->
+                    current.bookingId == bookingId &&
+                        current.status in setOf("CANCELLATION_PENDING", "CANCELLED")
+                }
+            },
+        ) { key ->
+            api.cancelBooking(bookingId, key, CancelCustomerBookingRequest(booking.version))
+        }
+    }
+
+    /** Recalculates replacement offers using only the exact server-owned booking version. */
+    suspend fun searchBookingRescheduleSlots(booking: CustomerBooking): List<DeliverySlot> {
+        val bookingId = booking.bookingId
+            ?: throw CustomerApiException(409, "Заказ ещё не готов к переносу")
+        requireBookingVersion(booking)
+        return call {
+            api.searchBookingRescheduleSlots(
+                bookingId,
+                SearchCustomerBookingRescheduleRequest(booking.version),
+            )
+        }
+    }
+
+    /** Atomically swaps one booking to a server offer with a process-durable command identity. */
+    suspend fun rescheduleBooking(
+        booking: CustomerBooking,
+        slot: DeliverySlot,
+    ): CustomerBooking {
+        val bookingId = booking.bookingId
+            ?: throw CustomerApiException(409, "Заказ ещё не готов к переносу")
+        requireBookingVersion(booking)
+        val operation =
+            "booking-reschedule:$bookingId:${booking.version}:${slot.slotId}:${slot.version}"
+        return durableIdempotent(
+            operation = operation,
+            reconcile = {
+                api.bookings().firstOrNull { current ->
+                    current.bookingId == bookingId &&
+                        current.version > booking.version &&
+                        current.slotId == slot.slotId &&
+                        current.status == "COMPLETED"
+                }
+            },
+        ) { key ->
+            api.rescheduleBooking(
+                bookingId,
+                key,
+                RescheduleCustomerBookingRequest(
+                    expectedVersion = booking.version,
+                    slotId = slot.slotId,
+                    slotVersion = slot.version,
+                ),
+            )
+        }
+    }
+
     /** Accepts one arrived cabin with a process-stable idempotency key. */
     suspend fun acceptCabin(
         bookingId: String,
@@ -217,9 +284,12 @@ class CustomerRepository @Inject constructor(
         strokes: List<CustomerSignatureStroke>,
     ): CustomerCabinAcceptance {
         val fingerprint = json.encodeToString(AcceptCustomerCabinRequest(strokes)).sha256()
-        return idempotent("accept:$bookingId:$cabinId:$fingerprint") { key ->
-            api.acceptCabin(bookingId, cabinId, key, AcceptCustomerCabinRequest(strokes))
-        }
+        val operationPrefix = "accept:$bookingId:$cabinId:"
+        return durableIdempotent(
+            operation = "$operationPrefix$fingerprint",
+            complete = { workflowStore.completeIdempotentOperations(operationPrefix) },
+            reconcile = { authoritativeCabin(bookingId, cabinId)?.acceptance },
+        ) { key -> api.acceptCabin(bookingId, cabinId, key, AcceptCustomerCabinRequest(strokes)) }
     }
 
     /** Uploads customer evidence, waits for READY generations, and commits one immutable report. */
@@ -238,13 +308,23 @@ class CustomerRepository @Inject constructor(
         val references = evidence.mapIndexed { index, source ->
             uploadReadyEvidence(owner, folderId, source, index)
         }
-        val fingerprint = listOf(category, description.trim(), references.joinToString()).joinToString("|").sha256()
-        return idempotent("problem:$bookingId:$cabinId:$fingerprint") { key ->
+        val request = ReportCustomerCabinProblemRequest(category, description.trim(), references)
+        val operation = "problem:$bookingId:$cabinId:${json.encodeToString(request).sha256()}"
+        return durableIdempotent(
+            operation = operation,
+            reconcile = {
+                authoritativeCabin(bookingId, cabinId)?.problems?.firstOrNull { problem ->
+                    problem.category == request.category &&
+                        problem.description == request.description &&
+                        problem.mediaReferences == request.mediaReferences
+                }
+            },
+        ) { key ->
             api.reportProblem(
                 bookingId,
                 cabinId,
                 key,
-                ReportCustomerCabinProblemRequest(category, description.trim(), references),
+                request,
             )
         }
     }
@@ -449,6 +529,50 @@ class CustomerRepository @Inject constructor(
             block(key).also { pendingIdempotencyKeys.remove(operation, key) }
         } catch (failure: Throwable) {
             throw failure.toCustomerApiException(json)
+        }
+    }
+
+    private suspend fun <T> durableIdempotent(
+        operation: String,
+        complete: suspend (String) -> Unit = { key ->
+            workflowStore.completeIdempotentOperation(operation, key)
+        },
+        reconcile: suspend () -> T?,
+        block: suspend (String) -> T,
+    ): T {
+        val key = workflowStore.beginIdempotentOperation(operation)
+        return try {
+            block(key).also { complete(key) }
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (failure: Throwable) {
+            val reconciled = try {
+                reconcile()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                null
+            }
+            if (reconciled != null) {
+                complete(key)
+                reconciled
+            } else {
+                throw failure.toCustomerApiException(json)
+            }
+        }
+    }
+
+    private suspend fun authoritativeCabin(
+        bookingId: String,
+        cabinId: String,
+    ): CustomerBookingCabin? = api.bookings()
+        .firstOrNull { booking -> booking.bookingId == bookingId }
+        ?.cabins
+        ?.firstOrNull { cabin -> cabin.cabinUnitId == cabinId }
+
+    private fun requireBookingVersion(booking: CustomerBooking) {
+        if (booking.version <= 0) {
+            throw CustomerApiException(409, "Версия заказа неизвестна. Обновите список заказов")
         }
     }
 }

@@ -82,16 +82,16 @@ public class DocumentDriverTaskPlanner {
 
   /**
    * Creates or idempotently replans the ordinary document-owned driver task for a confirmed
-   * transfer containing only loose furniture. The supplied summary is the frozen cargo snapshot
-   * shown through the same queue and WorkerApp task path as cabin transfers; this method neither
-   * invents a cabin nor crosses the asset boundary.
+   * transfer without physical cabin lines. The supplied summary freezes its loose furniture or
+   * operational resources through the same queue and WorkerApp task path as cabin transfers; this
+   * method neither invents a cabin nor crosses the asset or resource-owner boundary.
    */
   @Transactional
   public void planTransferCargo(LogisticsDocument document, String cargoSummary) {
     planTransferCargo(document, cargoSummary, DriverTaskWorkerContent.empty());
   }
 
-  /** Creates or replans a furniture-only transfer with its exact WorkerApp cargo manifest. */
+  /** Creates or replans a zero-cabin transfer with its exact WorkerApp cargo/resource manifest. */
   @Transactional
   public void planTransferCargo(
       LogisticsDocument document,

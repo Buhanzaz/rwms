@@ -37,7 +37,11 @@ export type StartReturnEstimatesCommand = ReturnVersionedCommand & {
 }
 
 export interface ReturnClient {
-  list(accessToken: string, warehouseId: string): Promise<ReturnDocument[]>
+  list(
+    accessToken: string,
+    warehouseId: string,
+    scheduledDate?: string
+  ): Promise<ReturnDocument[]>
   get(accessToken: string, documentId: string): Promise<ReturnDocument>
   create(input: ReturnCreateCommand): Promise<ReturnDocument>
   register(input: ReturnPickupCommand): Promise<ReturnDocument>

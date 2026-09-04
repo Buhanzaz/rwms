@@ -36,11 +36,41 @@ class TaskBoardSecurityPolicyTest {
     for (String[] profiles : List.of(new String[] {"dev", "prod"}, new String[] {"test", "production"})) {
       MockEnvironment environment = new MockEnvironment();
       environment.setActiveProfiles(profiles);
-      WarehouseAccessAuthorizer authorizer = new WarehouseAccessAuthorizer(environment, true);
+      WarehouseAccessAuthorizer authorizer = authorizer(environment, true);
 
       assertThatThrownBy(() -> authorizer.requireUserScope(jwt("USER", "rwms.read"), "rwms.write"))
           .isInstanceOf(AccessDeniedException.class);
     }
+  }
+
+  @Test
+  void isolatedAdministrationApplicationAllowsGlobalAdministratorsWithoutRwmsScopes() {
+    WarehouseAccessAuthorizer authorizer = authorizer(new MockEnvironment(), false);
+    Jwt administrator =
+        jwt(
+            "USER",
+            "openid profile offline_access admin.manage",
+            "client_id",
+            "rwms-admin-web",
+            "global_role",
+            "SYSTEM_ADMIN");
+
+    authorizer.requireUserScope(administrator, "rwms.write");
+    authorizer.requireTaskScope(administrator, true);
+    authorizer.requireGlobalManagement(administrator);
+    assertThatThrownBy(
+            () ->
+                authorizer.requireTaskScope(
+                    jwt(
+                        "USER",
+                        "openid profile offline_access admin.manage",
+                        "client_id",
+                        "rwms-admin-web",
+                        "global_role",
+                        "WAREHOUSE_MANAGER"),
+                    true))
+        .isInstanceOf(AccessDeniedException.class)
+        .hasMessageContaining("Required task scope");
   }
 
   @Test
@@ -98,7 +128,7 @@ class TaskBoardSecurityPolicyTest {
   @Test
   void workerIdentityClaimIsRequiredAndMustBeUuid() {
     WarehouseAccessAuthorizer authorizer =
-        new WarehouseAccessAuthorizer(new MockEnvironment(), false);
+        authorizer(new MockEnvironment(), false);
     assertThatThrownBy(() -> authorizer.workerId(jwt("WORKER", "worker.tasks")))
         .isInstanceOf(AccessDeniedException.class)
         .hasMessageContaining("worker_id");
@@ -116,7 +146,7 @@ class TaskBoardSecurityPolicyTest {
   @Test
   void workerAndDriverMobileScopesCannotCrossSurfaces() {
     WarehouseAccessAuthorizer authorizer =
-        new WarehouseAccessAuthorizer(new MockEnvironment(), false);
+        authorizer(new MockEnvironment(), false);
     Jwt worker = jwt("WORKER", "worker.tasks");
     Jwt driver = jwt("WORKER", "driver.tasks");
 
@@ -136,7 +166,7 @@ class TaskBoardSecurityPolicyTest {
   @Test
   void malformedWarehouseAccessClaimsFailClosed() {
     WarehouseAccessAuthorizer authorizer =
-        new WarehouseAccessAuthorizer(new MockEnvironment(), false);
+        authorizer(new MockEnvironment(), false);
     for (Object malformed :
         List.of(
             "not-a-list",
@@ -148,6 +178,19 @@ class TaskBoardSecurityPolicyTest {
               () -> authorizer.requireWarehouse(token, WAREHOUSE, dev.buhanzaz.rwms.taskboard.security.AccessLevel.VIEW, false))
           .isInstanceOf(AccessDeniedException.class);
     }
+  }
+
+  @Test
+  void globalAdministrationCanManageWarehouseWithoutATenantClaim() {
+    WarehouseAccessAuthorizer authorizer = new WarehouseAccessAuthorizer(new MockEnvironment(), false);
+    Jwt administrator =
+        jwt("USER", "rwms.read", "global_role", "WMS_ADMIN");
+
+    authorizer.requireWarehouse(
+        administrator,
+        WAREHOUSE,
+        dev.buhanzaz.rwms.taskboard.security.AccessLevel.MANAGE,
+        false);
   }
 
   @Test
@@ -207,6 +250,11 @@ class TaskBoardSecurityPolicyTest {
         .claim("client_id", clientId)
         .claim("scope", scopes)
         .build();
+  }
+
+  private static WarehouseAccessAuthorizer authorizer(
+      MockEnvironment environment, boolean developmentAuthBypass) {
+    return new WarehouseAccessAuthorizer(environment, developmentAuthBypass);
   }
 
   private MockEnvironment secureProductionEnvironment() {
@@ -320,8 +368,10 @@ class TaskBoardSecurityPolicyTest {
             .claim("principal_type", type)
             .claim("scope", scope)
             .claim("warehouse_id", WAREHOUSE.toString());
-    if (additionalClaim.length == 2)
-      builder.claim(String.valueOf(additionalClaim[0]), additionalClaim[1]);
+    if (additionalClaim.length % 2 != 0) throw new IllegalArgumentException("Claim pairs required");
+    for (int index = 0; index < additionalClaim.length; index += 2) {
+      builder.claim(String.valueOf(additionalClaim[index]), additionalClaim[index + 1]);
+    }
     return builder.build();
   }
 }

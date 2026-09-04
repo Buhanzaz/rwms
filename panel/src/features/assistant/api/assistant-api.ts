@@ -1,5 +1,10 @@
 import type { OrderClientChoice } from "@/features/orders/components/order-client-chooser"
-import { apiErrorFromResponse, bearerRequest } from "@/lib/api-client"
+import {
+  apiErrorFromRequestFailure,
+  apiErrorFromResponse,
+  bearerRequest,
+  invalidApiResponseError,
+} from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 
 export const ASSISTANT_QUERY_KEY = ["assistant-conversations"] as const
@@ -214,11 +219,12 @@ export async function getAssistantConversation(
   accessToken: string,
   conversationId: string
 ) {
-  return parseAssistantConversationDetail(
-    await bearerRequest<unknown>(
-      accessToken,
-      conversationsEndpoint(`/${encodeURIComponent(conversationId)}`)
-    )
+  const response = await bearerRequest<unknown>(
+    accessToken,
+    conversationsEndpoint(`/${encodeURIComponent(conversationId)}`)
+  )
+  return parseAssistantApiResponse(() =>
+    parseAssistantConversationDetail(response)
   )
 }
 
@@ -278,8 +284,11 @@ function parseSseBlock(block: string): AssistantTurnEvent | null {
     .map((line) => line.slice(5).trimStart())
     .join("\n")
   if (!data) return null
-  const parsed = JSON.parse(data) as AssistantTurnEvent
-  return parsed && typeof parsed.event === "string" ? parsed : null
+  const parsed: unknown = JSON.parse(data)
+  if (!isRecord(parsed) || typeof parsed.event !== "string") {
+    throw new Error("Assistant SSE event is invalid")
+  }
+  return parsed as AssistantTurnEvent
 }
 
 export async function streamAssistantTurn(
@@ -290,47 +299,66 @@ export async function streamAssistantTurn(
     signal?: AbortSignal
   } & AssistantTurnRequest
 ) {
-  const response = await fetch(
-    conversationsEndpoint(
-      `/${encodeURIComponent(params.conversationId)}/turns`
-    ),
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${params.accessToken}`,
-        Accept: "text/event-stream",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(
-        params.message !== undefined
-          ? { message: params.message }
-          : { clarificationAnswer: params.clarificationAnswer }
+  let response: Response
+  try {
+    response = await fetch(
+      conversationsEndpoint(
+        `/${encodeURIComponent(params.conversationId)}/turns`
       ),
-      signal: params.signal,
-    }
-  )
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${params.accessToken}`,
+          Accept: "text/event-stream",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(
+          params.message !== undefined
+            ? { message: params.message }
+            : { clarificationAnswer: params.clarificationAnswer }
+        ),
+        signal: params.signal,
+      }
+    )
+  } catch (error) {
+    throw apiErrorFromRequestFailure(error)
+  }
   if (!response.ok) {
     throw await apiErrorFromResponse(response)
   }
+  const contentType = response.headers.get("Content-Type") ?? ""
+  if (!contentType.toLowerCase().includes("text/event-stream")) {
+    throw invalidApiResponseError(
+      new Error(`Assistant stream content type is ${contentType || "missing"}`)
+    )
+  }
   if (!response.body) {
-    throw new Error("Сервис чата не открыл поток ответа.")
+    throw invalidApiResponseError(
+      new Error("Assistant response did not contain an SSE body")
+    )
   }
 
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let pending = ""
   while (true) {
-    const { done, value } = await reader.read()
+    let chunk: ReadableStreamReadResult<Uint8Array>
+    try {
+      chunk = await reader.read()
+    } catch (error) {
+      throw apiErrorFromRequestFailure(error)
+    }
+    const { done, value } = chunk
     pending += decoder.decode(value, { stream: !done })
     const blocks = pending.split(/\r?\n\r?\n/)
     pending = blocks.pop() ?? ""
     for (const block of blocks) {
-      const event = parseSseBlock(block)
+      const event = parseAssistantApiResponse(() => parseSseBlock(block))
       if (event) params.onEvent(event)
     }
     if (done) break
   }
-  const finalEvent = parseSseBlock(pending)
+  const finalEvent = parseAssistantApiResponse(() => parseSseBlock(pending))
   if (finalEvent) params.onEvent(finalEvent)
 }
 
@@ -416,22 +444,29 @@ export async function updateAssistantSelection(params: {
   warehouseId: string
   rentalItemIds: string[]
 }) {
-  return parseCabinSelection(
-    await bearerRequest<unknown>(
-      params.accessToken,
-      conversationsEndpoint(
-        `/${encodeURIComponent(params.conversationId)}/selection`
-      ),
-      {
-        method: "PUT",
-        headers: { "Idempotency-Key": params.idempotencyKey },
-        body: JSON.stringify({
-          warehouseId: params.warehouseId,
-          rentalItemIds: [...new Set(params.rentalItemIds)],
-        }),
-      }
-    )
+  const response = await bearerRequest<unknown>(
+    params.accessToken,
+    conversationsEndpoint(
+      `/${encodeURIComponent(params.conversationId)}/selection`
+    ),
+    {
+      method: "PUT",
+      headers: { "Idempotency-Key": params.idempotencyKey },
+      body: JSON.stringify({
+        warehouseId: params.warehouseId,
+        rentalItemIds: [...new Set(params.rentalItemIds)],
+      }),
+    }
   )
+  return parseAssistantApiResponse(() => parseCabinSelection(response))
+}
+
+function parseAssistantApiResponse<T>(parse: () => T): T {
+  try {
+    return parse()
+  } catch (error) {
+    throw invalidApiResponseError(error)
+  }
 }
 
 function parseCabinFilterSuggestions(

@@ -143,6 +143,7 @@ func TestOpenAPIParsesAndExposesOnlyApprovedRuntimePaths(t *testing.T) {
 		"/api/internal/media/v1/asset-imports/{jobId}/retry":                                               "post",
 		"/api/internal/media/v1/asset-imports/{jobId}/replace-sources":                                     "post",
 		"/api/internal/media/v1/logistics/references/validate":                                             "post",
+		"/api/internal/media/v1/assets/cabin-creation-snapshots":                                           "post",
 		"/api/internal/media/v1/logistics/cabin-presentations/snapshots":                                   "post",
 		"/api/internal/media/v1/logistics/cabins/{cabinId}/cover-from-task-evidence":                       "post",
 		"/api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content": "get",
@@ -156,6 +157,8 @@ func TestOpenAPIParsesAndExposesOnlyApprovedRuntimePaths(t *testing.T) {
 		"/api/media/v1/assets/{mediaId}/variants/{variant}/content": "get",
 		"/api/media/v1/assets/{mediaId}/deletion":                   "post",
 	}
+	approved["/api/internal/media/v1/logistics/contractor-task-executions/{entryId}/workers/{workerId}/evidence/{evidenceId}"] = "post"
+	approved["/api/internal/media/v1/logistics/contractor-task-executions/{entryId}/workers/{workerId}/assets/{mediaId}/generations/{generation}/variants/{variant}/content"] = "get"
 	if len(paths) != len(approved) {
 		t.Fatalf("OpenAPI paths = %d, want exactly %d", len(paths), len(approved))
 	}
@@ -166,6 +169,46 @@ func TestOpenAPIParsesAndExposesOnlyApprovedRuntimePaths(t *testing.T) {
 		}
 		if _, ok := pathItem["delete"]; ok {
 			t.Errorf("%s exposes forbidden delete operation", path)
+		}
+	}
+}
+
+func TestAssetCabinCreationSnapshotContractIsClosedAndExactlyScoped(t *testing.T) {
+	root := repositoryRoot(t)
+	var document map[string]any
+	if err := yaml.Unmarshal(readContract(t, filepath.Join(root, "contracts", "openapi", "media-service.yaml")), &document); err != nil {
+		t.Fatalf("decode media-service.yaml: %v", err)
+	}
+	operation := objectAt(t,
+		objectAt(t, objectAt(t, document, "paths"), "/api/internal/media/v1/assets/cabin-creation-snapshots"), "post")
+	description := stringAt(t, operation, "description")
+	if !strings.Contains(description, "sub=client_id=asset-service") ||
+		!strings.Contains(description, "exactly media.asset") {
+		t.Fatalf("asset cabin snapshot auth description = %q", description)
+	}
+	schemas := objectAt(t, objectAt(t, document, "components"), "schemas")
+	snapshot := objectAt(t, schemas, "CabinCreationSnapshot")
+	properties := objectAt(t, snapshot, "properties")
+	for _, required := range []string{"cabinId", "warehouseId", "activeFolderId", "coverMediaId", "photoCount", "readyPhotos"} {
+		if _, found := properties[required]; !found {
+			t.Errorf("CabinCreationSnapshot is missing %s", required)
+		}
+	}
+	for _, forbidden := range []string{"objectKey", "bucket", "url", "fileName", "contentType", "bytes"} {
+		if _, found := properties[forbidden]; found {
+			t.Errorf("CabinCreationSnapshot exposes forbidden %s", forbidden)
+		}
+	}
+	readyPhoto := objectAt(t, schemas, "CabinCreationReadyPhoto")
+	readyProperties := objectAt(t, readyPhoto, "properties")
+	for _, required := range []string{"mediaId", "generation", "photoIndex", "checksumSha256", "contentType", "contentLength"} {
+		if _, found := readyProperties[required]; !found {
+			t.Errorf("CabinCreationReadyPhoto is missing %s", required)
+		}
+	}
+	for _, forbidden := range []string{"objectKey", "bucket", "url", "fileName", "bytes"} {
+		if _, found := readyProperties[forbidden]; found {
+			t.Errorf("CabinCreationReadyPhoto exposes forbidden %s", forbidden)
 		}
 	}
 }
@@ -364,8 +407,8 @@ func TestPublicMediaContractExposesAllCanonicalOwnerScopes(t *testing.T) {
 	if got := stringSliceAt(t, ownerType, "enum"); !equalStrings(got, []string{
 		"INVENTORY_FINDING", "CABIN", "MAINTENANCE_ESTIMATE", "MAINTENANCE_REPAIR",
 		"MAINTENANCE_ACCEPTANCE", "MAINTENANCE_CATALOG_NODE", "LOGISTICS_RETURN",
-		"LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER", "LOGISTICS_CUSTOMER_PROFILE", "TASK_BOARD_ENTRY",
-		"DRIVER_SHIFT",
+		"LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER", "LOGISTICS_CUSTOMER_PROFILE",
+		"TASK_BOARD_WORKER_PROFILE", "TASK_BOARD_ENTRY", "DRIVER_SHIFT",
 	}) {
 		t.Fatalf("media owner types = %#v", got)
 	}
@@ -392,7 +435,7 @@ func TestPublicMediaContractExposesAllCanonicalOwnerScopes(t *testing.T) {
 		t.Fatal("media asset folderId must be required")
 	}
 	pairs, ok := upload["oneOf"].([]any)
-	if !ok || len(pairs) != 12 {
+	if !ok || len(pairs) != 13 {
 		t.Fatalf("upload owner scope pairs = %#v", upload["oneOf"])
 	}
 	wire, err := json.Marshal(pairs)
@@ -410,6 +453,7 @@ func TestPublicMediaContractExposesAllCanonicalOwnerScopes(t *testing.T) {
 		`"ownerType":{"const":"LOGISTICS_SHIPMENT"}`, `"context":{"const":"SHIPMENT"}`,
 		`"ownerType":{"const":"LOGISTICS_TRANSFER"}`, `"context":{"const":"TRANSFER"}`,
 		`"ownerType":{"const":"LOGISTICS_CUSTOMER_PROFILE"}`, `"context":{"const":"PROFILE_AVATAR"}`,
+		`"ownerType":{"const":"TASK_BOARD_WORKER_PROFILE"}`, `"context":{"const":"PROFILE_AVATAR"}`,
 		`"ownerType":{"const":"TASK_BOARD_ENTRY"}`, `"context":{"const":"WORK_RESULT"}`,
 		`"ownerType":{"const":"DRIVER_SHIFT"}`, `"context":{"const":"SHIFT_EVIDENCE"}`,
 	} {
@@ -501,6 +545,16 @@ func TestLogisticsCabinPresentationContractIsPrivateAndOpaque(t *testing.T) {
 	if got := stringAt(t, content, "operationId"); got != "getLogisticsCabinPresentationVariantContent" {
 		t.Fatalf("content operationId = %q", got)
 	}
+	contentDescription := stringAt(t, content, "description")
+	for _, required := range []string{
+		"immutable presentation membership", "retained canonical CABIN",
+		"media_generation is at least the pinned generation",
+		"does not require the media asset to remain current, READY or non-deleted",
+	} {
+		if !strings.Contains(contentDescription, required) {
+			t.Errorf("content description does not contain %q: %s", required, contentDescription)
+		}
+	}
 	responses := objectAt(t, content, "responses")
 	if responses["404"] == nil {
 		t.Fatal("private cabin presentation content route must fold mismatches into 404")
@@ -587,7 +641,7 @@ func TestServiceOwnerProofAndDeletionContractsAreClosedAndOpaque(t *testing.T) {
 				t.Errorf("%s exposes forbidden %q", name, forbidden)
 			}
 		}
-		if pairs, ok := schema["oneOf"].([]any); !ok || len(pairs) != 4 {
+		if pairs, ok := schema["oneOf"].([]any); !ok || len(pairs) != 5 {
 			t.Fatalf("%s identity union = %#v", name, schema["oneOf"])
 		}
 		authorizedSubject := objectAt(t, properties, "authorizedSubjectId")
@@ -615,8 +669,8 @@ func TestLegacyUnionSchemaCarriesTheExpandedOwnerEnum(t *testing.T) {
 	if got := stringSliceAt(t, ownerType, "enum"); !equalStrings(got, []string{
 		"INVENTORY_FINDING", "CABIN", "MAINTENANCE_ESTIMATE", "MAINTENANCE_REPAIR",
 		"MAINTENANCE_ACCEPTANCE", "MAINTENANCE_CATALOG_NODE", "LOGISTICS_RETURN",
-		"LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER", "LOGISTICS_CUSTOMER_PROFILE", "TASK_BOARD_ENTRY",
-		"DRIVER_SHIFT",
+		"LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER", "LOGISTICS_CUSTOMER_PROFILE",
+		"TASK_BOARD_WORKER_PROFILE", "TASK_BOARD_ENTRY", "DRIVER_SHIFT",
 	}) {
 		t.Fatalf("legacy union media owner types = %#v", got)
 	}

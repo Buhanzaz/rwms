@@ -16,6 +16,7 @@ import dev.buhanzaz.rwms.worker.core.database.WorkerTaskEntity
 import dev.buhanzaz.rwms.worker.core.network.WorkerGatewayClient
 import dev.buhanzaz.rwms.worker.core.network.WorkerKpiPaletteDto
 import dev.buhanzaz.rwms.worker.core.network.WorkerTaskDetailDto
+import dev.buhanzaz.rwms.worker.core.network.safeWorkerUserMessage
 import dev.buhanzaz.rwms.worker.core.sync.WorkerProjectionWriter
 import dev.buhanzaz.rwms.worker.core.sync.WorkerSyncScheduler
 import java.time.Instant
@@ -273,7 +274,7 @@ class TaskDetailViewModel @Inject constructor(
             return
         }
         viewModelScope.launch {
-            runCatching {
+            try {
                 val lease = requireNotNull(localStore.leaseFor(current.userId)) { "Офлайн-доступ ещё не подготовлен" }
                 require(lease.isLeaseActive(SystemClock.elapsedRealtime())) { "Срок офлайн-доступа истёк" }
                 val payload = PendingWorkerAction(
@@ -299,10 +300,20 @@ class TaskDetailViewModel @Inject constructor(
                     ),
                 )
                 scheduler.request(current.userId)
-            }.onFailure { errors.value = it.message ?: "Не удалось поставить действие в очередь" }
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (exception: Exception) {
+                errors.value = workerTaskActionQueueErrorMessage(exception)
+            }
         }
     }
 }
+
+/** Maps local queueing failures without exposing exception text to the worker. */
+internal fun workerTaskActionQueueErrorMessage(failure: Throwable): String =
+    failure.safeWorkerUserMessage(
+        "Не удалось поставить действие в очередь. Синхронизируйте задание и повторите попытку.",
+    )
 
 private fun String.statusAfterAction(): String = when (this) {
     "TAKE", "JOIN", "RESUME" -> "IN_PROGRESS"

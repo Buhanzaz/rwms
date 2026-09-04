@@ -17,6 +17,7 @@ function response() {
       id: SHIPMENT_ID,
       version: 0,
       documentType: "SHIPMENT",
+      customerDeliveryPurpose: "RENTAL_DELIVERY",
       state: "DRAFT",
       warehouseId: SERVICE_WAREHOUSE_ID,
       destinationWarehouseId: null,

@@ -13,7 +13,7 @@ import java.util.UUID;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
-/** Warehouse-local calendar and independent capacities used only to derive final-plan drafts. */
+/** Inventory-owned holiday exceptions for future warehouse final-plan generations. */
 @Entity
 @Table(name = "inventory_planning_settings")
 public class InventoryPlanningSettings {
@@ -47,32 +47,24 @@ public class InventoryPlanningSettings {
 
   protected InventoryPlanningSettings() {}
 
-  public static InventoryPlanningSettings create(
-      UUID warehouseId,
-      int movementDailyCapacity,
-      int repairDailyCapacity,
-      String workingWeekdays,
-      String holidays) {
+  /**
+   * Creates a holiday-only setting while retaining V14's non-null legacy columns as inert storage.
+   *
+   * <p>Those fields are neither read nor changed by planning. Their fixed values exist only until a
+   * separately approved storage retirement can remove the old schema safely.
+   */
+  public static InventoryPlanningSettings create(UUID warehouseId, String holidays) {
     InventoryPlanningSettings value = new InventoryPlanningSettings();
     value.warehouseId = requireWarehouse(warehouseId);
-    value.replace(movementDailyCapacity, repairDailyCapacity, workingWeekdays, holidays);
+    value.movementDailyCapacity = 1;
+    value.repairDailyCapacity = 1;
+    value.workingWeekdays = "[\"MONDAY\"]";
+    value.replaceHolidays(holidays);
     return value;
   }
 
-  public void replace(
-      int nextMovementDailyCapacity,
-      int nextRepairDailyCapacity,
-      String nextWorkingWeekdays,
-      String nextHolidays) {
-    if (nextMovementDailyCapacity < 1 || nextMovementDailyCapacity > 1000) {
-      throw new IllegalArgumentException("Movement daily capacity must be between 1 and 1000");
-    }
-    if (nextRepairDailyCapacity < 1 || nextRepairDailyCapacity > 1000) {
-      throw new IllegalArgumentException("Repair daily capacity must be between 1 and 1000");
-    }
-    movementDailyCapacity = nextMovementDailyCapacity;
-    repairDailyCapacity = nextRepairDailyCapacity;
-    workingWeekdays = jsonArray(nextWorkingWeekdays, "working weekdays");
+  /** Replaces only inventory-owned holiday exceptions under the aggregate version fence. */
+  public void replaceHolidays(String nextHolidays) {
     holidays = jsonArray(nextHolidays, "holidays");
   }
 
@@ -96,20 +88,12 @@ public class InventoryPlanningSettings {
     return revision;
   }
 
-  public int getMovementDailyCapacity() {
-    return movementDailyCapacity;
-  }
-
-  public int getRepairDailyCapacity() {
-    return repairDailyCapacity;
-  }
-
-  public String getWorkingWeekdays() {
-    return workingWeekdays;
-  }
-
   public String getHolidays() {
     return holidays;
+  }
+
+  public OffsetDateTime getUpdatedAt() {
+    return updatedAt;
   }
 
   private static UUID requireWarehouse(UUID value) {

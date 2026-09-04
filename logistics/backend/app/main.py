@@ -1,5 +1,6 @@
 """FastAPI application composition root for the standalone logistics backend."""
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -9,21 +10,97 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 
+from app.api.geocoding import YandexGeocodingClient
 from app.api.router import api_router
 from app.config import get_settings
 from app.db import engine
 from app.errors import ApiError, api_error_handler
 from app.integrations.rwms import get_rwms_planning_client
+from app.security import AccessTokenVerifier, JwksAccessTokenVerifier
+from app.services.capacity_publication_worker import run_capacity_publication_worker
+from app.services.contractor_handoff_worker import run_contractor_handoff_worker
+from app.services.demand_ingestion_worker import run_demand_ingestion_worker
 from app.services.planner_runtime import RuntimePlannerFacade
 from app.services.plans import PlannerFacade, UnavailablePlannerFacade
+from app.services.request_reschedule_worker import run_request_reschedule_worker
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
-    """Release pooled database resources on graceful process shutdown."""
+    """Run server-owned RWMS workers and release their resources on graceful shutdown."""
 
-    yield
-    await engine.dispose()
+    settings = get_settings()
+    stop = asyncio.Event()
+    worker_tasks: list[asyncio.Task[None]] = []
+    rwms_client = get_rwms_planning_client(settings)
+    geocoder: YandexGeocodingClient | None = None
+    if settings.rwms_sync_enabled:
+        geocoder = YandexGeocodingClient(settings)
+        worker_tasks.append(
+            asyncio.create_task(
+                run_demand_ingestion_worker(
+                    rwms_client,
+                    geocoder,
+                    application.state.planner_facade,
+                    stop,
+                    interval_seconds=settings.rwms_demand_sync_interval_seconds,
+                    batch_size=settings.rwms_demand_sync_batch_size,
+                ),
+                name="rwms-demand-ingestion-worker",
+            )
+        )
+        worker_tasks.append(
+            asyncio.create_task(
+                run_contractor_handoff_worker(
+                    rwms_client,
+                    stop,
+                    interval_seconds=(
+                        settings.rwms_contractor_handoff_retry_interval_seconds
+                    ),
+                    batch_size=settings.rwms_contractor_handoff_retry_batch_size,
+                ),
+                name="rwms-contractor-handoff-worker",
+            )
+        )
+        worker_tasks.append(
+            asyncio.create_task(
+                run_request_reschedule_worker(
+                    rwms_client,
+                    stop,
+                    interval_seconds=(
+                        settings.rwms_request_reschedule_retry_interval_seconds
+                    ),
+                    batch_size=settings.rwms_request_reschedule_retry_batch_size,
+                    max_attempts=(
+                        settings.rwms_request_reschedule_retry_max_attempts
+                    ),
+                ),
+                name="rwms-request-reschedule-worker",
+            )
+        )
+    if settings.rwms_capacity_publish_enabled:
+        worker_tasks.append(
+            asyncio.create_task(
+                run_capacity_publication_worker(
+                    rwms_client,
+                    stop,
+                    interval_seconds=settings.rwms_capacity_retry_interval_seconds,
+                ),
+                name="rwms-capacity-publication-worker",
+            )
+        )
+    try:
+        yield
+    finally:
+        stop.set()
+        if worker_tasks:
+            _, pending = await asyncio.wait(worker_tasks, timeout=5)
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*worker_tasks, return_exceptions=True)
+        if geocoder is not None:
+            await geocoder.aclose()
+        await engine.dispose()
 
 
 async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSONResponse:
@@ -43,7 +120,10 @@ async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSON
     )
 
 
-def create_app(planner_facade: PlannerFacade | None = None) -> FastAPI:
+def create_app(
+    planner_facade: PlannerFacade | None = None,
+    access_token_verifier: AccessTokenVerifier | None = None,
+) -> FastAPI:
     """Create an application with an injectable planner integration boundary."""
 
     settings = get_settings()
@@ -57,6 +137,9 @@ def create_app(planner_facade: PlannerFacade | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     application.state.planner_facade = planner_facade or UnavailablePlannerFacade()
+    application.state.access_token_verifier = (
+        access_token_verifier or JwksAccessTokenVerifier(settings)
+    )
     application.add_exception_handler(ApiError, api_error_handler)  # type: ignore[arg-type]
     application.add_exception_handler(IntegrityError, integrity_error_handler)  # type: ignore[arg-type]
     application.add_middleware(

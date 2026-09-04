@@ -29,6 +29,7 @@ public record OAuthClientProperties(List<Client> clients) {
             "warehouse.operation.mark",
             "warehouse.lifecycle.read",
             "warehouse.lifecycle.confirm",
+            "media.asset",
             "media.asset-import");
     static final String INVENTORY_CLIENT_ID = "inventory-service";
     static final String TASK_BOARD_CLIENT_ID = "task-board-service";
@@ -36,12 +37,14 @@ public record OAuthClientProperties(List<Client> clients) {
     static final Set<String> TASK_BOARD_SCOPES =
             Set.of(
                     "worker-credentials.manage",
+                    "media.task-board",
                     "warehouse.identity.read",
                     "warehouse.timezone.read",
                     "warehouse.lifecycle.read",
                     "warehouse.lifecycle.confirm");
     static final String WORKER_ANDROID_CLIENT_ID = "rwms-worker-android";
     static final String DRIVER_ANDROID_CLIENT_ID = "rwms-driver-android";
+    public static final String PANEL_CLIENT_ID = "rwms-panel";
     public static final String MANAGER_ANDROID_CLIENT_ID = "rwms-manager-android";
     static final Set<String> MANAGER_ANDROID_SCOPES = Set.of(
             "openid",
@@ -50,6 +53,13 @@ public record OAuthClientProperties(List<Client> clients) {
             "rwms.read",
             "rwms.write",
             "warehouse.read");
+    public static final String RENTAL_MANAGER_WEB_CLIENT_ID = "rwms-rental-manager-web";
+    public static final String RENTAL_MANAGER_ANDROID_CLIENT_ID = "rwms-rental-manager-android";
+    static final Set<String> RENTAL_MANAGER_SCOPES =
+            Set.of("openid", "profile", "offline_access", "rental.manage");
+    public static final String ADMIN_WEB_CLIENT_ID = "rwms-admin-web";
+    static final Set<String> ADMIN_WEB_SCOPES =
+            Set.of("openid", "profile", "offline_access", "admin.manage");
     public static final String CUSTOMER_ANDROID_CLIENT_ID = "rwms-customer-android";
     static final Set<String> CUSTOMER_ANDROID_SCOPES =
             Set.of("openid", "profile", "offline_access", "customer.rental");
@@ -64,7 +74,8 @@ public record OAuthClientProperties(List<Client> clients) {
                     "asset.inventory",
                     "maintenance.inventory",
                     "logistics.inventory",
-                    "media.inventory");
+                    "media.inventory",
+                    "task-board.inventory-calendar.read");
     static final String LOGISTICS_CLIENT_ID = "logistics-service";
     static final String LOGISTICS_AUDIENCE = "rwms-services";
     static final String LOGISTICS_SECRET_ENVIRONMENT = "LOGISTICS_CLIENT_SECRET";
@@ -233,6 +244,33 @@ public record OAuthClientProperties(List<Client> clients) {
          */
         boolean managerAndroidClient() {
             return MANAGER_ANDROID_CLIENT_ID.equals(clientId);
+        }
+
+        /**
+         * Identifies the rental-manager web client with its isolated application scope.
+         *
+         * @return whether this is the reserved rental-manager web client
+         */
+        boolean rentalManagerWebClient() {
+            return RENTAL_MANAGER_WEB_CLIENT_ID.equals(clientId);
+        }
+
+        /**
+         * Identifies the rental-manager Android client with its isolated application scope.
+         *
+         * @return whether this is the reserved rental-manager Android client
+         */
+        boolean rentalManagerAndroidClient() {
+            return RENTAL_MANAGER_ANDROID_CLIENT_ID.equals(clientId);
+        }
+
+        /**
+         * Identifies the system administration web client.
+         *
+         * @return whether this is the reserved administration web client
+         */
+        boolean adminWebClient() {
+            return ADMIN_WEB_CLIENT_ID.equals(clientId);
         }
 
         /**

@@ -69,18 +69,26 @@ class RentalAccessIntegrationTest {
 
         mvc.perform(put("/api/admin/users/{id}", viewer.id())
                         .with(jwt().jwt(token -> token.subject(wmsAdmin.username()))
-                                .authorities(new SimpleGrantedAuthority("ROLE_WMS_ADMIN")))
+                                .authorities(
+                                        new SimpleGrantedAuthority("ROLE_USER"),
+                                        new SimpleGrantedAuthority("ROLE_WMS_ADMIN"),
+                                        new SimpleGrantedAuthority("CLIENT_rwms-admin-web"),
+                                        new SimpleGrantedAuthority("SCOPE_admin.manage")))
                         .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
                         .content(updateRequest(viewer, true)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.rentalAccess").value(true));
 
-        AdminUserResponse updated = users.getUser(viewer.id());
+        AdminUserResponse updated = users.getUser(viewer.id(), adminAuthentication());
         assertThat(updated.rentalAccess()).isTrue();
 
         mvc.perform(put("/api/admin/users/{id}", viewer.id())
                         .with(jwt().jwt(token -> token.subject(warehouseManager.username()))
-                                .authorities(new SimpleGrantedAuthority("ROLE_WAREHOUSE_MANAGER")))
+                                .authorities(
+                                        new SimpleGrantedAuthority("ROLE_USER"),
+                                        new SimpleGrantedAuthority("ROLE_WAREHOUSE_MANAGER"),
+                                        new SimpleGrantedAuthority("CLIENT_rwms-admin-web"),
+                                        new SimpleGrantedAuthority("SCOPE_admin.manage")))
                         .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
                         .content(updateRequest(updated, false)))
                 .andExpect(status().isForbidden());

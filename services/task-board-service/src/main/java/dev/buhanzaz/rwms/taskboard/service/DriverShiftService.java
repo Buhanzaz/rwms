@@ -1,6 +1,8 @@
 package dev.buhanzaz.rwms.taskboard.service;
 
 import static dev.buhanzaz.rwms.taskboard.api.DriverShiftApiModels.*;
+import static dev.buhanzaz.rwms.taskboard.api.PlanningReplacementApiModels.PlanningReplacementShiftRequest;
+import static dev.buhanzaz.rwms.taskboard.api.PlanningReplacementApiModels.PlanningReplacementShiftResult;
 import static dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes.DRIVER_SHIFT_OWNER_PROOF_CHANGED;
 
 import dev.buhanzaz.rwms.taskboard.config.DriverShiftProperties;
@@ -15,7 +17,11 @@ import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -36,12 +42,16 @@ import tools.jackson.databind.ObjectMapper;
 public class DriverShiftService {
   private final DriverShiftProperties properties;
   private final DriverShiftPlanRepository plans;
+  private final DriverShiftRouteOperationRepository routeOperations;
   private final DriverShiftRepository shifts;
   private final VehicleInspectionRepository inspections;
   private final VehicleInspectionItemResultRepository items;
   private final VehicleDefectRepository defects;
   private final DriverShiftPhotoRepository photos;
   private final WorkerRepository workers;
+  private final WorkerOperationalAssignmentRepository operationalAssignments;
+  private final WorkerOperationalAvailabilityPolicy operationalAvailability =
+      new WorkerOperationalAvailabilityPolicy();
   private final WarehouseIdentityGateway warehouses;
   private final DriverWeatherProvider weather;
   private final TaskBoardEventStore events;
@@ -53,12 +63,14 @@ public class DriverShiftService {
   public DriverShiftService(
       DriverShiftProperties properties,
       DriverShiftPlanRepository plans,
+      DriverShiftRouteOperationRepository routeOperations,
       DriverShiftRepository shifts,
       VehicleInspectionRepository inspections,
       VehicleInspectionItemResultRepository items,
       VehicleDefectRepository defects,
       DriverShiftPhotoRepository photos,
       WorkerRepository workers,
+      WorkerOperationalAssignmentRepository operationalAssignments,
       WarehouseIdentityGateway warehouses,
       DriverWeatherProvider weather,
       TaskBoardEventStore events,
@@ -67,12 +79,14 @@ public class DriverShiftService {
       ObjectProvider<Clock> clocks) {
     this.properties = properties;
     this.plans = plans;
+    this.routeOperations = routeOperations;
     this.shifts = shifts;
     this.inspections = inspections;
     this.items = items;
     this.defects = defects;
     this.photos = photos;
     this.workers = workers;
+    this.operationalAssignments = operationalAssignments;
     this.warehouses = warehouses;
     this.weather = weather;
     this.events = events;
@@ -86,6 +100,7 @@ public class DriverShiftService {
   public DriverShiftPlanResponse putPlan(
       UUID sourceShiftId, String idempotencyKey, PutDriverShiftPlanRequest request) {
     requireIdempotencyKey(idempotencyKey, null);
+    validateRouteOperations(request);
     String fingerprint = fingerprint(request);
     OffsetDateTime now = now();
     Optional<DriverShiftPlan> bySource = plans.findBySourceShiftIdForUpdate(sourceShiftId);
@@ -109,6 +124,7 @@ public class DriverShiftService {
         throw new ConflictException("Driver shift plan version is stale or divergent");
       replace(plan, request, fingerprint, now);
       plans.saveAndFlush(plan);
+      replaceRouteOperations(plan.getId(), request.operations());
       return planResponse(plan, PlanApplyResult.REPLACED);
     }
     plan = new DriverShiftPlan();
@@ -116,23 +132,190 @@ public class DriverShiftService {
     plan.initialize(sourceShiftId, request.sourcePlanId(), now);
     replace(plan, request, fingerprint, now);
     plans.saveAndFlush(plan);
+    replaceRouteOperations(plan.getId(), request.operations());
     return planResponse(plan, PlanApplyResult.CREATED);
+  }
+
+  /**
+   * Replaces the complete unfrozen shift membership of one planner lineage inside the calling
+   * atomic task replacement transaction. The driver/date uniqueness constraint is deferred so a
+   * legitimate driver swap cannot observe an intermediate duplicate, while any target owned by a
+   * plan outside this lineage still fails closed before mutation.
+   */
+  List<PlanningReplacementShiftResult> replacePlansAtomically(
+      UUID sourcePlanId,
+      long expectedSourcePlanVersion,
+      long replacementPlanVersion,
+      UUID warehouseId,
+      LocalDate workDate,
+      List<PlanningReplacementShiftRequest> requested) {
+    List<DriverShiftPlan> current = plans.findAllBySourcePlanIdForUpdate(sourcePlanId);
+    Map<UUID, DriverShiftPlan> bySourceShift =
+        current.stream()
+            .collect(
+                java.util.stream.Collectors.toMap(
+                    DriverShiftPlan::getSourceShiftId,
+                    java.util.function.Function.identity()));
+    Set<UUID> requestedIds = new HashSet<>();
+    Set<String> requestedDriverDates = new HashSet<>();
+    for (PlanningReplacementShiftRequest item : requested) {
+      PutDriverShiftPlanRequest plan = item.plan();
+      if (!requestedIds.add(item.sourceShiftId())
+          || !requestedDriverDates.add(plan.driverId() + ":" + plan.workDate())
+          || !sourcePlanId.equals(plan.sourcePlanId())
+          || plan.sourcePlanVersion() != replacementPlanVersion
+          || !warehouseId.equals(plan.warehouseId())
+          || !workDate.equals(plan.workDate())) {
+        throw new IllegalArgumentException("Replacement shift membership is invalid");
+      }
+      DriverShiftPlan existing = bySourceShift.get(item.sourceShiftId());
+      if (existing == null
+          || existing.getSourcePlanVersion() != expectedSourcePlanVersion
+          || existing.getFrozenShiftId() != null) {
+        throw new ConflictException("Driver shift plan membership is stale or frozen");
+      }
+      DriverShiftPlan target =
+          plans.findByDriverIdAndWorkDateForUpdate(plan.driverId(), plan.workDate()).orElse(null);
+      if (target != null && !bySourceShift.containsKey(target.getSourceShiftId())) {
+        throw new ConflictException("Driver already has another shift plan for this work date");
+      }
+      validateRouteOperations(plan);
+    }
+    if (!requestedIds.equals(bySourceShift.keySet())) {
+      throw new ConflictException("Driver shift plan membership is incomplete");
+    }
+
+    OffsetDateTime now = now();
+    for (PlanningReplacementShiftRequest item : requested) {
+      DriverShiftPlan plan = bySourceShift.get(item.sourceShiftId());
+      replace(plan, item.plan(), fingerprint(item.plan()), now);
+    }
+    plans.saveAllAndFlush(current);
+    for (PlanningReplacementShiftRequest item : requested) {
+      replaceRouteOperations(
+          bySourceShift.get(item.sourceShiftId()).getId(), item.plan().operations());
+    }
+    return requested.stream()
+        .map(
+            item -> {
+              DriverShiftPlan plan = bySourceShift.get(item.sourceShiftId());
+              return new PlanningReplacementShiftResult(
+                  item.sourceShiftId(), plan.getVersion(), plan.getSourcePlanVersion());
+            })
+        .toList();
+  }
+
+  /**
+   * Replaces the complete remaining shift membership after an agreed task removal and tombstones
+   * every omitted, still-unfrozen shift. New shift identities are forbidden in this recovery step.
+   */
+  List<PlanningReplacementShiftResult> replacePlansAfterTaskRemoval(
+      UUID sourcePlanId,
+      long expectedSourcePlanVersion,
+      long replacementPlanVersion,
+      UUID warehouseId,
+      LocalDate workDate,
+      List<PlanningReplacementShiftRequest> requested) {
+    Map<UUID, DriverShiftPlan> bySourceShift =
+        requirePlansAfterTaskRemoval(
+            sourcePlanId,
+            expectedSourcePlanVersion,
+            replacementPlanVersion,
+            warehouseId,
+            workDate,
+            requested);
+    List<DriverShiftPlan> current = List.copyOf(bySourceShift.values());
+    Set<UUID> requestedIds =
+        requested.stream()
+            .map(PlanningReplacementShiftRequest::sourceShiftId)
+            .collect(java.util.stream.Collectors.toUnmodifiableSet());
+    OffsetDateTime now = now();
+    for (PlanningReplacementShiftRequest item : requested) {
+      DriverShiftPlan plan = bySourceShift.get(item.sourceShiftId());
+      replace(plan, item.plan(), fingerprint(item.plan()), now);
+    }
+    current.stream()
+        .filter(plan -> !requestedIds.contains(plan.getSourceShiftId()))
+        .forEach(
+            plan ->
+                plan.withdraw(expectedSourcePlanVersion, replacementPlanVersion, now));
+    plans.saveAllAndFlush(current);
+    for (PlanningReplacementShiftRequest item : requested) {
+      replaceRouteOperations(
+          bySourceShift.get(item.sourceShiftId()).getId(), item.plan().operations());
+    }
+    return requested.stream()
+        .map(
+            item -> {
+              DriverShiftPlan plan = bySourceShift.get(item.sourceShiftId());
+              return new PlanningReplacementShiftResult(
+                  item.sourceShiftId(), plan.getVersion(), plan.getSourcePlanVersion());
+            })
+        .toList();
+  }
+
+  /** Locks and validates a complete remaining shift snapshot without mutating it. */
+  void requirePlansReplaceableAfterTaskRemoval(
+      UUID sourcePlanId,
+      long expectedSourcePlanVersion,
+      long replacementPlanVersion,
+      UUID warehouseId,
+      LocalDate workDate,
+      List<PlanningReplacementShiftRequest> requested) {
+    requirePlansAfterTaskRemoval(
+        sourcePlanId,
+        expectedSourcePlanVersion,
+        replacementPlanVersion,
+        warehouseId,
+        workDate,
+        requested);
+  }
+
+  private Map<UUID, DriverShiftPlan> requirePlansAfterTaskRemoval(
+      UUID sourcePlanId,
+      long expectedSourcePlanVersion,
+      long replacementPlanVersion,
+      UUID warehouseId,
+      LocalDate workDate,
+      List<PlanningReplacementShiftRequest> requested) {
+    List<DriverShiftPlan> current = plans.findAllBySourcePlanIdForUpdate(sourcePlanId);
+    Map<UUID, DriverShiftPlan> bySourceShift =
+        current.stream()
+            .collect(
+                java.util.stream.Collectors.toMap(
+                    DriverShiftPlan::getSourceShiftId,
+                    java.util.function.Function.identity()));
+    Set<UUID> requestedIds = new HashSet<>();
+    Set<String> requestedDriverDates = new HashSet<>();
+    for (PlanningReplacementShiftRequest item : requested) {
+      PutDriverShiftPlanRequest plan = item.plan();
+      DriverShiftPlan existing = bySourceShift.get(item.sourceShiftId());
+      if (!requestedIds.add(item.sourceShiftId())
+          || !requestedDriverDates.add(plan.driverId() + ":" + plan.workDate())
+          || existing == null
+          || !sourcePlanId.equals(plan.sourcePlanId())
+          || plan.sourcePlanVersion() != replacementPlanVersion
+          || !warehouseId.equals(plan.warehouseId())
+          || !workDate.equals(plan.workDate())
+          || existing.getSourcePlanVersion() != expectedSourcePlanVersion
+          || existing.getFrozenShiftId() != null) {
+        throw new ConflictException("Remaining driver shift membership is stale or invalid");
+      }
+      DriverShiftPlan target =
+          plans.findByDriverIdAndWorkDateForUpdate(plan.driverId(), plan.workDate()).orElse(null);
+      if (target != null && !bySourceShift.containsKey(target.getSourceShiftId())) {
+        throw new ConflictException("Driver already has another shift plan for this work date");
+      }
+      validateRouteOperations(plan);
+    }
+    return bySourceShift;
   }
 
   /**
    * Returns one startup aggregate and creates today's shift only from an existing registered plan.
    */
   @Transactional
-  public TodayShiftResponse today(UUID driverId, UUID warehouseId) {
-    return today(driverId, warehouseId, true);
-  }
-
-  private TodayShiftResponse currentToday(UUID driverId, UUID warehouseId) {
-    return today(driverId, warehouseId, false);
-  }
-
-  private TodayShiftResponse today(
-      UUID driverId, UUID warehouseId, boolean serializeCreation) {
+  public TodayShiftResponse today(UUID driverId, UUID homeWarehouseId) {
     OffsetDateTime serverTime = now();
     if (!properties.enabled())
       return new TodayShiftResponse(
@@ -148,39 +331,41 @@ public class DriverShiftService {
           null,
           null,
           null,
+          List.of(),
           List.of());
-    var worker =
-        workers
-            .findById(driverId)
-            .orElseThrow(() -> new NotFoundException("Driver profile was not found"));
-    if (!worker.isActive() || !warehouseId.equals(worker.getWarehouseId()))
-      throw new NotFoundException("Active driver profile was not found in this warehouse");
-    var warehouse = warehouses.identity(warehouseId);
+    Worker worker = requireHomeDriver(driverId, homeWarehouseId);
+    Optional<DriverShift> openShift = openShiftForUpdate(driverId);
+    if (openShift.isPresent()) {
+      return responseForShift(serverTime, openShift.get());
+    }
+
+    var homeWarehouse = warehouses.identity(homeWarehouseId);
+    var placement =
+        operationalAvailability.resolve(
+            worker,
+            operationalAssignments
+                .findAllByWorkerIdOrderByEffectiveFromAscCreatedAtAscIdAsc(driverId),
+            serverTime);
+    if (!placement.available()) {
+      ZoneId homeZone = requireZone(homeWarehouse.timeZone());
+      return unavailable(serverTime, homeWarehouse, homeZone);
+    }
+    var warehouse =
+        placement.warehouseId().equals(homeWarehouseId)
+            ? homeWarehouse
+            : warehouses.identity(placement.warehouseId());
     ZoneId zone = requireZone(warehouse.timeZone());
     LocalDate workDate = resolveWorkDate(serverTime, zone, properties.dayStart());
-    Optional<DriverShiftPlan> plan =
-        serializeCreation
-            ? plans.findByDriverIdAndWorkDateForUpdate(driverId, workDate)
-            : plans.findByDriverIdAndWorkDate(driverId, workDate);
-    if (plan.isEmpty() || !warehouseId.equals(plan.get().getWarehouseId()))
+    Optional<DriverShiftPlan> plan = plans.findByDriverIdAndWorkDateForUpdate(driverId, workDate);
+    if (plan.isEmpty() || !placement.warehouseId().equals(plan.get().getWarehouseId()))
       return unavailable(serverTime, warehouse, zone);
     DriverShift shift =
         shifts
             .findByDriverIdAndWorkDate(driverId, workDate)
             .orElseGet(
-                () -> {
-                  if (!serializeCreation)
-                    throw new NotFoundException("Driver shift was not found");
-                  return createShift(plan.get(), warehouse, serverTime);
-                });
-    TaskSummaryView tasks = taskSummary(shift, plan.get());
-    if (shift.getStatus() == DriverShiftStatus.SHIFT_ACTIVE && tasks.canStartClosing()) {
-      shift.markTasksComplete(serverTime);
-      shifts.saveAndFlush(shift);
-      publishOwnerProof(shift, false);
-      tasks = taskSummary(shift, plan.get());
-    }
-    return response(serverTime, warehouse, plan.get(), shift, tasks);
+                () -> createShift(plan.get(), warehouse, serverTime));
+    requireShiftPlanMatch(shift, plan.get());
+    return responseForShift(serverTime, warehouse, plan.get(), shift);
   }
 
   /** Records the once-per-work-date briefing acknowledgement. */
@@ -324,9 +509,9 @@ public class DriverShiftService {
       UpdateInspectionItemRequest request) {
     requireIdempotencyKey(key, request.operationId());
     String hash = fingerprint(request);
-    if (replay(request.operationId(), driverId, shiftId, "INSPECTION_ITEM", hash))
-      return currentToday(driverId, warehouseId);
     DriverShift shift = ownedShift(driverId, warehouseId, shiftId);
+    if (replay(request.operationId(), driverId, shiftId, "INSPECTION_ITEM", hash))
+      return responseForShift(now(), shift);
     requireVersion(shift, request.expectedVersion());
     if (shift.getStatus() != DriverShiftStatus.VEHICLE_INSPECTION_REQUIRED)
       throw new ConflictException("Vehicle inspection is not the current shift step");
@@ -353,7 +538,7 @@ public class DriverShiftService {
           && request.defectDescription().trim().equals(defect.getDescription())) {
         recordReceipt(
             request.operationId(), UUID.fromString(key), shift, "INSPECTION_ITEM", hash);
-        return currentToday(driverId, warehouseId);
+        return responseForShift(now(), shift);
       }
       if (defect == null) {
         defect = new VehicleDefect();
@@ -382,7 +567,7 @@ public class DriverShiftService {
       if (item.getState() == InspectionItemState.OK) {
         recordReceipt(
             request.operationId(), UUID.fromString(key), shift, "INSPECTION_ITEM", hash);
-        return currentToday(driverId, warehouseId);
+        return responseForShift(now(), shift);
       }
       item.answer(InspectionItemState.OK, null, acceptedAt);
     } else throw new IllegalArgumentException("Inspection result must be OK or DEFECT");
@@ -390,7 +575,7 @@ public class DriverShiftService {
     shift.touch(acceptedAt);
     shifts.saveAndFlush(shift);
     recordReceipt(request.operationId(), UUID.fromString(key), shift, "INSPECTION_ITEM", hash);
-    return currentToday(driverId, warehouseId);
+    return responseForShift(now(), shift);
   }
 
   /** Persists one closing report after odometer, fuel, defect and photo validation. */
@@ -466,9 +651,9 @@ public class DriverShiftService {
       UUID driverId, UUID warehouseId, UUID shiftId, String key, ReserveShiftPhotoRequest request) {
     requireIdempotencyKey(key, request.operationId());
     String hash = fingerprint(request);
-    if (replay(request.operationId(), driverId, shiftId, "PHOTO_RESERVATION", hash))
-      return currentToday(driverId, warehouseId);
     DriverShift shift = ownedShift(driverId, warehouseId, shiftId);
+    if (replay(request.operationId(), driverId, shiftId, "PHOTO_RESERVATION", hash))
+      return responseForShift(now(), shift);
     requireVersion(shift, request.expectedVersion());
     Optional<DriverShiftPhoto> existing =
         photos.findByShiftIdAndClientReferenceId(shiftId, request.clientReferenceId());
@@ -484,7 +669,7 @@ public class DriverShiftService {
           && value.getSha256().equals(request.sha256())) {
         recordReceipt(
             request.operationId(), UUID.fromString(key), shift, "PHOTO_RESERVATION", hash);
-        return currentToday(driverId, warehouseId);
+        return responseForShift(now(), shift);
       }
       throw new ConflictException("Photo client reference was reused with changed content");
     }
@@ -495,7 +680,7 @@ public class DriverShiftService {
     photo.initialize(
         shiftId,
         driverId,
-        warehouseId,
+        shift.getWarehouseId(),
         request.clientReferenceId(),
         request.evidenceId(),
         request.role(),
@@ -510,7 +695,7 @@ public class DriverShiftService {
     shift.touch(acceptedAt);
     shifts.saveAndFlush(shift);
     recordReceipt(request.operationId(), UUID.fromString(key), shift, "PHOTO_RESERVATION", hash);
-    return currentToday(driverId, warehouseId);
+    return responseForShift(now(), shift);
   }
 
   /**
@@ -553,9 +738,9 @@ public class DriverShiftService {
       Consumer<DriverShift> mutation) {
     requireIdempotencyKey(key, operationId);
     String hash = fingerprint(request);
-    if (replay(operationId, driverId, shiftId, type, hash))
-      return currentToday(driverId, warehouseId);
     DriverShift shift = ownedShift(driverId, warehouseId, shiftId);
+    if (replay(operationId, driverId, shiftId, type, hash))
+      return responseForShift(now(), shift);
     requireVersion(shift, expectedVersion);
     try {
       mutation.accept(shift);
@@ -565,7 +750,7 @@ public class DriverShiftService {
     shifts.saveAndFlush(shift);
     recordReceipt(operationId, UUID.fromString(key), shift, type, hash);
     publishOwnerProof(shift, false);
-    return currentToday(driverId, warehouseId);
+    return responseForShift(now(), shift);
   }
 
   private DriverShift createShift(
@@ -663,6 +848,7 @@ select template.template_version,item.item_code,item.section_name,item.item_labe
         inspectionView(inspection, itemResults, shiftDefects, shiftPhotos),
         taskSummary,
         closingView(shift, plan, shiftPhotos),
+        routeOperationViews(plan.getId()),
         shiftPhotos.stream().map(this::photoView).toList());
   }
 
@@ -688,6 +874,7 @@ select template.template_version,item.item_code,item.section_name,item.item_labe
         null,
         null,
         null,
+        List.of(),
         List.of());
   }
 
@@ -714,12 +901,75 @@ select template.template_version,item.item_code,item.section_name,item.item_labe
     return OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
   }
 
-  private DriverShift ownedShift(UUID driverId, UUID warehouseId, UUID shiftId) {
+  private Worker requireHomeDriver(UUID driverId, UUID homeWarehouseId) {
+    Worker worker =
+        workers
+            .findById(driverId)
+            .orElseThrow(() -> new NotFoundException("Driver profile was not found"));
+    if (!worker.isActive() || !homeWarehouseId.equals(worker.getWarehouseId()))
+      throw new NotFoundException("Active driver profile was not found in this warehouse");
+    return worker;
+  }
+
+  /** Locks and returns the driver's sole unfinished shift, if one exists. */
+  private Optional<DriverShift> openShiftForUpdate(UUID driverId) {
+    List<UUID> ids =
+        jdbc.queryForList(
+            "select id from driver_shift where driver_id=? and status<>'SHIFT_CLOSED'"
+                + " order by work_date desc,created_at desc limit 2 for update",
+            UUID.class,
+            driverId);
+    if (ids.size() > 1)
+      throw new ConflictException("Driver has more than one unfinished shift");
+    return ids.isEmpty()
+        ? Optional.empty()
+        : Optional.of(
+            shifts
+                .findByIdForUpdate(ids.getFirst())
+                .orElseThrow(() -> new NotFoundException("Driver shift was not found")));
+  }
+
+  private TodayShiftResponse responseForShift(OffsetDateTime serverTime, DriverShift shift) {
+    DriverShiftPlan plan =
+        plans
+            .findById(shift.getPlanId())
+            .orElseThrow(() -> new NotFoundException("Driver shift plan was not found"));
+    requireShiftPlanMatch(shift, plan);
+    var warehouse = warehouses.identity(shift.getWarehouseId());
+    return responseForShift(serverTime, warehouse, plan, shift);
+  }
+
+  private TodayShiftResponse responseForShift(
+      OffsetDateTime serverTime,
+      WarehouseIdentityGateway.WarehouseIdentity warehouse,
+      DriverShiftPlan plan,
+      DriverShift shift) {
+    requireShiftPlanMatch(shift, plan);
+    TaskSummaryView tasks = taskSummary(shift, plan);
+    if (shift.getStatus() == DriverShiftStatus.SHIFT_ACTIVE && tasks.canStartClosing()) {
+      shift.markTasksComplete(serverTime);
+      shifts.saveAndFlush(shift);
+      publishOwnerProof(shift, false);
+      tasks = taskSummary(shift, plan);
+    }
+    return response(serverTime, warehouse, plan, shift, tasks);
+  }
+
+  private void requireShiftPlanMatch(DriverShift shift, DriverShiftPlan plan) {
+    if (!shift.getPlanId().equals(plan.getId())
+        || !shift.getDriverId().equals(plan.getDriverId())
+        || !shift.getWarehouseId().equals(plan.getWarehouseId())
+        || !shift.getWorkDate().equals(plan.getWorkDate()))
+      throw new ConflictException("Driver shift does not match its registered plan");
+  }
+
+  private DriverShift ownedShift(UUID driverId, UUID homeWarehouseId, UUID shiftId) {
+    requireHomeDriver(driverId, homeWarehouseId);
     DriverShift shift =
         shifts
             .findByIdForUpdate(shiftId)
             .orElseThrow(() -> new NotFoundException("Driver shift was not found"));
-    if (!driverId.equals(shift.getDriverId()) || !warehouseId.equals(shift.getWarehouseId()))
+    if (!driverId.equals(shift.getDriverId()))
       throw new NotFoundException("Driver shift was not found in this principal context");
     return shift;
   }
@@ -806,6 +1056,7 @@ select template.template_version,item.item_code,item.section_name,item.item_labe
         vehicle.manufacturer(),
         vehicle.model(),
         vehicle.configurationType(),
+        vehicle.cabinCapacity(),
         vehicle.startOdometer(),
         trailer == null ? null : trailer.id(),
         trailer == null ? null : trailer.name(),
@@ -815,11 +1066,259 @@ select template.template_version,item.item_code,item.section_name,item.item_labe
         now);
   }
 
+  /** Replaces the operation children atomically with the owning, not-yet-frozen plan version. */
+  private void replaceRouteOperations(UUID planId, List<RouteOperationView> requested) {
+    routeOperations.deleteAllByDriverShiftPlanId(planId);
+    routeOperations.flush();
+    List<DriverShiftRouteOperation> replacements =
+        requested.stream()
+            .map(
+                operation -> {
+                  DriverShiftRouteOperation entity = new DriverShiftRouteOperation();
+                  entity.assignReviewedId(UUID.randomUUID());
+                  entity.initialize(
+                      planId,
+                      operation.sequence(),
+                      operation.kind(),
+                      operation.warehouseId(),
+                      operation.sourceTaskId(),
+                      operation.sourceTransferId(),
+                      operation.locationLabel(),
+                      operation.plannedArrival(),
+                      operation.plannedDeparture(),
+                      operation.loadBefore(),
+                      operation.loadAfter());
+                  return entity;
+                })
+            .toList();
+    routeOperations.saveAllAndFlush(replacements);
+  }
+
+  /** Rejects reordered, lossy, or structurally inconsistent executable route snapshots. */
+  private void validateRouteOperations(PutDriverShiftPlanRequest request) {
+    List<RouteOperationView> operations = request.operations();
+    if (operations.size() > 1_000)
+      throw new IllegalArgumentException("A driver route cannot exceed 1000 operations");
+    Integer cabinCapacity = request.vehicle().cabinCapacity();
+    if (cabinCapacity != null && (cabinCapacity < 1 || cabinCapacity > 2))
+      throw new IllegalArgumentException("Driver vehicle cabin capacity must be between 1 and 2");
+    int priorLoad = 0;
+    OffsetDateTime priorEnd = null;
+    for (int index = 0; index < operations.size(); index++) {
+      RouteOperationView operation = operations.get(index);
+      if (operation == null
+          || operation.sequence() != index + 1
+          || operation.kind() == null
+          || operation.locationLabel() == null
+          || operation.locationLabel().isBlank()
+          || operation.locationLabel().length() > 500
+          || operation.plannedArrival() == null
+          || operation.plannedDeparture() == null
+          || operation.loadBefore() < 0
+          || operation.loadAfter() < 0) {
+        throw new IllegalArgumentException(
+            "Driver route operations must form one contiguous executable order");
+      }
+      boolean positioning = isPositioning(operation.kind());
+      OffsetDateTime operationStart =
+          positioning ? operation.plannedDeparture() : operation.plannedArrival();
+      OffsetDateTime operationEnd =
+          positioning ? operation.plannedArrival() : operation.plannedDeparture();
+      if (operationStart.isAfter(operationEnd)
+          || (priorEnd != null && operationStart.isBefore(priorEnd))) {
+        throw new IllegalArgumentException("Driver route operation timing is invalid");
+      }
+      boolean customer = isCustomerOperation(operation.kind());
+      boolean transfer = isTransferOperation(operation.kind());
+      if ((customer
+              && (operation.sourceTaskId() == null
+                  || operation.sourceTransferId() != null
+                  || operation.warehouseId() != null))
+          || (transfer
+              && (operation.sourceTaskId() != null
+                  || operation.sourceTransferId() == null
+                  || operation.warehouseId() == null))
+          || (!customer
+              && !transfer
+              && (operation.sourceTaskId() != null
+                  || operation.sourceTransferId() != null
+                  || operation.warehouseId() == null))
+          || operation.loadBefore() != priorLoad) {
+        throw new IllegalArgumentException(
+            "Driver route operation identity or load chain is invalid");
+      }
+      if (transfer && cabinCapacity == null)
+        throw new IllegalArgumentException(
+            "Transfer route operations require vehicle cabin capacity");
+      if (cabinCapacity != null
+          && (operation.loadBefore() > cabinCapacity
+              || operation.loadAfter() > cabinCapacity))
+        throw new IllegalArgumentException("Driver route load exceeds vehicle cabin capacity");
+      if ((operation.kind() == DriverShiftRouteOperationKind.TRANSFER_LOAD
+              && operation.loadAfter() < operation.loadBefore())
+          || (operation.kind() == DriverShiftRouteOperationKind.TRANSFER_UNLOAD
+              && operation.loadAfter() > operation.loadBefore()))
+        throw new IllegalArgumentException(
+            "Transfer load operations cannot reverse the planned cabin load");
+      if ((positioning || operation.kind() == DriverShiftRouteOperationKind.ORIGIN_START)
+          && operation.loadBefore() != operation.loadAfter()) {
+        throw new IllegalArgumentException("Positioning cannot change the planned vehicle load");
+      }
+      priorLoad = operation.loadAfter();
+      priorEnd = operationEnd;
+    }
+    validatePositioningShape(request.warehouseId(), operations);
+  }
+
+  /** Validates the one permitted cross-warehouse envelope and its paired transfer cargo. */
+  private void validatePositioningShape(
+      UUID planWarehouseId, List<RouteOperationView> operations) {
+    long syntheticCount =
+        operations.stream()
+            .filter(
+                operation ->
+                    operation.kind() == DriverShiftRouteOperationKind.ORIGIN_START
+                        || isPositioning(operation.kind()))
+            .count();
+    if (syntheticCount == 0) {
+      if (operations.stream().anyMatch(operation -> isTransferOperation(operation.kind())))
+        throw new IllegalArgumentException(
+            "Transfer route operations require cross-warehouse positioning");
+      return;
+    }
+    int inboundIndex = 1;
+    while (inboundIndex < operations.size() - 1
+        && operations.get(inboundIndex).kind()
+            == DriverShiftRouteOperationKind.TRANSFER_LOAD) {
+      inboundIndex++;
+    }
+    if (operations.size() < 4
+        || syntheticCount != 3
+        || operations.getFirst().kind() != DriverShiftRouteOperationKind.ORIGIN_START
+        || inboundIndex >= operations.size() - 1
+        || operations.get(inboundIndex).kind()
+            != DriverShiftRouteOperationKind.INBOUND_POSITIONING
+        || operations.getLast().kind() != DriverShiftRouteOperationKind.RETURN_POSITIONING) {
+      throw new IllegalArgumentException(
+          "A cross-warehouse route requires origin, inbound, and return positioning");
+    }
+    RouteOperationView origin = operations.getFirst();
+    RouteOperationView inbound = operations.get(inboundIndex);
+    RouteOperationView returned = operations.getLast();
+    UUID serviceWarehouseId = inbound.warehouseId();
+    RouteOperationView inboundPredecessor = operations.get(inboundIndex - 1);
+    if (!planWarehouseId.equals(origin.warehouseId())
+        || serviceWarehouseId.equals(planWarehouseId)
+        || !origin.warehouseId().equals(returned.warehouseId())
+        || !origin.plannedArrival().equals(origin.plannedDeparture())
+        || !inboundPredecessor.plannedDeparture().equals(inbound.plannedDeparture())) {
+      throw new IllegalArgumentException("Cross-warehouse positioning endpoints are invalid");
+    }
+
+    List<RouteOperationView> transferLoads = operations.subList(1, inboundIndex);
+    if (transferLoads.stream()
+        .anyMatch(operation -> !planWarehouseId.equals(operation.warehouseId()))) {
+      throw new IllegalArgumentException("Transfer loads must use the route origin warehouse");
+    }
+    int firstServiceOperation = inboundIndex + 1;
+    while (firstServiceOperation < operations.size() - 1
+        && operations.get(firstServiceOperation).kind()
+            == DriverShiftRouteOperationKind.TRANSFER_UNLOAD) {
+      firstServiceOperation++;
+    }
+    List<RouteOperationView> transferUnloads =
+        operations.subList(inboundIndex + 1, firstServiceOperation);
+    if (transferUnloads.stream()
+        .anyMatch(operation -> !serviceWarehouseId.equals(operation.warehouseId()))) {
+      throw new IllegalArgumentException(
+          "Transfer unloads must use the inbound destination warehouse");
+    }
+    validateTransferPairs(transferLoads, transferUnloads);
+
+    for (int index = firstServiceOperation; index < operations.size() - 1; index++) {
+      RouteOperationView operation = operations.get(index);
+      if (isTransferOperation(operation.kind()))
+        throw new IllegalArgumentException(
+            "Transfer unloads must immediately follow inbound positioning");
+      if (operation.warehouseId() != null
+          && !serviceWarehouseId.equals(operation.warehouseId())) {
+        throw new IllegalArgumentException(
+            "Planner stops between positioning legs must belong to the service warehouse");
+      }
+    }
+  }
+
+  /** Requires one unique load and one equal unload delta for every canonical transfer identity. */
+  private void validateTransferPairs(
+      List<RouteOperationView> transferLoads, List<RouteOperationView> transferUnloads) {
+    Map<UUID, Integer> loadedByTransfer = new LinkedHashMap<>();
+    for (RouteOperationView operation : transferLoads) {
+      Integer duplicate =
+          loadedByTransfer.put(
+              operation.sourceTransferId(), operation.loadAfter() - operation.loadBefore());
+      if (duplicate != null)
+        throw new IllegalArgumentException(
+            "A transfer identity can have only one load operation");
+    }
+    Map<UUID, Integer> unloadedByTransfer = new LinkedHashMap<>();
+    for (RouteOperationView operation : transferUnloads) {
+      Integer duplicate =
+          unloadedByTransfer.put(
+              operation.sourceTransferId(), operation.loadBefore() - operation.loadAfter());
+      if (duplicate != null)
+        throw new IllegalArgumentException(
+            "A transfer identity can have only one unload operation");
+    }
+    if (!loadedByTransfer.equals(unloadedByTransfer))
+      throw new IllegalArgumentException(
+          "Every transfer load requires one balanced destination unload");
+  }
+
+  private boolean isPositioning(DriverShiftRouteOperationKind kind) {
+    return kind == DriverShiftRouteOperationKind.INBOUND_POSITIONING
+        || kind == DriverShiftRouteOperationKind.RETURN_POSITIONING;
+  }
+
+  private boolean isCustomerOperation(DriverShiftRouteOperationKind kind) {
+    return kind == DriverShiftRouteOperationKind.DELIVERY
+        || kind == DriverShiftRouteOperationKind.PICKUP;
+  }
+
+  private boolean isTransferOperation(DriverShiftRouteOperationKind kind) {
+    return kind == DriverShiftRouteOperationKind.TRANSFER_LOAD
+        || kind == DriverShiftRouteOperationKind.TRANSFER_UNLOAD;
+  }
+
   private DriverShiftPlanResponse planResponse(DriverShiftPlan plan, PlanApplyResult result) {
     return new DriverShiftPlanResponse(
         plan.getSourceShiftId(), plan.getSourcePlanId(), plan.getSourcePlanVersion(), result);
   }
 
+  private List<RouteOperationView> routeOperationViews(UUID planId) {
+    return routeOperations.findAllByDriverShiftPlanIdOrderBySequenceAsc(planId).stream()
+        .map(
+            operation ->
+                new RouteOperationView(
+                    operation.getSequence(),
+                    operation.getKind(),
+                    operation.getWarehouseId(),
+                    operation.getSourceTaskId(),
+                    operation.getSourceTransferId(),
+                    operation.getLocationLabel(),
+                    operation.getPlannedArrival(),
+                    operation.getPlannedDeparture(),
+                    operation.getLoadBefore(),
+                    operation.getLoadAfter()))
+        .toList();
+  }
+
+  /**
+   * Summarizes exact driver work for the shift date across every physical task warehouse.
+   *
+   * <p>The shift and JWT retain the driver's home warehouse. A cross-warehouse service task enters
+   * this summary only through its exact planned worker or a non-cancelled persisted assignment;
+   * identity-free shared pool work and another driver's work remain excluded.
+   */
   private TaskSummaryView taskSummary(DriverShift shift, DriverShiftPlan plan) {
     List<java.util.Map<String, Object>> rows =
         jdbc.queryForList(
@@ -827,15 +1326,18 @@ select template.template_version,item.item_code,item.section_name,item.item_labe
 with driver_tasks as (
   select distinct task.id,task.status
     from board_task task
-   where task.warehouse_id=? and task.scheduled_date=? and task.status<>'CANCELLED'
+   where task.scheduled_date=? and task.status<>'CANCELLED'
      and (task.planned_driver_worker_id=? or exists (
        select 1 from queue_entry entry
        join task_assignment assignment on assignment.queue_entry_id=entry.id
         where entry.task_id=task.id and assignment.worker_id=? and assignment.status<>'CANCELLED'
      ))
-) select count(*) total_count,count(*) filter(where status='ACTIVE') active_count,count(*) filter(where status='DONE') completed_count from driver_tasks
+)
+select count(*) total_count,
+       count(*) filter(where status='ACTIVE') active_count,
+       count(*) filter(where status='DONE') completed_count
+  from driver_tasks
 """,
-            shift.getWarehouseId(),
             shift.getWorkDate(),
             shift.getDriverId(),
             shift.getDriverId());
@@ -972,6 +1474,7 @@ with driver_tasks as (
         plan.getVehicleManufacturer(),
         plan.getVehicleModel(),
         plan.getConfigurationType(),
+        plan.getCabinCapacity(),
         plan.getStartOdometer(),
         trailer);
   }

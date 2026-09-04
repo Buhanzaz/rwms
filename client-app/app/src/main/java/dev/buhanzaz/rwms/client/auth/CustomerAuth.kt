@@ -14,6 +14,7 @@ import dev.buhanzaz.rwms.client.data.OAuthTokenPayload
 import dev.buhanzaz.rwms.client.data.ProblemDetails
 import dev.buhanzaz.rwms.client.data.RegistrationRequest
 import dev.buhanzaz.rwms.client.data.RegistrationResponse
+import dev.buhanzaz.rwms.client.data.customerProblemMessage
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
@@ -68,7 +69,7 @@ sealed interface CustomerAuthState {
     /** A credential or registration exchange is currently in progress. */
     data object Authenticating : CustomerAuthState
 
-    /** A usable access or refresh token exists in encrypted local storage. */
+    /** A usable access or refresh token exists in memory or encrypted local storage. */
     data object SignedIn : CustomerAuthState
 }
 
@@ -77,13 +78,16 @@ object RegistrationValidator {
     /** Returns a localized error or `null` when the request can be submitted. */
     fun validate(username: String, password: String, confirmation: String): String? = when {
         username.trim().length !in 3..64 -> "Логин должен содержать от 3 до 64 символов"
-        !username.trim().all { it.isLetterOrDigit() || it == '.' || it == '_' || it == '-' } ->
-            "В логине разрешены буквы, цифры, точка, дефис и подчёркивание"
+        !CustomerUsernamePattern.matches(username.trim()) ->
+            "Логин должен начинаться с латинской буквы или цифры и содержать только " +
+                "латинские буквы, цифры, точку, дефис и подчёркивание"
         password.length !in 8..128 -> "Пароль должен содержать от 8 до 128 символов"
         password != confirmation -> "Пароли не совпадают"
         else -> null
     }
 }
+
+private val CustomerUsernamePattern = Regex("^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 /** Encrypted token record stored in DataStore; credentials and cookies are never represented here. */
 @Serializable
@@ -140,8 +144,10 @@ class CustomerAuthRepository @Inject constructor(
     private val sessionStore = EncryptedCustomerSessionStore(context, json)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val exchangeMutex = Mutex()
+    private val registrationMutex = Mutex()
     private val mutableState = MutableStateFlow<CustomerAuthState>(CustomerAuthState.Loading)
     @Volatile private var cachedSession: StoredCustomerSession? = null
+    @Volatile private var persistSessionAcrossRestarts = false
 
     /** Current session state consumed by the app-level conditional graph. */
     val state: StateFlow<CustomerAuthState> = mutableState.asStateFlow()
@@ -150,6 +156,7 @@ class CustomerAuthRepository @Inject constructor(
         scope.launch {
             val restored = sessionStore.read()
             cachedSession = restored
+            persistSessionAcrossRestarts = restored != null
             mutableState.value = if (restored != null) {
                 CustomerAuthState.SignedIn
             } else {
@@ -160,49 +167,59 @@ class CustomerAuthRepository @Inject constructor(
 
     /** Registers the account with CSRF protection, then signs in through the same PKCE flow. */
     suspend fun register(username: String, password: String, confirmation: String) {
-        RegistrationValidator.validate(username, password, confirmation)?.let { message ->
-            mutableState.value = CustomerAuthState.SignedOut(message)
-            return
-        }
-        mutableState.value = CustomerAuthState.Authenticating
+        if (!registrationMutex.tryLock()) return
         try {
-            withContext(Dispatchers.IO) {
-                val cookies = EphemeralCustomerCookieJar()
-                val client = ephemeralClient(cookies)
-                try {
-                    val csrf = fetchCsrf(client)
-                    val body = json.encodeToString(
-                        RegistrationRequest(username.trim(), password, confirmation),
-                    ).toRequestBodyJson()
-                    client.newCall(
-                        Request.Builder()
-                            .url(configuration.registrationUrl)
-                            .header(csrf.headerName, csrf.token)
-                            .post(body)
-                            .build(),
-                    ).execute().use { response ->
-                        if (!response.isSuccessful) throw response.asAuthFailure("Не удалось зарегистрироваться")
-                        response.body.string().takeIf(String::isNotBlank)?.let {
-                            json.decodeFromString<RegistrationResponse>(it)
-                        }
-                    }
-                } finally {
-                    cookies.clear()
-                }
+            RegistrationValidator.validate(username, password, confirmation)?.let { message ->
+                mutableState.value = CustomerAuthState.SignedOut(message)
+                return
             }
-            login(username, password)
-        } catch (cancelled: CancellationException) {
-            mutableState.value = CustomerAuthState.SignedOut()
-            throw cancelled
-        } catch (failure: CustomerAuthException) {
-            mutableState.value = CustomerAuthState.SignedOut(failure.userMessage)
-        } catch (_: Throwable) {
-            mutableState.value = CustomerAuthState.SignedOut("Регистрация временно недоступна")
+            mutableState.value = CustomerAuthState.Authenticating
+            try {
+                withContext(Dispatchers.IO) {
+                    val cookies = EphemeralCustomerCookieJar()
+                    val client = ephemeralClient(cookies)
+                    try {
+                        val csrf = fetchCsrf(client)
+                        val body = json.encodeToString(
+                            RegistrationRequest(username.trim(), password, confirmation),
+                        ).toRequestBodyJson()
+                        client.newCall(
+                            Request.Builder()
+                                .url(configuration.registrationUrl)
+                                .header(csrf.headerName, csrf.token)
+                                .post(body)
+                                .build(),
+                        ).execute().use { response ->
+                            if (!response.isSuccessful) {
+                                throw response.asAuthFailure("Не удалось зарегистрироваться")
+                            }
+                            response.body.string().takeIf(String::isNotBlank)?.let {
+                                json.decodeFromString<RegistrationResponse>(it)
+                            }
+                        }
+                    } finally {
+                        cookies.clear()
+                    }
+                }
+                login(username, password, rememberMe = true)
+            } catch (cancelled: CancellationException) {
+                mutableState.value = CustomerAuthState.SignedOut()
+                throw cancelled
+            } catch (failure: CustomerAuthException) {
+                mutableState.value = CustomerAuthState.SignedOut(failure.userMessage)
+            } catch (_: Throwable) {
+                mutableState.value = CustomerAuthState.SignedOut("Регистрация временно недоступна")
+            }
+        } finally {
+            registrationMutex.unlock()
         }
     }
 
-    /** Exchanges credentials only inside an ephemeral cookie session and stores OAuth tokens encrypted. */
-    suspend fun login(username: String, password: String) {
+    /**
+     * Exchanges credentials inside an ephemeral cookie session. Remembered sessions are encrypted
+     * in DataStore; unchecked sessions remain usable only until this app process ends.
+     */
+    suspend fun login(username: String, password: String, rememberMe: Boolean = true) {
         if (username.isBlank() || password.isBlank()) {
             mutableState.value = CustomerAuthState.SignedOut("Введите логин и пароль")
             return
@@ -211,6 +228,7 @@ class CustomerAuthRepository @Inject constructor(
             mutableState.value = CustomerAuthState.Authenticating
             try {
                 val token = withContext(Dispatchers.IO) { nativePkceLogin(username.trim(), password) }
+                persistSessionAcrossRestarts = rememberMe
                 persist(token.toStoredSession())
                 mutableState.value = CustomerAuthState.SignedIn
             } catch (cancelled: CancellationException) {
@@ -229,7 +247,10 @@ class CustomerAuthRepository @Inject constructor(
     /** Returns a valid token, serializing refresh-token rotation across concurrent HTTP calls. */
     suspend fun accessToken(forceRefresh: Boolean = false, rejectedToken: String? = null): String? =
         exchangeMutex.withLock {
-            val current = cachedSession ?: sessionStore.read()?.also { cachedSession = it } ?: return@withLock null
+            val current = cachedSession ?: sessionStore.read()?.also {
+                cachedSession = it
+                persistSessionAcrossRestarts = true
+            } ?: return@withLock null
             if (!forceRefresh && current.isAccessTokenUsable(System.currentTimeMillis())) {
                 return@withLock current.accessToken
             }
@@ -392,12 +413,17 @@ class CustomerAuthRepository @Inject constructor(
         .build()
 
     private suspend fun persist(session: StoredCustomerSession) {
-        sessionStore.write(session)
+        if (persistSessionAcrossRestarts) {
+            sessionStore.write(session)
+        } else {
+            sessionStore.clear()
+        }
         cachedSession = session
     }
 
     private suspend fun clear(message: String?) {
         cachedSession = null
+        persistSessionAcrossRestarts = false
         sessionStore.clear()
         mutableState.value = CustomerAuthState.SignedOut(message)
     }
@@ -411,8 +437,11 @@ class CustomerAuthRepository @Inject constructor(
 
     private fun Response.asAuthFailure(defaultMessage: String): CustomerAuthException {
         val payload = body.string().take(MAX_AUTH_RESPONSE_BYTES)
-        val detail = runCatching { json.decodeFromString<ProblemDetails>(payload).detail }.getOrNull()
-        return CustomerAuthException(detail?.takeIf(String::isNotBlank) ?: defaultMessage, terminal = code in 400..499)
+        val problem = runCatching { json.decodeFromString<ProblemDetails>(payload) }.getOrNull()
+        return CustomerAuthException(
+            customerProblemMessage(code, problem, defaultMessage),
+            terminal = code in 400..499,
+        )
     }
 }
 

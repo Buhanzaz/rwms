@@ -17,7 +17,7 @@ Russian version: [README.ru.md](README.ru.md).
   role and warehouse-access check. Hiding a UI control is not authorization.
 - The same OIDC transaction may be started by the standalone logistics
   workspace. Its callback performs a full-page return to
-  `/logistics-simulator/**`; ordinary panel return paths continue through the
+  `/logistics-panel/**`; ordinary panel return paths continue through the
   panel router. Both clients use the same renewable `rwms-panel` user session.
 - `CUSTOMER` is a recognized human role only so user administration, order
   actors and dossier history can render truthful labels. It remains ineligible
@@ -25,8 +25,29 @@ Russian version: [README.ru.md](README.ru.md).
   the supported customer workflow is the separate CustomerApp. See the
   [auth model](src/features/auth/auth-model.ts), [user model](src/features/settings/users/model/users.ts)
   and [order permissions](src/features/orders/permissions/orders-permissions.ts).
+- `/manager/` is the separate rental-manager web surface. It accepts only the
+  dedicated `rwms-rental-manager-web` session with `RENTAL_MANAGER`, signed
+  company, `rentalAccess=true`, and exactly `rental.manage`. Its shared warehouse
+  provider keeps only explicitly granted warehouses; an empty grant set is
+  explained without blocking chat or client lookup.
 - The Vite proxy is a local-development convenience only. Production browser
   requests remain same-origin and must be served behind the public gateway.
+
+## Standalone administration
+
+- `/admin/` is a standalone administrator workspace. It uses the dedicated
+  `rwms-admin-web` `USER` session with exactly `admin.manage` after the OIDC
+  protocol scopes; its UI gate is `SYSTEM_ADMIN` only. Browser traffic remains
+  same-origin through `/auth/**` and `/api/**`.
+- The grouped sidebar separates claims, user settings, object settings and
+  general settings. The object-settings selector admits only active,
+  non-representative production and/or main objects. Vehicle and trailer catalog
+  calls use public `/api/logistics-planner/v1/admin/**`; relocating a resource
+  changes its permanent catalog home, not a logistics trip.
+- Repair-place settings are count-only and refill becomes eligible immediately.
+  The object work schedule combines task-board work time with inventory holiday
+  days; drivers set their own shifts, and inventory has no per-day cabin quota
+  or weekday-specific setting.
 
 ## Product surface and state ownership
 
@@ -39,13 +60,19 @@ contexts and screens are usable.
   entity, and filter inputs. The server stays authoritative.
 - The selected warehouse is a non-authoritative local UI preference. It is
   revalidated against the profile returned after authentication.
-- `/settings/warehouses` creates and edits the warehouse-service aggregate directly. The form
-  persists its coordinate pair and independent `representative` checkbox; list and detail views
-  show a quiet representative badge and an explicit not-routable warning when coordinates are
-  absent. An existing representative warehouse exposes its complete directed support-link editor
-  with priority, capability switches, weekdays, date exceptions and an optional service interval.
-  The editor replaces that collection under the warehouse version fence; it never creates a second
-  logistics warehouse or map marker.
+- `/settings/warehouses` is presented as **Objects** and edits the warehouse-service aggregate
+  directly. The form persists independent production/main checkboxes or one representative parent,
+  uses the shared IANA timezone selector with a visible UTC offset, and exposes lifecycle/timezone
+  actions inside edit. The directory shows code, city, classifications, timezone, order and a
+  tooltip warning for missing coordinates. An existing representative object exposes its complete
+  directed support-link editor with priority, capability switches, weekdays, date exceptions and an
+  optional service interval. The editor replaces that collection under the warehouse version fence;
+  it never creates a second logistics object or map marker.
+- `/settings/users` groups RWMS and rental entitlements in a dedicated access section. RWMS access
+  enables object grants only for an eligible ManagerApp role; a shared timezone selector is used for
+  create and edit, password change is an edit action, and the directory consolidates application,
+  rental and object access. `WMS_ADMIN` remains readable for existing identities but is not offered
+  as a new role assignment.
 - Task-board brigade settings submit the selected membership and the workers'
   version-fenced current-brigade changes in one group command. The panel does
   not offer a second worker-table assignment action; task-board commits or
@@ -157,6 +184,19 @@ contexts and screens are usable.
   `SMALL`, an opened gallery or work workspace requests `MEDIUM`, and the
   fullscreen viewer requests `LARGE` only on demand. See the
   [creation uploader](src/features/rental-items/rental-item-creation-photo-uploader.tsx).
+  Warehouse cabin creation now computes the ordered 1-20 image manifest before
+  the command (the title image is index zero) and atomically creates the cabin
+  with an asset-owned durable creation intent and availability hold. The panel
+  uploads into the server-provided media folder with the stable per-image
+  command IDs and reports completion only after every image is READY and
+  asset-service has proved the exact gallery and cover through media-service.
+  An upload failure or dialog close leaves explicit pending work; reopening the
+  dialog lists it and requires the user to reselect the exact source bytes and
+  order before resume. Explicit abandon retains the cabin and media, while
+  asset-service quarantines the cabin in `WAREHOUSE`. Inventory creation keeps
+  the existing no-photo endpoint because its inspection finding owns the later
+  photo workflow. See the [durable intent adapter](src/features/rental-items/rental-item-creation-intent-support.ts)
+  and the [asset API](src/features/rental-items/api/asset-rental-items-api.ts).
   A cabin detail carousel reads only the media-service active gallery folder;
   its photo archive still lists every historical folder. If that authoritative
   active-folder projection fails while archive media loaded successfully, the
@@ -243,6 +283,18 @@ contexts and screens are usable.
   the [photo-presentation client](src/features/rental-items/cabin-photo-presentations-api.ts)
   [public page](src/features/rental-items/public-cabin-photo-presentation-page.tsx),
   and [fullscreen viewer](src/components/media/fullscreen-photo-viewer.tsx).
+- An expiring logistics-owned contractor capability opens
+  `/contractor-routes/{token}` outside the authenticated React subtree. The
+  page reads the live, ordered task-board route through logistics, shows only
+  the scoped address, contact, cargo, instructions, and capability-proxied
+  images, and applies exact version-fenced `START`/`COMPLETE` entry commands.
+  Result evidence is limited to a bounded JPEG or WebP upload with its capture
+  time, checksum, and stable evidence id; completion remains disabled until
+  the owner services report READY evidence. The browser neither invents task
+  ids nor stores a contractor route as domain state, and an expired or revoked
+  token renders one safe unavailable-link state. See the
+  [public route client](src/features/logistics/contractor-route-share/contractor-route-share-api.ts)
+  and [public route page](src/features/logistics/contractor-route-share/public-contractor-route-page.tsx).
 - The panel may combine independent public reads for a screen, but it must not
   orchestrate cross-service business workflows in the browser.
 
@@ -358,8 +410,8 @@ contexts and screens are usable.
   shows desired and factual furniture only as information, and sends the shared
   month count through the existing versioned, idempotent
   `POST /orders/{id}/rental-terms/extend` command. The manager contact dialog
-  keeps the selected client. Saving moves the order to the saved state so it can be
-  handled in Tasks; it does not create a shipment or trip.
+  keeps the selected client. Saving moves the order to the saved state for
+  subsequent logistics planning; it does not create a shipment or trip.
 - An order that the server marks editable exposes `Добавить бытовки` in both DRAFT
   and SAVED states, including after the first cabin was added. Its chooser has
   exactly two linked paths: AI chat and ordinary booking, each carrying the
@@ -406,8 +458,19 @@ contexts and screens are usable.
   shipment batch must contain exactly one source: selection and submit both reject a mixed batch,
   the command and idempotency signature carry the source, and the driver picker reads the physical
   source warehouse. Scheduling and expanded task rows show both warehouse names.
-- Expanded rows on `/logistics/order-tasks`, `/logistics/shipments`, and
-  `/logistics/returns` show the linked order and customer overview before the
+- The operational return, shipment and warehouse-transfer pages select one exact
+  day instead of a range or a scheduled/unscheduled mode. The default is today
+  in the selected warehouse IANA timezone; an explicit choice is retained as
+  the `date` URL parameter across reloads without clearing other page state.
+  Active list reads always send that day to logistics-service, and a transfer
+  day includes both arrivals at and departures from the selected warehouse.
+- Shipment confirmation, overdue return labels, furniture-task defaults and
+  scheduling dialogs evaluate “today” in the IANA timezone of the exact
+  inventory-source/owning warehouse. They fail closed when warehouse metadata
+  is unavailable instead of falling back to UTC, browser time or a global
+  Moscow date.
+- Expanded rows on `/logistics/shipments` and `/logistics/returns` show the
+  linked order and customer overview before the
   cabin list: address, named contacts, phones, coordinates, rental term, and
   outbound/return drivers remain visible when their authoritative reads are
   available. Each cabin compares order-desired furniture with its current
@@ -459,6 +522,9 @@ normal `DRAFT`; explicit activation applies a today's revision immediately to
 the whole warehouse-local calendar day, while a future revision remains
 scheduled. Past dates are rejected.
 
+The KPI palette is edited once for the whole company and is independent of the
+selected warehouse; the work schedule remains an object-specific setting.
+
 `/` is the selected warehouse's live daily-brigade view. It reads the current
 [task-board snapshot and daily activity projection](../contracts/openapi/task-board-service.yaml),
 active worker groups, the active KPI schedule/palette, and only the maintenance
@@ -472,10 +538,10 @@ Each segment starts at task-board's persisted TAKE timestamp and ends at its
 persisted completion timestamp; a live segment ends at current server-aligned
 time. Shift bounds only position and clip segments and never replace those
 actual times. Completed tasks remain as neutral history, while a currently
-`IN_PROGRESS` or `PAUSED` segment uses the server-configured KPI palette range
+`IN_PROGRESS` or `PAUSED` segment uses the server-configured, company-wide KPI palette range
 for its live remaining percentage. Hover/focus shows its exact start and end,
 cabin, physical queue, repair complexity, priority and remaining percentage.
-An inactive palette leaves live work neutral and explains why. The dashboard
+An unconfigured palette leaves live work neutral and explains why. The dashboard
 refreshes both task-board reads every 30 seconds for external worker changes;
 [`HomePage`](src/features/home/home-page.tsx), the
 [activity client](src/features/home/daily-brigade-activity-api.ts), and the
@@ -494,6 +560,13 @@ Problem Details conversion. `401` remains an authentication-renewal/login
 signal, `403` requires refreshed grants or user action, and `409` requires an
 authoritative refetch/conflict path. A malformed Problem Details body still
 returns a status-bearing `ApiError` with a safe fallback message.
+
+Transport failures and malformed successful JSON, SSE, and media protocol
+responses use that same boundary. The rendered `ApiError.message` is fixed,
+Russian, and selected from status/code; raw browser, parser, response-body, or
+service text is retained only as `diagnosticMessage` for structured telemetry.
+Both native and cross-realm `AbortError` values are classified as
+`REQUEST_ABORTED`, and cancellation diagnostics never become UI copy.
 
 Media additions use a bounded four-worker upload queue with stable idempotency
 keys and ordered results. A first failure prevents new jobs from starting,
@@ -563,6 +636,7 @@ npm run typecheck
 npm test
 npm run lint
 npm run build
+npm run build:admin
 ```
 
 `npm run dev` listens on `localhost:8080`; its proxy target is for local

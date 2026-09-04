@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Supplier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -209,6 +210,18 @@ public class AssistantConversationService {
   public AssistantApiModels.ConversationDetailResponse detail(
       UUID ownerSubjectId, UUID conversationId, String bearerToken) {
     AssistantConversation conversation = owned(conversationId, ownerSubjectId);
+    return detail(
+        conversation,
+        conversationId,
+        bearerToken,
+        () -> owned(conversationId, ownerSubjectId));
+  }
+
+  private AssistantApiModels.ConversationDetailResponse detail(
+      AssistantConversation conversation,
+      UUID conversationId,
+      String bearerToken,
+      Supplier<AssistantConversation> refreshedConversation) {
     Map<UUID, List<JsonNode>> noticesByTurn = searchNoticesByTurn(conversationId);
     List<AssistantApiModels.MessageResponse> responseMessages =
         messages.findByConversationIdOrderByCreatedAtAscIdAsc(conversationId).stream()
@@ -230,7 +243,7 @@ public class AssistantConversationService {
               : selections.current(conversation.getRentalInquiryId(), bearerToken);
     } catch (AssistantInquiryArchivedException terminal) {
       archiveFromRentalInquiry(conversation.getId(), conversation.getRentalInquiryId());
-      return archivedDetail(owned(conversationId, ownerSubjectId), responseMessages);
+      return archivedDetail(refreshedConversation.get(), responseMessages);
     }
     JsonNode recovered = mergedLastSearchResult(conversationId);
     JsonNode lastSearchResult =
@@ -296,6 +309,12 @@ public class AssistantConversationService {
         conversations
             .findByIdAndOwnerSubjectIdAndArchivedFalse(conversationId, ownerSubjectId)
             .orElseThrow(() -> new AssistantNotFoundException("Conversation was not found"));
+    return beginTurn(conversation, request);
+  }
+
+  private TurnStart beginTurn(
+      AssistantConversation conversation, AssistantApiModels.TurnRequest request) {
+    UUID conversationId = conversation.getId();
     AssistantClarificationService.AnsweredQuestion answered;
     if (request.clarificationAnswer() == null) {
       clarifications.requireNoActiveQuestion(conversationId);

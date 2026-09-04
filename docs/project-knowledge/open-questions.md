@@ -4,34 +4,61 @@ Use this file only for unresolved contradictions or product decisions that
 block a safe implementation. This is not a backlog and does not authorize
 work.
 
-## Retiring Planner Requests Missing From A Full RWMS Feed
+## Claims Aggregate And Dedicated Chat Owner
 
 - Status: `Open`
-- Affected owner and consumers: logistics-service as rental-demand owner;
-  standalone `logistics/` warehouse planner as a read projection; saved
-  route plans and later apply commands.
-- Requested behavior: a synchronized warehouse workspace must stop planning an
-  order after it is assigned, cancelled or otherwise disappears from the
-  logistics-owned still-unplanned demand feed.
-- Conflicting contract or invariant: the canonical planning response is named
-  a complete warehouse/date demand snapshot, but it contains only the current
-  still-unplanned remainder and no tombstone or removal reason. The planner
-  currently upserts returned order IDs and leaves an absent local request
-  `READY`. Deleting it would break saved-plan references and erase history;
-  retaining it as active leaves planner state stale. A later apply fails at
-  the authoritative logistics fence, but that does not correct the local
-  projection.
+- Affected owner and consumers: the future claim aggregate, CustomerApp,
+  rental-manager web/Android, RWMS warehouse staff, company administrators,
+  logistics order/return/replacement flows and media attachments.
+- Requested behavior: create one company-isolated claim for a delivered rented
+  cabin, retain a three-day deadline and resolution history, and provide a
+  dedicated three-party text/photo/voice conversation.
+- Conflicting contract or invariant: logistics-service already accepts one
+  customer-only immutable arrived-cabin problem report, but no active canonical
+  manager/RWMS lifecycle contract, participant authorization matrix or
+  deadline/resolution state machine exists for claims. Assistant-service
+  conversations are manager-owned rental inquiries and cannot safely become a
+  customer/manager/warehouse claim chat. Choosing the lifecycle owner implicitly
+  decides responsibility derivation, financial discount authority,
+  replacement/return orchestration, attachment access and cross-service recovery.
+- Evidence: the customer-only intake is
+  [`CustomerCabinProblem`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/customer/domain/CustomerCabinProblem.java)
+  and its canonical POST operation is under `logistics-service.yaml`; it has no
+  manager list/detail/decision boundary, three-day deadline, resolution or
+  dedicated conversation. The current assistant boundary is documented in
+  [`assistant-service`](service-catalog.md) and rental order transitions remain
+  logistics-owned in [`runtime flows`](runtime-flows.md#rental-client-and-order-entry).
+- Smallest decision needed: decide whether logistics-service extends the existing
+  immutable problem evidence into the claim lifecycle or another current service
+  owns that lifecycle, then approve participant/warehouse/company authorization,
+  deadline clock, terminal resolution values and integration commands for
+  discount, replacement and return. Media-service remains the only byte owner.
+- Resolution and date: none. On 2026-09-02 the Android manager foundation did
+  not invent a parallel claim or reuse private assistant conversations.
+
+## Rental-Order Mutation Quarantine Resolution
+
+- Status: `Open`
+- Affected owner and consumers: logistics-service rental-order mutation
+  recovery, warehouse managers and a future operator recovery surface.
+- Requested behavior: recover or administratively resolve a cancel/remove-unit
+  command after finite automatic retries place it in quarantine.
+- Conflicting contract or invariant: V77 durably preserves immutable intent,
+  per-effect receipts and the final local fence, but no public role, command,
+  audit reason or reconciliation outcome is defined for requeue/resolve. A
+  blind retry could repeat a permanent rejection or hide a cross-service
+  inconsistency; direct database editing would bypass authorization and audit.
 - Evidence:
-  [`planning feed contract`](../../contracts/openapi/logistics-service.yaml),
-  [`planner synchronization`](../../logistics/backend/app/integrations/rwms_sync.py),
+  [`recovery owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderMutationRecoveryService.java),
+  [`local state owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderMutationLocalStore.java),
   and
-  [`planner request aggregate`](../../logistics/backend/app/models/domain.py).
-- Smallest decision needed: define whether omission from a successful complete
-  refresh is an authoritative inactive transition, and specify how existing
-  unassigned tasks, saved plan members and history are retained or invalidated.
-  If omission is not sufficient evidence, extend the canonical feed with a
-  lifecycle/tombstone fact and update both producer and consumer together.
-- Resolution and date: none.
+  [`V77`](../../services/logistics-service/src/main/resources/db/migration/V77__durable_rental_order_mutation_recovery.sql).
+- Smallest decision needed: define the authorized operator role, whether the
+  command may be requeued or must be reconciled/closed, required reason and
+  evidence, version/idempotency fence, and the audit-visible terminal states.
+- Resolution and date: none. On 2026-08-31 automatic recovery, quarantine,
+  logs and fixed-name metrics were implemented without inventing an operator
+  mutation API.
 
 ## Guaranteed Alice/SpeechKit Voice Search In CustomerApp
 
@@ -84,34 +111,6 @@ work.
   producer/consumer flows together.
 - Resolution and date: none. On 2026-08-27 only explicit acknowledgement was
   implemented; no amount is displayed or charged.
-
-## Non-Expiring Cabin Presentation Versus Current Media Generation
-
-- Status: `Open`
-- Affected owner and consumers: media-service as retained-object and scoped-read
-  owner; logistics-service as public cabin-presentation owner; public panel
-  presentation viewers.
-- Requested behavior: a created cabin-photo presentation is an immutable,
-  non-expiring snapshot whose exact image URLs remain readable.
-- Conflicting contract or invariant: logistics freezes only
-  `{mediaId,generation}` and proxies every later image read to media-service.
-  The private media operation currently authorizes only a `READY` asset's exact
-  current generation. A later soft delete or generation advance therefore
-  makes the non-expiring public URL return `404`, even though media retains the
-  immutable object and variant rows. Allowing arbitrary historical reads would
-  broaden media authorization and cannot be inferred from retention alone.
-- Evidence:
-  [`logistics public presentation contract`](../../contracts/openapi/logistics-service.yaml),
-  [`media private presentation contract`](../../contracts/openapi/media-service.yaml),
-  [`logistics presentation proxy`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/photo/CabinPhotoPresentationService.java),
-  and
-  [`media variant read`](../../services/media-service/internal/persistence/cabin_photo_library.go).
-- Smallest decision needed: either authorize the exact historically frozen
-  generation only when it is named by a valid logistics presentation, with a
-  durable owner-proof boundary, or weaken the public contract so a presentation
-  remains structurally immutable but its images are readable only while those
-  media generations are current.
-- Resolution and date: none.
 
 ## Retiring The Former Saint Petersburg Warehouse
 
@@ -431,63 +430,46 @@ work.
 - Resolution and date: none. V49 adds lookup indexes only and rewrites no data;
   the narrow direct/direct and lost-response paths are protected now.
 
-## Worker And Driver Invalidation Replay Semantics
-
-- Status: `Open`
-- Affected owner and consumers: task-board-service, WorkerApp, DriverApp and API
-  gateway SSE transport.
-- Requested behavior: reconnecting either native task client must have one
-  documented recovery rule after missed invalidations.
-- Conflicting contract or invariant: OpenAPI tells clients to reconnect with
-  `Last-Event-ID`, while task-board currently emits a new in-memory
-  `FEED_CHANGED` invalidation on connection and does not replay the supplied
-  cursor. Both native clients also perform periodic authoritative refreshes.
-- Evidence:
-  [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml),
-  [`WorkerTaskBoardController.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/api/WorkerTaskBoardController.java),
-  [`DriverTaskBoardController.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/api/DriverTaskBoardController.java),
-  [`WorkerInvalidationHub.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/WorkerInvalidationHub.java),
-  [`WorkerRealtimeCoordinator.kt`](../../worker-app/core-sync/src/main/java/dev/buhanzaz/rwms/worker/core/sync/WorkerRealtimeCoordinator.kt),
-  [`DriverRealtimeCoordinator.kt`](../../driver-app/core-sync/src/main/java/dev/buhanzaz/rwms/driver/core/sync/DriverRealtimeCoordinator.kt).
-- Smallest decision needed: choose invalidation-only reconnect with mandatory
-  full refresh and no replay promise, or a durable ordered replay log with
-  cursor expiry and resync semantics.
-- Resolution and date: none. The current periodic refresh reduces data-loss
-  impact but does not make the contract statement accurate.
-
 ## Android Release Publication Trust
 
 - Status: `Open`
-- Affected owner and consumers: manager Android app, WorkerApp, DriverApp,
-  manager-download-site, driver-download-site, worker-download-site,
-  downloads-site, release engineering and device administrators.
+- Affected owner and consumers: all four Android apps and their four owned
+  download surfaces, release engineering and device administrators.
 - Requested behavior: every published APK must be traceable to one reviewed
   source revision and expose a verifiable version, signature and checksum.
-- Conflicting contract or invariant: the manager download site still has two
+- Confirmed repository behavior: every Android release artifact task now fails
+  closed without complete readable external signing material. Every owned
+  download surface validates an explicit `PRODUCTION`/`INTERNAL_TEST` channel,
+  package/version, immutable path, source provenance, APK SHA-256 and one signer
+  pinned by `release-trust-policy.json`. CustomerApp and WorkerApp have pinned
+  production certificates. ManagerApp and DriverApp deliberately have empty
+  production allowlists and can publish only their pinned debug packages as
+  `INTERNAL_TEST` until a production certificate is reviewed.
+- Remaining organizational decision: the manager download site still has two
   manually kept page implementations and currently distributes a debug-signed
-  test APK. Its active release now has a Manager-owned immutable route and one
-  integrity record covering source, package, version, signer and SHA-256. The
-  worker site separately publishes through its own validated manifest and
-  Worker-owned route. DriverApp now has its own release record and immutable
-  route; the static `/downloads/` page reads all three records rather than
-  duplicating APKs or mutable metadata. There is still no documented
-  production-signing authority/retention policy or organization-wide
-  checksum-verification flow.
+  test APK. There is still no approved production signing authority, key
+  custody/rotation/recovery procedure or artifact-retention policy. Those
+  external decisions cannot be inferred from repository code.
 - Evidence:
   [`manager app build`](../../app/build.gradle.kts),
   [`manager release record`](../../manager-download-site/release.json),
+  [`manager trust policy`](../../manager-download-site/release-trust-policy.json),
   [`download preparation`](../../manager-download-site/scripts/prepare-sites-worker.mjs),
   [`Next page`](../../manager-download-site/app/page.jsx),
   [`static page`](../../manager-download-site/public/index.html),
   [`worker manifest`](../../worker-download-site/release.json),
+  [`worker trust policy`](../../worker-download-site/release-trust-policy.json),
   [`worker route`](../../worker-download-site/scripts/build-site.mjs),
   [`worker app build`](../../worker-app/app/build.gradle.kts),
   [`driver app build`](../../driver-app/app/build.gradle.kts),
-  [`Driver release record`](../../driver-download-site/release.json), and
+  [`Driver release record`](../../driver-download-site/release.json),
+  [`Driver trust policy`](../../driver-download-site/release-trust-policy.json),
+  [`Customer trust policy`](../../client-download-site/release-trust-policy.json), and
   [`aggregate Downloads builder`](../../downloads-site/scripts/build-site.mjs).
-- Smallest decision needed: choose the supported page implementation, release
-  signing authority and key custody, artifact repository/retention policy, and
-  manifest fields used as the only rendered version source.
+- Smallest decision needed: provision and review ManagerApp/DriverApp
+  production signer hashes, assign signing authority and key
+  custody/rotation/recovery, choose the supported Manager page implementation,
+  and approve artifact repository/retention policy.
 - Resolution and date: the WorkerApp publication portion was completed on
   2026-08-10. On 2026-08-13 the ManagerApp `0.3.37-debug` publication replaced
   its mutable external artifact link with a versioned Manager-owned asset and
@@ -496,8 +478,10 @@ work.
   page implementation and the organization-wide release policy. On 2026-08-24
   a dedicated DriverApp release record and the aggregate `/downloads/` page
   resolved the missing DriverApp download surface without mixing application
-  artefacts; all three current APKs are still test/distribution artefacts, not
-  a production-signing policy.
+  artefacts. On 2026-08-31 repository-side signing and APK trust gates were
+  normalized across all four apps/surfaces; the question remains open only for
+  the external production keys, authority, recovery, retention and duplicate
+  Manager page decision described above.
 
 ## Media Terminal Retry Authorization
 
@@ -580,19 +564,27 @@ work.
 - Affected owner and consumers: logistics-service, standalone planner, public
   client presentation and manager logistics panel.
 - Requested behavior: show clients dates that are actually free for delivery,
-  not only dates permitted by the five-day service policy.
-- Conflicting contract or invariant: the current `requestableDeliveryDates`
-  list is the warehouse-local `today+2...today+5` request horizon and explicitly
-  makes no capacity promise. The standalone plan is independently versioned and
-  does not reserve RWMS driver/vehicle capacity while a client is choosing.
+  without representing provisional guidance as a guaranteed slot.
+- Confirmed current behavior: exact CustomerApp slot search and presentation
+  guidance share the configurable warehouse-local
+  `earliestDeliveryDays..bookingHorizonDays` range (defaults
+  `today+2...today+14`). Exact search evaluates the supplied address across the
+  whole range. Address-free `requestableDeliveryDates` returns at most four
+  earliest capacity-aware provisional dates using the depot as the candidate
+  destination; it explicitly makes no exact-address or reservation promise.
+  The standalone plan remains independently versioned and does not reserve
+  RWMS driver/vehicle capacity while a presentation viewer is choosing.
 - Evidence:
   [`ClientDeliveryDatePolicy.java`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/ClientDeliveryDatePolicy.java),
   [`public presentation`](../../panel/src/features/assistant/pages/public-client-presentation-page.tsx),
   [`warehouse planner`](../../logistics/backend/app/planner/heuristic.py).
-- Smallest decision needed: choose the capacity owner, freshness/version fence,
-  reservation lifetime and fallback shown when the planner is unavailable.
-- Resolution and date: none. The UI labels current values as requested dates,
-  and final logistics scheduling remains authoritative.
+- Smallest decision needed: choose whether public presentation keeps four
+  non-binding guidance dates or collects an address and exposes the exact full
+  range; approve offer/hold lifetime, freshness/version fence and the fallback
+  shown when planner/capacity is unavailable.
+- Resolution and date: none. Exact CustomerApp offers remain logistics-owned;
+  the presentation UI labels current values as dates available for request and
+  agreement rather than guaranteed slots.
 
 ## Planned Arrival Time In DriverApp
 
@@ -601,20 +593,26 @@ work.
   DriverApp.
 - Requested behavior: show the driver an approximate arrival time before
   claiming an extra trip.
-- Conflicting contract or invariant: current RWMS shipment/task contracts are
-  intentionally date-only, while planned arrival/route segment timestamps live
-  only in a versioned warehouse plan. Applying a plan currently assigns date,
-  driver and cabin IDs but does not establish which service owns ETA updates,
-  delay propagation or stale-plan display.
+- Confirmed repository behavior: an applied plan now publishes one immutable
+  task-board-owned route-operation snapshot with aware planned
+  arrival/departure instants. DriverApp shows that planned ETA in the shift
+  warehouse timezone (or preserves the timestamp offset when metadata is
+  invalid) before start, during active tasks and while closing.
+- Remaining contract gap: the future shared-trip preview/claim response remains
+  date-oriented and does not expose this applied-shift snapshot before claim.
+  No owner is approved for live telemetry, delay propagation, dynamic/actual
+  ETA or stale-estimate policy.
 - Evidence:
   [`planning assignment schema`](../../contracts/openapi/logistics-service.yaml),
-  [`RouteStopRead`](../../logistics/backend/app/schemas/domain.py),
+  [`task-board shift schema`](../../contracts/openapi/task-board-service.yaml),
+  [`route-operation owner`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/service/DriverShiftService.java),
+  [`DriverApp timeline`](../../driver-app/feature-shift/src/main/java/dev/buhanzaz/rwms/driver/feature/shift/DriverShiftScreen.kt), and
   [`DriverTripDetailsBlock`](../../driver-app/feature-task-detail/src/main/java/dev/buhanzaz/rwms/driver/feature/taskdetail/TaskDetailScreen.kt).
-- Smallest decision needed: approve an additive planned-arrival snapshot owner,
-  its timezone/version semantics and whether DriverApp labels it as the last
-  applied estimate or obtains a live planner read.
-- Resolution and date: none. DriverApp currently shows the assigned date and a
-  prefilled Yandex Maps route, but does not invent an ETA.
+- Smallest decision needed: decide whether pre-claim preview should receive a
+  separately versioned candidate ETA, and later approve telemetry/dynamic ETA
+  ownership and stale-display semantics.
+- Resolution and date: applied-shift planned ETA resolved on 2026-08-31;
+  pre-claim and dynamic/actual ETA remain open.
 
 ## Retention And Archive Policy For Immutable Operational Evidence
 

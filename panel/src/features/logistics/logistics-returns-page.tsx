@@ -5,7 +5,7 @@ import {
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query"
-import { Link, useNavigate, useSearchParams } from "react-router-dom"
+import { Link, useNavigate } from "react-router-dom"
 
 import { OperationsListGrid } from "@/components/operations-list-grid"
 import {
@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/dialog"
 import { FieldError, FieldGroup } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { SingleDayPicker } from "@/components/ui/single-day-picker"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
 import {
@@ -52,6 +53,7 @@ import {
   useLogisticsReferenceLabels,
   type LogisticsReferenceLabels,
 } from "@/features/logistics/use-logistics-reference-labels"
+import { useLogisticsDay } from "@/features/logistics/use-logistics-day"
 import { AcceptUndamagedDialog } from "@/features/logistics/returns/accept-undamaged-dialog"
 import {
   RETURNS_QUERY_KEY,
@@ -126,22 +128,6 @@ function linkedShipmentDriverLabel(
   return document.driverSnapshot ?? "Не назначен"
 }
 
-function matchesDateRange(
-  value: string | null,
-  filters: LogisticsDocumentFiltersState<string>
-) {
-  if (filters.schedule === "SCHEDULED" && value === null) return false
-  if (filters.schedule === "UNSCHEDULED" && value !== null) return false
-  if (!value) return !filters.dateFrom && !filters.dateTo
-  if (filters.dateFrom && value < filters.dateFrom) {
-    return false
-  }
-  if (filters.dateTo && value > filters.dateTo) {
-    return false
-  }
-  return true
-}
-
 function textFilterOptions(values: Iterable<string | null | undefined>) {
   return [
     ...new Set(
@@ -166,8 +152,8 @@ function errorMessage(cause: unknown, fallback: string) {
   return cause instanceof Error ? cause.message : fallback
 }
 
-function returnListQueryKey(warehouseId: string) {
-  return [...RETURNS_QUERY_KEY, warehouseId] as const
+function returnListQueryKey(warehouseId: string, scheduledDate: string) {
+  return [...RETURNS_QUERY_KEY, warehouseId, scheduledDate] as const
 }
 
 function desiredWindowsForReturn(
@@ -181,11 +167,15 @@ function desiredWindowsForReturn(
 
 function storeServiceProjection(
   queryClient: QueryClient,
-  document: ReturnDocument
+  document: ReturnDocument,
+  selectedDate: string
 ) {
   queryClient.setQueryData<ReturnDocument[]>(
-    returnListQueryKey(document.warehouseId),
+    returnListQueryKey(document.warehouseId, selectedDate),
     (current) => {
+      if (document.scheduledDate !== selectedDate) {
+        return current?.filter((candidate) => candidate.id !== document.id)
+      }
       if (!current) return [document]
       const exists = current.some((candidate) => candidate.id === document.id)
       return exists
@@ -198,9 +188,11 @@ function storeServiceProjection(
 }
 
 export function LogisticsReturnsPage() {
-  const { selectedWarehouseId } = useWarehouse()
+  const { selectedWarehouse, selectedWarehouseId } = useWarehouse()
   const { accessToken, currentUser } = useAuth()
-  const [searchParams] = useSearchParams()
+  const { searchParams, selectedDate, setSelectedDate } = useLogisticsDay(
+    selectedWarehouse?.timeZone
+  )
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState("")
@@ -218,9 +210,10 @@ export function LogisticsReturnsPage() {
   const selectedLineId = searchParams.get("returnItemId")
 
   const query = useQuery({
-    queryKey: returnListQueryKey(selectedWarehouseId ?? "none"),
-    queryFn: () => listReturns(accessToken!, selectedWarehouseId!),
-    enabled: Boolean(accessToken && selectedWarehouseId),
+    queryKey: returnListQueryKey(selectedWarehouseId ?? "none", selectedDate),
+    queryFn: () =>
+      listReturns(accessToken!, selectedWarehouseId!, selectedDate),
+    enabled: Boolean(accessToken && selectedWarehouseId && selectedDate),
     refetchInterval: 5_000,
   })
   const shipmentsQuery = useQuery({
@@ -293,7 +286,6 @@ export function LogisticsReturnsPage() {
       ) {
         return false
       }
-      if (!matchesDateRange(document.scheduledDate, filters)) return false
       if (!needle) return true
       return [
         document.id,
@@ -329,7 +321,7 @@ export function LogisticsReturnsPage() {
 
   function refresh(warehouseId: string) {
     return queryClient.invalidateQueries({
-      queryKey: returnListQueryKey(warehouseId),
+      queryKey: returnListQueryKey(warehouseId, selectedDate),
     })
   }
 
@@ -365,7 +357,7 @@ export function LogisticsReturnsPage() {
       })
     },
     onSuccess: (result) => {
-      storeServiceProjection(queryClient, result)
+      storeServiceProjection(queryClient, result, selectedDate)
       setPickupTarget(null)
       setCommandError(null)
       void refresh(result.warehouseId)
@@ -469,6 +461,18 @@ export function LogisticsReturnsPage() {
           filters={filters}
           stateOptions={stateOptions}
           dateLabel="Вывоз"
+          leadingControl={
+            <SingleDayPicker
+              label="Календарь"
+              hideLabel
+              value={selectedDate}
+              disabled={!selectedWarehouse}
+              className="w-full sm:w-56"
+              onValueChange={setSelectedDate}
+            />
+          }
+          showSchedule={false}
+          showDateRange={false}
           extraFilters={[
             {
               label: "Контрагент",
@@ -661,7 +665,7 @@ export function LogisticsReturnsPage() {
           document={estimateTarget}
           onOpenChange={(open) => !open && setEstimateTarget(null)}
           onSuccess={(result) => {
-            storeServiceProjection(queryClient, result)
+            storeServiceProjection(queryClient, result, selectedDate)
             void refresh(result.warehouseId)
             const returnEstimateSearch = new URLSearchParams({
               returnId: estimateTarget.id,
@@ -686,7 +690,7 @@ export function LogisticsReturnsPage() {
           document={acceptTarget}
           onOpenChange={(open) => !open && setAcceptTarget(null)}
           onSuccess={(result) => {
-            storeServiceProjection(queryClient, result)
+            storeServiceProjection(queryClient, result, selectedDate)
             void refresh(result.warehouseId)
             setAcceptTarget(null)
             setCommandError(null)

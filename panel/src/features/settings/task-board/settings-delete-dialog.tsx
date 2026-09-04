@@ -1,3 +1,6 @@
+import { Delete02Icon, Loading03Icon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
+
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,6 +29,8 @@ export function SettingsDeleteDialog({
   onClose: () => void
   onConfirm: () => Promise<void>
 }) {
+  const deleteAction = confirmLabel === "Удалить"
+
   return (
     <AlertDialog open onOpenChange={(open) => !open && !pending && onClose()}>
       <AlertDialogContent>
@@ -34,22 +39,44 @@ export function SettingsDeleteDialog({
           <AlertDialogDescription>{description}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={pending}>Отмена</AlertDialogCancel>
+          {deleteAction ? (
+            <AlertDialogAction
+              variant="destructive"
+              size="icon"
+              className="sm:mr-auto"
+              aria-label={pending ? "Удаление…" : "Удалить"}
+              title="Удалить"
+              disabled={pending}
+              onClick={(event) => {
+                event.preventDefault()
+                void onConfirm()
+              }}
+            >
+              <HugeiconsIcon
+                icon={pending ? Loading03Icon : Delete02Icon}
+                className={pending ? "animate-spin" : undefined}
+                aria-hidden="true"
+              />
+            </AlertDialogAction>
+          ) : null}
           {error ? (
-            <p role="alert" className="text-xs text-destructive sm:mr-auto">
+            <p role="alert" className="text-xs text-destructive">
               {error}
             </p>
           ) : null}
-          <AlertDialogAction
-            variant="destructive"
-            disabled={pending}
-            onClick={(event) => {
-              event.preventDefault()
-              void onConfirm()
-            }}
-          >
-            {pending ? "Выполняем…" : confirmLabel}
-          </AlertDialogAction>
+          <AlertDialogCancel disabled={pending}>Отмена</AlertDialogCancel>
+          {!deleteAction ? (
+            <AlertDialogAction
+              variant="default"
+              disabled={pending}
+              onClick={(event) => {
+                event.preventDefault()
+                void onConfirm()
+              }}
+            >
+              {pending ? "Выполняем…" : confirmLabel}
+            </AlertDialogAction>
+          ) : null}
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

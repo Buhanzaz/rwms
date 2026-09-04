@@ -16,9 +16,9 @@ public class FurnitureEquipmentLinkReviewService {
   }
 
   public PageResponse<FurnitureEquipmentLinkResponse> list(
-      UUID warehouseId, FurnitureEquipmentLinkState state, int page, int size) {
+      FurnitureEquipmentLinkState state, int page, int size) {
     FurnitureEquipmentLinkStore.LinkPage result =
-        links.list(warehouseId, state == null ? null : state.name(), page, size);
+        links.list(state == null ? null : state.name(), page, size);
     return new PageResponse<>(
         result.items().stream().map(FurnitureEquipmentLinkReviewService::response).toList(),
         result.page(),
@@ -27,14 +27,12 @@ public class FurnitureEquipmentLinkReviewService {
   }
 
   public ReviewedLink review(
-      UUID warehouseId,
       UUID nodeId,
       long expectedReviewVersion,
       FurnitureEquipmentLinkReviewAction action,
       UUID reviewSubjectId,
       String reason) {
     FurnitureEquipmentLinkStore.ReviewResult result = links.review(
-        warehouseId,
         nodeId,
         expectedReviewVersion,
         FurnitureEquipmentLinkStore.ReviewAction.valueOf(action.name()),

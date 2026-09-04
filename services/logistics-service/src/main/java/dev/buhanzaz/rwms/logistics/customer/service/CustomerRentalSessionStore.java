@@ -5,25 +5,38 @@ import dev.buhanzaz.rwms.logistics.customer.domain.CustomerSessionState;
 import dev.buhanzaz.rwms.logistics.customer.repository.CustomerRentalSessionRepository;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsTransactionLock;
+import java.time.Duration;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Short transactional store for customer cart command preparation and finalization. */
+/**
+ * Short transactional store for customer cart commands and database-time recovery leases. Remote
+ * checkout effects run only after these claim transactions have committed.
+ */
 @Service
 @RequiredArgsConstructor
 public class CustomerRentalSessionStore {
+  private static final int RECOVERY_BATCH_SIZE = 100;
+  private static final int MAX_RECOVERY_ATTEMPTS = 8;
+  private static final Duration RECOVERY_LEASE = Duration.ofMinutes(5);
+  private static final long MAX_RECOVERY_DELAY_SECONDS = 300;
+
   private final CustomerRentalSessionRepository sessions;
   private final LogisticsTransactionLock transactionLock;
 
   /** Creates the cart after the existing inquiry has been durably created. */
   @Transactional
-  public CustomerRentalSession create(UUID inquiryId, UUID subjectId, UUID warehouseId) {
+  public CustomerRentalSession create(
+      UUID inquiryId, UUID subjectId, UUID warehouseId) {
     transactionLock.acquire("customer-rental-session:" + inquiryId);
     CustomerRentalSession existing = sessions.findByInquiryId(inquiryId).orElse(null);
     if (existing != null) {
@@ -35,7 +48,8 @@ public class CustomerRentalSessionStore {
       }
       return existing;
     }
-    return sessions.saveAndFlush(CustomerRentalSession.create(inquiryId, subjectId, warehouseId));
+    return sessions.saveAndFlush(
+        CustomerRentalSession.create(inquiryId, subjectId, warehouseId));
   }
 
   /** Claims or recognizes an idempotent cabin-selection command under a row lock. */
@@ -82,7 +96,10 @@ public class CustomerRentalSessionStore {
   /** Clears the pending marker after a proven failed remote command. */
   @Transactional
   public void failSelection(
-      UUID subjectId, UUID inquiryId, UUID commandKey, String commandSha256) {
+      UUID subjectId,
+      UUID inquiryId,
+      UUID commandKey,
+      String commandSha256) {
     CustomerRentalSession session = locked(subjectId, inquiryId);
     if (session.getState() == CustomerSessionState.SELECTION_PENDING) {
       session.failSelection(commandKey, commandSha256);
@@ -93,7 +110,10 @@ public class CustomerRentalSessionStore {
   /** Replaces the complete furniture intent under an optimistic row fence. */
   @Transactional
   public CustomerRentalSession replaceEquipment(
-      UUID subjectId, UUID inquiryId, long expectedVersion, String equipmentJson) {
+      UUID subjectId,
+      UUID inquiryId,
+      long expectedVersion,
+      String equipmentJson) {
     CustomerRentalSession session = locked(subjectId, inquiryId);
     translateVersion(() -> session.replaceEquipment(expectedVersion, equipmentJson));
     return sessions.saveAndFlush(session);
@@ -102,7 +122,10 @@ public class CustomerRentalSessionStore {
   /** Replaces the complete rental-term intent under an optimistic row fence. */
   @Transactional
   public CustomerRentalSession replaceRentalTerms(
-      UUID subjectId, UUID inquiryId, long expectedVersion, String rentalTermsJson) {
+      UUID subjectId,
+      UUID inquiryId,
+      long expectedVersion,
+      String rentalTermsJson) {
     CustomerRentalSession session = locked(subjectId, inquiryId);
     translateVersion(() -> session.replaceRentalTerms(expectedVersion, rentalTermsJson));
     return sessions.saveAndFlush(session);
@@ -133,17 +156,17 @@ public class CustomerRentalSessionStore {
       }
       return new CheckoutPreparation(
           session,
-          session.getState() == CustomerSessionState.BOOKED,
+          isCompletedCheckout(session),
           session.getState() == CustomerSessionState.CHECKOUT_PENDING,
           session.getCheckoutCommandKey());
     }
     if (session.getCheckoutCommandKey() != null
         && Objects.equals(commandSha256, session.getCheckoutCommandSha256())
         && (session.getState() == CustomerSessionState.CHECKOUT_PENDING
-            || session.getState() == CustomerSessionState.BOOKED)) {
+            || isCompletedCheckout(session))) {
       return new CheckoutPreparation(
           session,
-          session.getState() == CustomerSessionState.BOOKED,
+          isCompletedCheckout(session),
           session.getState() == CustomerSessionState.CHECKOUT_PENDING,
           session.getCheckoutCommandKey());
     }
@@ -153,6 +176,12 @@ public class CustomerRentalSessionStore {
     translateVersion(() -> session.beginCheckout(expectedVersion, commandKey, commandSha256));
     return new CheckoutPreparation(
         sessions.saveAndFlush(session), false, false, commandKey);
+  }
+
+  private static boolean isCompletedCheckout(CustomerRentalSession session) {
+    return session.getState() == CustomerSessionState.BOOKED
+        || session.getState() == CustomerSessionState.CANCEL_PENDING
+        || session.getState() == CustomerSessionState.CANCELLED;
   }
 
   /** Stores the durable presentation-booking receipt for retry reconciliation. */
@@ -167,25 +196,32 @@ public class CustomerRentalSessionStore {
       String presentationToken) {
     CustomerRentalSession session = locked(subjectId, inquiryId);
     session.recordPendingBooking(
-        commandKey, commandSha256, bookingId, orderId, presentationToken);
+        commandKey, commandSha256, bookingId, orderId, presentationToken, now());
     return sessions.saveAndFlush(session);
   }
 
   /** Marks a customer cart booked once the existing booking saga completes. */
   @Transactional
   public CustomerRentalSession completeBooking(
-      UUID subjectId, UUID inquiryId, UUID bookingId, UUID orderId) {
+      UUID subjectId,
+      UUID inquiryId,
+      UUID bookingId,
+      UUID orderId,
+      UUID recoveryLeaseToken) {
     CustomerRentalSession session = locked(subjectId, inquiryId);
-    session.completeBooking(bookingId, orderId);
+    session.completeBooking(bookingId, orderId, recoveryLeaseToken, now());
     return sessions.saveAndFlush(session);
   }
 
   /** Makes a rejected booking correctable while retaining its durable upstream receipt. */
   @Transactional
   public CustomerRentalSession rejectBooking(
-      UUID subjectId, UUID inquiryId, UUID bookingId) {
+      UUID subjectId,
+      UUID inquiryId,
+      UUID bookingId,
+      UUID recoveryLeaseToken) {
     CustomerRentalSession session = locked(subjectId, inquiryId);
-    session.rejectBooking(bookingId);
+    session.rejectBooking(bookingId, recoveryLeaseToken, now());
     return sessions.saveAndFlush(session);
   }
 
@@ -197,22 +233,98 @@ public class CustomerRentalSessionStore {
         .orElseThrow(CustomerRentalSessionStore::notFound);
   }
 
+  /** Returns one completed booking only when it belongs to the exact CustomerApp subject. */
+  @Transactional(readOnly = true)
+  public CustomerRentalSession requiredBooking(UUID subjectId, UUID bookingId) {
+    return sessions
+        .findByBookingIdAndCustomerSubjectId(bookingId, subjectId)
+        .orElseThrow(CustomerRentalSessionStore::bookingNotFound);
+  }
+
   /** Lists all carts of one authenticated customer in reverse creation order. */
   @Transactional(readOnly = true)
   public List<CustomerRentalSession> list(UUID subjectId) {
     return sessions.findAllByCustomerSubjectIdOrderByCreatedAtDescIdDesc(subjectId);
   }
 
-  /** Returns the oldest deterministic batch of at most 100 pending checkout carts. */
-  @Transactional(readOnly = true)
-  public List<CustomerRentalSession> pendingBookings() {
-    return sessions.findAllByStateOrderByUpdatedAtAscIdAsc(
-        CustomerSessionState.CHECKOUT_PENDING, PageRequest.of(0, 100));
+  /** Claims the oldest due checkout receipts while concurrent workers skip leased rows. */
+  @Transactional
+  public List<CheckoutRecoveryClaim> claimPendingBookings() {
+    OffsetDateTime timestamp = now();
+    OffsetDateTime leaseUntil = timestamp.plus(RECOVERY_LEASE);
+    List<CustomerRentalSession> due =
+        sessions.findDueCheckoutRecoveryForUpdate(timestamp, RECOVERY_BATCH_SIZE);
+    List<CheckoutRecoveryClaim> claims =
+        due.stream()
+            .map(session -> claim(session, timestamp, leaseUntil))
+            .flatMap(Optional::stream)
+            .toList();
+    sessions.flush();
+    return claims;
+  }
+
+  /** Claims one exact customer-owned receipt when it is due and not already leased. */
+  @Transactional
+  public Optional<CheckoutRecoveryClaim> claimPendingBooking(
+      UUID subjectId, UUID inquiryId) {
+    CustomerRentalSession session = locked(subjectId, inquiryId);
+    OffsetDateTime timestamp = now();
+    Optional<CheckoutRecoveryClaim> claim =
+        claim(session, timestamp, timestamp.plus(RECOVERY_LEASE));
+    claim.ifPresent(ignored -> sessions.flush());
+    return claim;
+  }
+
+  /** Persists bounded retry timing or terminal quarantine for one exact leased receipt. */
+  @Transactional
+  public RecoveryFailure failCheckoutRecovery(
+      UUID subjectId,
+      UUID inquiryId,
+      UUID recoveryLeaseToken,
+      String errorCode) {
+    CustomerRentalSession session = locked(subjectId, inquiryId);
+    OffsetDateTime timestamp = now();
+    int nextAttemptNumber = Math.addExact(session.getRecoveryAttemptCount(), 1);
+    boolean quarantined = nextAttemptNumber >= MAX_RECOVERY_ATTEMPTS;
+    OffsetDateTime nextAttemptAt =
+        quarantined
+            ? null
+            : timestamp.plusSeconds(recoveryDelaySeconds(nextAttemptNumber));
+    session.failCheckoutRecovery(
+        recoveryLeaseToken, errorCode, timestamp, nextAttemptAt, quarantined);
+    sessions.saveAndFlush(session);
+    return new RecoveryFailure(nextAttemptNumber, nextAttemptAt, quarantined);
+  }
+
+  private static Optional<CheckoutRecoveryClaim> claim(
+      CustomerRentalSession session, OffsetDateTime timestamp, OffsetDateTime leaseUntil) {
+    UUID leaseToken = UUID.randomUUID();
+    if (!session.claimCheckoutRecovery(leaseToken, timestamp, leaseUntil)) {
+      return Optional.empty();
+    }
+    return Optional.of(
+        new CheckoutRecoveryClaim(
+            session.getCustomerSubjectId(),
+            session.getInquiryId(),
+            leaseToken,
+            session));
+  }
+
+  private static long recoveryDelaySeconds(int attemptNumber) {
+    int shift = Math.max(0, Math.min(attemptNumber - 1, 20));
+    return Math.min(MAX_RECOVERY_DELAY_SECONDS, 2L << shift);
+  }
+
+  private OffsetDateTime now() {
+    return OffsetDateTime.ofInstant(sessions.currentDatabaseTimestamp(), ZoneOffset.UTC)
+        .truncatedTo(ChronoUnit.MICROS);
   }
 
   private CustomerRentalSession locked(UUID subjectId, UUID inquiryId) {
     CustomerRentalSession session =
-        sessions.findByInquiryIdForUpdate(inquiryId).orElseThrow(CustomerRentalSessionStore::notFound);
+        sessions
+            .findByInquiryIdForUpdate(inquiryId)
+            .orElseThrow(CustomerRentalSessionStore::notFound);
     if (!subjectId.equals(session.getCustomerSubjectId())) throw notFound();
     return session;
   }
@@ -235,6 +347,11 @@ public class CustomerRentalSessionStore {
     return new OrderProblemException(HttpStatus.NOT_FOUND, "CUSTOMER_CART_NOT_FOUND", "Корзина не найдена");
   }
 
+  private static OrderProblemException bookingNotFound() {
+    return new OrderProblemException(
+        HttpStatus.NOT_FOUND, "CUSTOMER_BOOKING_NOT_FOUND", "Бронирование не найдено");
+  }
+
   private static OrderProblemException conflict(String code, String message) {
     return new OrderProblemException(HttpStatus.CONFLICT, code, message);
   }
@@ -252,4 +369,15 @@ public class CustomerRentalSessionStore {
       boolean completedReplay,
       boolean pendingReplay,
       UUID commandKey) {}
+
+  /** Immutable lease-fenced checkout receipt processed outside the claim transaction. */
+  public record CheckoutRecoveryClaim(
+      UUID customerSubjectId,
+      UUID inquiryId,
+      UUID leaseToken,
+      CustomerRentalSession session) {}
+
+  /** Safe persisted outcome of one failed recovery attempt. */
+  public record RecoveryFailure(
+      int attemptCount, OffsetDateTime nextAttemptAt, boolean quarantined) {}
 }

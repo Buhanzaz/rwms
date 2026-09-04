@@ -291,7 +291,4 @@ interface WorkerInvalidationDao {
 
     @Query("SELECT MAX(revision) FROM worker_invalidation WHERE userId = :userId")
     suspend fun latestRevision(userId: String): Long?
-
-    @Query("SELECT eventId FROM worker_invalidation WHERE userId = :userId ORDER BY revision DESC LIMIT 1")
-    suspend fun latestEventId(userId: String): String?
 }

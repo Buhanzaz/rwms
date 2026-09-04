@@ -2,7 +2,6 @@ package dev.buhanzaz.rwms.taskboard.api;
 
 import static dev.buhanzaz.rwms.taskboard.api.KpiSettingsApiModels.*;
 
-import dev.buhanzaz.rwms.taskboard.security.AccessLevel;
 import dev.buhanzaz.rwms.taskboard.security.WarehouseAccessAuthorizer;
 import dev.buhanzaz.rwms.taskboard.service.KpiSettingsService;
 import jakarta.validation.Valid;
@@ -15,7 +14,6 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -26,47 +24,33 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Public per-warehouse configuration API for task-board KPI presentation and working time.
+ * Public global configuration API for work schedules and KPI activation state.
  *
- * <p>Palette and schedule are version-fenced independently from task execution. A pending schedule
- * for the current or a future warehouse-local calendar date is deliberately activated with an
- * idempotency key so a retry cannot create a second effective configuration decision. A
- * current-day revision becomes active before the activation response is returned.
+ * <p>A pending schedule is activated with an idempotency key so a retry cannot create a second
+ * effective configuration decision.
  */
 @RestController
 @RequiredArgsConstructor
 @Validated
-@RequestMapping("/api/warehouses/{warehouseId}/task-board/kpi-settings")
+@RequestMapping("/api/task-board/kpi-settings")
 public class KpiSettingsController {
   private final KpiSettingsService service;
   private final WarehouseAccessAuthorizer access;
 
-  /** Returns the selected warehouse's active and pending KPI settings. */
+  /** Returns the active and pending settings shared by every warehouse. */
   @GetMapping
-  public WarehouseKpiSettingsResponse get(
-      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID warehouseId) {
-    read(jwt, warehouseId);
-    return service.get(warehouseId);
+  public KpiSettingsResponse get(@AuthenticationPrincipal Jwt jwt) {
+    access.requireUserScope(jwt, "rwms.read");
+    return service.get();
   }
 
-  /** Replaces the version-fenced palette used to classify KPI percentages. */
-  @PutMapping("/palette")
-  public WarehouseKpiSettingsResponse savePalette(
-      @AuthenticationPrincipal Jwt jwt,
-      @PathVariable UUID warehouseId,
-      @Valid @RequestBody SaveKpiPaletteRequest request) {
-    write(jwt, warehouseId);
-    return service.savePalette(warehouseId, request);
-  }
-
-  /** Saves a current-day or future-effective work schedule without activating it. */
+  /** Saves a current-day or future-effective shared schedule without activating it. */
   @PutMapping("/work-schedule")
-  public WarehouseKpiSettingsResponse saveWorkSchedule(
+  public KpiSettingsResponse saveWorkSchedule(
       @AuthenticationPrincipal Jwt jwt,
-      @PathVariable UUID warehouseId,
       @Valid @RequestBody SaveWorkScheduleRequest request) {
-    write(jwt, warehouseId);
-    return service.saveWorkSchedule(warehouseId, request);
+    requireWrite(jwt);
+    return service.saveWorkSchedule(request);
   }
 
   /** Removes the pending schedule under the currently observed settings version. */
@@ -74,30 +58,23 @@ public class KpiSettingsController {
   @ResponseStatus(HttpStatus.NO_CONTENT)
   public void deletePendingWorkSchedule(
       @AuthenticationPrincipal Jwt jwt,
-      @PathVariable UUID warehouseId,
       @RequestParam @Min(0) long expectedVersion) {
-    write(jwt, warehouseId);
-    service.deletePendingWorkSchedule(warehouseId, expectedVersion);
+    requireWrite(jwt);
+    service.deletePendingWorkSchedule(expectedVersion);
   }
 
   /** Activates the pending schedule exactly once, applying a current-day revision immediately. */
   @PostMapping("/activate")
-  public WarehouseKpiSettingsResponse activate(
+  public KpiSettingsResponse activate(
       @AuthenticationPrincipal Jwt jwt,
-      @PathVariable UUID warehouseId,
       @RequestHeader("Idempotency-Key") UUID operationId,
       @Valid @RequestBody ActivateKpiSettingsRequest request) {
-    write(jwt, warehouseId);
-    return service.activate(warehouseId, operationId, request);
+    requireWrite(jwt);
+    return service.activate(operationId, request);
   }
 
-  private void read(Jwt jwt, UUID warehouseId) {
-    access.requireUserScope(jwt, "rwms.read");
-    access.requireWarehouse(jwt, warehouseId, AccessLevel.VIEW, false);
-  }
-
-  private void write(Jwt jwt, UUID warehouseId) {
+  private void requireWrite(Jwt jwt) {
     access.requireUserScope(jwt, "rwms.write");
-    access.requireWarehouse(jwt, warehouseId, AccessLevel.MANAGE, false);
+    access.requireGlobalManagement(jwt);
   }
 }

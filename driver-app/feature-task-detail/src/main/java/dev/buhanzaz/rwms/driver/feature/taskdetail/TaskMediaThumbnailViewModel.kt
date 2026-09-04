@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.buhanzaz.rwms.driver.core.network.DriverGatewayClient
+import dev.buhanzaz.rwms.driver.core.network.toDriverUserMessage
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
@@ -60,7 +61,11 @@ class TaskMediaThumbnailViewModel @Inject constructor(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
-                TaskMediaThumbnail.Failed(error.message ?: "Не удалось загрузить фото")
+                TaskMediaThumbnail.Failed(
+                    error.toDriverUserMessage(
+                        "Не удалось загрузить фотографию. Повторите после синхронизации.",
+                    ),
+                )
             }
             mutableThumbnails.value = mutableThumbnails.value + (path to next)
         }

@@ -49,7 +49,11 @@ export type TransferReconcileCommand = TransferVersionedCommand & {
 }
 
 export interface WarehouseTransferClient {
-  list(accessToken: string, warehouseId: string): Promise<TransferDocument[]>
+  list(
+    accessToken: string,
+    warehouseId: string,
+    scheduledDate?: string
+  ): Promise<TransferDocument[]>
   get(accessToken: string, documentId: string): Promise<TransferDocument>
   getPlan(accessToken: string, documentId: string): Promise<TransferPlan>
   getFurnitureReadiness(

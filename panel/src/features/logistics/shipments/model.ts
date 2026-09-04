@@ -1,3 +1,7 @@
+import type {
+  CustomerDeliveryPurpose,
+} from "@/features/logistics/customer-delivery-purpose"
+
 export const SHIPMENT_DOCUMENT_STATES = [
   "DRAFT",
   "PREPARING",
@@ -48,6 +52,8 @@ export type ShipmentDocument = {
   id: string
   version: number
   documentType: "SHIPMENT"
+  /** Customer-facing commercial purpose; never used for a warehouse TRANSFER. */
+  customerDeliveryPurpose: CustomerDeliveryPurpose
   state: ShipmentDocumentState
   warehouseId: string
   destinationWarehouseId: null

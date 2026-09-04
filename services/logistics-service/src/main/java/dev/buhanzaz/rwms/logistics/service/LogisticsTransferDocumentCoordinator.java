@@ -59,7 +59,9 @@ class LogisticsTransferDocumentCoordinator {
   private static final String CREATE_TRANSFER = "CREATE_TRANSFER";
   private static final String UPDATE_TRANSFER_PLAN = "UPDATE_TRANSFER_PLAN";
   private static final String CONFIRM_TRANSFER_PLAN = "CONFIRM_TRANSFER_PLAN";
+  private static final String DEPART_TRANSFER = "DEPART_TRANSFER";
   private static final String DEPART_TRANSFER_LINE = "DEPART_TRANSFER_LINE";
+  private static final String ARRIVE_TRANSFER = "ARRIVE_TRANSFER";
   private static final String ARRIVE_TRANSFER_LINE = "ARRIVE_TRANSFER_LINE";
   private static final String CANCEL_TRANSFER = "CANCEL_TRANSFER";
 
@@ -449,6 +451,62 @@ class LogisticsTransferDocumentCoordinator {
     return result(document, false);
   }
 
+  /**
+   * Starts a confirmed transfer that has no physical cabin lines. Loose furniture and resource
+   * assignments still advance through the same transfer-plan workflow, while cabin transfers must
+   * continue to use their independently fenced line commands.
+   */
+  LogisticsDocumentCommandResult departTransfer(
+      UUID subjectId,
+      UUID idempotencyKey,
+      UUID correlationId,
+      UUID documentId,
+      long expectedDocumentVersion) {
+    requireWholeTransferCommand(documentId, correlationId, expectedDocumentVersion);
+    String checksum =
+        LogisticsCommandChecksum.sha256(
+            DEPART_TRANSFER,
+            List.of(documentId.toString(), Long.toString(expectedDocumentVersion)));
+    idempotency.acquireLock(subjectId, DEPART_TRANSFER, idempotencyKey);
+    LogisticsDocument replay =
+        idempotency.replay(subjectId, idempotencyKey, DEPART_TRANSFER, checksum);
+    if (replay != null) return result(replay, true);
+
+    LogisticsDocument document =
+        readProjection.document(documentId, LogisticsDocumentType.TRANSFER);
+    requireExpectedVersion(
+        document, expectedDocumentVersion, "Transfer document version changed concurrently");
+    transferPlanning.required(documentId);
+    transferPlanning.requireDepartureAllowed(document);
+    requireNoPhysicalTransferLines(documentId);
+    if (document.getState() != LogisticsDocumentState.DRAFT) {
+      throw new LogisticsConflictException(
+          "Transfer departure is not allowed in its current lifecycle state");
+    }
+
+    document.beginTransferDeparture();
+    documentRepository.saveAndFlush(document);
+    eventStore.append(
+        document,
+        1,
+        correlationId,
+        subjectId,
+        LogisticsEventType.TRANSFER_DEPARTURE_STARTED,
+        "RESOURCE_OR_FURNITURE_ONLY");
+    document.markTransferInTransit();
+    documentRepository.saveAndFlush(document);
+    eventStore.append(
+        document,
+        1,
+        correlationId,
+        subjectId,
+        LogisticsEventType.TRANSFER_DEPARTED,
+        "RESOURCE_OR_FURNITURE_ONLY");
+    transferPlanWorkflow.beginTransit(document);
+    idempotency.remember(subjectId, idempotencyKey, DEPART_TRANSFER, checksum, document);
+    return result(document, false);
+  }
+
   LogisticsDocumentCommandResult arriveTransferLine(
       UUID subjectId,
       UUID idempotencyKey,
@@ -536,6 +594,51 @@ class LogisticsTransferDocumentCoordinator {
         LogisticsEventType.TRANSFER_ARRIVAL_STARTED,
         null);
     idempotency.remember(subjectId, idempotencyKey, ARRIVE_TRANSFER_LINE, checksum, document);
+    return result(document, false);
+  }
+
+  /**
+   * Records factual arrival for a zero-cabin transfer and starts the same furniture/resource
+   * completion workflow used after the final physical cabin has arrived.
+   */
+  LogisticsDocumentCommandResult arriveTransfer(
+      UUID subjectId,
+      UUID idempotencyKey,
+      UUID correlationId,
+      UUID documentId,
+      long expectedDocumentVersion) {
+    requireWholeTransferCommand(documentId, correlationId, expectedDocumentVersion);
+    String checksum =
+        LogisticsCommandChecksum.sha256(
+            ARRIVE_TRANSFER,
+            List.of(documentId.toString(), Long.toString(expectedDocumentVersion)));
+    idempotency.acquireLock(subjectId, ARRIVE_TRANSFER, idempotencyKey);
+    LogisticsDocument replay =
+        idempotency.replay(subjectId, idempotencyKey, ARRIVE_TRANSFER, checksum);
+    if (replay != null) return result(replay, true);
+
+    LogisticsDocument document =
+        readProjection.document(documentId, LogisticsDocumentType.TRANSFER);
+    requireExpectedVersion(
+        document, expectedDocumentVersion, "Transfer document version changed concurrently");
+    transferPlanning.required(documentId);
+    requireNoPhysicalTransferLines(documentId);
+    if (document.getState() != LogisticsDocumentState.IN_TRANSIT) {
+      throw new LogisticsConflictException(
+          "Transfer arrival is not allowed in its current lifecycle state");
+    }
+
+    document.beginTransferArrival();
+    documentRepository.saveAndFlush(document);
+    eventStore.append(
+        document,
+        1,
+        correlationId,
+        subjectId,
+        LogisticsEventType.TRANSFER_ARRIVAL_STARTED,
+        "RESOURCE_OR_FURNITURE_ONLY");
+    transferPlanWorkflow.requestCompletion(document);
+    idempotency.remember(subjectId, idempotencyKey, ARRIVE_TRANSFER, checksum, document);
     return result(document, false);
   }
 
@@ -748,6 +851,20 @@ class LogisticsTransferDocumentCoordinator {
         || expectedDocumentVersion < 0
         || expectedLineVersion < 0) {
       throw new IllegalArgumentException("Transfer command identifiers and versions are required");
+    }
+  }
+
+  private static void requireWholeTransferCommand(
+      UUID documentId, UUID correlationId, long expectedDocumentVersion) {
+    if (documentId == null || correlationId == null || expectedDocumentVersion < 0) {
+      throw new IllegalArgumentException("Transfer command identifiers and version are required");
+    }
+  }
+
+  private void requireNoPhysicalTransferLines(UUID documentId) {
+    if (!readProjection.lines(documentId).isEmpty()) {
+      throw new LogisticsConflictException(
+          "Cabin transfer departure and arrival require line-scoped confirmation");
     }
   }
 

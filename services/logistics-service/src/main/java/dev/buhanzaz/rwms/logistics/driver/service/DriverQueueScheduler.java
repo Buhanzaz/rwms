@@ -54,10 +54,6 @@ public class DriverQueueScheduler {
     LogisticsDependencyGateway.RepairPlaceProjection repairPlaces =
         dependencies.readRepairPlaces(warehouseId);
     discoverRemovalTasks(repairPlaces);
-    // A current -> scheduled move is an explicit operator decision. Freeze both automatic
-    // promotion and rolling reflow while the maintenance-owned hold is active so the relay cannot
-    // alter the entry version between two manual drag-and-drop operations.
-    if (hasActiveManualPromotionHold(warehouseId)) return;
     LocalDate today = warehouseToday(warehouseId);
     reflowScheduledQueue(warehouseId, today, repairPlaces.repairPlaceCount());
 
@@ -77,7 +73,6 @@ public class DriverQueueScheduler {
     for (int pass = 0; pass < MAX_AUTO_PROMOTIONS_PER_PASS; pass++) {
       board = dependencies.readDriverBoard(warehouseId);
       repairPlaces = dependencies.readRepairPlaces(warehouseId);
-      if (hasActiveManualPromotionHold(warehouseId)) return;
       DriverTaskKind previousKind =
           promotedTail != null ? promotedTail : currentTailKind(board);
 
@@ -116,34 +111,19 @@ public class DriverQueueScheduler {
       throw new LogisticsConflictException(
           "Задание нельзя перенести в «Текущее задание»");
     }
-
-    OffsetDateTime now = now();
-    List<DriverLogisticsTask> heldTasks =
-        tasks
-            .findAllByWarehouseIdAndStateAndManualPromotionHoldUntilAfterOrderByManualPromotionHoldUntilAscIdAsc(
-                task.getWarehouseId(), DriverTaskState.SCHEDULED, now);
-    DriverLogisticsTask held = selectHeldTask(heldTasks, task.getId());
-
-    LogisticsDependencyGateway.RepairPlaceProjection preflight =
-        dependencies.readRepairPlaces(task.getWarehouseId());
-    ensureManualPromotionCanUseCapacity(task, held, preflight);
-
-    // One manual insertion replaces exactly one active manually-created hole. If that hole had
-    // reserved a place, release it before reserving the replacement task.
-    if (held != null) {
-      processor.processUntilIdle(held.getId());
-      DriverLogisticsTask released =
-          tasks.findById(held.getId()).orElseThrow(LogisticsNotFoundException::new);
-      if (released.getKind().consumesRepairPlace()
-          && released.getRepairPlaceAllocationVersion() != null) {
-        throw new LogisticsConflictException(
-            "Не удалось освободить ремонтное место после ручного переноса");
-      }
-      released.clearManualPromotionHold();
-      tasks.saveAndFlush(released);
+    if (task.hasPendingRepairPlaceRelease()) {
+      throw new LogisticsConflictException(
+          "Освобождение ремонтного места еще не подтверждено");
     }
 
-    task = tasks.findById(taskId).orElseThrow(LogisticsNotFoundException::new);
+    LogisticsDependencyGateway.RepairPlaceProjection places =
+        dependencies.readRepairPlaces(task.getWarehouseId());
+    if (task.getKind().consumesRepairPlace()
+        && task.getRepairPlaceAllocationVersion() == null
+        && !inboundRepairPlaceAvailable(places)) {
+      throw new LogisticsConflictException(
+          "На складе нет свободного или освобождаемого ремонтного места");
+    }
     UUID externalTaskId = task.getExternalTaskId();
     // Registration and the board projection are separate read paths.  An explicit operator
     // promotion must use the task-board's authoritative point lookup, not wait for a whole-board
@@ -154,8 +134,6 @@ public class DriverQueueScheduler {
     if (!isMovableScheduledSnapshot(boardTask, task.getWarehouseId())) {
       throw new LogisticsConflictException("Задание нельзя перенести в «Текущее задание»");
     }
-    LogisticsDependencyGateway.RepairPlaceProjection places =
-        dependencies.readRepairPlaces(task.getWarehouseId());
     promote(new Candidate(task, boardTask), places);
   }
 
@@ -296,6 +274,7 @@ public class DriverQueueScheduler {
         DriverLogisticsTask local = local(boardTask.externalTaskId());
         if (local != null
             && local.getState() == DriverTaskState.SCHEDULED
+            && !local.hasPendingRepairPlaceRelease()
             && !excludedTaskIds.contains(local.getExternalTaskId())) {
           result.add(new Candidate(local, boardTask));
         }
@@ -426,33 +405,6 @@ public class DriverQueueScheduler {
         targetIndex);
   }
 
-  private static void ensureManualPromotionCanUseCapacity(
-      DriverLogisticsTask task,
-      DriverLogisticsTask activeHeldTask,
-      LogisticsDependencyGateway.RepairPlaceProjection repairPlaces) {
-    if (!task.getKind().consumesRepairPlace()
-        || task.getRepairPlaceAllocationVersion() != null
-        || inboundRepairPlaceAvailable(repairPlaces)) {
-      return;
-    }
-    boolean heldReservationCanBeReleased =
-        activeHeldTask != null
-            && activeHeldTask.getKind().consumesRepairPlace()
-            && activeHeldTask.getRepairPlaceAllocationVersion() != null;
-    if (!heldReservationCanBeReleased) {
-      throw new LogisticsConflictException(
-          "На складе нет свободного или освобождаемого ремонтного места");
-    }
-  }
-
-  private static DriverLogisticsTask selectHeldTask(
-      List<DriverLogisticsTask> heldTasks, UUID requestedTaskId) {
-    return heldTasks.stream()
-        .filter(candidate -> candidate.getId().equals(requestedTaskId))
-        .findFirst()
-        .orElseGet(() -> heldTasks.stream().findFirst().orElse(null));
-  }
-
   private DriverLogisticsTask local(UUID externalTaskId) {
     return tasks.findByExternalTaskId(externalTaskId).orElse(null);
   }
@@ -464,11 +416,6 @@ public class DriverQueueScheduler {
       result.put(task.getExternalTaskId(), task);
     }
     return result;
-  }
-
-  private boolean hasActiveManualPromotionHold(UUID warehouseId) {
-    return tasks.existsByWarehouseIdAndStateAndManualPromotionHoldUntilAfter(
-        warehouseId, DriverTaskState.SCHEDULED, now());
   }
 
   static boolean inboundRepairPlaceAvailable(
@@ -514,10 +461,6 @@ public class DriverQueueScheduler {
 
   private void lockWarehouseQueue(UUID warehouseId) {
     transactionLock.acquire("driver-queue:" + warehouseId);
-  }
-
-  private static OffsetDateTime now() {
-    return OffsetDateTime.now(ZoneOffset.UTC);
   }
 
   private static UUID derivedKey(String operation, UUID taskId) {

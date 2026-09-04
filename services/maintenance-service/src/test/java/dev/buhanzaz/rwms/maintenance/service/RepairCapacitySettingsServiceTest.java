@@ -40,7 +40,7 @@ class RepairCapacitySettingsServiceTest {
 
     assertThat(service.get(warehouseId))
         .isEqualTo(
-            new RepairCapacitySettingsResponse(warehouseId, 0, 6, 5, null, null));
+            new RepairCapacitySettingsResponse(warehouseId, 0, 6, null, null));
     verify(repository).findById(warehouseId);
     verifyNoMoreInteractions(repository);
   }
@@ -53,17 +53,18 @@ class RepairCapacitySettingsServiceTest {
         .thenAnswer(invocation -> invocation.getArgument(0));
 
     RepairCapacitySettingsResponse response = service.replace(
-        warehouseId, new ReplaceRepairCapacitySettingsRequest(0L, 9, 15));
+        warehouseId, new ReplaceRepairCapacitySettingsRequest(0L, 9));
 
     assertThat(response)
         .isEqualTo(
-            new RepairCapacitySettingsResponse(warehouseId, 0, 9, 15, null, null));
+            new RepairCapacitySettingsResponse(warehouseId, 0, 9, null, null));
     ArgumentCaptor<RepairCapacitySettings> saved =
         ArgumentCaptor.forClass(RepairCapacitySettings.class);
     verify(repository).saveAndFlush(saved.capture());
     assertThat(saved.getValue().getWarehouseId()).isEqualTo(warehouseId);
     assertThat(saved.getValue().getRepairPlaceCount()).isEqualTo(9);
-    assertThat(saved.getValue().getAutomaticRefillDelayMinutes()).isEqualTo(15);
+    assertThat(saved.getValue().getAutomaticRefillDelayMinutes())
+        .isEqualTo(RepairCapacitySettings.DEFAULT_AUTOMATIC_REFILL_DELAY_MINUTES);
   }
 
   @Test
@@ -72,7 +73,7 @@ class RepairCapacitySettingsServiceTest {
     when(repository.findById(warehouseId)).thenReturn(Optional.empty());
 
     assertThatThrownBy(() -> service.replace(
-        warehouseId, new ReplaceRepairCapacitySettingsRequest(1L, 7, 5)))
+        warehouseId, new ReplaceRepairCapacitySettingsRequest(1L, 7)))
         .isInstanceOf(MaintenanceConflictException.class)
         .extracting(exception -> ((MaintenanceConflictException) exception).code())
         .isEqualTo("MAINTENANCE_VERSION_CONFLICT");
@@ -80,20 +81,20 @@ class RepairCapacitySettingsServiceTest {
   }
 
   @Test
-  void existingSettingsUseStrictVersionCasAndDomainReplace() {
+  void existingSettingsUseStrictVersionCasAndPreserveLegacyDelayStorage() {
     UUID warehouseId = UUID.randomUUID();
     RepairCapacitySettings settings = RepairCapacitySettings.create(warehouseId, 4, 5);
     when(repository.findById(warehouseId)).thenReturn(Optional.of(settings));
     when(repository.saveAndFlush(settings)).thenReturn(settings);
 
     assertThat(service.replace(
-            warehouseId, new ReplaceRepairCapacitySettingsRequest(0L, 8, 10))
+            warehouseId, new ReplaceRepairCapacitySettingsRequest(0L, 8))
         .repairPlaceCount())
         .isEqualTo(8);
-    assertThat(settings.getAutomaticRefillDelayMinutes()).isEqualTo(10);
+    assertThat(settings.getAutomaticRefillDelayMinutes()).isEqualTo(5);
 
     assertThatThrownBy(() -> service.replace(
-        warehouseId, new ReplaceRepairCapacitySettingsRequest(1L, 10, 10)))
+        warehouseId, new ReplaceRepairCapacitySettingsRequest(1L, 10)))
         .isInstanceOf(MaintenanceConflictException.class)
         .extracting(exception -> ((MaintenanceConflictException) exception).code())
         .isEqualTo("MAINTENANCE_VERSION_CONFLICT");

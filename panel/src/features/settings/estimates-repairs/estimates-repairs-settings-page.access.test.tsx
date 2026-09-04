@@ -50,10 +50,6 @@ vi.mock("@/features/auth/use-auth", () => ({
   }),
 }))
 
-vi.mock("@/hooks/use-warehouse", () => ({
-  useWarehouse: () => ({ selectedWarehouseId: WAREHOUSE_ID }),
-}))
-
 vi.mock(
   "@/features/settings/estimates-repairs/estimate-creation-window-settings-card",
   () => ({ EstimateCreationWindowSettingsCard: () => null })
@@ -357,7 +353,7 @@ function currentUser(level: WarehouseAccessLevel): CurrentUser {
     lastName: null,
     email: null,
     principalType: "USER",
-    globalRole: "WAREHOUSE_MANAGER",
+    globalRole: level === "VIEW" ? "WAREHOUSE_MANAGER" : "WMS_ADMIN",
     rentalAccess: false,
     warehouseAccessAll: false,
     warehouseAccesses: [{ warehouseId: WAREHOUSE_ID, level }],
@@ -404,7 +400,7 @@ function renderPage(
 }
 
 function findCatalogSection(name: string) {
-  return screen.findByRole("radio", { name })
+  return screen.findByRole("tab", { name })
 }
 
 function getCanvasMetric(node: HTMLElement, label: string) {
@@ -497,6 +493,9 @@ describe("maintenance catalog settings", () => {
     expect(screen.getByLabelText("Средний ремонт")).toBeTruthy()
     expect(screen.getByLabelText("Тяжёлый ремонт")).toBeTruthy()
     expect(screen.getByLabelText("Капитальный ремонт")).toBeTruthy()
+    expect(
+      screen.getByLabelText("Выбрать цвет: Лёгкий ремонт").className
+    ).toContain("rwms-color-picker")
 
     fireEvent.change(screen.getByLabelText("Лёгкий ремонт"), {
       target: { value: "#16A34A" },
@@ -510,7 +509,6 @@ describe("maintenance catalog settings", () => {
     await waitFor(() =>
       expect(mocks.saveComplexityColors).toHaveBeenCalledWith(
         "maintenance-token",
-        WAREHOUSE_ID,
         {
           version: 3,
           lightColor: "#16A34A",
@@ -542,7 +540,7 @@ describe("maintenance catalog settings", () => {
     })
     expect(
       (await findCatalogSection("Конструктор каталога смет")).getAttribute(
-        "aria-checked"
+        "aria-selected"
       )
     ).toBe("true")
     expect(await screen.findByRole("button", { name: /^Окна/ })).toBeTruthy()
@@ -561,7 +559,7 @@ describe("maintenance catalog settings", () => {
     expect(screen.queryByRole("button", { name: "Назад" })).toBeNull()
   })
 
-  it("keeps the six compact catalog sections above action and category content", async () => {
+  it("keeps the six object-style catalog tabs above action and category content", async () => {
     const user = userEvent.setup()
     renderPage("MANAGE")
 
@@ -577,15 +575,17 @@ describe("maintenance catalog settings", () => {
       "Общее",
     ]
 
-    expect(navigation.firstElementChild?.className).toContain("lg:grid-cols-6")
+    const tabsList = within(navigation).getByRole("tablist")
+    expect(tabsList.className).toContain("bg-muted/75")
+    expect(tabsList.className).toContain("backdrop-blur-md")
     for (const action of actions) {
       expect(
-        within(navigation).getByRole("radio", { name: action }).className
-      ).toContain("h-9")
+        within(navigation).getByRole("tab", { name: action }).className
+      ).toContain("data-[state=active]:bg-background")
     }
 
     await user.click(
-      within(navigation).getByRole("radio", {
+      within(navigation).getByRole("tab", {
         name: "Конструктор каталога смет",
       })
     )
@@ -596,8 +596,8 @@ describe("maintenance catalog settings", () => {
     ).toBeTruthy()
     expect(
       within(navigation)
-        .getByRole("radio", { name: "Конструктор каталога смет" })
-        .getAttribute("aria-checked")
+        .getByRole("tab", { name: "Конструктор каталога смет" })
+        .getAttribute("aria-selected")
     ).toBe("true")
     expect(category.className).toContain("h-9")
 
@@ -628,7 +628,6 @@ describe("maintenance catalog settings", () => {
       expect(mocks.saveCatalogColors).toHaveBeenCalledWith(
         expect.objectContaining({
           accessToken: "maintenance-token",
-          warehouseId: WAREHOUSE_ID,
           catalogVersionId: catalog.id,
         }),
         expect.objectContaining({ CATEGORY: "#336699" })
@@ -791,7 +790,6 @@ describe("maintenance catalog settings", () => {
     await waitFor(() => {
       expect(mocks.saveCanvasNode).toHaveBeenCalledWith(
         expect.objectContaining({
-          warehouseId: WAREHOUSE_ID,
           catalogVersionId: catalog.id,
         }),
         expect.objectContaining({
@@ -848,7 +846,6 @@ describe("maintenance catalog settings", () => {
     await waitFor(() => {
       expect(mocks.saveCanvasNode).toHaveBeenCalledWith(
         expect.objectContaining({
-          warehouseId: WAREHOUSE_ID,
           catalogVersionId: catalog.id,
         }),
         expect.objectContaining({
@@ -1043,7 +1040,6 @@ describe("maintenance catalog settings", () => {
       expect(mocks.saveCanvasNode).toHaveBeenCalledWith(
         expect.objectContaining({
           accessToken: "maintenance-token",
-          warehouseId: WAREHOUSE_ID,
           catalogVersionId: catalog.id,
         }),
         expect.objectContaining({

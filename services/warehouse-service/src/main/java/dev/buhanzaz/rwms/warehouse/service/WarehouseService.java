@@ -154,7 +154,12 @@ public class WarehouseService {
    * @return newly created or exact replay response
    */
   @Transactional
-  public CreateResult create(UUID subjectId, UUID idempotencyKey, CreateWarehouseRequest request) {
+  public CreateResult create(
+      UUID subjectId, UUID idempotencyKey, CreateWarehouseRequest request) {
+    validateRepresentativeParent(
+        request.production(),
+        request.mainWarehouse(),
+        request.representativeParentWarehouseId());
     Warehouse candidate = newWarehouse(request);
     String fingerprint = fingerprint(candidate);
     Optional<WarehouseResponse> replayed =
@@ -187,7 +192,12 @@ public class WarehouseService {
    */
   @Transactional
   public WarehouseResponse replace(UUID id, ReplaceWarehouseRequest request) {
-    Warehouse warehouse = requireForUpdate(id);
+    Warehouse warehouse =
+        requireConfigurationForUpdate(
+            id,
+            request.production(),
+            request.mainWarehouse(),
+            request.representativeParentWarehouseId());
     assertExpectedVersion(warehouse, request.expectedVersion());
     if (warehouses.existsByNormalizedNameAndIdNot(Warehouse.normalizeName(request.name()), id)) {
       throw duplicateNameConflict();
@@ -200,9 +210,17 @@ public class WarehouseService {
       throw new WarehouseConflictException(
           "An operated warehouse timezone must be scheduled with an effective timestamp");
     }
-    if (!request.representative() && supportLinks.existsByServedWarehouseId(id)) {
+    if (request.representativeParentWarehouseId() == null
+        && supportLinks.existsByServedWarehouseId(id)) {
       throw new WarehouseConflictException(
           "Remove warehouse support links before clearing the representative characteristic");
+    }
+    if ((warehouse.isProduction() || warehouse.isMainWarehouse())
+        && !request.production()
+        && !request.mainWarehouse()
+        && warehouses.existsByRepresentativeParentWarehouseId(id)) {
+      throw new WarehouseConflictException(
+          "An object referenced by representatives must remain production or a main warehouse");
     }
 
     Warehouse.Mutation mutation =
@@ -213,7 +231,9 @@ public class WarehouseService {
             request.latitude(),
             request.longitude(),
             request.sortOrder(),
-            request.representative());
+            request.production(),
+            request.mainWarehouse(),
+            request.representativeParentWarehouseId());
     if (timeZoneChanged) warehouse.correctTimeZone(requestedTimeZone);
     if (mutation == Warehouse.Mutation.NONE && !timeZoneChanged) return response(warehouse, now);
 
@@ -221,7 +241,7 @@ public class WarehouseService {
     try {
       persisted = warehouses.saveAndFlush(warehouse);
     } catch (DataIntegrityViolationException exception) {
-      throw duplicateNameConflict();
+      throw new WarehouseConflictException("Warehouse metadata conflicts with current data");
     }
     if (timeZoneChanged) timeZones.append(id, now, requestedTimeZone, now);
     outbox.append(persisted, WarehouseEventType.CHANGED, requestedTimeZone.getId());
@@ -232,7 +252,8 @@ public class WarehouseService {
    * Appends a future-effective timezone decision for a warehouse that has already operated.
    *
    * <p>Historical operation timestamps continue to resolve their former timezone. An unused
-   * warehouse must use {@link #replace(UUID, ReplaceWarehouseRequest)} for an immediate correction.
+   * warehouse must use {@link #replace(UUID, ReplaceWarehouseRequest)} for an immediate
+   * correction.
    *
    * @param id stable warehouse identity
    * @param request version-fenced future timezone decision
@@ -309,7 +330,8 @@ public class WarehouseService {
    * @return terminal warehouse projection
    */
   @Transactional
-  public WarehouseResponse completeInactivation(UUID id, WarehouseLifecycleTransitionRequest request) {
+  public WarehouseResponse completeInactivation(
+      UUID id, WarehouseLifecycleTransitionRequest request) {
     Warehouse warehouse = requireForUpdate(id);
     assertExpectedVersion(warehouse, request.expectedVersion());
     if (warehouse.getLifecycleState() != WarehouseLifecycleState.DRAINING) {
@@ -436,12 +458,7 @@ public class WarehouseService {
         id, effective.getTimeZone(), effective.getEffectiveFrom());
   }
 
-  /**
-   * Returns the minimal existence projection used by narrow internal validation contracts.
-   *
-   * @param id stable warehouse identity
-   * @return minimal existence projection
-   */
+  /** Returns the minimal existence projection used by internal validation contracts. */
   @Transactional(readOnly = true)
   public InternalWarehouseExistenceResponse existence(UUID id) {
     Warehouse warehouse = require(id);
@@ -521,8 +538,7 @@ public class WarehouseService {
   /**
    * Decides whether one operation direction is admitted by the current lifecycle state.
    *
-   * <p>The result must be used instead of the legacy {@code active} projection when an owner needs
-   * to distinguish outgoing draining work from new incoming work.
+   * <p>The result distinguishes outgoing draining work from new incoming work.
    *
    * @param id stable warehouse identity
    * @param direction proposed operation direction
@@ -554,7 +570,9 @@ public class WarehouseService {
         request.longitude(),
         zone(request.timeZone()),
         request.sortOrder(),
-        request.representative());
+        request.production(),
+        request.mainWarehouse(),
+        request.representativeParentWarehouseId());
   }
 
   private WarehouseResponse response(Warehouse warehouse, OffsetDateTime now) {
@@ -585,6 +603,63 @@ public class WarehouseService {
     return warehouses.findByIdForUpdate(id).orElseThrow(WarehouseNotFoundException::new);
   }
 
+  /** Locks a representative and its eligible parent in UUID order before validating the relationship. */
+  private Warehouse requireConfigurationForUpdate(
+      UUID warehouseId,
+      boolean production,
+      boolean mainWarehouse,
+    UUID representativeParentWarehouseId) {
+    if (representativeParentWarehouseId == null) {
+      return requireForUpdate(warehouseId);
+    }
+    if (production || mainWarehouse) {
+      throw new IllegalArgumentException(
+          "A representative object cannot also be production or a main warehouse");
+    }
+    if (warehouseId.equals(representativeParentWarehouseId)) {
+      throw new IllegalArgumentException("An object cannot be its own representative parent");
+    }
+    List<Warehouse> locked =
+        warehouses.findAllByIdForUpdate(Set.of(warehouseId, representativeParentWarehouseId));
+    if (locked.size() != 2) throw new WarehouseNotFoundException();
+    Warehouse warehouse = locked.stream()
+        .filter(candidate -> candidate.getId().equals(warehouseId))
+        .findFirst()
+        .orElseThrow(WarehouseNotFoundException::new);
+    Warehouse parent = locked.stream()
+        .filter(candidate -> candidate.getId().equals(representativeParentWarehouseId))
+        .findFirst()
+        .orElseThrow(WarehouseNotFoundException::new);
+    requireRepresentativeParentEligibility(parent);
+    return warehouse;
+  }
+
+  /** Validates and locks the eligible parent referenced by a new representative object. */
+  private void validateRepresentativeParent(
+      boolean production,
+      boolean mainWarehouse,
+      UUID representativeParentWarehouseId) {
+    if (representativeParentWarehouseId == null) {
+      return;
+    }
+    if (production || mainWarehouse) {
+      throw new IllegalArgumentException(
+          "A representative object cannot also be production or a main warehouse");
+    }
+    Warehouse parent =
+        warehouses
+            .findByIdForUpdate(representativeParentWarehouseId)
+            .orElseThrow(WarehouseNotFoundException::new);
+    requireRepresentativeParentEligibility(parent);
+  }
+
+  private static void requireRepresentativeParentEligibility(Warehouse parent) {
+    if (!parent.isProduction() && !parent.isMainWarehouse()) {
+      throw new WarehouseConflictException(
+          "A representative object must reference a production or main warehouse object");
+    }
+  }
+
   private static void assertExpectedVersion(Warehouse warehouse, long expectedVersion) {
     if (warehouse.getVersion() != expectedVersion) {
       throw new WarehouseConflictException("Warehouse has been changed by another request");
@@ -601,7 +676,7 @@ public class WarehouseService {
 
   /**
    * Hashes every normalized create field so an idempotency key cannot replay across a change of
-   * the representative characteristic.
+   * classifications or responsible representative parent.
    */
   private String fingerprint(Warehouse warehouse) {
     try {
@@ -615,7 +690,9 @@ public class WarehouseService {
                   warehouse.getLongitude(),
                   warehouse.getTimeZone(),
                   warehouse.getSortOrder(),
-                  warehouse.isRepresentative())));
+                  warehouse.isProduction(),
+                  warehouse.isMainWarehouse(),
+                  warehouse.getRepresentativeParentWarehouseId())));
     } catch (JacksonException exception) {
       throw new IllegalArgumentException(
           "Warehouse create command cannot be fingerprinted", exception);
@@ -639,5 +716,7 @@ public class WarehouseService {
       BigDecimal longitude,
       String timeZone,
       Integer sortOrder,
-      boolean representative) {}
+      boolean production,
+      boolean mainWarehouse,
+      UUID representativeParentWarehouseId) {}
 }

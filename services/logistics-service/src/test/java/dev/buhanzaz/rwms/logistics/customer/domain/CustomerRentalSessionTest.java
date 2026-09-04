@@ -1,6 +1,8 @@
 package dev.buhanzaz.rwms.logistics.customer.domain;
 
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -95,6 +97,82 @@ class CustomerRentalSessionTest {
     assertThat(slot.getOrderId()).isNull();
   }
 
+  @Test
+  void checkoutRecoveryUsesLeaseBackoffAndTerminalQuarantine() {
+    CustomerRentalSession session =
+        CustomerRentalSession.create(
+            UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID());
+    UUID commandKey = UUID.randomUUID();
+    UUID bookingId = UUID.randomUUID();
+    session.beginCheckout(0, commandKey, HASH);
+    session.recordPendingBooking(
+        commandKey,
+        HASH,
+        bookingId,
+        null,
+        "presentation-token",
+        OffsetDateTime.parse("2026-08-31T09:00:00Z"));
+
+    for (int attempt = 1; attempt <= 8; attempt++) {
+      OffsetDateTime due = session.getRecoveryNextAttemptAt();
+      UUID leaseToken = UUID.randomUUID();
+      assertThat(session.claimCheckoutRecovery(leaseToken, due, due.plusMinutes(5))).isTrue();
+      OffsetDateTime failedAt = due.plusSeconds(1);
+      session.failCheckoutRecovery(
+          leaseToken,
+          "DEPENDENCY_PENDING",
+          failedAt,
+          attempt == 8 ? null : failedAt.plusSeconds(2),
+          attempt == 8);
+    }
+
+    assertThat(session.getRecoveryAttemptCount()).isEqualTo(8);
+    assertThat(session.getRecoveryQuarantinedAt()).isNotNull();
+    assertThat(session.getRecoveryNextAttemptAt()).isNull();
+    assertThat(
+            session.claimCheckoutRecovery(
+                UUID.randomUUID(),
+                session.getRecoveryQuarantinedAt().plusMinutes(10),
+                session.getRecoveryQuarantinedAt().plusMinutes(15)))
+        .isFalse();
+  }
+
+  @Test
+  void checkoutCompletionRequiresCurrentLeaseAndClearsRecoveryMetadata() {
+    CustomerRentalSession session =
+        CustomerRentalSession.create(
+            UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID());
+    UUID commandKey = UUID.randomUUID();
+    UUID bookingId = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    session.beginCheckout(0, commandKey, HASH);
+    session.recordPendingBooking(
+        commandKey,
+        HASH,
+        bookingId,
+        orderId,
+        "presentation-token",
+        OffsetDateTime.parse("2026-08-31T09:00:00Z"));
+    OffsetDateTime due = session.getRecoveryNextAttemptAt();
+    UUID leaseToken = UUID.randomUUID();
+    assertThat(session.claimCheckoutRecovery(leaseToken, due, due.plusMinutes(5))).isTrue();
+
+    assertThatThrownBy(
+            () ->
+                session.completeBooking(
+                    bookingId, orderId, UUID.randomUUID(), due.plusSeconds(1)))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("lease");
+
+    session.completeBooking(bookingId, orderId, leaseToken, due.plusSeconds(1));
+
+    assertThat(session.getState()).isEqualTo(CustomerSessionState.BOOKED);
+    assertThat(session.getRecoveryAttemptCount()).isZero();
+    assertThat(session.getRecoveryNextAttemptAt()).isNull();
+    assertThat(session.getRecoveryLeaseToken()).isNull();
+    assertThat(session.getRecoveryLastErrorCode()).isNull();
+  }
+
   private static CustomerDeliverySlot deliverySlot(OffsetDateTime now) {
     return CustomerDeliverySlot.offer(
         UUID.randomUUID(),
@@ -127,7 +205,8 @@ class CustomerRentalSessionTest {
 
   private static CustomerRentalSession sessionWithSlot() {
     CustomerRentalSession session =
-        CustomerRentalSession.create(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID());
+        CustomerRentalSession.create(
+            UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID());
     session.selectDeliverySlot(0, UUID.randomUUID());
     return session;
   }

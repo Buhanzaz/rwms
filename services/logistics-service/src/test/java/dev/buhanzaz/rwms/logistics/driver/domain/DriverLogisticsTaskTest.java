@@ -263,7 +263,7 @@ class DriverLogisticsTaskTest {
   }
 
   @Test
-  void manualPromotionHoldExpiresButItsReservationReleaseMarkerRemainsDurable() {
+  void repairPlaceReleaseMarkerIsImmediateAndDurable() {
     DriverLogisticsTask task =
         create(
             UUID.randomUUID(),
@@ -272,12 +272,13 @@ class DriverLogisticsTaskTest {
             DriverTaskSourceType.REPAIR,
             UUID.randomUUID(),
             DriverTaskKind.DELIVER_TO_REPAIR);
-    task.markManualPromotionHold(1);
-    ReflectionTestUtils.setField(
-        task, "manualPromotionHoldUntil", OffsetDateTime.now(ZoneOffset.UTC).minusSeconds(1));
+    task.registerBoardTask(
+        UUID.randomUUID(), 0, UUID.randomUUID(), "WAITING", "SCHEDULED", null);
+    task.reserveRepairPlace(UUID.randomUUID(), 0);
+    task.markRepairPlaceReleasePending();
 
-    assertThat(task.hasManualPromotionHold()).isTrue();
-    assertThat(task.isManualPromotionHeldAt(OffsetDateTime.now(ZoneOffset.UTC))).isFalse();
+    assertThat(task.hasPendingRepairPlaceRelease()).isTrue();
+    assertThat(task.getNextAttemptAt()).isBeforeOrEqualTo(OffsetDateTime.now(ZoneOffset.UTC));
   }
 
   @Test

@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.driver.api;
 
+import dev.buhanzaz.rwms.logistics.domain.CustomerDeliveryPurpose;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskAudienceMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskPlanningMode;
@@ -7,6 +8,7 @@ import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AdditionalContactResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.DesiredDeliveryWindowResponse;
+import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -45,7 +47,9 @@ public final class DriverTaskApiModels {
       String taskNumber,
       int tripNumber,
       String operationType,
+      CustomerDeliveryPurpose customerDeliveryPurpose,
       String clientName,
+      ClientType clientType,
       String address,
       BigDecimal latitude,
       BigDecimal longitude,
@@ -55,6 +59,10 @@ public final class DriverTaskApiModels {
       String comment,
       List<DesiredDeliveryWindowResponse> desiredDeliveryWindows,
       LocalDate scheduledDate,
+      OffsetDateTime provisionalEta,
+      boolean provisionalEtaApproximate,
+      UUID provisionalEtaSourcePlanId,
+      Long provisionalEtaSourcePlanVersion,
       List<DriverTripCabinResponse> cabins) {}
 
   public record CreateDriverTaskRequest(

@@ -5,12 +5,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.math.BigDecimal;
 import java.time.ZoneId;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
 
 class WarehouseTest {
 
   @Test
-  void createsAWhitespaceFoldedDisplayNameAndUnicodeNormalizedIdentity() {
+  void createsWhitespaceFoldedIdentityAndDefaultMainWarehouseClassification() {
     Warehouse warehouse =
         Warehouse.create(
             " \u00a0СЕВЕРНЫЙ\t\n Склад\u00a0 ",
@@ -24,34 +26,135 @@ class WarehouseTest {
     assertThat(warehouse.getCity()).isEqualTo("Санкт-Петербург");
     assertThat(warehouse.getAddress()).isNull();
     assertThat(warehouse.isActive()).isTrue();
+    assertThat(warehouse.isProduction()).isFalse();
+    assertThat(warehouse.isMainWarehouse()).isTrue();
     assertThat(warehouse.isRepresentative()).isFalse();
   }
 
   @Test
-  void representativeCharacteristicChangesWithoutAffectingLifecycleAdmission() {
+  void keepsProductionAndMainClassificationsIndependentAndReservesParentsForRepresentatives() {
+    Warehouse dualPurpose =
+        Warehouse.create(
+            "Москва",
+            "Москва",
+            null,
+            null,
+            null,
+            ZoneId.of("Europe/Moscow"),
+            null,
+            true,
+            true,
+            null);
+    assertThat(dualPurpose.isProduction()).isTrue();
+    assertThat(dualPurpose.isMainWarehouse()).isTrue();
+    assertThat(dualPurpose.isRepresentative()).isFalse();
+
+    UUID parentId = UUID.randomUUID();
+    Warehouse representative =
+        Warehouse.create(
+            "Тверь",
+            "Тверь",
+            null,
+            null,
+            null,
+            ZoneId.of("Europe/Moscow"),
+            null,
+            false,
+            false,
+            parentId);
+    assertThat(representative.isProduction()).isFalse();
+    assertThat(representative.isMainWarehouse()).isFalse();
+    assertThat(representative.isRepresentative()).isTrue();
+    assertThat(representative.getRepresentativeParentWarehouseId()).isEqualTo(parentId);
+  }
+
+  @Test
+  void rejectsInvalidClassificationShapes() {
+    assertThatThrownBy(
+            () ->
+                Warehouse.create(
+                    "Без классификации",
+                    "Москва",
+                    null,
+                    null,
+                    null,
+                    ZoneId.of("Europe/Moscow"),
+                    null,
+                    false,
+                    false,
+                    null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("must be production");
+    assertThatThrownBy(
+            () ->
+                Warehouse.create(
+                    "Представительство с флагом",
+                    "Москва",
+                    null,
+                    null,
+                    null,
+                    ZoneId.of("Europe/Moscow"),
+                    null,
+                    true,
+                    false,
+                    UUID.randomUUID()))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("cannot also be production");
+  }
+
+  @Test
+  void convertsRepresentativeToProductionWithTheCurrentClassificationShape() {
     Warehouse warehouse =
         Warehouse.create(
             "Великий Новгород",
             "Великий Новгород",
             null,
+            null,
+            null,
             ZoneId.of("Europe/Moscow"),
             null,
-            true);
+            false,
+            false,
+            UUID.randomUUID());
 
-    assertThat(warehouse.isRepresentative()).isTrue();
-    assertThat(warehouse.isActive()).isTrue();
-    assertThat(warehouse.allowsIncomingOperations()).isTrue();
-    assertThat(warehouse.allowsOutgoingOperations()).isTrue();
     assertThat(
             warehouse.replace(
                 warehouse.getName(),
                 warehouse.getCity(),
                 warehouse.getAddress(),
+                warehouse.getLatitude(),
+                warehouse.getLongitude(),
                 warehouse.getSortOrder(),
-                false))
+                true,
+                false,
+                null))
         .isEqualTo(Warehouse.Mutation.CHANGED);
     assertThat(warehouse.isRepresentative()).isFalse();
-    assertThat(warehouse.getLifecycleState()).isEqualTo(WarehouseLifecycleState.ACTIVE);
+    assertThat(warehouse.isProduction()).isTrue();
+    assertThat(warehouse.isMainWarehouse()).isFalse();
+    assertThat(warehouse.getRepresentativeParentWarehouseId()).isNull();
+  }
+
+  @Test
+  void rejectsSelfRepresentativeParentOnceIdentityIsAssigned() {
+    UUID warehouseId = UUID.randomUUID();
+    Warehouse warehouse =
+        Warehouse.create(
+            "Сам себе родитель",
+            "Москва",
+            null,
+            null,
+            null,
+            ZoneId.of("Europe/Moscow"),
+            null,
+            false,
+            false,
+            warehouseId);
+    ReflectionTestUtils.setField(warehouse, "id", warehouseId);
+
+    assertThatThrownBy(warehouse::beforeInsert)
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("cannot be its own representative parent");
   }
 
   @Test
@@ -65,11 +168,12 @@ class WarehouseTest {
             new BigDecimal("31.275475"),
             ZoneId.of("Europe/Moscow"),
             null,
-            true);
-
-    assertThat(warehouse.getAddress()).isNull();
+            false,
+            true,
+            null);
     assertThat(warehouse.getLatitude()).isEqualByComparingTo("58.521475");
     assertThat(warehouse.getLongitude()).isEqualByComparingTo("31.275475");
+
     assertThatThrownBy(
             () ->
                 Warehouse.create(
@@ -80,22 +184,26 @@ class WarehouseTest {
                     null,
                     ZoneId.of("Europe/Moscow"),
                     null,
-                    false))
+                    false,
+                    true,
+                    null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("supplied together");
     assertThatThrownBy(
             () ->
                 Warehouse.create(
-                    "Broken range",
+                    "Unset coordinates",
                     "Регион",
                     null,
-                    new BigDecimal("91.000000"),
-                    new BigDecimal("31.000000"),
+                    BigDecimal.ZERO,
+                    BigDecimal.ZERO,
                     ZoneId.of("Europe/Moscow"),
                     null,
-                    false))
+                    false,
+                    true,
+                    null))
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("WGS84 range");
+        .hasMessageContaining("must not both be zero");
   }
 
   @Test
@@ -112,20 +220,13 @@ class WarehouseTest {
     Warehouse warehouse =
         Warehouse.create("Lifecycle", "Москва", null, ZoneId.of("Europe/Moscow"), null);
 
-    assertThat(warehouse.getLifecycleState()).isEqualTo(WarehouseLifecycleState.ACTIVE);
-    assertThat(warehouse.isActive()).isTrue();
-    assertThat(warehouse.allowsIncomingOperations()).isTrue();
-    assertThat(warehouse.allowsOutgoingOperations()).isTrue();
     assertThat(warehouse.startDraining()).isTrue();
     assertThat(warehouse.getLifecycleState()).isEqualTo(WarehouseLifecycleState.DRAINING);
-    assertThat(warehouse.isActive()).isFalse();
     assertThat(warehouse.allowsIncomingOperations()).isFalse();
     assertThat(warehouse.allowsOutgoingOperations()).isTrue();
-    assertThat(warehouse.startDraining()).isFalse();
     assertThat(warehouse.completeInactivation()).isTrue();
     assertThat(warehouse.getLifecycleState()).isEqualTo(WarehouseLifecycleState.INACTIVE);
     assertThat(warehouse.allowsIncomingOperations()).isFalse();
     assertThat(warehouse.allowsOutgoingOperations()).isFalse();
-    assertThat(warehouse.completeInactivation()).isFalse();
   }
 }

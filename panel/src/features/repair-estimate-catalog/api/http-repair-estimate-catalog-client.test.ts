@@ -26,7 +26,6 @@ const linkId = "00000000-0000-4000-8000-000000000004"
 describe("operational maintenance catalog adapter", () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    window.localStorage.setItem("wms:selected-warehouse-id", warehouseId)
     auth.getUser.mockResolvedValue({
       expired: false,
       access_token: "catalog-token",
@@ -76,13 +75,12 @@ describe("operational maintenance catalog adapter", () => {
     ])
   })
 
-  it("loads the one global active catalog through the selected warehouse context", async () => {
+  it("loads the one global active catalog without warehouse context", async () => {
     const snapshot =
       await httpRepairEstimateCatalogClient.getOperationalCatalog()
 
     expect(maintenance.listMaintenanceCatalogVersions).toHaveBeenCalledWith(
       "catalog-token",
-      warehouseId,
       "ACTIVE"
     )
     expect(snapshot.nodes[0]).toMatchObject({
@@ -106,30 +104,6 @@ describe("operational maintenance catalog adapter", () => {
       linkType: "FOLLOW_UP",
       sortOrder: 10,
     })
-  })
-
-  it("uses an authoritative workflow warehouse instead of the stored preference", async () => {
-    const workflowWarehouseId = "00000000-0000-4000-8000-000000000006"
-
-    await httpRepairEstimateCatalogClient.getOperationalCatalog(
-      workflowWarehouseId
-    )
-
-    expect(maintenance.listMaintenanceCatalogVersions).toHaveBeenCalledWith(
-      "catalog-token",
-      workflowWarehouseId,
-      "ACTIVE"
-    )
-    expect(maintenance.listMaintenanceCatalogNodes).toHaveBeenCalledWith(
-      "catalog-token",
-      workflowWarehouseId,
-      versionId
-    )
-    expect(maintenance.listMaintenanceCatalogLinks).toHaveBeenCalledWith(
-      "catalog-token",
-      workflowWarehouseId,
-      versionId
-    )
   })
 
   it("does not expose legacy material comments to estimate editors", async () => {
@@ -162,7 +136,7 @@ describe("operational maintenance catalog adapter", () => {
     expect(snapshot.nodes[0]?.comment).toBeNull()
   })
 
-  it("uses the same global catalog when its recorded warehouse differs from the selected warehouse", async () => {
+  it("uses the same global catalog regardless of its retained audit warehouse", async () => {
     maintenance.listMaintenanceCatalogVersions.mockResolvedValue({
       items: [
         {
@@ -181,12 +155,10 @@ describe("operational maintenance catalog adapter", () => {
 
     expect(maintenance.listMaintenanceCatalogNodes).toHaveBeenCalledWith(
       "catalog-token",
-      warehouseId,
       versionId
     )
     expect(maintenance.listMaintenanceCatalogLinks).toHaveBeenCalledWith(
       "catalog-token",
-      warehouseId,
       versionId
     )
     expect(snapshot.nodes).toHaveLength(1)

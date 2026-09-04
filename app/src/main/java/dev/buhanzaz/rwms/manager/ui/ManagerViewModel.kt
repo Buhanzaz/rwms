@@ -106,7 +106,7 @@ data class TransferEditorState(
     val destinationWarehouseId: String = "",
     val destinationWarehouseIds: Set<String> = emptySet(),
     val driverSnapshot: String = "",
-    val scheduledDate: String = LocalDate.now().toString(),
+    val scheduledDate: String = "",
     val candidates: List<RentalItemDto> = emptyList(),
     val selectedAssetIds: Set<String> = emptySet(),
     val furnitureCatalog: List<EquipmentCatalogItemDto> = emptyList(),
@@ -584,6 +584,10 @@ class ManagerViewModel(
         transferCoordinator.openTransfer(documentId, onReady)
 
     fun closeTransfer() = transferCoordinator.closeTransfer()
+
+    fun departTransfer() = transferCoordinator.departTransfer()
+
+    fun arriveTransfer() = transferCoordinator.arriveTransfer()
 
     fun departTransferLine(lineId: String) =
         transferCoordinator.departTransferLine(lineId)

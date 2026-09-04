@@ -11,7 +11,6 @@ const defaultSetting = {
   warehouseId,
   version: 0,
   repairPlaceCount: 6,
-  automaticRefillDelayMinutes: 5,
   createdAt: null,
   updatedAt: null,
 }
@@ -88,12 +87,11 @@ describe("RepairCapacitySettingsCard", () => {
 
     expect((input as HTMLInputElement).value).toBe("6")
     expect(
-      (
-        screen.getByRole("spinbutton", {
-          name: "Задержка автозаполнения, минут",
-        }) as HTMLInputElement
-      ).value
-    ).toBe("5")
+      screen.queryByRole("spinbutton", {
+        name: /Задержка автозаполнения/,
+      })
+    ).toBeNull()
+    expect(screen.getByText(/заполняется автоматически и сразу/)).toBeTruthy()
     expect(
       screen.getByText("Настройка ещё не сохранялась для выбранного склада.")
     ).toBeTruthy()
@@ -104,7 +102,6 @@ describe("RepairCapacitySettingsCard", () => {
     mocks.updateRepairCapacity.mockResolvedValue({
       ...defaultSetting,
       repairPlaceCount: 9,
-      automaticRefillDelayMinutes: 12,
       createdAt: "2026-07-25T12:00:00Z",
       updatedAt: "2026-07-25T12:00:00Z",
     })
@@ -116,11 +113,6 @@ describe("RepairCapacitySettingsCard", () => {
     })
     await user.clear(input)
     await user.type(input, "9")
-    const refillDelayInput = screen.getByRole("spinbutton", {
-      name: "Задержка автозаполнения, минут",
-    })
-    await user.clear(refillDelayInput)
-    await user.type(refillDelayInput, "12")
     await user.click(screen.getByRole("button", { name: "Сохранить" }))
 
     await waitFor(() =>
@@ -130,7 +122,6 @@ describe("RepairCapacitySettingsCard", () => {
         {
           expectedVersion: 0,
           repairPlaceCount: 9,
-          automaticRefillDelayMinutes: 12,
         }
       )
     )
@@ -159,8 +150,9 @@ describe("RepairCapacitySettingsCard", () => {
     renderCard()
 
     expect((await screen.findByRole("alert")).textContent).toContain(
-      "maintenance-service недоступен"
+      "Сервис временно недоступен. Повторите попытку позже."
     )
+    expect(screen.queryByText("maintenance-service недоступен")).toBeNull()
     expect(
       screen.getByText("Настройка не подменяется локальным значением.")
     ).toBeTruthy()
@@ -176,7 +168,6 @@ describe("RepairCapacitySettingsCard", () => {
       ...defaultSetting,
       version: 5,
       repairPlaceCount: 7,
-      automaticRefillDelayMinutes: 20,
       updatedAt: "2026-07-25T12:30:00Z",
     }
     mocks.getRepairCapacity
@@ -211,12 +202,5 @@ describe("RepairCapacitySettingsCard", () => {
         ).value
       ).toBe("7")
     )
-    expect(
-      (
-        screen.getByRole("spinbutton", {
-          name: "Задержка автозаполнения, минут",
-        }) as HTMLInputElement
-      ).value
-    ).toBe("20")
   })
 })

@@ -27,9 +27,7 @@ const WAREHOUSE_ID = "00000000-0000-4000-8000-000000000201"
 const setting: InventoryPlanningSettings = {
   warehouseId: WAREHOUSE_ID,
   settingsRevision: 3,
-  movementDailyCapacity: 6,
-  repairDailyCapacity: 6,
-  workingWeekdays: ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY"],
+  updatedAt: "2026-08-09T09:30:00Z",
   holidays: ["2026-08-10"],
 }
 
@@ -61,29 +59,20 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-describe("inventory planning settings", () => {
-  it("saves separate capacities, weekdays and calendar holidays with the server revision", async () => {
+describe("inventory holiday settings", () => {
+  it("saves only holidays with the server revision", async () => {
     const user = userEvent.setup()
     renderCard()
 
-    const movement = await screen.findByRole("spinbutton", {
-      name: "Бытовок на перемещение в день",
-    })
-    const repair = screen.getByRole("spinbutton", {
-      name: "Бытовок на ремонт в день",
-    })
-    await user.clear(movement)
-    await user.type(movement, "8")
-    await user.clear(repair)
-    await user.type(repair, "5")
-    await user.click(screen.getByRole("button", { name: "Сб" }))
+    const holiday = await screen.findByLabelText("Праздничная дата")
+    expect(screen.queryByRole("spinbutton")).toBeNull()
+    expect(screen.queryByText(/бытовок.*день/i)).toBeNull()
+    expect(screen.queryByRole("button", { name: "Пн" })).toBeNull()
 
-    const holiday = screen.getByLabelText("Праздничная дата")
-    await user.clear(holiday)
     await user.type(holiday, "2026-08-12")
     await user.click(screen.getByRole("button", { name: "Добавить дату" }))
     await user.click(
-      screen.getByRole("button", { name: "Сохранить календарь" })
+      screen.getByRole("button", { name: "Сохранить праздники" })
     )
 
     await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(1))
@@ -92,39 +81,42 @@ describe("inventory planning settings", () => {
       warehouseId: WAREHOUSE_ID,
       request: {
         expectedSettingsRevision: 3,
-        movementDailyCapacity: 8,
-        repairDailyCapacity: 5,
-        workingWeekdays: [
-          "MONDAY",
-          "TUESDAY",
-          "WEDNESDAY",
-          "THURSDAY",
-          "FRIDAY",
-          "SATURDAY",
-        ],
         holidays: ["2026-08-10", "2026-08-12"],
       },
     })
     expect(mocks.success).toHaveBeenCalledWith(
-      "Календарь итогового плана сохранён."
+      "Праздничные выходные сохранены."
     )
   })
 
-  it("does not allow an empty working week", async () => {
+  it("does not add the same holiday twice", async () => {
     const user = userEvent.setup()
     renderCard()
 
-    await screen.findByText("Версия 3")
-    for (const label of ["Пн", "Вт", "Ср", "Чт", "Пт"]) {
-      await user.click(screen.getByRole("button", { name: label }))
-    }
+    const holiday = await screen.findByLabelText("Праздничная дата")
+    await user.type(holiday, "2026-08-10")
+    await user.click(screen.getByRole("button", { name: "Добавить дату" }))
+
+    expect(screen.getByText("Эта праздничная дата уже добавлена.")).toBeTruthy()
+    expect(mocks.update).not.toHaveBeenCalled()
+  })
+
+  it("removes a holiday without restoring retired planning fields", async () => {
+    const user = userEvent.setup()
+    renderCard()
+
+    await screen.findByText("10.08.2026")
     await user.click(
-      screen.getByRole("button", { name: "Сохранить календарь" })
+      screen.getByRole("button", { name: "Удалить праздник 10.08.2026" })
+    )
+    await user.click(
+      screen.getByRole("button", { name: "Сохранить праздники" })
     )
 
-    expect(
-      screen.getByText("Выберите хотя бы один рабочий день недели.")
-    ).toBeTruthy()
-    expect(mocks.update).not.toHaveBeenCalled()
+    await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(1))
+    expect(mocks.update.mock.calls[0]?.[0].request).toEqual({
+      expectedSettingsRevision: 3,
+      holidays: [],
+    })
   })
 })

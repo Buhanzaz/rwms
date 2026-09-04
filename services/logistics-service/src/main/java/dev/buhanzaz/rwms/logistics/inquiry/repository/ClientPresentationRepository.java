@@ -16,6 +16,8 @@ public interface ClientPresentationRepository
     extends JpaRepository<ClientPresentation, UUID> {
   Optional<ClientPresentation> findByInquiryId(UUID inquiryId);
 
+  Optional<ClientPresentation> findById(UUID id);
+
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select presentation from ClientPresentation presentation where presentation.id = :id")
   Optional<ClientPresentation> findForUpdate(@Param("id") UUID id);

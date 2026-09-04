@@ -17,11 +17,17 @@ ManagerApp или WorkerApp.
 ## Проверка
 
 ```bash
-sha256sum /path/to/rwms-driver-0.1.20-debug.apk
-node downloads-site/scripts/build-site.mjs
-node downloads-site/scripts/verify-site.mjs
+node --test scripts/release-trust.test.mjs
+RWMS_DRIVER_APK=/path/to/rwms-driver-0.1.20-debug.apk \
+  node scripts/verify-release.mjs
 ```
 
-Скрипт сборки валидирует эту запись вместе с существующими записями ManagerApp
-и WorkerApp и записывает только статическую общую страницу в каталог, заданный
-`RWMS_DOWNLOADS_SITE_OUTPUT`.
+`release-trust-policy.json` разделяет allowlist сертификатов `INTERNAL_TEST` и
+`PRODUCTION`. Проверка через `aapt` и `apksigner` сверяет hash точного APK,
+package/version, DN единственного signer и его SHA-256. Текущая запись явно
+относится к `INTERNAL_TEST`; пустой production allowlist не позволяет выдать
+этот debug-артефакт за production-релиз. Ротация сертификата требует отдельного
+reviewed-изменения policy.
+
+Отдельный builder общей download-page потребляет эту проверенную запись, но
+никогда не владеет и не копирует APK DriverApp.

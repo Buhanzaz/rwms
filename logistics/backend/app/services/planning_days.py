@@ -6,13 +6,17 @@ from dataclasses import dataclass
 from datetime import date
 from uuid import UUID
 
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import ApiError, not_found
 from app.models import (
+    LogisticsActionStatus,
+    LogisticsHumanAction,
     LogisticsRequest,
     PlanningDayClosure,
+    PlanningDayMode,
+    PlanningDayPolicy,
     PlanningTask,
     RequestDateOption,
     RouteCycle,
@@ -23,7 +27,7 @@ from app.models import (
 from app.models.domain import PlanStatus, RequestStatus
 from app.schemas.domain import PlanningDayStatusRead
 from app.services.auto_planning import generate_missing_draft_plans
-from app.services.plans import PlannerFacade
+from app.services.plans import PlannerFacade, archive_mutable_plans_for_dates
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +76,8 @@ def _status(
     planning_date: date,
     closure: PlanningDayClosure | None,
     plan_id: UUID | None,
+    policy: PlanningDayPolicy | None,
+    pending_action_count: int,
 ) -> PlanningDayStatusRead:
     """Map durable closure state into the public date-status projection."""
 
@@ -82,6 +88,13 @@ def _status(
         closed_at=closure.created_at if closure is not None else None,
         closed_by=closure.closed_by if closure is not None else None,
         plan_id=plan_id,
+        mode=(
+            policy.mode
+            if policy is not None
+            else PlanningDayMode.DELIVERIES_AND_PICKUPS
+        ),
+        mode_version=policy.version if policy is not None else 0,
+        pending_action_count=pending_action_count,
     )
 
 
@@ -99,8 +112,37 @@ async def get_planning_day_status(
             PlanningDayClosure.date == planning_date,
         )
     )
+    policy = await session.scalar(
+        select(PlanningDayPolicy).where(
+            PlanningDayPolicy.warehouse_id == warehouse.id,
+            PlanningDayPolicy.date == planning_date,
+        )
+    )
+    pending_action_count = len(
+        tuple(
+            await session.scalars(
+                select(LogisticsHumanAction.id).where(
+                    LogisticsHumanAction.warehouse_id == warehouse.id,
+                    LogisticsHumanAction.day == planning_date,
+                    LogisticsHumanAction.status.in_(
+                        (
+                            LogisticsActionStatus.PENDING,
+                            LogisticsActionStatus.IN_PROGRESS,
+                        )
+                    ),
+                )
+            )
+        )
+    )
     plan_id = await _latest_plan_id(session, warehouse.id, planning_date)
-    return _status(warehouse.id, planning_date, closure, plan_id)
+    return _status(
+        warehouse.id,
+        planning_date,
+        closure,
+        plan_id,
+        policy,
+        pending_action_count,
+    )
 
 
 async def close_planning_day(
@@ -109,9 +151,9 @@ async def close_planning_day(
     warehouse_id: UUID,
     planning_date: date,
     *,
-    closed_by: str = "local-admin",
+    closed_by: str,
 ) -> PlanningDayCloseResult:
-    """Stop new demand and atomically replace the preliminary plan with a final one."""
+    """Stop new demand and atomically replace only a mutable preliminary head."""
 
     warehouse = await session.scalar(
         select(Warehouse).where(Warehouse.id == warehouse_id).with_for_update()
@@ -133,23 +175,11 @@ async def close_planning_day(
         )
         session.add(closure)
         await session.flush()
-        exact_date = (
-            RoutePlan.warehouse_id == warehouse.id,
-            RoutePlan.date == planning_date,
+        await archive_mutable_plans_for_dates(
+            session,
+            warehouse.id,
+            {planning_date},
         )
-        await session.execute(
-            delete(RoutePlan).where(
-                *exact_date,
-                RoutePlan.status == PlanStatus.GENERATED,
-                RoutePlan.manually_changed.is_(False),
-            )
-        )
-        await session.execute(
-            update(RoutePlan)
-            .where(*exact_date, RoutePlan.status != PlanStatus.ARCHIVED)
-            .values(status=PlanStatus.ARCHIVED)
-        )
-        await session.flush()
     await generate_missing_draft_plans(
         session,
         planner,
@@ -158,6 +188,28 @@ async def close_planning_day(
     )
     await session.refresh(closure)
     plan_id = await _latest_plan_id(session, warehouse.id, planning_date)
+    policy = await session.scalar(
+        select(PlanningDayPolicy).where(
+            PlanningDayPolicy.warehouse_id == warehouse.id,
+            PlanningDayPolicy.date == planning_date,
+        )
+    )
+    pending_action_count = len(
+        tuple(
+            await session.scalars(
+                select(LogisticsHumanAction.id).where(
+                    LogisticsHumanAction.warehouse_id == warehouse.id,
+                    LogisticsHumanAction.day == planning_date,
+                    LogisticsHumanAction.status.in_(
+                        (
+                            LogisticsActionStatus.PENDING,
+                            LogisticsActionStatus.IN_PROGRESS,
+                        )
+                    ),
+                )
+            )
+        )
+    )
     mandatory_task_ids = set(
         await session.scalars(
             select(PlanningTask.id)
@@ -201,6 +253,13 @@ async def close_planning_day(
             extra={"task_ids": [str(task_id) for task_id in missing_mandatory]},
         )
     return PlanningDayCloseResult(
-        status=_status(warehouse.id, planning_date, closure, plan_id),
+        status=_status(
+            warehouse.id,
+            planning_date,
+            closure,
+            plan_id,
+            policy,
+            pending_action_count,
+        ),
         changed=changed,
     )

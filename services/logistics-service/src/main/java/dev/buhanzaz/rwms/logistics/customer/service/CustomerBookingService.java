@@ -100,6 +100,7 @@ public class CustomerBookingService {
         session.getOrderId() == null ? List.of() : bookingCabins(identity, session);
     return new CustomerBookingResponse(
         session.getBookingId(),
+        session.getVersion(),
         session.getOrderId(),
         status,
         errorCode,
@@ -110,25 +111,35 @@ public class CustomerBookingService {
         slot == null ? null : slot.getDeliveryDate(),
         slot == null ? null : slot.getWindowStart(),
         slot == null ? null : slot.getWindowEnd(),
+        null,
         cabins);
   }
 
   /** Returns all current customer bookings with server-owned cabin arrival state. */
   @Transactional(readOnly = true)
   public List<CustomerBookingResponse> list(CustomerIdentity identity) {
-    return sessions.findAllByCustomerSubjectIdOrderByCreatedAtDescIdDesc(identity.subjectId()).stream()
+    return sessions
+        .findAllByCustomerSubjectIdOrderByCreatedAtDescIdDesc(identity.subjectId())
+        .stream()
         .filter(session -> session.getBookingId() != null)
         .map(
             session ->
                 response(
                     identity,
                     session,
-                    session.getState()
-                            == dev.buhanzaz.rwms.logistics.customer.domain.CustomerSessionState.BOOKED
-                        ? "COMPLETED"
-                        : "PENDING",
+                    status(session),
                     null))
         .toList();
+  }
+
+  /** Maps durable session state to the stable CustomerApp booking lifecycle. */
+  public static String status(CustomerRentalSession session) {
+    return switch (session.getState()) {
+      case BOOKED -> "COMPLETED";
+      case CANCEL_PENDING -> "CANCELLATION_PENDING";
+      case CANCELLED -> "CANCELLED";
+      default -> "PENDING";
+    };
   }
 
   /** Accepts exactly one arrived cabin with an idempotent canonical drawn signature. */
@@ -141,7 +152,11 @@ public class CustomerBookingService {
       AcceptCustomerCabinRequest request) {
     String signatureJson = write(request);
     String requestSha256 = sha256(signatureJson);
-    transactionLock.acquire("customer-cabin-acceptance:" + identity.subjectId() + ":" + idempotencyKey);
+    transactionLock.acquire(
+        "customer-cabin-acceptance:"
+            + identity.subjectId()
+            + ":"
+            + idempotencyKey);
     CustomerCabinAcceptance replay =
         acceptances
             .findByCustomerSubjectIdAndIdempotencyKey(identity.subjectId(), idempotencyKey)
@@ -154,7 +169,9 @@ public class CustomerBookingService {
       }
       return responseMapper.toResponse(replay);
     }
-    if (acceptances.findByBookingIdAndCabinUnitId(bookingId, cabinId).isPresent()) {
+    if (acceptances
+        .findByBookingIdAndCabinUnitId(bookingId, cabinId)
+        .isPresent()) {
       throw conflict("CUSTOMER_CABIN_ALREADY_ACCEPTED", "Бытовка уже принята");
     }
     ArrivedCabin arrived = requiredArrivedCabin(identity, bookingId, cabinId);
@@ -198,7 +215,11 @@ public class CustomerBookingService {
     String mediaJson = write(media);
     String requestSha256 =
         sha256(request.category().name() + "\n" + description + "\n" + mediaJson);
-    transactionLock.acquire("customer-cabin-problem:" + identity.subjectId() + ":" + idempotencyKey);
+    transactionLock.acquire(
+        "customer-cabin-problem:"
+            + identity.subjectId()
+            + ":"
+            + idempotencyKey);
     CustomerCabinProblem replay =
         problems
             .findByCustomerSubjectIdAndIdempotencyKey(identity.subjectId(), idempotencyKey)
@@ -226,7 +247,9 @@ public class CustomerBookingService {
               .toList());
     }
     CustomerCabinProblemPhase phase =
-        acceptances.findByBookingIdAndCabinUnitId(bookingId, cabinId).isPresent()
+        acceptances
+                .findByBookingIdAndCabinUnitId(bookingId, cabinId)
+                .isPresent()
             ? CustomerCabinProblemPhase.AFTER_ACCEPTANCE
             : CustomerCabinProblemPhase.BEFORE_ACCEPTANCE;
     CustomerCabinProblem saved =
@@ -256,10 +279,14 @@ public class CustomerBookingService {
         rentalOrders.get(access.orderActor(identity, session.getWarehouseId()), session.getOrderId());
     ShipmentProjection shipments = shipmentProjection(order.id());
     Map<UUID, CustomerCabinAcceptance> acceptanceByCabin =
-        acceptances.findAllByBookingIdOrderByAcceptedAtAscIdAsc(session.getBookingId()).stream()
+        acceptances
+            .findAllByBookingIdOrderByAcceptedAtAscIdAsc(session.getBookingId())
+            .stream()
             .collect(Collectors.toMap(CustomerCabinAcceptance::getCabinUnitId, value -> value));
     Map<UUID, List<CustomerCabinProblem>> problemsByCabin =
-        problems.findAllByBookingIdOrderByReportedAtAscIdAsc(session.getBookingId()).stream()
+        problems
+            .findAllByBookingIdOrderByReportedAtAscIdAsc(session.getBookingId())
+            .stream()
             .collect(Collectors.groupingBy(CustomerCabinProblem::getCabinUnitId, LinkedHashMap::new, Collectors.toList()));
     List<CustomerBookingCabin> result = new ArrayList<>();
     for (OrderUnitResponse unit : order.units()) {
@@ -363,7 +390,10 @@ public class CustomerBookingService {
 
   private CustomerDeliverySlot deliverySlot(CustomerRentalSession session) {
     if (session.getDeliverySlotId() == null) return null;
-    CustomerDeliverySlot slot = slots.findById(session.getDeliverySlotId()).orElse(null);
+    CustomerDeliverySlot slot =
+        slots
+            .findById(session.getDeliverySlotId())
+            .orElse(null);
     if (slot == null
         || !session.getCustomerSubjectId().equals(slot.getCustomerSubjectId())
         || !session.getInquiryId().equals(slot.getInquiryId())) return null;
@@ -371,7 +401,9 @@ public class CustomerBookingService {
   }
 
   private static void requireOwner(CustomerIdentity identity, CustomerRentalSession session) {
-    if (!identity.subjectId().equals(session.getCustomerSubjectId())) throw bookingNotFound();
+    if (!identity.subjectId().equals(session.getCustomerSubjectId())) {
+      throw bookingNotFound();
+    }
   }
 
   private CustomerCabinProblemResponse problem(CustomerCabinProblem problem) {

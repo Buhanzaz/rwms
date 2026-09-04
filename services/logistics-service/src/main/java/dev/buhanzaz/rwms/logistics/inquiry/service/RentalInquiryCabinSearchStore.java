@@ -39,7 +39,7 @@ import tools.jackson.databind.ObjectMapper;
 @Transactional(readOnly = true)
 public class RentalInquiryCabinSearchStore {
   private static final String DOWNSTREAM_KEY_DOMAIN =
-      "rwms:logistics:user-rental-inquiry-cabin-search:v1";
+      "rwms:logistics:rental-inquiry-cabin-search:v2";
 
   private final RentalInquiryRepository inquiries;
   private final RentalInquirySearchAttemptRepository attempts;
@@ -162,7 +162,8 @@ public class RentalInquiryCabinSearchStore {
     OffsetDateTime timestamp = now();
     RentalInquiry inquiry = requiredForUpdate(prepared.inquiryId());
     requireOwnedActive(actor, inquiry);
-    RentalInquirySearchAttempt attempt = requiredAttemptForUpdate(prepared.receiptId());
+    RentalInquirySearchAttempt attempt =
+        requiredAttemptForUpdate(prepared.receiptId());
     requirePreparedIdentity(actor, prepared, attempt);
     access.requireWarehouseEdit(actor, attempt.getWarehouseId());
     requireInquiryWarehouse(inquiry, attempt.getWarehouseId());
@@ -202,7 +203,8 @@ public class RentalInquiryCabinSearchStore {
     OffsetDateTime timestamp = now();
     RentalInquiry inquiry = requiredForUpdate(prepared.inquiryId());
     requireOwnedActive(actor, inquiry);
-    RentalInquirySearchAttempt attempt = requiredAttemptForUpdate(prepared.receiptId());
+    RentalInquirySearchAttempt attempt =
+        requiredAttemptForUpdate(prepared.receiptId());
     requirePreparedIdentity(actor, prepared, attempt);
     access.requireWarehouseEdit(actor, attempt.getWarehouseId());
     requireInquiryWarehouse(inquiry, attempt.getWarehouseId());

@@ -3,7 +3,11 @@ import { Route, Routes } from "react-router-dom"
 
 import { ManagerBookingAlertDialog } from "@/features/assistant/components/manager-booking-alert-dialog"
 import { useAuth } from "@/features/auth/use-auth"
-import type { OrdersModuleRuntime } from "@/features/orders/domain/orders-module"
+import {
+  RWMS_ORDERS_CAPABILITIES,
+  type OrdersModuleCapabilities,
+  type OrdersModuleRuntime,
+} from "@/features/orders/domain/orders-module"
 import { OrdersModuleProvider } from "@/features/orders/orders-module-provider"
 import { OrderDetailPage } from "@/features/orders/pages/order-detail-page"
 import { OrdersListPage } from "@/features/orders/pages/orders-list-page"
@@ -11,8 +15,10 @@ import { useWarehouse } from "@/hooks/use-warehouse"
 
 export function VaultPanelOrdersModuleAdapter({
   children,
+  capabilities = RWMS_ORDERS_CAPABILITIES,
 }: {
   children: ReactNode
+  capabilities?: OrdersModuleCapabilities
 }) {
   const { accessToken, currentUser } = useAuth()
   const { warehouses } = useWarehouse()
@@ -32,16 +38,21 @@ export function VaultPanelOrdersModuleAdapter({
         city: warehouse.city,
         address: warehouse.address,
       })),
+      capabilities,
     }),
-    [accessToken, currentUser, warehouses]
+    [accessToken, capabilities, currentUser, warehouses]
   )
 
   return <OrdersModuleProvider value={runtime}>{children}</OrdersModuleProvider>
 }
 
-export function OrdersRoutes() {
+export function OrdersRoutes({
+  capabilities = RWMS_ORDERS_CAPABILITIES,
+}: {
+  capabilities?: OrdersModuleCapabilities
+} = {}) {
   return (
-    <VaultPanelOrdersModuleAdapter>
+    <VaultPanelOrdersModuleAdapter capabilities={capabilities}>
       <ManagerBookingAlertDialog />
       <Routes>
         <Route index element={<OrdersListPage />} />

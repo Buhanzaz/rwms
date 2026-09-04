@@ -39,13 +39,13 @@ public class SecurityConfiguration {
     http.authorizeHttpRequests(
         authorize -> {
           authorize.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll();
-          authorize
-              .requestMatchers("/api/logistics/public/v1/client-presentations/**")
-              .permitAll();
+          authorize.requestMatchers("/api/logistics/public/v1/client-presentations/**").permitAll();
           authorize
               .requestMatchers(
-                  HttpMethod.GET,
-                  "/api/logistics/public/v1/cabin-photo-presentations/**")
+                  HttpMethod.GET, "/api/logistics/public/v1/cabin-photo-presentations/**")
+              .permitAll();
+          authorize
+              .requestMatchers("/api/logistics/public/v1/contractor-route-shares/**")
               .permitAll();
           if (bypassEnabled) authorize.requestMatchers("/api/logistics/**").permitAll();
           authorize.anyRequest().authenticated();
@@ -84,7 +84,9 @@ public class SecurityConfiguration {
             HttpHeaders.AUTHORIZATION,
             HttpHeaders.CONTENT_TYPE,
             CorrelationIdFilter.HEADER_NAME,
-            "Idempotency-Key"));
+            "Idempotency-Key",
+            "X-Content-SHA256",
+            "X-Captured-At"));
     configuration.setExposedHeaders(
         List.of(CorrelationIdFilter.HEADER_NAME, HttpHeaders.ETAG, "Idempotency-Replayed"));
     UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

@@ -4,6 +4,8 @@ import dev.buhanzaz.rwms.client.data.CustomerApiException
 import dev.buhanzaz.rwms.client.data.CustomerBooking
 import dev.buhanzaz.rwms.client.data.DeliverySlot
 import dev.buhanzaz.rwms.client.data.EquipmentSelection
+import java.text.NumberFormat
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Pure selection rules shared by UI events and unit tests. */
@@ -52,21 +54,20 @@ data class SelectionDraft(
     val equipment: Map<EquipmentKey, Long>,
 )
 
-/** Pure complete-replacement rules for bulk and per-cabin rental durations. */
+/** Pure complete-replacement rules for one selected cabin's rental duration. */
 object CustomerRentalTermPolicy {
-    /** Applies a bounded duration to targets while preserving every other selected cabin's term. */
-    fun apply(
+    /** Replaces one selected cabin's bounded term while preserving every other selected cabin's term. */
+    fun withCabinTerm(
         selectedCabins: Set<String>,
         existingTerms: Map<String, Long>,
-        requestedTargets: Set<String>,
+        cabinUnitId: String,
         months: Long,
     ): Map<String, Long> {
         require(selectedCabins.isNotEmpty())
         require(months in 1..120)
-        require(requestedTargets.all { it in selectedCabins })
-        val targets = requestedTargets.ifEmpty { selectedCabins }
+        require(cabinUnitId in selectedCabins)
         return selectedCabins.associateWith { cabinId ->
-            if (cabinId in targets) months else existingTerms[cabinId] ?: 1L
+            if (cabinId == cabinUnitId) months else existingTerms[cabinId] ?: 1L
         }
     }
 }
@@ -221,8 +222,17 @@ internal object CustomerBookingPolicy {
     fun visible(latest: CustomerBooking?, bookings: List<CustomerBooking>): List<CustomerBooking> =
         (bookings + listOfNotNull(latest)).distinctBy { booking -> booking.stableIdentity() }
 
-    /** Checkout pending/completed states fence further cart commands for the active inquiry. */
-    fun locksCart(booking: CustomerBooking?): Boolean = booking?.status in setOf("PENDING", "COMPLETED")
+    /** Applies an immediate command response until the following authoritative list refresh. */
+    fun replace(updated: CustomerBooking, bookings: List<CustomerBooking>): List<CustomerBooking> =
+        listOf(updated) + bookings.filterNot { booking -> booking.sameBookingAs(updated) }
+
+    /** Every accepted checkout lifecycle keeps its original inquiry immutable. */
+    fun locksCart(booking: CustomerBooking?): Boolean = booking?.status in setOf(
+        "PENDING",
+        "COMPLETED",
+        "CANCELLATION_PENDING",
+        "CANCELLED",
+    )
 
     /** A booking from an earlier inquiry never locks a newly opened cart. */
     fun locksCart(booking: CustomerBooking?, activeInquiryId: String?): Boolean =
@@ -232,6 +242,55 @@ internal object CustomerBookingPolicy {
         (bookingId != null && bookingId == other.bookingId) || inquiryId == other.inquiryId
 
     private fun CustomerBooking.stableIdentity(): String = bookingId ?: inquiryId
+}
+
+/** Pure CustomerApp presentation and action rules for service-owned booking mutations. */
+internal object CustomerBookingLifecyclePolicy {
+    /** Only an exact completed booking can offer cancellation or rescheduling controls. */
+    fun canChange(booking: CustomerBooking): Boolean =
+        booking.bookingId != null && booking.version > 0 && booking.status == "COMPLETED"
+
+    /** Returns the Russian lifecycle label without exposing a backend enum to the customer. */
+    fun statusLabel(status: String): String = when (status) {
+        "COMPLETED" -> "Оформлен"
+        "REJECTED" -> "Отклонён"
+        "PENDING" -> "Обрабатывается"
+        "CANCELLATION_PENDING" -> "Отмена выполняется"
+        "CANCELLED" -> "Отменён"
+        else -> "Статус уточняется"
+    }
+
+    /** Converts stable recovery codes carried by a booking projection into actionable copy. */
+    fun recoveryMessage(errorCode: String?): String? = when (errorCode) {
+        null -> null
+        "CUSTOMER_BOOKING_CANCELLATION_PENDING" ->
+            "Отмена ещё выполняется. Обновите статус немного позже."
+        "CUSTOMER_BOOKING_CANCELLATION_FAILED" ->
+            "Не удалось завершить отмену. Обновите статус или повторите попытку позже."
+        "CUSTOMER_BOOKING_RECONCILIATION_REQUIRED" ->
+            "Отмена требует проверки сотрудником RWMS. Текущий статус сохранён."
+        "ORDER_MUTATION_RECONCILIATION_REQUIRED",
+        "CUSTOMER_BOOKING_MUTATION_FAILED",
+        "ORDER_MUTATION_RECOVERY_FAILED",
+        "ORDER_MUTATION_LOCAL_RECONCILIATION_FAILED",
+        -> "Изменение заказа требует проверки сотрудником RWMS. Текущий статус сохранён."
+        else -> "Статус операции уточняется. Обновите заказ немного позже."
+    }
+
+    /** Formats a real server fee, while an absent policy remains absent rather than becoming zero. */
+    fun cancellationFeeLabel(
+        amount: Long?,
+        locale: Locale = Locale.forLanguageTag("ru-RU"),
+    ): String? = amount?.let { value ->
+        val formatted = NumberFormat.getIntegerInstance(locale).format(value)
+            .replace('\u00a0', ' ')
+            .replace('\u202f', ' ')
+        "$formatted ₽"
+    }
+
+    /** Orders only exact server offers and never creates a local replacement date. */
+    fun orderedSlots(slots: List<DeliverySlot>): List<DeliverySlot> =
+        slots.sortedWith(compareBy(DeliverySlot::date, DeliverySlot::start, DeliverySlot::slotId))
 }
 
 /** Decides when a terminal customer inquiry must be replaced without discarding its booking. */

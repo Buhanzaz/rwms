@@ -58,6 +58,28 @@ class WarehouseOpenApiParityTest {
             "/api/internal/warehouse/v1/warehouses/{id}/admission",
             "/api/internal/warehouse/v1/warehouses/{id}/lifecycle-readiness",
             "/api/internal/warehouse/v1/lifecycle/readiness-work");
+    Map<String, Object> authExistence =
+        child(child(paths, "/api/internal/warehouse/v1/warehouses/{id}/existence"), "get");
+    Map<String, Object> authExistenceOk =
+        child(child(authExistence, "responses"), "200");
+    assertThat(
+            child(
+                    child(child(authExistenceOk, "content"), "application/json"),
+                    "schema")
+                .get("$ref"))
+        .isEqualTo("#/components/schemas/InternalWarehouseExistence");
+    Map<String, Object> assetExistence =
+        child(
+            child(paths, "/api/internal/warehouse/v1/warehouses/asset/{id}/existence"),
+            "get");
+    Map<String, Object> assetExistenceOk =
+        child(child(assetExistence, "responses"), "200");
+    assertThat(
+            child(
+                    child(child(assetExistenceOk, "content"), "application/json"),
+                    "schema")
+                .get("$ref"))
+        .isEqualTo("#/components/schemas/InternalWarehouseExistence");
     Map<String, Object> create = child(child(paths, "/api/warehouse/v1/warehouses"), "post");
     assertThat(list(create.get("parameters")).getFirst())
         .isInstanceOfSatisfying(
@@ -79,28 +101,50 @@ class WarehouseOpenApiParityTest {
             "active",
             "lifecycleState",
             "sortOrder",
-            "representative");
+            "representative",
+            "production",
+            "mainWarehouse",
+            "representativeParentWarehouseId");
+    assertThat(child(child(schemas, "Warehouse"), "properties"))
+        .containsKeys(
+            "representative",
+            "production",
+            "mainWarehouse",
+            "representativeParentWarehouseId")
+        .doesNotContainKeys("companyId", "warehouseType", "productionWarehouseId");
     assertThat(list(child(schemas, "CreateWarehouseRequest").get("required")))
         .doesNotContain("representative", "latitude", "longitude");
-    assertThat(
-            child(
-                    child(child(schemas, "CreateWarehouseRequest"), "properties"),
-                    "representative")
-                .get("default"))
-        .isEqualTo(false);
+    assertThat(child(child(schemas, "CreateWarehouseRequest"), "properties"))
+        .containsKeys(
+            "production",
+            "mainWarehouse",
+            "representativeParentWarehouseId")
+        .doesNotContainKeys("companyId", "warehouseType", "productionWarehouseId", "representative");
     assertThat(list(child(schemas, "ReplaceWarehouseRequest").get("required")))
         .containsExactlyInAnyOrder("expectedVersion", "name", "city", "timeZone");
     assertThat(child(child(schemas, "ReplaceWarehouseRequest"), "properties"))
-        .doesNotContainKey("active");
-    assertThat(
-            child(
-                    child(child(schemas, "ReplaceWarehouseRequest"), "properties"),
-                    "representative")
-                .get("default"))
-        .isEqualTo(false);
+        .containsKeys(
+            "production",
+            "mainWarehouse",
+            "representativeParentWarehouseId")
+        .doesNotContainKeys(
+            "active", "companyId", "warehouseType", "productionWarehouseId", "representative");
     assertThat(list(child(schemas, "InternalWarehouseExistence").get("required")))
         .containsExactlyInAnyOrder("id", "version", "active");
     assertThat(child(schemas, "InternalWarehouseExistence").get("additionalProperties"))
+        .isEqualTo(false);
+    assertThat(list(child(schemas, "InternalWarehouseIdentity").get("required")))
+        .containsExactlyInAnyOrder(
+            "id",
+            "version",
+            "active",
+            "name",
+            "city",
+            "address",
+            "latitude",
+            "longitude",
+            "timeZone");
+    assertThat(child(schemas, "InternalWarehouseIdentity").get("additionalProperties"))
         .isEqualTo(false);
     assertThat(list(child(schemas, "InventoryWarehouseMetadata").get("required")))
         .containsExactlyInAnyOrder("id", "version", "active", "timeZone");
@@ -135,7 +179,8 @@ class WarehouseOpenApiParityTest {
             "latitude",
             "longitude",
             "timeZone",
-            "representative");
+            "representative")
+        .doesNotContainKey("companyId");
     assertThat(list(child(schemas, "ReplaceWarehouseSupportLinksRequest").get("required")))
         .containsExactlyInAnyOrder("expectedVersion", "links");
     assertThat(list(child(schemas, "WarehouseSupportLinks").get("required")))
@@ -182,6 +227,8 @@ class WarehouseOpenApiParityTest {
         .containsExactly("expectedVersion");
     assertThat(list(child(schemas, "WarehouseLifecycleState").get("enum")))
         .containsExactly("ACTIVE", "DRAINING", "INACTIVE");
+    assertThat(schemas).doesNotContainKey("WarehouseType");
+    assertWarehouseClassificationContract(schemas);
     assertThat(list(child(schemas, "WarehouseOperationDirection").get("enum")))
         .containsExactly("INCOMING", "OUTGOING");
     assertThat(list(child(schemas, "WarehouseOperationAdmission").get("required")))
@@ -196,6 +243,33 @@ class WarehouseOpenApiParityTest {
         .containsExactlyInAnyOrder("items", "nextAfter");
     assertThat(child(paths, "/api/warehouse/v1/warehouses/{id}")).doesNotContainKey("delete");
     assertAllLocalReferencesResolve(document, document);
+  }
+
+  private static void assertWarehouseClassificationContract(Map<String, Object> schemas) {
+    assertThat(
+            map(list(child(schemas, "Warehouse").get("allOf")).getFirst()).get("$ref"))
+        .isEqualTo("#/components/schemas/WarehouseClassificationInvariant");
+    for (String command : List.of("CreateWarehouseRequest", "ReplaceWarehouseRequest")) {
+      assertThat(child(schemas, command)).doesNotContainKey("allOf");
+      assertThat(child(child(schemas, command), "properties"))
+          .containsKeys("production", "mainWarehouse", "representativeParentWarehouseId");
+    }
+
+    List<Object> variants = list(child(schemas, "WarehouseClassificationInvariant").get("oneOf"));
+    assertThat(variants).hasSize(2);
+    Map<String, Object> productionProperties = child(map(variants.get(0)), "properties");
+    assertThat(child(productionProperties, "representative").get("const")).isEqualTo(false);
+    assertThat(child(productionProperties, "representativeParentWarehouseId").get("type"))
+        .isEqualTo("null");
+    assertThat(productionProperties).doesNotContainKeys("warehouseType", "productionWarehouseId");
+    assertThat(map(variants.get(0))).containsKey("anyOf");
+    Map<String, Object> representativeProperties = child(map(variants.get(1)), "properties");
+    assertThat(child(representativeProperties, "representative").get("const")).isEqualTo(true);
+    assertThat(child(representativeProperties, "production").get("const")).isEqualTo(false);
+    assertThat(child(representativeProperties, "mainWarehouse").get("const")).isEqualTo(false);
+    assertThat(child(representativeProperties, "representativeParentWarehouseId").get("format"))
+        .isEqualTo("uuid");
+    assertThat(representativeProperties).doesNotContainKeys("warehouseType", "productionWarehouseId");
   }
 
   private Set<Endpoint> controllerEndpoints() throws ClassNotFoundException {

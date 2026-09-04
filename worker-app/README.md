@@ -50,26 +50,32 @@ projections, Problem Details, media payloads, and every other DTO.
 
 ## Screens and server-owned work
 
-The navigation drawer contains Task Board and Downloads; the app-bar monogram
-opens Profile. The board displays only categories, groups, assignments, the KPI
-palette, and task summaries supplied in the worker feed. WorkerApp has no driver
-work surface or driver trip read. Task-board exposes a joint `LOGISTICS_DRIVER`
-task here only after its primary performer has taken it and only to an eligible
-secondary worker; a stale cached waiting entry is hidden locally as an
-additional fail-closed guard.
+The navigation drawer contains `Моё задание` and Downloads; the app-bar
+monogram opens Profile. A silent looping water video, the exact BLOCK BOX logo,
+a three-second logo greeting, animated sign-in fields and animated gradient
+buttons are shared with CustomerApp. The video remains behind every route, and
+the task, notice and dialog surfaces stay lightly translucent.
 
-The eligible slinger takes an active joint task with the current group ID when
-one exists: the visible `Взять задание` control sends the `JOIN` wire action.
-The owning service pauses the previous assignment timer for that group and
-later resumes it according to the server workflow. Slinger participation is
-optional, so the driver may complete with a ready result photo before anyone
-joins. WorkerApp does not present a pause action; a joined slinger can resume a
-server-paused task or complete the shared task. Completion requires at least
-one server-`READY` photo from either active participant; the server closes the
-same task for both. Ordinary group-bound roles and qualification-only
-categories keep their own panels; queues and task cards can also collapse.
-Panels stack on a narrow screen and use a two-column horizontal board from
-720 dp.
+The home surface renders exactly one server-authorized card instead of a task
+board: a joined active slinger task first, then the current worker/group active
+or paused ordinary task, then the first waiting task in authoritative category
+and queue order. A local pending TAKE/JOIN remains the foreground card until an
+authoritative refresh catches up. The card is centered and bounded to 620 dp on
+larger windows. WorkerApp still owns no queue membership, assignment or task
+transition and has no driver work surface or driver-trip read.
+
+Task-board exposes a joint `LOGISTICS_DRIVER` task only after its primary
+performer has taken it and only to an eligible secondary worker. Before JOIN,
+that active task appears as one non-dismissible priority dialog over any
+WorkerApp route. Selecting `Взять задание` opens its detail and queues the
+existing durable `JOIN` action with the current group ID. The owning service
+atomically pauses the previous assignment for the whole group and automatically
+resumes it after the shared task closes; the restored card then becomes the one
+home task again. Slinger participation is optional, so the driver may complete
+with a ready result photo before anyone joins. Completion requires at least one
+server-`READY` photo from either active participant and closes the same shared
+task for both. WorkerApp never fabricates the pause/resume transition and does
+not expose a manual pause action.
 
 Task-board publishes only warehouse queues whose manager checkbox is enabled.
 Within each published ordinary queue, active `REAL` work remains available and
@@ -83,19 +89,17 @@ ahead. A route whose first required stage is electricity can therefore arrive
 directly in the electrician queue, while SES blocking and route promotion
 remain server-owned.
 
-The centered board header is `Доска задач`; it does not repeat a group-role
+The centered home header is `Моё задание`; it does not repeat a group-role
 caption or routine sync-progress text. Its refresh icon rotates while a current
 sync stage is active, while offline and blocked-evidence failures remain
-explicit. Group and queue headers show their disclosure controls without an
-aggregate task count. A task-card header vertically aligns the cabin number,
-status and disclosure icon; the scheduled date is absent. A waiting card shows
-`Выделенное время` and the bare maintenance-owned difficulty (`Легкий ремонт`,
-`Средний ремонт` or `Тяжелый ремонт`) once. An active card shows the same
-difficulty together with `Время работы` and KPI on the right, without requiring
-expansion. Expansion shows `Этап X из Y`, `Приоритет N`, and one
-integer uploaded-photo count; it never renders a required-photo fraction or a
-`таймер остановлен` suffix. A task card never renders the technical maintenance
-title. These behaviors are owned by
+explicit. A card header aligns the cabin number and status; the scheduled date
+is absent. A waiting card shows `Выделенное время` and the bare
+maintenance-owned difficulty (`Легкий ремонт`, `Средний ремонт` or
+`Тяжелый ремонт`). An active card shows the same difficulty with `Время работы`
+and KPI. The always-visible summary also shows `Этап X из Y`, `Приоритет N` and
+one integer uploaded-photo count; it never renders a required-photo fraction,
+technical maintenance title or `таймер остановлен` suffix. These behaviors are
+owned by
 [`TasksScreen.kt`](feature-tasks/src/main/java/dev/buhanzaz/rwms/worker/feature/tasks/TasksScreen.kt).
 
 `Открыть задание` opens a dedicated full-screen task destination, including on
@@ -118,7 +122,7 @@ scrolling with task content. Its button spans the available width, and the
 ordinary TAKE label is `Взять задание`.
 
 A canonical `LOGISTICS_DRIVER_TASK` transfer is marked
-`Межскладское перемещение` on the board and opens as `Межскладской рейс`.
+`Межскладское перемещение` on the task card and opens as `Межскладской рейс`.
 Logistics freezes the source-to-destination route, exact cabin numbers and
 characteristics, actual/required furniture comparison, loose furniture and the
 dispatcher comment into task-board's existing `taskText`, `works`, `materials`
@@ -136,7 +140,7 @@ projection are implemented by
 and
 [`TaskDetailPresentation.kt`](feature-task-detail/src/main/java/dev/buhanzaz/rwms/worker/feature/taskdetail/TaskDetailPresentation.kt).
 
-Both board and detail stage labels use the required zero-based
+Both task-card and detail stage labels use the required zero-based
 `routeStepIndex` plus one over `routeStepCount`, the authoritative ordinal and
 count of worker execution packages. They never derive presentation from the raw
 persisted `routeIndex`: that separate value remains the identity supplied to
@@ -221,7 +225,9 @@ is invented. Worker-facing work data does not expose price/cost fields.
 - FCM and SSE carry invalidation/revision signals only. They trigger a focused
   refresh; they never replace the authoritative feed. FCM device registration
   uses `targetKind=FID` with the Firebase Installation ID, never a messaging
-  registration token. Foreground polling also periodically refreshes the feed.
+  registration token. A reconnect opens a fresh SSE subscription and triggers
+  an authoritative REST refresh; the client does not send a replay cursor.
+  Foreground polling also periodically refreshes the feed.
 
 ## Errors, concurrency, and retries
 
@@ -242,6 +248,14 @@ WorkManager run succeeds instead of becoming a terminal scheduler failure.
 Automatic failure retry is limited to `429`, `502`, `503`, `504`,
 and proven transport faults; malformed Problem Details retain the actual HTTP
 status with a safe fallback.
+
+Worker-visible failure text never uses a Problem Details `title`, `detail`,
+violation message, or arbitrary exception message. `core-network` maps the
+authoritative status and recognized problem code to a fixed, action-oriented
+Russian message; an unknown code or status receives a generic safe fallback.
+The raw transport DTO remains attached to the typed exception only for typed
+metadata and structured diagnostics. Sync uses the mapped text for outcomes,
+progress, conflicts, outbox retry reasons, and evidence review state.
 
 One unique WorkManager job performs at most four attempts: only the permitted
 transient failures return `Result.retry()`, and WorkManager uses a persisted
@@ -316,11 +330,17 @@ properties file modeled on [signing.properties.example](signing.properties.examp
 bash ./gradlew -PsigningPropertiesFile=/secure/path/rwms-worker-signing.properties assembleRelease
 ~~~
 
+Every APK or bundle release task fails before artifact creation when the
+properties file, any of its four required values, or the referenced keystore is
+missing or unreadable. Debug tasks remain independent from production keys.
+
 ## Release integrity
 
 Publish only the exact reviewed APK. Record its package name, 'versionCode',
 'versionName', signing certificate, and SHA-256, then install that same file on a
-device/emulator. An end-to-end claim requires authentication through the intended
+device/emulator. `worker-download-site/release-trust-policy.json` separately
+pins the only certificate accepted for the `PRODUCTION` channel and rejects a
+debug package, debug version or cross-channel signer. An end-to-end claim requires authentication through the intended
 public gateway, the first worker-context request, and the changed task/offline
 flow; a successful build or an HTTP 200 alone is insufficient.
 
@@ -329,9 +349,9 @@ flow; a successful build or an HTTP 200 alone is insufficient.
 - The current Room projection does not persist qualification display names or
   queue-to-worker-class bindings. A qualification-only panel therefore uses the
   authoritative category name rather than guessing a role label.
-- The worker SSE endpoint currently treats a new subscription as a fresh
-  invalidation and does not implement a usable 'Last-Event-ID' replay path.
-  Foreground polling reduces the stale window but is not event replay.
+- Worker SSE reconnect is intentionally invalidation-only: local event IDs are
+  retained for deduplication and audit, not cursor replay. A reconnect's
+  authoritative REST refresh and foreground polling reduce the stale window.
 - Local invalidation rows are append-only in the current schema and lack a
   retention/pruning policy and a '(userId, revision)' index. Long-lived installs
   can accumulate unnecessary local data.

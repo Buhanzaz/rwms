@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.order.service;
 
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -62,6 +63,8 @@ class RentalOrderUnitReplacementServiceTest {
   private final RentalOrderReadService reads = mock(RentalOrderReadService.class);
   private final RentalOrderReservationService reservations =
       mock(RentalOrderReservationService.class);
+  private final RentalOrderMutationLocalStore orderMutations =
+      mock(RentalOrderMutationLocalStore.class);
   private final RentalOrderInventorySourcePolicy inventorySources =
       mock(RentalOrderInventorySourcePolicy.class);
   private final OrderAuthorizer access = mock(OrderAuthorizer.class);
@@ -79,6 +82,7 @@ class RentalOrderUnitReplacementServiceTest {
       new RentalOrderUnitReplacementService(
           reads,
           reservations,
+          orderMutations,
           inventorySources,
           access,
           dependencies,

@@ -199,6 +199,20 @@ interface RwmsApi {
         @Path("documentId") documentId: String,
     ): TransferFurnitureReadinessDto
 
+    @POST("api/logistics/v1/transfers/{documentId}/depart")
+    suspend fun departTransfer(
+        @Path("documentId") documentId: String,
+        @Query("expectedVersion") expectedVersion: Long,
+        @Header("Idempotency-Key") idempotencyKey: String,
+    ): LogisticsDocumentDto
+
+    @POST("api/logistics/v1/transfers/{documentId}/arrive")
+    suspend fun arriveTransfer(
+        @Path("documentId") documentId: String,
+        @Query("expectedVersion") expectedVersion: Long,
+        @Header("Idempotency-Key") idempotencyKey: String,
+    ): LogisticsDocumentDto
+
     @POST("api/logistics/v1/transfers/{documentId}/lines/{lineId}/depart")
     suspend fun departTransferLine(
         @Path("documentId") documentId: String,

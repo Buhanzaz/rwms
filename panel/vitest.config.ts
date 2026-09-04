@@ -9,6 +9,8 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     restoreMocks: true,
-    maxWorkers: 4,
+    // jsdom-heavy UI files otherwise contend for the event loop in the full 1,300+ test gate.
+    maxWorkers: 2,
+    testTimeout: 10_000,
   },
 })

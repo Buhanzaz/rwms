@@ -75,7 +75,26 @@ function createClient(
   return { client, calls, fetch }
 }
 
+async function rejectionOf(promise: Promise<unknown>) {
+  try {
+    await promise
+  } catch (error) {
+    return error
+  }
+  throw new Error("Expected promise to reject")
+}
+
 describe("HttpMediaClient", () => {
+  it("exposes the exact upload checksum before a durable create command", async () => {
+    const sha256 = vi.fn(async () => CHECKSUM)
+    const { client, fetch } = createClient([], { sha256 })
+    const file = new File(["photo"], "photo.jpg", { type: "image/jpeg" })
+
+    await expect(client.calculateChecksumSha256(file)).resolves.toBe(CHECKSUM)
+    expect(sha256).toHaveBeenCalledWith(file)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
   it("orchestrates create, same-origin content, and idempotent finalize", async () => {
     const session = {
       uploadSessionId: SESSION_ID,
@@ -565,9 +584,17 @@ describe("HttpMediaClient", () => {
       }),
     ])
 
-    await expect(
+    const failure = await rejectionOf(
       client.listCabinCovers("cover-token", WAREHOUSE_ID, [OWNER_ID])
-    ).rejects.toThrow("Cabin cover does not match previews")
+    )
+    expect(failure).toBeInstanceOf(ApiError)
+    expect(failure).toMatchObject({
+      status: 502,
+      code: "INVALID_API_RESPONSE",
+      message:
+        "Сервис вернул некорректные данные. Обновите страницу или повторите попытку позже.",
+      diagnosticMessage: "Cabin cover does not match previews",
+    })
   })
 
   it("rejects malformed enums and URL or query injection before content fetch", async () => {
@@ -584,7 +611,7 @@ describe("HttpMediaClient", () => {
           contentUploadUrl,
         }),
       ])
-      await expect(
+      const failure = await rejectionOf(
         client.createUploadSession(
           "access-token",
           owner,
@@ -596,7 +623,16 @@ describe("HttpMediaClient", () => {
           },
           CREATE_KEY
         )
-      ).rejects.toThrow(/path|public media API/i)
+      )
+      expect(failure).toMatchObject({
+        status: 502,
+        code: "INVALID_API_RESPONSE",
+        message:
+          "Сервис вернул некорректные данные. Обновите страницу или повторите попытку позже.",
+      })
+      expect((failure as ApiError).diagnosticMessage).toMatch(
+        /path|public media API/i
+      )
       expect(fetch).toHaveBeenCalledOnce()
     }
 
@@ -609,7 +645,16 @@ describe("HttpMediaClient", () => {
     const { client, fetch } = createClient([
       jsonResponse({ items: [malformed], next: null }),
     ])
-    await expect(client.listOwnerMedia("access-token", owner)).rejects.toThrow(
+    const malformedFailure = await rejectionOf(
+      client.listOwnerMedia("access-token", owner)
+    )
+    expect(malformedFailure).toMatchObject({
+      status: 502,
+      code: "INVALID_API_RESPONSE",
+      message:
+        "Сервис вернул некорректные данные. Обновите страницу или повторите попытку позже.",
+    })
+    expect((malformedFailure as ApiError).diagnosticMessage).toContain(
       "rotationDegrees"
     )
     expect(fetch).toHaveBeenCalledOnce()
@@ -639,10 +684,91 @@ describe("HttpMediaClient", () => {
     const injected = createClient([
       jsonResponse({ items: [injectedVariant], next: null }),
     ])
-    await expect(
+    const injectedFailure = await rejectionOf(
       injected.client.listOwnerMedia("access-token", owner)
-    ).rejects.toThrow("unexpected query parameter")
+    )
+    expect(injectedFailure).toMatchObject({
+      status: 502,
+      code: "INVALID_API_RESPONSE",
+      message:
+        "Сервис вернул некорректные данные. Обновите страницу или повторите попытку позже.",
+      diagnosticMessage:
+        "Media content path has an unexpected query parameter",
+    })
     expect(injected.fetch).toHaveBeenCalledOnce()
+  })
+
+  it("maps a raw media fetch failure to a safe typed network error", async () => {
+    const fetch = vi
+      .fn()
+      .mockRejectedValue(new TypeError("Failed to fetch minio.internal"))
+    const client = new HttpMediaClient({ baseUrl: BASE_URL, fetch })
+
+    await expect(
+      client.listOwnerMedia("access-token", owner)
+    ).rejects.toMatchObject({
+      status: 0,
+      code: "NETWORK_ERROR",
+      message:
+        "Не удалось связаться с сервером. Проверьте подключение и повторите попытку.",
+      diagnosticMessage: "Failed to fetch minio.internal",
+    })
+  })
+
+  it("maps malformed successful media JSON and protocol content types safely", async () => {
+    const malformed = createClient([
+      new Response("{not-json", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ])
+    const malformedFailure = await rejectionOf(
+      malformed.client.listOwnerMedia("access-token", owner)
+    )
+    expect(malformedFailure).toMatchObject({
+      status: 502,
+      code: "INVALID_API_RESPONSE",
+      message:
+        "Сервис вернул некорректные данные. Обновите страницу или повторите попытку позже.",
+    })
+    expect((malformedFailure as ApiError).diagnosticMessage).not.toBe(
+      (malformedFailure as ApiError).message
+    )
+
+    const wrongContentType = createClient([
+      new Response(JSON.stringify({ items: [], next: null }), {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      }),
+    ])
+    await expect(
+      wrongContentType.client.listOwnerMedia("access-token", owner)
+    ).rejects.toMatchObject({
+      status: 502,
+      code: "INVALID_API_RESPONSE",
+      message:
+        "Сервис вернул некорректные данные. Обновите страницу или повторите попытку позже.",
+      diagnosticMessage: "Media JSON response content type is text/html",
+    })
+  })
+
+  it("maps a media content response type mismatch without exposing protocol text", async () => {
+    const { client } = createClient([
+      new Response("internal error page", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      }),
+    ])
+
+    await expect(
+      client.createOriginalObjectUrl("access-token", owner, MEDIA_ID)
+    ).rejects.toMatchObject({
+      status: 502,
+      code: "INVALID_API_RESPONSE",
+      message:
+        "Сервис вернул некорректные данные. Обновите страницу или повторите попытку позже.",
+      diagnosticMessage: "Media service returned an unexpected content type",
+    })
   })
 
   it("maps Problem Details and never falls back to a mock", async () => {

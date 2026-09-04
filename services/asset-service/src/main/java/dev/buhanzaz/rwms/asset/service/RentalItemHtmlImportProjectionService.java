@@ -77,7 +77,9 @@ public class RentalItemHtmlImportProjectionService {
 
   HtmlImportDetailResponse create(
       UUID actorSubjectId, UUID idempotencyKey, UUID warehouseId, byte[] html) {
-    if (actorSubjectId == null || idempotencyKey == null || warehouseId == null) {
+    if (actorSubjectId == null
+        || idempotencyKey == null
+        || warehouseId == null) {
       throw new IllegalArgumentException("HTML import identity is required");
     }
     if (html == null) throw new IllegalArgumentException("HTML source is required");

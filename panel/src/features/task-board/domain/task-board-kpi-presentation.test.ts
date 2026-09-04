@@ -61,13 +61,9 @@ function entry(patch: Partial<TaskBoardEntryDto> = {}): TaskBoardEntryDto {
 }
 
 describe("task-board KPI palette", () => {
-  it("uses only a palette activated for the current warehouse", () => {
-    expect(paletteForTaskBoard({ status: "ACTIVE", palette })).toBe(palette)
-    expect(paletteForTaskBoard({ status: "SCHEDULED", palette })).toBe(palette)
-    expect(paletteForTaskBoard({ status: "DRAFT", palette })).toBeNull()
-    expect(
-      paletteForTaskBoard({ status: "UNCONFIGURED", palette: null })
-    ).toBeNull()
+  it("uses the global palette regardless of the warehouse work-schedule status", () => {
+    expect(paletteForTaskBoard({ palette })).toBe(palette)
+    expect(paletteForTaskBoard({ palette: null })).toBeNull()
   })
 
   it("uses the upper segment on a shared boundary and clamps values above 100", () => {

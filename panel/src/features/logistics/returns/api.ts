@@ -10,8 +10,11 @@ export const RETURNS_QUERY_KEY = ["logistics", "returns"] as const
 
 export const returnClient = new HttpReturnClient()
 
-export const listReturns = (accessToken: string, warehouseId: string) =>
-  returnClient.list(accessToken, warehouseId)
+export const listReturns = (
+  accessToken: string,
+  warehouseId: string,
+  scheduledDate?: string
+) => returnClient.list(accessToken, warehouseId, scheduledDate)
 
 export const getReturn = (accessToken: string, documentId: string) =>
   returnClient.get(accessToken, documentId)

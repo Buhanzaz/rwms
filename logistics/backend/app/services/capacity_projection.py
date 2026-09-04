@@ -1,4 +1,4 @@
-"""Anonymous simulator test capacity and isochrone tariffs published to RWMS."""
+"""Anonymous capacity, isochrone tariffs, and exceptional policies published to RWMS."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from hashlib import sha256
+from typing import Literal, cast
 from uuid import UUID, uuid5
 
 from sqlalchemy import select
@@ -14,21 +15,38 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.errors import ApiError, not_found
+from app.geo import geometry_to_geojson
 from app.integrations.rwms import RwmsPlanningClient
 from app.models import (
     DriverShift,
     LogisticsRequest,
     PlanningDayClosure,
+    PlanningDayMode,
+    PlanningDayPolicy,
     Warehouse,
+    WarehousePolicyZone,
 )
 from app.models.domain import RequestStatus
+from app.models.policy_zone import PolicyZoneKind
 from app.schemas.domain import (
     PlanningSettings,
     RwmsCapacitySnapshotCommand,
     RwmsCapacitySnapshotResult,
     RwmsIsochroneTariff,
     RwmsPlanningCapacityJob,
+    RwmsPlanningCapacityPriceZone,
+    RwmsPlanningCapacityRestrictionZone,
     RwmsPlanningCapacityShift,
+)
+from app.schemas.policy_zones import GeoJsonMultiPolygon
+from app.services.capacity_publication_state import (
+    record_capacity_publication_failure,
+    record_capacity_publication_success,
+)
+from app.services.planning_group import (
+    link_allows_group_planning,
+    link_allows_planning_date,
+    resolve_planning_warehouse_group,
 )
 from app.services.workload_generator import GENERATOR_SOURCE_SYSTEM
 
@@ -78,8 +96,10 @@ def _revision(
     jobs: list[RwmsPlanningCapacityJob],
     shifts: list[RwmsPlanningCapacityShift],
     isochrone_tariffs: list[RwmsIsochroneTariff],
+    price_zones: list[RwmsPlanningCapacityPriceZone],
+    restriction_zones: list[RwmsPlanningCapacityRestrictionZone],
 ) -> str:
-    """Hash one durable workload generation and its sorted capacity facts."""
+    """Hash one durable generation and every sorted capacity or policy fact."""
 
     facts = {
         "warehouseId": str(warehouse_id),
@@ -90,6 +110,25 @@ def _revision(
                 "priceRubles": tariff.price_rubles,
             }
             for tariff in isochrone_tariffs
+        ],
+        "priceZones": [
+            {
+                "sourceZoneId": str(zone.source_zone_id),
+                "sourceZoneVersion": zone.source_zone_version,
+                "deliveryPriceRubles": zone.delivery_price_rubles,
+                "pickupPriceRubles": zone.pickup_price_rubles,
+                "geometry": zone.geometry.model_dump(mode="json"),
+            }
+            for zone in price_zones
+        ],
+        "restrictionZones": [
+            {
+                "sourceZoneId": str(zone.source_zone_id),
+                "sourceZoneVersion": zone.source_zone_version,
+                "kind": zone.kind,
+                "geometry": zone.geometry.model_dump(mode="json"),
+            }
+            for zone in restriction_zones
         ],
         "jobs": [
             {
@@ -132,6 +171,7 @@ def _revision(
 async def build_capacity_projection(
     session: AsyncSession,
     warehouse_id: UUID,
+    rwms_client: RwmsPlanningClient | None = None,
 ) -> CapacityProjection:
     """Read generator-owned anonymous test capacity and tariffs for one linked warehouse."""
 
@@ -242,6 +282,36 @@ async def build_capacity_projection(
             .order_by(DriverShift.date_from, DriverShift.start_time, DriverShift.id)
         )
     )
+    planning_group = await resolve_planning_warehouse_group(
+        session,
+        rwms_client,
+        warehouse,
+    )
+    pickup_only_policies = tuple(
+        await session.scalars(
+            select(PlanningDayPolicy).where(
+                PlanningDayPolicy.warehouse_id == planning_group.root.id,
+                PlanningDayPolicy.mode == PlanningDayMode.PICKUPS_ONLY,
+            )
+        )
+    )
+    if warehouse.id == planning_group.root.id:
+        pickup_only_dates = {policy.date for policy in pickup_only_policies}
+    else:
+        incoming_links = tuple(
+            link
+            for link in planning_group.links
+            if link.served_warehouse.warehouse_id == warehouse.external_warehouse_id
+            and link_allows_group_planning(link)
+        )
+        pickup_only_dates = {
+            policy.date
+            for policy in pickup_only_policies
+            if any(
+                link_allows_planning_date(link, policy.date)
+                for link in incoming_links
+            )
+        }
     shifts: list[RwmsPlanningCapacityShift] = []
     for shift in active_shifts:
         if not shift.driver.active or not shift.vehicle.active:
@@ -254,7 +324,7 @@ async def build_capacity_projection(
             )
         current_date = shift.date_from
         while current_date <= shift.date_to:
-            if current_date not in closed_dates:
+            if current_date not in closed_dates and current_date not in pickup_only_dates:
                 shifts.append(
                     RwmsPlanningCapacityShift(
                         source_shift_id=uuid5(
@@ -293,12 +363,71 @@ async def build_capacity_projection(
         )
         for tariff in warehouse.isochrone_tariffs
     ]
+    policy_zones = list(
+        await session.scalars(
+            select(WarehousePolicyZone)
+            .where(WarehousePolicyZone.warehouse_id == warehouse_id)
+            .order_by(WarehousePolicyZone.id)
+        )
+    )
+    price_zones: list[RwmsPlanningCapacityPriceZone] = []
+    restriction_zones: list[RwmsPlanningCapacityRestrictionZone] = []
+    for zone in policy_zones:
+        geometry = GeoJsonMultiPolygon.model_validate(
+            geometry_to_geojson(zone.geometry)
+        )
+        kind = PolicyZoneKind(zone.kind)
+        if kind is PolicyZoneKind.SPECIAL_PRICE:
+            if (
+                zone.delivery_price_rubles is None
+                or zone.pickup_price_rubles is None
+            ):
+                raise ApiError(
+                    422,
+                    "RWMS_CAPACITY_POLICY_ZONE_INVALID",
+                    "A SPECIAL_PRICE policy requires delivery and pickup prices",
+                )
+            price_zones.append(
+                RwmsPlanningCapacityPriceZone(
+                    source_zone_id=zone.id,
+                    source_zone_version=zone.version,
+                    delivery_price_rubles=zone.delivery_price_rubles,
+                    pickup_price_rubles=zone.pickup_price_rubles,
+                    geometry=geometry,
+                )
+            )
+        else:
+            restriction_zones.append(
+                RwmsPlanningCapacityRestrictionZone(
+                    source_zone_id=zone.id,
+                    source_zone_version=zone.version,
+                    kind=cast(
+                        Literal["FORBIDDEN", "NO_TRAILER"],
+                        kind.value,
+                    ),
+                    geometry=geometry,
+                )
+            )
+    if len(price_zones) > 500:
+        raise ApiError(
+            422,
+            "RWMS_CAPACITY_TOO_MANY_PRICE_ZONES",
+            "A capacity snapshot cannot contain more than 500 price zones",
+        )
+    if len(restriction_zones) > 500:
+        raise ApiError(
+            422,
+            "RWMS_CAPACITY_TOO_MANY_RESTRICTION_ZONES",
+            "A capacity snapshot cannot contain more than 500 restriction zones",
+        )
     source_revision = _revision(
         external_warehouse_id,
         warehouse.capacity_generation,
         jobs,
         shifts,
         isochrone_tariffs,
+        price_zones,
+        restriction_zones,
     )
     return CapacityProjection(
         command=RwmsCapacitySnapshotCommand(
@@ -307,6 +436,8 @@ async def build_capacity_projection(
             jobs=jobs,
             shifts=shifts,
             isochrone_tariffs=isochrone_tariffs,
+            price_zones=price_zones,
+            restriction_zones=restriction_zones,
         ),
         idempotency_key=uuid5(
             _CAPACITY_IDEMPOTENCY_NAMESPACE,
@@ -322,28 +453,45 @@ async def publish_warehouse_capacity(
 ) -> RwmsCapacitySnapshotResult:
     """Release the read transaction before replacing the remote projection."""
 
-    client.ensure_capacity_publish_enabled()
-    projection = await build_capacity_projection(session, warehouse_id)
     warehouse = await session.get(Warehouse, warehouse_id)
     if warehouse is None:
         raise not_found("warehouse", warehouse_id)
-    await session.commit()
-    result = await client.replace_capacity_snapshot(
-        warehouse.external_warehouse_id,
-        projection.command,
-        idempotency_key=projection.idempotency_key,
-    )
-    if (
-        result.warehouse_id != warehouse.external_warehouse_id
-        or result.source_generation != projection.command.source_generation
-        or result.source_revision != projection.command.source_revision
-        or result.job_count != len(projection.command.jobs)
-        or result.shift_count != len(projection.command.shifts)
-        or result.isochrone_tariff_count != len(projection.command.isochrone_tariffs)
-    ):
-        raise ApiError(
-            502,
-            "RWMS_CAPACITY_RESPONSE_MISMATCH",
-            "RWMS capacity response does not identify the submitted snapshot",
+    generation = warehouse.capacity_generation
+    try:
+        client.ensure_capacity_publish_enabled()
+        projection = await build_capacity_projection(session, warehouse_id, client)
+        await session.commit()
+        result = await client.replace_capacity_snapshot(
+            warehouse.external_warehouse_id,
+            projection.command,
+            idempotency_key=projection.idempotency_key,
         )
+        if (
+            result.warehouse_id != warehouse.external_warehouse_id
+            or result.source_generation != projection.command.source_generation
+            or result.source_revision != projection.command.source_revision
+            or result.job_count != len(projection.command.jobs)
+            or result.shift_count != len(projection.command.shifts)
+            or result.isochrone_tariff_count != len(projection.command.isochrone_tariffs)
+            or result.price_zone_count != len(projection.command.price_zones)
+            or result.restriction_zone_count
+            != len(projection.command.restriction_zones)
+        ):
+            raise ApiError(
+                502,
+                "RWMS_CAPACITY_RESPONSE_MISMATCH",
+                "RWMS capacity response does not identify the submitted snapshot",
+            )
+    except Exception as exc:
+        await session.rollback()
+        await record_capacity_publication_failure(
+            session,
+            warehouse_id,
+            generation,
+            exc,
+        )
+        await session.commit()
+        raise
+    await record_capacity_publication_success(session, warehouse_id, generation)
+    await session.commit()
     return result

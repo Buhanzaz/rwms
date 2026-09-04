@@ -32,6 +32,9 @@ class InventoryClientCredentialsValidatorTest {
         assertThatCode(() -> AuthorizationServerConfiguration.validateInventoryDownstreamRequest(
                         context("inventory-service", Set.of("logistics.inventory"), exactOverrides)))
                 .doesNotThrowAnyException();
+        assertThatCode(() -> AuthorizationServerConfiguration.validateInventoryDownstreamRequest(
+                        context("inventory-service", Set.of("task-board.inventory-calendar.read"), exactOverrides)))
+                .doesNotThrowAnyException();
     }
 
     @Test
@@ -39,6 +42,7 @@ class InventoryClientCredentialsValidatorTest {
         for (Set<String> scopes : Set.of(
                 Set.<String>of(),
                 Set.of("warehouse.read", "asset.inventory"),
+                Set.of("task-board.inventory-calendar.read", "asset.inventory"),
                 Set.of("foreign.scope"))) {
             assertThatThrownBy(() -> AuthorizationServerConfiguration.validateInventoryDownstreamRequest(
                             context("inventory-service", scopes, Map.of())))

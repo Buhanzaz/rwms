@@ -2,7 +2,6 @@ import { useState } from "react"
 import { FilterIcon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -76,6 +75,7 @@ function MultiSelectFilter<T extends string>({
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState<T[]>(selected)
   const controlPrefix = label.toLocaleLowerCase("ru-RU").replace(/\s+/g, "-")
+  const hasSelectedValues = selected.length > 0
 
   function toggle(value: T) {
     setDraft((current) =>
@@ -97,12 +97,15 @@ function MultiSelectFilter<T extends string>({
         <Button
           type="button"
           size="default"
-          variant={selected.length > 0 ? "secondary" : "outline"}
-          className="h-9 w-full justify-start"
+          variant="outline"
+          className={`h-9 w-full justify-start${
+            hasSelectedValues ? " rwms-button-light" : ""
+          }`}
+          aria-pressed={hasSelectedValues}
         >
           {label}
-          {selected.length > 0 ? (
-            <Badge variant="outline">{selected.length}</Badge>
+          {hasSelectedValues ? (
+            <span className="text-xs text-current">{selected.length}</span>
           ) : null}
           <HugeiconsIcon
             icon={FilterIcon}

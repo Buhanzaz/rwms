@@ -40,7 +40,6 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 public class CustomerDeliveryEstimateService {
   private static final int MAX_ESTIMATED_DATES = 4;
-  private static final int MAX_MATRIX_POINTS = 32;
 
   private final CustomerDeliveryProperties properties;
   private final LogisticsDependencyGateway dependencies;
@@ -55,7 +54,8 @@ public class CustomerDeliveryEstimateService {
 
   /**
    * Returns up to four earliest warehouse-local days with provisional capacity for one cabin.
-   * Representative warehouses additionally require an eligible owner-held support-calendar day.
+   * Representative warehouses expose only full-day guidance backed by the same confirmed local
+   * route-capacity calculation; support topology alone never creates customer capacity.
    */
   public List<LocalDate> estimatedDates(UUID warehouseId) {
     return estimatedDates(warehouseId, now());
@@ -84,8 +84,8 @@ public class CustomerDeliveryEstimateService {
                 CustomerDeliverySlotKind.DURING_DAY,
                 configuration.customerDeliveryStart(),
                 configuration.customerDeliveryEnd(),
-                false);
-        if (supportDay.allowed() && (localCapacity || supportDay.flexibleSupport())) {
+                localCapacity);
+        if (supportDay.allowed()) {
           result.add(date);
         }
       } else if (localCapacity) {
@@ -135,7 +135,6 @@ public class CustomerDeliveryEstimateService {
                     job.getLatitude().doubleValue(), job.getLongitude().doubleValue())));
     int candidateIndex = points.size();
     points.add(depot);
-    if (points.size() > MAX_MATRIX_POINTS) return false;
 
     List<DeliveryJob> jobs = new ArrayList<>(existing.size() + generated.size() + 1);
     for (int index = 0; index < existing.size(); index++) {

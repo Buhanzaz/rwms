@@ -5,8 +5,13 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityIsochroneTariff;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityPriceZone;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityRestrictionKind;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityRestrictionZone;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityIsochroneTariffRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityJobRepository;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityPriceZoneRepository;
+import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityRestrictionZoneRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityShiftRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacitySnapshotRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.service.CustomerDeliveryCapacityFence;
@@ -79,6 +84,10 @@ class CustomerDeliverySlotHoldStoreTest {
     WarehouseCapacityShiftRepository shifts = mock(WarehouseCapacityShiftRepository.class);
     WarehouseCapacityIsochroneTariffRepository isochroneTariffs =
         mock(WarehouseCapacityIsochroneTariffRepository.class);
+    WarehouseCapacityPriceZoneRepository priceZones =
+        mock(WarehouseCapacityPriceZoneRepository.class);
+    WarehouseCapacityRestrictionZoneRepository restrictionZones =
+        mock(WarehouseCapacityRestrictionZoneRepository.class);
     WarehouseCapacitySnapshotRepository snapshots =
         mock(WarehouseCapacitySnapshotRepository.class);
     DriverLogisticsTaskRepository drivers = mock(DriverLogisticsTaskRepository.class);
@@ -90,12 +99,16 @@ class CustomerDeliverySlotHoldStoreTest {
             generated,
             shifts,
             isochroneTariffs,
+            priceZones,
+            restrictionZones,
             snapshots,
             drivers,
             capacityFence,
             CLOCK);
-    when(sessions.selectSlot(subjectId, inquiryId, 4, slotId)).thenReturn(session);
-    when(slots.findByIdForUpdate(slotId)).thenReturn(Optional.of(offered));
+    when(sessions.selectSlot(subjectId, inquiryId, 4, slotId))
+        .thenReturn(session);
+    when(slots.findByIdForUpdate(slotId))
+        .thenReturn(Optional.of(offered));
     when(slots.findCapacityWorkloadForUpdate(
             warehouseId,
             date,
@@ -117,8 +130,11 @@ class CustomerDeliverySlotHoldStoreTest {
             OffsetDateTime.parse("2026-08-27T07:00:00Z"));
     when(isochroneTariffs.findTariffs(warehouseId))
         .thenReturn(snapshot.getIsochroneTariffs());
+    when(priceZones.findTariffZones(warehouseId)).thenReturn(List.of());
+    when(restrictionZones.findRestrictionZones(warehouseId)).thenReturn(List.of());
     when(snapshots.findByWarehouseId(warehouseId)).thenReturn(Optional.of(snapshot));
-    when(slots.findHeldForUpdate(inquiryId, CustomerDeliverySlotState.HELD))
+    when(
+            slots.findHeldForUpdate(inquiryId, CustomerDeliverySlotState.HELD))
         .thenReturn(List.of());
     when(slots.saveAndFlush(offered)).thenReturn(offered);
     String fingerprint =
@@ -196,6 +212,66 @@ class CustomerDeliverySlotHoldStoreTest {
             0);
 
     assertThat(changedTariff).isNotEqualTo(baseline);
+  }
+
+  @Test
+  void exceptionalPolicyFactsParticipateInTheFinalWorkloadFence() {
+    WarehouseCapacitySnapshot baseline =
+        snapshotWithPolicies(9_000, WarehouseCapacityRestrictionKind.NO_TRAILER);
+    WarehouseCapacitySnapshot changedPrice =
+        snapshotWithPolicies(9_500, WarehouseCapacityRestrictionKind.NO_TRAILER);
+    WarehouseCapacitySnapshot changedRestriction =
+        snapshotWithPolicies(9_000, WarehouseCapacityRestrictionKind.FORBIDDEN);
+
+    String baselineFingerprint = fingerprint(baseline);
+
+    assertThat(fingerprint(changedPrice)).isNotEqualTo(baselineFingerprint);
+    assertThat(fingerprint(changedRestriction)).isNotEqualTo(baselineFingerprint);
+  }
+
+  private static String fingerprint(WarehouseCapacitySnapshot snapshot) {
+    return CustomerCapacityWorkloadFingerprint.sha256(
+        List.of(),
+        List.of(),
+        List.of(),
+        snapshot,
+        snapshot.getIsochroneTariffs(),
+        snapshot.getPriceZones(),
+        snapshot.getRestrictionZones(),
+        0);
+  }
+
+  private static WarehouseCapacitySnapshot snapshotWithPolicies(
+      long deliveryPrice, WarehouseCapacityRestrictionKind restrictionKind) {
+    return WarehouseCapacitySnapshot.create(
+        UUID.fromString("00000000-0000-0000-0000-000000000710"),
+        1,
+        "a".repeat(64),
+        List.of(),
+        List.of(),
+        tariffFacts(10_000),
+        List.of(
+            new WarehouseCapacityPriceZone.Facts(
+                UUID.fromString("00000000-0000-0000-0000-000000000711"),
+                1,
+                deliveryPrice,
+                4_000,
+                geometry())),
+        List.of(
+            new WarehouseCapacityRestrictionZone.Facts(
+                UUID.fromString("00000000-0000-0000-0000-000000000712"),
+                1,
+                restrictionKind,
+                geometry())),
+        OffsetDateTime.parse("2026-08-27T07:00:00Z"));
+  }
+
+  private static String geometry() {
+    return """
+        {"type":"MultiPolygon","coordinates":[[[
+          [37.0,55.0],[38.0,55.0],[38.0,56.0],[37.0,55.0]
+        ]]]}
+        """;
   }
 
   private static List<WarehouseCapacityIsochroneTariff.Facts> tariffFacts(long firstPrice) {

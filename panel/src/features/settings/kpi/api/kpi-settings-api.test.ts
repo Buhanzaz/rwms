@@ -3,18 +3,17 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   activateKpiSettings,
   deletePendingWorkSchedule,
+  getKpiPalette,
   getKpiSettings,
   saveKpiPalette,
   saveWorkSchedule,
 } from "@/features/settings/kpi/api/kpi-settings-api"
 
-const warehouseId = "warehouse/id"
 const settings = {
-  warehouseId,
-  timeZone: "Europe/Moscow",
   status: "DRAFT",
   version: 3,
   dataAvailableFrom: null,
+  minimumEffectiveDate: "2026-09-04",
   palette: null,
   activeSchedule: null,
   pendingSchedule: null,
@@ -31,28 +30,37 @@ function jsonResponse(body: unknown, status = 200) {
 afterEach(() => vi.restoreAllMocks())
 
 describe("KPI settings API", () => {
-  it("loads warehouse settings from the public task-board route", async () => {
+  it("loads global settings from the public task-board route", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(jsonResponse(settings))
 
-    await expect(getKpiSettings("access-token", warehouseId)).resolves.toEqual(
-      settings
-    )
+    await expect(getKpiSettings("access-token")).resolves.toEqual(settings)
 
     const [input, init] = fetchMock.mock.calls[0]!
     expect(new URL(String(input)).pathname).toBe(
-      "/api/task-board/warehouses/warehouse%2Fid/task-board/kpi-settings"
+      "/api/task-board/kpi-settings"
     )
     expect(new Headers(init?.headers).get("Authorization")).toBe(
       "Bearer access-token"
     )
   })
 
-  it("saves an atomic palette with the aggregate expectedVersion", async () => {
+  it("loads and saves the one palette shared by every object", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
-      .mockResolvedValue(jsonResponse({ ...settings, version: 4 }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          version: 3,
+          palette: settings.palette,
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          version: 4,
+          palette: settings.palette,
+        })
+      )
     const input = {
       expectedVersion: 3,
       ranges: [
@@ -62,14 +70,17 @@ describe("KPI settings API", () => {
       overdueColor: "#7F1D1D",
     }
 
-    await saveKpiPalette("access-token", warehouseId, input)
+    await expect(getKpiPalette("access-token")).resolves.toEqual({
+      version: 3,
+      palette: null,
+    })
+    await saveKpiPalette("access-token", input)
 
-    const [url, init] = fetchMock.mock.calls[0]!
-    expect(new URL(String(url)).pathname).toBe(
-      "/api/task-board/warehouses/warehouse%2Fid/task-board/kpi-settings/palette"
-    )
-    expect(init?.method).toBe("PUT")
-    expect(JSON.parse(String(init?.body))).toEqual(input)
+    expect(
+      fetchMock.mock.calls.map(([url]) => new URL(String(url)).pathname)
+    ).toEqual(["/api/task-board/kpi-palette", "/api/task-board/kpi-palette"])
+    expect(fetchMock.mock.calls[1]![1]?.method).toBe("PUT")
+    expect(JSON.parse(String(fetchMock.mock.calls[1]![1]?.body))).toEqual(input)
   })
 
   it("saves, removes and activates a scheduled configuration", async () => {
@@ -81,7 +92,7 @@ describe("KPI settings API", () => {
         jsonResponse({ ...settings, version: 5, status: "ACTIVE" })
       )
 
-    await saveWorkSchedule("access-token", warehouseId, {
+    await saveWorkSchedule("access-token", {
       expectedVersion: 3,
       effectiveFrom: "2026-08-01",
       shiftStart: "08:00",
@@ -89,10 +100,9 @@ describe("KPI settings API", () => {
       daysOff: [6, 7],
       breaks: [{ start: "13:00", end: "14:00" }],
     })
-    await deletePendingWorkSchedule("access-token", warehouseId, 4)
+    await deletePendingWorkSchedule("access-token", 4)
     await activateKpiSettings(
       "access-token",
-      warehouseId,
       4,
       "00000000-0000-4000-8000-000000000099"
     )
@@ -100,9 +110,9 @@ describe("KPI settings API", () => {
     expect(
       fetchMock.mock.calls.map(([url]) => new URL(String(url)).pathname)
     ).toEqual([
-      "/api/task-board/warehouses/warehouse%2Fid/task-board/kpi-settings/work-schedule",
-      "/api/task-board/warehouses/warehouse%2Fid/task-board/kpi-settings/work-schedule/pending",
-      "/api/task-board/warehouses/warehouse%2Fid/task-board/kpi-settings/activate",
+      "/api/task-board/kpi-settings/work-schedule",
+      "/api/task-board/kpi-settings/work-schedule/pending",
+      "/api/task-board/kpi-settings/activate",
     ])
     expect(new URL(String(fetchMock.mock.calls[1]![0])).search).toBe(
       "?expectedVersion=4"

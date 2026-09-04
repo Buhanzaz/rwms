@@ -9,6 +9,13 @@ F1C разрешено принять только после успешного
 `flyway/verify-version-2.sql` и явного baseline оператором на версии `2`; см.
 `flyway/README.md`. Автоматический baseline отключён.
 
+Аддитивные миграции до
+`src/main/resources/db/migration/V7__customer_registration_throttle.sql`
+устанавливают event sourcing, native clients и access entitlements, затем
+добавляют долговечный fixed-window counter регистрации. Counter хранит SHA-256
+source key вместо исходного адреса, имеет global bucket и индекс для
+ограниченной очистки истёкших строк.
+
 `baseline/schema.sql`, неизменяемые каталоги в `releases/`, корневой runner
 `Apply-SchemaReleases.ps1` и `rwms_schema_history` являются историческими
 read-only свидетельствами. Они больше не образуют активный production-путь

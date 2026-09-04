@@ -5,30 +5,30 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, time, timedelta
 from types import SimpleNamespace
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api import catalog as catalog_api
 from app.api.catalog import get_warehouse_workspace
 from app.config import Settings
-from app.errors import ApiError
 from app.integrations.rwms_sync import _load_plan_for_rwms_apply, build_assignments_command
-from app.models import RoutePlan, Warehouse
+from app.models import RoutePlan, Trailer, Warehouse
 from app.models.domain import PlanStatus
 from app.schemas.domain import (
     GeneratePlanRequest,
+    RwmsDriverIdentity,
     RwmsPlanningDateOption,
     RwmsPlanningRequest,
-    RwmsSyncFailure,
-    RwmsSyncResult,
+    RwmsPlanningUnitReservation,
     RwmsWarehouseIdentity,
     RwmsWarehouseSupportLink,
 )
 from app.services.auto_planning import invalidate_mutable_group_root_plans
 from app.services.planner_runtime import RuntimePlannerFacade
 from app.services.planning_group import link_allows_group_planning
+from tests.auth import admin_principal
 from tests.factories import (
     make_driver,
     make_request,
@@ -38,6 +38,12 @@ from tests.factories import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+def _warehouse_local_date(warehouse: Warehouse) -> date:
+    """Return the current planning date in the warehouse's canonical timezone."""
+
+    return datetime.now(ZoneInfo(warehouse.timezone)).date()
 
 
 def _identity(warehouse: Warehouse) -> RwmsWarehouseIdentity:
@@ -109,6 +115,45 @@ class _NetworkClient:
             }
         ]
 
+    async def list_vehicle_assignments(
+        self,
+        warehouse_id: UUID,
+        *,
+        window_start: datetime,
+        window_end: datetime,
+    ) -> list[object]:
+        """Return no vehicle moves in tests whose frozen input is only the support graph."""
+
+        del warehouse_id, window_start, window_end
+        return []
+
+    async def list_drivers(
+        self,
+        warehouse_id: UUID,
+        *,
+        at: datetime | None = None,
+        include_incoming: bool = False,
+    ) -> list[RwmsDriverIdentity]:
+        """Return no canonical workers for group tests that exercise demand only."""
+
+        del warehouse_id, at, include_incoming
+        return []
+
+    async def list_support_links(
+        self,
+        served_warehouse_id: UUID,
+        *,
+        at: datetime,
+    ) -> list[RwmsWarehouseSupportLink]:
+        """Return active incoming links for the exact served warehouse."""
+
+        del at
+        return [
+            link
+            for link in self.links
+            if link.served_warehouse.warehouse_id == served_warehouse_id
+        ]
+
 
 def test_contractor_fallback_keeps_regional_demand_in_the_group() -> None:
     """A contractor-only edge still admits demand so the planner can explain the fallback."""
@@ -165,11 +210,15 @@ def _enabled_settings() -> Settings:
 async def test_workspace_exposes_root_and_representative_requests_once(
     db_session: AsyncSession,
 ) -> None:
-    """A selected root sees direct regional demand while all resources remain root-owned."""
+    """A selected root sees regional demand and every member-owned local resource."""
 
     planning_date = date(2026, 8, 30)
     root = await make_warehouse(db_session, name="Main")
-    representative = await make_warehouse(db_session, name="Representative")
+    representative = await make_warehouse(
+        db_session,
+        name="Representative",
+        timezone="Pacific/Kiritimati",
+    )
     representative.representative = True
     root_request = await make_request(db_session, root, planning_date=planning_date)
     representative_request = await make_request(
@@ -177,15 +226,47 @@ async def test_workspace_exposes_root_and_representative_requests_once(
         representative,
         planning_date=planning_date,
     )
+    root_driver = await make_driver(db_session, root)
+    representative_driver = await make_driver(db_session, representative)
+    root_vehicle = await make_vehicle(db_session, root)
+    representative_vehicle = await make_vehicle(db_session, representative)
+    root_shift = await make_shift(
+        db_session,
+        root,
+        root_driver,
+        root_vehicle,
+        date_from=planning_date,
+        date_to=planning_date,
+    )
+    representative_shift = await make_shift(
+        db_session,
+        representative,
+        representative_driver,
+        representative_vehicle,
+        date_from=planning_date,
+        date_to=planning_date,
+    )
+    root_trailer = Trailer(
+        warehouse_id=root.id,
+        name="Root trailer",
+        registration_number="ROOT-TRAILER",
+    )
+    representative_trailer = Trailer(
+        warehouse_id=representative.id,
+        name="Representative trailer",
+        registration_number="REP-TRAILER",
+    )
+    db_session.add_all([root_trailer, representative_trailer])
+    await db_session.flush()
     client = _NetworkClient([_link(root, representative)])
 
     workspace = await get_warehouse_workspace(
         root.id,
         db_session,
-        SimpleNamespace(),
         _enabled_settings(),
         client,  # type: ignore[arg-type]
-        refresh_rwms=False,
+        admin_principal(),
+        planning_date=planning_date,
     )
 
     assert workspace.planning_root_warehouse_id == root.id
@@ -195,6 +276,22 @@ async def test_workspace_exposes_root_and_representative_requests_once(
         representative_request.id,
     }
     assert len(workspace.requests) == 2
+    assert {item.id: item.warehouse_id for item in workspace.drivers} == {
+        root_driver.id: root.id,
+        representative_driver.id: representative.id,
+    }
+    assert {item.id: item.warehouse_id for item in workspace.vehicles} == {
+        root_vehicle.id: root.id,
+        representative_vehicle.id: representative.id,
+    }
+    assert {item.id: item.warehouse_id for item in workspace.trailers} == {
+        root_trailer.id: root.id,
+        representative_trailer.id: representative.id,
+    }
+    assert {item.id: item.warehouse_id for item in workspace.shifts} == {
+        root_shift.id: root.id,
+        representative_shift.id: representative.id,
+    }
 
 
 @pytest.mark.asyncio
@@ -204,7 +301,11 @@ async def test_representative_selection_resolves_the_same_root_without_duplicate
     """Selecting a representative preserves selection but exposes its main planning root."""
 
     root = await make_warehouse(db_session, name="Main")
-    representative = await make_warehouse(db_session, name="Representative")
+    representative = await make_warehouse(
+        db_session,
+        name="Representative",
+        timezone="Pacific/Kiritimati",
+    )
     representative.representative = True
     link = _link(root, representative)
     client = _NetworkClient([link, link])
@@ -212,13 +313,13 @@ async def test_representative_selection_resolves_the_same_root_without_duplicate
     workspace = await get_warehouse_workspace(
         representative.id,
         db_session,
-        SimpleNamespace(),
         _enabled_settings(),
         client,  # type: ignore[arg-type]
-        refresh_rwms=False,
+        admin_principal(),
     )
 
     assert workspace.warehouse.id == representative.id
+    assert workspace.planning_date == _warehouse_local_date(representative)
     assert workspace.planning_root_warehouse_id == root.id
     assert workspace.planning_group_warehouse_ids == [root.id, representative.id]
 
@@ -226,14 +327,14 @@ async def test_representative_selection_resolves_the_same_root_without_duplicate
 @pytest.mark.asyncio
 async def test_unchanged_group_workspace_refresh_preserves_mutable_plan_identity(
     db_session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An unchanged RWMS poll must not churn the shared root draft plan."""
+    """Repeated pure workspace reads never churn the shared root draft plan."""
 
-    planning_date = datetime.now().date()
     root = await make_warehouse(db_session, name="Main")
+    planning_date = _warehouse_local_date(root)
     representative = await make_warehouse(db_session, name="Representative")
     representative.representative = True
+    assert representative.external_warehouse_id is not None
     draft = RoutePlan(
         warehouse_id=root.id,
         date=planning_date,
@@ -243,142 +344,82 @@ async def test_unchanged_group_workspace_refresh_preserves_mutable_plan_identity
     db_session.add(draft)
     await db_session.flush()
     client = _NetworkClient([_link(root, representative)])
-    generated_for: list[tuple[UUID, ...]] = []
-
-    async def refresh_directory(*args: object, **kwargs: object) -> list[Warehouse]:
-        """Keep the persisted planning group unchanged during the focused refresh."""
-
-        return [root, representative]
-
-    async def sync_requests(*args: object, **kwargs: object) -> RwmsSyncResult:
-        """Model an idempotent member poll where every source order was skipped."""
-
-        return RwmsSyncResult(imported=0, updated=0, skipped=1)
-
-    async def generate_plans(
-        session: AsyncSession,
-        planner: object,
-        warehouse_id: UUID,
-        planning_dates: object,
-        *,
-        request_warehouse_ids: object = None,
-    ) -> tuple[()]:
-        """Record the aggregate demand scope without replacing an existing draft."""
-
-        del session, planner, warehouse_id, planning_dates
-        generated_for.append(tuple(request_warehouse_ids or ()))  # type: ignore[arg-type]
-        return ()
-
-    monkeypatch.setattr(catalog_api, "refresh_warehouse_directory", refresh_directory)
-    monkeypatch.setattr(catalog_api, "sync_warehouse_requests", sync_requests)
-    monkeypatch.setattr(catalog_api, "generate_missing_draft_plans", generate_plans)
-
-    await get_warehouse_workspace(
-        root.id,
-        db_session,
-        object(),
-        _enabled_settings(),
-        client,  # type: ignore[arg-type]
-        refresh_rwms=True,
-    )
-
-    remaining = await db_session.scalar(select(RoutePlan).where(RoutePlan.id == draft.id))
-    assert remaining is not None
-    assert remaining.id == draft.id
-    assert generated_for == [(root.id, representative.id)]
-
-
-@pytest.mark.asyncio
-async def test_incomplete_group_workspace_refresh_preserves_mutable_plan(
-    db_session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A partially changed but failed member sync must leave the stable draft untouched."""
-
-    planning_date = datetime.now().date()
-    root = await make_warehouse(db_session, name="Main")
-    representative = await make_warehouse(db_session, name="Representative")
-    representative.representative = True
-    draft = RoutePlan(
-        warehouse_id=root.id,
-        date=planning_date,
-        name="Stable draft",
-        status=PlanStatus.DRAFT,
-    )
-    db_session.add(draft)
-    await db_session.flush()
-    client = _NetworkClient([_link(root, representative)])
-    generation_calls = 0
-
-    async def refresh_directory(*args: object, **kwargs: object) -> list[Warehouse]:
-        """Keep the persisted planning group unchanged during the focused refresh."""
-
-        return [root, representative]
-
-    async def sync_requests(
-        session: AsyncSession,
-        warehouse_id: UUID,
-        *args: object,
-        **kwargs: object,
-    ) -> RwmsSyncResult:
-        """Return one partially changed feed containing an explicit synchronization failure."""
-
-        del session, args, kwargs
-        if warehouse_id == root.id:
-            return RwmsSyncResult(
-                imported=1,
-                updated=0,
-                skipped=0,
-                failures=[
-                    RwmsSyncFailure(
-                        order_id=uuid4(),
-                        code="COORDINATES_REQUIRED",
-                        message="Coordinates are required",
-                    )
-                ],
-            )
-        return RwmsSyncResult(imported=0, updated=0, skipped=1)
-
-    async def generate_plans(*args: object, **kwargs: object) -> tuple[()]:
-        """Fail the regression if generation runs after an incomplete synchronization."""
-
-        nonlocal generation_calls
-        generation_calls += 1
-        return ()
-
-    monkeypatch.setattr(catalog_api, "refresh_warehouse_directory", refresh_directory)
-    monkeypatch.setattr(catalog_api, "sync_warehouse_requests", sync_requests)
-    monkeypatch.setattr(catalog_api, "generate_missing_draft_plans", generate_plans)
-
-    with pytest.raises(ApiError) as error:
+    for _ in range(2):
         await get_warehouse_workspace(
             root.id,
             db_session,
-            object(),
             _enabled_settings(),
             client,  # type: ignore[arg-type]
-            refresh_rwms=True,
+            admin_principal(),
+            planning_date=planning_date,
         )
 
     remaining = await db_session.scalar(select(RoutePlan).where(RoutePlan.id == draft.id))
-    assert error.value.code == "RWMS_WORKSPACE_SYNC_INCOMPLETE"
     assert remaining is not None
     assert remaining.id == draft.id
-    assert generation_calls == 0
 
 
-@pytest.mark.parametrize(("imported", "updated"), [(1, 0), (0, 1)])
 @pytest.mark.asyncio
-async def test_changed_group_workspace_refresh_rebuilds_only_mutable_root_plan(
+async def test_group_workspace_filters_and_keyset_pages_one_exact_date(
     db_session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
-    imported: int,
-    updated: int,
 ) -> None:
-    """A changed member feed replaces the root draft while preserving confirmation."""
+    """The bounded group projection reports an exact-date total and stable UUID cursor."""
 
-    planning_date = datetime.now().date()
     root = await make_warehouse(db_session, name="Main")
+    planning_date = _warehouse_local_date(root)
+    representative = await make_warehouse(db_session, name="Representative")
+    representative.representative = True
+    expected = {
+        (await make_request(db_session, root, planning_date=planning_date)).id,
+        (await make_request(db_session, representative, planning_date=planning_date)).id,
+        (await make_request(db_session, representative, planning_date=planning_date)).id,
+    }
+    outside = await make_request(
+        db_session,
+        root,
+        planning_date=planning_date + timedelta(days=1),
+    )
+    client = _NetworkClient([_link(root, representative)])
+    first = await get_warehouse_workspace(
+        root.id,
+        db_session,
+        _enabled_settings(),
+        client,  # type: ignore[arg-type]
+        admin_principal(),
+        planning_date=planning_date,
+        request_limit=2,
+    )
+    assert first.planning_date == planning_date
+    assert first.request_total == 3
+    assert len(first.requests) == 2
+    assert first.request_next_cursor is not None
+
+    second = await get_warehouse_workspace(
+        root.id,
+        db_session,
+        _enabled_settings(),
+        client,  # type: ignore[arg-type]
+        admin_principal(),
+        planning_date=planning_date,
+        request_limit=2,
+        request_cursor=first.request_next_cursor,
+    )
+    assert second.request_total == 3
+    assert second.request_next_cursor is None
+    assert {item.id for item in [*first.requests, *second.requests]} == expected
+    assert outside.id not in expected
+
+
+@pytest.mark.parametrize("selected_member", ["root", "representative"])
+@pytest.mark.asyncio
+async def test_group_workspace_read_never_archives_root_plan_heads(
+    db_session: AsyncSession,
+    selected_member: str,
+) -> None:
+    """Either group member reads the same persisted draft and confirmed heads."""
+
+    root = await make_warehouse(db_session, name="Main")
+    planning_date = _warehouse_local_date(root)
     representative = await make_warehouse(db_session, name="Representative")
     representative.representative = True
     draft = RoutePlan(
@@ -396,66 +437,14 @@ async def test_changed_group_workspace_refresh_rebuilds_only_mutable_root_plan(
     db_session.add_all([draft, confirmed])
     await db_session.flush()
     client = _NetworkClient([_link(root, representative)])
-    rebuilt_ids: list[UUID] = []
-    generated_for: list[tuple[UUID, ...]] = []
-
-    async def refresh_directory(*args: object, **kwargs: object) -> list[Warehouse]:
-        """Keep the persisted planning group unchanged during the focused refresh."""
-
-        return [root, representative]
-
-    async def sync_requests(
-        session: AsyncSession,
-        warehouse_id: UUID,
-        *args: object,
-        **kwargs: object,
-    ) -> RwmsSyncResult:
-        """Report one changed root feed and an unchanged representative feed."""
-
-        del session, args, kwargs
-        if warehouse_id == root.id:
-            return RwmsSyncResult(
-                imported=imported,
-                updated=updated,
-                skipped=0,
-            )
-        return RwmsSyncResult(imported=0, updated=0, skipped=1)
-
-    async def generate_plans(
-        session: AsyncSession,
-        planner: object,
-        warehouse_id: UUID,
-        planning_dates: object,
-        *,
-        request_warehouse_ids: object = None,
-    ) -> tuple[()]:
-        """Represent automatic regeneration after the endpoint removes the stale draft."""
-
-        del planner, planning_dates
-        assert await session.scalar(select(RoutePlan).where(RoutePlan.id == draft.id)) is None
-        generated_for.append(tuple(request_warehouse_ids or ()))  # type: ignore[arg-type]
-        rebuilt = RoutePlan(
-            warehouse_id=warehouse_id,
-            date=planning_date,
-            name="Rebuilt draft",
-            status=PlanStatus.DRAFT,
-        )
-        session.add(rebuilt)
-        await session.flush()
-        rebuilt_ids.append(rebuilt.id)
-        return ()
-
-    monkeypatch.setattr(catalog_api, "refresh_warehouse_directory", refresh_directory)
-    monkeypatch.setattr(catalog_api, "sync_warehouse_requests", sync_requests)
-    monkeypatch.setattr(catalog_api, "generate_missing_draft_plans", generate_plans)
 
     await get_warehouse_workspace(
-        root.id,
+        root.id if selected_member == "root" else representative.id,
         db_session,
-        object(),
         _enabled_settings(),
         client,  # type: ignore[arg-type]
-        refresh_rwms=True,
+        admin_principal(),
+        planning_date=planning_date,
     )
 
     remaining_ids = set(
@@ -463,10 +452,8 @@ async def test_changed_group_workspace_refresh_rebuilds_only_mutable_root_plan(
             select(RoutePlan.id).where(RoutePlan.warehouse_id == root.id)
         )
     )
-    assert draft.id not in remaining_ids
+    assert draft.id in remaining_ids
     assert confirmed.id in remaining_ids
-    assert rebuilt_ids[0] in remaining_ids
-    assert generated_for == [(root.id, representative.id)]
 
 
 @pytest.mark.asyncio
@@ -548,13 +535,21 @@ async def test_root_plan_assignment_retains_representative_service_warehouse(
         orderId=uuid4(),
         orderVersion=2,
         sourceRevision="a" * 64,
+        customerDeliveryPurpose="RENTAL_DELIVERY",
         orderNumber="REG-1",
         clientName="Regional client",
+        clientType="LEGAL_ENTITY",
         address=request.address_label,
         latitude=request.latitude,
         longitude=request.longitude,
         quantity=1,
         unitIds=[unit_id],
+        unitReservations=[
+            RwmsPlanningUnitReservation(
+                unitId=unit_id,
+                inventorySourceWarehouseId=representative.external_warehouse_id,
+            )
+        ],
         dateOptions=[
             RwmsPlanningDateOption(
                 date=planning_date,
@@ -571,6 +566,7 @@ async def test_root_plan_assignment_retains_representative_service_warehouse(
     request.external_id = source.order_id
     request.external_version = source.order_version
     request.external_payload = source.model_dump(mode="json", by_alias=True)
+    request.customer_delivery_purpose = source.customer_delivery_purpose
     driver = await make_driver(db_session, root)
     vehicle = await make_vehicle(db_session, root)
     await make_shift(
@@ -599,6 +595,9 @@ async def test_root_plan_assignment_retains_representative_service_warehouse(
     assert command.assignments[0].service_warehouse_id == (
         representative.external_warehouse_id
     )
+    assert command.assignments[0].inventory_source_warehouse_id == (
+        representative.external_warehouse_id
+    )
     assert command.assignments[0].unit_ids == [unit_id]
 
 
@@ -618,7 +617,7 @@ async def test_group_refresh_invalidates_only_recomputable_root_plan(
     )
     confirmed = RoutePlan(
         warehouse_id=root.id,
-        date=planning_date,
+        date=planning_date + timedelta(days=1),
         name="Confirmed",
         status=PlanStatus.CONFIRMED,
     )
@@ -628,13 +627,10 @@ async def test_group_refresh_invalidates_only_recomputable_root_plan(
     await invalidate_mutable_group_root_plans(
         db_session,
         root.id,
-        (planning_date,),
+        (planning_date, planning_date + timedelta(days=1)),
     )
 
-    remaining = set(
-        await db_session.scalars(
-            select(RoutePlan.id).where(RoutePlan.warehouse_id == root.id)
-        )
-    )
-    assert draft.id not in remaining
-    assert confirmed.id in remaining
+    await db_session.refresh(draft)
+    await db_session.refresh(confirmed)
+    assert draft.status == PlanStatus.ARCHIVED
+    assert confirmed.status == PlanStatus.CONFIRMED

@@ -237,9 +237,17 @@ internal fun driverTripCabinPresentations(
     )
 }
 
-/** Maps existing logistics operation enum names to concise driver-facing wording. */
-internal fun driverTripOperationLabel(operationType: String): String = when (operationType) {
-    "SHIPMENT" -> "Доставка / аренда"
+/** Maps physical trip types and the optional customer-delivery purpose to driver-facing wording. */
+internal fun driverTripOperationLabel(
+    operationType: String,
+    customerDeliveryPurpose: String?,
+): String = when (operationType) {
+    "SHIPMENT" -> when (customerDeliveryPurpose) {
+        "RENTAL_DELIVERY" -> "Доставка в аренду"
+        "SALE_DELIVERY" -> "Доставка на продажу"
+        "CUSTOMER_RELOCATION" -> "Переезд клиента"
+        else -> "Доставка"
+    }
     "RETURN" -> "Вывоз"
     "TRANSFER" -> "Перемещение"
     else -> operationType
@@ -265,21 +273,21 @@ internal fun canReadRichLogisticsDetails(
     sourceType: String?,
     driverAudienceMode: String?,
     scheduledDate: String?,
-    today: LocalDate,
+    today: LocalDate?,
 ): Boolean = isLogisticsDriverTaskSource(sourceType) &&
     (
         driverAudienceMode == ASSIGNED_DRIVER_AUDIENCE_MODE ||
-            isFutureSharedLogisticsTask(driverAudienceMode, scheduledDate, today)
+            today?.let { isFutureSharedLogisticsTask(driverAudienceMode, scheduledDate, it) } == true
         )
 
-/** Allows the claim control only for a shared logistics task scheduled strictly after today. */
+/** Allows claim only after a warehouse-local date is available and the shared task is future. */
 internal fun canClaimFutureLogisticsTask(
     sourceType: String?,
     driverAudienceMode: String?,
     scheduledDate: String?,
-    today: LocalDate,
+    today: LocalDate?,
 ): Boolean = isLogisticsDriverTaskSource(sourceType) &&
-    isFutureSharedLogisticsTask(driverAudienceMode, scheduledDate, today)
+    today?.let { isFutureSharedLogisticsTask(driverAudienceMode, scheduledDate, it) } == true
 
 private fun isFutureSharedLogisticsTask(
     driverAudienceMode: String?,

@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils"
 
 export type GridSortDirection = "asc" | "desc"
 
-export const GRID_HEADER_CLASS = "sticky top-0 z-20 bg-muted shadow-sm"
+export const GRID_HEADER_CLASS = "sticky top-0 z-20 bg-muted/85 shadow-sm"
 export const GRID_HEADER_CELL_CLASS =
   "border-b px-3 py-3 text-left text-xs font-medium text-muted-foreground"
 export const GRID_CELL_CLASS = "border-b px-3 py-2 align-middle"

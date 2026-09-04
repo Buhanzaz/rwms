@@ -22,11 +22,17 @@ keeping source-domain facts and decisions with their original owners.
 | Operational work | Tasks, route entries, assignment, pinning, pause/resume/complete, and history | Source domain owns why the work exists and its aggregate state |
 | Native execution | Separate driver/worker feeds, offline action leases, evidence reservation, SSE and transactional FCM invalidation | DriverApp and WorkerApp refresh authoritative REST state and upload media through media-service |
 | Driver daily shift | Warehouse-local work date, preparation/closing state machine, inspection snapshot, defects, audit timestamps and media proof | Logistics supplies the reviewed driver/vehicle/day plan; warehouse owns identity/timezone; media owns bytes |
-| KPI | Warehouse palette/schedule revisions and emitted daily evidence | Analytics owns the KPI read projection |
+| KPI | Company-wide display palette, warehouse work-schedule revisions, and emitted daily evidence | Analytics owns the KPI read projection |
 | Warehouse lifecycle | Local operation marks, admission fence, draining blockers, exact-version readiness | Warehouse-service owns lifecycle state and admission decisions |
 
 The service does not own users and roles, warehouse identity, repair or
 logistics aggregates, media bytes, analytics projections, or gateway routing.
+
+Every public warehouse-bound operation resolves the current warehouse identity
+from warehouse-service and compares its immutable company with the signed
+`company_id` of the USER or WORKER token before applying role, warehouse grant,
+or worker-home rules. `SYSTEM_ADMIN` and `WMS_ADMIN` therefore do not bypass the
+company boundary when a warehouse ID is supplied directly.
 
 ## Command and task flow
 
@@ -49,6 +55,7 @@ task / route / queue-entry transaction
 driver app --> primary feed/detail --> take/action/evidence reservation
 worker app --> ordinary work + active slinger feed --> join/action/evidence reservation
            --> media upload --> media fact --> shared completion
+logistics-service --> exact contractor task snapshot --> evidence reservation --> start/complete
 ```
 
 A source-owned task uses a stable external identity so a retry finds the same
@@ -95,12 +102,15 @@ Dated driver and shipment planning remains on the separate logistics surfaces. T
 [`TaskBoardFutureAvailabilityService`](src/main/java/dev/buhanzaz/rwms/taskboard/service/TaskBoardFutureAvailabilityService.java),
 and [`OrdinaryQueueAvailabilityPolicy`](src/main/java/dev/buhanzaz/rwms/taskboard/service/OrdinaryQueueAvailabilityPolicy.java).
 
-KPI schedule revisions may start on the warehouse-local current date or a future date. Saving keeps
-the revision in `DRAFT`; explicit activation makes a current-date revision `ACTIVE` in the same
-command and applies it to the whole current local calendar day. A future revision remains
-`SCHEDULED` until its date, and a past date is rejected. Activating a replacement for the same date
-retires the prior scheduled/active revision under the existing receipt and optimistic-concurrency
-fences. This behavior is owned by
+The KPI display palette and work schedule form one company-scoped, version-fenced settings head.
+The company boundary comes from the signed principal; no warehouse is selected for either setting.
+One activated schedule applies the same effective local-calendar date, shift, breaks and days off
+to every company warehouse, while each operational clock interprets those values in its own
+authoritative timezone. Saving keeps a revision in `DRAFT`; activation schedules it idempotently,
+and a revision effective on the current UTC configuration date is promoted immediately. A future
+revision remains `SCHEDULED` until its date, and a date before the current UTC date is rejected.
+Activating a replacement for the same date retires the prior scheduled/active revision under the
+existing receipt and shared optimistic-concurrency fence. This behavior is owned by
 [`KpiSettingsService`](src/main/java/dev/buhanzaz/rwms/taskboard/service/KpiSettingsService.java) and
 the [canonical contract](../../contracts/openapi/task-board-service.yaml).
 
@@ -130,13 +140,19 @@ comparing immutable historical facts that predate the addition.
 Logistics driver tasks additionally carry one persisted audience:
 `UNASSIGNED`, `ASSIGNED_DRIVER`, or `WAREHOUSE_DRIVERS`. Only the exact
 logistics-service driver-task source may set it. Only assigned work carries a worker identity; that
-worker must be active in the same warehouse and have the primary qualification of the driver queue.
+worker must be active. Staff workers must have the primary qualification of the target driver
+queue. An exact active `CONTRACTOR` assignment is the narrow exception because contractor profiles
+have no staff qualification, group or app credential; contractors never become candidates for the
+identity-free `WAREHOUSE_DRIVERS` pool. An exact `ASSIGNED_DRIVER` may retain a different home
+warehouse; identity-free work remains same-warehouse only.
 Task-board ignores a caller-supplied display name and stores its authoritative worker snapshot.
 Unassigned tasks remain dispatcher work. An assigned task is visible only to that driver. A waiting
 identity-free shared task is visible to every qualified warehouse driver until one takes it, after
 which only the actual assignee retains access. DriverApp receives visible primary work from both
 `SCHEDULED` and `CURRENT` lanes through `/api/driver/v1/**`, so its dated screen can show assigned
-future work and shared future candidates. WorkerApp receives ordinary work and only active
+future work, exact cross-warehouse assignments and shared future candidates. Remote detail,
+actions, evidence ownership and task content resolve the physical warehouse from the server-owned
+entry; the worker/JWT home warehouse is unchanged. WorkerApp receives ordinary work and only active
 `CURRENT` secondary logistics work through `/api/worker/v1/**`; scheduled driver work never leaks
 to the slinger surface. A driver take persists a `TASK_JOIN_AVAILABLE` push for eligible
 slingers. The waiting logistics task is announced only on the DriverApp SSE surface; WorkerApp
@@ -152,12 +168,44 @@ private source replan boundary may replace audience under the shared task/entry 
 public ordinary board exposes only same-queue waiting-card reorder, never logistics replanning or a
 cross-queue move.
 
+The existing DriverApp SSE subscription remains home-warehouse scoped. Exact remote work still
+converges through the authoritative REST feed: DriverApp's opaque revision uses the maximum value
+from the one global revision sequence, so any warehouse mutation changes the comparison token.
+That conservative token can cause an extra refresh for an unrelated warehouse, while response data
+remains exact-audience filtered; a remote event does not yet produce a targeted home SSE item.
+
 The exact logistics-service private driver directory resolves workforce ownership on every read.
 For one warehouse it returns only `{workerId, displayName}` for active workers whose active primary
 qualification matches that warehouse's active logistics-driver queue and definition, ordered by
 normalized display name and then UUID. Secondary bindings, inactive workers, queues, definitions or
 qualifications are excluded; login, group, contact, credential and other personal fields never
 cross this boundary.
+
+The private contractor-execution boundary accepts only the exact logistics-service SERVICE
+credential with the sole `task-board.logistics` scope. Every read and command proves source client
+`logistics-service`, source type `LOGISTICS_DRIVER_TASK`, `ASSIGNED_DRIVER`, the exact active
+`WorkerEmploymentType.CONTRACTOR`, and exact route membership. Its snapshot contains ordered
+entry/status/version facts, worker-visible title, description, unit, task text, works, materials,
+comments and immutable source-media identities, generation and content type. It contains no phone,
+credentials, general board, unrelated tasks or bearer-only media read paths. Task-board has no
+separate structured client address/coordinates on this boundary; an address is available only when
+the source already supplied it in worker-visible text. `START` and `COMPLETE` delegate to
+`TaskBoardWorkerExecutionService`, preserve route order and optimistic entry versions, and share
+the native ready/selected result-evidence invariant. The stable operation UUID uses the existing
+immutable `worker_action_receipt`; the response returns the changed entry version for the next
+command. While that exact route entry is `IN_PROGRESS`, the same private boundary may reserve a
+result-evidence identity through the existing `worker_task_evidence` and entry-owner-proof
+pipeline. Task, route, warehouse, worker and logistics source facts are server-derived, every
+request and replay re-proves the live contractor assignment, and native offline leases are neither
+accepted nor issued. The response exposes only owner and declared media metadata needed for a
+mediated upload; it contains no upload/read path. No schema migration is required.
+
+External task registration never invents a global Moscow or server-calendar
+date. An explicit `scheduledDate` remains authoritative; otherwise the
+deadline instant, or the injected server instant when no deadline exists, is
+converted with `WarehouseTimeZoneGateway` for the task warehouse. The same
+warehouse-local date decides whether a scheduled task emits today's worker
+availability notification.
 
 ## Driver daily shift lifecycle
 
@@ -168,6 +216,49 @@ read freeze that plan into a shift. The startup transaction loads the current
 warehouse identity and IANA timezone from warehouse-service, applies the
 configured 06:00 warehouse-local boundary, locks the matching plan, and creates
 at most one shift. Repeated or concurrent reads return the same aggregate.
+
+The registered plan may add one contiguous operation list. Task-board validates
+sequence, temporal order, endpoint identity and the load chain, then stores the
+operations under the replaceable plan in
+`driver_shift_route_operation`. A newer source plan may replace the complete
+list only before a real shift freezes the plan; afterwards both plan and
+operations are immutable. `GET /shift/today` returns the ordered snapshot with
+planned arrival/departure instants and load transitions. Local routes remain
+compatible with an omitted/empty list, while a cross-warehouse snapshot must
+include origin start, inbound positioning and return positioning around its
+service-warehouse/customer operations.
+
+The immutable vehicle snapshot may add its exact effective `cabinCapacity`. Transfer cargo uses
+paired `TRANSFER_LOAD`/`TRANSFER_UNLOAD` operations with one canonical `sourceTransferId` at the
+route origin and inbound destination. Task-board rejects duplicate or unbalanced identities,
+reversed load changes, wrong endpoints and a per-leg cabin load above capacity. A furniture-only
+transfer is still a physical pair of operations but intentionally leaves the cabin load unchanged.
+Legacy plans may omit capacity only while they contain no transfer-cargo operation.
+
+Published-plan recovery reuses the same task and shift aggregates through three logistics-only
+commands: `PREPARE`, `COMMIT`, and `RELEASE` below
+`/internal/task-board/v1/logistics/planning-replan-holds/**`. `PREPARE` locks the complete source
+membership and exact task, entry, shift, warehouse, date and version fences. `COMMIT` atomically
+stores the removed member's lineage tombstone and replaces every remaining task/shift revision;
+`RELEASE` is valid only while the hold is still prepared. An owner-cancelled removed task is
+accepted only as the exact pre-start `CANCELLED/SCHEDULED/CANCELLED` task/entry pair and is not
+cancelled a second time; every remaining member must still be `ACTIVE/SCHEDULED/WAITING` and
+unassigned. Flyway [`V44`](src/main/resources/db/migration/V44__published_plan_reschedule_hold.sql)
+owns the hold and tombstone fields, while
+[`V45`](src/main/resources/db/migration/V45__single_active_planning_replan_hold.sql) permits only one
+prepared hold per source lineage.
+
+The DriverApp JWT continues to identify the worker and the worker's immutable
+home warehouse. Before creating a new shift, task-board derives the current
+operational warehouse from assignment history. Only an `ACTIVE` temporary
+assignment or a completed permanent assignment can select the destination;
+`PLANNED` and `IN_TRANSIT` assignments cannot expose or create a destination
+shift. The destination warehouse's IANA timezone controls the work date and
+frozen shift. Once created, an unfinished shift is resumed by its exact
+driver/shift identity even after the temporary assignment ends, while every
+command still verifies the JWT home warehouse against the worker profile. Shift
+photos and other warehouse-owned effects use the frozen shift warehouse rather
+than the home claim.
 
 The explicit adjacent state machine is
 `DAILY_BRIEFING_REQUIRED -> MEDICAL_CHECK_REQUIRED ->
@@ -187,7 +278,7 @@ cannot be erased by switching the item to OK; new inspection defects are
 conservatively `BLOCKING` and prevent the ordinary start transition. The
 existing logistics task screen remains the execution surface. Task-board moves
 an active shift toward closing only when at least one exact-driver task exists
-for that warehouse/date and all such tasks are `DONE`.
+for that date across physical warehouses and all such tasks are `DONE`.
 
 Closing separately records manual warehouse return, vehicle condition,
 odometer and fuel. Odometer may not decrease; a configured suspicious jump
@@ -229,6 +320,7 @@ components own the decisions:
 | `DriverTaskAudienceService` | Logistics-driver audience shape, qualification, visibility and execution authorization |
 | `LogisticsDriverDirectoryService` | Least-privilege active primary logistics-driver directory for the exact logistics-service caller |
 | `ContractorDriverService` / `WorkerOperationalAssignmentService` | Warehouse-owned on-demand contractor catalog and dated operational assignments; contractor profiles never require a vehicle or internal route-cycle model |
+| `ContractorTaskExecutionService` | Exact logistics-owned contractor route snapshot, evidence reservation and replay-safe START/COMPLETE adapter over the existing worker state machine and evidence invariant |
 | `DriverShiftService` | Driver plan registration, work-date resolution, shift/inspection/defect transitions, receipts and startup projection |
 | `HttpWarehouseIdentityGateway` | Exact private warehouse identity/timezone/coordinates read for the shift owner |
 | `MetNoWeatherProvider` / `WeatherHazardRules` | Fail-open normalized weather cache and configurable advisory derivation |
@@ -236,7 +328,7 @@ components own the decisions:
 | `WorkerTaskAccessService` | Shared worker/group/qualification queue audience for native task reads and media proofs |
 | `WorkerFeedCountProjection` | One-query route cardinality and READY-evidence counts for a bounded native feed page |
 | `WorkerFeedRevisionStore` | Transactional, warehouse-scoped opaque revision advanced by authoritative task-board facts |
-| `WorkerActionReceiptStore` | Advisory-locked immutable native-action request and frozen-response receipts |
+| `WorkerActionReceiptStore` | Advisory-locked immutable native and exact-contractor action request and frozen-response receipts |
 | `TaskBoardEntryOwnerProofReconciler` | Bounded idempotent repair of legacy or workforce-stale media proof audiences |
 | `WorkerPushOutbox` / `WorkerPushDispatcher` | Transactional slinger notification, leased FCM delivery and bounded recovery |
 | `WorkforceService` | Stable worker/group API facade over three lifecycle owners |
@@ -289,14 +381,17 @@ The public gateway maps `/api/task-board/**` to this service's downstream
 | `/api/warehouses/{warehouseId}/work-queues` | Warehouse-authorized user | Physical queue projections and capabilities |
 | `/api/warehouses/{warehouseId}/task-board/**` | Warehouse-authorized user | Aggregate ordinary-board read and supported task commands |
 | `/api/warehouses/{warehouseId}/task-board/daily-brigade-activity` | Warehouse-authorized user | Actual task-assignment intervals overlapping the current warehouse-local day |
-| `/api/warehouses/{warehouseId}/task-board/kpi-settings/**` | Warehouse manager/admin | Palette and effective schedule revisions |
+| `/api/task-board/kpi-palette` | Authenticated company; global management for `PUT` | One version-fenced KPI palette shared by every company warehouse |
+| `/api/task-board/kpi-settings/**` | Authenticated company; global management for mutations | One version-fenced work schedule shared by every company warehouse; no warehouse selector |
 | `/api/worker/v1/**` | Worker credential and `worker.tasks` scope | Context, feed, detail, actions, evidence reservations, devices, and events |
 | `/api/driver/v1/**` | Worker credential and `driver.tasks` scope | Driver-only context, primary feed, actions, evidence reservations, devices, and events |
 | `/api/driver/v1/shift/today` and `/api/driver/v1/shifts/{shiftId}/**` | Exact driver identity and `driver.tasks` | Startup aggregate and version-fenced daily-shift transitions |
+| `/api/internal/task-board/v1/inventory/warehouses/{warehouseId}/work-calendar` | Exact `inventory-service` SERVICE identity and sole `task-board.inventory-calendar.read` scope | Bounded effective object-calendar snapshot: timezone, schedule revision, `daysOff` result and fingerprint for inventory planning; no browser access and no Driver Up shift semantics |
 | `/api/internal/task-board/v1/maintenance/**` | Exact maintenance-service identity | Routing and catalog preflight |
 | `/api/internal/task-board/v1/tasks/**` | Exact source service identity | Idempotent task synchronization and evidence reads |
 | `/api/internal/task-board/v1/logistics/**` | Exact logistics-service identity | Driver/equipment task integration |
 | `/api/internal/task-board/v1/logistics/warehouses/{warehouseId}/drivers` | Exact logistics-service identity and scope | Active primary-qualified driver identities only |
+| `/api/internal/task-board/v1/logistics/contractor-execution/workers/{workerId}/tasks/{externalTaskId}`, `.../entries/{entryId}/actions` and `.../evidence-reservations` | Exact logistics-service identity and sole `task-board.logistics` scope | Exact assigned active-contractor route snapshot, result-evidence reservation and START/COMPLETE without credentials, contact disclosure, native offline lease, media bearer path or general-board access |
 | `/api/internal/task-board/v1/driver-shift-plans/{sourceShiftId}` | Exact logistics-service identity and `task-board.driver-shifts.plan` | Idempotent reviewed driver/vehicle/day plan registration |
 | `/api/internal/queue-definitions/**` | Allow-listed service identity | Durable queue usage references |
 
@@ -307,7 +402,8 @@ Contractors remain `WorkerEmploymentType.CONTRACTOR` records with a contact,
 note and active flag. The catalog stores no availability dates: the selected
 planning day belongs to the downstream assignment. It does not provision
 credentials, require a vehicle or make the worker eligible for the ordinary
-primary-driver optimizer.
+primary-driver optimizer. A task becomes service-executable only after logistics registers an
+exact `ASSIGNED_DRIVER` audience for that contractor; the catalog alone grants no task access.
 
 The daily-brigade activity read uses persisted assignment `startedAt` from TAKE
 and `finishedAt` from completion. Shift bounds select and position the display
@@ -320,7 +416,9 @@ read-only, warehouse-authorized and owned entirely by task-board.
 
 `GET /api/worker/v1/events` is an SSE invalidation stream. The current producer
 emits a `FEED_CHANGED` signal when a client subscribes and for subsequent
-changes; the worker app also performs periodic authoritative REST refresh.
+changes; the worker app also performs periodic authoritative REST refresh. A
+reconnect opens a fresh subscription and is followed by an authoritative REST
+feed refresh; this contract has no cursor replay or `Last-Event-ID` dependency.
 Payloads are not a complete task projection. A subscription is keyed by the
 authenticated warehouse, native surface and worker, so a fact from another
 warehouse cannot advance or notify this stream. A feed page reads its
@@ -328,7 +426,9 @@ warehouse revision and projection under one repeatable-read snapshot; cursors
 remain valid across unrelated warehouse changes. Its weak ETag is scoped to
 the authenticated warehouse, native surface and worker as well as that revision.
 
-`GET /api/driver/v1/events` has the same invalidation-only semantics. Device
+`GET /api/driver/v1/events` has the same invalidation-only semantics: reconnect
+opens a fresh subscription and the DriverApp refreshes its authoritative REST
+feed. Device
 registrations are surface-bound and accept current Firebase Installation IDs
 (`targetKind=FID`) plus legacy registration tokens. A driver's successful TAKE
 stores the slinger notification in `worker_push_outbox` in the same transaction;
@@ -383,7 +483,9 @@ An exact retry returns that original response unchanged; any changed surface,
 worker, warehouse, entry or request field returns `409`. A pre-V36 event with
 the same correlation ID but no receipt also fails closed with `409`, because
 its original response cannot be reconstructed safely. Volatile SSE
-invalidation is dispatched only after commit.
+invalidation is dispatched only after commit. The private contractor adapter reuses this receipt
+table and lock while adding the external task and service channel to its canonical request; it
+re-proves the exact active contractor assignment before accepting a replay.
 
 Evidence is first reserved with a stable client reference, then uploaded to
 media-service. A media fact links the processed generation back to the reserved
@@ -391,6 +493,9 @@ evidence before completion may rely on it. A legacy `image/jpeg` declaration may
 an `image/webp` logical client bundle may be at most 1 MiB and its `sha256` is the deterministic
 bundle-manifest checksum. Both formats retain one logical evidence row, and reservation replays
 must match the original entry, operation, route step, capture time, MIME type, size, and checksum.
+The exact-contractor reservation endpoint applies the same declaration and replay rules while
+deriving its route and owner facts on the server and requiring an `IN_PROGRESS` entry plus the exact
+live contractor assignment before both a first reservation and replay.
 The same format and byte limits are enforced by
 [`V32__support_worker_evidence_webp_bundles.sql`](src/main/resources/db/migration/V32__support_worker_evidence_webp_bundles.sql).
 
@@ -407,10 +512,10 @@ adds the warehouse revision sequence/projection and immutable worker-action rece
 warehouse rows are backfilled above the former global revision fence; no domain event, task or
 evidence row is rewritten.
 
-The current OpenAPI text mentions `Last-Event-ID`, but controller and client do
-not implement durable replay. Current reconnect is safe because it triggers a
-fresh invalidation and periodic pull; the semantic mismatch and required
-decision are recorded in the full audit.
+SSE reconnect is intentionally invalidation-only. The controllers and mobile
+clients do not accept or send a replay cursor; reconnect triggers an
+authoritative REST refresh, while local event IDs remain available only for
+invalidation deduplication and audit.
 
 ## Persistence and eventing
 
@@ -461,6 +566,12 @@ removes contractor availability columns and their range index. Contractor profil
 on-demand warehouse address book; an exact date is stored only by the logistics assignment that
 uses the contractor.
 
+[`V41__driver_shift_route_operations.sql`](src/main/resources/db/migration/V41__driver_shift_route_operations.sql)
+adds the immutable ordered operation children below a replaceable-until-frozen shift plan.
+[`V42__driver_shift_transfer_route_operations.sql`](src/main/resources/db/migration/V42__driver_shift_transfer_route_operations.sql)
+adds nullable effective cabin capacity and canonical transfer identity, expands the operation-kind
+and identity constraints, and leaves every existing plan compatible through null/default absence.
+
 ## Security and isolation
 
 - All API chains validate JWT issuer/audience; worker and driver routes require
@@ -472,6 +583,8 @@ uses the contractor.
 - Driver-shift plans accept only the exact logistics-service credential and
   `task-board.driver-shifts.plan`; mobile shift routes accept only the matching
   `WORKER` identity, warehouse and `driver.tasks` scope.
+- Cross-warehouse DriverApp actions retain that home-warehouse token fence and additionally require
+  the exact remote `ASSIGNED_DRIVER` audience; entry IDs never grant warehouse access by themselves.
 - Auth-service remains the credential owner. Task-board persists only the
   operational credential workflow state needed for reconciliation.
 - CORS uses explicit panel, worker, and driver origins. Browser/mobile clients use the

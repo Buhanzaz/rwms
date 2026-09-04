@@ -457,8 +457,8 @@ function KpiContent({
     queryFn: () => listKpiWorkerGroups(accessToken, warehouseId),
   })
   const settingsQuery = useQuery({
-    queryKey: kpiSettingsKeys.warehouse(warehouseId),
-    queryFn: () => getKpiSettings(accessToken, warehouseId),
+    queryKey: kpiSettingsKeys.settings,
+    queryFn: () => getKpiSettings(accessToken),
   })
 
   const loading =

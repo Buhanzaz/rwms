@@ -20,10 +20,19 @@ import {
   vi,
 } from "vitest"
 
+import type {
+  RentalItemCreationIntent,
+  RentalItemCreationPhotoManifestInput,
+} from "@/features/rental-items/api/asset-rental-items-api"
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 
 const WAREHOUSE_ID = "11111111-1111-4111-8111-111111111111"
 const RENTAL_ITEM_ID = "22222222-2222-4222-8222-222222222222"
+const CREATION_INTENT_ID = "77777777-7777-4777-8777-777777777777"
+const MEDIA_FOLDER_ID = "88888888-8888-4888-8888-888888888888"
+const MEDIA_COMMAND_ID = "99999999-9999-4999-8999-999999999999"
+const UPLOAD_COMMAND_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+const PHOTO_CHECKSUM = "b".repeat(64)
 
 const authState = vi.hoisted(() => ({
   level: "VIEW" as "VIEW" | "EDIT" | "MANAGE",
@@ -31,7 +40,10 @@ const authState = vi.hoisted(() => ({
 
 const assetApi = vi.hoisted(() => ({
   listAssetRentalItems: vi.fn(),
-  createAssetRentalItem: vi.fn(),
+  createAssetRentalItemWithPhotoIntent: vi.fn(),
+  listPendingRentalItemCreationIntents: vi.fn(),
+  completeRentalItemCreationIntent: vi.fn(),
+  abandonRentalItemCreationIntent: vi.fn(),
   getAssetRentalItem: vi.fn(),
   listAssetRentalItemManualNotes: vi.fn(),
   addAssetRentalItemManualNote: vi.fn(),
@@ -48,6 +60,7 @@ const dossierApi = vi.hoisted(() => ({
 const mediaApi = vi.hoisted(() => ({
   listCabinCovers: vi.fn(),
   listOwnerMedia: vi.fn(),
+  calculateChecksumSha256: vi.fn(),
   uploadFile: vi.fn(),
   createVariantObjectUrl: vi.fn(),
   createOriginalObjectUrl: vi.fn(),
@@ -230,6 +243,38 @@ function rentalItem(overrides: Partial<RentalItemDto> = {}): RentalItemDto {
   }
 }
 
+function creationIntent(
+  photoManifest: readonly RentalItemCreationPhotoManifestInput[] = [
+    {
+      photoIndex: 0,
+      checksumSha256: PHOTO_CHECKSUM,
+      contentType: "image/jpeg",
+      contentLength: 3,
+    },
+  ]
+): RentalItemCreationIntent {
+  return {
+    id: CREATION_INTENT_ID,
+    version: 0,
+    rentalItemId: RENTAL_ITEM_ID,
+    warehouseId: WAREHOUSE_ID,
+    state: "PENDING",
+    expectedPhotoCount: photoManifest.length,
+    mediaFolderId: MEDIA_FOLDER_ID,
+    mediaCommandId: MEDIA_COMMAND_ID,
+    photoManifestSha256: "c".repeat(64),
+    photoManifest: photoManifest.map((photo) => ({
+      ...photo,
+      uploadCommandId: UPLOAD_COMMAND_ID,
+    })),
+    coverMediaId: null,
+    mediaProofSha256: null,
+    createdAt: "2026-08-31T09:00:00Z",
+    completedAt: null,
+    abandonedAt: null,
+  }
+}
+
 function renderWithQuery(ui: ReactNode) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -300,6 +345,21 @@ async function selectRequiredComposition(
   await user.click(within(dialog).getByRole("radio", { name: "Нет" }))
 }
 
+async function uploadRequiredPhoto(
+  user: ReturnType<typeof userEvent.setup>,
+  dialog: HTMLElement,
+  name = "new-cabin.jpg"
+) {
+  const file = new File([new Uint8Array([1, 2, 3])], name, {
+    type: "image/jpeg",
+  })
+  await user.upload(
+    within(dialog).getByLabelText("Фотографии новой бытовки"),
+    file
+  )
+  return file
+}
+
 beforeEach(() => {
   authState.level = "VIEW"
   assetApi.listAssetRentalItems.mockResolvedValue({
@@ -311,7 +371,33 @@ beforeEach(() => {
   })
   assetApi.getAssetRentalItem.mockResolvedValue(rentalItem())
   assetApi.listAssetRentalItemManualNotes.mockResolvedValue([])
-  assetApi.createAssetRentalItem.mockResolvedValue(rentalItem())
+  assetApi.listPendingRentalItemCreationIntents.mockResolvedValue({
+    content: [],
+    page: 0,
+    size: 50,
+    totalElements: 0,
+    totalPages: 0,
+  })
+  assetApi.createAssetRentalItemWithPhotoIntent.mockImplementation(
+    async ({ photoManifest }) => ({
+      rentalItem: rentalItem(),
+      intent: creationIntent(photoManifest),
+    })
+  )
+  assetApi.completeRentalItemCreationIntent.mockImplementation(async () => ({
+    ...creationIntent(),
+    version: 1,
+    state: "COMPLETED",
+    coverMediaId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    mediaProofSha256: "d".repeat(64),
+    completedAt: "2026-08-31T09:05:00Z",
+  }))
+  assetApi.abandonRentalItemCreationIntent.mockImplementation(async () => ({
+    ...creationIntent(),
+    version: 1,
+    state: "ABANDONED",
+    abandonedAt: "2026-08-31T09:05:00Z",
+  }))
   assetApi.getRentalItemCreationOptions.mockResolvedValue({
     newCategory: "Новая",
     usedCategories: ["Обычная", "ИТР"],
@@ -365,10 +451,16 @@ beforeEach(() => {
   })
   mediaApi.listOwnerMedia.mockResolvedValue({ items: [], next: null })
   mediaApi.listCabinCovers.mockResolvedValue({ items: [] })
+  mediaApi.calculateChecksumSha256.mockResolvedValue(PHOTO_CHECKSUM)
   mediaApi.uploadFile.mockResolvedValue({
     session: {},
     uploadedObject: {},
-    asset: {},
+    asset: {
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      folderId: MEDIA_FOLDER_ID,
+      status: "READY",
+      generation: 1,
+    },
   })
   mediaApi.createVariantObjectUrl.mockResolvedValue({
     url: "blob:ready-cabin-photo",
@@ -438,7 +530,7 @@ describe("rental item command access", () => {
         "Заявку на списание может создать управляющий склада или администратор с доступом MANAGE."
       )
     ).toBeTruthy()
-    expect(assetApi.createAssetRentalItem).not.toHaveBeenCalled()
+    expect(assetApi.createAssetRentalItemWithPhotoIntent).not.toHaveBeenCalled()
   })
 
   it("opens the cabin write-off proposal for a warehouse manager", async () => {
@@ -555,18 +647,27 @@ describe("rental item command access", () => {
     })
     await user.type(within(dialog).getByLabelText("Номер бытовки"), "БЫТ-009")
     await selectRequiredComposition(user, dialog)
+    await uploadRequiredPhoto(user, dialog)
     await user.click(
       within(dialog).getByRole("button", { name: "Создать бытовку" })
     )
 
     await waitFor(() =>
-      expect(assetApi.createAssetRentalItem).toHaveBeenCalledWith(
+      expect(
+        assetApi.createAssetRentalItemWithPhotoIntent
+      ).toHaveBeenCalledWith(
         expect.objectContaining({
           accessToken: "asset-token",
           input: expect.objectContaining({
             warehouseId: WAREHOUSE_ID,
             number: "БЫТ-009",
           }),
+          photoManifest: [
+            expect.objectContaining({
+              photoIndex: 0,
+              checksumSha256: PHOTO_CHECKSUM,
+            }),
+          ],
         })
       )
     )
@@ -614,6 +715,7 @@ describe("rental item command access", () => {
     const numberInput = within(dialog).getByLabelText("Номер бытовки")
     await user.type(numberInput, "тест/1")
     await selectRequiredComposition(user, dialog)
+    await uploadRequiredPhoto(user, dialog, "underscore-cabin.jpg")
     await user.click(
       within(dialog).getByRole("button", { name: "Создать бытовку" })
     )
@@ -623,7 +725,7 @@ describe("rental item command access", () => {
         "Номер бытовки должен содержать от 1 до 128 символов, начинаться с буквы или цифры и включать только буквы, цифры, пробелы, дефис (-) или символ подчёркивания (_)."
       )
     ).toBeTruthy()
-    expect(assetApi.createAssetRentalItem).not.toHaveBeenCalled()
+    expect(assetApi.createAssetRentalItemWithPhotoIntent).not.toHaveBeenCalled()
 
     await user.clear(numberInput)
     await user.type(numberInput, "тест_1")
@@ -632,7 +734,9 @@ describe("rental item command access", () => {
     )
 
     await waitFor(() =>
-      expect(assetApi.createAssetRentalItem).toHaveBeenCalledWith(
+      expect(
+        assetApi.createAssetRentalItemWithPhotoIntent
+      ).toHaveBeenCalledWith(
         expect.objectContaining({
           accessToken: "asset-token",
           input: expect.objectContaining({
@@ -644,7 +748,7 @@ describe("rental item command access", () => {
     )
   })
 
-  it("creates the cabin before uploading staged photos through media-service", async () => {
+  it("creates the durable cabin intent before uploading staged photos", async () => {
     authState.level = "EDIT"
     const user = userEvent.setup()
     renderWithQuery(<RentalItemsPage />)
@@ -669,7 +773,9 @@ describe("rental item command access", () => {
     )
 
     await waitFor(() =>
-      expect(assetApi.createAssetRentalItem).toHaveBeenCalledTimes(1)
+      expect(
+        assetApi.createAssetRentalItemWithPhotoIntent
+      ).toHaveBeenCalledTimes(1)
     )
     await waitFor(() =>
       expect(mediaApi.uploadFile).toHaveBeenCalledWith(
@@ -695,7 +801,16 @@ describe("rental item command access", () => {
     authState.level = "EDIT"
     mediaApi.uploadFile
       .mockRejectedValueOnce(new Error("Сервис фото недоступен"))
-      .mockResolvedValueOnce({ session: {}, uploadedObject: {}, asset: {} })
+      .mockResolvedValueOnce({
+        session: {},
+        uploadedObject: {},
+        asset: {
+          id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          folderId: MEDIA_FOLDER_ID,
+          status: "READY",
+          generation: 1,
+        },
+      })
     const user = userEvent.setup()
     renderWithQuery(<RentalItemsPage />)
 
@@ -718,16 +833,21 @@ describe("rental item command access", () => {
       within(dialog).getByRole("button", { name: "Создать бытовку" })
     )
 
-    await screen.findByText(/Бытовка БЫТ-001 создана, но фото не загружены/)
+    await screen.findByText(/Создание бытовки БЫТ-001 не завершено/)
     const firstUploadArguments = mediaApi.uploadFile.mock.calls[0]
     await user.click(
       within(dialog).getByRole("button", {
-        name: "Повторить загрузку фото",
+        name: "Загрузить и завершить",
       })
     )
 
     await waitFor(() => expect(mediaApi.uploadFile).toHaveBeenCalledTimes(2))
-    expect(assetApi.createAssetRentalItem).toHaveBeenCalledTimes(1)
+    await waitFor(() =>
+      expect(assetApi.completeRentalItemCreationIntent).toHaveBeenCalledTimes(1)
+    )
+    expect(assetApi.createAssetRentalItemWithPhotoIntent).toHaveBeenCalledTimes(
+      1
+    )
     expect(mediaApi.uploadFile.mock.calls[1]?.[4]).toBe(
       firstUploadArguments?.[4]
     )
@@ -829,6 +949,7 @@ describe("rental item command access", () => {
         id: "77777777-7777-4777-8777-777777777777",
         version: 6,
         documentType: "SHIPMENT",
+        customerDeliveryPurpose: "RENTAL_DELIVERY",
         state: "SHIPPED",
         warehouseId: WAREHOUSE_ID,
         destinationWarehouseId: null,

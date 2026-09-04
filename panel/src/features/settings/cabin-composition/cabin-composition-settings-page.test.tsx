@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react"
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -11,9 +17,7 @@ const CHARACTERISTIC_ID = "44444444-4444-4444-8444-444444444444"
 const cabinApi = vi.hoisted(() => ({
   getCabinSettings: vi.fn(),
   createCabinCatalogItem: vi.fn(),
-  createIdempotencyKey: vi.fn(
-    () => "55555555-5555-4555-8555-555555555555"
-  ),
+  createIdempotencyKey: vi.fn(() => "55555555-5555-4555-8555-555555555555"),
   updateCabinCatalogItem: vi.fn(),
   deleteCabinCatalogItem: vi.fn(),
   replaceCabinTypeDimensions: vi.fn(),
@@ -114,15 +118,20 @@ describe("CabinCompositionSettingsPage", () => {
     const user = userEvent.setup()
     renderPage()
 
+    expect(await screen.findByRole("tab", { name: "Типы" })).toBeTruthy()
     expect(
-      await screen.findByRole("heading", { name: "Настройки бытовок" })
-    ).toBeTruthy()
-    expect(screen.getByText("Металлическая дверь")).toBeTruthy()
+      screen.queryByRole("heading", { name: "Настройки бытовок" })
+    ).toBeNull()
+    expect(screen.getByText("БК-2")).toBeTruthy()
+    expect(screen.queryByText("Металлическая дверь")).toBeNull()
     expect(screen.queryByText(TYPE_ID)).toBeNull()
     expect(screen.queryByText(DIMENSION_ID)).toBeNull()
-    expect(screen.getAllByRole("button", { name: "Удалить" })).toHaveLength(4)
+    expect(screen.getByRole("button", { name: "Изменить БК-2" })).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Удалить" })).toBeNull()
 
-    await user.click(screen.getByRole("button", { name: "Габариты" }))
+    await user.click(
+      screen.getByRole("button", { name: "Настроить габариты БК-2" })
+    )
     const dialog = await screen.findByRole("dialog", {
       name: "Габариты для типа «БК-2»",
     })
@@ -130,7 +139,9 @@ describe("CabinCompositionSettingsPage", () => {
     expect((checkbox as HTMLButtonElement).getAttribute("data-state")).toBe(
       "checked"
     )
-    await user.click(within(dialog).getByRole("button", { name: "Сохранить габариты" }))
+    await user.click(
+      within(dialog).getByRole("button", { name: "Сохранить габариты" })
+    )
 
     expect(cabinApi.replaceCabinTypeDimensions).toHaveBeenCalledWith({
       accessToken: "settings-token",
@@ -144,8 +155,10 @@ describe("CabinCompositionSettingsPage", () => {
     const user = userEvent.setup()
     renderPage()
 
-    await screen.findByRole("heading", { name: "Настройки бытовок" })
-    await user.click(screen.getByRole("button", { name: "Габариты" }))
+    await screen.findByRole("tab", { name: "Типы" })
+    await user.click(
+      screen.getByRole("button", { name: "Настроить габариты БК-2" })
+    )
 
     const dialog = await screen.findByRole("dialog", {
       name: "Габариты для типа «БК-2»",
@@ -156,9 +169,7 @@ describe("CabinCompositionSettingsPage", () => {
       )
     ).toBeTruthy()
 
-    await user.click(
-      within(dialog).getByRole("checkbox", { name: "2.4x6" })
-    )
+    await user.click(within(dialog).getByRole("checkbox", { name: "2.4x6" }))
     await user.click(
       within(dialog).getByRole("button", { name: "Сохранить габариты" })
     )
@@ -183,15 +194,15 @@ describe("CabinCompositionSettingsPage", () => {
     )
     renderPage()
 
-    await screen.findByRole("heading", { name: "Настройки бытовок" })
-    await user.click(screen.getByRole("button", { name: "Габариты" }))
+    await screen.findByRole("tab", { name: "Типы" })
+    await user.click(
+      screen.getByRole("button", { name: "Настроить габариты БК-2" })
+    )
 
     const dialog = await screen.findByRole("dialog", {
       name: "Габариты для типа «БК-2»",
     })
-    await user.click(
-      within(dialog).getByRole("checkbox", { name: "2.4x6" })
-    )
+    await user.click(within(dialog).getByRole("checkbox", { name: "2.4x6" }))
     await user.click(
       within(dialog).getByRole("button", { name: "Сохранить габариты" })
     )
@@ -211,15 +222,15 @@ describe("CabinCompositionSettingsPage", () => {
     cabinApi.deleteCabinCatalogItem.mockResolvedValue(undefined)
     renderPage()
 
-    const characteristic = await screen.findByText("Металлическая дверь")
-    const characteristicRow = characteristic.closest("article")
-    expect(characteristicRow).not.toBeNull()
-
+    await user.click(await screen.findByRole("tab", { name: "Характеристики" }))
+    await screen.findByText("Металлическая дверь")
     await user.click(
-      within(characteristicRow as HTMLElement).getByRole("button", {
-        name: "Удалить",
-      })
+      screen.getByRole("button", { name: "Изменить Металлическая дверь" })
     )
+    const editor = await screen.findByRole("dialog", {
+      name: "Настройка бытовки",
+    })
+    await user.click(within(editor).getByRole("button", { name: "Удалить" }))
 
     const confirmation = await screen.findByRole("alertdialog", {
       name: "Удалить характеристику «Металлическая дверь»?",
@@ -236,31 +247,28 @@ describe("CabinCompositionSettingsPage", () => {
       })
     )
     await waitFor(() =>
-      expect(cabinApi.getCabinSettings.mock.calls.length).toBeGreaterThanOrEqual(
-        2
-      )
+      expect(
+        cabinApi.getCabinSettings.mock.calls.length
+      ).toBeGreaterThanOrEqual(2)
     )
   })
 
   it("keeps the catalog entry and shows the service reason when deletion is forbidden", async () => {
     const user = userEvent.setup()
     cabinApi.deleteCabinCatalogItem.mockRejectedValue(
-      new ApiError(
-        "Характеристика используется в бытовке «БЫТ-042».",
-        409
-      )
+      new ApiError("Характеристика используется в бытовке «БЫТ-042».", 409)
     )
     renderPage()
 
-    const characteristic = await screen.findByText("Металлическая дверь")
-    const characteristicRow = characteristic.closest("article")
-    expect(characteristicRow).not.toBeNull()
-
+    await user.click(await screen.findByRole("tab", { name: "Характеристики" }))
+    await screen.findByText("Металлическая дверь")
     await user.click(
-      within(characteristicRow as HTMLElement).getByRole("button", {
-        name: "Удалить",
-      })
+      screen.getByRole("button", { name: "Изменить Металлическая дверь" })
     )
+    const editor = await screen.findByRole("dialog", {
+      name: "Настройка бытовки",
+    })
+    await user.click(within(editor).getByRole("button", { name: "Удалить" }))
 
     const confirmation = await screen.findByRole("alertdialog", {
       name: "Удалить характеристику «Металлическая дверь»?",

@@ -4,10 +4,17 @@ services:
   frontend:
     build:
       args:
-        VITE_API_BASE_URL: /logistics-simulator/api
-        VITE_APP_BASE_PATH: /logistics-simulator/
+        VITE_API_BASE_URL: /logistics-panel/api
+        VITE_APP_BASE_PATH: /logistics-panel/
+        VITE_MAP_STYLE_URL: ${VITE_MAP_STYLE_URL:-https://tiles.openfreemap.org/styles/liberty}
 
   backend:
+    environment:
+      # The issuer is part of the signed JWT and must match the public auth URL
+      # exactly. Signing keys stay on the Docker-only RWMS bridge; production
+      # composition intentionally has no public-service or localhost fallback.
+      AUTH_ISSUER: ${AUTH_ISSUER:?Set AUTH_ISSUER to the public RWMS auth issuer}
+      AUTH_JWKS_URL: ${AUTH_JWKS_URL:-http://172.21.0.1:19002/oauth2/jwks}
     networks:
       default: {}
       rwms_private_bridge: {}

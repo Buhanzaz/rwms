@@ -39,6 +39,20 @@ const returnApi = vi.hoisted(() => ({
 const authState = vi.hoisted(() => ({
   level: "EDIT" as "VIEW" | "EDIT" | "MANAGE",
 }))
+const warehouseState = vi.hoisted(() => ({
+  selectedWarehouse: {
+    id: "11111111-1111-4111-8111-111111111111",
+    name: "Склад обслуживания",
+    timeZone: "Europe/Moscow",
+  },
+  warehouses: [
+    {
+      id: "11111111-1111-4111-8111-111111111111",
+      name: "Склад обслуживания",
+      timeZone: "Europe/Moscow",
+    },
+  ],
+}))
 
 vi.mock("@/features/logistics/shipments/api", () => ({
   SHIPMENT_FURNITURE_READINESS_QUERY_KEY: [
@@ -136,6 +150,8 @@ vi.mock("@/features/auth/use-auth", () => ({
 vi.mock("@/hooks/use-warehouse", () => ({
   useWarehouse: () => ({
     selectedWarehouseId: "11111111-1111-4111-8111-111111111111",
+    selectedWarehouse: warehouseState.selectedWarehouse,
+    warehouses: warehouseState.warehouses,
   }),
 }))
 
@@ -172,6 +188,7 @@ function shipmentDocument(
     id,
     version,
     documentType: "SHIPMENT",
+    customerDeliveryPurpose: "RENTAL_DELIVERY",
     state,
     warehouseId: WAREHOUSE_ID,
     destinationWarehouseId: null,
@@ -227,6 +244,12 @@ function renderPage(initialEntry = "/") {
 
 beforeEach(() => {
   authState.level = "EDIT"
+  warehouseState.selectedWarehouse = {
+    id: WAREHOUSE_ID,
+    name: "Склад обслуживания",
+    timeZone: "Europe/Moscow",
+  }
+  warehouseState.warehouses = [warehouseState.selectedWarehouse]
   driverDirectoryApi.listRepairWorkerGroups.mockResolvedValue([
     {
       id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -272,6 +295,7 @@ beforeEach(() => {
     id: ORDER_ID,
     number: ORDER_NUMBER,
     status: "SAVED",
+    customerDeliveryPurpose: "RENTAL_DELIVERY",
     client: {
       id: CLIENT_ID,
       displayName: "ООО Тест",
@@ -333,6 +357,27 @@ afterEach(() => {
 })
 
 describe("LogisticsShipmentsPage", () => {
+  it("loads shipments for the day restored from the URL", async () => {
+    renderPage("/logistics/shipments?date=2026-07-22")
+
+    await waitFor(() =>
+      expect(shipmentApi.listShipments).toHaveBeenCalledWith(
+        "shipment-token",
+        WAREHOUSE_ID,
+        "2026-07-22"
+      )
+    )
+    expect(screen.getByTestId("current-location").textContent).toBe(
+      "/logistics/shipments?date=2026-07-22"
+    )
+  })
+
+  it("shows the commercial purpose separately from shipment state", async () => {
+    renderPage()
+
+    expect(await screen.findAllByText("Доставка в аренду")).not.toHaveLength(0)
+  })
+
   it("shows cabin and order numbers in the shipment composition", async () => {
     const user = userEvent.setup()
     renderPage()
@@ -540,7 +585,8 @@ describe("LogisticsShipmentsPage", () => {
     await screen.findAllByText("Ждёт подтверждения")
     expect(shipmentApi.listShipments).toHaveBeenCalledWith(
       "shipment-token",
-      WAREHOUSE_ID
+      WAREHOUSE_ID,
+      expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/)
     )
     expect(screen.queryByRole("button", { name: "Отгрузить" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Отгружена" })).toBeNull()
@@ -557,6 +603,7 @@ describe("LogisticsShipmentsPage", () => {
         ...shipmentDocument(AWAITING_ID, "AWAITING_CONFIRMATION", 5),
         partySnapshot: "ООО Бета",
         driverSnapshot: "Петров Пётр",
+        customerDeliveryPurpose: "SALE_DELIVERY",
       },
     ])
     const user = userEvent.setup()
@@ -572,8 +619,13 @@ describe("LogisticsShipmentsPage", () => {
     expect(
       screen.getAllByRole("button", { name: "Водитель" })
     ).not.toHaveLength(0)
-    expect(screen.getByLabelText("Отгрузка с")).toBeTruthy()
-    expect(screen.getByLabelText("Отгрузка по")).toBeTruthy()
+    expect(
+      screen.getAllByRole("button", { name: "Назначение" })
+    ).not.toHaveLength(0)
+    expect(screen.getByText("День отгрузок")).toBeTruthy()
+    expect(screen.getByRole("button", { name: /^День отгрузок:/ })).toBeTruthy()
+    expect(screen.queryByLabelText("Отгрузка с")).toBeNull()
+    expect(screen.queryByLabelText("Отгрузка по")).toBeNull()
     expect(screen.queryByText("Дата", { exact: true })).toBeNull()
     expect(screen.queryByRole("button", { name: "Обновить" })).toBeNull()
     expect(
@@ -586,6 +638,16 @@ describe("LogisticsShipmentsPage", () => {
 
     await waitFor(() => expect(screen.queryByText("ООО Бета")).toBeNull())
     expect(screen.getAllByText("ООО Альфа")).not.toHaveLength(0)
+
+    await user.click(screen.getByRole("button", { name: "Сбросить фильтры" }))
+    await screen.findAllByText("ООО Бета")
+
+    await user.click(screen.getAllByRole("button", { name: "Назначение" })[0]!)
+    await user.click(screen.getByRole("checkbox", { name: "Доставка продажи" }))
+    await user.click(screen.getByRole("button", { name: "Применить" }))
+
+    await waitFor(() => expect(screen.queryByText("ООО Альфа")).toBeNull())
+    expect(screen.getAllByText("ООО Бета")).not.toHaveLength(0)
   })
 
   it("keeps the shipment search compact and lets the user hide filters", async () => {
@@ -804,6 +866,53 @@ describe("LogisticsShipmentsPage", () => {
         keepScheduledDate: true,
       })
     )
+  })
+
+  it("confirms against the source warehouse date instead of the UTC date", async () => {
+    vi.setSystemTime("2026-08-31T20:30:00Z")
+    const sourceWarehouseId = "99999999-9999-4999-8999-999999999999"
+    warehouseState.warehouses = [
+      warehouseState.selectedWarehouse,
+      {
+        id: sourceWarehouseId,
+        name: "Склад-источник",
+        timeZone: "Asia/Novosibirsk",
+      },
+    ]
+    shipmentApi.listShipments.mockResolvedValue([
+      {
+        ...shipmentDocument(AWAITING_ID, "AWAITING_CONFIRMATION", 5),
+        scheduledDate: "2026-09-01",
+        lines: [
+          {
+            ...shipmentDocument(AWAITING_ID, "AWAITING_CONFIRMATION", 5)
+              .lines[0],
+            inventorySourceWarehouseId: sourceWarehouseId,
+          },
+        ],
+      },
+    ])
+    shipmentApi.confirmShipmentPreparation.mockResolvedValue(
+      shipmentDocument(AWAITING_ID, "CONFIRMING_PREPARATION", 6)
+    )
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Отгружена" }))[0]!
+    )
+
+    await waitFor(() =>
+      expect(shipmentApi.confirmShipmentPreparation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: AWAITING_ID,
+          expectedVersion: 5,
+        })
+      )
+    )
+    expect(
+      screen.queryByRole("dialog", { name: "Дата отгрузки отличается" })
+    ).toBeNull()
   })
 
   it("opens a separate schedule command without chaining shipment confirmation", async () => {

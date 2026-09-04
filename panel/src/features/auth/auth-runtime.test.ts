@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { AUTHORITY, AUTH_SCOPE } from "@/features/auth/auth-config"
 import {
+  ADMIN_AUTH_CONFIG,
+  AUTHORITY,
+  AUTH_SCOPE,
+  RENTAL_MANAGER_AUTH_CONFIG,
+} from "@/features/auth/auth-config"
+import {
+  getSafeReturnTo,
   getUserManager,
   hasRenewablePanelSession,
 } from "@/features/auth/oidc-client"
@@ -28,6 +34,45 @@ describe("panel authentication runtime", () => {
 
   it("renews the panel session from its refresh token without a redirect", () => {
     expect(getUserManager().settings.automaticSilentRenew).toBe(true)
+  })
+
+  it("isolates the administration client, callback, scopes and session storage", () => {
+    const manager = getUserManager(ADMIN_AUTH_CONFIG)
+
+    expect(manager.settings.client_id).toBe("rwms-admin-web")
+    expect(manager.settings.scope).toBe(
+      "openid profile offline_access admin.manage"
+    )
+    expect(manager.settings.redirect_uri).toBe(
+      `${window.location.origin}/admin/auth/callback`
+    )
+    expect(manager).not.toBe(getUserManager())
+    expect(getSafeReturnTo("/admin/users", ADMIN_AUTH_CONFIG)).toBe(
+      "/admin/users"
+    )
+    expect(getSafeReturnTo("/orders", ADMIN_AUTH_CONFIG)).toBe("/admin/")
+    expect(getSafeReturnTo("/admin/auth/callback", ADMIN_AUTH_CONFIG)).toBe(
+      "/admin/"
+    )
+  })
+
+  it("isolates the rental-manager client and keeps returns inside /manager", () => {
+    const manager = getUserManager(RENTAL_MANAGER_AUTH_CONFIG)
+
+    expect(manager.settings.client_id).toBe("rwms-rental-manager-web")
+    expect(manager.settings.scope).toBe(
+      "openid profile offline_access rental.manage"
+    )
+    expect(manager.settings.redirect_uri).toBe(
+      `${window.location.origin}/manager/auth/callback`
+    )
+    expect(manager).not.toBe(getUserManager())
+    expect(getSafeReturnTo("/manager/orders", RENTAL_MANAGER_AUTH_CONFIG)).toBe(
+      "/manager/orders"
+    )
+    expect(getSafeReturnTo("/orders", RENTAL_MANAGER_AUTH_CONFIG)).toBe(
+      "/manager/"
+    )
   })
 
   it("recognizes only offline panel sessions with a refresh token as renewable", () => {

@@ -2,6 +2,8 @@ package dev.buhanzaz.rwms.logistics.customer.capacity.service;
 
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityIsochroneTariff;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityJobRequest;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityPriceZoneRequest;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityRestrictionZoneRequest;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityShiftRequest;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.ReplacePlanningCapacitySnapshotRequest;
 import java.math.BigDecimal;
@@ -23,6 +25,25 @@ final class WarehouseCapacityChecksum {
       List<PlanningCapacityJobRequest> sortedJobs,
       List<PlanningCapacityShiftRequest> sortedShifts,
       List<PlanningCapacityIsochroneTariff> sortedTariffs) {
+    return sha256(
+        warehouseId,
+        request,
+        sortedJobs,
+        sortedShifts,
+        sortedTariffs,
+        List.of(),
+        List.of());
+  }
+
+  /** Hashes tariff tiers and every normalized policy zone into the command replay fence. */
+  static String sha256(
+      UUID warehouseId,
+      ReplacePlanningCapacitySnapshotRequest request,
+      List<PlanningCapacityJobRequest> sortedJobs,
+      List<PlanningCapacityShiftRequest> sortedShifts,
+      List<PlanningCapacityIsochroneTariff> sortedTariffs,
+      List<PlanningCapacityPriceZoneRequest> sortedPriceZones,
+      List<PlanningCapacityRestrictionZoneRequest> sortedRestrictionZones) {
     try {
       MessageDigest digest = MessageDigest.getInstance("SHA-256");
       append(digest, "REPLACE_WAREHOUSE_CAPACITY");
@@ -54,6 +75,21 @@ final class WarehouseCapacityChecksum {
       for (PlanningCapacityIsochroneTariff tariff : sortedTariffs) {
         append(digest, Integer.toString(tariff.travelMinutes()));
         append(digest, Long.toString(tariff.priceRubles()));
+      }
+      for (PlanningCapacityPriceZoneRequest zone : sortedPriceZones) {
+        append(digest, zone.sourceZoneId().toString());
+        append(digest, Long.toString(zone.sourceZoneVersion()));
+        append(digest, Long.toString(zone.deliveryPriceRubles()));
+        append(digest, Long.toString(zone.pickupPriceRubles()));
+        append(digest, zone.geometry().type());
+        append(digest, zone.geometry().coordinates().toString());
+      }
+      for (PlanningCapacityRestrictionZoneRequest zone : sortedRestrictionZones) {
+        append(digest, zone.sourceZoneId().toString());
+        append(digest, Long.toString(zone.sourceZoneVersion()));
+        append(digest, zone.kind().name());
+        append(digest, zone.geometry().type());
+        append(digest, zone.geometry().coordinates().toString());
       }
       return HexFormat.of().formatHex(digest.digest());
     } catch (NoSuchAlgorithmException exception) {

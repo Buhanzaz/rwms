@@ -649,6 +649,16 @@ func validateCreateActor(command CreateUploadCommand) error {
 		}
 		return nil
 	}
+	if IsWorkerProfileOwnerType(command.OwnerType) {
+		ownerID, err := uuid.Parse(command.OwnerID)
+		if err != nil || ownerID == uuid.Nil || command.Kind != media.KindImage ||
+			command.ClientReferenceID != nil || command.WorkerID == nil || *command.WorkerID == uuid.Nil ||
+			command.PrincipalType != PrincipalTypeWorker || command.Actor.PrincipalType != PrincipalTypeWorker ||
+			command.Actor.SubjectID != *command.WorkerID || ownerID != *command.WorkerID {
+			return ErrConflict
+		}
+		return nil
+	}
 	if command.ClientReferenceID != nil || command.WorkerID != nil || command.PrincipalType != PrincipalTypeUser {
 		return ErrConflict
 	}
@@ -1395,12 +1405,21 @@ func requireFinalizeWorkerAccess(ctx context.Context, tx pgx.Tx, asset AssetReco
 	if command.PrincipalType != PrincipalTypeWorker {
 		return nil
 	}
-	if !IsWorkerEvidenceOwnerType(asset.OwnerType) || command.WorkerID == nil || asset.CreatedBy == nil ||
+	if command.WorkerID == nil || asset.CreatedBy == nil ||
 		asset.CreatedBy.PrincipalType != PrincipalTypeWorker || asset.CreatedBy.SubjectID != command.Actor.SubjectID {
 		return ErrOwnerProofMissing
 	}
 	ownerID, err := uuid.Parse(asset.OwnerID)
 	if err != nil || ownerID == uuid.Nil {
+		return ErrOwnerProofMissing
+	}
+	if IsWorkerProfileOwnerType(asset.OwnerType) {
+		if ownerID != *command.WorkerID || command.Actor.SubjectID != *command.WorkerID {
+			return ErrOwnerProofMissing
+		}
+		return nil
+	}
+	if !IsWorkerEvidenceOwnerType(asset.OwnerType) {
 		return ErrOwnerProofMissing
 	}
 	return requireWorkerEvidenceUploadAccess(ctx, tx, asset.OwnerType, ownerID, asset.WarehouseID, *command.WorkerID)
@@ -1855,6 +1874,15 @@ func readOwnerAssets(
 // concurrent owner revocation cannot race the read. The complete retained
 // folder archive remains available through the CABIN asset list.
 func (repository *Repository) ReadCabinCovers(
+	ctx context.Context,
+	warehouseID uuid.UUID,
+	cabinIDs []uuid.UUID,
+	consume func([]CabinCoverRecord) error,
+) error {
+	return repository.readCabinCovers(ctx, warehouseID, cabinIDs, consume)
+}
+
+func (repository *Repository) readCabinCovers(
 	ctx context.Context,
 	warehouseID uuid.UUID,
 	cabinIDs []uuid.UUID,

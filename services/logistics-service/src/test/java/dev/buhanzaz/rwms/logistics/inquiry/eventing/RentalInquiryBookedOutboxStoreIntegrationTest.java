@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.inquiry.eventing;
 
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -117,6 +118,7 @@ class RentalInquiryBookedOutboxStoreIntegrationTest {
     UUID orderId = UUID.randomUUID();
     UUID managerSubjectId = UUID.randomUUID();
     OffsetDateTime occurredAt = OffsetDateTime.parse("2026-08-09T12:00:00Z");
+    insertBookedLineage(inquiryId, conversationId, orderId, managerSubjectId);
     transactions.executeWithoutResult(
         ignored ->
             store.append(
@@ -202,18 +204,79 @@ class RentalInquiryBookedOutboxStoreIntegrationTest {
   }
 
   private UUID appendPendingEvent() {
+    UUID inquiryId = UUID.randomUUID();
+    UUID conversationId = UUID.randomUUID();
     UUID orderId = UUID.randomUUID();
+    UUID managerSubjectId = UUID.randomUUID();
+    insertBookedLineage(inquiryId, conversationId, orderId, managerSubjectId);
     transactions.executeWithoutResult(
         ignored ->
             store.append(
-                UUID.randomUUID(),
+                inquiryId,
                 1,
-                UUID.randomUUID(),
+                conversationId,
                 UUID.randomUUID(),
                 orderId,
-                UUID.randomUUID(),
+                managerSubjectId,
                 OffsetDateTime.now()));
     return orderId;
+  }
+
+  private void insertBookedLineage(
+      UUID inquiryId, UUID conversationId, UUID orderId, UUID managerSubjectId) {
+    UUID clientId = UUID.randomUUID();
+    String phone =
+        "+79%09d".formatted(Long.remainderUnsigned(clientId.getLeastSignificantBits(), 1_000_000_000L));
+    jdbc.update(
+        """
+        insert into order_client(
+          id,client_type,display_name,normalized_name,phone,normalized_phone,
+          responsible_manager_id,responsible_manager_display_name,created_by_subject_id,
+          creation_idempotency_key,creation_request_sha256,created_at,updated_at)
+        values (?,'INDIVIDUAL',?,?,?,?,?,'Менеджер',?,?,?,
+          clock_timestamp(),clock_timestamp())
+        """,
+        clientId,
+        "Клиент " + clientId,
+        "клиент " + clientId,
+        phone,
+        phone,
+        managerSubjectId,
+        managerSubjectId,
+        UUID.randomUUID(),
+        "a".repeat(64));
+    jdbc.update(
+        """
+        insert into rental_order(
+          id,order_number,status,client_id,manager_id,manager_display_name,
+          created_by_subject_id,created_by_display_name,created_by_role,
+          creation_idempotency_key,creation_request_sha256,created_at,updated_at)
+        values (?,?,'DRAFT',?,?,'Менеджер',?,'Менеджер','RENTAL_MANAGER',?,?,
+          clock_timestamp(),clock_timestamp())
+        """,
+        orderId,
+        "ORD-%019d".formatted(orderId.getMostSignificantBits() & Long.MAX_VALUE),
+        clientId,
+        managerSubjectId,
+        managerSubjectId,
+        UUID.randomUUID(),
+        "b".repeat(64));
+    jdbc.update(
+        """
+        insert into rental_inquiry(
+          id,conversation_id,creation_idempotency_key,client_id,manager_id,
+          manager_display_name,manager_role,rental_order_id,state,booked_order_id,
+          created_at,updated_at,booked_at)
+        values (?,?,?,?,?,'Менеджер','RENTAL_MANAGER',?,'BOOKED',?,
+          clock_timestamp(),clock_timestamp(),clock_timestamp())
+        """,
+        inquiryId,
+        conversationId,
+        UUID.randomUUID(),
+        clientId,
+        managerSubjectId,
+        orderId,
+        orderId);
   }
 
   private UUID eventId(UUID orderId) {

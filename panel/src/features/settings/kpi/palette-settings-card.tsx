@@ -13,7 +13,6 @@ import {
 } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -42,8 +41,8 @@ import {
 } from "@/components/ui/popover"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type {
+  KpiPaletteResponse,
   SaveKpiPaletteInput,
-  WarehouseKpiSettings,
 } from "@/features/settings/kpi/api/kpi-settings-api"
 import {
   mergePaletteBoundary,
@@ -88,6 +87,20 @@ function rangeBackground(color: string | null) {
   return normalizeRgb(color) ?? "var(--muted)"
 }
 
+function rangeForeground(color: string | null) {
+  const normalized = normalizeRgb(color)
+  if (normalized === null) return undefined
+
+  const red = Number.parseInt(normalized.slice(1, 3), 16)
+  const green = Number.parseInt(normalized.slice(3, 5), 16)
+  const blue = Number.parseInt(normalized.slice(5, 7), 16)
+  const brightness = (red * 299 + green * 587 + blue * 114) / 1000
+
+  return brightness >= 150
+    ? "var(--rwms-dusk-blue)"
+    : "var(--rwms-white)"
+}
+
 function ColorPopover({
   label,
   value,
@@ -129,7 +142,7 @@ export function PaletteSettingsCard({
   actionError,
   onSave,
 }: {
-  settings: WarehouseKpiSettings
+  settings: KpiPaletteResponse
   saving: boolean
   blocked: boolean
   actionError: string | null
@@ -299,8 +312,8 @@ export function PaletteSettingsCard({
       <CardHeader>
         <CardTitle>Диапазоны KPI</CardTitle>
         <CardDescription>
-          Деления и RGB-цвета применяются к доске и показателям только этого
-          склада.
+          Деления и RGB-цвета применяются к доске и показателям всех объектов
+          всех объектов.
         </CardDescription>
         <CardAction>
           <ToggleGroup
@@ -363,13 +376,16 @@ export function PaletteSettingsCard({
                   <button
                     type="button"
                     aria-label={`Диапазон от ${range.fromPercent}% до ${range.toPercent}%`}
-                    className="h-full border-r last:border-r-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                    className="h-full border-r px-1 text-[10px] font-medium last:border-r-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                     style={{
                       width: `${range.toPercent - range.fromPercent}%`,
                       backgroundColor: rangeBackground(range.color),
+                      color: rangeForeground(range.color),
                     }}
                     disabled={blocked}
-                  />
+                  >
+                    {range.fromPercent}–{range.toPercent}%
+                  </button>
                 </ColorPopover>
               ) : (
                 <div
@@ -438,9 +454,10 @@ export function PaletteSettingsCard({
               >
                 <Button
                   type="button"
-                  variant="outline"
-                  size="sm"
+                  variant="destructive"
+                  size="icon"
                   aria-label={`Удалить границу ${selectedBoundary}%`}
+                  title="Удалить границу"
                   disabled={blocked}
                   onClick={(event) => {
                     event.stopPropagation()
@@ -451,8 +468,7 @@ export function PaletteSettingsCard({
                     setSelectedBoundary(null)
                   }}
                 >
-                  <HugeiconsIcon icon={Delete02Icon} data-icon="inline-start" />
-                  Удалить
+                  <HugeiconsIcon icon={Delete02Icon} aria-hidden="true" />
                 </Button>
               </div>
             ) : null}
@@ -506,12 +522,16 @@ export function PaletteSettingsCard({
             disabled={blocked}
             onChange={setOverdueColor}
           >
-            <Button type="button" variant="outline" disabled={blocked}>
-              <span
-                className="size-3 rounded-full border"
-                style={{ backgroundColor: rangeBackground(overdueColor) }}
-                aria-hidden="true"
-              />
+            <Button
+              type="button"
+              variant="outline"
+              className="rwms-button-color shadow-sm"
+              style={{
+                backgroundColor: rangeBackground(overdueColor),
+                color: rangeForeground(overdueColor),
+              }}
+              disabled={blocked}
+            >
               Цвет просрочки
             </Button>
           </ColorPopover>
@@ -523,16 +543,35 @@ export function PaletteSettingsCard({
 
         <div className="flex flex-wrap gap-2">
           {ranges.map((range) => (
-            <Badge key={range.fromPercent} variant="outline">
-              {range.fromPercent}–{range.toPercent}% · {range.color ?? "серый"}
-            </Badge>
+            <ColorPopover
+              key={range.fromPercent}
+              label={`диапазона ${range.fromPercent}–${range.toPercent}%`}
+              value={range.color}
+              disabled={blocked}
+              onChange={(value) =>
+                setRanges((current) =>
+                  setPaletteRangeColor(current, range.fromPercent, value)
+                )
+              }
+            >
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="rwms-button-color shadow-sm"
+                style={{
+                  backgroundColor: rangeBackground(range.color),
+                  color: rangeForeground(range.color),
+                }}
+                disabled={blocked}
+              >
+                {range.fromPercent}–{range.toPercent}%
+              </Button>
+            </ColorPopover>
           ))}
         </div>
       </CardContent>
-      <CardFooter className="justify-between gap-3 border-t">
-        <p className="text-sm text-muted-foreground">
-          От 1 до 6 непрерывных диапазонов, шаг границы — 1%.
-        </p>
+      <CardFooter className="justify-end gap-3 border-t">
         <Button
           type="button"
           disabled={blocked || !validation.valid}

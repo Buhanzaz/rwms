@@ -33,25 +33,40 @@ export type TransferLine = {
   state: TransferLineState
   tenantSnapshot: string | null
   rentalOrderId: null
+  /** Physical source remains the transfer source even when the document is read at its destination. */
+  inventorySourceWarehouseId: string
+  /** Inventory-created shipment furniture is never part of a warehouse transfer line. */
+  inventoryShipmentFurniture: null
 }
 
 export type TransferDocument = {
   id: string
   version: number
   documentType: "TRANSFER"
+  /** Interwarehouse work is deliberately separate from customer delivery. */
+  customerDeliveryPurpose: null
   state: TransferDocumentState
   warehouseId: string
   destinationWarehouseId: string
+  /** Optional reverse leg returned by a transfer-creation response. */
+  linkedReturnTransferId: string | null
   partySnapshot: null
-  driverSnapshot: null
-  driverWorkerId: null
+  /** Immutable assigned-driver display snapshot; never use the opaque ID in the UI. */
+  driverSnapshot: string | null
+  driverWorkerId: string | null
   clientId: null
+  /** Historical rental imports are only shipment or return facts, never transfers. */
+  historicalRentalImport: false
   equipmentMovementTaskId: string | null
   scheduledDate: string
   /** Transfers are warehouse-owned and never belong to a rental order. */
   rentalOrderId: null
   /** Transfers are not created from rental shipments. */
   rentalShipmentId: null
+  /** Inventory outcomes create only return or shipment documents, never transfers. */
+  inventorySourceId: null
+  inventorySourceFindingId: null
+  inventorySourceDispositionKind: null
   lines: TransferLine[]
   createdAt: string
   updatedAt: string

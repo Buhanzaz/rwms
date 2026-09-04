@@ -21,6 +21,7 @@ from pydantic import (
 )
 
 from app.models.domain import (
+    CustomerDeliveryPurpose,
     OptimizationStatus,
     PlanStatus,
     RequestStatus,
@@ -29,8 +30,33 @@ from app.models.domain import (
     TaskStatus,
     VehicleLoadProfileType,
 )
+from app.schemas.policy_zones import GeoJsonMultiPolygon
 
 type NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+def _shift_duration_seconds(start: time, end: time) -> int:
+    """Return the interval, treating only an earlier end as the next local day."""
+
+    duration = (
+        end.hour * 3600
+        + end.minute * 60
+        + end.second
+        - start.hour * 3600
+        - start.minute * 60
+        - start.second
+    )
+    return duration + 24 * 3600 if duration < 0 else duration
+
+
+def _validate_shift_break(start: time, end: time, break_minutes: int) -> None:
+    """Reject a break that leaves no usable driver capacity in the shift."""
+
+    duration_seconds = _shift_duration_seconds(start, end)
+    if duration_seconds == 0:
+        raise ValueError("start_time and end_time must define a non-zero shift")
+    if break_minutes * 60 >= duration_seconds:
+        raise ValueError("break_minutes must be shorter than the shift duration")
 
 
 def _default_isochrone_tariffs() -> list[IsochroneTariff]:
@@ -97,18 +123,13 @@ class PlanningSettings(ApiModel):
 
 
 class WorkloadGeneratorInput(ApiModel):
-    """Bounded deterministic request workload generated for one warehouse horizon."""
+    """Bounded random request workload generated for one warehouse horizon."""
 
     start_date: date
     days: int = Field(default=1, ge=1, le=31)
     deliveries_per_day: int = Field(ge=0, le=10)
     pickups_per_day: int = Field(ge=0, le=10)
     alternative_dates_count: int = Field(default=0, ge=0, le=3)
-    cargo_length_mm: int = Field(default=6_000, gt=0)
-    cargo_width_mm: int = Field(default=2_400, gt=0)
-    cargo_height_mm: int = Field(default=2_400, gt=0)
-    cargo_weight_kg: int = Field(default=1_200, gt=0)
-    seed: int
 
     @model_validator(mode="after")
     def validate_date_choices_fit_horizon(self) -> WorkloadGeneratorInput:
@@ -131,7 +152,6 @@ class WorkloadGenerationResult(ApiModel):
     """Auditable local generation summary plus anonymous test-capacity publication state."""
 
     warehouse_id: UUID
-    seed: int
     start_date: date
     end_date: date
     created_requests: int
@@ -142,9 +162,7 @@ class WorkloadGenerationResult(ApiModel):
     daily_counts: list[WorkloadGenerationDailyCount]
     auto_plan_run_ids: list[UUID] = Field(default_factory=list)
     auto_plan_ids: list[UUID] = Field(default_factory=list)
-    capacity_projection_status: Literal["NOT_REQUESTED", "PUBLISHED", "FAILED"] = (
-        "NOT_REQUESTED"
-    )
+    capacity_projection_status: Literal["NOT_REQUESTED", "PUBLISHED", "FAILED"] = "NOT_REQUESTED"
     capacity_projection_warning: str | None = None
 
 
@@ -155,9 +173,7 @@ class WorkloadDeletionResult(ApiModel):
     date: date
     deleted_requests: int
     deleted_plans: int = 0
-    capacity_projection_status: Literal["NOT_REQUESTED", "PUBLISHED", "FAILED"] = (
-        "NOT_REQUESTED"
-    )
+    capacity_projection_status: Literal["NOT_REQUESTED", "PUBLISHED", "FAILED"] = "NOT_REQUESTED"
     capacity_projection_warning: str | None = None
 
 
@@ -207,6 +223,7 @@ class WarehouseCreate(ApiModel):
 class WarehouseUpdate(ApiModel):
     """Partial update for warehouse planning configuration and depot timings."""
 
+    expected_version: int = Field(ge=1)
     default_planning_date: date | None = None
     seed: int | None = None
     settings: PlanningSettings | None = None
@@ -228,6 +245,7 @@ class WarehouseRead(ApiModel):
     """Canonical RWMS identity plus warehouse-local planning configuration."""
 
     id: UUID
+    version: int
     external_warehouse_id: UUID
     external_warehouse_version: int
     name: str
@@ -248,6 +266,11 @@ class WarehouseRead(ApiModel):
     seed: int
     settings: dict[str, Any]
     capacity_generation: int
+    capacity_published_generation: int
+    capacity_publish_status: Literal["NOT_REQUESTED", "PENDING", "PUBLISHED", "FAILED"]
+    capacity_publish_attempts: int
+    capacity_publish_error_code: str | None
+    capacity_publish_next_attempt_at: AwareDatetime | None
     created_at: AwareDatetime
     updated_at: AwareDatetime
 
@@ -267,8 +290,6 @@ class AvailableWarehouseRead(ApiModel):
     routing_ready: bool
     routing_unavailable_reason: str | None = None
     local_warehouse_id: UUID | None = None
-
-
 
 
 class DriverCreate(ApiModel):
@@ -295,6 +316,7 @@ class DriverCreate(ApiModel):
 class DriverUpdate(ApiModel):
     """Partial driver update."""
 
+    expected_version: int = Field(ge=1)
     rwms_assignment_mode: Literal["ASSIGNED_DRIVER", "WAREHOUSE_DRIVERS"] | None = None
     external_worker_id: UUID | None = None
     active: bool | None = None
@@ -306,6 +328,7 @@ class DriverRead(DriverCreate):
     """Persisted driver representation."""
 
     id: UUID
+    version: int
     warehouse_id: UUID
     name: str
 
@@ -367,6 +390,7 @@ class VehicleCreate(ApiModel):
 class VehicleUpdate(ApiModel):
     """Partial vehicle update."""
 
+    expected_version: int = Field(ge=1)
     name: NonBlank | None = None
     registration_number: NonBlank | None = None
     capacity: int | None = Field(default=None, ge=1, le=2)
@@ -414,7 +438,53 @@ class VehicleRead(VehicleCreate):
     """Persisted vehicle with its complete operational axle-load profile set."""
 
     id: UUID
+    version: int
     warehouse_id: UUID
+    load_profiles: list[VehicleLoadProfileCreate]
+
+
+class AdminVehicleRead(VehicleCreate):
+    """Administrative vehicle view keyed by the canonical warehouse UUID."""
+
+    id: UUID
+    version: int = Field(ge=1)
+    name: NonBlank
+    registration_number: NonBlank
+    capacity: int = Field(ge=1, le=2)
+    active: bool
+    average_speed_city: float = Field(gt=0)
+    average_speed_region: float = Field(gt=0)
+    vehicle_type: str | None
+    manufacturer: str | None
+    model: str | None
+    is_hgv: bool | None
+    tare_weight_kg: int | None = Field(gt=0)
+    max_gross_weight_kg: int | None = Field(gt=0)
+    length_mm: int | None = Field(gt=0)
+    width_mm: int | None = Field(gt=0)
+    height_mm: int | None = Field(gt=0)
+    axle_count: int | None = Field(gt=0)
+    max_axle_load_kg: int | None = Field(gt=0)
+    payload_capacity_kg: int | None = Field(gt=0)
+    platform_length_mm: int | None = Field(gt=0)
+    platform_width_mm: int | None = Field(gt=0)
+    platform_height_from_ground_mm: int | None = Field(gt=0)
+    max_platform_payload_kg: int | None = Field(gt=0)
+    max_cargo_length_mm: int | None = Field(gt=0)
+    max_cargo_width_mm: int | None = Field(gt=0)
+    max_cargo_height_mm: int | None = Field(gt=0)
+    max_cargo_weight_kg: int | None = Field(gt=0)
+    can_use_trailer: bool | None
+    default_trailer_id: UUID | None
+    combined_length_with_trailer_mm: int | None = Field(gt=0)
+    coupling_length_mm: int | None = Field(gt=0)
+    height_safety_margin_mm: int = Field(ge=0)
+    width_safety_margin_mm: int = Field(ge=0)
+    weight_safety_margin_kg: int = Field(ge=0)
+    notes: str
+    warehouse_id: UUID = Field(
+        description="Canonical warehouse-service UUID, never the planner-local row UUID."
+    )
     load_profiles: list[VehicleLoadProfileCreate]
 
 
@@ -446,6 +516,7 @@ class TrailerCreate(ApiModel):
 class TrailerUpdate(ApiModel):
     """Partial update of trailer identity, availability, and physical limits."""
 
+    expected_version: int = Field(ge=1)
     name: NonBlank | None = None
     registration_number: NonBlank | None = None
     active: bool | None = None
@@ -472,7 +543,47 @@ class TrailerRead(TrailerCreate):
     """Persisted trailer representation."""
 
     id: UUID
+    version: int
     warehouse_id: UUID
+
+
+class AdminTrailerRead(TrailerCreate):
+    """Administrative trailer view keyed by the canonical warehouse UUID."""
+
+    id: UUID
+    version: int = Field(ge=1)
+    name: NonBlank
+    registration_number: NonBlank
+    active: bool
+    tare_weight_kg: int | None = Field(gt=0)
+    max_gross_weight_kg: int | None = Field(gt=0)
+    length_mm: int | None = Field(gt=0)
+    width_mm: int | None = Field(gt=0)
+    height_mm: int | None = Field(gt=0)
+    platform_length_mm: int | None = Field(gt=0)
+    platform_width_mm: int | None = Field(gt=0)
+    platform_height_from_ground_mm: int | None = Field(gt=0)
+    max_platform_payload_kg: int | None = Field(gt=0)
+    payload_capacity_kg: int | None = Field(gt=0)
+    axle_count: int | None = Field(gt=0)
+    max_axle_load_kg: int | None = Field(gt=0)
+    max_cargo_length_mm: int | None = Field(gt=0)
+    max_cargo_width_mm: int | None = Field(gt=0)
+    max_cargo_height_mm: int | None = Field(gt=0)
+    max_cargo_weight_kg: int | None = Field(gt=0)
+    notes: str
+    warehouse_id: UUID = Field(
+        description="Canonical warehouse-service UUID, never the planner-local row UUID."
+    )
+
+
+class AdminCatalogRelocationRequest(ApiModel):
+    """Optimistically fenced permanent relocation to a canonical warehouse."""
+
+    expected_version: int = Field(ge=1)
+    target_warehouse_id: UUID = Field(
+        description="Canonical warehouse-service UUID of the new owning object."
+    )
 
 
 class VehicleConfigurationCreate(ApiModel):
@@ -514,7 +625,7 @@ class VehicleConfigurationUpdate(ApiModel):
 
 
 class ShiftCreate(ApiModel):
-    """Input for one repeated daily shift over an inclusive monthly date range."""
+    """Input for one repeated local shift over at most 31 inclusive start dates."""
 
     driver_id: UUID
     vehicle_id: UUID
@@ -527,25 +638,20 @@ class ShiftCreate(ApiModel):
 
     @model_validator(mode="after")
     def validate_interval(self) -> ShiftCreate:
-        """Require a bounded ascending range within one calendar month."""
+        """Require a bounded ascending range and positive usable daily capacity."""
 
         if self.date_to < self.date_from:
             raise ValueError("date_to must be on or after date_from")
         if (self.date_to - self.date_from).days > 30:
             raise ValueError("shift date range cannot exceed 31 inclusive days")
-        if (self.date_from.year, self.date_from.month) != (
-            self.date_to.year,
-            self.date_to.month,
-        ):
-            raise ValueError("shift date range must stay within one calendar month")
-        if self.end_time <= self.start_time:
-            raise ValueError("end_time must be after start_time")
+        _validate_shift_break(self.start_time, self.end_time, self.break_minutes)
         return self
 
 
 class ShiftUpdate(ApiModel):
     """Partial driver shift update."""
 
+    expected_version: int = Field(ge=1)
     driver_id: UUID | None = None
     vehicle_id: UUID | None = None
     date_from: DateValue | None = None
@@ -555,16 +661,29 @@ class ShiftUpdate(ApiModel):
     break_minutes: int | None = Field(default=None, ge=0)
     active: bool | None = None
 
+    @model_validator(mode="after")
+    def validate_complete_interval(self) -> ShiftUpdate:
+        """Validate break capacity when a patch supplies the complete interval."""
+
+        if (
+            self.start_time is not None
+            and self.end_time is not None
+            and self.break_minutes is not None
+        ):
+            _validate_shift_break(self.start_time, self.end_time, self.break_minutes)
+        return self
+
 
 class ShiftRead(ShiftCreate):
     """Persisted driver shift representation."""
 
     id: UUID
+    version: int
     warehouse_id: UUID
 
 
 class RequestDateOptionInput(ApiModel):
-    """Acceptable request date with a hard or soft local time window."""
+    """Acceptable date whose travel band is independent of its optional window."""
 
     date: date
     priority: int = 0
@@ -585,8 +704,6 @@ class RequestDateOptionInput(ApiModel):
             and self.window_end <= self.window_start
         ):
             raise ValueError("window_end must be after window_start")
-        if self.travel_zone_hours is not None and (self.window_start is None or not self.is_hard):
-            raise ValueError("travel_zone_hours requires a complete hard time window")
         return self
 
 
@@ -600,6 +717,7 @@ class RequestDateOptionRead(RequestDateOptionInput):
 class RequestDateOptionUpdate(ApiModel):
     """Partial update of an acceptable date and local service window."""
 
+    expected_version: int = Field(ge=1)
     date: DateValue | None = None
     priority: int | None = None
     window_start: time | None = None
@@ -611,6 +729,7 @@ class RequestDateOptionUpdate(ApiModel):
 class RequestScheduleInput(ApiModel):
     """Explicitly assign a request to one accepted date or clear that choice."""
 
+    expected_version: int = Field(ge=1)
     date: DateValue | None
     add_if_missing: bool = False
 
@@ -618,6 +737,7 @@ class RequestScheduleInput(ApiModel):
 class RequestPlanningDetailsInput(ApiModel):
     """Dispatcher-owned date, window, obligation, access, and notification details."""
 
+    expected_version: int = Field(ge=1)
     date: date
     window_start: time | None = None
     window_end: time | None = None
@@ -648,14 +768,15 @@ class RequestPlanningDetailsInput(ApiModel):
 class RequestTaskSplitInput(ApiModel):
     """Explicit operator-selected transport-part quantities for one request."""
 
-    part_quantities: list[int] = Field(min_length=1)
+    expected_version: int = Field(ge=1)
+    part_quantities: list[int] | None = Field(default=None, min_length=1)
 
     @field_validator("part_quantities")
     @classmethod
-    def validate_part_capacities(cls, value: list[int]) -> list[int]:
+    def validate_part_capacities(cls, value: list[int] | None) -> list[int] | None:
         """Keep every explicit subtask within the supported one-or-two-unit capacity."""
 
-        if any(quantity < 1 or quantity > 2 for quantity in value):
+        if value is not None and any(quantity < 1 or quantity > 2 for quantity in value):
             raise ValueError("each part quantity must be between 1 and 2")
         return value
 
@@ -675,13 +796,14 @@ class LogisticsRequestCreate(ApiModel):
     cargo_weight_kg: int | None = Field(default=None, gt=0)
     service_minutes: int = Field(default=30, ge=0)
     priority: int = 0
-    status: RequestStatus = RequestStatus.READY
+    status: Literal[RequestStatus.READY] = RequestStatus.READY
     split_allowed: bool = True
     mandatory: bool = False
     trailer_access_allowed: bool | None = None
     include_driver_passport_in_notification: bool = False
     contact_name: str = Field(default="", max_length=200)
     contact_phone: str = Field(default="", max_length=64)
+    client_type: Literal["INDIVIDUAL", "SOLE_PROPRIETOR", "LEGAL_ENTITY"] | None = None
     notes: str = ""
     date_options: list[RequestDateOptionInput] = Field(default_factory=list)
 
@@ -715,6 +837,7 @@ class LogisticsRequestCreate(ApiModel):
 class LogisticsRequestUpdate(ApiModel):
     """Partial request update; coordinate changes trigger server reclassification."""
 
+    expected_version: int = Field(ge=1)
     type: RequestType | None = None
     name: NonBlank | None = None
     address_label: str | None = None
@@ -727,13 +850,14 @@ class LogisticsRequestUpdate(ApiModel):
     cargo_weight_kg: int | None = Field(default=None, gt=0)
     service_minutes: int | None = Field(default=None, ge=0)
     priority: int | None = None
-    status: RequestStatus | None = None
+    status: Literal[RequestStatus.READY] | None = None
     split_allowed: bool | None = None
     mandatory: bool | None = None
     trailer_access_allowed: bool | None = None
     include_driver_passport_in_notification: bool | None = None
     contact_name: str | None = Field(default=None, max_length=200)
     contact_phone: str | None = Field(default=None, max_length=64)
+    client_type: Literal["INDIVIDUAL", "SOLE_PROPRIETOR", "LEGAL_ENTITY"] | None = None
     notes: str | None = None
     date_options: list[RequestDateOptionInput] | None = None
 
@@ -763,10 +887,12 @@ class LogisticsRequestRead(ApiModel):
     """Warehouse request with date options and vehicle-sized split parts."""
 
     id: UUID
+    version: int
     warehouse_id: UUID
     source_system: str | None
     external_id: UUID | None
     type: RequestType
+    customer_delivery_purpose: CustomerDeliveryPurpose | None
     name: str
     address_label: str
     latitude: float
@@ -790,10 +916,17 @@ class LogisticsRequestRead(ApiModel):
     assigned_contractor_phone: str | None
     assigned_at: AwareDatetime | None
     assigned_by: str | None
+    contractor_handoff_command_id: UUID | None
+    contractor_handoff_sequence: int | None = Field(
+        ge=0,
+        description="Zero-based request position in the immutable contractor handoff command.",
+    )
+    external_task_ids: list[UUID]
     trailer_access_allowed: bool | None
     include_driver_passport_in_notification: bool
     contact_name: str
     contact_phone: str
+    client_type: Literal["INDIVIDUAL", "SOLE_PROPRIETOR", "LEGAL_ENTITY"] | None
     notes: str
     created_at: AwareDatetime
     updated_at: AwareDatetime
@@ -802,9 +935,10 @@ class LogisticsRequestRead(ApiModel):
 
 
 class WarehouseWorkspaceRead(ApiModel):
-    """Selected warehouse, its direct planning group, and root-owned resources."""
+    """Bounded dated projection for a selected warehouse and its direct planning group."""
 
     warehouse: WarehouseRead
+    planning_date: date
     planning_root_warehouse_id: UUID
     planning_group_warehouse_ids: list[UUID]
     warehouses: list[WarehouseRead]
@@ -813,6 +947,8 @@ class WarehouseWorkspaceRead(ApiModel):
     trailers: list[TrailerRead]
     shifts: list[ShiftRead]
     requests: list[LogisticsRequestRead]
+    request_total: int = Field(ge=0)
+    request_next_cursor: UUID | None = None
 
 
 class RwmsApiModel(BaseModel):
@@ -833,7 +969,7 @@ class RwmsPlanningDateOption(RwmsApiModel):
 
     @model_validator(mode="after")
     def validate_customer_window(self) -> RwmsPlanningDateOption:
-        """Require complete ordered hard windows for CustomerApp planning options."""
+        """Validate fixed windows while retaining an informational travel band."""
 
         if (self.window_start is None) != (self.window_end is None):
             raise ValueError("windowStart and windowEnd must be provided together")
@@ -842,9 +978,14 @@ class RwmsPlanningDateOption(RwmsApiModel):
                 raise ValueError("windowStart must precede windowEnd")
             if not self.is_hard:
                 raise ValueError("fixed delivery windows must be hard")
-        if self.travel_zone_hours is not None and (self.window_start is None or not self.is_hard):
-            raise ValueError("travelZoneHours requires a complete hard window")
         return self
+
+
+class RwmsPlanningUnitReservation(RwmsApiModel):
+    """Concrete cabin reservation with its authoritative physical source warehouse."""
+
+    unit_id: UUID = Field(alias="unitId")
+    inventory_source_warehouse_id: UUID = Field(alias="inventorySourceWarehouseId")
 
 
 class RwmsPlanningRequest(RwmsApiModel):
@@ -853,13 +994,20 @@ class RwmsPlanningRequest(RwmsApiModel):
     order_id: UUID = Field(alias="orderId")
     order_version: int = Field(alias="orderVersion", ge=0)
     source_revision: str = Field(alias="sourceRevision", pattern=r"^[0-9a-f]{64}$")
+    customer_delivery_purpose: CustomerDeliveryPurpose = Field(alias="customerDeliveryPurpose")
     order_number: NonBlank = Field(alias="orderNumber")
     client_name: NonBlank = Field(alias="clientName")
+    client_type: Literal["INDIVIDUAL", "SOLE_PROPRIETOR", "LEGAL_ENTITY"] = Field(
+        alias="clientType"
+    )
+    contact_name: str | None = Field(default=None, alias="contactName", max_length=200)
+    contact_phone: str | None = Field(default=None, alias="contactPhone", max_length=64)
     address: NonBlank
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
     quantity: int = Field(gt=0)
     unit_ids: list[UUID] = Field(alias="unitIds")
+    unit_reservations: list[RwmsPlanningUnitReservation] = Field(alias="unitReservations")
     date_options: list[RwmsPlanningDateOption] = Field(alias="dateOptions")
     trailer_access_allowed: bool | None = Field(alias="trailerAccessAllowed")
     delivery_price_rubles: int | None = Field(
@@ -883,15 +1031,26 @@ class RwmsPlanningRequest(RwmsApiModel):
             raise ValueError("unitIds count must equal quantity")
         if len(set(self.unit_ids)) != len(self.unit_ids):
             raise ValueError("unitIds must be unique")
-        if (
-            self.price_isochrone_minutes is not None
-            and self.price_isochrone_minutes % 60 != 0
-        ):
+        reservation_unit_ids = [item.unit_id for item in self.unit_reservations]
+        if len(set(reservation_unit_ids)) != len(reservation_unit_ids):
+            raise ValueError("unitReservations unitId values must be unique")
+        if set(reservation_unit_ids) != set(self.unit_ids):
+            raise ValueError("unitReservations must map exactly every unitId")
+        if self.price_isochrone_minutes is not None and self.price_isochrone_minutes % 60 != 0:
             raise ValueError("priceIsochroneMinutes must be an hourly tier")
         dates = [option.date for option in self.date_options]
         if len(set(dates)) != len(dates):
             raise ValueError("dateOptions dates must be unique")
         return self
+
+    def inventory_sources_for(self, unit_ids: list[UUID]) -> frozenset[UUID]:
+        """Return the authoritative physical sources for one concrete unit slice."""
+
+        source_by_unit = {
+            reservation.unit_id: reservation.inventory_source_warehouse_id
+            for reservation in self.unit_reservations
+        }
+        return frozenset(source_by_unit[unit_id] for unit_id in unit_ids)
 
 
 class RwmsPlanningFeed(RwmsApiModel):
@@ -947,6 +1106,8 @@ class RwmsWarehouseIdentity(RwmsApiModel):
             raise ValueError("latitude and longitude must both be set or both omitted")
         if self.routing_ready and self.latitude is None:
             raise ValueError("routingReady requires latitude and longitude")
+        if self.routing_ready and self.latitude == 0 and self.longitude == 0:
+            raise ValueError("routingReady cannot use placeholder coordinates 0,0")
         return self
 
 
@@ -1028,6 +1189,51 @@ class RwmsDriverIdentity(RwmsApiModel):
             and self.available_until <= self.available_from
         ):
             raise ValueError("availableUntil must follow availableFrom")
+        return self
+
+
+class RwmsVehicleOperationalAssignment(RwmsApiModel):
+    """Logistics-owned vehicle placement fact over one transfer interval."""
+
+    assignment_id: UUID = Field(alias="assignmentId")
+    version: int = Field(ge=0)
+    transfer_id: UUID = Field(alias="transferId")
+    vehicle_id: UUID = Field(alias="vehicleId")
+    source_warehouse_id: UUID = Field(alias="sourceWarehouseId")
+    destination_warehouse_id: UUID = Field(alias="destinationWarehouseId")
+    mode: Literal["TRIP_ONLY", "TEMPORARY", "PERMANENT"]
+    status: Literal["PLANNED", "IN_TRANSIT", "ACTIVE", "COMPLETED", "CANCELLED"]
+    travel_starts_at: AwareDatetime = Field(alias="travelStartsAt")
+    effective_from: AwareDatetime = Field(alias="effectiveFrom")
+    effective_until: AwareDatetime | None = Field(alias="effectiveUntil")
+    created_at: AwareDatetime = Field(alias="createdAt")
+    updated_at: AwareDatetime = Field(alias="updatedAt")
+
+    @model_validator(mode="after")
+    def validate_assignment_definition(self) -> RwmsVehicleOperationalAssignment:
+        """Reject impossible topology, lifecycle, and half-open interval combinations."""
+
+        if self.source_warehouse_id == self.destination_warehouse_id:
+            raise ValueError("sourceWarehouseId and destinationWarehouseId must differ")
+        if self.travel_starts_at >= self.effective_from:
+            raise ValueError("travelStartsAt must precede effectiveFrom")
+        if self.mode == "TEMPORARY" and (
+            self.effective_until is None or self.effective_until <= self.effective_from
+        ):
+            raise ValueError("TEMPORARY requires effectiveUntil after effectiveFrom")
+        if self.mode == "PERMANENT":
+            if self.status == "COMPLETED" and self.effective_until is None:
+                raise ValueError("COMPLETED PERMANENT requires bounded effectiveUntil")
+            if self.status != "COMPLETED" and self.effective_until is not None:
+                raise ValueError("only COMPLETED PERMANENT may have effectiveUntil")
+            if self.effective_until is not None and self.effective_until <= self.effective_from:
+                raise ValueError("bounded PERMANENT effectiveUntil must follow effectiveFrom")
+        if self.mode == "TRIP_ONLY" and self.effective_until != self.effective_from:
+            raise ValueError("TRIP_ONLY requires effectiveUntil equal to effectiveFrom")
+        if self.mode == "TRIP_ONLY" and self.status == "ACTIVE":
+            raise ValueError("TRIP_ONLY cannot have ACTIVE placement status")
+        if self.updated_at < self.created_at:
+            raise ValueError("updatedAt cannot precede createdAt")
         return self
 
 
@@ -1139,6 +1345,7 @@ class RwmsPlanningCapacityShift(RwmsApiModel):
 
         if self.shift_end <= self.shift_start:
             raise ValueError("shiftStart must precede shiftEnd")
+        _validate_shift_break(self.shift_start, self.shift_end, self.break_minutes)
         return self
 
 
@@ -1147,6 +1354,25 @@ class RwmsIsochroneTariff(RwmsApiModel):
 
     travel_minutes: int = Field(alias="travelMinutes", ge=60, le=720, multiple_of=60)
     price_rubles: int = Field(alias="priceRubles", ge=0)
+
+
+class RwmsPlanningCapacityPriceZone(RwmsApiModel):
+    """One SPECIAL_PRICE override published without changing normal route reach."""
+
+    source_zone_id: UUID = Field(alias="sourceZoneId")
+    source_zone_version: int = Field(alias="sourceZoneVersion", ge=0)
+    delivery_price_rubles: int = Field(alias="deliveryPriceRubles", ge=0)
+    pickup_price_rubles: int = Field(alias="pickupPriceRubles", ge=0)
+    geometry: GeoJsonMultiPolygon
+
+
+class RwmsPlanningCapacityRestrictionZone(RwmsApiModel):
+    """One FORBIDDEN or NO_TRAILER feasibility override published to RWMS."""
+
+    source_zone_id: UUID = Field(alias="sourceZoneId")
+    source_zone_version: int = Field(alias="sourceZoneVersion", ge=0)
+    kind: Literal["FORBIDDEN", "NO_TRAILER"]
+    geometry: GeoJsonMultiPolygon
 
 
 class RwmsCapacitySnapshotCommand(RwmsApiModel):
@@ -1160,6 +1386,16 @@ class RwmsCapacitySnapshotCommand(RwmsApiModel):
         alias="isochroneTariffs",
         min_length=1,
         max_length=12,
+    )
+    price_zones: list[RwmsPlanningCapacityPriceZone] = Field(
+        default_factory=list,
+        alias="priceZones",
+        max_length=500,
+    )
+    restriction_zones: list[RwmsPlanningCapacityRestrictionZone] = Field(
+        default_factory=list,
+        alias="restrictionZones",
+        max_length=500,
     )
 
     @field_validator("jobs")
@@ -1188,15 +1424,49 @@ class RwmsCapacitySnapshotCommand(RwmsApiModel):
 
     @field_validator("isochrone_tariffs")
     @classmethod
-    def validate_tariffs(
-        cls, value: list[RwmsIsochroneTariff]
-    ) -> list[RwmsIsochroneTariff]:
+    def validate_tariffs(cls, value: list[RwmsIsochroneTariff]) -> list[RwmsIsochroneTariff]:
         """Require the same contiguous hourly tier sequence as the public warehouse API."""
 
         expected = list(range(60, 60 * (len(value) + 1), 60))
         if [tariff.travel_minutes for tariff in value] != expected:
             raise ValueError("isochroneTariffs must be contiguous hourly tiers starting at 60")
         return value
+
+    @field_validator("price_zones")
+    @classmethod
+    def validate_unique_price_zones(
+        cls,
+        value: list[RwmsPlanningCapacityPriceZone],
+    ) -> list[RwmsPlanningCapacityPriceZone]:
+        """Reject duplicate SPECIAL_PRICE source identities in one replacement."""
+
+        identifiers = [zone.source_zone_id for zone in value]
+        if len(set(identifiers)) != len(identifiers):
+            raise ValueError("priceZones sourceZoneId values must be unique")
+        return value
+
+    @field_validator("restriction_zones")
+    @classmethod
+    def validate_unique_restriction_zones(
+        cls,
+        value: list[RwmsPlanningCapacityRestrictionZone],
+    ) -> list[RwmsPlanningCapacityRestrictionZone]:
+        """Reject duplicate restriction source identities in one replacement."""
+
+        identifiers = [zone.source_zone_id for zone in value]
+        if len(set(identifiers)) != len(identifiers):
+            raise ValueError("restrictionZones sourceZoneId values must be unique")
+        return value
+
+    @model_validator(mode="after")
+    def validate_disjoint_zone_families(self) -> RwmsCapacitySnapshotCommand:
+        """Keep each source zone in exactly one policy family."""
+
+        price_ids = {zone.source_zone_id for zone in self.price_zones}
+        restriction_ids = {zone.source_zone_id for zone in self.restriction_zones}
+        if price_ids.intersection(restriction_ids):
+            raise ValueError("sourceZoneId cannot occur in both policy-zone arrays")
+        return self
 
 
 class RwmsCapacitySnapshotResult(RwmsApiModel):
@@ -1209,6 +1479,8 @@ class RwmsCapacitySnapshotResult(RwmsApiModel):
     job_count: int = Field(alias="jobCount", ge=0)
     shift_count: int = Field(alias="shiftCount", ge=0)
     isochrone_tariff_count: int = Field(alias="isochroneTariffCount", ge=1, le=12)
+    price_zone_count: int = Field(alias="priceZoneCount", ge=0, le=500)
+    restriction_zone_count: int = Field(alias="restrictionZoneCount", ge=0, le=500)
     replayed: bool
     updated_at: AwareDatetime = Field(alias="updatedAt")
 
@@ -1218,6 +1490,9 @@ class RwmsPlanningAssignment(RwmsApiModel):
 
     order_id: UUID = Field(alias="orderId")
     service_warehouse_id: UUID | None = Field(default=None, alias="serviceWarehouseId")
+    inventory_source_warehouse_id: UUID | None = Field(
+        default=None, alias="inventorySourceWarehouseId"
+    )
     expected_order_version: int = Field(alias="expectedOrderVersion", ge=0)
     scheduled_date: date = Field(alias="scheduledDate")
     assignment_type: Literal["ROUTE_PLAN", "CONTRACTOR_HANDOFF"] = Field(
@@ -1229,6 +1504,7 @@ class RwmsPlanningAssignment(RwmsApiModel):
     driver_worker_id: UUID | None = Field(default=None, alias="driverWorkerId")
     driver_name: NonBlank = Field(alias="driverName")
     unit_ids: list[UUID] = Field(alias="unitIds", min_length=1, max_length=2)
+    provisional_eta: AwareDatetime | None = Field(default=None, alias="provisionalEta")
 
     @model_validator(mode="after")
     def validate_driver_audience(self) -> RwmsPlanningAssignment:
@@ -1241,6 +1517,8 @@ class RwmsPlanningAssignment(RwmsApiModel):
             )
         if self.assignment_type == "CONTRACTOR_HANDOFF" and not assigned:
             raise ValueError("CONTRACTOR_HANDOFF requires ASSIGNED_DRIVER")
+        if assigned and self.provisional_eta is not None:
+            raise ValueError("provisionalEta is only used for shared driver-pool tasks")
         return self
 
 
@@ -1253,9 +1531,10 @@ class RwmsDriverShiftPlanVehicle(RwmsApiModel):
     vehicle_type: str | None = Field(default=None, alias="vehicleType", max_length=64)
     manufacturer: str | None = Field(default=None, max_length=100)
     model: str | None = Field(default=None, max_length=100)
-    configuration_type: Literal[
-        "TRUCK", "TRUCK_WITH_TRAILER", "TRUCK_WITH_CRANE"
-    ] = Field(alias="configurationType")
+    configuration_type: Literal["TRUCK", "TRUCK_WITH_TRAILER", "TRUCK_WITH_CRANE"] = Field(
+        alias="configurationType"
+    )
+    cabin_capacity: int | None = Field(default=None, alias="cabinCapacity", ge=1, le=2)
     start_odometer: int | None = Field(default=None, alias="startOdometer", ge=0)
 
 
@@ -1267,6 +1546,56 @@ class RwmsDriverShiftPlanTrailer(RwmsApiModel):
     registration_number: NonBlank = Field(alias="registrationNumber", max_length=64)
 
 
+class RwmsDriverShiftRouteOperation(RwmsApiModel):
+    """One exact executable stop or positioning leg in a published driver workday."""
+
+    sequence: int = Field(ge=1)
+    kind: Literal[
+        "ORIGIN_START",
+        "TRANSFER_LOAD",
+        "INBOUND_POSITIONING",
+        "TRANSFER_UNLOAD",
+        "DEPOT_LOAD",
+        "DELIVERY",
+        "PICKUP",
+        "DEPOT_UNLOAD",
+        "DEPOT_RETURN",
+        "RETURN_POSITIONING",
+    ]
+    warehouse_id: UUID | None = Field(default=None, alias="warehouseId")
+    source_task_id: UUID | None = Field(default=None, alias="sourceTaskId")
+    source_transfer_id: UUID | None = Field(default=None, alias="sourceTransferId")
+    location_label: NonBlank = Field(alias="locationLabel", max_length=500)
+    planned_arrival: AwareDatetime = Field(alias="plannedArrival")
+    planned_departure: AwareDatetime = Field(alias="plannedDeparture")
+    load_before: int = Field(alias="loadBefore", ge=0)
+    load_after: int = Field(alias="loadAfter", ge=0)
+
+    @model_validator(mode="after")
+    def validate_operation_semantics(self) -> RwmsDriverShiftRouteOperation:
+        """Keep positioning intervals and stop dwell intervals temporally unambiguous."""
+
+        positioning = self.kind in {
+            "INBOUND_POSITIONING",
+            "RETURN_POSITIONING",
+        }
+        if positioning and self.planned_departure > self.planned_arrival:
+            raise ValueError("positioning departure must not follow arrival")
+        if not positioning and self.planned_arrival > self.planned_departure:
+            raise ValueError("stop arrival must not follow departure")
+        customer = self.kind in {"DELIVERY", "PICKUP"}
+        if customer != (self.source_task_id is not None):
+            raise ValueError("only customer operations require sourceTaskId")
+        transfer = self.kind in {"TRANSFER_LOAD", "TRANSFER_UNLOAD"}
+        if transfer != (self.source_transfer_id is not None):
+            raise ValueError("only transfer operations require sourceTransferId")
+        if customer == (self.warehouse_id is not None):
+            raise ValueError("only warehouse operations require warehouseId")
+        if (positioning or self.kind == "ORIGIN_START") and (self.load_before != self.load_after):
+            raise ValueError("positioning operations cannot change planned load")
+        return self
+
+
 class RwmsDriverShiftPlan(RwmsApiModel):
     """One driver/vehicle snapshot with an exact int64 meter total from a plan version."""
 
@@ -1274,6 +1603,8 @@ class RwmsDriverShiftPlan(RwmsApiModel):
     source_plan_id: UUID = Field(alias="sourcePlanId")
     source_plan_version: int = Field(alias="sourcePlanVersion", ge=1)
     warehouse_id: UUID = Field(alias="warehouseId")
+    route_origin_warehouse_id: UUID | None = Field(default=None, alias="routeOriginWarehouseId")
+    support_warehouse_link_id: UUID | None = Field(default=None, alias="supportWarehouseLinkId")
     driver_id: UUID = Field(alias="driverId")
     driver_name: NonBlank = Field(alias="driverName", max_length=256)
     work_date: date = Field(alias="workDate")
@@ -1283,6 +1614,7 @@ class RwmsDriverShiftPlan(RwmsApiModel):
     route_distance_meters: int = Field(
         alias="routeDistanceMeters", ge=0, le=9_223_372_036_854_775_807
     )
+    operations: list[RwmsDriverShiftRouteOperation] = Field(default_factory=list, max_length=1000)
 
 
 class RwmsAssignmentsCommand(RwmsApiModel):
@@ -1294,6 +1626,103 @@ class RwmsAssignmentsCommand(RwmsApiModel):
     assignments: list[RwmsPlanningAssignment]
     driver_shift_plans: list[RwmsDriverShiftPlan] = Field(
         default_factory=list, alias="driverShiftPlans"
+    )
+
+
+class RwmsPlanningAssignmentReplacement(RwmsApiModel):
+    """Complete fenced intent for one existing published shipment assignment."""
+
+    order_id: UUID = Field(alias="orderId")
+    expected_order_version: int = Field(alias="expectedOrderVersion", ge=0)
+    document_id: UUID = Field(alias="documentId")
+    external_task_id: UUID = Field(alias="externalTaskId")
+    expected_task_version: int = Field(alias="expectedTaskVersion", ge=0)
+    service_warehouse_id: UUID = Field(alias="serviceWarehouseId")
+    scheduled_date: date = Field(alias="scheduledDate")
+    unit_ids: list[UUID] = Field(alias="unitIds", min_length=1, max_length=2)
+    driver_audience_mode: Literal["ASSIGNED_DRIVER", "WAREHOUSE_DRIVERS"] = Field(
+        alias="driverAudienceMode"
+    )
+    driver_worker_id: UUID | None = Field(alias="driverWorkerId")
+    driver_name: NonBlank | None = Field(alias="driverName", max_length=512)
+    target_queue_position: int = Field(alias="targetQueuePosition", ge=0)
+    provisional_eta: AwareDatetime | None = Field(alias="provisionalEta")
+
+    @model_validator(mode="after")
+    def validate_replacement_identity(self) -> RwmsPlanningAssignmentReplacement:
+        """Reject duplicate units and an audience without its exact worker identity."""
+
+        if len(set(self.unit_ids)) != len(self.unit_ids):
+            raise ValueError("unitIds must be unique")
+        assigned = self.driver_audience_mode == "ASSIGNED_DRIVER"
+        if assigned != (self.driver_worker_id is not None):
+            raise ValueError(
+                "ASSIGNED_DRIVER requires driverWorkerId and WAREHOUSE_DRIVERS forbids it"
+            )
+        if assigned and self.driver_name is None:
+            raise ValueError("ASSIGNED_DRIVER requires driverName")
+        if assigned and self.provisional_eta is not None:
+            raise ValueError("provisionalEta is only used for shared driver-pool tasks")
+        return self
+
+
+class RwmsReplacePlanningAssignmentsCommand(RwmsApiModel):
+    """All-or-nothing same-lineage replacement submitted to the order owner."""
+
+    warehouse_id: UUID = Field(alias="warehouseId")
+    date: date
+    expected_source_plan_version: int = Field(alias="expectedSourcePlanVersion", ge=1)
+    replacement_plan_version: int = Field(alias="replacementPlanVersion", ge=2)
+    assignments: list[RwmsPlanningAssignmentReplacement] = Field(min_length=1, max_length=500)
+    driver_shift_plans: list[RwmsDriverShiftPlan] = Field(alias="driverShiftPlans", max_length=500)
+
+    @model_validator(mode="after")
+    def validate_complete_revision(self) -> RwmsReplacePlanningAssignmentsCommand:
+        """Keep membership, day, and replacement lineage internally consistent."""
+
+        if self.replacement_plan_version <= self.expected_source_plan_version:
+            raise ValueError("replacementPlanVersion must be strictly newer")
+        task_ids = [item.external_task_id for item in self.assignments]
+        if len(task_ids) != len(set(task_ids)):
+            raise ValueError("assignments must contain unique externalTaskId values")
+        if any(item.scheduled_date != self.date for item in self.assignments):
+            raise ValueError("every assignment must remain on the command date")
+        return self
+
+
+class RwmsReplacedPlanningAssignment(RwmsApiModel):
+    """Authoritative owner and task-board fences after an atomic replacement."""
+
+    order_id: UUID = Field(alias="orderId")
+    order_version: int = Field(alias="orderVersion", ge=0)
+    document_id: UUID = Field(alias="documentId")
+    external_task_id: UUID = Field(alias="externalTaskId")
+    task_version: int = Field(alias="taskVersion", ge=0)
+    task_board_task_version: int = Field(alias="taskBoardTaskVersion", ge=0)
+    task_board_entry_id: UUID = Field(alias="taskBoardEntryId")
+    task_board_entry_version: int = Field(alias="taskBoardEntryVersion", ge=0)
+    queue_position: int = Field(alias="queuePosition", ge=0)
+
+
+class RwmsReplacedPlanningDriverShift(RwmsApiModel):
+    """Authoritative task-board revision for one replaced driver shift snapshot."""
+
+    source_shift_id: UUID = Field(alias="sourceShiftId")
+    task_board_shift_plan_version: int = Field(alias="taskBoardShiftPlanVersion", ge=0)
+    source_plan_version: int = Field(alias="sourcePlanVersion", ge=1)
+
+
+class RwmsReplacePlanningAssignmentsResult(RwmsApiModel):
+    """Complete atomic replacement outcome returned by the logistics owner."""
+
+    outcome: Literal["APPLIED", "REPLAYED"]
+    source_plan_id: UUID = Field(alias="sourcePlanId")
+    source_plan_version: int = Field(alias="sourcePlanVersion", ge=2)
+    warehouse_id: UUID = Field(alias="warehouseId")
+    date: date
+    assignments: list[RwmsReplacedPlanningAssignment] = Field(min_length=1, max_length=500)
+    driver_shift_plans: list[RwmsReplacedPlanningDriverShift] = Field(
+        alias="driverShiftPlans", max_length=500
     )
 
 
@@ -1340,13 +1769,18 @@ class ContractorDispatchRead(ApiModel):
     mode: Literal["AUTO", "MANUAL"]
     assigned_request_ids: list[UUID]
     assigned_count: int = Field(ge=1)
+    contractor_handoff_command_id: UUID | None
+    external_task_ids: list[UUID]
 
 
 class RwmsAppliedAssignment(RwmsApiModel):
     """Successfully applied or replayed RWMS assignment outcome."""
 
     order_id: UUID = Field(alias="orderId")
+    order_version: int = Field(alias="orderVersion", ge=0)
     document_id: UUID = Field(alias="documentId")
+    external_task_id: UUID = Field(alias="externalTaskId")
+    task_version: int = Field(alias="taskVersion", ge=0)
     replayed: bool
 
 
@@ -1369,7 +1803,12 @@ class RwmsPlanningAssignmentStatus(RwmsApiModel):
     """Current RWMS driver-task ownership for one exact shipment unit slice."""
 
     order_id: UUID = Field(alias="orderId")
+    order_version: int = Field(alias="orderVersion", ge=0)
     document_id: UUID = Field(alias="documentId")
+    external_task_id: UUID = Field(alias="externalTaskId")
+    task_version: int = Field(alias="taskVersion", ge=0)
+    source_plan_id: UUID | None = Field(alias="sourcePlanId")
+    source_plan_version: int | None = Field(alias="sourcePlanVersion", ge=1)
     scheduled_date: date = Field(alias="scheduledDate")
     unit_ids: list[UUID] = Field(alias="unitIds", min_length=1, max_length=2)
     driver_audience_mode: Literal["ASSIGNED_DRIVER", "WAREHOUSE_DRIVERS"] = Field(
@@ -1385,6 +1824,8 @@ class RwmsPlanningAssignmentStatus(RwmsApiModel):
 
         if len(set(self.unit_ids)) != len(self.unit_ids):
             raise ValueError("unitIds must be unique")
+        if (self.source_plan_id is None) != (self.source_plan_version is None):
+            raise ValueError("sourcePlanId and sourcePlanVersion must be provided together")
         assigned = self.driver_audience_mode == "ASSIGNED_DRIVER"
         if assigned != (self.driver_worker_id is not None):
             raise ValueError(
@@ -1543,6 +1984,7 @@ class RoutePlanRead(ApiModel):
 
     id: UUID
     warehouse_id: UUID
+    supersedes_plan_id: UUID | None = None
     date: date
     name: str
     version: int
@@ -1568,6 +2010,11 @@ class PlanningDayStatusRead(ApiModel):
     closed_at: AwareDatetime | None = None
     closed_by: str | None = None
     plan_id: UUID | None = None
+    mode: Literal["DELIVERIES_AND_PICKUPS", "DELIVERIES_ONLY", "PICKUPS_ONLY"] = (
+        "DELIVERIES_AND_PICKUPS"
+    )
+    mode_version: int = Field(default=0, ge=0)
+    pending_action_count: int = Field(default=0, ge=0)
 
 
 class ExpectedVersionRequest(ApiModel):
@@ -1581,7 +2028,6 @@ class ConfirmPlanRequest(ExpectedVersionRequest):
 
     accept_warnings: bool = False
     empty_positioning_reason: NonBlank | None = None
-    confirmed_by: NonBlank = "local-admin"
 
 
 class CyclePatch(ExpectedVersionRequest):
@@ -1594,12 +2040,17 @@ class CyclePatch(ExpectedVersionRequest):
 
 
 class ManualChangeRequest(ExpectedVersionRequest):
-    """Validated manual route-edit command and audit context."""
+    """Validated manual route-edit request without client-owned audit identity."""
 
     change_type: NonBlank
     payload: dict[str, Any]
     reason: NonBlank
-    changed_by: NonBlank = "local-admin"
+
+
+class ManualChangeCommand(ManualChangeRequest):
+    """Server-side route-edit command enriched with a verified audit actor."""
+
+    changed_by: NonBlank
 
 
 class SimulationDelayRequest(ExpectedVersionRequest):

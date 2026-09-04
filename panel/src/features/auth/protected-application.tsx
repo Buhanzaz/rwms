@@ -1,52 +1,21 @@
-import { useEffect, useRef } from "react"
-import { useLocation } from "react-router-dom"
-
 import App from "@/App"
-import { Button } from "@/components/ui/button"
-import { useAuth } from "@/features/auth/use-auth"
+import { AuthenticatedApplication } from "@/features/auth/authenticated-application"
+import type { CurrentUser } from "@/features/auth/auth-model"
+
+const PANEL_ROLES = new Set<CurrentUser["globalRole"]>([
+  "SYSTEM_ADMIN",
+  "WMS_ADMIN",
+  "WAREHOUSE_MANAGER",
+  "VIEWER",
+])
 
 export function ProtectedApplication() {
-  const location = useLocation()
-  const { status, error, beginLogin } = useAuth()
-  const redirectStarted = useRef(false)
-
-  useEffect(() => {
-    if (status !== "unauthenticated" || redirectStarted.current || error) {
-      return
-    }
-
-    redirectStarted.current = true
-    void beginLogin(`${location.pathname}${location.search}${location.hash}`)
-  }, [
-    beginLogin,
-    error,
-    location.hash,
-    location.pathname,
-    location.search,
-    status,
-  ])
-
-  if (status === "authenticated") {
-    return <App />
-  }
-
   return (
-    <main className="flex min-h-svh flex-col items-center justify-center gap-4 bg-muted p-6 text-center">
-      <p className="text-sm text-muted-foreground">
-        {error ?? "Проверяем сессию…"}
-      </p>
-      {error ? (
-        <Button
-          type="button"
-          onClick={() =>
-            void beginLogin(
-              `${location.pathname}${location.search}${location.hash}`
-            )
-          }
-        >
-          Войти
-        </Button>
-      ) : null}
-    </main>
+    <AuthenticatedApplication
+      isAllowed={(user) => PANEL_ROLES.has(user.globalRole)}
+      accessDeniedMessage="Эта учётная запись не имеет доступа к рабочей панели RWMS."
+    >
+      <App />
+    </AuthenticatedApplication>
   )
 }

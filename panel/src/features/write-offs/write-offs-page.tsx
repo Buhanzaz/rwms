@@ -12,7 +12,6 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { OperationsListGrid } from "@/components/operations-list-grid"
 import {
   PageToolbar,
-  PageToolbarActions,
   PageToolbarContent,
 } from "@/components/page-toolbar"
 import { Badge } from "@/components/ui/badge"
@@ -465,8 +464,8 @@ export function WriteOffsPage({
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
-      <PageToolbar>
-        <PageToolbarContent>
+      <PageToolbar className="sm:flex-nowrap">
+        <PageToolbarContent className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
           <Tabs value={disposition} onValueChange={switchDisposition}>
             <TabsList>
               <TabsTrigger value="WRITE_OFF">Списания</TabsTrigger>
@@ -483,7 +482,7 @@ export function WriteOffsPage({
             }}
           >
             <SelectTrigger
-              className="w-full max-w-64"
+              className="w-full sm:w-64"
               aria-label="Состояние решения"
             >
               <SelectValue />
@@ -499,17 +498,19 @@ export function WriteOffsPage({
               </SelectGroup>
             </SelectContent>
           </Select>
-        </PageToolbarContent>
-        <PageToolbarActions>
           {canInitiate ? (
-            <Button type="button" onClick={() => setCreateOpen(true)}>
+            <Button
+              type="button"
+              className="w-full sm:w-auto"
+              onClick={() => setCreateOpen(true)}
+            >
               <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
               {disposition === "WRITE_OFF"
                 ? "Списать бытовку"
                 : "Добавить утрату"}
             </Button>
           ) : null}
-        </PageToolbarActions>
+        </PageToolbarContent>
       </PageToolbar>
 
       {!accessToken ? (
@@ -528,15 +529,6 @@ export function WriteOffsPage({
             ? listQuery.error.message
             : "Не удалось загрузить решения по имуществу."}
         </p>
-      ) : items.length === 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Решений пока нет</CardTitle>
-            <CardDescription>
-              Здесь появятся решения по одному корневому объекту имущества.
-            </CardDescription>
-          </CardHeader>
-        </Card>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="hidden min-h-0 md:block">

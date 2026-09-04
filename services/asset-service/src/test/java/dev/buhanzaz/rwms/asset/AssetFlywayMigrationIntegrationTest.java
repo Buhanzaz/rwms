@@ -36,6 +36,8 @@ class AssetFlywayMigrationIntegrationTest {
       UUID.fromString("00000000-0000-0000-0000-000000000001");
   private static final UUID MSK_WAREHOUSE_ID =
       UUID.fromString("00000000-0000-0000-0000-000000000002");
+  private static final UUID INITIAL_COMPANY_ID =
+      UUID.fromString("ae0d6f97-f0c5-576a-9ea7-1ddcc1a03b48");
   private static final ObjectMapper JSON = new ObjectMapper();
   private static final List<String> STATUSES = List.of(
       "FREE",
@@ -90,7 +92,7 @@ class AssetFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsTransferredWarehouseData() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(44);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(46);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
@@ -105,6 +107,8 @@ class AssetFlywayMigrationIntegrationTest {
         "equipment_movement_ledger",
         "equipment_allocation_hold",
         "operation_lease",
+        "rental_item_creation_intent",
+        "rental_item_creation_photo",
         "domain_event",
         "event_stream_head",
         "aggregate_snapshot",
@@ -232,6 +236,25 @@ class AssetFlywayMigrationIntegrationTest {
             "target_rental_item_id IS NOT NULL",
             "order_units IS NOT NULL");
     assertThat(toRegclass("ix_equipment_hold_active_order_target")).isNotNull();
+    assertThat(toRegclass("idx_rental_item_creation_intent_pending")).isNotNull();
+    assertThat(
+            constraintDefinition(
+                "rental_item_creation_photo",
+                "ck_rental_item_creation_photo_content_type"))
+        .contains("image/jpeg", "image/png", "image/webp");
+    assertThat(
+            integer("""
+                select count(*) from pg_trigger
+                where not tgisinternal
+                  and tgname in ('ck_rental_item_creation_intent_manifest',
+                                 'ck_rental_item_creation_photo_manifest')
+                """))
+        .isEqualTo(2);
+    assertThat(
+            constraintDefinition(
+                "rental_item_creation_intent",
+                "ck_rental_item_creation_intent_terminal"))
+        .contains("PENDING", "COMPLETED", "ABANDONED", "media_proof_sha256");
     assertThat(integer("""
         select count(*) from pg_trigger
         where not tgisinternal
@@ -276,12 +299,12 @@ class AssetFlywayMigrationIntegrationTest {
         """, existingId, UUID.randomUUID());
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(42);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(44);
     latest.validate();
 
     assertThat(appliedVersions())
         .containsExactly(
-            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41", "42", "43", "44");
+            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46");
     assertThat(columnCount("rental_item", "number")).isZero();
     assertThat(columnCount("rental_item", "display_canonical_number")).isEqualTo(1);
     assertThat(columnCount("rental_item", "identity_match_key")).isEqualTo(1);
@@ -317,7 +340,7 @@ class AssetFlywayMigrationIntegrationTest {
         "a".repeat(64));
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(6);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(8);
     latest.validate();
 
     assertThat(columnCount("inventory_asset_outcome_watermark", "passport_observation_sha256"))
@@ -353,7 +376,7 @@ class AssetFlywayMigrationIntegrationTest {
         .doesNotContain("CUSTOMER");
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(4);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(6);
     latest.validate();
     assertThat(
             constraintDefinition(
@@ -558,6 +581,91 @@ class AssetFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void versionFortyFiveAddsDurableCreationIntentWithoutRewritingExistingCabins() {
+    Flyway versionFortyFour = configuration(MIGRATIONS).target("44").load();
+    assertThat(versionFortyFour.migrate().migrationsExecuted).isEqualTo(44);
+    int rentalItemCount = integer("select count(*) from rental_item");
+    assertThat(toRegclass("rental_item_creation_intent")).isNull();
+
+    Flyway versionFortyFive = configuration(MIGRATIONS).target("45").load();
+    assertThat(versionFortyFive.migrate().migrationsExecuted).isOne();
+    versionFortyFive.validate();
+
+    assertThat(toRegclass("rental_item_creation_intent")).isNotNull();
+    assertThat(toRegclass("rental_item_creation_photo")).isNotNull();
+    assertThat(toRegclass("idx_rental_item_creation_intent_pending")).isNotNull();
+    assertThat(integer("select count(*) from rental_item")).isEqualTo(rentalItemCount);
+    assertThat(versionFortyFive.migrate().migrationsExecuted).isZero();
+  }
+
+  @Test
+  void versionFortySixBackfillsImmutableCompanyOwnershipWithoutRewritingCabins() {
+    Flyway versionFortyFive = configuration(MIGRATIONS).target("45").load();
+    assertThat(versionFortyFive.migrate().migrationsExecuted).isEqualTo(45);
+    int rentalItemCount = integer("select count(*) from rental_item");
+    long rentalItemVersionTotal =
+        jdbc.queryForObject("select coalesce(sum(version),0) from rental_item", Long.class);
+    UUID htmlImportId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into rental_item_html_import(
+          id,version,warehouse_id,actor_subject_id,idempotency_key,source_sha256,state,
+          row_count,selected_count,invalid_count,unresolved_count,media_link_count,
+          warning_count,plan_json,created_at,updated_at)
+        values (?,0,?,?,?,?,'DRAFT',0,0,0,0,0,0,'{}',clock_timestamp(),clock_timestamp())
+        """,
+        htmlImportId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "a".repeat(64));
+    assertThat(columnCount("rental_item", "company_id")).isZero();
+
+    Flyway versionFortySix = configuration(MIGRATIONS).target("46").load();
+    assertThat(versionFortySix.migrate().migrationsExecuted).isOne();
+    versionFortySix.validate();
+
+    assertThat(integer("select count(*) from rental_item")).isEqualTo(rentalItemCount);
+    assertThat(jdbc.queryForObject(
+            "select coalesce(sum(version),0) from rental_item", Long.class))
+        .isEqualTo(rentalItemVersionTotal);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from rental_item where company_id=?",
+                Integer.class,
+                INITIAL_COMPANY_ID))
+        .isEqualTo(rentalItemCount);
+    assertThat(columnCount("rental_item_html_import", "company_id")).isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "select company_id from rental_item_html_import where id=?",
+                UUID.class,
+                htmlImportId))
+        .isEqualTo(INITIAL_COMPANY_ID);
+    assertThat(toRegclass("idx_rental_item_company_warehouse_status")).isNotNull();
+    assertThat(toRegclass("idx_rental_item_html_import_company_warehouse")).isNotNull();
+    UUID rentalItemId =
+        jdbc.queryForObject("select id from rental_item order by id limit 1", UUID.class);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update rental_item set company_id=? where id=?",
+                    UUID.randomUUID(),
+                    rentalItemId))
+        .isInstanceOf(RuntimeException.class)
+        .hasStackTraceContaining("company ownership is immutable");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update rental_item_html_import set company_id=? where id=?",
+                    UUID.randomUUID(),
+                    htmlImportId))
+        .isInstanceOf(RuntimeException.class)
+        .hasStackTraceContaining("company ownership is immutable");
+    assertThat(versionFortySix.migrate().migrationsExecuted).isZero();
+  }
+
+  @Test
   void versionSevenUpgradeRemovesOnlyKnownOldPanelStockPhotoFields(@TempDir Path directory)
       throws IOException {
     List<String> scripts = List.of(
@@ -600,11 +708,11 @@ class AssetFlywayMigrationIntegrationTest {
     int outboxCount = integer("select count(*) from outbox_event");
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(37);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(39);
     latest.validate();
     assertThat(appliedVersions())
         .containsExactly(
-            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41", "42", "43", "44");
+            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46");
     assertOldPanelTechnicalMetadataRemoved();
     assertLegacyIdentityMetadataRemoved();
     JsonNode unrelated = json(jdbc.queryForObject(
@@ -692,7 +800,7 @@ class AssetFlywayMigrationIntegrationTest {
         order by snapshot.aggregate_version desc limit 1
         """, correctedAggregateId);
     latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(36);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(38);
     latest.validate();
 
     assertThat(integer("select count(*) from rental_item")).isEqualTo(195);

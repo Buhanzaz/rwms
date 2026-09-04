@@ -17,8 +17,12 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.unit.dp
 import com.google.common.truth.Truth.assertThat
+import dev.buhanzaz.rwms.driver.core.database.ServerTimeAnchor
 import dev.buhanzaz.rwms.driver.core.database.DriverTaskEntity
+import dev.buhanzaz.rwms.driver.core.sync.DriverWarehouseClockSnapshot
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -152,6 +156,46 @@ class LogisticsScreenTest {
 
         compose.onNodeWithText("Мои задания · 1").assertIsDisplayed()
         compose.onNodeWithTag("additional-logistics-heading").assertIsDisplayed()
+        compose.onNodeWithText("Дополнительные задания · 1").assertIsDisplayed()
+    }
+
+    @Test
+    fun `warehouse date centers UI and exposes the same future shared day despite device timezone`() {
+        val instant = Instant.parse("2026-08-31T19:00:00Z")
+        val clock = DriverWarehouseClockSnapshot(
+            serverTimeAnchor = ServerTimeAnchor(
+                serverEpochMillis = instant.toEpochMilli(),
+                elapsedRealtimeAtSyncMillis = 1_000L,
+                leaseExpiresAtEpochMillis = Instant.parse("2026-09-02T19:00:00Z").toEpochMilli(),
+            ),
+            timeZone = ZoneId.of("Asia/Yekaterinburg"),
+        )
+        val warehouseToday = requireNotNull(clock.localDateAt(1_000L))
+        val shared = task("shared").copy(
+            scheduledDate = "2026-09-02",
+            driverAudienceMode = "WAREHOUSE_DRIVERS",
+        )
+
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.size(width = 360.dp, height = 640.dp)) {
+                    LogisticsDatedContent(
+                        userId = "driver",
+                        today = warehouseToday,
+                        categories = emptyList(),
+                        tasks = listOf(shared),
+                        kpiPalette = null,
+                        onTask = {},
+                    )
+                }
+            }
+        }
+
+        assertThat(
+            instant.atZone(ZoneId.of("America/Los_Angeles")).toLocalDate(),
+        ).isEqualTo(LocalDate.of(2026, 8, 31))
+        compose.onNodeWithTag("logistics-date-2026-09-01").assertIsSelected()
+        compose.onNodeWithTag("logistics-date-2026-09-02").performClick()
         compose.onNodeWithText("Дополнительные задания · 1").assertIsDisplayed()
     }
 

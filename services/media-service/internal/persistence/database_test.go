@@ -37,6 +37,7 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 	v18 := flywayChecksum(mediamigration.V18)
 	v19 := flywayChecksum(mediamigration.V19)
 	v20 := flywayChecksum(mediamigration.V20)
+	v22 := flywayChecksum(mediamigration.V22)
 	const (
 		flyway124V1      int32 = -1307356325
 		flyway124V2      int32 = -573926044
@@ -60,6 +61,7 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 		flyway124V18     int32 = -227466898
 		flyway124V19     int32 = 1811753772
 		flyway124V20     int32 = 336643391
+		flyway124V22     int32 = -1543669809
 	)
 	if v1 != flyway124V1 || v2 != flyway124V2 || v3 != flyway124V3 || v4 != flyway124V4 ||
 		v4Guard != flyway124V4Guard || v5 != flyway124V5 || v5Guard != flyway124V5Guard ||
@@ -118,6 +120,26 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 	if v20 != flyway124V20 {
 		t.Fatalf("Flyway 12.4 checksum drift: V20=%d (want %d)", v20, flyway124V20)
 	}
+	if v22 != flyway124V22 {
+		t.Fatalf("Flyway 12.4 checksum drift: V22=%d (want %d)", v22, flyway124V22)
+	}
+}
+
+func TestV22AddsWorkerProfileAvatarOwnerWithoutDestructiveDataChanges(t *testing.T) {
+	sql := strings.ToLower(string(mediamigration.V22))
+	for _, required := range []string{
+		"task_board_worker_profile", "worker_profile", "task-board-service",
+		"media-service-task-board-owner-proof-v1",
+	} {
+		if !strings.Contains(sql, required) {
+			t.Errorf("V22 does not contain %q", required)
+		}
+	}
+	for _, forbidden := range []string{"drop table", "truncate", "delete from media_asset"} {
+		if strings.Contains(sql, forbidden) {
+			t.Errorf("V22 contains destructive statement %q", forbidden)
+		}
+	}
 }
 
 func TestVerifyMigrationHistoryAcceptsCanonicalAndOutOfOrderFlywayRanks(t *testing.T) {
@@ -129,13 +151,9 @@ func TestVerifyMigrationHistoryAcceptsCanonicalAndOutOfOrderFlywayRanks(t *testi
 	// A database that already had V1 through V5 receives V4.1 and V5.1 after
 	// V5 when Flyway runs with outOfOrder=true. Installed rank therefore does
 	// not match semantic version order, while the approved migration set does.
-	outOfOrder := []migrationHistoryRow{
-		canonical[0], canonical[1], canonical[2], canonical[3], canonical[5],
-		canonical[4], canonical[6], canonical[7], canonical[8], canonical[9], canonical[10],
-		canonical[11], canonical[12],
-		canonical[13], canonical[14], canonical[15], canonical[16], canonical[17], canonical[18], canonical[19],
-		canonical[20], canonical[21],
-	}
+	outOfOrder := append([]migrationHistoryRow(nil), canonical[:4]...)
+	outOfOrder = append(outOfOrder, canonical[5], canonical[4])
+	outOfOrder = append(outOfOrder, canonical[6:]...)
 	if err := verifyMigrationHistory(outOfOrder); err != nil {
 		t.Fatalf("real out-of-order Flyway upgrade history rejected: %v", err)
 	}
@@ -259,6 +277,7 @@ func approvedMigrationHistory() []migrationHistoryRow {
 		{"18", "customer shipment subject binding", "V18__customer_shipment_subject_binding.sql", mediamigration.V18},
 		{"19", "customer profile avatar owner", "V19__customer_profile_avatar_owner.sql", mediamigration.V19},
 		{"20", "driver shift media owner", "V20__driver_shift_media_owner.sql", mediamigration.V20},
+		{"22", "task board worker profile avatar owner", "V22__task_board_worker_profile_avatar_owner.sql", mediamigration.V22},
 	}
 	history := make([]migrationHistoryRow, 0, len(migrations))
 	for _, migration := range migrations {
@@ -573,7 +592,7 @@ func TestDriverShiftMediaMigrationAddsDedicatedProofsWithoutRewritingAssets(t *t
 	}
 }
 
-func TestV18ToV20CustomerProfileAndDriverShiftUpgradeIntegration(t *testing.T) {
+func TestV18ToV22CustomerProfileDriverShiftAndWorkerProfileUpgradeIntegration(t *testing.T) {
 	baseURL := os.Getenv("MEDIA_TEST_DATABASE_URL")
 	if baseURL == "" {
 		t.Skip("MEDIA_TEST_DATABASE_URL is not configured")
@@ -586,6 +605,7 @@ func TestV18ToV20CustomerProfileAndDriverShiftUpgradeIntegration(t *testing.T) {
 		t.Fatalf("open V18 media database: %v", err)
 	}
 	legacyMediaID, legacyEntryID, legacyEvidenceID, legacyWarehouseID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	legacyImportJobID, legacyAssetImportID := uuid.New(), uuid.New()
 	if _, err := pool.Exec(ctx, `insert into media_asset (
 		media_id,folder_id,client_reference_id,owner_type,owner_id,warehouse_id,media_kind,
 		original_file_name,original_content_type,source_object_key,processing_status,version)
@@ -594,6 +614,14 @@ func TestV18ToV20CustomerProfileAndDriverShiftUpgradeIntegration(t *testing.T) {
 		"media/"+legacyMediaID.String()+"/source/legacy-task.jpg"); err != nil {
 		pool.Close()
 		t.Fatalf("seed pre-V20 task evidence: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `insert into media_asset_import_job (
+		job_id,asset_import_id,warehouse_id,preflight_idempotency_key,
+		preflight_request_sha256,job_status)
+	values ($1,$2,$3,$4,$5,'PREFLIGHT_PENDING')`,
+		legacyImportJobID, legacyAssetImportID, legacyWarehouseID, uuid.New(), strings.Repeat("a", 64)); err != nil {
+		pool.Close()
+		t.Fatalf("seed pre-V22 asset import job: %v", err)
 	}
 	var assetsBefore int64
 	if err := pool.QueryRow(ctx, `select count(*) from media_asset`).Scan(&assetsBefore); err != nil {
@@ -624,6 +652,19 @@ func TestV18ToV20CustomerProfileAndDriverShiftUpgradeIntegration(t *testing.T) {
 		pool.Close()
 		t.Fatalf("record V20 driver-shift migration: %v", err)
 	}
+	if _, err := pool.Exec(ctx, string(mediamigration.V22)); err != nil {
+		pool.Close()
+		t.Fatalf("apply V22 worker profile avatar migration: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
+		installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
+	values ((select coalesce(max(installed_rank),0)+1 from flyway_schema_history),
+		'22','task board worker profile avatar owner','SQL',
+		'V22__task_board_worker_profile_avatar_owner.sql',$1,current_user,0,true)`,
+		flywayChecksum(mediamigration.V22)); err != nil {
+		pool.Close()
+		t.Fatalf("record V22 worker profile avatar migration: %v", err)
+	}
 	var assetsAfter int64
 	if err := pool.QueryRow(ctx, `select count(*) from media_asset`).Scan(&assetsAfter); err != nil {
 		pool.Close()
@@ -650,7 +691,7 @@ func TestV18ToV20CustomerProfileAndDriverShiftUpgradeIntegration(t *testing.T) {
 	pool.Close()
 	database, err := Open(ctx, databaseURL)
 	if err != nil {
-		t.Fatalf("open upgraded V20 media database: %v", err)
+		t.Fatalf("open upgraded V22 media database: %v", err)
 	}
 	database.Close()
 }

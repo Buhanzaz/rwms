@@ -13,6 +13,7 @@ import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemPage;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinAvailability;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinAvailabilityRequest;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinAvailabilityResponse;
+import dev.buhanzaz.rwms.asset.domain.AssetCompanyDefaults;
 import dev.buhanzaz.rwms.asset.security.AssetAuthorizer;
 import dev.buhanzaz.rwms.asset.service.AssetService;
 import dev.buhanzaz.rwms.asset.service.CabinCompositionService;
@@ -42,12 +43,24 @@ class AssetRentalItemCreationOptionsTest {
   void readsAvailableRentalItemsOnlyForAnAccessibleWarehouse() {
     UUID warehouseId = UUID.randomUUID();
     RentalItemPage expected = new RentalItemPage(List.of(), 0, 50, 0, 0);
-    when(presentationHolds.availableRentalItems(warehouseId, 0, 50, "CAB-1"))
+    when(
+            presentationHolds.availableRentalItems(
+                AssetCompanyDefaults.INITIAL_COMPANY_ID,
+                warehouseId,
+                0,
+                50,
+                "CAB-1"))
         .thenReturn(expected);
 
     assertThat(controller.available(user(warehouseId), warehouseId, 0, 50, "CAB-1"))
         .isSameAs(expected);
-    verify(presentationHolds).availableRentalItems(warehouseId, 0, 50, "CAB-1");
+    verify(presentationHolds)
+        .availableRentalItems(
+            AssetCompanyDefaults.INITIAL_COMPANY_ID,
+            warehouseId,
+            0,
+            50,
+            "CAB-1");
   }
 
   @Test
@@ -59,10 +72,12 @@ class AssetRentalItemCreationOptionsTest {
     CabinAvailabilityResponse expected =
         new CabinAvailabilityResponse(
             warehouseId, List.of(new CabinAvailability(rentalItemId, true, "AVAILABLE")));
-    when(presentationHolds.availability(request)).thenReturn(expected);
+    when(presentationHolds.availability(AssetCompanyDefaults.INITIAL_COMPANY_ID, request))
+        .thenReturn(expected);
 
     assertThat(controller.availability(user(warehouseId), request)).isSameAs(expected);
-    verify(presentationHolds).availability(request);
+    verify(presentationHolds)
+        .availability(AssetCompanyDefaults.INITIAL_COMPANY_ID, request);
   }
 
   @Test
@@ -183,6 +198,8 @@ class AssetRentalItemCreationOptionsTest {
             "rwms.read",
             "global_role",
             "WAREHOUSE_MANAGER",
+            "company_id",
+            AssetCompanyDefaults.INITIAL_COMPANY_ID.toString(),
             "warehouse_access",
             List.of(Map.of("warehouseId", warehouseId.toString(), "level", "VIEW"))));
   }

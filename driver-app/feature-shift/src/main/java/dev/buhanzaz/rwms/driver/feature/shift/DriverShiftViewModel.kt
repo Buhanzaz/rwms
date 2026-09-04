@@ -16,6 +16,7 @@ import dev.buhanzaz.rwms.driver.core.network.DriverMedicalCheckDto
 import dev.buhanzaz.rwms.driver.core.network.DriverShiftPhotoDto
 import dev.buhanzaz.rwms.driver.core.network.DriverVehicleDefectDto
 import dev.buhanzaz.rwms.driver.core.network.TodayDriverShiftDto
+import dev.buhanzaz.rwms.driver.core.network.toDriverUserMessage
 import dev.buhanzaz.rwms.driver.core.sync.DriverProjectionWriter
 import dev.buhanzaz.rwms.driver.core.sync.DriverSyncScheduler
 import java.time.Instant
@@ -119,7 +120,9 @@ class DriverShiftViewModel @Inject constructor(
                     projections.applyTodayShift(userId, gateway.todayDriverShift())
                 }
             } catch (error: Throwable) {
-                transientError.value = error.message ?: "Не удалось получить состояние смены"
+                transientError.value = error.toDriverUserMessage(
+                    "Не удалось получить состояние смены. Проверьте соединение и повторите.",
+                )
             } finally {
                 initialLoadComplete.value = true
             }
@@ -135,7 +138,11 @@ class DriverShiftViewModel @Inject constructor(
                     projections.applyTodayShift(userId, today)
                     transientError.value = null
                 }
-                .onFailure { error -> transientError.value = error.message ?: "Не удалось обновить смену" }
+                .onFailure { error ->
+                    transientError.value = error.toDriverUserMessage(
+                        "Не удалось обновить смену. Проверьте соединение и повторите.",
+                    )
+                }
         }
     }
 
@@ -398,7 +405,9 @@ class DriverShiftViewModel @Inject constructor(
                 val today = json.decodeFromString<TodayDriverShiftDto>(entity.serializedTodayShift)
                 block(entity, today)
             } catch (error: Throwable) {
-                transientError.value = error.message ?: "Не удалось сохранить действие"
+                transientError.value = error.toDriverUserMessage(
+                    "Не удалось сохранить действие. Обновите смену и повторите.",
+                )
             } finally {
                 submitting.value = false
             }

@@ -1,7 +1,17 @@
 import { useMemo, useState, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  Add01Icon,
+  Delete02Icon,
+  PencilEdit01Icon,
+} from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
 import { toast } from "sonner"
 
+import {
+  OperationsListGrid,
+  type OperationsListGridColumn,
+} from "@/components/operations-list-grid"
 import {
   createCabinCatalogItem,
   createIdempotencyKey,
@@ -17,13 +27,7 @@ import { isGlobalAdministrator } from "@/features/auth/auth-model"
 import { useAuth } from "@/features/auth/use-auth"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
@@ -51,6 +55,7 @@ import {
   FieldLabel,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ApiError } from "@/lib/api-client"
 
 const CABIN_SETTINGS_QUERY_KEY = ["cabin-composition-settings"] as const
@@ -81,8 +86,7 @@ type SettingsMutation = {
 }
 
 function errorMessage(error: unknown, stale = false) {
-  const base =
-    error instanceof Error ? error.message : "Операция не выполнена."
+  const base = error instanceof Error ? error.message : "Операция не выполнена."
   return stale
     ? `${base} Данные обновлены с сервера. Откройте действие заново.`
     : base
@@ -106,12 +110,14 @@ function CatalogItemDialog({
   serverError,
   onOpenChange,
   onSave,
+  onDelete,
 }: {
   editor: CatalogEditorState
   pending: boolean
   serverError: string | null
   onOpenChange: (open: boolean) => void
   onSave: (input: { name: string; active: boolean }) => void
+  onDelete?: () => void
 }) {
   const item = editor.mode === "edit" ? editor.item : null
   const [name, setName] = useState(item?.name ?? "")
@@ -137,7 +143,9 @@ function CatalogItemDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            {item ? "Настройка бытовки" : `Новая запись: ${catalogKindLabels[kind]}`}
+            {item
+              ? "Настройка бытовки"
+              : `Новая запись: ${catalogKindLabels[kind]}`}
           </DialogTitle>
           <DialogDescription>
             В панели отображается только название; идентификатор остаётся внутри
@@ -166,9 +174,7 @@ function CatalogItemDialog({
                 onCheckedChange={(checked) => setActive(checked === true)}
               />
               <FieldContent>
-                <FieldLabel htmlFor="cabin-catalog-active">
-                  Активна
-                </FieldLabel>
+                <FieldLabel htmlFor="cabin-catalog-active">Активна</FieldLabel>
               </FieldContent>
             </Field>
           ) : null}
@@ -176,6 +182,20 @@ function CatalogItemDialog({
           {formError ? <FieldError>{formError}</FieldError> : null}
 
           <DialogFooter>
+            {item && onDelete ? (
+              <Button
+                type="button"
+                variant="destructive"
+                size="icon"
+                className="sm:mr-auto"
+                aria-label="Удалить"
+                title="Удалить"
+                disabled={pending}
+                onClick={onDelete}
+              >
+                <HugeiconsIcon icon={Delete02Icon} aria-hidden="true" />
+              </Button>
+            ) : null}
             <Button
               type="button"
               variant="outline"
@@ -287,10 +307,7 @@ function TypeDimensionsDialog({
             >
               Отмена
             </Button>
-            <Button
-              type="submit"
-              disabled={pending}
-            >
+            <Button type="submit" disabled={pending}>
               {pending ? "Сохраняем…" : "Сохранить габариты"}
             </Button>
           </DialogFooter>
@@ -339,17 +356,21 @@ function CabinCatalogDeleteDialog({
         ) : null}
 
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={pending}>Отмена</AlertDialogCancel>
           <AlertDialogAction
             variant="destructive"
+            size="icon"
+            className="sm:mr-auto"
+            aria-label={pending ? "Удаление…" : "Удалить"}
+            title="Удалить"
             disabled={pending}
             onClick={(event) => {
               event.preventDefault()
               onConfirm()
             }}
           >
-            {pending ? "Удаляем…" : "Удалить"}
+            <HugeiconsIcon icon={Delete02Icon} aria-hidden="true" />
           </AlertDialogAction>
+          <AlertDialogCancel disabled={pending}>Отмена</AlertDialogCancel>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
@@ -361,129 +382,118 @@ function CatalogSection({
   items,
   settings,
   pending,
-  onAdd,
   onEdit,
   onEditDimensions,
-  onDelete,
 }: {
   kind: CabinCatalogKind
   items: CabinCatalogItem[]
   settings: CabinSettings
   pending: boolean
-  onAdd: (kind: CabinCatalogKind) => void
   onEdit: (item: CabinCatalogItem) => void
   onEditDimensions: (type: CabinCatalogItem) => void
-  onDelete: (item: CabinCatalogItem) => void
 }) {
   const dimensionsById = new Map(
     settings.dimensions.map((dimension) => [dimension.id, dimension.name])
   )
-
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <CardTitle>{catalogKindLabels[kind]}</CardTitle>
-            <CardDescription>
-              {kind === "TYPE"
-                ? "Типы бытовок и доступные для них габариты."
-                : "Глобальный каталог состава бытовки."}
-            </CardDescription>
-          </div>
-          <Button type="button" size="sm" onClick={() => onAdd(kind)}>
-            Добавить
+  const linkedDimensions = (item: CabinCatalogItem) =>
+    kind === "TYPE"
+      ? settings.typeDimensions
+          .filter((link) => link.typeId === item.id)
+          .sort(
+            (left, right) =>
+              left.sortOrder - right.sortOrder ||
+              left.dimensionId.localeCompare(right.dimensionId)
+          )
+          .flatMap((link) => {
+            const name = dimensionsById.get(link.dimensionId)
+            return name ? [name] : []
+          })
+      : []
+  const columns: OperationsListGridColumn<CabinCatalogItem>[] = [
+    {
+      id: "name",
+      label: "Название",
+      getSortValue: (item) => item.name,
+      render: (item) => <span className="font-medium">{item.name}</span>,
+    },
+    {
+      id: "status",
+      label: "Доступность",
+      getSortValue: (item) => (item.active ? 1 : 0),
+      render: (item) => <StatusBadge active={item.active} />,
+    },
+    ...(kind === "TYPE"
+      ? [
+          {
+            id: "dimensions",
+            label: "Габариты",
+            getSortValue: (item) => linkedDimensions(item).join(", "),
+            render: (item) => {
+              const names = linkedDimensions(item)
+              return names.length > 0 ? names.join(", ") : "—"
+            },
+          } satisfies OperationsListGridColumn<CabinCatalogItem>,
+        ]
+      : []),
+    {
+      id: "actions",
+      label: "Действия",
+      getSortValue: () => null,
+      className: "w-0",
+      cellClassName: "w-0",
+      render: (item) => (
+        <div className="flex justify-end gap-2">
+          {kind === "TYPE" ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={pending}
+              aria-label={`Настроить габариты ${item.name}`}
+              onClick={() => onEditDimensions(item)}
+            >
+              Габариты
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="outline"
+            disabled={pending}
+            aria-label={`Изменить ${item.name}`}
+            onClick={() => onEdit(item)}
+          >
+            <HugeiconsIcon icon={PencilEdit01Icon} aria-hidden="true" />
           </Button>
         </div>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-2">
-        {items.length > 0 ? (
-          items.map((item) => {
-            const linkedDimensions =
-              kind === "TYPE"
-                ? settings.typeDimensions
-                    .filter((link) => link.typeId === item.id)
-                    .sort(
-                      (left, right) =>
-                        left.sortOrder - right.sortOrder ||
-                        left.dimensionId.localeCompare(right.dimensionId)
-                    )
-                    .flatMap((link) => {
-                      const name = dimensionsById.get(link.dimensionId)
-                      return name ? [name] : []
-                    })
-                : []
-            return (
-              <article
-                key={item.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium">{item.name}</span>
-                    <StatusBadge active={item.active} />
-                  </div>
-                  {kind === "TYPE" ? (
-                    linkedDimensions.length > 0 ? (
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        {linkedDimensions.map((name) => (
-                          <Badge key={name} variant="outline">
-                            {name}
-                          </Badge>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Габариты не выбраны.
-                      </p>
-                    )
-                  ) : null}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {kind === "TYPE" ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      disabled={pending}
-                      onClick={() => onEditDimensions(item)}
-                    >
-                      Габариты
-                    </Button>
-                  ) : null}
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    disabled={pending}
-                    onClick={() => onEdit(item)}
-                  >
-                    Изменить
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="destructive"
-                    disabled={pending}
-                    onClick={() => onDelete(item)}
-                  >
-                    Удалить
-                  </Button>
-                </div>
-              </article>
-            )
-          })
-        ) : (
-          <p className="text-sm text-muted-foreground">Записей пока нет.</p>
-        )}
-      </CardContent>
-    </Card>
+      ),
+    },
+  ]
+
+  return (
+    <section
+      className="flex min-h-0 flex-col gap-3"
+      aria-label={catalogKindLabels[kind]}
+    >
+      {items.length > 0 ? (
+        <OperationsListGrid
+          className="min-h-0 flex-1 overflow-auto bg-muted/70"
+          items={items}
+          columns={columns}
+        />
+      ) : (
+        <div className="flex min-h-36 items-center justify-center rounded-lg border bg-muted/55 px-4 text-center text-sm text-muted-foreground">
+          Записей пока нет.
+        </div>
+      )}
+    </section>
   )
 }
 
 export function CabinCompositionSettingsPage() {
   const queryClient = useQueryClient()
   const { accessToken, currentUser } = useAuth()
+  const [activeKind, setActiveKind] = useState<CabinCatalogKind>("TYPE")
   const [editor, setEditor] = useState<CatalogEditorState | null>(null)
   const [dimensionsEditor, setDimensionsEditor] =
     useState<CabinCatalogItem | null>(null)
@@ -578,7 +588,11 @@ export function CabinCompositionSettingsPage() {
   }
 
   if (settingsQuery.isLoading) {
-    return <p className="text-sm text-muted-foreground">Загрузка настроек бытовок…</p>
+    return (
+      <p className="text-sm text-muted-foreground">
+        Загрузка настроек бытовок…
+      </p>
+    )
   }
 
   if (settingsQuery.isError || !settingsQuery.data) {
@@ -591,7 +605,11 @@ export function CabinCompositionSettingsPage() {
           <p role="alert" className="text-destructive">
             {errorMessage(settingsQuery.error)}
           </p>
-          <Button type="button" variant="outline" onClick={() => void refresh()}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void refresh()}
+          >
             Повторить
           </Button>
         </CardContent>
@@ -600,70 +618,51 @@ export function CabinCompositionSettingsPage() {
   }
 
   const settings = settingsQuery.data
+  const itemsByKind: Record<CabinCatalogKind, CabinCatalogItem[]> = {
+    TYPE: settings.types,
+    DIMENSION: settings.dimensions,
+    FINISHING: settings.finishings,
+    CHARACTERISTIC: settings.characteristics,
+  }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto pb-4">
-      <div>
-        <h1 className="text-xl font-semibold">Настройки бытовок</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Управляйте типами, габаритами, отделкой и характеристиками бытовок.
-        </p>
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden pb-4">
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <Tabs
+          className="min-w-0"
+          value={activeKind}
+          onValueChange={(value) => setActiveKind(value as CabinCatalogKind)}
+        >
+          <div className="max-w-full overflow-x-auto pb-1">
+            <TabsList className="min-w-max bg-muted/75 shadow-xs backdrop-blur-md">
+              {(Object.keys(catalogKindLabels) as CabinCatalogKind[]).map(
+                (kind) => (
+                  <TabsTrigger key={kind} value={kind}>
+                    {catalogKindLabels[kind]}
+                  </TabsTrigger>
+                )
+              )}
+            </TabsList>
+          </div>
+        </Tabs>
+        <Button
+          type="button"
+          size="sm"
+          onClick={() => setEditor({ mode: "create", kind: activeKind })}
+        >
+          <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+          Добавить
+        </Button>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-2">
-        <CatalogSection
-          kind="TYPE"
-          items={settings.types}
-          settings={settings}
-          pending={mutation.isPending || deleteMutation.isPending}
-          onAdd={(kind) => setEditor({ mode: "create", kind })}
-          onEdit={(item) => setEditor({ mode: "edit", item })}
-          onEditDimensions={setDimensionsEditor}
-          onDelete={(item) => {
-            setDeleteError(null)
-            setDeleteTarget(item)
-          }}
-        />
-        <CatalogSection
-          kind="DIMENSION"
-          items={settings.dimensions}
-          settings={settings}
-          pending={mutation.isPending || deleteMutation.isPending}
-          onAdd={(kind) => setEditor({ mode: "create", kind })}
-          onEdit={(item) => setEditor({ mode: "edit", item })}
-          onEditDimensions={setDimensionsEditor}
-          onDelete={(item) => {
-            setDeleteError(null)
-            setDeleteTarget(item)
-          }}
-        />
-        <CatalogSection
-          kind="FINISHING"
-          items={settings.finishings}
-          settings={settings}
-          pending={mutation.isPending || deleteMutation.isPending}
-          onAdd={(kind) => setEditor({ mode: "create", kind })}
-          onEdit={(item) => setEditor({ mode: "edit", item })}
-          onEditDimensions={setDimensionsEditor}
-          onDelete={(item) => {
-            setDeleteError(null)
-            setDeleteTarget(item)
-          }}
-        />
-        <CatalogSection
-          kind="CHARACTERISTIC"
-          items={settings.characteristics}
-          settings={settings}
-          pending={mutation.isPending || deleteMutation.isPending}
-          onAdd={(kind) => setEditor({ mode: "create", kind })}
-          onEdit={(item) => setEditor({ mode: "edit", item })}
-          onEditDimensions={setDimensionsEditor}
-          onDelete={(item) => {
-            setDeleteError(null)
-            setDeleteTarget(item)
-          }}
-        />
-      </div>
+      <CatalogSection
+        kind={activeKind}
+        items={itemsByKind[activeKind]}
+        settings={settings}
+        pending={mutation.isPending || deleteMutation.isPending}
+        onEdit={(item) => setEditor({ mode: "edit", item })}
+        onEditDimensions={setDimensionsEditor}
+      />
 
       {editor ? (
         <CatalogItemDialog
@@ -709,6 +708,16 @@ export function CabinCompositionSettingsPage() {
               close: () => setEditor(null),
             })
           }}
+          onDelete={
+            editor.mode === "edit"
+              ? () => {
+                  setEditor(null)
+                  setActionError(null)
+                  setDeleteError(null)
+                  setDeleteTarget(editor.item)
+                }
+              : undefined
+          }
         />
       ) : null}
 

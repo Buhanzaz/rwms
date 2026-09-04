@@ -587,9 +587,7 @@ beforeEach(() => {
   inventoryApi.getInventoryPlanningSettings.mockResolvedValue({
     warehouseId: WAREHOUSE_ID,
     settingsRevision: 1,
-    movementDailyCapacity: 6,
-    repairDailyCapacity: 6,
-    workingWeekdays: ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY"],
+    updatedAt: "2026-08-09T09:30:00Z",
     holidays: [],
   })
   inventoryApi.getInventoryFinalPlan.mockResolvedValue(finalPlan())
@@ -1511,6 +1509,9 @@ describe("InventoryFinishPage conflict resolution", () => {
     await waitFor(() =>
       expect(inventoryApi.saveInventoryFurnitureReview).toHaveBeenCalledTimes(2)
     )
+    expect(await screen.findByText("Без дневного лимита")).toBeTruthy()
+    expect(screen.queryByText(/Перемещения:/)).toBeNull()
+    expect(screen.queryByText(/Ремонты:/)).toBeNull()
     await user.click(
       await screen.findByRole("button", {
         name: "Подготовить план и перейти к сверке заданий",
@@ -2408,6 +2409,9 @@ describe("InventoryHistoryDetailPage authoritative outcome recovery", () => {
     const failure = await within(dialog).findByRole("alert")
     expect(within(failure).getByText("Пересчёт не запущен")).toBeTruthy()
     expect(failure.textContent).toContain(
+      "Не удалось выполнить действие. Проверьте введённые данные и повторите попытку."
+    )
+    expect(failure.textContent).not.toContain(
       "Dependency rejected invalid inventory input"
     )
     expect(failure.textContent).toContain("фотографии и история сохранены")

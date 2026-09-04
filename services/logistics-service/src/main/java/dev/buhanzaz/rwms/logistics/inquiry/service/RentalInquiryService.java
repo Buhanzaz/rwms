@@ -56,16 +56,23 @@ public class RentalInquiryService {
       throw new IllegalArgumentException(
           "Idempotency-Key must equal the assistant conversation ID");
     }
-    transactionLock.acquire("rental-inquiry:create:" + actor.subjectId() + ":" + idempotencyKey);
+    transactionLock.acquire(
+        "rental-inquiry:create:"
+            + actor.subjectId()
+            + ":"
+            + idempotencyKey);
     if (request.conversationId() != null) {
-      transactionLock.acquire("rental-inquiry:conversation:" + request.conversationId());
+      transactionLock.acquire(
+          "rental-inquiry:conversation:"
+              + request.conversationId());
     }
     RentalInquiry existing =
         inquiries
             .findByManagerIdAndCreationIdempotencyKey(actor.subjectId(), idempotencyKey)
             .orElse(null);
     if (existing == null && request.conversationId() != null) {
-      existing = inquiries.findByConversationId(request.conversationId()).orElse(null);
+      existing =
+          inquiries.findByConversationId(request.conversationId()).orElse(null);
     }
     if (existing != null) {
       requireOwner(actor, existing);
@@ -144,7 +151,9 @@ public class RentalInquiryService {
       throw new IllegalArgumentException("Order-linked inquiry filter is required");
     }
     rentalOrders.get(actor, rentalOrderId);
-    return inquiries.findAllByRentalOrderIdOrderByCreatedAtDescIdDesc(rentalOrderId).stream()
+    return inquiries
+        .findAllByRentalOrderIdOrderByCreatedAtDescIdDesc(rentalOrderId)
+        .stream()
         .map(mapper::toResponse)
         .toList();
   }
@@ -235,13 +244,16 @@ public class RentalInquiryService {
 
   public RentalInquiry requiredOwned(OrderActor actor, UUID inquiryId) {
     RentalInquiry inquiry =
-        inquiries.findById(inquiryId).orElseThrow(() -> notFound("Диалог аренды не найден"));
+        inquiries
+            .findById(inquiryId)
+            .orElseThrow(() -> notFound("Диалог аренды не найден"));
     requireOwner(actor, inquiry);
     return inquiry;
   }
 
   public static void requireOwner(OrderActor actor, RentalInquiry inquiry) {
-    if (!actor.subjectId().equals(inquiry.getManagerId())) {
+    if (actor == null
+        || !actor.subjectId().equals(inquiry.getManagerId())) {
       throw notFound("Диалог аренды не найден");
     }
   }

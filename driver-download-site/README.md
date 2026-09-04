@@ -17,11 +17,18 @@ public URL or checksum and must not result in a download link.
 ## Verification
 
 ```bash
-sha256sum /path/to/rwms-driver-0.1.20-debug.apk
-node downloads-site/scripts/build-site.mjs
-node downloads-site/scripts/verify-site.mjs
+node --test scripts/release-trust.test.mjs
+RWMS_DRIVER_APK=/path/to/rwms-driver-0.1.20-debug.apk \
+  node scripts/verify-release.mjs
 ```
 
-The build script validates this record together with the existing ManagerApp
-and WorkerApp records, and writes only the aggregate static page to the output
-directory selected by `RWMS_DOWNLOADS_SITE_OUTPUT`.
+`release-trust-policy.json` separates `INTERNAL_TEST` and `PRODUCTION`
+certificate allowlists. The verifier checks the exact APK hash,
+package/version, single signer DN and signer SHA-256 through `aapt` and
+`apksigner`. The current record is explicitly `INTERNAL_TEST`; an empty
+production allowlist prevents this debug artifact from being relabelled as a
+production release. Certificate rotation requires an explicit reviewed policy
+change.
+
+The separate aggregate download-site builder consumes this validated record;
+it never owns or copies the DriverApp APK.

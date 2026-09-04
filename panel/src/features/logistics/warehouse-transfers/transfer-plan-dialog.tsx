@@ -34,6 +34,7 @@ import {
   FieldSet,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { SingleDayPicker } from "@/components/ui/single-day-picker"
 import {
   Select,
   SelectContent,
@@ -75,12 +76,16 @@ import {
   emptyTransferCabinGroup,
   type TransferCabinGroupDraft,
 } from "@/features/logistics/warehouse-transfers/model/transfer-plan-form"
+import { currentBusinessDate } from "@/features/logistics/use-logistics-day"
 import {
   getRentalItemCreationOptions,
   listAssetRentalItems,
   rentalItemCreationOptionsQueryKey,
 } from "@/features/rental-items/api/asset-rental-items-api"
-import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
+import {
+  RENTAL_ITEM_STATUS_LABEL,
+  type RentalItemDto,
+} from "@/features/rental-items/model/rental-item"
 import type { EquipmentItemDto } from "@/types/equipment"
 
 /** Stable retry identity retained while a command payload is unchanged. */
@@ -93,6 +98,8 @@ export type TransferPlanDialogProps = {
   warehouseId: string
   warehouses: WarehouseInfo[]
   initialDestinationWarehouseId: string | null
+  /** The operation day selected in the surrounding transfers list. */
+  initialScheduledDate?: string
   existingDocument?: TransferDocument | null
   existingPlan?: TransferPlan | null
   onCreated: (document: TransferDocument) => void
@@ -102,11 +109,6 @@ export type TransferPlanDialogProps = {
 
 function identity() {
   return crypto.randomUUID()
-}
-
-function localDate() {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`
 }
 
 function iso(value: string) {
@@ -183,6 +185,7 @@ export function TransferPlanDialog({
   warehouseId,
   warehouses,
   initialDestinationWarehouseId,
+  initialScheduledDate,
   existingDocument = null,
   existingPlan = null,
   onCreated,
@@ -199,6 +202,12 @@ export function TransferPlanDialog({
       warehouse.id !== warehouseId &&
       hasWarehouseAccess(currentUser, warehouse.id, "EDIT")
   )
+  const sourceWarehouse = warehouses.find(
+    (warehouse) => warehouse.id === warehouseId
+  )
+  const sourceBusinessDate = sourceWarehouse
+    ? currentBusinessDate(sourceWarehouse.timeZone)
+    : null
   const destinationCandidate =
     existingDocument?.destinationWarehouseId ?? initialDestinationWarehouseId
   const validInitialDestination = destinations.some(
@@ -214,7 +223,9 @@ export function TransferPlanDialog({
     hasWarehouseAccess(currentUser, warehouseId, "MANAGE") &&
     hasWarehouseAccess(currentUser, destinationWarehouseId, "MANAGE")
   const [scheduledDate, setScheduledDate] = useState(
-    existingPlan?.scheduledDate ?? existingDocument?.scheduledDate ?? ""
+    existingPlan?.scheduledDate ??
+      existingDocument?.scheduledDate ??
+      (initialScheduledDate || sourceBusinessDate || "")
   )
   const [plannedDepartureAt, setPlannedDepartureAt] = useState(
     localDateTimeInput(existingPlan?.plannedDepartureAt ?? null)
@@ -350,7 +361,10 @@ export function TransferPlanDialog({
     if (!/^\d{4}-\d{2}-\d{2}$/.test(scheduledDate)) {
       return "Укажите плановую дату."
     }
-    if (scheduledDate < localDate()) {
+    if (!sourceBusinessDate) {
+      return "Не удалось определить часовой пояс склада-источника."
+    }
+    if (scheduledDate < sourceBusinessDate) {
       return "Плановая дата не может быть в прошлом."
     }
     const departure = iso(plannedDepartureAt)
@@ -649,18 +663,16 @@ export function TransferPlanDialog({
                 </Field>
               </div>
               <div className="grid gap-4 md:grid-cols-3">
-                <Field>
-                  <FieldLabel htmlFor="transfer-plan-date">Дата</FieldLabel>
-                  <Input
-                    id="transfer-plan-date"
-                    type="date"
-                    value={scheduledDate}
-                    onChange={(event) => {
-                      setScheduledDate(event.target.value)
-                      changed()
-                    }}
-                  />
-                </Field>
+                <SingleDayPicker
+                  id="transfer-plan-date"
+                  label="Дата"
+                  value={scheduledDate}
+                  disabled={pending}
+                  onValueChange={(value) => {
+                    setScheduledDate(value)
+                    changed()
+                  }}
+                />
                 <Field>
                   <FieldLabel htmlFor="transfer-plan-departure">
                     Отправление
@@ -1139,8 +1151,6 @@ export function TransferPlanDialog({
           <ContractorDriverDialog
             accessToken={accessToken}
             warehouseId={warehouseId}
-            initialFrom={plannedDepartureAt}
-            initialUntil={plannedArrivalAt}
             onOpenChange={setContractorOpen}
             onCreated={(driver) => {
               queryClient.setQueryData<LogisticsDriverResource[]>(
@@ -1315,6 +1325,15 @@ function CabinGroupEditor({
   const allocated = new Set(
     group.allocatedCabins.map((allocation) => allocation.assetId)
   )
+  const candidateCabins = cabins.filter((cabin) => {
+    if (allocated.has(cabin.id)) {
+      return true
+    }
+    return (
+      !allocatedElsewhere.has(cabin.id) &&
+      cabinGroupMismatches(cabin, group, sourceWarehouseId).length === 0
+    )
+  })
   return (
     <Card size="sm" aria-label={`Группа бытовок ${index + 1}`}>
       <CardHeader>
@@ -1487,7 +1506,12 @@ function CabinGroupEditor({
             можно сохранить без выбора; подтверждение — нельзя.
           </FieldDescription>
           <div className="grid gap-2 md:grid-cols-2">
-            {cabins.map((cabin) => {
+            {candidateCabins.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Нет свободных бытовок, подходящих под требования группы.
+              </p>
+            ) : null}
+            {candidateCabins.map((cabin) => {
               const mismatches = cabinGroupMismatches(
                 cabin,
                 group,
@@ -1496,9 +1520,10 @@ function CabinGroupEditor({
               const selected = allocated.has(cabin.id)
               const usedByOther = allocatedElsewhere.has(cabin.id) && !selected
               const disabled =
-                mismatches.length > 0 ||
-                usedByOther ||
-                (!selected && group.allocatedCabins.length >= group.quantity)
+                !selected &&
+                (mismatches.length > 0 ||
+                  usedByOther ||
+                  group.allocatedCabins.length >= group.quantity)
               const delta = selected
                 ? calculateCabinFurnitureDelta(cabin, group.furniturePerCabin)
                 : []
@@ -1534,7 +1559,7 @@ function CabinGroupEditor({
                     {cabin.number} · {cabin.type}
                   </span>
                   <span className="text-muted-foreground">
-                    {cabin.status} ·{" "}
+                    {RENTAL_ITEM_STATUS_LABEL[cabin.status]} ·{" "}
                     {catalogName(options.finishings, cabin.finishingId)}
                     {cabin.linoleum ? " · линолеум" : ""}
                   </span>
@@ -1587,23 +1612,17 @@ function CabinGroupEditor({
 function ContractorDriverDialog({
   accessToken,
   warehouseId,
-  initialFrom,
-  initialUntil,
   onOpenChange,
   onCreated,
 }: {
   accessToken: string
   warehouseId: string
-  initialFrom: string
-  initialUntil: string
   onOpenChange: (open: boolean) => void
   onCreated: (driver: LogisticsDriverResource) => void
 }) {
   const contractorId = useRef(identity()).current
   const [displayName, setDisplayName] = useState("")
   const [phone, setPhone] = useState("")
-  const [availableFrom, setAvailableFrom] = useState(initialFrom)
-  const [availableUntil, setAvailableUntil] = useState(initialUntil)
   const [comment, setComment] = useState("")
   const [error, setError] = useState<string | null>(null)
   const mutation = useMutation({
@@ -1615,8 +1634,6 @@ function ContractorDriverDialog({
           contractorId,
           displayName: displayName.trim(),
           phone: phone.trim(),
-          availableFrom: iso(availableFrom)!,
-          availableUntil: iso(availableUntil)!,
           comment: comment.trim() || null,
         },
       }),
@@ -1627,21 +1644,13 @@ function ContractorDriverDialog({
         employmentType: "CONTRACTOR",
         phone: contractor.phone,
         operationalWarehouseId: contractor.homeWarehouseId,
-        availableFrom: contractor.availableFrom,
-        availableUntil: contractor.availableUntil,
         availabilityKind: "HOME",
       }),
   })
 
   function submit() {
-    const from = iso(availableFrom)
-    const until = iso(availableUntil)
-    if (!displayName.trim() || !phone.trim() || !from || !until) {
-      setError("Укажите имя, телефон и период доступности.")
-      return
-    }
-    if (Date.parse(until) <= Date.parse(from)) {
-      setError("Окончание смены должно быть позже начала.")
+    if (!displayName.trim() || !phone.trim()) {
+      setError("Укажите имя и телефон.")
       return
     }
     setError(null)
@@ -1654,8 +1663,8 @@ function ContractorDriverDialog({
         <DialogHeader>
           <DialogTitle>Добавить наёмного водителя</DialogTitle>
           <DialogDescription>
-            Профиль будет доступен только в заданный период. Учётная запись
-            водительского приложения автоматически не создаётся.
+            Создаётся постоянный профиль без учётной записи. На рейс и выбранный
+            день водитель назначается отдельно.
           </DialogDescription>
         </DialogHeader>
         <FieldGroup className="py-3">
@@ -1675,26 +1684,6 @@ function ContractorDriverDialog({
               onChange={(event) => setPhone(event.target.value)}
             />
           </Field>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field>
-              <FieldLabel htmlFor="contractor-from">Начало смены</FieldLabel>
-              <Input
-                id="contractor-from"
-                type="datetime-local"
-                value={availableFrom}
-                onChange={(event) => setAvailableFrom(event.target.value)}
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="contractor-until">Конец смены</FieldLabel>
-              <Input
-                id="contractor-until"
-                type="datetime-local"
-                value={availableUntil}
-                onChange={(event) => setAvailableUntil(event.target.value)}
-              />
-            </Field>
-          </div>
           <Field>
             <FieldLabel htmlFor="contractor-comment">Комментарий</FieldLabel>
             <Textarea

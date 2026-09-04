@@ -70,6 +70,8 @@ type repository interface {
 		func([]persistence.CabinCoverRecord) error) error
 	ReadCabinPresentationSnapshots(context.Context, uuid.UUID, []uuid.UUID,
 		func([]persistence.CabinPresentationSnapshotRecord) error) error
+	ReadCabinPresentationVariant(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, int, media.Variant,
+		func(persistence.VariantRecord) error) error
 	ReadOriginal(context.Context, uuid.UUID, string, string, uuid.UUID, *int,
 		func(persistence.AssetRecord, *persistence.VariantRecord) error) error
 	ReadOriginalForCustomer(context.Context, uuid.UUID, string, string, uuid.UUID, uuid.UUID, *int,
@@ -138,6 +140,10 @@ func (principal mediaRequestPrincipal) requireWorkerOwner(ownerType, ownerID str
 		if err := principal.worker.RequireTaskAccess(warehouseID); err != nil {
 			return uuid.Nil, err
 		}
+	case persistence.OwnerTypeTaskBoardWorkerProfile:
+		if err := principal.worker.RequireTaskAccess(warehouseID); err != nil {
+			return uuid.Nil, err
+		}
 	case persistence.OwnerTypeDriverShift:
 		if err := principal.worker.RequireDriverTaskAccess(warehouseID); err != nil {
 			return uuid.Nil, err
@@ -147,6 +153,9 @@ func (principal mediaRequestPrincipal) requireWorkerOwner(ownerType, ownerID str
 	}
 	ownerUUID, err := uuid.Parse(ownerID)
 	if err != nil || ownerUUID == uuid.Nil || ownerUUID.String() != ownerID {
+		return uuid.Nil, auth.ErrForbidden
+	}
+	if persistence.IsWorkerProfileOwnerType(ownerType) && ownerUUID != principal.worker.WorkerID {
 		return uuid.Nil, auth.ErrForbidden
 	}
 	return ownerUUID, nil
@@ -266,7 +275,10 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("POST /api/internal/media/v1/asset-imports/{jobId}/replace-sources", server.replaceAssetImportSources)
 	server.mux.HandleFunc("POST /api/internal/media/v1/asset-imports/{jobId}/retry", server.retryAssetImport)
 	server.mux.HandleFunc("POST /api/internal/media/v1/logistics/references/validate", server.validateLogisticsReferences)
+	server.mux.HandleFunc("POST /api/internal/media/v1/logistics/contractor-task-executions/{entryId}/workers/{workerId}/evidence/{evidenceId}", server.uploadContractorTaskEvidence)
+	server.mux.HandleFunc("GET /api/internal/media/v1/logistics/contractor-task-executions/{entryId}/workers/{workerId}/assets/{mediaId}/generations/{generation}/variants/{variant}/content", server.getContractorTaskExecutionVariantContent)
 	server.mux.HandleFunc("PUT /api/internal/media/v1/inventory/outcomes/{inventoryId}/findings/{findingId}/cabin-photos", server.applyInventoryCabinPhotos)
+	server.mux.HandleFunc("POST /api/internal/media/v1/assets/cabin-creation-snapshots", server.listAssetCabinCreationSnapshots)
 	server.mux.HandleFunc("POST /api/internal/media/v1/logistics/cabin-presentations/snapshots", server.listLogisticsCabinPresentationSnapshots)
 	server.mux.HandleFunc("POST /api/internal/media/v1/logistics/cabins/{cabinId}/cover-from-task-evidence", server.setCabinCoverFromTaskEvidence)
 	server.mux.HandleFunc("GET /api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content", server.getLogisticsCabinPresentationVariantContent)
@@ -288,7 +300,10 @@ func (server *Server) routes() {
 	// would conflict with the GET {jobId} pattern in net/http's ServeMux.
 	server.mux.HandleFunc("/api/internal/media/v1/asset-imports/", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/internal/media/v1/logistics/references/validate", server.methodNotAllowed)
+	server.mux.HandleFunc("/api/internal/media/v1/logistics/contractor-task-executions/{entryId}/workers/{workerId}/evidence/{evidenceId}", server.methodNotAllowed)
+	server.mux.HandleFunc("/api/internal/media/v1/logistics/contractor-task-executions/{entryId}/workers/{workerId}/assets/{mediaId}/generations/{generation}/variants/{variant}/content", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/internal/media/v1/inventory/outcomes/{inventoryId}/findings/{findingId}/cabin-photos", server.methodNotAllowed)
+	server.mux.HandleFunc("/api/internal/media/v1/assets/cabin-creation-snapshots", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/internal/media/v1/logistics/cabin-presentations/snapshots", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/internal/media/v1/logistics/cabins/{cabinId}/cover-from-task-evidence", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content", server.methodNotAllowed)
@@ -734,6 +749,69 @@ func (server *Server) setCabinCoverFromTaskEvidence(response http.ResponseWriter
 	})
 }
 
+// listAssetCabinCreationSnapshots exposes the smallest authoritative media
+// proof needed by asset-service to complete a cabin-photo creation intent. It
+// deliberately reuses the current CABIN owner and gallery projection and does
+// not reveal storage, filename, URL, or raw-content details.
+func (server *Server) listAssetCabinCreationSnapshots(response http.ResponseWriter, request *http.Request) {
+	if !server.assetPrincipal(response, request) {
+		return
+	}
+	var body cabinPresentationSnapshotsRequest
+	if !server.decode(response, request, &body) {
+		return
+	}
+	warehouseID, err := uuid.Parse(body.WarehouseID)
+	if err != nil || warehouseID == uuid.Nil || len(body.CabinIDs) < 1 || len(body.CabinIDs) > 100 {
+		server.problem(response, request, http.StatusBadRequest,
+			"MEDIA_INVALID_CABIN_CREATION_SNAPSHOT", "Invalid cabin creation snapshot request")
+		return
+	}
+	cabinIDs := make([]uuid.UUID, 0, len(body.CabinIDs))
+	seen := make(map[uuid.UUID]struct{}, len(body.CabinIDs))
+	for _, value := range body.CabinIDs {
+		cabinID, parseErr := uuid.Parse(value)
+		if parseErr != nil || cabinID == uuid.Nil {
+			server.problem(response, request, http.StatusBadRequest,
+				"MEDIA_INVALID_CABIN_CREATION_SNAPSHOT", "Invalid cabin creation snapshot request")
+			return
+		}
+		if _, duplicate := seen[cabinID]; duplicate {
+			server.problem(response, request, http.StatusBadRequest,
+				"MEDIA_INVALID_CABIN_CREATION_SNAPSHOT", "Invalid cabin creation snapshot request")
+			return
+		}
+		seen[cabinID] = struct{}{}
+		cabinIDs = append(cabinIDs, cabinID)
+	}
+	items := make([]any, 0, len(cabinIDs))
+	err = server.repository.ReadCabinPresentationSnapshots(request.Context(), warehouseID, cabinIDs,
+		func(records []persistence.CabinPresentationSnapshotRecord) error {
+			for _, record := range records {
+				readyPhotos := make([]any, 0, len(record.Photos))
+				for _, photo := range record.Photos {
+					readyPhotos = append(readyPhotos, map[string]any{
+						"mediaId": photo.MediaID, "generation": photo.Generation,
+						"photoIndex": photo.PhotoIndex, "checksumSha256": photo.SourceChecksum,
+						"contentType": photo.SourceContentType, "contentLength": photo.SourceContentLength,
+					})
+				}
+				items = append(items, map[string]any{
+					"cabinId": record.CabinID, "warehouseId": warehouseID,
+					"activeFolderId": record.ActiveFolderID, "coverMediaId": record.CoverMediaID,
+					"photoCount": record.PhotoCount, "readyPhotos": readyPhotos,
+				})
+			}
+			return nil
+		})
+	if err != nil {
+		server.repositoryProblem(response, request, err)
+		return
+	}
+	response.Header().Set("Cache-Control", "no-store")
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
 // listLogisticsCabinPresentationSnapshots is intentionally a private
 // projection boundary: logistics receives only opaque current media references
 // and the variants it may subsequently stream. It never receives a public URL,
@@ -799,10 +877,12 @@ func (server *Server) listLogisticsCabinPresentationSnapshots(response http.Resp
 	writeJSON(response, http.StatusOK, map[string]any{"items": items})
 }
 
-// getLogisticsCabinPresentationVariantContent streams exactly one approved
-// cabin image variant. Every owner, warehouse, state, current-generation, and
-// variant mismatch is folded into the same 404 response so this endpoint does
-// not become a media-existence oracle.
+// getLogisticsCabinPresentationVariantContent streams exactly one generation
+// already approved by logistics' immutable presentation snapshot. The retained
+// CABIN association and immutable variant row keep that generation readable
+// after an asset advance or soft deletion. Every tuple mismatch is folded into
+// the same 404 response so this endpoint does not become a media-existence
+// oracle.
 func (server *Server) getLogisticsCabinPresentationVariantContent(response http.ResponseWriter, request *http.Request) {
 	if !server.logisticsPrincipal(response, request) {
 		return
@@ -824,13 +904,10 @@ func (server *Server) getLogisticsCabinPresentationVariantContent(response http.
 	}
 
 	var selectedVariant *persistence.VariantRecord
-	err := server.repository.ReadCurrentVariant(request.Context(), mediaID, persistence.OwnerTypeCabin,
-		cabinID.String(), warehouseID, int(generation), variant,
-		func(asset persistence.AssetRecord, record *persistence.VariantRecord) error {
-			if asset.ID != mediaID || asset.WarehouseID != warehouseID ||
-				asset.Kind != media.KindImage || asset.Status != media.StatusReady ||
-				asset.Generation != int(generation) ||
-				record == nil || record.Variant != variant || record.ObjectKey == "" || record.ObjectVersionID == "" ||
+	err := server.repository.ReadCabinPresentationVariant(request.Context(), cabinID, warehouseID,
+		mediaID, int(generation), variant,
+		func(record persistence.VariantRecord) error {
+			if record.Variant != variant || record.ObjectKey == "" || record.ObjectVersionID == "" ||
 				record.SizeBytes <= 0 {
 				return persistence.ErrNotFound
 			}
@@ -838,7 +915,7 @@ func (server *Server) getLogisticsCabinPresentationVariantContent(response http.
 			if !supportedImage || variantKind != media.KindImage {
 				return persistence.ErrNotFound
 			}
-			copyOfVariant := *record
+			copyOfVariant := record
 			selectedVariant = &copyOfVariant
 			return nil
 		})
@@ -1032,7 +1109,8 @@ func (server *Server) createUpload(response http.ResponseWriter, request *http.R
 		server.problem(response, request, http.StatusUnsupportedMediaType, "MEDIA_UNSUPPORTED_TYPE", "Unsupported media type")
 		return
 	}
-	if body.OwnerType == persistence.OwnerTypeLogisticsCustomerProfile && kind != media.KindImage {
+	if (body.OwnerType == persistence.OwnerTypeLogisticsCustomerProfile ||
+		persistence.IsWorkerProfileOwnerType(body.OwnerType)) && kind != media.KindImage {
 		server.problem(response, request, http.StatusUnsupportedMediaType, "MEDIA_UNSUPPORTED_TYPE", "Unsupported media type")
 		return
 	}
@@ -1414,6 +1492,9 @@ func (server *Server) authorizeUploadAsset(response http.ResponseWriter, request
 			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
 			return false
 		}
+		if persistence.IsWorkerProfileOwnerType(asset.OwnerType) {
+			return true
+		}
 		if asset.OwnerType == persistence.OwnerTypeTaskBoardEntry {
 			err = server.repository.AuthorizeTaskBoardEntryWorker(request.Context(), ownerID, asset.WarehouseID, principal.worker.WorkerID)
 		} else {
@@ -1771,6 +1852,9 @@ func (server *Server) listOwner(response http.ResponseWriter, request *http.Requ
 		if ownerType == persistence.OwnerTypeTaskBoardEntry {
 			err = server.repository.ReadTaskBoardEntryAssetsForWorker(request.Context(), workerOwnerID,
 				warehouseID, principal.worker.WorkerID, limit, after, consume)
+		} else if persistence.IsWorkerProfileOwnerType(ownerType) {
+			err = server.repository.ReadOwnerAssets(request.Context(), ownerType, ownerID, warehouseID,
+				limit, after, consume)
 		} else {
 			err = server.repository.ReadDriverShiftAssetsForWorker(request.Context(), workerOwnerID,
 				warehouseID, principal.worker.WorkerID, limit, after, consume)
@@ -1911,7 +1995,10 @@ func (server *Server) getOriginal(response http.ResponseWriter, request *http.Re
 			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
 			return
 		}
-		if ownerType == persistence.OwnerTypeTaskBoardEntry {
+		if persistence.IsWorkerProfileOwnerType(ownerType) {
+			err = server.repository.ReadOriginal(request.Context(), mediaID, ownerType, ownerID,
+				warehouseID, generation, consume)
+		} else if ownerType == persistence.OwnerTypeTaskBoardEntry {
 			err = server.repository.ReadTaskBoardEntryOriginalForWorker(request.Context(), workerOwnerID, warehouseID,
 				principal.worker.WorkerID, mediaID, generation, consume)
 		} else {
@@ -1991,7 +2078,10 @@ func (server *Server) getVariantContent(response http.ResponseWriter, request *h
 			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
 			return
 		}
-		if ownerType == persistence.OwnerTypeTaskBoardEntry {
+		if persistence.IsWorkerProfileOwnerType(ownerType) {
+			err = server.repository.ReadCurrentVariant(request.Context(), mediaID, ownerType, ownerID,
+				warehouseID, generation, variant, consume)
+		} else if ownerType == persistence.OwnerTypeTaskBoardEntry {
 			err = server.repository.ReadTaskBoardEntryVariantForWorker(request.Context(), workerOwnerID, warehouseID,
 				principal.worker.WorkerID, mediaID, generation, variant, consume)
 		} else {
@@ -2303,6 +2393,20 @@ func (server *Server) logisticsPrincipal(response http.ResponseWriter, request *
 	}
 	err := principal.RequireExact("logistics-service", "media.logistics")
 	if err == nil {
+		return true
+	}
+	server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+	return false
+}
+
+// assetPrincipal accepts only asset-service with the exact media.asset scope;
+// broader service tokens cannot read cabin-creation proof metadata.
+func (server *Server) assetPrincipal(response http.ResponseWriter, request *http.Request) bool {
+	principal, ok := server.servicePrincipal(response, request)
+	if !ok {
+		return false
+	}
+	if principal.RequireExact("asset-service", "media.asset") == nil {
 		return true
 	}
 	server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")

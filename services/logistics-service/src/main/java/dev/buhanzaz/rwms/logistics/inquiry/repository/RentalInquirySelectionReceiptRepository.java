@@ -22,7 +22,8 @@ public interface RentalInquirySelectionReceiptRepository
         and receipt.publicIdempotencyKey = :idempotencyKey
       """)
   Optional<RentalInquirySelectionReceipt> findByPublicKeyForUpdate(
-      @Param("subjectId") UUID subjectId, @Param("idempotencyKey") UUID idempotencyKey);
+      @Param("subjectId") UUID subjectId,
+      @Param("idempotencyKey") UUID idempotencyKey);
 
   /**
    * Locks the one unfinished effect for an inquiry before another selection command is admitted.
@@ -31,7 +32,8 @@ public interface RentalInquirySelectionReceiptRepository
   @Query(
       """
       select receipt from RentalInquirySelectionReceipt receipt
-      where receipt.inquiryId = :inquiryId and receipt.state = :state
+      where receipt.inquiryId = :inquiryId
+        and receipt.state = :state
       """)
   Optional<RentalInquirySelectionReceipt> findByInquiryAndStateForUpdate(
       @Param("inquiryId") UUID inquiryId, @Param("state") RentalInquirySelectionReceiptState state);

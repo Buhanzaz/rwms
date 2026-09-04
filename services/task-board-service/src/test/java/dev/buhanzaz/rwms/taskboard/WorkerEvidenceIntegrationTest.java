@@ -20,8 +20,9 @@ import dev.buhanzaz.rwms.taskboard.eventing.WorkerMediaEventProcessor;
 import dev.buhanzaz.rwms.taskboard.push.WorkerPushClient;
 import dev.buhanzaz.rwms.taskboard.push.WorkerPushDispatcher;
 import dev.buhanzaz.rwms.taskboard.push.WorkerPushOutbox;
+import dev.buhanzaz.rwms.taskboard.service.KpiPaletteService;
 import dev.buhanzaz.rwms.taskboard.service.ConflictException;
-import dev.buhanzaz.rwms.taskboard.service.KpiSettingsService;
+import dev.buhanzaz.rwms.taskboard.service.MobileTaskSurface;
 import dev.buhanzaz.rwms.taskboard.service.RegistryService;
 import dev.buhanzaz.rwms.taskboard.service.TaskBoardEntryOwnerProofReconciler;
 import dev.buhanzaz.rwms.taskboard.service.TaskBoardService;
@@ -60,7 +61,7 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
   @Autowired TaskBoardService board;
   @Autowired TaskBoardEntryOwnerProofService ownerProofs;
   @Autowired WorkerTaskBoardService workerBoard;
-  @Autowired KpiSettingsService kpiSettings;
+  @Autowired KpiPaletteService kpiPalettes;
   @Autowired WorkerOfflineLeaseCodec leases;
   @Autowired WorkerMediaEventProcessor mediaEvents;
   @Autowired WorkerPushOutbox pushOutbox;
@@ -458,8 +459,7 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
         WAREHOUSE,
         worker.id(),
         new SetCurrentGroupRequest(worker.version(), group.id()));
-    kpiSettings.savePalette(
-        WAREHOUSE,
+    kpiPalettes.replace(
         new SaveKpiPaletteRequest(
             0,
             List.of(
@@ -467,7 +467,7 @@ class WorkerEvidenceIntegrationTest extends PostgresIntegrationTestSupport {
                 new KpiPaletteRangeRequest(60, 85, "#EAB308"),
                 new KpiPaletteRangeRequest(85, 100, "#16A34A")),
             "#7F1D1D"));
-    var context = workerBoard.context(worker.id(), WAREHOUSE);
+    var context = workerBoard.context(MobileTaskSurface.WORKER, worker.id(), WAREHOUSE);
     assertThat(context.categories())
         .singleElement()
         .satisfies(category -> assertThat(category.groupIds()).containsExactly(group.id()));

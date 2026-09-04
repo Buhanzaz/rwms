@@ -28,7 +28,7 @@ Planner operations use the standalone same-origin FastAPI. Creating an
 interwarehouse transfer is deliberately not duplicated there: the local modal
 reuses the panel's renewable `USER` OIDC session and sends the canonical draft
 command through the public gateway to `logistics-service`. The shared panel
-callback performs a full-page return to `/logistics-simulator/**` after login.
+callback performs a full-page return to `/logistics-panel/**` after login.
 
 FastAPI is standalone and uses only its own database. It integrates with RWMS
 through authenticated transport contracts and never reads another service's

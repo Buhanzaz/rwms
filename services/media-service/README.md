@@ -444,6 +444,23 @@ retries; validation is terminal on its actual attempt. A DLT record uses the
 source processing-job UUID key for a valid request, or deterministic UUIDv5 in
 the OID namespace over SHA-256 of the raw bytes for an invalid request.
 
+## Private asset cabin-creation proof
+
+`POST /api/internal/media/v1/assets/cabin-creation-snapshots` is the narrowly scoped read used by
+asset-service to finish its mandatory-photo cabin-creation intent. It accepts only an exact SERVICE
+JWT (`sub=client_id=asset-service`, audience `rwms-services`, sole scope `media.asset`) and a
+bounded list of cabin/warehouse identities. It reuses the canonical current CABIN photo-library
+projection; it does not query or write the asset database.
+
+For each currently bound requested cabin, the response states the active gallery folder, full
+logical image count, current READY cover and ordered current-generation READY images. Each image
+includes only its opaque media ID, generation, zero-based association index and immutable finalized
+source checksum, content type and byte length. Filenames, object-store locations, signed URLs and
+bytes are excluded. Missing owner proof, an incomplete/processing gallery, a folder mismatch or a
+missing READY cover remains explicit so asset-service can fail closed. This projection adds no
+media schema: the finalized metadata and canonical cabin-library association already own the
+proof.
+
 ## Bounded processing recovery
 
 The processing consumer classifies malformed Kafka input, a transient object
@@ -522,6 +539,27 @@ filename, MIME type, processing state or retention policy. It is read-only:
 no upload, owner binding mutation, event, outbox, Kafka consumer or object
 storage call is made.
 
+`POST /api/internal/media/v1/logistics/contractor-task-executions/{entryId}/workers/{workerId}/evidence/{evidenceId}`
+is the exact contractor evidence ingress used by logistics-service. The same
+exact SERVICE identity/scope is required, `Idempotency-Key` must equal the
+reserved `evidenceId`, and `warehouseId` is the only query parameter. The
+request is one bounded JPEG or WebP with a known `Content-Length` and lowercase
+`X-Content-SHA256`. Media-service derives one stable opaque media ID, records
+the named contractor as the `WORKER` actor, and rechecks the current task-board
+upload audience before both create and finalize. Bytes are streamed to the
+existing private versioned store and verified by length, checksum, MIME sniff,
+object version and ETag. An exact retry returns only
+`{mediaId,generation,status}` and never another asset, object path, upload
+session, URL or credential.
+
+`GET /api/internal/media/v1/logistics/contractor-task-executions/{entryId}/workers/{workerId}/assets/{mediaId}/generations/{generation}/variants/{variant}/content`
+is the paired private SMALL/MEDIUM/LARGE stream. It uses the existing exact
+task-board worker read proof and a pinned generation, folds every owner,
+worker, warehouse, media, generation or variant mismatch into opaque `404`,
+and returns the immutable WebP bytes with `private, no-store`. It is not a
+general media path; logistics owns any later expiring browser-facing contractor
+presentation and never forwards its service credential.
+
 `POST /api/internal/media/v1/logistics/cabin-presentations/snapshots` uses the
 same exact SERVICE identity and scope. It accepts one to one hundred unique
 CABIN IDs for one warehouse and returns only current canonical bindings plus
@@ -537,10 +575,18 @@ processing data is returned.
 
 `GET /api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content`
 is the paired private byte stream. `variant` is exactly `SMALL` or `LARGE`; the
-request must name the CABIN, warehouse and current generation. Every owner,
-warehouse, state, generation and variant mismatch is an opaque 404. There is
-no public logistics presentation-media route; logistics owns any later
-browser-facing proxy.
+request must name the CABIN, warehouse and generation pinned by an immutable
+presentation snapshot. Media verifies the retained canonical association and
+the exact generation/variant row, then streams its pinned MinIO object version;
+it deliberately does not require the asset to remain current, READY or
+non-deleted. The trusted logistics boundary is the membership check: only
+logistics may call this route and it must send a `{cabinId,warehouseId,mediaId,
+generation,variant}` tuple previously issued by a current snapshot. The
+association's `media_generation >= generation` predicate therefore preserves
+that historical generation after later processing or soft deletion. Every
+scope, association, cabin, warehouse, media, generation and variant mismatch
+is an opaque 404. There is no public logistics presentation-media route;
+logistics owns any later browser-facing proxy.
 
 ## Structural architecture gate
 

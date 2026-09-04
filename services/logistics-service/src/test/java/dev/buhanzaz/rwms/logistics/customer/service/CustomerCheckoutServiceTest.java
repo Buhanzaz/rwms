@@ -23,7 +23,9 @@ import dev.buhanzaz.rwms.logistics.inquiry.service.ClientPresentationService;
 import dev.buhanzaz.rwms.logistics.inquiry.service.PresentationBookingService;
 import dev.buhanzaz.rwms.logistics.service.CabinFurnitureTaskService;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -47,6 +49,8 @@ class CustomerCheckoutServiceTest {
       UUID.fromString("00000000-0000-0000-0000-000000000407");
   private static final UUID ORDER =
       UUID.fromString("00000000-0000-0000-0000-000000000408");
+  private static final UUID RECOVERY_LEASE =
+      UUID.fromString("00000000-0000-0000-0000-000000000410");
 
   @Test
   void checkoutUsesDisplayedOneMonthDefaultForAnExistingIncompleteCart() {
@@ -74,7 +78,8 @@ class CustomerCheckoutServiceTest {
             presentations,
             bookings,
             furnitureTasks);
-    CustomerIdentity identity = new CustomerIdentity(SUBJECT, "customer");
+    CustomerIdentity identity =
+        new CustomerIdentity(SUBJECT, "customer");
     CustomerRentalSession current = mock(CustomerRentalSession.class);
     CustomerBookingResponse expected = mock(CustomerBookingResponse.class);
     CustomerCheckoutRequest request = new CustomerCheckoutRequest(9L, SLOT, 3L);
@@ -131,19 +136,27 @@ class CustomerCheckoutServiceTest {
             presentations,
             bookings,
             furnitureTasks);
-    CustomerIdentity identity = new CustomerIdentity(SUBJECT, "customer");
+    CustomerIdentity identity =
+        new CustomerIdentity(SUBJECT, "customer");
     CustomerRentalSession pending = session(CustomerSessionState.CHECKOUT_PENDING);
     CustomerRentalSession completed = session(CustomerSessionState.BOOKED);
     CustomerDeliverySlot confirmedSlot = mock(CustomerDeliverySlot.class);
     LocalDate deliveryDate = LocalDate.of(2026, 9, 10);
     when(sessions.list(SUBJECT)).thenReturn(List.of(pending));
+    when(sessions.claimPendingBooking(SUBJECT, INQUIRY))
+        .thenReturn(
+            Optional.of(
+                new CustomerRentalSessionStore.CheckoutRecoveryClaim(
+                    SUBJECT, INQUIRY, RECOVERY_LEASE, pending)));
     when(bookings.status("presentation-token", BOOKING))
         .thenReturn(new PresentationBookingResponse(BOOKING, "COMPLETED", ORDER, "/status", null));
     when(slots.confirm(identity, INQUIRY, SLOT, BOOKING, ORDER)).thenReturn(confirmedSlot);
     when(confirmedSlot.getDeliveryDate()).thenReturn(deliveryDate);
     when(equipmentCodec.decode("equipment-json"))
         .thenReturn(List.of(new CustomerCabinEquipmentSelection(CABIN, EQUIPMENT, 2L)));
-    when(sessions.completeBooking(SUBJECT, INQUIRY, BOOKING, ORDER)).thenReturn(completed);
+    when(
+            sessions.completeBooking(SUBJECT, INQUIRY, BOOKING, ORDER, RECOVERY_LEASE))
+        .thenReturn(completed);
     when(customerBookings.response(identity, completed, "COMPLETED", null))
         .thenReturn(mock(CustomerBookingResponse.class));
 
@@ -160,7 +173,61 @@ class CustomerCheckoutServiceTest {
             eq(deliveryDate),
             eq(List.of(new CabinFurnitureRequirement(EQUIPMENT, 2L))));
     assertThat(taskKeys.getAllValues()).containsExactly(taskKeys.getValue(), taskKeys.getValue());
-    verify(sessions, times(2)).completeBooking(SUBJECT, INQUIRY, BOOKING, ORDER);
+    verify(sessions, times(2))
+        .completeBooking(SUBJECT, INQUIRY, BOOKING, ORDER, RECOVERY_LEASE);
+  }
+
+  @Test
+  void scheduledRecoveryPersistsSafeBackoffReasonAfterUnexpectedFailure() {
+    CustomerRentalService rentals = mock(CustomerRentalService.class);
+    CustomerRentalSessionStore sessions = mock(CustomerRentalSessionStore.class);
+    CustomerCheckoutStore checkoutStore = mock(CustomerCheckoutStore.class);
+    CustomerEquipmentCodec equipmentCodec = mock(CustomerEquipmentCodec.class);
+    CustomerRentalTermCodec rentalTermCodec = mock(CustomerRentalTermCodec.class);
+    CustomerDeliverySlotService slots = mock(CustomerDeliverySlotService.class);
+    CustomerBookingService customerBookings = mock(CustomerBookingService.class);
+    CustomerAuthorizer access = mock(CustomerAuthorizer.class);
+    ClientPresentationService presentations = mock(ClientPresentationService.class);
+    PresentationBookingService bookings = mock(PresentationBookingService.class);
+    CabinFurnitureTaskService furnitureTasks = mock(CabinFurnitureTaskService.class);
+    CustomerCheckoutService service =
+        new CustomerCheckoutService(
+            rentals,
+            sessions,
+            checkoutStore,
+            equipmentCodec,
+            rentalTermCodec,
+            slots,
+            customerBookings,
+            access,
+            presentations,
+            bookings,
+            furnitureTasks);
+    CustomerRentalSession pending = session(CustomerSessionState.CHECKOUT_PENDING);
+    var claim =
+        new CustomerRentalSessionStore.CheckoutRecoveryClaim(
+            SUBJECT, INQUIRY, RECOVERY_LEASE, pending);
+    when(sessions.claimPendingBookings()).thenReturn(List.of(claim));
+    when(bookings.status("presentation-token", BOOKING))
+        .thenThrow(new IllegalStateException("raw dependency failure"));
+    when(sessions.failCheckoutRecovery(
+            SUBJECT,
+            INQUIRY,
+            RECOVERY_LEASE,
+            "CUSTOMER_CHECKOUT_DEPENDENCY_PENDING"))
+        .thenReturn(
+            new CustomerRentalSessionStore.RecoveryFailure(
+                1, OffsetDateTime.parse("2026-08-31T09:00:02Z"), false));
+    when(sessions.required(SUBJECT, INQUIRY)).thenReturn(pending);
+
+    service.reconcilePending();
+
+    verify(sessions)
+        .failCheckoutRecovery(
+            SUBJECT,
+            INQUIRY,
+            RECOVERY_LEASE,
+            "CUSTOMER_CHECKOUT_DEPENDENCY_PENDING");
   }
 
   private static CustomerRentalSession session(CustomerSessionState state) {

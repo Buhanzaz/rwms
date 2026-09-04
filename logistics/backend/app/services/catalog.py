@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
-from datetime import date, time
+from datetime import date, datetime, time, timedelta
+from hashlib import sha256
+from typing import cast
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
-from sqlalchemy import delete, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -20,6 +23,7 @@ from app.models import (
     LogisticsRequest,
     PlanningTask,
     RequestDateOption,
+    RouteCycle,
     RoutePlan,
     RouteStop,
     Trailer,
@@ -30,6 +34,7 @@ from app.models import (
     WarehouseIsochroneTariff,
 )
 from app.models.domain import (
+    CatalogVersionMixin,
     PlanStatus,
     RequestStatus,
     RequestType,
@@ -62,6 +67,11 @@ from app.schemas.domain import (
 )
 from app.schemas.geocoding import ResolvedAddress
 from app.services import plans as plan_service
+from app.services.request_reschedule_fence import reject_active_request_reschedules
+from app.services.vehicle_availability import (
+    VehicleAvailabilityPolicy,
+    recurring_shift_intervals,
+)
 
 RWMS_SOURCE_SYSTEM = "RWMS"
 RWMS_SOURCE_FIELDS = frozenset(
@@ -82,6 +92,180 @@ CARGO_PHYSICAL_FIELDS = (
     "cargo_height_mm",
     "cargo_weight_kg",
 )
+
+
+def _routing_coordinates_ready(latitude: float | None, longitude: float | None) -> bool:
+    """Return whether a complete route origin is not the conventional 0,0 placeholder."""
+
+    return latitude is not None and longitude is not None and not (latitude == 0 and longitude == 0)
+
+
+def _shift_duration_seconds(start: time, end: time) -> int:
+    """Return the interval, treating only an earlier end as the next local day."""
+
+    duration = (
+        end.hour * 3600
+        + end.minute * 60
+        + end.second
+        - start.hour * 3600
+        - start.minute * 60
+        - start.second
+    )
+    return duration + 24 * 3600 if duration < 0 else duration
+
+
+def _shift_interval(day: date, start: time, end: time) -> tuple[datetime, datetime]:
+    """Materialize one repeated local shift interval without assigning a timezone offset."""
+
+    starts_at = datetime.combine(day, start)
+    ends_at = datetime.combine(day, end)
+    if ends_at < starts_at:
+        ends_at += timedelta(days=1)
+    return starts_at, ends_at
+
+
+def _shift_ranges_overlap(
+    *,
+    left_from: date,
+    left_to: date,
+    left_start: time,
+    left_end: time,
+    right_from: date,
+    right_to: date,
+    right_start: time,
+    right_end: time,
+) -> bool:
+    """Return whether two bounded recurring ranges share any positive local-time interval."""
+
+    left_day = left_from
+    while left_day <= left_to:
+        left_interval = _shift_interval(left_day, left_start, left_end)
+        right_day = max(right_from, left_day - timedelta(days=1))
+        right_last = min(right_to, left_day + timedelta(days=1))
+        while right_day <= right_last:
+            right_interval = _shift_interval(right_day, right_start, right_end)
+            if max(left_interval[0], right_interval[0]) < min(left_interval[1], right_interval[1]):
+                return True
+            right_day += timedelta(days=1)
+        left_day += timedelta(days=1)
+    return False
+
+
+def _shift_lock_key(resource: str, resource_id: UUID) -> int:
+    """Derive a stable signed PostgreSQL advisory key for one shift resource."""
+
+    digest = sha256(f"rwms-logistics:shift:{resource}:{resource_id}".encode()).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=True)
+
+
+def _trailer_assignment_lock_key(trailer_id: UUID) -> int:
+    """Derive the transaction fence shared by trailer assignment and relocation."""
+
+    digest = sha256(f"rwms-logistics:trailer-assignment:{trailer_id}".encode()).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=True)
+
+
+async def _lock_trailer_assignment(session: AsyncSession, trailer_id: UUID) -> None:
+    """Serialize a trailer relocation with vehicles selecting it as their default."""
+
+    await session.execute(
+        select(func.pg_advisory_xact_lock(_trailer_assignment_lock_key(trailer_id)))
+    )
+
+
+def _driver_pool_lock_key(warehouse_id: UUID) -> int:
+    """Derive the transaction fence for one warehouse-wide driver audience."""
+
+    digest = sha256(f"rwms-logistics:driver-pool:{warehouse_id}".encode()).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=True)
+
+
+async def _ensure_driver_pool_available(
+    session: AsyncSession,
+    warehouse_id: UUID,
+    *,
+    exclude_id: UUID | None = None,
+) -> None:
+    """Serialize and reject a new warehouse-wide pool when one is already persisted."""
+
+    await session.execute(select(func.pg_advisory_xact_lock(_driver_pool_lock_key(warehouse_id))))
+    statement = select(Driver.id).where(
+        Driver.warehouse_id == warehouse_id,
+        Driver.rwms_assignment_mode == "WAREHOUSE_DRIVERS",
+    )
+    if exclude_id is not None:
+        statement = statement.where(Driver.id != exclude_id)
+    if await session.scalar(statement.limit(1)) is not None:
+        raise ApiError(
+            409,
+            "WAREHOUSE_DRIVER_POOL_EXISTS",
+            "The warehouse already has a warehouse-wide driver pool",
+        )
+
+
+async def _lock_shift_resources(
+    session: AsyncSession,
+    *,
+    driver_ids: set[UUID],
+    vehicle_ids: set[UUID],
+) -> None:
+    """Serialize overlap checks for every affected driver and vehicle without deadlocks."""
+
+    keys = {
+        *(_shift_lock_key("driver", resource_id) for resource_id in driver_ids),
+        *(_shift_lock_key("vehicle", resource_id) for resource_id in vehicle_ids),
+    }
+    for key in sorted(keys):
+        await session.execute(select(func.pg_advisory_xact_lock(key)))
+
+
+async def _get_versioned_catalog_entity[MutableModel: Base](
+    session: AsyncSession,
+    model: type[MutableModel],
+    entity_id: UUID,
+    resource_name: str,
+    expected_version: int,
+) -> MutableModel:
+    """Lock one mutable catalog row and reject a stale optimistic command."""
+
+    entity = await session.get(model, entity_id, with_for_update=True)
+    if entity is None:
+        raise not_found(resource_name, entity_id)
+    _assert_catalog_version(
+        cast(CatalogVersionMixin, entity),
+        resource_name,
+        expected_version,
+    )
+    return entity
+
+
+def _assert_catalog_version(
+    entity: CatalogVersionMixin,
+    resource_name: str,
+    expected_version: int,
+) -> None:
+    """Reject a stale command after its mutable catalog row has been locked."""
+
+    versioned = entity
+    if versioned.version != expected_version:
+        raise ApiError(
+            409,
+            "CATALOG_VERSION_CONFLICT",
+            "The catalog resource changed after it was loaded",
+            extra={
+                "resource": resource_name,
+                "expected_version": expected_version,
+                "actual_version": versioned.version,
+            },
+        )
+
+
+def _advance_catalog_version(entity: CatalogVersionMixin) -> None:
+    """Advance an already locked mutable catalog aggregate exactly once per command."""
+
+    entity.version += 1
+
+
 DEFAULT_ISOCHRONE_TARIFFS = (
     (60, 10_000),
     (120, 15_000),
@@ -107,34 +291,26 @@ async def _invalidate_route_plans_for_dates(
     warehouse_id: UUID,
     dates: set[date],
 ) -> None:
-    """Delete stale plans before authoritative RWMS demand changes their inputs."""
+    """Archive stale mutable heads without deleting confirmed plans or revision history."""
 
-    if not dates:
-        return
-    await session.execute(
-        delete(RoutePlan).where(
-            RoutePlan.warehouse_id == warehouse_id,
-            RoutePlan.date.in_(dates),
-        )
-    )
-    await session.flush()
+    await plan_service.archive_mutable_plans_for_dates(session, warehouse_id, dates)
 
 
 async def _invalidate_mutable_route_plans_for_warehouse(
     session: AsyncSession,
     warehouse_id: UUID,
 ) -> None:
-    """Remove only recomputable route artifacts for one changed warehouse projection."""
+    """Archive recomputable route heads for one changed warehouse projection."""
 
-    await session.execute(
-        delete(RoutePlan).where(
-            RoutePlan.warehouse_id == warehouse_id,
-            RoutePlan.status.in_(
-                (PlanStatus.DRAFT, PlanStatus.GENERATED, PlanStatus.VALIDATED)
-            ),
+    dates = set(
+        await session.scalars(
+            select(RoutePlan.date).where(
+                RoutePlan.warehouse_id == warehouse_id,
+                RoutePlan.status.in_(plan_service.MUTABLE_PLAN_STATUSES),
+            )
         )
     )
-    await session.flush()
+    await plan_service.archive_mutable_plans_for_dates(session, warehouse_id, dates)
 
 
 def _request_effective_dates(request: LogisticsRequest) -> set[date]:
@@ -241,15 +417,21 @@ async def _insert_canonical_warehouse(
 ) -> Warehouse:
     """Insert one routable canonical identity, tolerating a concurrent first discovery."""
 
-    if identity.routing_ready:
+    if identity.routing_ready and _routing_coordinates_ready(identity.latitude, identity.longitude):
         assert identity.latitude is not None
         assert identity.longitude is not None
         latitude = identity.latitude
         longitude = identity.longitude
-    else:
+    elif resolved is not None and _routing_coordinates_ready(resolved.latitude, resolved.longitude):
         assert resolved is not None
         latitude = resolved.latitude
         longitude = resolved.longitude
+    else:
+        raise ApiError(
+            422,
+            "WAREHOUSE_COORDINATES_REQUIRED",
+            "Не заданы координаты для использования склада в логистике",  # noqa: RUF001
+        )
     entity = Warehouse(
         external_warehouse_id=identity.warehouse_id,
         external_warehouse_version=identity.warehouse_version,
@@ -295,10 +477,8 @@ async def reconcile_warehouse_directory(
         )
     materialized: list[Warehouse] = []
     for identity in identities:
-        owner_coordinates_available = (
-            identity.routing_ready
-            and identity.latitude is not None
-            and identity.longitude is not None
+        owner_coordinates_available = identity.routing_ready and _routing_coordinates_ready(
+            identity.latitude, identity.longitude
         )
         current = await session.scalar(
             select(Warehouse).where(Warehouse.external_warehouse_id == identity.warehouse_id)
@@ -307,6 +487,7 @@ async def reconcile_warehouse_directory(
             not owner_coordinates_available
             and current is not None
             and current.routing_ready
+            and _routing_coordinates_ready(current.latitude, current.longitude)
             and identity.address is not None
             and current.address == identity.address
             and current.city == identity.city
@@ -320,6 +501,8 @@ async def reconcile_warehouse_directory(
         ):
             try:
                 resolved = await resolve_address(identity)
+                if not _routing_coordinates_ready(resolved.latitude, resolved.longitude):
+                    resolved = None
             except ApiError:
                 resolved = None
 
@@ -328,6 +511,7 @@ async def reconcile_warehouse_directory(
             .where(Warehouse.external_warehouse_id == identity.warehouse_id)
             .with_for_update()
         )
+        inserted = entity is None
         if entity is None:
             if not identity.routing_ready:
                 if resolved is None:
@@ -337,32 +521,33 @@ async def reconcile_warehouse_directory(
         address_derived_point_still_valid = (
             not owner_coordinates_available
             and entity.routing_ready
+            and _routing_coordinates_ready(entity.latitude, entity.longitude)
             and identity.address is not None
             and entity.address == identity.address
             and entity.city == identity.city
         )
         effective_routing_ready = (
-            owner_coordinates_available
-            or address_derived_point_still_valid
-            or resolved is not None
+            owner_coordinates_available or address_derived_point_still_valid or resolved is not None
         )
         route_facts_changed = (
             entity.external_warehouse_version != identity.warehouse_version
             or entity.routing_ready != effective_routing_ready
             or (
                 owner_coordinates_available
-                and (
-                    entity.latitude != identity.latitude
-                    or entity.longitude != identity.longitude
-                )
+                and (entity.latitude != identity.latitude or entity.longitude != identity.longitude)
             )
             or (
                 resolved is not None
-                and (
-                    entity.latitude != resolved.latitude
-                    or entity.longitude != resolved.longitude
-                )
+                and (entity.latitude != resolved.latitude or entity.longitude != resolved.longitude)
             )
+        )
+        catalog_facts_changed = not inserted and (
+            route_facts_changed
+            or entity.name != identity.name
+            or entity.city != identity.city
+            or entity.address != identity.address
+            or entity.timezone != identity.timezone
+            or entity.representative != identity.representative
         )
         entity.external_warehouse_version = identity.warehouse_version
         entity.name = identity.name
@@ -379,6 +564,8 @@ async def reconcile_warehouse_directory(
         elif resolved is not None:
             entity.latitude = resolved.latitude
             entity.longitude = resolved.longitude
+        if catalog_facts_changed:
+            _advance_catalog_version(entity)
         if route_facts_changed:
             await _invalidate_mutable_route_plans_for_warehouse(session, entity.id)
         if effective_routing_ready:
@@ -404,13 +591,13 @@ async def create_warehouse(
     )
     if duplicate is not None:
         raise ApiError(409, "WAREHOUSE_ALREADY_BOUND", "RWMS warehouse is already configured")
-    if identity.routing_ready:
+    if identity.routing_ready and _routing_coordinates_ready(identity.latitude, identity.longitude):
         assert identity.latitude is not None
         assert identity.longitude is not None
         address = identity.address
         latitude = identity.latitude
         longitude = identity.longitude
-    elif resolved is not None:
+    elif resolved is not None and _routing_coordinates_ready(resolved.latitude, resolved.longitude):
         assert identity.address is not None
         address = identity.address
         latitude = resolved.latitude
@@ -448,24 +635,48 @@ async def update_warehouse(
 ) -> Warehouse:
     """Update warehouse fields and validate the effective local hours."""
 
-    entity = await get_required(session, Warehouse, warehouse_id, "warehouse")
-    values = payload.model_dump(exclude_unset=True)
+    entity = await _get_versioned_catalog_entity(
+        session,
+        Warehouse,
+        warehouse_id,
+        "warehouse",
+        payload.expected_version,
+    )
+    values = payload.model_dump(exclude_unset=True, exclude={"expected_version"})
     start = values.get("working_day_start", entity.working_day_start)
     end = values.get("working_day_end", entity.working_day_end)
     if end <= start:
         raise ApiError(422, "INVALID_WORKING_DAY", "working_day_end must be after start")
-    values = payload.model_dump(exclude_unset=True, exclude={"isochrone_tariffs"})
+    values = payload.model_dump(
+        exclude_unset=True,
+        exclude={"expected_version", "isochrone_tariffs"},
+    )
     for field, value in values.items():
         setattr(entity, field, value)
     if payload.isochrone_tariffs is not None:
         entity.isochrone_tariffs = _tariff_entities(
-            [
-                (item.travel_minutes, item.price_rubles)
-                for item in payload.isochrone_tariffs
-            ]
+            [(item.travel_minutes, item.price_rubles) for item in payload.isochrone_tariffs]
         )
+    _advance_catalog_version(entity)
     await session.flush()
     return entity
+
+
+def _require_staff_driver_identity(
+    identity: RwmsDriverIdentity | None,
+    worker_id: UUID | None,
+) -> RwmsDriverIdentity:
+    """Validate an exact RWMS worker as a staff route-planning identity."""
+
+    if worker_id is None or identity is None or identity.worker_id != worker_id:
+        raise ApiError(422, "RWMS_DRIVER_NOT_FOUND", "RWMS worker is not eligible")
+    if identity.employment_type != "STAFF":
+        raise ApiError(
+            422,
+            "RWMS_DRIVER_NOT_STAFF",
+            "Для маршрута можно выбрать только штатного водителя RWMS.",
+        )
+    return identity
 
 
 async def create_driver(
@@ -480,9 +691,12 @@ async def create_driver(
     values = payload.model_dump()
     name = "Водители склада"
     if payload.rwms_assignment_mode == "ASSIGNED_DRIVER":
-        if identity is None or identity.worker_id != payload.external_worker_id:
-            raise ApiError(422, "RWMS_DRIVER_NOT_FOUND", "RWMS worker is not eligible")
-        name = identity.display_name
+        name = _require_staff_driver_identity(
+            identity,
+            payload.external_worker_id,
+        ).display_name
+    else:
+        await _ensure_driver_pool_available(session, warehouse_id)
     entity = Driver(warehouse_id=warehouse_id, name=name, **values)
     session.add(entity)
     await session.flush()
@@ -497,14 +711,18 @@ async def update_driver(
 ) -> Driver:
     """Update a driver while preserving explicit RWMS audience invariants."""
 
-    entity = await get_required(session, Driver, driver_id, "driver")
-    values = payload.model_dump(exclude_unset=True)
+    entity = await _get_versioned_catalog_entity(
+        session,
+        Driver,
+        driver_id,
+        "driver",
+        payload.expected_version,
+    )
+    values = payload.model_dump(exclude_unset=True, exclude={"expected_version"})
     mode = values.get("rwms_assignment_mode", entity.rwms_assignment_mode)
     worker_id = values.get("external_worker_id", entity.external_worker_id)
     if mode == "ASSIGNED_DRIVER":
-        if worker_id is None or identity is None or identity.worker_id != worker_id:
-            raise ApiError(422, "RWMS_DRIVER_NOT_FOUND", "RWMS worker is not eligible")
-        entity.name = identity.display_name
+        entity.name = _require_staff_driver_identity(identity, worker_id).display_name
     else:
         if worker_id is not None:
             raise ApiError(
@@ -512,9 +730,16 @@ async def update_driver(
                 "RWMS_DRIVER_ASSIGNMENT_INVALID",
                 "WAREHOUSE_DRIVERS requires external_worker_id to be null",
             )
+        if entity.rwms_assignment_mode != "WAREHOUSE_DRIVERS":
+            await _ensure_driver_pool_available(
+                session,
+                entity.warehouse_id,
+                exclude_id=entity.id,
+            )
         entity.name = "Водители склада"
     for field, value in values.items():
         setattr(entity, field, value)
+    _advance_catalog_version(entity)
     await session.flush()
     return entity
 
@@ -550,13 +775,11 @@ async def list_vehicles(session: AsyncSession, warehouse_id: UUID) -> list[Vehic
     return list(result.unique())
 
 
-async def _load_vehicle_with_profiles(session: AsyncSession, vehicle_id: UUID) -> Vehicle:
+async def get_vehicle(session: AsyncSession, vehicle_id: UUID) -> Vehicle:
     """Reload one vehicle with its response-owned axle-load profile aggregate."""
 
     entity = await session.scalar(
-        select(Vehicle)
-        .where(Vehicle.id == vehicle_id)
-        .options(selectinload(Vehicle.load_profiles))
+        select(Vehicle).where(Vehicle.id == vehicle_id).options(selectinload(Vehicle.load_profiles))
     )
     if entity is None:
         raise not_found("vehicle", vehicle_id)
@@ -568,17 +791,24 @@ async def update_vehicle(
 ) -> Vehicle:
     """Update vehicle availability, capacity, speeds, or labels."""
 
-    entity = await get_required(session, Vehicle, vehicle_id, "vehicle")
-    values = payload.model_dump(exclude_unset=True)
+    entity = await _get_versioned_catalog_entity(
+        session,
+        Vehicle,
+        vehicle_id,
+        "vehicle",
+        payload.expected_version,
+    )
+    values = payload.model_dump(exclude_unset=True, exclude={"expected_version"})
     await _validate_vehicle_trailer_assignment(
         session,
         warehouse_id=entity.warehouse_id,
         can_use_trailer=values.get("can_use_trailer", entity.can_use_trailer),
         trailer_id=values.get("default_trailer_id", entity.default_trailer_id),
     )
-    apply_update(entity, payload)
+    apply_update(entity, payload, exclude={"expected_version"})
+    _advance_catalog_version(entity)
     await session.flush()
-    return await _load_vehicle_with_profiles(session, entity.id)
+    return await get_vehicle(session, entity.id)
 
 
 async def create_vehicle_configuration(
@@ -594,7 +824,7 @@ async def create_vehicle_configuration(
         for profile in payload.load_profiles
     )
     await session.flush()
-    return await _load_vehicle_with_profiles(session, entity.id)
+    return await get_vehicle(session, entity.id)
 
 
 async def update_vehicle_configuration(
@@ -612,19 +842,24 @@ async def update_vehicle_configuration(
     )
     if entity is None:
         raise not_found("vehicle", vehicle_id)
-    values = payload.vehicle.model_dump(exclude_unset=True)
+    _assert_catalog_version(entity, "vehicle", payload.vehicle.expected_version)
+    values = payload.vehicle.model_dump(
+        exclude_unset=True,
+        exclude={"expected_version"},
+    )
     await _validate_vehicle_trailer_assignment(
         session,
         warehouse_id=entity.warehouse_id,
         can_use_trailer=values.get("can_use_trailer", entity.can_use_trailer),
         trailer_id=values.get("default_trailer_id", entity.default_trailer_id),
     )
-    apply_update(entity, payload.vehicle)
+    apply_update(entity, payload.vehicle, exclude={"expected_version"})
     entity.load_profiles.clear()
     await session.flush()
     entity.load_profiles.extend(
         VehicleLoadProfile(**profile.model_dump(mode="json")) for profile in payload.load_profiles
     )
+    _advance_catalog_version(entity)
     await session.flush()
     return entity
 
@@ -648,6 +883,7 @@ async def _validate_vehicle_trailer_assignment(
         )
     if not isinstance(trailer_id, UUID):
         raise ApiError(422, "INVALID_TRAILER_ID", "default_trailer_id must be a UUID")
+    await _lock_trailer_assignment(session, trailer_id)
     trailer = await get_required(session, Trailer, trailer_id, "trailer")
     if trailer.warehouse_id != warehouse_id:
         raise ApiError(
@@ -674,24 +910,267 @@ async def update_trailer(
 ) -> Trailer:
     """Update trailer identity, availability, or physical specification."""
 
-    entity = await get_required(session, Trailer, trailer_id, "trailer")
-    apply_update(entity, payload)
+    entity = await _get_versioned_catalog_entity(
+        session,
+        Trailer,
+        trailer_id,
+        "trailer",
+        payload.expected_version,
+    )
+    apply_update(entity, payload, exclude={"expected_version"})
+    _advance_catalog_version(entity)
     await session.flush()
     return entity
 
 
-async def _require_same_warehouse_shift_resources(
-    session: AsyncSession, warehouse_id: UUID, driver_id: UUID, vehicle_id: UUID
+async def relocate_vehicle(
+    session: AsyncSession,
+    vehicle_id: UUID,
+    target_warehouse_id: UUID,
+    expected_version: int,
+) -> Vehicle:
+    """Permanently move an unassigned vehicle between configured warehouse objects."""
+
+    await _lock_shift_resources(session, driver_ids=set(), vehicle_ids={vehicle_id})
+    entity = await _get_versioned_catalog_entity(
+        session,
+        Vehicle,
+        vehicle_id,
+        "vehicle",
+        expected_version,
+    )
+    await require_warehouse(session, target_warehouse_id)
+    if entity.warehouse_id == target_warehouse_id:
+        raise ApiError(
+            409,
+            "CATALOG_RELOCATION_TARGET_UNCHANGED",
+            "The vehicle already belongs to the target warehouse",
+        )
+    if entity.default_trailer_id is not None:
+        raise ApiError(
+            409,
+            "VEHICLE_HAS_DEFAULT_TRAILER",
+            "Detach the vehicle's default trailer before relocation",
+        )
+    active_shift_id = await session.scalar(
+        select(DriverShift.id)
+        .where(
+            DriverShift.vehicle_id == vehicle_id,
+            DriverShift.active.is_(True),
+        )
+        .order_by(DriverShift.id)
+        .limit(1)
+    )
+    if active_shift_id is not None:
+        raise ApiError(
+            409,
+            "VEHICLE_HAS_ACTIVE_SHIFTS",
+            "Deactivate every active vehicle shift before relocation",
+            extra={"shift_id": str(active_shift_id)},
+        )
+    duplicate_id = await session.scalar(
+        select(Vehicle.id)
+        .where(
+            Vehicle.warehouse_id == target_warehouse_id,
+            Vehicle.registration_number == entity.registration_number,
+            Vehicle.id != entity.id,
+        )
+        .limit(1)
+    )
+    if duplicate_id is not None:
+        raise ApiError(
+            409,
+            "VEHICLE_REGISTRATION_CONFLICT",
+            "The target warehouse already has a vehicle with this registration number",
+        )
+    entity.warehouse_id = target_warehouse_id
+    _advance_catalog_version(entity)
+    await session.flush()
+    return await get_vehicle(session, entity.id)
+
+
+async def relocate_trailer(
+    session: AsyncSession,
+    trailer_id: UUID,
+    target_warehouse_id: UUID,
+    expected_version: int,
+) -> Trailer:
+    """Permanently move an unattached trailer between configured warehouse objects."""
+
+    await _lock_trailer_assignment(session, trailer_id)
+    entity = await _get_versioned_catalog_entity(
+        session,
+        Trailer,
+        trailer_id,
+        "trailer",
+        expected_version,
+    )
+    await require_warehouse(session, target_warehouse_id)
+    if entity.warehouse_id == target_warehouse_id:
+        raise ApiError(
+            409,
+            "CATALOG_RELOCATION_TARGET_UNCHANGED",
+            "The trailer already belongs to the target warehouse",
+        )
+    referencing_vehicle_id = await session.scalar(
+        select(Vehicle.id)
+        .where(Vehicle.default_trailer_id == trailer_id)
+        .order_by(Vehicle.id)
+        .limit(1)
+    )
+    if referencing_vehicle_id is not None:
+        raise ApiError(
+            409,
+            "TRAILER_IS_DEFAULT_FOR_VEHICLE",
+            "Detach the trailer from every vehicle before relocation",
+            extra={"vehicle_id": str(referencing_vehicle_id)},
+        )
+    duplicate_id = await session.scalar(
+        select(Trailer.id)
+        .where(
+            Trailer.warehouse_id == target_warehouse_id,
+            Trailer.registration_number == entity.registration_number,
+            Trailer.id != entity.id,
+        )
+        .limit(1)
+    )
+    if duplicate_id is not None:
+        raise ApiError(
+            409,
+            "TRAILER_REGISTRATION_CONFLICT",
+            "The target warehouse already has a trailer with this registration number",
+        )
+    entity.warehouse_id = target_warehouse_id
+    _advance_catalog_version(entity)
+    await session.flush()
+    return entity
+
+
+async def delete_vehicle(
+    session: AsyncSession,
+    vehicle_id: UUID,
+    expected_version: int,
 ) -> None:
-    """Ensure a shift cannot bind resources from a different warehouse."""
+    """Delete only a vehicle that has never been retained by a driver shift."""
+
+    await _lock_shift_resources(session, driver_ids=set(), vehicle_ids={vehicle_id})
+    entity = await _get_versioned_catalog_entity(
+        session,
+        Vehicle,
+        vehicle_id,
+        "vehicle",
+        expected_version,
+    )
+    shift = await session.scalar(
+        select(DriverShift)
+        .where(DriverShift.vehicle_id == vehicle_id)
+        .order_by(DriverShift.active.desc(), DriverShift.id)
+        .limit(1)
+    )
+    if shift is not None:
+        if shift.active:
+            raise ApiError(
+                409,
+                "VEHICLE_HAS_ACTIVE_SHIFTS",
+                "Deactivate every active vehicle shift before deleting the vehicle",
+                extra={"shift_id": str(shift.id)},
+            )
+        raise ApiError(
+            409,
+            "VEHICLE_HAS_LINKED_SHIFTS",
+            "Delete is forbidden while the vehicle has retained driver-shift history",
+            extra={"shift_id": str(shift.id)},
+        )
+    await session.delete(entity)
+    await session.flush()
+
+
+async def delete_trailer(
+    session: AsyncSession,
+    trailer_id: UUID,
+    expected_version: int,
+) -> None:
+    """Delete only a trailer that is not selected as any vehicle's default."""
+
+    await _lock_trailer_assignment(session, trailer_id)
+    entity = await _get_versioned_catalog_entity(
+        session,
+        Trailer,
+        trailer_id,
+        "trailer",
+        expected_version,
+    )
+    referencing_vehicle_id = await session.scalar(
+        select(Vehicle.id)
+        .where(Vehicle.default_trailer_id == trailer_id)
+        .order_by(Vehicle.id)
+        .limit(1)
+    )
+    if referencing_vehicle_id is not None:
+        raise ApiError(
+            409,
+            "TRAILER_IS_DEFAULT_FOR_VEHICLE",
+            "Detach the trailer from every vehicle before deleting it",
+            extra={"vehicle_id": str(referencing_vehicle_id)},
+        )
+    await session.delete(entity)
+    await session.flush()
+
+
+async def _require_same_warehouse_shift_resources(
+    session: AsyncSession,
+    warehouse_id: UUID,
+    driver_id: UUID,
+    vehicle_id: UUID,
+    *,
+    date_from: date,
+    date_to: date,
+    start_time: time,
+    end_time: time,
+    vehicle_availability: VehicleAvailabilityPolicy | None,
+) -> None:
+    """Require a local driver and a vehicle based at the shift warehouse throughout."""
 
     driver = await get_required(session, Driver, driver_id, "driver")
     vehicle = await get_required(session, Vehicle, vehicle_id, "vehicle")
-    if driver.warehouse_id != warehouse_id or vehicle.warehouse_id != warehouse_id:
+    if driver.warehouse_id != warehouse_id:
         raise ApiError(
             422,
             "SHIFT_WAREHOUSE_MISMATCH",
-            "Driver and vehicle must belong to the shift warehouse",
+            "Driver must belong to the shift warehouse",
+        )
+    if vehicle_availability is None:
+        if vehicle.warehouse_id != warehouse_id:
+            raise ApiError(
+                422,
+                "SHIFT_WAREHOUSE_MISMATCH",
+                "Vehicle must belong to the shift warehouse",
+            )
+        return
+
+    target_warehouse = await require_warehouse(session, warehouse_id)
+    home_warehouse = await require_warehouse(session, vehicle.warehouse_id)
+    intervals = recurring_shift_intervals(
+        date_from,
+        date_to,
+        start_time,
+        end_time,
+        ZoneInfo(target_warehouse.timezone),
+    )
+    if any(
+        not vehicle_availability.available_for_interval(
+            vehicle.id,
+            home_warehouse.external_warehouse_id,
+            target_warehouse.external_warehouse_id,
+            interval_start,
+            interval_end,
+        )
+        for interval_start, interval_end in intervals
+    ):
+        raise ApiError(
+            409,
+            "SHIFT_VEHICLE_OPERATIONAL_WAREHOUSE_MISMATCH",
+            "Vehicle is reserved or is not operationally based at the shift warehouse",
         )
 
 
@@ -702,19 +1181,38 @@ async def _ensure_shift_available(
     vehicle_id: UUID,
     date_from: date,
     date_to: date,
+    start_time: time,
+    end_time: time,
     exclude_id: UUID | None = None,
 ) -> None:
-    """Reject overlapping active date ranges for either driver or vehicle."""
+    """Reject any positive recurring interval overlap for either locked resource."""
 
     statement = select(DriverShift).where(
         DriverShift.active.is_(True),
-        DriverShift.date_from <= date_to,
-        DriverShift.date_to >= date_from,
+        DriverShift.date_from <= date_to + timedelta(days=1),
+        DriverShift.date_to >= date_from - timedelta(days=1),
         or_(DriverShift.driver_id == driver_id, DriverShift.vehicle_id == vehicle_id),
     )
     if exclude_id is not None:
         statement = statement.where(DriverShift.id != exclude_id)
-    conflict = await session.scalar(statement.limit(1))
+    candidates = list(await session.scalars(statement.order_by(DriverShift.id)))
+    conflict = next(
+        (
+            candidate
+            for candidate in candidates
+            if _shift_ranges_overlap(
+                left_from=date_from,
+                left_to=date_to,
+                left_start=start_time,
+                left_end=end_time,
+                right_from=candidate.date_from,
+                right_to=candidate.date_to,
+                right_start=candidate.start_time,
+                right_end=candidate.end_time,
+            )
+        ),
+        None,
+    )
     if conflict is not None:
         code = (
             "DRIVER_SHIFT_OVERLAP" if conflict.driver_id == driver_id else "VEHICLE_SHIFT_OVERLAP"
@@ -723,13 +1221,31 @@ async def _ensure_shift_available(
 
 
 async def create_shift(
-    session: AsyncSession, warehouse_id: UUID, payload: ShiftCreate
+    session: AsyncSession,
+    warehouse_id: UUID,
+    payload: ShiftCreate,
+    *,
+    vehicle_availability: VehicleAvailabilityPolicy | None = None,
 ) -> DriverShift:
     """Create a non-overlapping aware shift for warehouse-owned resources."""
 
     await require_warehouse(session, warehouse_id)
+    if payload.active:
+        await _lock_shift_resources(
+            session,
+            driver_ids={payload.driver_id},
+            vehicle_ids={payload.vehicle_id},
+        )
     await _require_same_warehouse_shift_resources(
-        session, warehouse_id, payload.driver_id, payload.vehicle_id
+        session,
+        warehouse_id,
+        payload.driver_id,
+        payload.vehicle_id,
+        date_from=payload.date_from,
+        date_to=payload.date_to,
+        start_time=payload.start_time,
+        end_time=payload.end_time,
+        vehicle_availability=vehicle_availability,
     )
     if payload.active:
         await _ensure_shift_available(
@@ -738,6 +1254,8 @@ async def create_shift(
             vehicle_id=payload.vehicle_id,
             date_from=payload.date_from,
             date_to=payload.date_to,
+            start_time=payload.start_time,
+            end_time=payload.end_time,
         )
     entity = DriverShift(warehouse_id=warehouse_id, **payload.model_dump())
     session.add(entity)
@@ -745,29 +1263,62 @@ async def create_shift(
     return entity
 
 
-async def update_shift(session: AsyncSession, shift_id: UUID, payload: ShiftUpdate) -> DriverShift:
+async def update_shift(
+    session: AsyncSession,
+    shift_id: UUID,
+    payload: ShiftUpdate,
+    *,
+    vehicle_availability: VehicleAvailabilityPolicy | None = None,
+) -> DriverShift:
     """Update a shift after recomputing ownership, interval, and overlap checks."""
 
-    entity = await get_required(session, DriverShift, shift_id, "shift")
-    values = payload.model_dump(exclude_unset=True)
+    entity = await _get_versioned_catalog_entity(
+        session,
+        DriverShift,
+        shift_id,
+        "shift",
+        payload.expected_version,
+    )
+    values = payload.model_dump(exclude_unset=True, exclude={"expected_version"})
     driver_id = values.get("driver_id", entity.driver_id)
     vehicle_id = values.get("vehicle_id", entity.vehicle_id)
     date_from = values.get("date_from", entity.date_from)
     date_to = values.get("date_to", entity.date_to)
     start_time = values.get("start_time", entity.start_time)
     end_time = values.get("end_time", entity.end_time)
+    break_minutes = values.get("break_minutes", entity.break_minutes)
     active = values.get("active", entity.active)
     if date_to < date_from or (date_to - date_from).days > 30:
         raise ApiError(422, "INVALID_SHIFT_DATE_RANGE", "Shift date range must be 1-31 days")
-    if (date_from.year, date_from.month) != (date_to.year, date_to.month):
-        raise ApiError(422, "INVALID_SHIFT_MONTH", "Shift date range must stay in one month")
-    if end_time <= start_time:
-        raise ApiError(422, "INVALID_SHIFT_INTERVAL", "end_time must be after start_time")
+    duration_seconds = _shift_duration_seconds(start_time, end_time)
+    if duration_seconds == 0:
+        raise ApiError(
+            422,
+            "INVALID_SHIFT_DURATION",
+            "Shift start and end must define a non-zero duration",
+        )
+    if break_minutes * 60 >= duration_seconds:
+        raise ApiError(
+            422,
+            "INVALID_SHIFT_BREAK",
+            "Shift break must be shorter than the shift duration",
+        )
+    if active:
+        await _lock_shift_resources(
+            session,
+            driver_ids={entity.driver_id, driver_id},
+            vehicle_ids={entity.vehicle_id, vehicle_id},
+        )
     await _require_same_warehouse_shift_resources(
         session,
         entity.warehouse_id,
         driver_id,
         vehicle_id,
+        date_from=date_from,
+        date_to=date_to,
+        start_time=start_time,
+        end_time=end_time,
+        vehicle_availability=vehicle_availability,
     )
     if active:
         await _ensure_shift_available(
@@ -776,19 +1327,33 @@ async def update_shift(session: AsyncSession, shift_id: UUID, payload: ShiftUpda
             vehicle_id=vehicle_id,
             date_from=date_from,
             date_to=date_to,
+            start_time=start_time,
+            end_time=end_time,
             exclude_id=entity.id,
         )
-    apply_update(entity, payload)
+    apply_update(entity, payload, exclude={"expected_version"})
+    _advance_catalog_version(entity)
     await session.flush()
     return entity
 
 
 async def delete_catalog_entity[MutableModel: Base](
-    session: AsyncSession, model: type[MutableModel], entity_id: UUID, resource_name: str
+    session: AsyncSession,
+    model: type[MutableModel],
+    entity_id: UUID,
+    resource_name: str,
+    expected_version: int,
 ) -> None:
-    """Delete an explicitly addressed catalog entity."""
+    """Delete an explicitly addressed catalog entity under its optimistic fence."""
 
-    entity = await get_required(session, model, entity_id, resource_name)
+    entity = await session.get(model, entity_id, with_for_update=True)
+    if entity is None:
+        raise not_found(resource_name, entity_id)
+    _assert_catalog_version(
+        cast(CatalogVersionMixin, entity),
+        resource_name,
+        expected_version,
+    )
     await session.delete(entity)
     await session.flush()
 
@@ -830,6 +1395,52 @@ async def _request_tasks_have_plan_references(
         select(UnassignedTask.id).where(UnassignedTask.task_id.in_(existing_ids)).limit(1)
     )
     return assigned_reference is not None or unassigned_reference is not None
+
+
+async def _confirmed_plan_reference_id(
+    session: AsyncSession,
+    request: LogisticsRequest,
+) -> UUID | None:
+    """Return a confirmed plan that owns immutable planning facts for this request."""
+
+    task_ids = [task.id for task in request.tasks]
+    if not task_ids:
+        return None
+    assigned = (
+        select(RoutePlan.id)
+        .join(RouteCycle, RouteCycle.route_plan_id == RoutePlan.id)
+        .join(RouteStop, RouteStop.route_cycle_id == RouteCycle.id)
+        .where(
+            RouteStop.task_id.in_(task_ids),
+            RoutePlan.status == PlanStatus.CONFIRMED,
+        )
+    )
+    unassigned = (
+        select(RoutePlan.id)
+        .join(UnassignedTask, UnassignedTask.route_plan_id == RoutePlan.id)
+        .where(
+            UnassignedTask.task_id.in_(task_ids),
+            RoutePlan.status == PlanStatus.CONFIRMED,
+        )
+    )
+    return cast(UUID | None, await session.scalar(assigned.union(unassigned).limit(1)))
+
+
+async def _reject_confirmed_request_mutation(
+    session: AsyncSession,
+    request: LogisticsRequest,
+) -> None:
+    """Keep request and task facts immutable once a confirmed plan references them."""
+
+    await reject_active_request_reschedules(session, (request.id,))
+    plan_id = await _confirmed_plan_reference_id(session, request)
+    if plan_id is not None:
+        raise ApiError(
+            409,
+            "REQUEST_IN_CONFIRMED_PLAN",
+            "A request in a confirmed plan cannot be changed or deleted",
+            extra={"plan_id": str(plan_id)},
+        )
 
 
 async def _replace_request_tasks(
@@ -906,16 +1517,24 @@ async def upsert_rwms_request(
     session: AsyncSession,
     warehouse_id: UUID,
     source: RwmsPlanningRequest,
+    resolved: ResolvedAddress | None = None,
 ) -> str:
-    """Import one revisioned planning snapshot while retaining the order command fence.
+    """Import one revisioned snapshot using source or address-derived operational coordinates.
 
     A planning revision may advance without an order-version change because the feed also contains
     customer-slot and asset-reservation facts owned by separate aggregates. Pre-revision stored
     snapshots are upgraded once from the authenticated source and thereafter obey the same strict
-    revision replay check.
+    revision replay check. The stored source payload remains byte-for-field authoritative and never
+    receives the derived coordinates.
     """
 
-    if source.latitude is None or source.longitude is None:
+    if source.latitude is not None and source.longitude is not None:
+        latitude = source.latitude
+        longitude = source.longitude
+    elif resolved is not None:
+        latitude = resolved.latitude
+        longitude = resolved.longitude
+    else:
         raise ApiError(
             422,
             "RWMS_COORDINATES_REQUIRED",
@@ -931,7 +1550,11 @@ async def upsert_rwms_request(
             LogisticsRequest.source_system == RWMS_SOURCE_SYSTEM,
             LogisticsRequest.external_id == source.order_id,
         )
-        .options(selectinload(LogisticsRequest.date_options))
+        .options(
+            selectinload(LogisticsRequest.date_options),
+            selectinload(LogisticsRequest.tasks),
+        )
+        .with_for_update()
     )
     date_options = [
         RequestDateOptionInput(
@@ -958,13 +1581,15 @@ async def upsert_rwms_request(
                 type=RequestType.DELIVERY,
                 name=f"Заказ {source.order_number}",
                 address_label=source.address,
-                latitude=source.latitude,
-                longitude=source.longitude,
+                latitude=latitude,
+                longitude=longitude,
                 quantity=source.quantity,
                 **default_cargo,
                 service_minutes=service_minutes,
                 status=RequestStatus.READY,
-                contact_name=source.client_name,
+                contact_name=source.contact_name or source.client_name,
+                contact_phone=source.contact_phone or "",
+                client_type=source.client_type,
                 trailer_access_allowed=source.trailer_access_allowed,
                 date_options=date_options,
             ),
@@ -973,6 +1598,7 @@ async def upsert_rwms_request(
         created.external_id = source.order_id
         created.external_version = source.order_version
         created.external_payload = source_payload
+        created.customer_delivery_purpose = source.customer_delivery_purpose
         created.delivery_price_rubles = source.delivery_price_rubles
         created.price_isochrone_minutes = source.price_isochrone_minutes
         await session.flush()
@@ -980,11 +1606,26 @@ async def upsert_rwms_request(
 
     if entity.external_version is not None and source.order_version < entity.external_version:
         return "skipped"
+    restore_cancelled = entity.status == RequestStatus.CANCELLED
+    if restore_cancelled and await _confirmed_plan_reference_id(session, entity) is not None:
+        return "skipped"
     cargo_is_missing = all(getattr(entity, field) is None for field in CARGO_PHYSICAL_FIELDS)
     if entity.external_version == source.order_version:
         if entity.external_payload == source_payload:
             if not cargo_is_missing:
-                return "skipped"
+                if not restore_cancelled:
+                    return "skipped"
+                await _invalidate_route_plans_for_dates(
+                    session,
+                    warehouse_id,
+                    _request_effective_dates(entity),
+                )
+                entity.status = RequestStatus.READY
+                for task in entity.tasks:
+                    task.status = TaskStatus.READY
+                _advance_catalog_version(entity)
+                await session.flush()
+                return "updated"
         else:
             stored_revision = (entity.external_payload or {}).get("sourceRevision")
             if stored_revision == source.source_revision:
@@ -1006,31 +1647,103 @@ async def upsert_rwms_request(
     update_values: dict[str, object] = {
         "name": f"Заказ {source.order_number}",
         "address_label": source.address,
-        "contact_name": source.client_name,
+        "contact_name": source.contact_name or source.client_name,
+        "contact_phone": source.contact_phone or "",
+        "client_type": source.client_type,
         "trailer_access_allowed": source.trailer_access_allowed,
         "date_options": date_options,
     }
     if cargo_is_missing:
         update_values.update(default_cargo)
-    if entity.latitude != source.latitude or entity.longitude != source.longitude:
-        update_values["latitude"] = source.latitude
-        update_values["longitude"] = source.longitude
+    if entity.latitude != latitude or entity.longitude != longitude:
+        update_values["latitude"] = latitude
+        update_values["longitude"] = longitude
     if entity.quantity != source.quantity:
         update_values["quantity"] = source.quantity
     updated = await update_request(
         session,
         entity.id,
-        LogisticsRequestUpdate.model_validate(update_values),
+        LogisticsRequestUpdate.model_validate(
+            {"expected_version": entity.version, **update_values}
+        ),
         from_authoritative_source=True,
     )
     updated.source_system = RWMS_SOURCE_SYSTEM
     updated.external_id = source.order_id
     updated.external_version = source.order_version
     updated.external_payload = source_payload
+    updated.customer_delivery_purpose = source.customer_delivery_purpose
     updated.delivery_price_rubles = source.delivery_price_rubles
     updated.price_isochrone_minutes = source.price_isochrone_minutes
+    if restore_cancelled:
+        updated.status = RequestStatus.READY
+        for task in updated.tasks:
+            task.status = TaskStatus.READY
     await session.flush()
     return "updated"
+
+
+async def retire_absent_rwms_requests(
+    session: AsyncSession,
+    warehouse_id: UUID,
+    *,
+    present_order_ids: set[UUID],
+    date_from: date,
+    date_to: date,
+) -> int:
+    """Cancel unplanned projections omitted from one complete authoritative feed.
+
+    The warehouse/date RWMS endpoint is a complete still-unplanned snapshot. A missing source row
+    therefore retires only a locally mutable request intersecting that inclusive range. Source
+    payloads, accepted dates, task identities, and archived plan references remain intact for
+    history; confirmed plans fence the request from this transition.
+    """
+
+    statement = (
+        select(LogisticsRequest)
+        .where(
+            LogisticsRequest.warehouse_id == warehouse_id,
+            LogisticsRequest.source_system == RWMS_SOURCE_SYSTEM,
+            LogisticsRequest.status.in_((RequestStatus.READY, RequestStatus.UNASSIGNED)),
+        )
+        .options(
+            selectinload(LogisticsRequest.date_options),
+            selectinload(LogisticsRequest.tasks),
+        )
+        .order_by(LogisticsRequest.id)
+        .with_for_update()
+    )
+    if present_order_ids:
+        statement = statement.where(LogisticsRequest.external_id.not_in(present_order_ids))
+    candidates = list((await session.scalars(statement)).unique().all())
+    retiring_candidates: list[tuple[LogisticsRequest, set[date]]] = []
+    for request in candidates:
+        accepted_dates = {option.date for option in request.date_options}
+        if request.scheduled_date is not None:
+            accepted_dates.add(request.scheduled_date)
+        if not any(date_from <= candidate <= date_to for candidate in accepted_dates):
+            continue
+        if await _confirmed_plan_reference_id(session, request) is not None:
+            continue
+        retiring_candidates.append((request, accepted_dates))
+    await reject_active_request_reschedules(
+        session,
+        tuple(request.id for request, _accepted_dates in retiring_candidates),
+    )
+
+    retired = 0
+    affected_dates: set[date] = set()
+    for request, accepted_dates in retiring_candidates:
+        request.status = RequestStatus.CANCELLED
+        for task in request.tasks:
+            task.status = TaskStatus.CANCELLED
+        _advance_catalog_version(request)
+        affected_dates.update(accepted_dates)
+        retired += 1
+
+    await _invalidate_route_plans_for_dates(session, warehouse_id, affected_dates)
+    await session.flush()
+    return retired
 
 
 async def get_request(
@@ -1072,6 +1785,61 @@ async def list_requests(session: AsyncSession, warehouse_id: UUID) -> list[Logis
     return list((await session.scalars(statement)).unique().all())
 
 
+async def list_requests_page(
+    session: AsyncSession,
+    warehouse_ids: Sequence[UUID],
+    planning_date: date,
+    *,
+    limit: int,
+    cursor: UUID | None,
+) -> tuple[list[LogisticsRequest], int, UUID | None]:
+    """Read one exact planning date in stable UUID order with a bounded keyset page."""
+
+    unique_warehouse_ids = tuple(dict.fromkeys(warehouse_ids))
+    if not unique_warehouse_ids:
+        return [], 0, None
+    relevant = or_(
+        LogisticsRequest.scheduled_date == planning_date,
+        and_(
+            LogisticsRequest.scheduled_date.is_(None),
+            LogisticsRequest.date_options.any(RequestDateOption.date == planning_date),
+        ),
+    )
+    base = select(LogisticsRequest).where(
+        LogisticsRequest.warehouse_id.in_(unique_warehouse_ids),
+        relevant,
+    )
+    total = int(
+        await session.scalar(
+            select(func.count(LogisticsRequest.id)).where(
+                LogisticsRequest.warehouse_id.in_(unique_warehouse_ids),
+                relevant,
+            )
+        )
+        or 0
+    )
+    if cursor is not None:
+        base = base.where(LogisticsRequest.id > cursor)
+    entities = list(
+        (
+            await session.scalars(
+                base.options(
+                    selectinload(LogisticsRequest.date_options),
+                    selectinload(LogisticsRequest.tasks),
+                )
+                .order_by(LogisticsRequest.id)
+                .limit(limit + 1)
+            )
+        )
+        .unique()
+        .all()
+    )
+    has_more = len(entities) > limit
+    page = entities[:limit]
+    next_cursor = page[-1].id if has_more else None
+    return page, total, next_cursor
+
+
 async def update_request(
     session: AsyncSession,
     request_id: UUID,
@@ -1082,9 +1850,14 @@ async def update_request(
     """Update local fields or apply a trusted feed refresh under the request lock."""
 
     entity = await get_request(session, request_id, for_update=True)
+    _assert_catalog_version(entity, "request", payload.expected_version)
+    await _reject_confirmed_request_mutation(session, entity)
     previous_dates = _request_effective_dates(entity)
-    supplied_values = payload.model_dump(exclude_unset=True, exclude={"date_options"})
-    supplied_fields = set(payload.model_fields_set)
+    supplied_values = payload.model_dump(
+        exclude_unset=True,
+        exclude={"expected_version", "date_options"},
+    )
+    supplied_fields = set(payload.model_fields_set).difference({"expected_version"})
     if (
         entity.source_system == RWMS_SOURCE_SYSTEM
         and not from_authoritative_source
@@ -1164,6 +1937,7 @@ async def update_request(
             task.mandatory = entity.mandatory
     if regenerate_tasks:
         await _replace_request_tasks(session, entity)
+    _advance_catalog_version(entity)
     await session.flush()
     return await get_request(session, entity.id)
 
@@ -1176,6 +1950,8 @@ async def schedule_request(
     """Assign one accepted date, optionally recording an explicitly agreed new date."""
 
     entity = await get_request(session, request_id, for_update=True)
+    _assert_catalog_version(entity, "request", payload.expected_version)
+    await _reject_confirmed_request_mutation(session, entity)
     previous_dates = _request_effective_dates(entity)
     if payload.date is None:
         entity.scheduled_date = None
@@ -1184,6 +1960,7 @@ async def schedule_request(
             entity.warehouse_id,
             previous_dates | _request_effective_dates(entity),
         )
+        _advance_catalog_version(entity)
         await session.flush()
         return await get_request(session, entity.id)
 
@@ -1219,6 +1996,7 @@ async def schedule_request(
         entity.warehouse_id,
         previous_dates | _request_effective_dates(entity),
     )
+    _advance_catalog_version(entity)
     await session.flush()
     return await get_request(session, entity.id)
 
@@ -1231,6 +2009,8 @@ async def set_request_planning_details(
     """Atomically store one accepted date's dispatcher planning decisions."""
 
     entity = await get_request(session, request_id, for_update=True)
+    _assert_catalog_version(entity, "request", payload.expected_version)
+    await _reject_confirmed_request_mutation(session, entity)
     option = next(
         (item for item in entity.date_options if item.date == payload.date),
         None,
@@ -1240,12 +2020,6 @@ async def set_request_planning_details(
             422,
             "REQUEST_DATE_NOT_ALLOWED",
             "Выбранная дата отсутствует среди дат, согласованных клиентом.",
-        )
-    if option.travel_zone_hours is not None and not payload.is_hard:
-        raise ApiError(
-            422,
-            "INVALID_TRAVEL_ZONE",
-            "A CustomerApp travel zone must retain its hard delivery window",
         )
     source_fixed_window = (
         entity.source_system == RWMS_SOURCE_SYSTEM
@@ -1270,9 +2044,7 @@ async def set_request_planning_details(
         and option.window_end is None
     )
     if source_flexible_day and (
-        payload.window_start is not None
-        or payload.window_end is not None
-        or payload.is_hard
+        payload.window_start is not None or payload.window_end is not None or payload.is_hard
     ):
         raise ApiError(
             409,
@@ -1327,6 +2099,7 @@ async def set_request_planning_details(
         task.mandatory = payload.mandatory
     if trailer_access_changed:
         await _replace_request_tasks(session, entity)
+    _advance_catalog_version(entity)
     await session.flush()
     return await get_request(session, entity.id)
 
@@ -1334,17 +2107,22 @@ async def set_request_planning_details(
 async def split_request(
     session: AsyncSession,
     request_id: UUID,
+    expected_version: int,
     part_quantities: Sequence[int] | None = None,
 ) -> LogisticsRequest:
     """Regenerate automatic or explicitly-sized transport subtasks."""
 
     entity = await get_request(session, request_id, for_update=True)
+    _assert_catalog_version(entity, "request", expected_version)
+    await _reject_confirmed_request_mutation(session, entity)
     await _invalidate_route_plans_for_dates(
         session,
         entity.warehouse_id,
         _request_effective_dates(entity),
     )
     await _replace_request_tasks(session, entity, part_quantities)
+    _advance_catalog_version(entity)
+    await session.flush()
     return await get_request(session, entity.id)
 
 
@@ -1353,7 +2131,8 @@ async def create_date_option(
 ) -> RequestDateOption:
     """Append one unique acceptable date to an existing request."""
 
-    request = await get_request(session, request_id)
+    request = await get_request(session, request_id, for_update=True)
+    await _reject_confirmed_request_mutation(session, request)
     _reject_rwms_source_edit(
         request,
         "RWMS-owned accepted dates can only be changed by synchronizing the source feed",
@@ -1375,6 +2154,8 @@ async def create_date_option(
         request.warehouse_id,
         previous_dates | _request_effective_dates(request),
     )
+    _advance_catalog_version(request)
+    await session.flush()
     return entity
 
 
@@ -1384,18 +2165,18 @@ async def update_date_option(
     """Patch a date option while validating its effective time window."""
 
     entity = await get_required(session, RequestDateOption, option_id, "request_date_option")
-    request = await get_required(session, LogisticsRequest, entity.request_id, "request")
+    request = await get_request(session, entity.request_id, for_update=True)
+    _assert_catalog_version(request, "request", payload.expected_version)
+    await _reject_confirmed_request_mutation(session, request)
     _reject_rwms_source_edit(
         request,
         "RWMS-owned accepted dates can only be changed by synchronizing the source feed",
     )
     previous_dates = _request_effective_dates(request)
     previous_date = entity.date
-    values = payload.model_dump(exclude_unset=True)
+    values = payload.model_dump(exclude_unset=True, exclude={"expected_version"})
     start = values.get("window_start", entity.window_start)
     end = values.get("window_end", entity.window_end)
-    is_hard = values.get("is_hard", entity.is_hard)
-    travel_zone_hours = values.get("travel_zone_hours", entity.travel_zone_hours)
     if (start is None) != (end is None):
         raise ApiError(
             422,
@@ -1404,13 +2185,7 @@ async def update_date_option(
         )
     if start is not None and end is not None and end <= start:
         raise ApiError(422, "INVALID_TIME_WINDOW", "window_end must be after window_start")
-    if travel_zone_hours is not None and (start is None or not is_hard):
-        raise ApiError(
-            422,
-            "INVALID_TRAVEL_ZONE",
-            "travel_zone_hours requires a complete hard time window",
-        )
-    apply_update(entity, payload)
+    apply_update(entity, payload, exclude={"expected_version"})
     if request.scheduled_date == previous_date:
         request.scheduled_date = entity.date
     await _invalidate_route_plans_for_dates(
@@ -1418,15 +2193,22 @@ async def update_date_option(
         request.warehouse_id,
         previous_dates | _request_effective_dates(request),
     )
+    _advance_catalog_version(request)
     await session.flush()
     return entity
 
 
-async def delete_date_option(session: AsyncSession, option_id: UUID) -> None:
+async def delete_date_option(
+    session: AsyncSession,
+    option_id: UUID,
+    expected_version: int,
+) -> None:
     """Delete one acceptable date and clear an assignment that referenced it."""
 
     entity = await get_required(session, RequestDateOption, option_id, "request_date_option")
-    request = await get_required(session, LogisticsRequest, entity.request_id, "request")
+    request = await get_request(session, entity.request_id, for_update=True)
+    _assert_catalog_version(request, "request", expected_version)
+    await _reject_confirmed_request_mutation(session, request)
     _reject_rwms_source_edit(
         request,
         "RWMS-owned accepted dates can only be changed by synchronizing the source feed",
@@ -1441,21 +2223,24 @@ async def delete_date_option(session: AsyncSession, option_id: UUID) -> None:
         request.warehouse_id,
         previous_dates | _request_effective_dates(request),
     )
+    _advance_catalog_version(request)
+    await session.flush()
 
 
-async def delete_request(session: AsyncSession, request_id: UUID) -> None:
+async def delete_request(
+    session: AsyncSession,
+    request_id: UUID,
+    expected_version: int,
+) -> None:
     """Delete an unplanned source request and all owned date/task rows."""
 
-    entity = await get_request(session, request_id)
+    entity = await get_request(session, request_id, for_update=True)
+    _assert_catalog_version(entity, "request", expected_version)
     _reject_rwms_source_edit(
         entity,
         "An RWMS-owned request can only be removed or cancelled in the authoritative service",
     )
-    await _invalidate_route_plans_for_dates(
-        session,
-        entity.warehouse_id,
-        _request_effective_dates(entity),
-    )
+    await _reject_confirmed_request_mutation(session, entity)
     task_ids = [task.id for task in entity.tasks]
     referenced = False
     if task_ids:
@@ -1472,6 +2257,11 @@ async def delete_request(session: AsyncSession, request_id: UUID) -> None:
             "REQUEST_ALREADY_PLANNED",
             "The request is referenced by a saved plan and cannot be deleted",
         )
+    await _invalidate_route_plans_for_dates(
+        session,
+        entity.warehouse_id,
+        _request_effective_dates(entity),
+    )
     await session.delete(entity)
     await session.flush()
 
@@ -1483,3 +2273,54 @@ async def list_catalog[MutableModel: Base](
 
     await require_warehouse(session, warehouse_id)
     return await list_for_warehouse(session, model, warehouse_id)
+
+
+async def list_catalog_for_warehouses[MutableModel: Base](
+    session: AsyncSession,
+    model: type[MutableModel],
+    warehouse_ids: Sequence[UUID],
+) -> Sequence[MutableModel]:
+    """List warehouse-owned rows across one already-authorized direct planning group."""
+
+    unique_ids = tuple(dict.fromkeys(warehouse_ids))
+    if not unique_ids:
+        return ()
+    warehouse_column = model.warehouse_id  # type: ignore[attr-defined]
+    id_column = model.id  # type: ignore[attr-defined]
+    return list(
+        (
+            await session.scalars(
+                select(model)
+                .where(warehouse_column.in_(unique_ids))
+                .order_by(warehouse_column, id_column)
+            )
+        )
+        .unique()
+        .all()
+    )
+
+
+async def list_vehicles_for_warehouses(
+    session: AsyncSession,
+    warehouse_ids: Sequence[UUID],
+    *,
+    additional_vehicle_ids: Sequence[UUID] = (),
+) -> list[Vehicle]:
+    """List home-group and explicitly incoming vehicles with original ownership intact."""
+
+    unique_ids = tuple(dict.fromkeys(warehouse_ids))
+    incoming_ids = tuple(dict.fromkeys(additional_vehicle_ids))
+    if not unique_ids and not incoming_ids:
+        return []
+    result = await session.scalars(
+        select(Vehicle)
+        .where(
+            or_(
+                Vehicle.warehouse_id.in_(unique_ids),
+                Vehicle.id.in_(incoming_ids),
+            )
+        )
+        .options(selectinload(Vehicle.load_profiles))
+        .order_by(Vehicle.warehouse_id, Vehicle.id)
+    )
+    return list(result.unique())

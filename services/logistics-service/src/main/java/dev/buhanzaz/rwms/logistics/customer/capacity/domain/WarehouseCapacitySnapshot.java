@@ -80,6 +80,14 @@ public class WarehouseCapacitySnapshot {
   @OrderBy("travelMinutes ASC")
   private List<WarehouseCapacityIsochroneTariff> isochroneTariffs = new ArrayList<>();
 
+  @OneToMany(mappedBy = "snapshot", cascade = CascadeType.ALL, orphanRemoval = true)
+  @OrderBy("sourceZoneId ASC")
+  private List<WarehouseCapacityPriceZone> priceZones = new ArrayList<>();
+
+  @OneToMany(mappedBy = "snapshot", cascade = CascadeType.ALL, orphanRemoval = true)
+  @OrderBy("sourceZoneId ASC")
+  private List<WarehouseCapacityRestrictionZone> restrictionZones = new ArrayList<>();
+
   /** Creates one warehouse projection from a complete, validated replacement command. */
   public static WarehouseCapacitySnapshot create(
       UUID warehouseId,
@@ -88,6 +96,8 @@ public class WarehouseCapacitySnapshot {
       List<Facts> jobs,
       List<WarehouseCapacityShift.Facts> shifts,
       List<WarehouseCapacityIsochroneTariff.Facts> isochroneTariffs,
+      List<WarehouseCapacityPriceZone.Facts> priceZones,
+      List<WarehouseCapacityRestrictionZone.Facts> restrictionZones,
       OffsetDateTime now) {
     WarehouseCapacitySnapshot snapshot = new WarehouseCapacitySnapshot();
     snapshot.warehouseId = Objects.requireNonNull(warehouseId, "warehouseId");
@@ -98,8 +108,31 @@ public class WarehouseCapacitySnapshot {
         jobs,
         shifts,
         isochroneTariffs,
+        priceZones,
+        restrictionZones,
         now);
     return snapshot;
+  }
+
+  /** Preserves callers that predate exceptional delivery policy zones. */
+  public static WarehouseCapacitySnapshot create(
+      UUID warehouseId,
+      long sourceGeneration,
+      String sourceRevision,
+      List<Facts> jobs,
+      List<WarehouseCapacityShift.Facts> shifts,
+      List<WarehouseCapacityIsochroneTariff.Facts> isochroneTariffs,
+      OffsetDateTime now) {
+    return create(
+        warehouseId,
+        sourceGeneration,
+        sourceRevision,
+        jobs,
+        shifts,
+        isochroneTariffs,
+        List.of(),
+        List.of(),
+        now);
   }
 
   /** Atomically replaces the active simulator facts without mutating any real booking workload. */
@@ -109,6 +142,8 @@ public class WarehouseCapacitySnapshot {
       List<Facts> jobs,
       List<WarehouseCapacityShift.Facts> shifts,
       List<WarehouseCapacityIsochroneTariff.Facts> isochroneTariffs,
+      List<WarehouseCapacityPriceZone.Facts> priceZones,
+      List<WarehouseCapacityRestrictionZone.Facts> restrictionZones,
       OffsetDateTime now) {
     if (sourceGeneration < 1) {
       throw new IllegalArgumentException("sourceGeneration must be positive");
@@ -162,7 +197,63 @@ public class WarehouseCapacitySnapshot {
         tariff -> !requestedMinutes.contains(tariff.getTravelMinutes()));
     this.isochroneTariffs.sort(
         Comparator.comparingInt(WarehouseCapacityIsochroneTariff::getTravelMinutes));
+    Map<UUID, WarehouseCapacityPriceZone> existingPriceZoneBySource = new HashMap<>();
+    this.priceZones.forEach(
+        zone -> existingPriceZoneBySource.put(zone.getSourceZoneId(), zone));
+    Set<UUID> requestedPriceZoneSources = new HashSet<>();
+    for (WarehouseCapacityPriceZone.Facts facts :
+        Objects.requireNonNull(priceZones, "priceZones")) {
+      requestedPriceZoneSources.add(facts.sourceZoneId());
+      WarehouseCapacityPriceZone existing =
+          existingPriceZoneBySource.get(facts.sourceZoneId());
+      if (existing == null) {
+        this.priceZones.add(WarehouseCapacityPriceZone.create(this, facts));
+      } else {
+        existing.replace(facts);
+      }
+    }
+    this.priceZones.removeIf(
+        zone -> !requestedPriceZoneSources.contains(zone.getSourceZoneId()));
+    this.priceZones.sort(Comparator.comparing(WarehouseCapacityPriceZone::getSourceZoneId));
+    Map<UUID, WarehouseCapacityRestrictionZone> existingRestrictionBySource = new HashMap<>();
+    this.restrictionZones.forEach(
+        zone -> existingRestrictionBySource.put(zone.getSourceZoneId(), zone));
+    Set<UUID> requestedRestrictionSources = new HashSet<>();
+    for (WarehouseCapacityRestrictionZone.Facts facts :
+        Objects.requireNonNull(restrictionZones, "restrictionZones")) {
+      requestedRestrictionSources.add(facts.sourceZoneId());
+      WarehouseCapacityRestrictionZone existing =
+          existingRestrictionBySource.get(facts.sourceZoneId());
+      if (existing == null) {
+        this.restrictionZones.add(WarehouseCapacityRestrictionZone.create(this, facts));
+      } else {
+        existing.replace(facts);
+      }
+    }
+    this.restrictionZones.removeIf(
+        zone -> !requestedRestrictionSources.contains(zone.getSourceZoneId()));
+    this.restrictionZones.sort(
+        Comparator.comparing(WarehouseCapacityRestrictionZone::getSourceZoneId));
     this.updatedAt = Objects.requireNonNull(now, "now");
+  }
+
+  /** Preserves replacement code that predates exceptional delivery policy zones. */
+  public void replace(
+      long sourceGeneration,
+      String sourceRevision,
+      List<Facts> jobs,
+      List<WarehouseCapacityShift.Facts> shifts,
+      List<WarehouseCapacityIsochroneTariff.Facts> isochroneTariffs,
+      OffsetDateTime now) {
+    replace(
+        sourceGeneration,
+        sourceRevision,
+        jobs,
+        shifts,
+        isochroneTariffs,
+        List.of(),
+        List.of(),
+        now);
   }
 
   private static List<WarehouseCapacityIsochroneTariff.Facts> requireContiguousTariffs(

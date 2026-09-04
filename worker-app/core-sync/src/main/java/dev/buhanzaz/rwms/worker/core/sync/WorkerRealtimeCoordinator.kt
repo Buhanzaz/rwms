@@ -30,9 +30,10 @@ class WorkerRealtimeCoordinator @Inject constructor(
      */
     fun start(scope: CoroutineScope, userId: String): RealtimeHandles = RealtimeHandles(
         events = scope.launch {
-            val lastEventId = database.invalidationDao().latestEventId(userId)
-            sse.events(lastEventId)
+            sse.events()
                 .retryWhen { _, _ ->
+                    // A reconnect is a fresh signal subscription; refresh authoritative REST state.
+                    requestAuthoritativeRefreshOnReconnect(userId, scheduler::request)
                     delay(2_000)
                     true
                 }
@@ -67,6 +68,14 @@ class WorkerRealtimeCoordinator @Inject constructor(
             }
         },
     )
+}
+
+/** Requests the authoritative REST sync required whenever the SSE stream reconnects. */
+internal fun requestAuthoritativeRefreshOnReconnect(
+    userId: String,
+    scheduleSync: (String) -> Unit,
+) {
+    scheduleSync(userId)
 }
 
 /**

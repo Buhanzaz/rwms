@@ -38,6 +38,25 @@ const cabinFurnitureApi = vi.hoisted(() => ({
 const referenceApi = vi.hoisted(() => ({
   useLogisticsReferenceLabels: vi.fn(),
 }))
+const warehouseState = vi.hoisted(() => ({
+  selectedWarehouse: {
+    id: "11111111-1111-4111-8111-111111111111",
+    name: "Склад обслуживания",
+    timeZone: "Europe/Moscow",
+  },
+  warehouses: [
+    {
+      id: "11111111-1111-4111-8111-111111111111",
+      name: "Склад обслуживания",
+      timeZone: "Europe/Moscow",
+    },
+    {
+      id: "99999999-9999-4999-8999-999999999998",
+      name: "Опорный склад",
+      timeZone: "Europe/Moscow",
+    },
+  ],
+}))
 
 vi.mock("@/features/logistics/shipments/api", () => ({
   SHIPMENTS_QUERY_KEY: ["logistics", "shipments"],
@@ -107,16 +126,8 @@ vi.mock("@/features/auth/use-auth", () => ({
 vi.mock("@/hooks/use-warehouse", () => ({
   useWarehouse: () => ({
     selectedWarehouseId: "11111111-1111-4111-8111-111111111111",
-    warehouses: [
-      {
-        id: "11111111-1111-4111-8111-111111111111",
-        name: "Склад обслуживания",
-      },
-      {
-        id: "99999999-9999-4999-8999-999999999998",
-        name: "Опорный склад",
-      },
-    ],
+    selectedWarehouse: warehouseState.selectedWarehouse,
+    warehouses: warehouseState.warehouses,
   }),
 }))
 vi.mock("@/features/logistics/logistics-driver-picker", () => ({
@@ -173,6 +184,7 @@ function shipment() {
     id: SHIPMENT_ID,
     version: 4,
     documentType: "SHIPMENT" as const,
+    customerDeliveryPurpose: "RENTAL_DELIVERY" as const,
     state: "DRAFT" as const,
     warehouseId: WAREHOUSE_ID,
     destinationWarehouseId: null,
@@ -216,6 +228,7 @@ function rentalReturn() {
     id: RETURN_ID,
     version: 1,
     documentType: "RETURN" as const,
+    customerDeliveryPurpose: null,
     state: "DRAFT" as const,
     warehouseId: WAREHOUSE_ID,
     destinationWarehouseId: null,
@@ -250,6 +263,7 @@ function savedOrder() {
     version: 7,
     number: "ORD-000001",
     status: "SAVED" as const,
+    customerDeliveryPurpose: "RENTAL_DELIVERY" as const,
     client: {
       id: "66666666-6666-4666-8666-666666666666",
       version: 3,
@@ -420,6 +434,19 @@ function useThreeCabinReferenceLabels() {
 }
 
 beforeEach(() => {
+  warehouseState.selectedWarehouse = {
+    id: WAREHOUSE_ID,
+    name: "Склад обслуживания",
+    timeZone: "Europe/Moscow",
+  }
+  warehouseState.warehouses = [
+    warehouseState.selectedWarehouse,
+    {
+      id: SUPPORT_WAREHOUSE_ID,
+      name: "Опорный склад",
+      timeZone: "Europe/Moscow",
+    },
+  ]
   const document = shipment()
   shipmentApi.listShipments.mockResolvedValue([document])
   returnApi.listReturns.mockResolvedValue([])
@@ -500,6 +527,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
   vi.clearAllMocks()
 })
 
@@ -980,6 +1008,60 @@ describe("LogisticsOrderTasksPage", () => {
         })
       )
     )
+  })
+
+  it("marks a return due by the warehouse-local date instead of UTC", async () => {
+    vi.setSystemTime("2026-08-31T20:30:00Z")
+    warehouseState.selectedWarehouse = {
+      ...warehouseState.selectedWarehouse,
+      timeZone: "Asia/Novosibirsk",
+    }
+    warehouseState.warehouses = [
+      warehouseState.selectedWarehouse,
+      {
+        id: SUPPORT_WAREHOUSE_ID,
+        name: "Опорный склад",
+        timeZone: "Europe/Moscow",
+      },
+    ]
+    shipmentApi.listShipments.mockResolvedValue([
+      {
+        ...shipment(),
+        state: "SHIPPED" as const,
+        scheduledDate: "2026-08-30",
+      },
+    ])
+    const order = savedOrder()
+    referenceApi.useLogisticsReferenceLabels.mockReturnValue({
+      assetNumbers: new Map([[ASSET_ID, "БЫТ-001"]]),
+      orderNumbers: new Map([[ORDER_ID, "ORD-000001"]]),
+      assets: new Map(),
+      orders: new Map([
+        [
+          ORDER_ID,
+          {
+            status: "available",
+            order: {
+              ...order,
+              units: order.units.map((unit) => ({
+                ...unit,
+                rentalTerm: {
+                  rentalMonths: 3,
+                  shipmentDate: "2026-06-01",
+                  returnDate: "2026-09-01",
+                },
+              })),
+            },
+          },
+        ],
+      ]),
+    })
+
+    renderPage()
+
+    expect(
+      (await screen.findAllByText("Требует возврата")).length
+    ).toBeGreaterThan(0)
   })
 
   it("asks whether to keep or change a non-today shipment date", async () => {

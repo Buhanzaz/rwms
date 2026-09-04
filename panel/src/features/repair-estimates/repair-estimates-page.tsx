@@ -359,6 +359,8 @@ export function RepairEstimatesPage() {
                 { value: "COMPLETED", label: "Завершена" },
               ]}
               dateLabel="Создана"
+              dateFromLabel="С:"
+              dateToLabel="По:"
               showSchedule={false}
               extraFilters={[
                 {

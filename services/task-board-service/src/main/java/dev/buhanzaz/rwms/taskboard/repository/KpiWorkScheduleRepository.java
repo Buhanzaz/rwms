@@ -4,10 +4,14 @@ import dev.buhanzaz.rwms.taskboard.domain.KpiWorkScheduleRevision;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
 
-/** Resolves current, pending, and effective-dated warehouse work schedules. */
+/** Resolves installation-wide effective-dated work schedules. */
 public interface KpiWorkScheduleRepository
     extends JpaRepository<KpiWorkScheduleRevision, UUID> {
-  List<KpiWorkScheduleRevision>
-      findAllByWarehouseIdAndScheduledTrueOrderByEffectiveFromAsc(UUID warehouseId);
+  @Query(
+      value =
+          "select * from kpi_work_schedule where warehouse_id is null and scheduled order by effective_from",
+      nativeQuery = true)
+  List<KpiWorkScheduleRevision> findAllGlobalScheduledOrderByEffectiveFromAsc();
 }

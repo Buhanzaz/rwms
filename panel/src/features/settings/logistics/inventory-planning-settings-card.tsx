@@ -33,7 +33,6 @@ import {
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   getInventoryPlanningSettings,
   updateInventoryPlanningSettings,
@@ -41,24 +40,10 @@ import {
 import { inventoryPlanningSettingsQueryKey } from "@/features/inventory/api/inventory-api"
 import type {
   InventoryPlanningSettings,
-  InventoryWeekday,
   UpdateInventoryPlanningSettingsRequest,
 } from "@/features/inventory/model/inventory-service"
 import { ApiError } from "@/lib/api-client"
 
-const WEEKDAYS: Array<{ value: InventoryWeekday; label: string }> = [
-  { value: "MONDAY", label: "Пн" },
-  { value: "TUESDAY", label: "Вт" },
-  { value: "WEDNESDAY", label: "Ср" },
-  { value: "THURSDAY", label: "Чт" },
-  { value: "FRIDAY", label: "Пт" },
-  { value: "SATURDAY", label: "Сб" },
-  { value: "SUNDAY", label: "Вс" },
-]
-
-const WEEKDAY_VALUES = new Set<InventoryWeekday>(
-  WEEKDAYS.map((weekday) => weekday.value)
-)
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
 type InventoryPlanningSettingsCardProps = {
@@ -80,15 +65,12 @@ function formatHoliday(value: string) {
 
 function LoadingCard() {
   return (
-    <Card aria-label="Загрузка календаря инвентаризации">
+    <Card size="sm" aria-label="Загрузка праздничных выходных">
       <CardHeader>
-        <CardTitle>Планирование после инвентаризации</CardTitle>
-        <CardDescription>
-          Загружаем дневные лимиты и рабочий календарь…
-        </CardDescription>
+        <CardTitle>Праздничные выходные</CardTitle>
+        <CardDescription>Загружаем праздничные даты объекта…</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        <Skeleton className="h-9 w-full max-w-sm" />
         <Skeleton className="h-9 w-full max-w-sm" />
         <Skeleton className="h-20 w-full" />
       </CardContent>
@@ -109,11 +91,11 @@ function QueryErrorCard({
   onRetry: () => void
 }) {
   return (
-    <Card>
+    <Card size="sm">
       <CardHeader>
-        <CardTitle>Не удалось загрузить календарь инвентаризации</CardTitle>
+        <CardTitle>Не удалось загрузить праздничные выходные</CardTitle>
         <CardDescription>
-          Локальные значения не подставляются: итоговый план строит сервер.
+          Локальные значения не подставляются: рабочий календарь строит сервер.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -135,6 +117,7 @@ function QueryErrorCard({
             icon={retrying ? Loading03Icon : Refresh01Icon}
             data-icon="inline-start"
             className={retrying ? "animate-spin" : undefined}
+            aria-hidden="true"
           />
           {retrying ? "Повторяем…" : "Повторить"}
         </Button>
@@ -156,15 +139,6 @@ function SettingsForm({
   actionError: string | null
   onSave: (request: UpdateInventoryPlanningSettingsRequest) => void
 }) {
-  const [movementCapacity, setMovementCapacity] = useState(
-    String(setting.movementDailyCapacity)
-  )
-  const [repairCapacity, setRepairCapacity] = useState(
-    String(setting.repairDailyCapacity)
-  )
-  const [workingWeekdays, setWorkingWeekdays] = useState<InventoryWeekday[]>(
-    setting.workingWeekdays
-  )
   const [holidays, setHolidays] = useState(() => [...setting.holidays].sort())
   const [holidayDraft, setHolidayDraft] = useState("")
   const [validationError, setValidationError] = useState<string | null>(null)
@@ -185,39 +159,9 @@ function SettingsForm({
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const movementDailyCapacity = Number(movementCapacity)
-    const repairDailyCapacity = Number(repairCapacity)
-    if (
-      !Number.isInteger(movementDailyCapacity) ||
-      movementDailyCapacity < 1 ||
-      movementDailyCapacity > 1000
-    ) {
-      setValidationError(
-        "Лимит перемещений должен быть целым числом от 1 до 1000."
-      )
-      return
-    }
-    if (
-      !Number.isInteger(repairDailyCapacity) ||
-      repairDailyCapacity < 1 ||
-      repairDailyCapacity > 1000
-    ) {
-      setValidationError(
-        "Лимит ремонтов должен быть целым числом от 1 до 1000."
-      )
-      return
-    }
-    if (workingWeekdays.length === 0) {
-      setValidationError("Выберите хотя бы один рабочий день недели.")
-      return
-    }
-
     setValidationError(null)
     onSave({
       expectedSettingsRevision: setting.settingsRevision,
-      movementDailyCapacity,
-      repairDailyCapacity,
-      workingWeekdays,
       holidays,
     })
   }
@@ -226,103 +170,23 @@ function SettingsForm({
 
   return (
     <form onSubmit={submit}>
-      <Card>
+      <Card size="sm">
         <CardHeader>
-          <CardTitle>Планирование после инвентаризации</CardTitle>
+          <CardTitle>Праздничные выходные</CardTitle>
           <CardDescription>
-            Предварительно распределяет бытовки склада «{warehouseName}» по
-            датам перемещения и ремонта. Это не меняет фактическую вместимость
-            ремонтной зоны и не учитывает дни без задач как простой.
+            Исключения из общего рабочего календаря объекта «{warehouseName}».
           </CardDescription>
           <CardAction>
             <Badge variant="outline">Версия {setting.settingsRevision}</Badge>
           </CardAction>
         </CardHeader>
 
-        <CardContent className="flex flex-col gap-7">
-          <FieldGroup>
-            <Field data-invalid={visibleError !== null || undefined}>
-              <FieldLabel htmlFor="inventory-movement-daily-capacity">
-                Бытовок на перемещение в день
-              </FieldLabel>
-              <Input
-                id="inventory-movement-daily-capacity"
-                type="number"
-                min={1}
-                max={1000}
-                step={1}
-                inputMode="numeric"
-                value={movementCapacity}
-                disabled={saving}
-                aria-invalid={visibleError !== null}
-                onChange={(event) => {
-                  setMovementCapacity(event.target.value)
-                  setValidationError(null)
-                }}
-              />
-              <FieldDescription>
-                Отдельный лимит для предварительной очереди доставки в ремонт.
-              </FieldDescription>
-            </Field>
-
-            <Field data-invalid={visibleError !== null || undefined}>
-              <FieldLabel htmlFor="inventory-repair-daily-capacity">
-                Бытовок на ремонт в день
-              </FieldLabel>
-              <Input
-                id="inventory-repair-daily-capacity"
-                type="number"
-                min={1}
-                max={1000}
-                step={1}
-                inputMode="numeric"
-                value={repairCapacity}
-                disabled={saving}
-                aria-invalid={visibleError !== null}
-                onChange={(event) => {
-                  setRepairCapacity(event.target.value)
-                  setValidationError(null)
-                }}
-              />
-              <FieldDescription>
-                Отдельный лимит для предварительной очереди ремонтов.
-              </FieldDescription>
-            </Field>
-          </FieldGroup>
-
+        <CardContent className="flex flex-col gap-6">
           <FieldSet>
-            <FieldLegend variant="label">Рабочие дни недели</FieldLegend>
+            <FieldLegend variant="label">Праздничные даты</FieldLegend>
             <FieldDescription>
-              Автоматический план пропускает остальные дни и праздничные даты.
-            </FieldDescription>
-            <ToggleGroup
-              type="multiple"
-              variant="outline"
-              value={workingWeekdays}
-              disabled={saving}
-              aria-label="Рабочие дни инвентаризации"
-              onValueChange={(values) => {
-                setWorkingWeekdays(
-                  values.filter((value): value is InventoryWeekday =>
-                    WEEKDAY_VALUES.has(value as InventoryWeekday)
-                  )
-                )
-                setValidationError(null)
-              }}
-            >
-              {WEEKDAYS.map((weekday) => (
-                <ToggleGroupItem key={weekday.value} value={weekday.value}>
-                  {weekday.label}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
-          </FieldSet>
-
-          <FieldSet>
-            <FieldLegend variant="label">Праздничные выходные</FieldLegend>
-            <FieldDescription>
-              Выберите дату в календаре и добавьте её. Пустые дни без задач сюда
-              добавлять не нужно.
+              Выберите дату и добавьте её. Обычные выходные задаются в рабочем
+              графике выше.
             </FieldDescription>
             <FieldGroup>
               <Field orientation="responsive">
@@ -331,6 +195,8 @@ function SettingsForm({
                 </FieldLabel>
                 <Input
                   id="inventory-holiday-date"
+                  name="inventory-holiday-date"
+                  autoComplete="off"
                   type="date"
                   value={holidayDraft}
                   disabled={saving}
@@ -345,11 +211,16 @@ function SettingsForm({
                   disabled={saving || !holidayDraft}
                   onClick={addHoliday}
                 >
-                  <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+                  <HugeiconsIcon
+                    icon={Add01Icon}
+                    data-icon="inline-start"
+                    aria-hidden="true"
+                  />
                   Добавить дату
                 </Button>
               </Field>
             </FieldGroup>
+
             {holidays.length > 0 ? (
               <div
                 className="flex flex-wrap gap-2"
@@ -361,7 +232,7 @@ function SettingsForm({
                     <Button
                       type="button"
                       size="icon-xs"
-                      variant="ghost"
+                      variant="destructive"
                       disabled={saving}
                       aria-label={`Удалить праздник ${formatHoliday(holiday)}`}
                       onClick={() =>
@@ -370,7 +241,7 @@ function SettingsForm({
                         )
                       }
                     >
-                      <HugeiconsIcon icon={Cancel01Icon} />
+                      <HugeiconsIcon icon={Cancel01Icon} aria-hidden="true" />
                     </Button>
                   </Badge>
                 ))}
@@ -385,18 +256,19 @@ function SettingsForm({
           <FieldError>{visibleError}</FieldError>
         </CardContent>
 
-        <CardFooter className="justify-between gap-4 border-t">
+        <CardFooter className="flex-col items-stretch justify-between gap-4 border-t sm:flex-row sm:items-center">
           <p className="text-sm text-muted-foreground">
-            Новый календарь применяется при следующем построении или пересчёте
-            итогового плана.
+            Изменение календаря делает подготовленный черновик итогового плана
+            устаревшим.
           </p>
-          <Button type="submit" disabled={saving}>
+          <Button type="submit" className="self-end" disabled={saving}>
             <HugeiconsIcon
               icon={saving ? Loading03Icon : FloppyDiskIcon}
               data-icon="inline-start"
               className={saving ? "animate-spin" : undefined}
+              aria-hidden="true"
             />
-            {saving ? "Сохраняем…" : "Сохранить календарь"}
+            {saving ? "Сохраняем…" : "Сохранить праздники"}
           </Button>
         </CardFooter>
       </Card>
@@ -426,7 +298,7 @@ export function InventoryPlanningSettingsCard({
     onSuccess: (saved) => {
       queryClient.setQueryData(queryKey, saved)
       setActionError(null)
-      toast.success("Календарь итогового плана сохранён.")
+      toast.success("Праздничные выходные сохранены.")
     },
     onError: async (error) => {
       if (error instanceof ApiError && error.status === 409) {
@@ -439,7 +311,7 @@ export function InventoryPlanningSettingsCard({
       }
       const message = errorMessage(
         error,
-        "Не удалось сохранить календарь итогового плана."
+        "Не удалось сохранить праздничные выходные."
       )
       setActionError(message)
       toast.error(message)
@@ -452,7 +324,7 @@ export function InventoryPlanningSettingsCard({
       <QueryErrorCard
         error={
           settingsQuery.error ??
-          new Error("Inventory-service не вернул настройки планирования.")
+          new Error("Inventory-service не вернул настройки календаря.")
         }
         retrying={settingsQuery.isFetching}
         onRetry={() => void settingsQuery.refetch()}

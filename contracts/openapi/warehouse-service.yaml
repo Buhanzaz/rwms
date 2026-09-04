@@ -1,12 +1,19 @@
 openapi: 3.1.0
 info:
   title: RWMS Warehouse Service API
-  version: 1.1.0
+  version: 1.2.0
   description: >-
-    Canonical warehouse identity API. Public directory reads require a USER JWT
-    with warehouse.read and intentionally expose the same warehouse registry to
-    every such user, independently of warehouse_access grants. This approved
-    global directory includes name, city and address. Internal validation has
+    Canonical warehouse identity API. The public directory listing requires a USER
+    JWT with either warehouse.read, or SYSTEM_ADMIN/WMS_ADMIN
+    with exactly one application scope admin.manage after protocol scopes, or the exact
+    dedicated rental-manager credential
+    (rwms-rental-manager-web/android, RENTAL_MANAGER, rentalAccess=true,
+    rental.manage only). The listing is independent of warehouse_access grants.
+    This approved warehouse directory includes name, city and address.
+    An object can independently be production and/or a primary RWMS warehouse. A
+    representative has neither classification and selects one production or primary-RWMS
+    parent; this organizational relationship is independent from
+    operational support links. Internal validation has
     separate least-privilege paths for service credentials. Warehouse UUID is
     the stable external business reference; display names are unique only after
     the documented normalization and are never used as integration identity.
@@ -22,9 +29,13 @@ paths:
     get:
       operationId: listWarehouses
       description: >-
-        Requires USER and warehouse.read. This is an approved global directory:
-        warehouse_access grants do not filter the result. The default includes
-        ACTIVE and DRAINING warehouses; includeInactive is SYSTEM_ADMIN-only.
+        Requires USER. Authority is either warehouse.read,
+        SYSTEM_ADMIN/WMS_ADMIN with exactly one application scope admin.manage after
+        protocol scopes, or the exact dedicated rental-manager credential
+        (rwms-rental-manager-web/android, RENTAL_MANAGER, rentalAccess=true,
+        rental.manage only). This is the approved installation directory:
+        warehouse_access grants do not filter it. The default includes ACTIVE and DRAINING warehouses; includeInactive
+        is SYSTEM_ADMIN-only.
       parameters:
         - name: includeInactive
           in: query
@@ -42,7 +53,10 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
     post:
       operationId: createWarehouse
-      description: Requires USER, rwms.write, and exactly global role SYSTEM_ADMIN.
+      description: >-
+        Requires USER, global role SYSTEM_ADMIN or WMS_ADMIN, and
+        either rwms.write or exactly one application scope admin.manage after protocol
+        scopes.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -70,10 +84,10 @@ paths:
     get:
       operationId: getWarehouse
       description: >-
-        Requires USER and warehouse.read. The stable UUID lookup also returns an
-        inactive warehouse so historical asset, repair and logistics references
+        Requires USER and warehouse.read. The stable UUID lookup also returns an inactive
+        warehouse so historical asset, repair and logistics references
         remain resolvable. warehouse_access grants do not filter this approved
-        global directory read.
+        warehouse-directory read. An unknown UUID returns 404.
       responses:
         '200':
           description: Warehouse metadata.
@@ -86,7 +100,9 @@ paths:
     put:
       operationId: replaceWarehouse
       description: >-
-        Full mutable metadata replacement. Requires USER, rwms.write, and exactly SYSTEM_ADMIN.
+        Full mutable metadata replacement. Requires USER, global role
+        SYSTEM_ADMIN or WMS_ADMIN, and either rwms.write or exactly one application scope
+        admin.manage after protocol scopes.
         timeZone is an immediate correction only while this warehouse has no durable
         operation mark; an operated warehouse must use the effective-dated scheduling command.
         Lifecycle state is not replaceable through this operation.
@@ -116,8 +132,11 @@ paths:
       operationId: listWarehouseSupportLinks
       description: >-
         Returns the complete directed support-link collection, including inactive links.
-        Requires a USER with warehouse.read, a warehouse-management role and at least VIEW
-        access to the served warehouse. SYSTEM_ADMIN and WMS_ADMIN have global access.
+        Requires USER. The dedicated rwms-admin-web client with
+        SYSTEM_ADMIN/WMS_ADMIN and exactly one application scope admin.manage after
+        protocol scopes bypasses warehouse grants. Other callers require warehouse.read,
+        a warehouse-management role and at least VIEW access to the served warehouse.
+        Unknown UUIDs return 404.
       responses:
         '200':
           description: Current collection and the served warehouse version fence.
@@ -130,10 +149,13 @@ paths:
     put:
       operationId: replaceWarehouseSupportLinks
       description: >-
-        Atomic full replacement under the served warehouse expectedVersion. Requires USER,
-        rwms.write, a warehouse-management role and MANAGE access to both the served warehouse
-        and every supplied support warehouse. An identical retry is a semantic no-op. The served
-        warehouse must be active and representative; every support warehouse must be active.
+        Atomic full replacement under the served warehouse expectedVersion. Requires USER. The
+        dedicated rwms-admin-web client with SYSTEM_ADMIN/WMS_ADMIN and
+        exactly one application scope admin.manage after protocol scopes bypasses warehouse
+        grants. Other callers require rwms.write, a warehouse-management role and MANAGE access
+        to both the served warehouse and every supplied support warehouse. An identical retry is
+        a semantic no-op. The served warehouse must be active and representative; every support
+        warehouse must be active.
       requestBody:
         required: true
         content:
@@ -156,7 +178,9 @@ paths:
     post:
       operationId: startWarehouseDraining
       description: >-
-        Requires USER, rwms.write, and exactly SYSTEM_ADMIN. Permitted only from ACTIVE.
+        Requires USER, global role SYSTEM_ADMIN or WMS_ADMIN, and either
+        rwms.write or exactly one application scope admin.manage after protocol scopes.
+        Permitted only from ACTIVE.
         It permanently closes inbound admission while preserving outbound admission until
         all resource owners have confirmed readiness.
       requestBody:
@@ -181,7 +205,9 @@ paths:
     post:
       operationId: completeWarehouseInactivation
       description: >-
-        Requires USER, rwms.write, and exactly SYSTEM_ADMIN. Permitted only from DRAINING
+        Requires USER, global role SYSTEM_ADMIN or WMS_ADMIN, and either
+        rwms.write or exactly one application scope admin.manage after protocol scopes.
+        Permitted only from DRAINING
         after asset-service, inventory-service, logistics-service, maintenance-service and
         task-board-service have each recorded immutable readiness confirmation.
       requestBody:
@@ -206,7 +232,9 @@ paths:
     post:
       operationId: scheduleWarehouseTimeZone
       description: >-
-        Requires USER, rwms.write, and exactly SYSTEM_ADMIN. Available only after a
+        Requires USER, global role SYSTEM_ADMIN or WMS_ADMIN, and either
+        rwms.write or exactly one application scope admin.manage after protocol scopes.
+        Available only after a
         durable warehouse operation mark exists. Appends an immutable timezone decision
         whose effectiveFrom must be in the future; it never rewrites historical operation
         calculations or reports. The Warehouse response continues to expose the currently
@@ -589,15 +617,31 @@ components:
     Warehouse:
       type: object
       additionalProperties: false
-      required: [id, version, name, city, address, latitude, longitude, timeZone, active, lifecycleState, sortOrder, representative]
+      allOf:
+        - $ref: '#/components/schemas/WarehouseClassificationInvariant'
+      required: [id, version, name, city, address, latitude, longitude, timeZone, active, lifecycleState, sortOrder, representative, production, mainWarehouse, representativeParentWarehouseId]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, minimum: 0 }
         name: { type: string, minLength: 1, maxLength: 255, description: Unique after trim, internal-whitespace collapse and Unicode-aware lowercase normalization. }
         city: { type: string, minLength: 1, maxLength: 255 }
         address: { type: [string, 'null'], maxLength: 1000 }
-        latitude: { type: [number, 'null'], minimum: -90, maximum: 90, multipleOf: 0.000001 }
-        longitude: { type: [number, 'null'], minimum: -180, maximum: 180, multipleOf: 0.000001 }
+        latitude:
+          type: [number, 'null']
+          minimum: -90
+          maximum: 90
+          multipleOf: 0.000001
+          description: >-
+            Optional WGS84 latitude. Coordinates are absent together or present together; the exact
+            pair 0,0 is rejected as an unset placeholder.
+        longitude:
+          type: [number, 'null']
+          minimum: -180
+          maximum: 180
+          multipleOf: 0.000001
+          description: >-
+            Optional WGS84 longitude. Coordinates are absent together or present together; the exact
+            pair 0,0 is rejected as an unset placeholder.
         timeZone:
           type: string
           minLength: 1
@@ -612,7 +656,19 @@ components:
         sortOrder: { type: [integer, 'null'], minimum: 0 }
         representative:
           type: boolean
-          description: Additive characteristic that does not alter lifecycle or operation admission.
+          description: True when this object has no production or primary-RWMS classification.
+        production:
+          type: boolean
+          description: Object is exposed to the future manufacture management system.
+        mainWarehouse:
+          type: boolean
+          description: Object is exposed as a primary RWMS warehouse.
+        representativeParentWarehouseId:
+          type: [string, 'null']
+          format: uuid
+          description: >-
+            Selected parent for a representative object. It must reference an object marked as
+            production or a primary RWMS warehouse.
     CreateWarehouseRequest:
       type: object
       additionalProperties: false
@@ -626,19 +682,31 @@ components:
           minimum: -90
           maximum: 90
           multipleOf: 0.000001
-          description: Optional WGS84 latitude; latitude and longitude must be supplied together.
+          description: >-
+            Optional WGS84 latitude; latitude and longitude must be supplied together and the exact
+            pair 0,0 is rejected as an unset placeholder.
         longitude:
           type: [number, 'null']
           minimum: -180
           maximum: 180
           multipleOf: 0.000001
-          description: Optional WGS84 longitude; latitude and longitude must be supplied together.
+          description: >-
+            Optional WGS84 longitude; latitude and longitude must be supplied together and the exact
+            pair 0,0 is rejected as an unset placeholder.
         timeZone: { type: string, minLength: 1, maxLength: 64, description: Canonical IANA timezone identifier. }
         sortOrder: { type: [integer, 'null'], minimum: 0 }
-        representative:
+        production:
           type: boolean
-          default: false
-          description: Additive characteristic that does not alter lifecycle or operation admission.
+          description: True exposes the object to MMS.
+        mainWarehouse:
+          type: boolean
+          description: True exposes the object as a primary RWMS warehouse.
+        representativeParentWarehouseId:
+          type: [string, 'null']
+          format: uuid
+          description: >-
+            Required for a representative object and null for all other objects. Its parent must
+            be production or a primary RWMS warehouse.
     ReplaceWarehouseRequest:
       type: object
       additionalProperties: false
@@ -653,23 +721,60 @@ components:
           minimum: -90
           maximum: 90
           multipleOf: 0.000001
-          description: Full-replacement WGS84 latitude; requires longitude.
+          description: >-
+            Full-replacement WGS84 latitude; requires longitude and the exact pair 0,0 is rejected as
+            an unset placeholder.
         longitude:
           type: [number, 'null']
           minimum: -180
           maximum: 180
           multipleOf: 0.000001
-          description: Full-replacement WGS84 longitude; requires latitude.
+          description: >-
+            Full-replacement WGS84 longitude; requires latitude and the exact pair 0,0 is rejected as
+            an unset placeholder.
         timeZone:
           type: string
           minLength: 1
           maxLength: 64
           description: Immediate correction only before the first durable operation mark.
         sortOrder: { type: [integer, 'null'], minimum: 0 }
-        representative:
+        production:
           type: boolean
-          default: false
-          description: Full-replacement value; omitted legacy requests select false.
+          description: True exposes the object to MMS.
+        mainWarehouse:
+          type: boolean
+          description: True exposes the object as a primary RWMS warehouse.
+        representativeParentWarehouseId:
+          type: [string, 'null']
+          format: uuid
+          description: >-
+            Required for a representative object and null for all other objects. Its parent must
+            be production or a primary RWMS warehouse.
+    WarehouseClassificationInvariant:
+      type: object
+      description: >-
+        A regular object has at least one independent production or primary-RWMS classification.
+        A representative has neither classification and references exactly one eligible parent.
+      oneOf:
+        - title: Production or primary RWMS object
+          required: [representative, production, mainWarehouse, representativeParentWarehouseId]
+          properties:
+            representative: { type: boolean, const: false }
+            production: { type: boolean }
+            mainWarehouse: { type: boolean }
+            representativeParentWarehouseId: { type: 'null' }
+          anyOf:
+            - properties:
+                production: { const: true }
+            - properties:
+                mainWarehouse: { const: true }
+        - title: Representative warehouse
+          required: [representative, production, mainWarehouse, representativeParentWarehouseId]
+          properties:
+            representative: { type: boolean, const: true }
+            production: { type: boolean, const: false }
+            mainWarehouse: { type: boolean, const: false }
+            representativeParentWarehouseId: { type: string, format: uuid }
     WarehouseLifecycleState:
       type: string
       enum: [ACTIVE, DRAINING, INACTIVE]
@@ -814,8 +919,22 @@ components:
         name: { type: string, minLength: 1, maxLength: 255 }
         city: { type: string, minLength: 1, maxLength: 255 }
         address: { type: [string, 'null'], minLength: 1, maxLength: 1000 }
-        latitude: { type: [number, 'null'], minimum: -90, maximum: 90, multipleOf: 0.000001 }
-        longitude: { type: [number, 'null'], minimum: -180, maximum: 180, multipleOf: 0.000001 }
+        latitude:
+          type: [number, 'null']
+          minimum: -90
+          maximum: 90
+          multipleOf: 0.000001
+          description: >-
+            Optional owner-held WGS84 latitude; the exact coordinate pair 0,0 is rejected as an
+            unset placeholder.
+        longitude:
+          type: [number, 'null']
+          minimum: -180
+          maximum: 180
+          multipleOf: 0.000001
+          description: >-
+            Optional owner-held WGS84 longitude; the exact coordinate pair 0,0 is rejected as an
+            unset placeholder.
         timeZone: { type: string, minLength: 1, maxLength: 64 }
     InventoryWarehouseMetadata:
       type: object
@@ -849,13 +968,17 @@ components:
           minimum: -90
           maximum: 90
           multipleOf: 0.000001
-          description: Owner-held WGS84 latitude used by logistics as the map source of truth.
+          description: >-
+            Owner-held WGS84 latitude used by logistics as the map source of truth; the exact
+            coordinate pair 0,0 is rejected as an unset placeholder.
         longitude:
           type: [number, 'null']
           minimum: -180
           maximum: 180
           multipleOf: 0.000001
-          description: Owner-held WGS84 longitude used by logistics as the map source of truth.
+          description: >-
+            Owner-held WGS84 longitude used by logistics as the map source of truth; the exact
+            coordinate pair 0,0 is rejected as an unset placeholder.
         timeZone:
           type: string
           minLength: 1

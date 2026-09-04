@@ -23,7 +23,6 @@ public interface RentalInquiryRepository extends JpaRepository<RentalInquiry, UU
   Optional<RentalInquiry> findByManagerIdAndCreationIdempotencyKey(
       UUID managerId, UUID creationIdempotencyKey);
 
-  @Override
   @EntityGraph(attributePaths = "client")
   Optional<RentalInquiry> findById(UUID id);
 

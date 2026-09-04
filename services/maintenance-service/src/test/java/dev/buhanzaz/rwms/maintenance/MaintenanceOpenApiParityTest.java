@@ -644,8 +644,7 @@ class MaintenanceOpenApiParityTest {
         query("warehouseId", true, "uuid", null),
         query("page", false, "integer", "0"),
         query("size", false, "integer", "50"));
-    List<ParameterSpec> catalogId = List.of(
-        path("id"), query("warehouseId", true, "uuid", null));
+    List<ParameterSpec> catalogId = List.of(path("id"));
     List<ParameterSpec> estimateId = List.of(
         path("id"), query("warehouseId", true, "uuid", null));
     List<ParameterSpec> repairId = List.of(
@@ -657,7 +656,9 @@ class MaintenanceOpenApiParityTest {
     List<OperationSpec> result = new ArrayList<>();
     result.add(op("GET", "/api/maintenance/v1/catalog/versions", "listCatalogVersions",
         MaintenanceCatalogController.class, "versions",
-        append(warehousePage,
+        append(List.of(
+                query("page", false, "integer", "0"),
+                query("size", false, "integer", "50")),
             query("lifecycle", false, "$CatalogLifecycle", null),
             optionalHeader("If-None-Match")),
         null, null, "200", "CatalogVersionPage", false, "304", "401", "403"));
@@ -681,7 +682,7 @@ class MaintenanceOpenApiParityTest {
         "400", "401", "403", "404", "409", "422"));
     result.add(op("POST", "/api/maintenance/v1/catalog/versions", "createCatalogVersion",
         MaintenanceCatalogController.class, "createCatalog", idempotency,
-        CreateCatalogRequest.class, "CreateCatalogRequest", "201", "CatalogVersion", true,
+        null, null, "201", "CatalogVersion", true,
         "400", "401", "403", "409"));
     result.add(op("POST", "/api/maintenance/v1/catalog/versions/{id}/fork", "forkCatalogVersion",
         MaintenanceCatalogController.class, "fork", append(catalogId, requiredHeader("Idempotency-Key")),
@@ -693,14 +694,16 @@ class MaintenanceOpenApiParityTest {
         "400", "401", "403", "404", "409", "422", "503"));
     result.add(op("GET", "/api/maintenance/v1/catalog/furniture-equipment-links",
         "listFurnitureEquipmentLinks", FurnitureEquipmentLinkController.class, "list",
-        append(warehousePage,
+        append(List.of(
+                query("page", false, "integer", "0"),
+                query("size", false, "integer", "50")),
             query("state", false, "$FurnitureEquipmentLinkState", null)),
         null, null, "200", "FurnitureEquipmentLinkPage", false,
         "400", "401", "403"));
     result.add(op("POST",
         "/api/maintenance/v1/catalog/furniture-equipment-links/{nodeId}/review",
         "reviewFurnitureEquipmentLink", FurnitureEquipmentLinkController.class, "review",
-        List.of(path("nodeId"), query("warehouseId", true, "uuid", null)),
+        List.of(path("nodeId")),
         FurnitureEquipmentLinkReviewRequest.class, "FurnitureEquipmentLinkReviewRequest",
         "200", "FurnitureEquipmentLink", true,
         "400", "401", "403", "404", "409"));
@@ -1126,13 +1129,13 @@ class MaintenanceOpenApiParityTest {
     result.add(op("GET",
         "/api/maintenance/v1/settings/repair-complexity-colors",
         "getRepairComplexityColors", RepairComplexityColorsController.class, "get",
-        List.of(query("warehouseId", true, "uuid", null)),
+        List.of(),
         null, null, "200", "RepairComplexityColors", false,
         "401", "403"));
     result.add(op("PUT",
         "/api/maintenance/v1/settings/repair-complexity-colors",
         "replaceRepairComplexityColors", RepairComplexityColorsController.class, "replace",
-        List.of(query("warehouseId", true, "uuid", null)),
+        List.of(),
         ReplaceRepairComplexityColorsRequest.class, "ReplaceRepairComplexityColorsRequest",
         "200", "RepairComplexityColors", false,
         "400", "401", "403", "409"));
@@ -1541,7 +1544,7 @@ class MaintenanceOpenApiParityTest {
           sample(CatalogVersionResponse.class, "catalogVersion");
       case "catalogNodes" -> List.of(sample(CatalogNodeResponse.class, "catalogNode"));
       case "catalogLinks" -> List.of(sample(CatalogLinkResponse.class, "catalogLink"));
-      case "createCatalog", "forkCatalog", "activateCatalog" ->
+      case "createCatalog", "createGlobalCatalog", "forkCatalog", "activateCatalog" ->
           createResult(CatalogVersionResponse.class);
       case "estimates" -> List.of(sample(EstimateResponse.class, "estimate"));
       case "estimate", "updateEstimate" -> sample(EstimateResponse.class, "estimate");
@@ -1675,12 +1678,10 @@ class MaintenanceOpenApiParityTest {
         FurnitureEquipmentLinkResponse.class, "furnitureEquipmentLink");
     when(service.list(
             org.mockito.ArgumentMatchers.any(),
-            org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.anyInt(),
             org.mockito.ArgumentMatchers.anyInt()))
         .thenReturn(new PageResponse<>(List.of(response), 0, 50, 1));
     when(service.review(
-            org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.anyLong(),
             org.mockito.ArgumentMatchers.any(),
@@ -1952,6 +1953,10 @@ class MaintenanceOpenApiParityTest {
           && "logisticsPlanningMode".equals(components[index].getName())) {
         arguments[index] = RepairLogisticsPlanningMode.AUTO;
       }
+      if (recordType == LogisticsRepairPlaceProjectionResponse.class
+          && "automaticRefillDelayMinutes".equals(components[index].getName())) {
+        arguments[index] = 0;
+      }
     }
     return arguments;
   }
@@ -2055,7 +2060,6 @@ class MaintenanceOpenApiParityTest {
     values.put(CatalogLinkResponse.class, "CatalogLink");
     values.put(ReplaceCatalogNodesRequest.class, "ReplaceCatalogNodesRequest");
     values.put(ReplaceCatalogLinksRequest.class, "ReplaceCatalogLinksRequest");
-    values.put(CreateCatalogRequest.class, "CreateCatalogRequest");
     values.put(VersionCommand.class, "ExpectedVersionRequest");
     values.put(CompleteEstimateRequest.class, "CompleteEstimateRequest");
     values.put(QueueRepairRequest.class, "PriorityVersionRequest");
@@ -2234,7 +2238,6 @@ class MaintenanceOpenApiParityTest {
     values.put(RoutingSnapshot.class, "RoutingSnapshot");
     values.put(CatalogNodeInput.class, "CatalogNodeInput");
     values.put(CatalogLinkInput.class, "CatalogLinkInput");
-    values.put(CreateCatalogRequest.class, "CreateCatalogRequest");
     values.put(ReplaceCatalogNodesRequest.class, "ReplaceCatalogNodesRequest");
     values.put(ReplaceCatalogLinksRequest.class, "ReplaceCatalogLinksRequest");
     values.put(VersionCommand.class, "ExpectedVersionRequest");

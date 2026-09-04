@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta, timezone
 from types import SimpleNamespace
 from typing import cast
 from uuid import uuid4
@@ -20,6 +20,7 @@ from app.schemas.slot_planning import SlotAvailabilityRequest
 from app.services.support_resource_candidates import (
     SupportResourceFact,
     SupportResourceFacts,
+    _identity_rank,
     route_support_resource_facts,
 )
 from app.slot_planning.application import SlotPlanningApplication, SlotPlanningContext
@@ -229,6 +230,24 @@ def _facts(*items: SupportResourceFact) -> SupportResourceFacts:
     )
 
 
+def test_identity_rank_compares_aware_availability_as_absolute_instants() -> None:
+    """Different UTC offsets cannot make a later incoming fact win lexically."""
+
+    plus_two = timezone(timedelta(hours=2))
+    earlier = _identity(
+        availability_kind="INCOMING",
+        available_from=datetime(2026, 9, 14, 9, 30, tzinfo=plus_two),
+        available_until=datetime(2026, 9, 14, 18, tzinfo=plus_two),
+    )
+    later = _identity(
+        availability_kind="INCOMING",
+        available_from=datetime(2026, 9, 14, 8, tzinfo=UTC),
+        available_until=datetime(2026, 9, 14, 18, tzinfo=UTC),
+    )
+
+    assert _identity_rank(earlier) < _identity_rank(later)
+
+
 @pytest.mark.asyncio
 async def test_support_arrival_and_operations_delay_exact_customer_slots() -> None:
     """An 11:20 road arrival becomes usable only after unload, technical, and load work."""
@@ -241,6 +260,13 @@ async def test_support_arrival_and_operations_delay_exact_customer_slots() -> No
 
     assert len(resolution.candidates) == 1
     routed = resolution.candidates[0]
+    assert routed.inbound_departure_at == datetime(2026, 9, 14, 8, tzinfo=UTC)
+    assert routed.inbound_raw_arrival_at == datetime(
+        2026, 9, 14, 11, 20, tzinfo=UTC
+    )
+    assert routed.inbound_arrival_at == datetime(2026, 9, 14, 11, 20, tzinfo=UTC)
+    assert routed.inbound_travel_seconds == 12_000
+    assert routed.return_travel_seconds == 3_600
     assert routed.available_at_served == datetime(2026, 9, 14, 12, 35, tzinfo=UTC)
     assert routed.latest_served_finish == datetime(2026, 9, 14, 18, 15, tzinfo=UTC)
     assert routed.reason_codes == (
@@ -319,6 +345,148 @@ async def test_return_route_and_shift_limit_reject_cross_warehouse_candidate() -
     assert resolution.candidates == ()
     assert PlanningReason.SHIFT_LIMIT_EXCEEDED in resolution.reasons
     assert PlanningReason.CONTRACTOR_REQUIRED in resolution.reasons
+
+
+@pytest.mark.asyncio
+async def test_second_support_warehouse_is_selected_when_first_is_shift_limited() -> None:
+    """An unavailable first warehouse cannot hide a feasible lower-priority warehouse."""
+
+    unavailable = _fact()
+    first = replace(
+        unavailable,
+        link=_link(priority=1),
+        eligible_until=datetime(2026, 9, 14, 10, tzinfo=UTC),
+    )
+    available = _fact()
+    second_support_id = uuid4()
+    second_link = _link(priority=2)
+    second_link = second_link.model_copy(
+        update={
+            "support_warehouse": second_link.support_warehouse.model_copy(
+                update={
+                    "warehouse_id": second_support_id,
+                    "name": "Второй опорный",
+                }
+            )
+        }
+    )
+    available.support_warehouse.external_warehouse_id = second_support_id
+    second = replace(
+        available,
+        link=second_link,
+        eligible_until=datetime(2026, 9, 14, 20, tzinfo=UTC),
+    )
+
+    resolution = await route_support_resource_facts(
+        _facts(first, second),
+        _configuration(),
+        DirectedRoadProvider(inbound_minutes=30, return_minutes=30),
+    )
+
+    assert len(resolution.candidates) == 1
+    assert resolution.candidates[0].fact.link.support_link_id == second.link.support_link_id
+    assert PlanningReason.SHIFT_LIMIT_EXCEEDED in resolution.reasons
+
+
+@pytest.mark.asyncio
+async def test_same_physical_support_candidate_is_deduplicated_across_links() -> None:
+    """Repeated directory/link facts remain separately routed but yield one shift candidate."""
+
+    physical = _fact()
+    preferred = replace(physical, link=_link(priority=1))
+    alternate = replace(physical, link=_link(priority=2))
+
+    resolution = await route_support_resource_facts(
+        _facts(alternate, preferred),
+        _configuration(),
+        DirectedRoadProvider(inbound_minutes=30, return_minutes=30),
+    )
+
+    assert len(resolution.candidates) == 1
+    assert resolution.candidates[0].fact.link.support_link_id == preferred.link.support_link_id
+
+
+@pytest.mark.asyncio
+async def test_same_physical_shift_keeps_distinct_served_demand_options() -> None:
+    """Demand-aware dedupe cannot let one served member hide another member's link."""
+
+    physical = _fact()
+    served_b_id = uuid4()
+    served_b_link = _link(priority=2)
+    served_b_link = served_b_link.model_copy(
+        update={
+            "served_warehouse": served_b_link.served_warehouse.model_copy(
+                update={"warehouse_id": served_b_id, "name": "Представитель B"}
+            )
+        }
+    )
+    served_b = replace(physical, link=served_b_link)
+
+    resolution = await route_support_resource_facts(
+        _facts(physical, served_b),
+        _configuration(),
+        DirectedRoadProvider(inbound_minutes=30, return_minutes=30),
+    )
+
+    assert {
+        candidate.fact.link.served_warehouse.warehouse_id
+        for candidate in resolution.candidates
+    } == {SERVED_WAREHOUSE_ID, served_b_id}
+
+
+@pytest.mark.asyncio
+async def test_support_shift_end_before_start_rolls_to_next_local_day() -> None:
+    """Support positioning and mandatory return remain feasible across month midnight."""
+
+    physical = _fact()
+    physical.shift.start_time = time(22)
+    physical.shift.end_time = time(6)
+    overnight = replace(
+        physical,
+        planning_date=date(2026, 8, 31),
+        eligible_from=datetime(2026, 8, 31, 22, tzinfo=UTC),
+        eligible_until=datetime(2026, 9, 1, 6, tzinfo=UTC),
+    )
+
+    resolution = await route_support_resource_facts(
+        _facts(overnight),
+        _configuration(),
+        DirectedRoadProvider(inbound_minutes=30, return_minutes=30),
+    )
+
+    assert len(resolution.candidates) == 1
+    assert resolution.candidates[0].available_at_served == datetime(
+        2026,
+        8,
+        31,
+        23,
+        45,
+        tzinfo=UTC,
+    )
+    assert resolution.candidates[0].latest_served_finish == datetime(
+        2026,
+        9,
+        1,
+        4,
+        45,
+        tzinfo=UTC,
+    )
+
+
+@pytest.mark.asyncio
+async def test_zero_duration_support_shift_fails_fast() -> None:
+    """Equal local clock bounds are invalid rather than a fabricated 24-hour shift."""
+
+    physical = _fact()
+    physical.shift.start_time = time(8)
+    physical.shift.end_time = time(8)
+
+    with pytest.raises(ValueError, match="non-zero duration"):
+        await route_support_resource_facts(
+            _facts(physical),
+            _configuration(),
+            DirectedRoadProvider(inbound_minutes=30, return_minutes=30),
+        )
 
 
 @pytest.mark.asyncio
@@ -511,6 +679,14 @@ async def test_external_link_or_driver_change_advances_slot_source_revision(
     )
     client = SimpleNamespace()
 
+    async def list_support_network(
+        warehouse_id: object,
+    ) -> list[RwmsWarehouseSupportLink]:
+        """Expose the real adjacent edge used to resolve the selected planning group."""
+
+        assert warehouse_id in {served_external_id, support_external_id}
+        return [link]
+
     async def list_support_links(
         served_warehouse_id: object,
         *,
@@ -538,6 +714,7 @@ async def test_external_link_or_driver_change_advances_slot_source_revision(
             return []
         return [current_identity]
 
+    client.list_support_network = list_support_network
     client.list_support_links = list_support_links
     client.list_drivers = list_drivers
     settings = Settings(

@@ -1,4 +1,9 @@
-import { apiErrorFromResponse, bearerRequest } from "@/lib/api-client"
+import {
+  apiErrorFromRequestFailure,
+  apiErrorFromResponse,
+  bearerRequest,
+  invalidApiResponseError,
+} from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 
 export type CabinPhotoPresentation = {
@@ -63,9 +68,18 @@ export function createCabinPhotoPresentation(params: {
 }
 
 export async function getPublicCabinPhotoPresentation(token: string) {
-  const response = await fetch(publicPhotoPresentationEndpoint(token), {
-    headers: { Accept: "application/json" },
-  })
+  let response: Response
+  try {
+    response = await fetch(publicPhotoPresentationEndpoint(token), {
+      headers: { Accept: "application/json" },
+    })
+  } catch (error) {
+    throw apiErrorFromRequestFailure(error)
+  }
   if (!response.ok) throw await apiErrorFromResponse(response)
-  return (await response.json()) as PublicCabinPhotoPresentation
+  try {
+    return (await response.json()) as PublicCabinPhotoPresentation
+  } catch (error) {
+    throw invalidApiResponseError(error)
+  }
 }

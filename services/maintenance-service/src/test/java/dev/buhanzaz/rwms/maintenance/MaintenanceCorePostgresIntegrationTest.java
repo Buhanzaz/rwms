@@ -720,7 +720,7 @@ class MaintenanceCorePostgresIntegrationTest {
             rentalItemId);
     repairCapacitySettings.replace(
         warehouseId,
-        new ReplaceRepairCapacitySettingsRequest(0L, 6, 11));
+        new ReplaceRepairCapacitySettingsRequest(0L, 6));
 
     service.queueRepair(
         UUID.randomUUID(),
@@ -1360,7 +1360,7 @@ class MaintenanceCorePostgresIntegrationTest {
   void readyRemovalPairsWithExactlyOneInboundReservationAtFullCapacity() {
     UUID warehouseId = UUID.randomUUID();
     repairCapacitySettings.replace(
-        warehouseId, new ReplaceRepairCapacitySettingsRequest(0L, 1, 5));
+        warehouseId, new ReplaceRepairCapacitySettingsRequest(0L, 1));
     UUID readyCabinId = UUID.randomUUID();
     UUID inboundCabinId = UUID.randomUUID();
     rentalItemFacts.saveAllAndFlush(
@@ -1400,6 +1400,7 @@ class MaintenanceCorePostgresIntegrationTest {
 
     assertThat(paired.response().state()).isEqualTo(RepairPlaceAllocationState.RESERVED);
     var projection = repairPlaces.logisticsProjection(warehouseId);
+    assertThat(projection.automaticRefillDelayMinutes()).isZero();
     assertThat(projection.readyToReleaseCount()).isOne();
     assertThat(projection.reservedCount()).isOne();
     assertThat(projection.availableCount()).isZero();
@@ -4722,7 +4723,6 @@ class MaintenanceCorePostgresIntegrationTest {
     UUID reviewer = UUID.randomUUID();
 
     var retried = furnitureEquipmentLinkReviews.review(
-        warehouseId,
         nodeId,
         0,
         dev.buhanzaz.rwms.maintenance.api.FurnitureEquipmentLinkApiModels
@@ -4733,7 +4733,6 @@ class MaintenanceCorePostgresIntegrationTest {
     assertThat(retried.response().reviewVersion()).isOne();
     assertThat(retried.replayed()).isFalse();
     assertThat(furnitureEquipmentLinkReviews.review(
-            warehouseId,
             nodeId,
             0,
             dev.buhanzaz.rwms.maintenance.api.FurnitureEquipmentLinkApiModels
@@ -4744,7 +4743,6 @@ class MaintenanceCorePostgresIntegrationTest {
 
     exhaustFurnitureLink(nodeId);
     var abandoned = furnitureEquipmentLinkReviews.review(
-        warehouseId,
         nodeId,
         1,
         dev.buhanzaz.rwms.maintenance.api.FurnitureEquipmentLinkApiModels

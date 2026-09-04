@@ -6,6 +6,7 @@ import type { LogisticsRequest, PlanningTask, RouteCycle, RoutePlan, UUID, Wareh
 import type { PlanMove } from '../features/planning/PlanPanel';
 import { formatDate, formatDeliveryPrice, formatTime } from '../utils/format';
 import { DatePicker } from '../components/DatePicker';
+import { customerLegalTypeFromRequest, customerLegalTypeLabel } from '../utils/customer-presentation';
 
 interface RequestMapCardProps {
   request: LogisticsRequest;
@@ -121,6 +122,7 @@ export function RequestMapCard({
       <div className="request-map-menu__status">{requestStatusLabels[request.status]}</div>
       {serviceWarehouse?.representative ? <div className="request-map-menu__service-warehouse">Склад обслуживания: <strong>{serviceWarehouse.name}</strong></div> : null}
       <dl className="request-map-menu__details">
+        <div><dt><UserRound size={12} aria-hidden="true" />Тип клиента</dt><dd>{customerLegalTypeLabel(customerLegalTypeFromRequest(request))}</dd></div>
         <div><dt><MapPin size={12} aria-hidden="true" />Адрес</dt><dd>{request.address_label}</dd></div>
         <div><dt><PackageOpen size={12} aria-hidden="true" />Объём</dt><dd>{request.quantity} бытов. · обслуживание {request.service_minutes} мин</dd></div>
         <div><dt><Banknote size={12} aria-hidden="true" />Стоимость доставки</dt><dd>{formatDeliveryPrice(request.delivery_price_rubles)}{request.price_isochrone_minutes ? ` · изохрона до ${request.price_isochrone_minutes / 60} ч` : ''}</dd></div>

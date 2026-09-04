@@ -334,6 +334,42 @@ final class LogisticsOAuthHttpTransport {
     }
   }
 
+  /**
+   * Streams one bounded immutable binary command with its exact digest and content length. The
+   * caller owns domain validation; this transport only preserves the private service credential and
+   * replay headers.
+   */
+  <T> T postBytes(
+      String uri,
+      UUID key,
+      String contentSha256,
+      String contentType,
+      byte[] bytes,
+      Class<T> type,
+      String registration,
+      String scope,
+      String emptyResponseMessage,
+      FailurePolicy failurePolicy) {
+    try {
+      T response =
+          client
+              .post()
+              .uri(uri)
+              .header("Idempotency-Key", key.toString())
+              .header(HttpHeaders.AUTHORIZATION, bearer(registration, scope))
+              .header("X-Content-SHA256", contentSha256)
+              .header(HttpHeaders.CONTENT_LENGTH, Integer.toString(bytes.length))
+              .contentType(MediaType.parseMediaType(contentType))
+              .body(bytes)
+              .retrieve()
+              .body(type);
+      if (response == null) throw malformed(emptyResponseMessage);
+      return response;
+    } catch (RuntimeException exception) {
+      throw failure(failurePolicy, exception);
+    }
+  }
+
   ResponseEntity<byte[]> getBytes(
       String uri, String registration, String scope, FailurePolicy failurePolicy) {
     try {

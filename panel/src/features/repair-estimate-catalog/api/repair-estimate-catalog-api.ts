@@ -560,8 +560,6 @@ export function createRepairEstimateCatalogIndex(
 /**
  * Service-client boundary for operational estimate screens.
  */
-export async function getOperationalRepairEstimateCatalog(
-  warehouseId?: string | null
-): Promise<RepairEstimateCatalogSnapshotDto> {
-  return catalogClient.getOperationalCatalog(warehouseId)
+export async function getOperationalRepairEstimateCatalog(): Promise<RepairEstimateCatalogSnapshotDto> {
+  return catalogClient.getOperationalCatalog()
 }

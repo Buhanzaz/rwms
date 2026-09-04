@@ -2,6 +2,8 @@ package dev.buhanzaz.rwms.worker.feature.camera
 
 import com.google.common.truth.Truth.assertThat
 import java.io.File
+import java.io.IOException
+import kotlinx.coroutines.CancellationException
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.runners.JUnit4
@@ -143,11 +145,13 @@ class CameraCaptureContractsTest {
         val message = cameraBatchFailureMessage(
             savedCount = 2,
             selectedCount = 4,
-            causeMessage = "нет места",
+            cause = IllegalStateException("HTTP 500: /var/private/evidence"),
         )
 
         assertThat(message).contains("Сохранено 2 из 4 фото")
-        assertThat(message).contains("нет места")
+        assertThat(message).contains("Не удалось сохранить фотографию")
+        assertThat(message).doesNotContain("HTTP 500")
+        assertThat(message).doesNotContain("/var/private")
     }
 
     @Test
@@ -156,9 +160,9 @@ class CameraCaptureContractsTest {
             cameraBatchFailureMessage(
                 savedCount = 0,
                 selectedCount = 3,
-                causeMessage = "файл недоступен",
+                cause = IllegalStateException("SQL constraint worker_evidence_sha256"),
             ),
-        ).isEqualTo("файл недоступен")
+        ).isEqualTo("Не удалось сохранить фотографию. Повторите снимок.")
     }
 
     @Test
@@ -166,11 +170,13 @@ class CameraCaptureContractsTest {
         val message = galleryBatchFailureMessage(
             savedCount = 2,
             selectedCount = 4,
-            causeMessage = "файл повреждён",
+            cause = IllegalArgumentException("java.lang.IllegalArgumentException at ContentResolver"),
         )
 
         assertThat(message).contains("Добавлено 2 из 4 фото")
-        assertThat(message).contains("файл повреждён")
+        assertThat(message).contains("Не удалось добавить фотографию")
+        assertThat(message).doesNotContain("java.lang")
+        assertThat(message).doesNotContain("ContentResolver")
     }
 
     @Test
@@ -179,8 +185,33 @@ class CameraCaptureContractsTest {
             galleryBatchFailureMessage(
                 savedCount = 0,
                 selectedCount = 3,
-                causeMessage = "файл недоступен",
+                cause = IllegalStateException("content://private/image"),
             ),
-        ).isEqualTo("файл недоступен")
+        ).isEqualTo(
+            "Не удалось добавить фотографию. " +
+                "Проверьте файл и повторите попытку.",
+        )
+    }
+
+    @Test
+    fun `camera sync transport failure is actionable without its endpoint`() {
+        val message = cameraSyncFailureReason(
+            IOException("Failed to connect to internal-gateway:8080"),
+        )
+
+        assertThat(message).contains("Проверьте сеть")
+        assertThat(message).doesNotContain("internal-gateway")
+    }
+
+    @Test
+    fun `camera presentation mapping propagates cancellation`() {
+        val cancellation = CancellationException("screen closed")
+
+        try {
+            cameraBatchFailureMessage(0, 1, cancellation)
+            throw AssertionError("CancellationException expected")
+        } catch (actual: CancellationException) {
+            assertThat(actual).isSameInstanceAs(cancellation)
+        }
     }
 }

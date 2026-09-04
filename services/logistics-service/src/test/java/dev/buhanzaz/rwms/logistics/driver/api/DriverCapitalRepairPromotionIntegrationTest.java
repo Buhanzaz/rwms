@@ -140,7 +140,7 @@ class DriverCapitalRepairPromotionIntegrationTest {
     when(dependencies.readRepairPlaces(WAREHOUSE))
         .thenReturn(
             new LogisticsDependencyGateway.RepairPlaceProjection(
-                WAREHOUSE, 6, 5, 0, 6, 0, 0, false, List.of()));
+                WAREHOUSE, 6, 0, 6, 0, 0, false, List.of()));
 
     // The board list may lag a just-created task. A point lookup is authoritative for explicit
     // promotion and is deliberately the only read path that contains the registered card here.
@@ -159,7 +159,8 @@ class DriverCapitalRepairPromotionIntegrationTest {
             any(),
             anyInt(),
             any(),
-            any()))
+            any(),
+            isNull()))
         .thenAnswer(
             invocation -> {
               UUID externalTaskId = invocation.getArgument(1);

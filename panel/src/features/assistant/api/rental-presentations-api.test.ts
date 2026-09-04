@@ -290,4 +290,66 @@ describe("rental presentation API", () => {
       })
     ).resolves.toMatchObject({ state: "REJECTED" })
   })
+
+  it("maps a public presentation transport failure to safe Russian copy", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new TypeError("Failed to fetch public token"))
+    )
+
+    await expect(getPublicPresentation("opaque-token")).rejects.toMatchObject({
+      status: 0,
+      code: "NETWORK_ERROR",
+      message:
+        "Не удалось связаться с сервером. Проверьте подключение и повторите попытку.",
+      diagnosticMessage: "Failed to fetch public token",
+    })
+  })
+
+  it("maps malformed successful public presentation JSON to a typed safe error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("{not-json", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+    )
+
+    const request = getPublicPresentation("opaque-token")
+    await expect(request).rejects.toMatchObject({
+      status: 502,
+      code: "INVALID_API_RESPONSE",
+      message:
+        "Сервис вернул некорректные данные. Обновите страницу или повторите попытку позже.",
+    })
+    await expect(request).rejects.toHaveProperty("diagnosticMessage")
+  })
+
+  it("rejects a malformed successful booking response without exposing it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ internalState: "BROKEN" }), {
+          status: 202,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+    )
+
+    await expect(
+      confirmPublicPresentation({
+        token: "opaque-token",
+        selections: [{ rentalItemId: CABIN_ID, equipment: [] }],
+        idempotencyKey: IDEMPOTENCY_KEY,
+      })
+    ).rejects.toMatchObject({
+      status: 502,
+      code: "INVALID_API_RESPONSE",
+      message:
+        "Сервис вернул некорректные данные. Обновите страницу или повторите попытку позже.",
+      diagnosticMessage: "Public presentation booking response is invalid",
+    })
+  })
 })

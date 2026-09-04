@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { type ReactNode, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import {
   ArrowLeft01Icon,
@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardHeader,
@@ -40,6 +41,7 @@ import {
 import {
   formatOrderDateTime,
   ORDER_STATUS_LABELS,
+  type OrderSummary,
 } from "@/features/orders/domain/orders"
 import { useOrdersModule } from "@/features/orders/orders-module-context"
 
@@ -57,6 +59,58 @@ function DetailValue({
       <dt className="text-xs text-muted-foreground">{label}</dt>
       <dd className="font-medium whitespace-pre-wrap">{value || "—"}</dd>
     </div>
+  )
+}
+
+function ClientOrderMobileDetail({
+  label,
+  children,
+}: {
+  label: string
+  children: ReactNode
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <dt className="shrink-0 text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 text-right font-medium break-words">{children}</dd>
+    </div>
+  )
+}
+
+function ClientOrderMobileCard({ order }: { order: OrderSummary }) {
+  return (
+    <Link
+      to={`/orders/${order.id}`}
+      aria-label={`Открыть заказ ${order.number}`}
+      className="block rounded-xl outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 md:hidden"
+    >
+      <Card size="sm" className="transition-colors hover:bg-muted/40">
+        <CardHeader>
+          <CardTitle>{order.number}</CardTitle>
+          <CardAction>
+            <Badge variant={order.status === "DRAFT" ? "secondary" : "outline"}>
+              {ORDER_STATUS_LABELS[order.status]}
+            </Badge>
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          <dl className="flex flex-col gap-2 text-sm">
+            <ClientOrderMobileDetail label="Адрес">
+              {order.deliveryAddress ?? "Не указан"}
+            </ClientOrderMobileDetail>
+            <ClientOrderMobileDetail label="Телефон">
+              {order.contactPhone ?? "Не указан"}
+            </ClientOrderMobileDetail>
+            <ClientOrderMobileDetail label="Бытовки">
+              {order.unitCount}
+            </ClientOrderMobileDetail>
+            <ClientOrderMobileDetail label="Изменён">
+              {formatOrderDateTime(order.updatedAt)}
+            </ClientOrderMobileDetail>
+          </dl>
+        </CardContent>
+      </Card>
+    </Link>
   )
 }
 
@@ -225,7 +279,7 @@ export function ClientDetailPage() {
             </p>
           ) : (
             <div className="flex flex-col gap-3">
-              <Table>
+              <Table className="hidden md:table">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Номер</TableHead>
@@ -272,6 +326,11 @@ export function ClientDetailPage() {
                   ))}
                 </TableBody>
               </Table>
+              <div className="flex flex-col gap-3 md:hidden">
+                {orders.content.map((order) => (
+                  <ClientOrderMobileCard key={order.id} order={order} />
+                ))}
+              </div>
               <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
                 <span>Всего заказов: {orders.totalElements}</span>
                 <div className="flex gap-2">

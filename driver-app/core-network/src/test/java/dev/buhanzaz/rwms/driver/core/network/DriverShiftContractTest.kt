@@ -150,10 +150,77 @@ class DriverShiftContractTest {
         assertThat(restored.shift?.medicalCheck?.confirmationType).isEqualTo("SELF_CONFIRMATION_TEST")
         assertThat(restored.briefing?.weather?.hazards?.single()?.type).isEqualTo("HIGH_WIND")
         assertThat(restored.vehicle?.trailer?.registrationNumber).isEqualTo("В456ВВ78")
+        assertThat(restored.vehicle?.cabinCapacity).isEqualTo(2)
         assertThat(restored.inspection?.items?.single()?.defect?.severity).isEqualTo("BLOCKING")
         assertThat(restored.taskSummary?.canStartClosing).isTrue()
         assertThat(restored.closingReport?.odometerDistance).isEqualTo(214)
+        assertThat(restored.operations.map(DriverShiftRouteOperationDto::sequence))
+            .containsExactly(1, 2, 3, 4, 5, 6, 7, 8).inOrder()
+        assertThat(restored.operations.map(DriverShiftRouteOperationDto::kind))
+            .containsExactly(
+                "ORIGIN_START",
+                "TRANSFER_LOAD",
+                "INBOUND_POSITIONING",
+                "TRANSFER_UNLOAD",
+                "DEPOT_LOAD",
+                "DELIVERY",
+                "DEPOT_RETURN",
+                "RETURN_POSITIONING",
+            ).inOrder()
+        assertThat(restored.operations[2].plannedDeparture).isEqualTo("2026-08-30T05:45:00Z")
+        assertThat(restored.operations[2].plannedArrival).isEqualTo("2026-08-30T07:00:00Z")
+        assertThat(restored.operations.mapNotNull(DriverShiftRouteOperationDto::sourceTransferId))
+            .containsExactly("transfer-1", "transfer-1").inOrder()
         assertThat(restored.photos.single().mediaGeneration).isEqualTo(2)
+    }
+
+    @Test
+    fun `legacy today response without route operations restores an empty snapshot`() {
+        val restored = json.decodeFromString<TodayDriverShiftDto>(
+            """
+            {
+              "enabled": true,
+              "serverTime": "2026-08-30T16:47:00Z",
+              "nextRequiredAction": "SHIFT_NOT_AVAILABLE",
+              "photos": []
+            }
+            """.trimIndent(),
+        )
+
+        assertThat(restored.operations).isEmpty()
+    }
+
+    @Test
+    fun `legacy vehicle and route operation omit additive transfer fields`() {
+        val restored = json.decodeFromString<TodayDriverShiftDto>(
+            """
+            {
+              "enabled": true,
+              "serverTime": "2026-08-30T16:47:00Z",
+              "nextRequiredAction": "SHOW_TASKS",
+              "vehicle": {
+                "id": "vehicle-1",
+                "name": "MAN TGS",
+                "registrationNumber": "А123АА78",
+                "configurationType": "TRUCK"
+              },
+              "operations": [{
+                "sequence": 1,
+                "kind": "DEPOT_LOAD",
+                "warehouseId": "warehouse-1",
+                "locationLabel": "Склад Санкт-Петербург",
+                "plannedArrival": "2026-08-30T05:30:00Z",
+                "plannedDeparture": "2026-08-30T05:45:00Z",
+                "loadBefore": 0,
+                "loadAfter": 1
+              }],
+              "photos": []
+            }
+            """.trimIndent(),
+        )
+
+        assertThat(restored.vehicle?.cabinCapacity).isNull()
+        assertThat(restored.operations.single().sourceTransferId).isNull()
     }
 
     private inline fun <reified T : Annotation> route(methodName: String): String {
@@ -234,6 +301,7 @@ class DriverShiftContractTest {
             name = "MAN TGS",
             registrationNumber = "А123АА78",
             configurationType = "TRUCK_WITH_TRAILER",
+            cabinCapacity = 2,
             startOdometer = 128_428,
             trailer = DriverShiftTrailerDto(
                 id = "trailer-1",
@@ -289,6 +357,90 @@ class DriverShiftContractTest {
             photoCount = 1,
             completedAt = "2026-08-30T16:45:00Z",
         ),
+        operations = listOf(
+            routeOperation(
+                1,
+                "ORIGIN_START",
+                "warehouse-1",
+                "Склад Санкт-Петербург",
+                "2026-08-30T05:30:00Z",
+                "2026-08-30T05:30:00Z",
+                0,
+                0,
+            ),
+            routeOperation(
+                2,
+                "TRANSFER_LOAD",
+                "warehouse-1",
+                "Склад Санкт-Петербург",
+                "2026-08-30T05:30:00Z",
+                "2026-08-30T05:45:00Z",
+                0,
+                1,
+                sourceTransferId = "transfer-1",
+            ),
+            routeOperation(
+                3,
+                "INBOUND_POSITIONING",
+                "warehouse-2",
+                "Склад Великий Новгород",
+                "2026-08-30T07:00:00Z",
+                "2026-08-30T05:45:00Z",
+                1,
+                1,
+            ),
+            routeOperation(
+                4,
+                "TRANSFER_UNLOAD",
+                "warehouse-2",
+                "Склад Великий Новгород",
+                "2026-08-30T07:00:00Z",
+                "2026-08-30T07:15:00Z",
+                1,
+                0,
+                sourceTransferId = "transfer-1",
+            ),
+            routeOperation(
+                5,
+                "DEPOT_LOAD",
+                "warehouse-2",
+                "Склад Великий Новгород",
+                "2026-08-30T07:15:00Z",
+                "2026-08-30T07:30:00Z",
+                0,
+                1,
+            ),
+            DriverShiftRouteOperationDto(
+                sequence = 6,
+                kind = "DELIVERY",
+                sourceTaskId = "task-1",
+                locationLabel = "Невский проспект, 1",
+                plannedArrival = "2026-08-30T08:00:00Z",
+                plannedDeparture = "2026-08-30T08:20:00Z",
+                loadBefore = 1,
+                loadAfter = 0,
+            ),
+            routeOperation(
+                7,
+                "DEPOT_RETURN",
+                "warehouse-2",
+                "Склад Великий Новгород",
+                "2026-08-30T09:00:00Z",
+                "2026-08-30T09:00:00Z",
+                0,
+                0,
+            ),
+            routeOperation(
+                8,
+                "RETURN_POSITIONING",
+                "warehouse-1",
+                "Склад Санкт-Петербург",
+                "2026-08-30T10:30:00Z",
+                "2026-08-30T09:00:00Z",
+                0,
+                0,
+            ),
+        ),
         photos = listOf(
             DriverShiftPhotoDto(
                 id = "photo-1",
@@ -306,5 +458,27 @@ class DriverShiftContractTest {
                 sha256 = "a".repeat(64),
             ),
         ),
+    )
+
+    private fun routeOperation(
+        sequence: Int,
+        kind: String,
+        warehouseId: String,
+        locationLabel: String,
+        plannedArrival: String,
+        plannedDeparture: String,
+        loadBefore: Int,
+        loadAfter: Int,
+        sourceTransferId: String? = null,
+    ): DriverShiftRouteOperationDto = DriverShiftRouteOperationDto(
+        sequence = sequence,
+        kind = kind,
+        warehouseId = warehouseId,
+        sourceTransferId = sourceTransferId,
+        locationLabel = locationLabel,
+        plannedArrival = plannedArrival,
+        plannedDeparture = plannedDeparture,
+        loadBefore = loadBefore,
+        loadAfter = loadAfter,
     )
 }

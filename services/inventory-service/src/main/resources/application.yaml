@@ -108,6 +108,7 @@ rwms:
       client-id: ${INVENTORY_CLIENT_ID:inventory-service}
       client-secret: ${INVENTORY_CLIENT_SECRET:}
       warehouse-base-url: ${WAREHOUSE_INTERNAL_BASE_URL:}
+      task-board-base-url: ${TASK_BOARD_INTERNAL_BASE_URL:}
       asset-base-url: ${ASSET_INTERNAL_BASE_URL:}
       maintenance-base-url: ${MAINTENANCE_INTERNAL_BASE_URL:}
       logistics-base-url: ${LOGISTICS_INTERNAL_BASE_URL:}

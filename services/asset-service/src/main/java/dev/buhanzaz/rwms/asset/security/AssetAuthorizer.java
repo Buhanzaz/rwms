@@ -1,10 +1,11 @@
 package dev.buhanzaz.rwms.asset.security;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
-import java.nio.charset.StandardCharsets;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
 import org.springframework.security.access.AccessDeniedException;
@@ -21,6 +22,9 @@ public class AssetAuthorizer {
   private static final String MAINTENANCE_CLIENT_ID = "maintenance-service";
   private static final String INVENTORY_CLIENT_ID = "inventory-service";
   private static final String LOGISTICS_CLIENT_ID = "logistics-service";
+  private static final String ADMIN_WEB_CLIENT_ID = "rwms-admin-web";
+  private static final Set<String> INTERACTIVE_PROTOCOL_SCOPES =
+      Set.of("openid", "profile", "offline_access");
   private final boolean developmentPublicBypass;
 
   public AssetAuthorizer(
@@ -172,9 +176,29 @@ public class AssetAuthorizer {
 
   private void requireUserScope(Jwt jwt, String scope) {
     if (developmentPublicBypass) return;
+    if (isAdministrationApplication(jwt)) return;
     if (jwt == null || !"USER".equals(jwt.getClaimAsString("principal_type")) || !scopes(jwt).contains(scope)) {
       throw new AccessDeniedException("Required USER scope is missing");
     }
+  }
+
+  /**
+   * The administration SPA has a deliberately isolated application scope instead of the regular
+   * RWMS user scopes. It is accepted only for global administrators, not as a substitute for a
+   * warehouse grant or for another interactive client.
+   */
+  private static boolean isAdministrationApplication(Jwt jwt) {
+    if (jwt == null
+        || !"USER".equals(jwt.getClaimAsString("principal_type"))
+        || !ADMIN_WEB_CLIENT_ID.equals(jwt.getClaimAsString("client_id"))) {
+      return false;
+    }
+    String role = jwt.getClaimAsString("global_role");
+    if (!"SYSTEM_ADMIN".equals(role) && !"WMS_ADMIN".equals(role)) return false;
+    return scopes(jwt).stream()
+        .filter(scope -> !INTERACTIVE_PROTOCOL_SCOPES.contains(scope))
+        .toList()
+        .equals(List.of("admin.manage"));
   }
 
   private void requireWarehouse(Jwt jwt, UUID warehouseId, AccessLevel required) {

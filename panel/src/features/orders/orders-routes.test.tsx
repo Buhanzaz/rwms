@@ -39,7 +39,8 @@ function RuntimeProbe() {
     <output data-testid="orders-runtime">
       {runtime.accessToken}|{runtime.currentUser?.id}|
       {runtime.currentUser?.globalRole}|{runtime.warehouses[0]?.name}|
-      {runtime.warehouses[0]?.address}
+      {runtime.warehouses[0]?.address}|
+      {String(runtime.capabilities.logisticsTaskNavigation)}
     </output>
   )
 }
@@ -53,7 +54,7 @@ describe("VaultPanelOrdersModuleAdapter", () => {
     )
 
     expect(screen.getByTestId("orders-runtime").textContent).toBe(
-      "orders-token|11111111-1111-4111-8111-111111111111|WMS_ADMIN|Москва|Складская, 1"
+      "orders-token|11111111-1111-4111-8111-111111111111|WMS_ADMIN|Москва|Складская, 1|false"
     )
   })
 })

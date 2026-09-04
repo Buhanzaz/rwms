@@ -20,10 +20,12 @@ is built only with the reviewed APK supplied explicitly by the release process.
 
 A published manifest requires:
 
+- the `PRODUCTION` channel, exact non-debug application ID and version;
 - an immutable, credential-free HTTPS download URL;
 - a lower-case 64-character SHA-256 checksum;
 - an ISO publication date; and
-- the reviewed APK's actual package/version metadata; and
+- the reviewed APK's actual package/version/single-signer metadata pinned by
+  `release-trust-policy.json`; and
 - `RWMS_WORKER_APK` to point to that reviewed APK while the site is built.
 
 The source checkout never stores an APK. For a published release, the build
@@ -52,7 +54,9 @@ For a published manifest, supply the verified APK explicitly:
 and proves the generated Worker's security, root-route and download-route
 handling. `npm run build:cloudflare` then creates the deployable OpenNext
 Worker and static assets under '.open-next/'. For a published release, the
-checks also prove that the generated APK bytes match the rendered checksum.
+checks also prove that the generated APK bytes, package/version and signer from
+`aapt`/`apksigner` match the manifest and pinned channel policy. An unpinned or
+cross-channel certificate fails closed.
 
 ## Published VPS route
 

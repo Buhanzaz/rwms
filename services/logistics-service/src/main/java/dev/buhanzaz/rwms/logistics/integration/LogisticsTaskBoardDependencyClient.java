@@ -8,7 +8,10 @@ import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskWorkerContent;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import org.springframework.core.ParameterizedTypeReference;
 
 /**
@@ -20,6 +23,9 @@ import org.springframework.core.ParameterizedTypeReference;
 final class LogisticsTaskBoardDependencyClient {
   private static final String TASK_BOARD_CLIENT = "logistics-task-board";
   private static final String TASK_BOARD_SCOPE = "task-board.logistics";
+  private static final Set<String> CONTRACTOR_EVIDENCE_STATES =
+      Set.of("RESERVED", "UPLOADING", "READY", "REVIEW_REQUIRED", "REJECTED");
+  private static final Pattern SHA256 = Pattern.compile("^[0-9a-f]{64}$");
   static final String DRIVER_SHIFT_PLAN_CLIENT =
       "logistics-task-board-driver-shift-plan";
   static final String DRIVER_SHIFT_PLAN_SCOPE = "task-board.driver-shifts.plan";
@@ -30,8 +36,11 @@ final class LogisticsTaskBoardDependencyClient {
   private final String taskBoardTaskBase;
   private final String taskBoardDriverBase;
   private final String taskBoardDriverTaskBase;
+  private final String taskBoardContractorExecutionBase;
   private final String taskBoardOperationalAssignmentBase;
   private final String taskBoardDriverShiftPlanBase;
+  private final String taskBoardPlanningReplacementBase;
+  private final String taskBoardPlanningReplanHoldBase;
 
   LogisticsTaskBoardDependencyClient(LogisticsOAuthHttpTransport transport, String taskBoardBase) {
     this.transport = transport;
@@ -41,10 +50,15 @@ final class LogisticsTaskBoardDependencyClient {
     taskBoardTaskBase = taskBoardBase + "/api/internal/task-board/v1/tasks";
     taskBoardDriverBase = taskBoardBase + "/api/internal/task-board/v1/logistics/warehouses";
     taskBoardDriverTaskBase = taskBoardBase + "/api/internal/task-board/v1/logistics/tasks";
+    taskBoardContractorExecutionBase =
+        taskBoardBase + "/api/internal/task-board/v1/logistics/contractor-execution/workers";
     taskBoardOperationalAssignmentBase =
         taskBoardBase + "/api/internal/task-board/v1/logistics/operational-assignments";
-    taskBoardDriverShiftPlanBase =
-        taskBoardBase + "/api/internal/task-board/v1/driver-shift-plans";
+    taskBoardDriverShiftPlanBase = taskBoardBase + "/api/internal/task-board/v1/driver-shift-plans";
+    taskBoardPlanningReplacementBase =
+        taskBoardBase + "/api/internal/task-board/v1/logistics/planning-assignments";
+    taskBoardPlanningReplanHoldBase =
+        taskBoardBase + "/api/internal/task-board/v1/logistics/planning-replan-holds";
   }
 
   List<WarehouseDriverIdentity> listWarehouseDrivers(UUID warehouseId) {
@@ -105,6 +119,216 @@ final class LogisticsTaskBoardDependencyClient {
         DRIVER_SHIFT_PLAN_CLIENT,
         DRIVER_SHIFT_PLAN_SCOPE,
         DEFAULT);
+  }
+
+  /** Calls the task-board-owned all-or-nothing replacement boundary with the existing scope. */
+  PlanningReplacementResult replacePlanningAssignments(
+      UUID sourcePlanId, UUID idempotencyKey, PlanningReplacementSnapshot replacement) {
+    if (sourcePlanId == null || idempotencyKey == null || replacement == null) {
+      throw new IllegalArgumentException("Planner replacement identity is required");
+    }
+    PlanningReplacementResponse response =
+        transport.put(
+            taskBoardPlanningReplacementBase + "/" + sourcePlanId,
+            idempotencyKey,
+            new PlanningReplacementRequest(
+                replacement.warehouseId(),
+                replacement.date(),
+                replacement.expectedSourcePlanVersion(),
+                replacement.replacementPlanVersion(),
+                replacement.assignments().stream()
+                    .map(
+                        item ->
+                            new PlanningReplacementTaskRequest(
+                                item.externalTaskId(),
+                                item.sourceTaskId(),
+                                item.taskWarehouseId(),
+                                item.scheduledDate(),
+                                item.expectedTaskVersion(),
+                                item.expectedEntryVersion(),
+                                item.targetQueuePosition(),
+                                audienceRequest(item.driverAudience())))
+                    .toList(),
+                replacement.driverShiftPlans().stream()
+                    .map(
+                        item ->
+                            new PlanningReplacementShiftRequest(
+                                item.sourceShiftId(), item.plan()))
+                    .toList()),
+            PlanningReplacementResponse.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE,
+            "Task-board returned an empty planner replacement",
+            DEFAULT);
+    if (response == null
+        || !("APPLIED".equals(response.outcome()) || "REPLAYED".equals(response.outcome()))
+        || !sourcePlanId.equals(response.sourcePlanId())
+        || response.sourcePlanVersion() != replacement.replacementPlanVersion()
+        || !replacement.warehouseId().equals(response.warehouseId())
+        || !replacement.date().equals(response.date())
+        || response.assignments() == null
+        || response.driverShiftPlans() == null) {
+      throw malformed("Task-board returned an invalid planner replacement");
+    }
+    return new PlanningReplacementResult(
+        response.outcome(),
+        response.sourcePlanId(),
+        response.sourcePlanVersion(),
+        response.warehouseId(),
+        response.date(),
+        response.assignments().stream()
+            .map(
+                item ->
+                    new PlanningReplacementTaskResult(
+                        item.externalTaskId(),
+                        item.taskVersion(),
+                        item.entryId(),
+                        item.entryVersion(),
+                        item.queuePosition()))
+            .toList(),
+        response.driverShiftPlans().stream()
+            .map(
+                item ->
+                    new PlanningReplacementShiftResult(
+                        item.sourceShiftId(),
+                        item.shiftPlanVersion(),
+                        item.sourcePlanVersion()))
+            .toList());
+  }
+
+  /** Creates or exactly replays task-board's pre-start execution hold. */
+  PlanningReplanPrepareResult preparePlanningReschedule(
+      UUID sourcePlanId, UUID idempotencyKey, PlanningReplanPrepareSnapshot request) {
+    if (sourcePlanId == null || idempotencyKey == null || request == null) {
+      throw new IllegalArgumentException("Published reschedule preparation identity is required");
+    }
+    PlanningReplanPrepareResponse response =
+        transport.post(
+            taskBoardPlanningReplanHoldBase + "/" + sourcePlanId,
+            idempotencyKey,
+            new PlanningReplanPrepareRequest(
+                request.warehouseId(),
+                request.date(),
+                request.expectedSourcePlanVersion(),
+                request.replacementPlanVersion(),
+                new PlanningRemovedTaskRequest(
+                    request.removedAssignment().externalTaskId(),
+                    request.removedAssignment().sourceTaskId(),
+                    request.removedAssignment().taskWarehouseId(),
+                    request.removedAssignment().scheduledDate(),
+                    request.removedAssignment().expectedTaskVersion(),
+                    request.removedAssignment().expectedEntryVersion()),
+                request.remainingAssignments().stream()
+                    .map(
+                        item ->
+                            new PlanningReplacementTaskRequest(
+                                item.externalTaskId(),
+                                item.sourceTaskId(),
+                                item.taskWarehouseId(),
+                                item.scheduledDate(),
+                                item.expectedTaskVersion(),
+                                item.expectedEntryVersion(),
+                                item.targetQueuePosition(),
+                                audienceRequest(item.driverAudience())))
+                    .toList(),
+                request.driverShiftPlans().stream()
+                    .map(
+                        item ->
+                            new PlanningReplacementShiftRequest(
+                                item.sourceShiftId(), item.plan()))
+                    .toList()),
+            PlanningReplanPrepareResponse.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE,
+            "Task-board returned an empty published reschedule hold",
+            DEFAULT);
+    if (response == null
+        || !Set.of("PREPARED", "REPLAYED").contains(response.outcome())
+        || response.holdId() == null
+        || !sourcePlanId.equals(response.sourcePlanId())
+        || response.sourcePlanVersion() != request.expectedSourcePlanVersion()
+        || !request.removedAssignment().externalTaskId().equals(response.removedExternalTaskId())) {
+      throw malformed("Task-board returned an invalid published reschedule hold");
+    }
+    return new PlanningReplanPrepareResult(
+        response.outcome(),
+        response.holdId(),
+        response.sourcePlanId(),
+        response.sourcePlanVersion(),
+        response.removedExternalTaskId());
+  }
+
+  /** Commits or exactly replays the task-board half of a published reschedule. */
+  PlanningReplanCommitResult commitPlanningReschedule(UUID holdId, UUID idempotencyKey) {
+    PlanningReplanCommitResponse response =
+        transport.post(
+            taskBoardPlanningReplanHoldBase + "/" + holdId + "/commit",
+            idempotencyKey,
+            Map.of(),
+            PlanningReplanCommitResponse.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE,
+            "Task-board returned an empty published reschedule commit",
+            DEFAULT);
+    if (response == null
+        || !Set.of("APPLIED", "REPLAYED").contains(response.outcome())
+        || !holdId.equals(response.holdId())
+        || response.sourcePlanId() == null
+        || response.sourcePlanVersion() < 2
+        || response.removedAssignment() == null
+        || response.remainingAssignments() == null
+        || response.driverShiftPlans() == null) {
+      throw malformed("Task-board returned an invalid published reschedule commit");
+    }
+    return new PlanningReplanCommitResult(
+        response.outcome(),
+        response.holdId(),
+        response.sourcePlanId(),
+        response.sourcePlanVersion(),
+        new PlanningReplanRemovedTaskResult(
+            response.removedAssignment().externalTaskId(),
+            response.removedAssignment().taskVersion(),
+            response.removedAssignment().status()),
+        response.remainingAssignments().stream()
+            .map(
+                item ->
+                    new PlanningReplacementTaskResult(
+                        item.externalTaskId(),
+                        item.taskVersion(),
+                        item.entryId(),
+                        item.entryVersion(),
+                        item.queuePosition()))
+            .toList(),
+        response.driverShiftPlans().stream()
+            .map(
+                item ->
+                    new PlanningReplacementShiftResult(
+                        item.sourceShiftId(),
+                        item.shiftPlanVersion(),
+                        item.sourcePlanVersion()))
+            .toList());
+  }
+
+  /** Releases or exactly replays a hold before the owner commitment changes. */
+  PlanningReplanReleaseResult releasePlanningReschedule(UUID holdId, UUID idempotencyKey) {
+    PlanningReplanReleaseResponse response =
+        transport.post(
+            taskBoardPlanningReplanHoldBase + "/" + holdId + "/release",
+            idempotencyKey,
+            Map.of(),
+            PlanningReplanReleaseResponse.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE,
+            "Task-board returned an empty published reschedule release",
+            DEFAULT);
+    if (response == null
+        || !Set.of("RELEASED", "REPLAYED").contains(response.outcome())
+        || !holdId.equals(response.holdId())
+        || response.sourcePlanId() == null) {
+      throw malformed("Task-board returned an invalid published reschedule release");
+    }
+    return new PlanningReplanReleaseResult(
+        response.outcome(), response.holdId(), response.sourcePlanId());
   }
 
   WorkerOperationalAssignment createWorkerOperationalAssignment(
@@ -364,6 +588,34 @@ final class LogisticsTaskBoardDependencyClient {
       int priority,
       DriverTaskAudience driverAudience,
       DriverTaskWorkerContent workerContent) {
+    return registerDriverTask(
+        warehouseId,
+        externalTaskId,
+        sourceId,
+        title,
+        unitNumber,
+        description,
+        queueDefinitionId,
+        scheduledDate,
+        priority,
+        driverAudience,
+        workerContent,
+        null);
+  }
+
+  DriverBoardTask registerDriverTask(
+      UUID warehouseId,
+      UUID externalTaskId,
+      UUID sourceId,
+      String title,
+      String unitNumber,
+      String description,
+      UUID queueDefinitionId,
+      LocalDate scheduledDate,
+      int priority,
+      DriverTaskAudience driverAudience,
+      DriverTaskWorkerContent workerContent,
+      DriverTaskPlannerLineage plannerLineage) {
     DriverTaskWorkerContent content =
         workerContent == null ? DriverTaskWorkerContent.empty() : workerContent;
     DriverBoardTaskResponse response =
@@ -382,7 +634,14 @@ final class LogisticsTaskBoardDependencyClient {
                 priority,
                 new DriverTaskSourceRequest("LOGISTICS_DRIVER_TASK", sourceId),
                 "SCHEDULED",
-                audienceRequest(driverAudience)),
+                audienceRequest(driverAudience),
+                plannerLineage == null
+                    ? null
+                    : new PlannerTaskLineageRequest(
+                        plannerLineage.sourcePlanId(),
+                        plannerLineage.sourcePlanVersion(),
+                        plannerLineage.sourcePlanWarehouseId(),
+                        plannerLineage.sourcePlanDate())),
             DriverBoardTaskResponse.class,
             TASK_BOARD_CLIENT,
             TASK_BOARD_SCOPE,
@@ -435,6 +694,116 @@ final class LogisticsTaskBoardDependencyClient {
             TASK_BOARD_SCOPE,
             "Dependency returned an empty response",
             DEFAULT));
+  }
+
+  ContractorTaskExecution readContractorTaskExecution(UUID workerId, UUID externalTaskId) {
+    requireContractorTaskIdentity(workerId, externalTaskId);
+    ContractorTaskExecution response =
+        transport.get(
+            contractorTaskPath(workerId, externalTaskId),
+            ContractorTaskExecution.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE,
+            "Task-board returned an empty contractor task execution",
+            DEFAULT);
+    return contractorExecution(response, workerId, externalTaskId);
+  }
+
+  ContractorTaskActionResult applyContractorTaskAction(
+      UUID workerId,
+      UUID externalTaskId,
+      UUID entryId,
+      UUID idempotencyKey,
+      String action,
+      long expectedVersion,
+      UUID evidenceId) {
+    requireContractorTaskIdentity(workerId, externalTaskId);
+    if (entryId == null
+        || idempotencyKey == null
+        || expectedVersion < 0
+        || !("START".equals(action) || "COMPLETE".equals(action))
+        || ("START".equals(action) && evidenceId != null)) {
+      throw new IllegalArgumentException("Contractor task action is invalid");
+    }
+    ContractorTaskActionResponse response =
+        transport.post(
+            contractorTaskPath(workerId, externalTaskId) + "/entries/" + entryId + "/actions",
+            idempotencyKey,
+            new ContractorTaskActionRequest(idempotencyKey, action, expectedVersion, evidenceId),
+            ContractorTaskActionResponse.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE,
+            "Task-board returned an empty contractor task action",
+            DEFAULT);
+    if (response == null
+        || !"APPLIED".equals(response.outcome())
+        || response.currentVersion() < 0) {
+      throw malformed("Task-board returned an invalid contractor task action");
+    }
+    ContractorTaskExecution task = contractorExecution(response.task(), workerId, externalTaskId);
+    boolean currentEntry =
+        task.route().stream()
+            .anyMatch(
+                entry ->
+                    entryId.equals(entry.entryId())
+                        && entry.version() == response.currentVersion());
+    if (!currentEntry) {
+      throw malformed("Task-board returned a mismatched contractor task action");
+    }
+    return new ContractorTaskActionResult(response.currentVersion(), task);
+  }
+
+  ContractorEvidenceReservation reserveContractorTaskEvidence(
+      UUID workerId,
+      UUID externalTaskId,
+      UUID entryId,
+      UUID evidenceId,
+      OffsetDateTime capturedAt,
+      String contentType,
+      long sizeBytes,
+      String sha256) {
+    requireContractorTaskIdentity(workerId, externalTaskId);
+    if (entryId == null
+        || evidenceId == null
+        || capturedAt == null
+        || !("image/jpeg".equals(contentType) || "image/webp".equals(contentType))
+        || sizeBytes < 1
+        || sizeBytes > ("image/jpeg".equals(contentType) ? 15_728_640 : 1_048_576)
+        || sha256 == null
+        || !SHA256.matcher(sha256).matches()) {
+      throw new IllegalArgumentException("Contractor task evidence reservation is invalid");
+    }
+    ContractorEvidenceReservation response =
+        transport.post(
+            contractorTaskPath(workerId, externalTaskId)
+                + "/entries/"
+                + entryId
+                + "/evidence-reservations",
+            evidenceId,
+            new ContractorEvidenceReservationRequest(
+                evidenceId, evidenceId, capturedAt, contentType, sizeBytes, sha256),
+            ContractorEvidenceReservation.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE,
+            "Task-board returned an empty contractor evidence reservation",
+            DEFAULT);
+    if (response == null
+        || !evidenceId.equals(response.evidenceId())
+        || response.version() < 0
+        || !CONTRACTOR_EVIDENCE_STATES.contains(response.state())
+        || !entryId.equals(response.entryId())
+        || !"TASK_BOARD_ENTRY".equals(response.ownerType())
+        || !entryId.equals(response.ownerId())
+        || response.warehouseId() == null
+        || !evidenceId.equals(response.clientReferenceId())
+        || response.capturedAt() == null
+        || !capturedAt.toInstant().equals(response.capturedAt().toInstant())
+        || !contentType.equals(response.contentType())
+        || sizeBytes != response.sizeBytes()
+        || !sha256.equals(response.sha256())) {
+      throw malformed("Task-board returned an invalid contractor evidence reservation");
+    }
+    return response;
   }
 
   DriverBoardTask cancelDriverTask(UUID externalTaskId, long expectedTaskVersion) {
@@ -707,6 +1076,167 @@ final class LogisticsTaskBoardDependencyClient {
         response.cancelledAt());
   }
 
+  private String contractorTaskPath(UUID workerId, UUID externalTaskId) {
+    return taskBoardContractorExecutionBase + "/" + workerId + "/tasks/" + externalTaskId;
+  }
+
+  private static void requireContractorTaskIdentity(UUID workerId, UUID externalTaskId) {
+    if (workerId == null || externalTaskId == null) {
+      throw new IllegalArgumentException("Contractor task identity is required");
+    }
+  }
+
+  private static ContractorTaskExecution contractorExecution(
+      ContractorTaskExecution response, UUID workerId, UUID externalTaskId) {
+    if (response == null
+        || !workerId.equals(response.workerId())
+        || !externalTaskId.equals(response.externalTaskId())
+        || response.taskId() == null
+        || response.taskVersion() < 0
+        || response.warehouseId() == null
+        || invalidRequiredText(response.title(), 256)
+        || invalidOptionalText(response.description(), 2_000)
+        || invalidOptionalText(response.unitNumber(), 64)
+        || response.scheduledDate() == null
+        || response.priority() < 1
+        || response.priority() > 5
+        || !("ACTIVE".equals(response.status())
+            || "DONE".equals(response.status())
+            || "CANCELLED".equals(response.status()))
+        || response.source() == null
+        || !"LOGISTICS_DRIVER_TASK".equals(response.source().type())
+        || response.source().sourceId() == null
+        || response.route() == null
+        || response.route().isEmpty()) {
+      throw malformed("Task-board returned an invalid contractor task execution");
+    }
+    Set<UUID> entryIds = new java.util.HashSet<>();
+    for (int index = 0; index < response.route().size(); index++) {
+      ContractorTaskRouteEntry entry = response.route().get(index);
+      if (entry == null
+          || entry.entryId() == null
+          || !entryIds.add(entry.entryId())
+          || entry.version() < 0
+          || entry.routeIndex() < 0
+          || entry.routeStepIndex() != index
+          || entry.routeStepCount() != response.route().size()
+          || entry.queueName() == null
+          || entry.queueName().isBlank()
+          || !("WAITING".equals(entry.status())
+              || "IN_PROGRESS".equals(entry.status())
+              || "PAUSED".equals(entry.status())
+              || "DONE".equals(entry.status())
+              || "CANCELLED".equals(entry.status()))
+          || (entry.plannedDurationMinutes() != null && entry.plannedDurationMinutes() < 0)
+          || invalidOptionalText(entry.taskText(), 2_000)
+          || entry.resultPhotoMinCount() < 0
+          || entry.works() == null
+          || entry.materials() == null
+          || entry.comments() == null
+          || entry.sourceMedia() == null
+          || entry.evidence() == null
+          || entry.works().size() > 100
+          || entry.materials().size() > 100
+          || entry.comments().size() > 100
+          || entry.sourceMedia().size() > 100
+          || entry.evidence().size() > 100
+          || entry.works().stream().anyMatch(java.util.Objects::isNull)
+          || entry.materials().stream().anyMatch(java.util.Objects::isNull)
+          || entry.comments().stream().anyMatch(java.util.Objects::isNull)
+          || entry.sourceMedia().stream().anyMatch(java.util.Objects::isNull)
+          || entry.evidence().stream().anyMatch(java.util.Objects::isNull)
+          || invalidContractorEntryContent(entry)) {
+        throw malformed("Task-board returned an invalid contractor task route");
+      }
+    }
+    return response;
+  }
+
+  private static boolean invalidContractorEntryContent(ContractorTaskRouteEntry entry) {
+    Set<UUID> sourceMediaIds = new java.util.HashSet<>();
+    if (entry.sourceMedia().stream()
+        .anyMatch(
+            media ->
+                media.mediaId() == null
+                    || !sourceMediaIds.add(media.mediaId())
+                    || media.generation() < 1
+                    || invalidOptionalText(media.contentType(), 128)
+                    || media.recordedAt() == null)) {
+      return true;
+    }
+    Set<UUID> workIds = new java.util.HashSet<>();
+    if (entry.works().stream()
+        .anyMatch(
+            work ->
+                work.id() == null
+                    || !workIds.add(work.id())
+                    || invalidRequiredText(work.name(), 1_000)
+                    || !Double.isFinite(work.quantity())
+                    || work.quantity() < 0
+                    || invalidOptionalText(work.unit(), 32)
+                    || (work.durationMinutes() != null && work.durationMinutes() < 0)
+                    || invalidOptionalText(work.comment(), 2_000)
+                    || work.sourceMediaIds() == null
+                    || work.sourceMediaIds().size() > 100
+                    || work.sourceMediaIds().stream().anyMatch(java.util.Objects::isNull)
+                    || work.sourceMediaIds().stream().distinct().count()
+                        != work.sourceMediaIds().size()
+                    || !sourceMediaIds.containsAll(work.sourceMediaIds()))) {
+      return true;
+    }
+    Set<UUID> materialIds = new java.util.HashSet<>();
+    if (entry.materials().stream()
+        .anyMatch(
+            material ->
+                material.id() == null
+                    || !materialIds.add(material.id())
+                    || invalidRequiredText(material.name(), 1_000)
+                    || !Double.isFinite(material.quantity())
+                    || material.quantity() < 0
+                    || invalidOptionalText(material.unit(), 32))) {
+      return true;
+    }
+    Set<UUID> commentIds = new java.util.HashSet<>();
+    if (entry.comments().stream()
+        .anyMatch(
+            comment ->
+                comment.id() == null
+                    || !commentIds.add(comment.id())
+                    || invalidRequiredText(comment.text(), 2_000)
+                    || invalidOptionalText(comment.authorDisplayName(), 256)
+                    || comment.createdAt() == null)) {
+      return true;
+    }
+    Set<UUID> evidenceIds = new java.util.HashSet<>();
+    return entry.evidence().stream()
+        .anyMatch(
+            evidence ->
+                evidence.evidenceId() == null
+                    || !evidenceIds.add(evidence.evidenceId())
+                    || evidence.version() < 0
+                    || evidence.capturedAt() == null
+                    || evidence.recordedAt() == null
+                    || !("RESERVED".equals(evidence.state())
+                        || "UPLOADING".equals(evidence.state())
+                        || "READY".equals(evidence.state())
+                        || "REVIEW_REQUIRED".equals(evidence.state())
+                        || "REJECTED".equals(evidence.state()))
+                    || (evidence.mediaId() == null) != (evidence.mediaGeneration() == null)
+                    || (evidence.mediaGeneration() != null && evidence.mediaGeneration() < 1)
+                    || ("READY".equals(evidence.state()) && evidence.mediaId() == null)
+                    || invalidOptionalText(evidence.reviewReason(), 512)
+                    || !("image/jpeg".equals(evidence.contentType())
+                        || "image/webp".equals(evidence.contentType())));
+  }
+
+  private static boolean invalidRequiredText(String value, int maximum) {
+    return value == null || value.isBlank() || value.length() > maximum;
+  }
+
+  private static boolean invalidOptionalText(String value, int maximum) {
+    return value != null && value.length() > maximum;
+  }
+
   private static DriverBoardTask driverBoardEntry(
       DriverBoardEntryResponse response, UUID warehouseId) {
     if (response == null
@@ -857,6 +1387,104 @@ final class LogisticsTaskBoardDependencyClient {
   /** Planned task audience echoed by task-board. */
   private record DriverTaskAudienceResponse(String mode, UUID workerId, String workerName) {}
 
+  /** Task-board wire request for one existing task in a complete replacement. */
+  private record PlanningReplacementTaskRequest(
+      UUID externalTaskId,
+      UUID sourceTaskId,
+      UUID taskWarehouseId,
+      LocalDate scheduledDate,
+      long expectedTaskVersion,
+      long expectedEntryVersion,
+      int targetQueuePosition,
+      DriverTaskAudienceRequest driverAudience) {}
+
+  /** Task-board wire request for one stable driver shift identity. */
+  private record PlanningReplacementShiftRequest(
+      UUID sourceShiftId, DriverShiftPlanSnapshot plan) {}
+
+  /** Complete task-board wire request for an atomic planner replacement. */
+  private record PlanningReplacementRequest(
+      UUID warehouseId,
+      LocalDate date,
+      long expectedSourcePlanVersion,
+      long replacementPlanVersion,
+      List<PlanningReplacementTaskRequest> assignments,
+      List<PlanningReplacementShiftRequest> driverShiftPlans) {}
+
+  /** Authoritative task-board wire result for one replaced task. */
+  private record PlanningReplacementTaskResponse(
+      UUID externalTaskId,
+      long taskVersion,
+      UUID entryId,
+      long entryVersion,
+      int queuePosition) {}
+
+  /** Authoritative task-board wire result for one replaced shift plan. */
+  private record PlanningReplacementShiftResponse(
+      UUID sourceShiftId, long shiftPlanVersion, long sourcePlanVersion) {}
+
+  /** Complete task-board wire result for an atomic planner replacement. */
+  private record PlanningReplacementResponse(
+      String outcome,
+      UUID sourcePlanId,
+      long sourcePlanVersion,
+      UUID warehouseId,
+      LocalDate date,
+      List<PlanningReplacementTaskResponse> assignments,
+      List<PlanningReplacementShiftResponse> driverShiftPlans) {}
+
+  /** Wire task fence removed from the old-day source plan at COMMIT. */
+  private record PlanningRemovedTaskRequest(
+      UUID externalTaskId,
+      UUID sourceTaskId,
+      UUID taskWarehouseId,
+      LocalDate scheduledDate,
+      long expectedTaskVersion,
+      long expectedEntryVersion) {}
+
+  /** Wire PREPARE body for the complete old-day membership. */
+  private record PlanningReplanPrepareRequest(
+      UUID warehouseId,
+      LocalDate date,
+      long expectedSourcePlanVersion,
+      long replacementPlanVersion,
+      PlanningRemovedTaskRequest removedAssignment,
+      List<PlanningReplacementTaskRequest> remainingAssignments,
+      List<PlanningReplacementShiftRequest> driverShiftPlans) {}
+
+  /** Wire task-board hold receipt. */
+  private record PlanningReplanPrepareResponse(
+      String outcome,
+      UUID holdId,
+      UUID sourcePlanId,
+      long sourcePlanVersion,
+      UUID removedExternalTaskId) {}
+
+  /** Wire old-day task tombstone. */
+  private record PlanningRemovedTaskResponse(
+      UUID externalTaskId, long taskVersion, String status) {}
+
+  /** Wire task-board COMMIT receipt. */
+  private record PlanningReplanCommitResponse(
+      String outcome,
+      UUID holdId,
+      UUID sourcePlanId,
+      long sourcePlanVersion,
+      PlanningRemovedTaskResponse removedAssignment,
+      List<PlanningReplacementTaskResponse> remainingAssignments,
+      List<PlanningReplacementShiftResponse> driverShiftPlans) {}
+
+  /** Wire task-board RELEASE receipt. */
+  private record PlanningReplanReleaseResponse(
+      String outcome, UUID holdId, UUID sourcePlanId) {}
+
+  /** Planner lineage sent only for a newly published route-planner task. */
+  private record PlannerTaskLineageRequest(
+      UUID sourcePlanId,
+      long sourcePlanVersion,
+      UUID sourcePlanWarehouseId,
+      LocalDate sourcePlanDate) {}
+
   /** Sanitized immutable work snapshot sent through task-board to WorkerApp. */
   private record DriverWorkSnapshotRequest(
       UUID id,
@@ -910,7 +1538,8 @@ final class LogisticsTaskBoardDependencyClient {
       Integer priority,
       DriverTaskSourceRequest source,
       String lane,
-      DriverTaskAudienceRequest driverAudience) {}
+      DriverTaskAudienceRequest driverAudience,
+      PlannerTaskLineageRequest plannerLineage) {}
 
   /** Complete source-owned route replacement accepted only before driver execution begins. */
   private record PreStartUpdateDriverTaskRequest(
@@ -1096,4 +1725,21 @@ final class LogisticsTaskBoardDependencyClient {
       long mediaGeneration,
       UUID warehouseId,
       OffsetDateTime recordedAt) {}
+
+  /** Exact immutable public-route action sent with the same operation and idempotency identity. */
+  private record ContractorTaskActionRequest(
+      UUID operationId, String action, long expectedVersion, UUID evidenceId) {}
+
+  /** Exact task-board action response before owner-identity validation. */
+  private record ContractorTaskActionResponse(
+      String outcome, long currentVersion, ContractorTaskExecution task) {}
+
+  /** Exact evidence reservation request whose operation and idempotency identities are equal. */
+  private record ContractorEvidenceReservationRequest(
+      UUID operationId,
+      UUID evidenceId,
+      OffsetDateTime capturedAt,
+      String contentType,
+      long sizeBytes,
+      String sha256) {}
 }

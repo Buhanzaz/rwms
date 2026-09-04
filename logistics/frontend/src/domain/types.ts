@@ -1,9 +1,10 @@
-import type { Feature, LineString, Point } from 'geojson';
+import type { Feature, LineString, MultiPolygon, Point } from 'geojson';
 
 export type UUID = string;
 export type IsoDate = string;
 export type IsoDateTime = string;
 export type RequestType = 'DELIVERY' | 'PICKUP';
+export type CustomerDeliveryPurpose = 'RENTAL_DELIVERY' | 'SALE_DELIVERY' | 'CUSTOMER_RELOCATION';
 export type RequestStatus =
   | 'DRAFT'
   | 'READY'
@@ -74,9 +75,38 @@ export interface IsochroneTariff {
   price_rubles: number;
 }
 
+/** Exceptional policy kinds layered over normal isochrone reach and pricing. */
+export type PolicyZoneKind = 'SPECIAL_PRICE' | 'FORBIDDEN' | 'NO_TRAILER';
+
+/** Exact server-owned polygon and values for one warehouse exception. */
+export interface WarehousePolicyZone {
+  id: UUID;
+  warehouse_id: UUID;
+  name: string;
+  kind: PolicyZoneKind;
+  color: string;
+  geometry: MultiPolygon;
+  version: number;
+  delivery_price_rubles: number | null;
+  pickup_price_rubles: number | null;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+}
+
+/** Mutable values accepted by the standalone policy-zone boundary. */
+export interface PolicyZoneInput {
+  name: string;
+  kind: PolicyZoneKind;
+  color?: string | null;
+  geometry: MultiPolygon;
+  delivery_price_rubles: number | null;
+  pickup_price_rubles: number | null;
+}
+
 /** One RWMS-bound warehouse that owns its operational planning workspace. */
 export interface Warehouse {
   id: UUID;
+  version: number;
   external_warehouse_id: UUID;
   external_warehouse_version: number;
   name: string;
@@ -91,6 +121,11 @@ export interface Warehouse {
   seed: number;
   settings: PlanningSettings;
   capacity_generation: number;
+  capacity_published_generation: number;
+  capacity_publish_status: 'NOT_REQUESTED' | 'PENDING' | 'PUBLISHED' | 'FAILED';
+  capacity_publish_attempts: number;
+  capacity_publish_error_code: string | null;
+  capacity_publish_next_attempt_at: IsoDateTime | null;
   loading_minutes: number;
   unloading_minutes: number;
   turnaround_minutes: number;
@@ -119,6 +154,7 @@ export interface AvailableWarehouse {
 
 export interface Driver {
   id: UUID;
+  version: number;
   warehouse_id: UUID;
   external_worker_id?: UUID | null;
   name: string;
@@ -130,6 +166,7 @@ export interface Driver {
 
 export interface Vehicle {
   id: UUID;
+  version: number;
   warehouse_id: UUID;
   name: string;
   registration_number: string;
@@ -170,6 +207,7 @@ export interface Vehicle {
 
 export interface Trailer {
   id: UUID;
+  version: number;
   warehouse_id: UUID;
   name: string;
   registration_number: string;
@@ -206,9 +244,10 @@ export interface VehicleLoadProfile {
   max_actual_axle_load_kg: number;
 }
 
-/** Repeating daily driver assignment for an inclusive period inside one month. */
+/** Repeating daily driver assignment for up to 31 inclusive dates; an end before start is next-day. */
 export interface DriverShift {
   id: UUID;
+  version: number;
   warehouse_id: UUID;
   driver_id: UUID;
   vehicle_id: UUID;
@@ -232,10 +271,12 @@ export interface RequestDateOption {
 
 export interface LogisticsRequest {
   id: UUID;
+  version: number;
   warehouse_id: UUID;
   source_system?: string | null;
   external_id?: UUID | null;
   type: RequestType;
+  customer_delivery_purpose?: CustomerDeliveryPurpose | null;
   name: string;
   address_label: string;
   latitude: number;
@@ -262,6 +303,9 @@ export interface LogisticsRequest {
   assigned_contractor_phone?: string | null;
   assigned_at?: IsoDateTime | null;
   assigned_by?: string | null;
+  contractor_handoff_command_id?: UUID | null;
+  contractor_handoff_sequence?: number | null;
+  external_task_ids?: UUID[];
   cargo_length_mm?: number | null;
   cargo_width_mm?: number | null;
   cargo_height_mm?: number | null;
@@ -480,6 +524,7 @@ export interface UnassignedTask {
 export interface RoutePlan {
   id: UUID;
   warehouse_id: UUID;
+  supersedes_plan_id?: UUID | null;
   date: IsoDate;
   version: number;
   status: PlanStatus;
@@ -552,6 +597,8 @@ export interface OptimizationRun {
 /** Selected warehouse resources plus all warehouses shown on the common map. */
 export interface WarehouseWorkspace {
   warehouse: Warehouse;
+  /** Planning date of this bounded request projection. */
+  planning_date: IsoDate;
   warehouses: Warehouse[];
   /** Root warehouse selected for the current planning group, when supplied by logistics. */
   planning_root_warehouse_id?: UUID | null;
@@ -562,6 +609,8 @@ export interface WarehouseWorkspace {
   trailers?: Trailer[];
   shifts: DriverShift[];
   requests: LogisticsRequest[];
+  request_total: number;
+  request_next_cursor: UUID | null;
   plans?: RoutePlan[];
   /** Explicit non-fatal warning when saved demand is shown after an incomplete RWMS refresh. */
   rwms_refresh_warning?: string;

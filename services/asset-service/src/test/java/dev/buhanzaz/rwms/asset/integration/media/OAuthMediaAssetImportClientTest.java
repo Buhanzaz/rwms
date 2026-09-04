@@ -24,6 +24,7 @@ import tools.jackson.databind.ObjectMapper;
 
 class OAuthMediaAssetImportClientTest {
   private final UUID importId = UUID.randomUUID();
+  private final UUID companyId = UUID.randomUUID();
   private final UUID warehouseId = UUID.randomUUID();
   private final UUID sourceRowId = UUID.randomUUID();
   private final UUID jobId = UUID.randomUUID();
@@ -35,6 +36,7 @@ class OAuthMediaAssetImportClientTest {
   private final AtomicReference<String> mediaAuthorization =
       new AtomicReference<>();
   private final AtomicReference<String> mediaPath = new AtomicReference<>();
+  private final AtomicReference<String> mediaQuery = new AtomicReference<>();
   private final AtomicReference<String> mediaIdempotency =
       new AtomicReference<>();
   private final AtomicReference<String> mediaBody = new AtomicReference<>();
@@ -69,6 +71,7 @@ class OAuthMediaAssetImportClientTest {
 
     MediaAssetImportJob result =
         client.preflight(
+            companyId,
             importId,
             warehouseId,
             List.of(
@@ -78,6 +81,7 @@ class OAuthMediaAssetImportClientTest {
             idempotencyKey);
 
     assertThat(result.jobId()).isEqualTo(jobId);
+    assertThat(result.companyId()).isEqualTo(companyId);
     assertThat(result.status())
         .isEqualTo(MediaAssetImportJob.Status.PREFLIGHT_PENDING);
     assertThat(tokenAuthorization.get())
@@ -86,6 +90,7 @@ class OAuthMediaAssetImportClientTest {
         .isEqualTo(
             "grant_type=client_credentials&scope=media.asset-import");
     assertThat(mediaAuthorization.get()).isEqualTo("Bearer media-token");
+    assertThat(mediaQuery.get()).isEqualTo("companyId=" + companyId);
     assertThat(mediaIdempotency.get()).isEqualTo(idempotencyKey.toString());
     JsonNode request = new ObjectMapper().readTree(mediaBody.get());
     assertThat(request.path("assetImportId").asText())
@@ -108,6 +113,7 @@ class OAuthMediaAssetImportClientTest {
             () ->
                 client()
                     .preflight(
+                        companyId,
                         importId,
                         warehouseId,
                         List.of(
@@ -131,6 +137,7 @@ class OAuthMediaAssetImportClientTest {
             () ->
                 client()
                     .activate(
+                        companyId,
                         jobId,
                         List.of(
                             new MediaAssetImportBinding(
@@ -148,6 +155,7 @@ class OAuthMediaAssetImportClientTest {
     MediaAssetImportJob result =
         client()
             .replacePreflightSources(
+                companyId,
                 jobId,
                 List.of(
                     new MediaAssetImportSource(
@@ -160,6 +168,7 @@ class OAuthMediaAssetImportClientTest {
     assertThat(mediaPath.get())
         .isEqualTo(
             "/api/internal/media/v1/asset-imports/" + jobId + "/replace-sources");
+    assertThat(mediaQuery.get()).isEqualTo("companyId=" + companyId);
     assertThat(mediaIdempotency.get()).isEqualTo(idempotencyKey.toString());
     JsonNode request = new ObjectMapper().readTree(mediaBody.get());
     assertThat(request.has("assetImportId")).isFalse();
@@ -188,6 +197,7 @@ class OAuthMediaAssetImportClientTest {
             () ->
                 client()
                     .preflight(
+                        companyId,
                         importId,
                         warehouseId,
                         sources,
@@ -248,6 +258,7 @@ class OAuthMediaAssetImportClientTest {
 
   private void captureMediaCommand(HttpExchange exchange) throws IOException {
     mediaPath.set(exchange.getRequestURI().getPath());
+    mediaQuery.set(exchange.getRequestURI().getRawQuery());
     mediaAuthorization.set(
         exchange.getRequestHeaders().getFirst("Authorization"));
     mediaIdempotency.set(
@@ -263,6 +274,7 @@ class OAuthMediaAssetImportClientTest {
         {
           "jobId":"%s",
           "assetImportId":"%s",
+          "companyId":"%s",
           "warehouseId":"%s",
           "status":"%s",
           "preflightAttempts":0,
@@ -279,7 +291,7 @@ class OAuthMediaAssetImportClientTest {
           }]
         }
         """
-        .formatted(jobId, importId, warehouseId, status, sourceRowId);
+        .formatted(jobId, importId, companyId, warehouseId, status, sourceRowId);
   }
 
   private static void respond(

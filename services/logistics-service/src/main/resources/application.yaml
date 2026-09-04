@@ -51,7 +51,7 @@ spring:
     open-in-view: false
   cloud:
     function:
-      definition: logisticsInbound
+      definition: ${LOGISTICS_KAFKA_FUNCTION_DEFINITION:}
     stream:
       bindings:
         logisticsInbound-in-0:
@@ -100,6 +100,12 @@ rwms:
   logistics:
     idempotency:
       retention: ${LOGISTICS_IDEMPOTENCY_RETENTION:7d}
+    retention:
+      business-audit-proof: ${LOGISTICS_BUSINESS_AUDIT_PROOF_RETENTION:P1825D}
+      event-online: ${LOGISTICS_EVENT_ONLINE_RETENTION:P90D}
+      event-archive: ${LOGISTICS_EVENT_ARCHIVE_RETENTION:P365D}
+      gps-telemetry: ${LOGISTICS_GPS_TELEMETRY_RETENTION:P30D}
+      deletion-enabled: ${LOGISTICS_RETENTION_DELETION_ENABLED:false}
     dependencies:
       enabled: ${LOGISTICS_DEPENDENCIES_ENABLED:false}
       token-uri: ${AUTH_TOKEN_URI:}
@@ -179,6 +185,8 @@ rwms:
             depot-latitude: ${LOGISTICS_CUSTOMER_DEPOT_1_LATITUDE:0}
             depot-longitude: ${LOGISTICS_CUSTOMER_DEPOT_1_LONGITUDE:0}
         valhalla-base-url: ${LOGISTICS_CUSTOMER_VALHALLA_URL:http://127.0.0.1:8002}
+        routing-data-version: ${LOGISTICS_CUSTOMER_ROUTING_DATA_VERSION:}
+        routing-cache-ttl: ${LOGISTICS_CUSTOMER_ROUTING_CACHE_TTL:15m}
         connect-timeout: ${LOGISTICS_CUSTOMER_VALHALLA_CONNECT_TIMEOUT:2s}
         read-timeout: ${LOGISTICS_CUSTOMER_VALHALLA_READ_TIMEOUT:10s}
         depot-reload-minutes: ${LOGISTICS_CUSTOMER_DEPOT_RELOAD_MINUTES:30}

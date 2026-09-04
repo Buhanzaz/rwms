@@ -4,6 +4,7 @@ import { AuthCallbackPage } from "@/features/auth/auth-callback-page"
 import { AuthProvider } from "@/features/auth/auth-provider"
 import { ProtectedApplication } from "@/features/auth/protected-application"
 import { PublicClientPresentationPage } from "@/features/assistant/pages/public-client-presentation-page"
+import { PublicContractorRoutePage } from "@/features/logistics/contractor-route-share/public-contractor-route-page"
 import { PublicCabinPhotoPresentationPage } from "@/features/rental-items/public-cabin-photo-presentation-page"
 
 export function AuthRouter() {
@@ -16,6 +17,10 @@ export function AuthRouter() {
       <Route
         path="/photos/:token"
         element={<PublicCabinPhotoPresentationPage />}
+      />
+      <Route
+        path="/contractor-routes/:token"
+        element={<PublicContractorRoutePage />}
       />
       <Route
         path="*"

@@ -82,6 +82,35 @@ class ConfiguredRegisteredClientRepositoryTest {
         assertThat(repository.findByClientId("omitted-service")).isNull();
     }
 
+    @Test
+    void scopeDriftCannotBroadenTheDedicatedRentalManagerClient() {
+        Set<String> broadenedScopes = Set.of(
+                "openid",
+                "profile",
+                "offline_access",
+                "rental.manage",
+                "rwms.read",
+                "logistics.planning",
+                "admin.manage");
+        RegisteredClient stored = serviceClient(
+                "rental-manager-id",
+                OAuthClientProperties.RENTAL_MANAGER_WEB_CLIENT_ID,
+                broadenedScopes);
+        RegisteredClientRepository delegate = mock(RegisteredClientRepository.class);
+        when(delegate.findById("rental-manager-id")).thenReturn(stored);
+        when(delegate.findByClientId(OAuthClientProperties.RENTAL_MANAGER_WEB_CLIENT_ID))
+                .thenReturn(stored);
+        var repository = new ConfiguredRegisteredClientRepository(
+                delegate,
+                new OAuthClientProperties(List.of(configuredClient(
+                        OAuthClientProperties.RENTAL_MANAGER_WEB_CLIENT_ID,
+                        true,
+                        OAuthClientProperties.RENTAL_MANAGER_SCOPES))));
+
+        assertThat(repository.findById("rental-manager-id")).isNull();
+        assertThat(repository.findByClientId(OAuthClientProperties.RENTAL_MANAGER_WEB_CLIENT_ID)).isNull();
+    }
+
     private RegisteredClient serviceClient(String id, String clientId, Set<String> scopes) {
         return RegisteredClient.withId(id)
                 .clientId(clientId)

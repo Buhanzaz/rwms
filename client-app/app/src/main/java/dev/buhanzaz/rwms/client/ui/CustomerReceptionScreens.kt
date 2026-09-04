@@ -39,16 +39,13 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Videocam
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -223,11 +220,15 @@ fun CustomerProblemDialog(
             ProblemCategory("MISSING_EQUIPMENT", "Не хватает мебели или оборудования", category) { category = it }
             ProblemCategory("UNSUITABLE_CABIN", "Бытовка не подходит", category) { category = it }
             ProblemCategory("OTHER", "Другая проблема", category) { category = it }
-            OutlinedTextField(
+            CustomerStoreInputField(
                 value = description,
                 onValueChange = { description = it.take(2000); error = null },
-                label = { Text("Описание") },
-                minLines = 3,
+                placeholder = "Описание",
+                enabled = !busy,
+                keyboardType = androidx.compose.ui.text.input.KeyboardType.Text,
+                imeAction = androidx.compose.ui.text.input.ImeAction.Done,
+                height = 112.dp,
+                singleLine = false,
                 modifier = Modifier.fillMaxWidth(),
             )
             EvidenceMiniGallery(evidence) { evidence.remove(it) }

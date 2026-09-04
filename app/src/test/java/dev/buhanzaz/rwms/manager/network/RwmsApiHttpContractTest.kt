@@ -1070,7 +1070,21 @@ class RwmsApiHttpContractTest {
         val readiness = captureRequest {
             api.transferFurnitureReadiness(documentId)
         }
-        val depart = captureRequest {
+        val departTransfer = captureRequest {
+            api.departTransfer(
+                documentId = documentId,
+                expectedVersion = 3,
+                idempotencyKey = "transfer-depart-whole",
+            )
+        }
+        val arriveTransfer = captureRequest {
+            api.arriveTransfer(
+                documentId = documentId,
+                expectedVersion = 4,
+                idempotencyKey = "transfer-arrive-whole",
+            )
+        }
+        val departLine = captureRequest {
             api.departTransferLine(
                 documentId = documentId,
                 lineId = lineId,
@@ -1079,7 +1093,7 @@ class RwmsApiHttpContractTest {
                 idempotencyKey = "transfer-depart",
             )
         }
-        val arrive = captureRequest {
+        val arriveLine = captureRequest {
             api.arriveTransferLine(
                 documentId = documentId,
                 lineId = lineId,
@@ -1131,11 +1145,23 @@ class RwmsApiHttpContractTest {
         readiness.assertPublicSameOriginPath(
             "/api/logistics/v1/transfers/$documentId/furniture-readiness",
         )
-        depart.assertPublicSameOriginPath(
+        departTransfer.assertPublicSameOriginPath(
+            "/api/logistics/v1/transfers/$documentId/depart?expectedVersion=3",
+        )
+        assertThat(departTransfer.method).isEqualTo("POST")
+        assertThat(departTransfer.getHeader("Idempotency-Key")).isEqualTo("transfer-depart-whole")
+        assertThat(departTransfer.bodySize).isEqualTo(0L)
+        arriveTransfer.assertPublicSameOriginPath(
+            "/api/logistics/v1/transfers/$documentId/arrive?expectedVersion=4",
+        )
+        assertThat(arriveTransfer.method).isEqualTo("POST")
+        assertThat(arriveTransfer.getHeader("Idempotency-Key")).isEqualTo("transfer-arrive-whole")
+        assertThat(arriveTransfer.bodySize).isEqualTo(0L)
+        departLine.assertPublicSameOriginPath(
             "/api/logistics/v1/transfers/$documentId/lines/$lineId/depart?expectedVersion=4&expectedLineVersion=2",
         )
-        assertThat(depart.getHeader("Idempotency-Key")).isEqualTo("transfer-depart")
-        arrive.assertJsonCommand(
+        assertThat(departLine.getHeader("Idempotency-Key")).isEqualTo("transfer-depart")
+        arriveLine.assertJsonCommand(
             method = "POST",
             path = "/api/logistics/v1/transfers/$documentId/lines/$lineId/arrive?expectedVersion=5&expectedLineVersion=3",
             idempotencyKey = "transfer-arrive",

@@ -10,11 +10,18 @@ import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.Driver
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.DriverShiftPlanSnapshot;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.DriverTaskAudience;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.DriverTaskPreStartCancellation;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.DriverTaskPlannerLineage;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.EquipmentMovementBoardTask;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.EquipmentMovementOperation;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseDriverIdentity;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseDriverQueue;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WorkerOperationalAssignment;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.PlanningReplacementResult;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.PlanningReplacementSnapshot;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.PlanningReplanCommitResult;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.PlanningReplanPrepareResult;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.PlanningReplanPrepareSnapshot;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.PlanningReplanReleaseResult;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -40,6 +47,30 @@ interface LogisticsTaskBoardDependencyPort {
   default void registerDriverShiftPlan(
       UUID idempotencyKey, UUID sourceShiftId, DriverShiftPlanSnapshot plan) {
     throw unavailable("Driver shift plan registration is not configured");
+  }
+
+  /** Replaces one complete pre-start planner revision inside one task-board transaction. */
+  default PlanningReplacementResult replacePlanningAssignments(
+      UUID sourcePlanId, UUID idempotencyKey, PlanningReplacementSnapshot replacement) {
+    throw unavailable("Atomic planner replacement is not configured");
+  }
+
+  /** Prepares an execution hold for one exact published source-plan withdrawal. */
+  default PlanningReplanPrepareResult preparePlanningReschedule(
+      UUID sourcePlanId, UUID idempotencyKey, PlanningReplanPrepareSnapshot request) {
+    throw unavailable("Published planner reschedule preparation is not configured");
+  }
+
+  /** Commits the held task tombstone and complete remaining source-plan revision. */
+  default PlanningReplanCommitResult commitPlanningReschedule(
+      UUID holdId, UUID idempotencyKey) {
+    throw unavailable("Published planner reschedule commit is not configured");
+  }
+
+  /** Releases a hold only before the logistics owner mutation has committed. */
+  default PlanningReplanReleaseResult releasePlanningReschedule(
+      UUID holdId, UUID idempotencyKey) {
+    throw unavailable("Published planner reschedule release is not configured");
   }
 
   /** Creates or exactly replays one transfer-backed operational driver assignment. */
@@ -139,7 +170,36 @@ interface LogisticsTaskBoardDependencyPort {
       int priority,
       DriverTaskAudience driverAudience,
       DriverTaskWorkerContent workerContent) {
-    if (workerContent == null || workerContent.isEmpty()) {
+    return registerDriverTask(
+        warehouseId,
+        externalTaskId,
+        sourceId,
+        title,
+        unitNumber,
+        description,
+        queueDefinitionId,
+        scheduledDate,
+        priority,
+        driverAudience,
+        workerContent,
+        null);
+  }
+
+  /** Registers a new driver task with optional proof of its immutable planner lineage. */
+  default DriverBoardTask registerDriverTask(
+      UUID warehouseId,
+      UUID externalTaskId,
+      UUID sourceId,
+      String title,
+      String unitNumber,
+      String description,
+      UUID queueDefinitionId,
+      LocalDate scheduledDate,
+      int priority,
+      DriverTaskAudience driverAudience,
+      DriverTaskWorkerContent workerContent,
+      DriverTaskPlannerLineage plannerLineage) {
+    if (plannerLineage == null && (workerContent == null || workerContent.isEmpty())) {
       return registerDriverTask(
           warehouseId,
           externalTaskId,
@@ -172,6 +232,37 @@ interface LogisticsTaskBoardDependencyPort {
 
   default DriverBoardTask readDriverTask(UUID externalTaskId) {
     throw unavailable("Driver task lookup is not configured");
+  }
+
+  /** Reads one logistics task only through an exact active contractor assignment. */
+  default LogisticsDependencyGateway.ContractorTaskExecution readContractorTaskExecution(
+      UUID workerId, UUID externalTaskId) {
+    throw unavailable("Contractor task execution lookup is not configured");
+  }
+
+  /** Applies an idempotent expected-version START or COMPLETE to one exact contractor entry. */
+  default LogisticsDependencyGateway.ContractorTaskActionResult applyContractorTaskAction(
+      UUID workerId,
+      UUID externalTaskId,
+      UUID entryId,
+      UUID idempotencyKey,
+      String action,
+      long expectedVersion,
+      UUID evidenceId) {
+    throw unavailable("Contractor task execution action is not configured");
+  }
+
+  /** Reserves one exact contractor evidence identity before any media bytes are accepted. */
+  default LogisticsDependencyGateway.ContractorEvidenceReservation reserveContractorTaskEvidence(
+      UUID workerId,
+      UUID externalTaskId,
+      UUID entryId,
+      UUID evidenceId,
+      OffsetDateTime capturedAt,
+      String contentType,
+      long sizeBytes,
+      String sha256) {
+    throw unavailable("Contractor task evidence reservation is not configured");
   }
 
   default DriverBoardTask cancelDriverTask(UUID externalTaskId, long expectedTaskVersion) {

@@ -70,6 +70,76 @@ class CustomerDeliveryPropertiesTest {
     assertThat(representative.depotLongitude()).isEqualByComparingTo("31.269200");
   }
 
+  @Test
+  void rejectsNullIslandForConfiguredAndCanonicalWarehouseOrigins() {
+    CustomerDeliveryProperties configured =
+        properties(List.of(depot(MOSCOW, 0, 0)));
+    CustomerDeliveryProperties canonical =
+        properties(List.of(depot(MOSCOW, 55.75, 37.39)));
+
+    assertThatThrownBy(configured::validatedDepots)
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("0,0");
+    assertThatThrownBy(
+            () -> canonical.validated(SAINT_PETERSBURG, BigDecimal.ZERO, BigDecimal.ZERO))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("0,0");
+  }
+
+  @Test
+  void acceptsRouteOriginsOnOneZeroAxis() {
+    CustomerDeliveryProperties configured =
+        properties(List.of(depot(MOSCOW, 0, 37.39)));
+
+    assertThat(configured.validated(MOSCOW).depotLatitude()).isEqualByComparingTo("0");
+    assertThat(
+            configured
+                .validated(SAINT_PETERSBURG, new BigDecimal("58.573100"), BigDecimal.ZERO)
+                .depotLongitude())
+        .isEqualByComparingTo("0");
+  }
+
+  @Test
+  void validatesAndNormalizesRoutingCacheIdentity() {
+    CustomerDeliveryProperties properties =
+        properties(
+            List.of(depot(MOSCOW, 55.75, 37.39)),
+            "  graph-2026-08-31  ",
+            Duration.ofMinutes(15));
+
+    CustomerDeliveryProperties.Validated validated = properties.validated(MOSCOW);
+
+    assertThat(validated.routingDataVersion()).isEqualTo("graph-2026-08-31");
+    assertThat(validated.routingCacheTtl()).isEqualTo(Duration.ofMinutes(15));
+  }
+
+  @Test
+  void rejectsBlankRoutingDataVersion() {
+    CustomerDeliveryProperties properties =
+        properties(List.of(depot(MOSCOW, 55.75, 37.39)), "  ", Duration.ofMinutes(15));
+
+    assertThatThrownBy(properties::validatedDepots)
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("routing-data-version");
+  }
+
+  @Test
+  void rejectsNonPositiveOrUnboundedRoutingCacheTtl() {
+    List<CustomerDeliveryProperties.Depot> depots =
+        List.of(depot(MOSCOW, 55.75, 37.39));
+
+    assertThatThrownBy(
+            () -> properties(depots, "graph-v1", Duration.ZERO).validatedDepots())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("routing-cache-ttl must be positive");
+    assertThatThrownBy(
+            () ->
+                properties(depots, "graph-v1", Duration.ofHours(24).plusNanos(1))
+                    .validatedDepots())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("must not exceed 24 hours");
+  }
+
   private static CustomerDeliveryProperties.Depot depot(
       UUID warehouseId, double latitude, double longitude) {
     return new CustomerDeliveryProperties.Depot(
@@ -81,10 +151,19 @@ class CustomerDeliveryPropertiesTest {
 
   private static CustomerDeliveryProperties properties(
       List<CustomerDeliveryProperties.Depot> depots) {
+    return properties(depots, "test-routing-data-v1", Duration.ofMinutes(15));
+  }
+
+  private static CustomerDeliveryProperties properties(
+      List<CustomerDeliveryProperties.Depot> depots,
+      String routingDataVersion,
+      Duration routingCacheTtl) {
     return new CustomerDeliveryProperties(
         true,
         depots,
         "http://127.0.0.1:8002",
+        routingDataVersion,
+        routingCacheTtl,
         Duration.ofSeconds(1),
         Duration.ofSeconds(2),
         30,

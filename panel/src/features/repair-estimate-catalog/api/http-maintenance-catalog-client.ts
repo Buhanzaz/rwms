@@ -106,18 +106,10 @@ export type MaintenanceCatalogVersionPage = {
   totalElements: number
 }
 
-export type MaintenanceCreateCatalogRequest = {
-  warehouseId: string
-}
-
 const CATALOG_API = `${getGatewayRuntimeConfig().maintenanceApiBaseUrl}/v1/catalog`
 
-function catalogVersionEndpoint(warehouseId: string, catalogVersionId: string) {
-  const endpoint = new URL(
-    `${CATALOG_API}/versions/${encodeURIComponent(catalogVersionId)}`
-  )
-  endpoint.searchParams.set("warehouseId", warehouseId)
-  return endpoint
+function catalogVersionEndpoint(catalogVersionId: string) {
+  return new URL(`${CATALOG_API}/versions/${encodeURIComponent(catalogVersionId)}`)
 }
 
 function json(
@@ -130,11 +122,9 @@ function json(
 
 export function listMaintenanceCatalogVersions(
   accessToken: string,
-  warehouseId: string,
   lifecycle?: MaintenanceCatalogLifecycle
 ) {
   const endpoint = new URL(`${CATALOG_API}/versions`)
-  endpoint.searchParams.set("warehouseId", warehouseId)
   endpoint.searchParams.set("page", "0")
   endpoint.searchParams.set("size", "200")
   if (lifecycle) endpoint.searchParams.set("lifecycle", lifecycle)
@@ -144,32 +134,29 @@ export function listMaintenanceCatalogVersions(
 
 export function listMaintenanceCatalogNodes(
   accessToken: string,
-  warehouseId: string,
   catalogVersionId: string
 ) {
-  const endpoint = catalogVersionEndpoint(warehouseId, catalogVersionId)
+  const endpoint = catalogVersionEndpoint(catalogVersionId)
   endpoint.pathname += "/nodes"
   return bearerRequest<MaintenanceCatalogNode[]>(accessToken, endpoint)
 }
 
 export function listMaintenanceCatalogLinks(
   accessToken: string,
-  warehouseId: string,
   catalogVersionId: string
 ) {
-  const endpoint = catalogVersionEndpoint(warehouseId, catalogVersionId)
+  const endpoint = catalogVersionEndpoint(catalogVersionId)
   endpoint.pathname += "/links"
   return bearerRequest<MaintenanceCatalogLink[]>(accessToken, endpoint)
 }
 
 export function replaceMaintenanceCatalogNodes(
   accessToken: string,
-  warehouseId: string,
   catalogVersionId: string,
   expectedVersion: number,
   nodes: MaintenanceCatalogNodeInput[]
 ) {
-  const endpoint = catalogVersionEndpoint(warehouseId, catalogVersionId)
+  const endpoint = catalogVersionEndpoint(catalogVersionId)
   endpoint.pathname += "/nodes"
   return bearerRequest<MaintenanceCatalogVersion>(
     accessToken,
@@ -180,13 +167,12 @@ export function replaceMaintenanceCatalogNodes(
 
 export function replaceMaintenanceCatalog(
   accessToken: string,
-  warehouseId: string,
   catalogVersionId: string,
   expectedVersion: number,
   nodes: MaintenanceCatalogNodeInput[],
   links: MaintenanceCatalogLinkInput[]
 ) {
-  const endpoint = catalogVersionEndpoint(warehouseId, catalogVersionId)
+  const endpoint = catalogVersionEndpoint(catalogVersionId)
   return bearerRequest<MaintenanceCatalogVersion>(
     accessToken,
     endpoint,
@@ -196,12 +182,11 @@ export function replaceMaintenanceCatalog(
 
 export function replaceMaintenanceCatalogLinks(
   accessToken: string,
-  warehouseId: string,
   catalogVersionId: string,
   expectedVersion: number,
   links: MaintenanceCatalogLinkInput[]
 ) {
-  const endpoint = catalogVersionEndpoint(warehouseId, catalogVersionId)
+  const endpoint = catalogVersionEndpoint(catalogVersionId)
   endpoint.pathname += "/links"
   return bearerRequest<MaintenanceCatalogVersion>(
     accessToken,
@@ -212,12 +197,11 @@ export function replaceMaintenanceCatalogLinks(
 
 export function createMaintenanceCatalog(
   accessToken: string,
-  idempotencyKey: string,
-  request: MaintenanceCreateCatalogRequest
+  idempotencyKey: string
 ) {
   return bearerRequest<MaintenanceCatalogVersion>(
     accessToken,
     `${CATALOG_API}/versions`,
-    json("POST", request, { "Idempotency-Key": idempotencyKey })
+    { method: "POST", headers: { "Idempotency-Key": idempotencyKey } }
   )
 }

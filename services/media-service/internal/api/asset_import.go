@@ -197,7 +197,8 @@ func (server *Server) retryAssetImport(response http.ResponseWriter, request *ht
 		return
 	}
 	job, _, err := service.Retry(request.Context(), assetimport.RetryCommand{
-		JobID: jobID, IdempotencyKey: idempotencyKey, RequestSHA256: assetimport.CanonicalRetrySHA(jobID, idempotencyKey),
+		JobID: jobID, IdempotencyKey: idempotencyKey,
+		RequestSHA256: assetimport.CanonicalRetrySHA(jobID, idempotencyKey),
 	})
 	if err != nil {
 		server.assetImportProblem(response, request, err)

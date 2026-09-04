@@ -128,7 +128,11 @@ class BlockedMediaFeedReconciliationRobolectricTest {
 
         val outcome = coordinator.sync(USER_ID)
 
-        assertThat(outcome).isEqualTo(WorkerSyncOutcome.Retry("Media session unavailable"))
+        assertThat(outcome).isEqualTo(
+            WorkerSyncOutcome.Retry(
+                "Не удалось загрузить фотографию. Проверьте сеть и повторите попытку.",
+            ),
+        )
         assertThat(uploader.calls).isEqualTo(1)
         assertThat(api.feedCalls.get()).isEqualTo(1)
         assertThat(database.taskDao().task(USER_ID, ENTRY_ID)).isNull()
@@ -252,7 +256,11 @@ class BlockedMediaFeedReconciliationRobolectricTest {
 
         val outcome = coordinator.sync(USER_ID)
 
-        assertThat(outcome).isEqualTo(WorkerSyncOutcome.Retry("Фото временно недоступно"))
+        assertThat(outcome).isEqualTo(
+            WorkerSyncOutcome.Retry(
+                "RWMS временно недоступен. Проверьте соединение и повторите попытку.",
+            ),
+        )
         assertThat(api.actionEntryIds).containsExactly(completedEntryId)
         assertThat(database.outboxDao().pending(USER_ID).map { it.entryId }).containsExactly(ENTRY_ID)
     }
@@ -333,7 +341,11 @@ class BlockedMediaFeedReconciliationRobolectricTest {
 
         val outcome = coordinator.sync(USER_ID)
 
-        assertThat(outcome).isEqualTo(WorkerSyncOutcome.Conflict("Задание уже изменено"))
+        assertThat(outcome).isEqualTo(
+            WorkerSyncOutcome.Conflict(
+                "Данные изменились. Обновите список заданий и повторите действие.",
+            ),
+        )
         assertThat(database.conflictDao().observeOpen(USER_ID).first()).hasSize(1)
         assertThat(database.outboxDao().pending(USER_ID)).isEmpty()
         assertThat(store.acknowledgeOpenConflicts(USER_ID)).isEqualTo(1)
@@ -368,7 +380,9 @@ class BlockedMediaFeedReconciliationRobolectricTest {
         val outcome = coordinator.sync(USER_ID)
 
         assertThat(outcome).isEqualTo(
-            WorkerSyncOutcome.Conflict("Добавить новую фотографию можно только к заданию в работе"),
+            WorkerSyncOutcome.Conflict(
+                "Данные изменились. Обновите список заданий и повторите действие.",
+            ),
         )
         assertThat(api.reservationCalls.get()).isEqualTo(1)
         assertThat(api.detailCalls.get()).isEqualTo(1)

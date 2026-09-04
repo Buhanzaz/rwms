@@ -1,69 +1,61 @@
 package dev.buhanzaz.rwms.worker.feature.tasks
 
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.buhanzaz.rwms.worker.core.database.WorkerTaskEntity
 import dev.buhanzaz.rwms.worker.core.network.WorkerKpiPaletteDto
 import dev.buhanzaz.rwms.worker.core.ui.TaskStatusChip
+import dev.buhanzaz.rwms.worker.core.ui.WorkerButton
 import dev.buhanzaz.rwms.worker.core.ui.WorkerKpiColorRange
+import dev.buhanzaz.rwms.worker.core.ui.WorkerOutlinedButton
 import dev.buhanzaz.rwms.worker.core.ui.WorkerScreenScaffold
-import dev.buhanzaz.rwms.worker.core.ui.cabinNumberForDisplay
+import dev.buhanzaz.rwms.worker.core.ui.WorkerStoreNavy
 import dev.buhanzaz.rwms.worker.core.ui.isInterwarehouseTransferTask
-import dev.buhanzaz.rwms.worker.core.ui.workerRepairComplexityLabel
 import dev.buhanzaz.rwms.worker.core.ui.workerKpiTimeColor
+import dev.buhanzaz.rwms.worker.core.ui.workerRepairComplexityLabel
 import dev.buhanzaz.rwms.worker.core.ui.workerTaskStageOrdinal
-import dev.buhanzaz.rwms.worker.core.ui.workerTaskStageLabel
 import kotlinx.coroutines.delay
 
-/** Renders the worker task board from the locally synchronized projection. */
+/** Renders exactly one server-authorized current or next task. */
 @Composable
 fun TasksScreen(
     userId: String,
@@ -98,8 +90,16 @@ fun TasksScreen(
             }
         }
     }
+    val task = selectCurrentWorkerTask(
+        userId = userId,
+        currentGroupId = state.session?.currentGroupId,
+        categories = state.categories,
+        tasks = state.tasks,
+        assignments = state.assignments,
+    )
+
     WorkerScreenScaffold(
-        title = TASK_BOARD_TITLE,
+        title = CURRENT_TASK_TITLE,
         onBack = onBack,
         onMenu = onMenu,
         profileMonogram = profileMonogram,
@@ -107,7 +107,7 @@ fun TasksScreen(
         actions = {
             IconButton(
                 onClick = viewModel::syncNow,
-                modifier = Modifier.testTag("task-board-refresh"),
+                modifier = Modifier.testTag("current-task-refresh"),
             ) {
                 Icon(
                     imageVector = Icons.Filled.Refresh,
@@ -121,113 +121,67 @@ fun TasksScreen(
             }
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
-            taskBoardSyncNotice(
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding).testTag("single-task-screen"),
+            contentPadding = PaddingValues(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            taskSyncNotice(
                 online = state.online,
                 stage = state.progress?.stage,
                 message = state.progress?.message,
             )?.let { notice ->
-                Text(
-                    notice,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
-                )
+                item(key = "sync-notice") {
+                    NoticeCard(notice, error = true)
+                }
             }
             if (state.session?.operationalAvailability == "DISABLED") {
-                Text(
-                    "Рабочий временно недоступен — новые задания взять нельзя",
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                    color = MaterialTheme.colorScheme.error,
-                )
+                item(key = "availability-notice") {
+                    NoticeCard("Рабочий временно недоступен — новое задание взять нельзя", error = true)
+                }
             }
             if (state.conflicts.isNotEmpty()) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(
-                        "Есть конфликты синхронизации: ${state.conflicts.size}",
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    Text(
-                        state.conflicts.first().message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    OutlinedButton(
-                        onClick = viewModel::acknowledgeConflicts,
-                        modifier = Modifier.testTag("task-board-conflict-acknowledge"),
+                item(key = "conflict-notice") {
+                    Card(
+                        modifier = Modifier.widthIn(max = TASK_CARD_MAX_WIDTH).fillMaxWidth(),
+                        colors = translucentCardColors(),
+                        border = translucentCardBorder(),
                     ) {
-                        Text("Принять состояние RWMS и обновить")
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                "Есть конфликты синхронизации: ${state.conflicts.size}",
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            Text(
+                                state.conflicts.first().message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            WorkerOutlinedButton(
+                                onClick = viewModel::acknowledgeConflicts,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("current-task-conflict-acknowledge"),
+                            ) {
+                                Text("Принять состояние RWMS и обновить")
+                            }
+                        }
                     }
                 }
             }
-            val columns = buildWorkBoardColumns(
-                groups = state.groups,
-                categories = state.categories,
-                tasks = state.tasks,
-                assignments = state.assignments,
-            )
-            if (columns.isEmpty()) {
-                Text(
-                    "Нет назначенных работ. Обновите данные после изменения доски задач.",
-                    modifier = Modifier.padding(24.dp),
-                )
-            } else {
-                WorkBoardColumns(
-                    columns = columns,
-                    kpiPalette = state.kpiPalette,
-                    onTask = onTask,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-        }
-    }
-}
-
-/** Lays out independently collapsible worker-role panels for the available width. */
-@Composable
-internal fun WorkBoardColumns(
-    columns: List<WorkBoardColumn>,
-    kpiPalette: WorkerKpiPaletteDto?,
-    onTask: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    BoxWithConstraints(modifier) {
-        val showTwoColumns = maxWidth >= TWO_COLUMN_MIN_WIDTH && columns.size > 1
-        if (showTwoColumns) {
-            val columnWidth = (maxWidth - (BOARD_HORIZONTAL_PADDING * 2) - BOARD_GAP) / 2
-            LazyRow(
-                modifier = Modifier.fillMaxSize().testTag("work-board-wide"),
-                contentPadding = PaddingValues(horizontal = BOARD_HORIZONTAL_PADDING),
-                horizontalArrangement = Arrangement.spacedBy(BOARD_GAP),
-            ) {
-                items(columns, key = WorkBoardColumn::id) { column ->
-                    WorkBoardColumnPane(
-                        column = column,
-                        kpiPalette = kpiPalette,
-                        onTask = onTask,
-                        independentlyScrollable = true,
-                        modifier = Modifier.width(columnWidth).fillParentMaxHeight()
-                            .testTag("work-column-${column.id}"),
-                    )
-                }
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize().testTag("work-board-narrow"),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(vertical = 8.dp),
-            ) {
-                items(columns, key = WorkBoardColumn::id) { column ->
-                    WorkBoardColumnPane(
-                        column = column,
-                        kpiPalette = kpiPalette,
-                        onTask = onTask,
-                        independentlyScrollable = false,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
-                            .testTag("work-column-${column.id}"),
+            item(key = task?.entryId ?: "empty-task") {
+                if (task == null) {
+                    EmptyTaskCard()
+                } else {
+                    SingleTaskCard(
+                        task = task,
+                        kpiPalette = state.kpiPalette,
+                        onOpen = { onTask(task.entryId) },
+                        modifier = Modifier.widthIn(max = TASK_CARD_MAX_WIDTH).fillMaxWidth(),
                     )
                 }
             }
@@ -235,237 +189,159 @@ internal fun WorkBoardColumns(
     }
 }
 
-/** Renders one ordered task queue with its empty and loading states. */
+/** Non-dismissible priority surface shown above any current WorkerApp route. */
 @Composable
-internal fun TaskQueueList(
-    sections: List<TaskQueueSection>,
-    onTask: (String) -> Unit,
-    modifier: Modifier = Modifier,
+fun SlingerTaskInterruptionDialog(
+    task: WorkerTaskEntity,
+    currentTaskVisible: Boolean,
+    onTake: () -> Unit,
 ) {
-    LazyColumn(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-    ) {
-        items(sections, key = TaskQueueSection::queueId) { section ->
-            TaskQueueSectionPanel(
-                section = section,
-                kpiPalette = null,
-                onTask = onTask,
-                presentationKey = section.queueId,
-            )
-        }
-    }
-}
-
-/**
- * Renders one worker-role panel. A personal panel uses the authorized category
- * name because the local projection does not provide its qualification name.
- */
-@Composable
-private fun WorkBoardColumnPane(
-    column: WorkBoardColumn,
-    kpiPalette: WorkerKpiPaletteDto?,
-    onTask: (String) -> Unit,
-    independentlyScrollable: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    var expanded by rememberSaveable(column.id) { mutableStateOf(true) }
-    Card(modifier = modifier.animateContentSize()) {
-        Column(Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier.fillMaxWidth()
-                    .testTag("work-column-toggle-${column.id}")
-                    .toggleable(
-                        value = expanded,
-                        role = Role.Button,
-                        onValueChange = { expanded = it },
-                    )
-                    .semantics {
-                        stateDescription = if (expanded) "Развернуто" else "Свернуто"
-                    }
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    column.name,
-                    modifier = Modifier.weight(1f).testTag("work-column-title-${column.id}"),
-                    style = MaterialTheme.typography.titleLarge,
-                )
-                Icon(
-                    imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                    contentDescription = if (expanded) "Свернуть раздел" else "Развернуть раздел",
-                    modifier = Modifier.size(36.dp).testTag("work-column-chevron-${column.id}"),
-                )
-            }
-            if (expanded && independentlyScrollable) {
-                LazyColumn(
-                    modifier = Modifier.fillMaxWidth().weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(bottom = 12.dp),
-                ) {
-                    items(column.sections, key = TaskQueueSection::queueId) { section ->
-                        TaskQueueSectionPanel(
-                            section = section,
-                            kpiPalette = kpiPalette,
-                            onTask = onTask,
-                            presentationKey = "${column.id}-${section.queueId}",
-                        )
-                    }
-                }
-            } else if (expanded) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    column.sections.forEach { section ->
-                        TaskQueueSectionPanel(
-                            section = section,
-                            kpiPalette = kpiPalette,
-                            onTask = onTask,
-                            presentationKey = "${column.id}-${section.queueId}",
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** Renders a collapsible server-authorized queue without changing task membership. */
-@Composable
-private fun TaskQueueSectionPanel(
-    section: TaskQueueSection,
-    kpiPalette: WorkerKpiPaletteDto?,
-    onTask: (String) -> Unit,
-    presentationKey: String,
-) {
-    var expanded by rememberSaveable(presentationKey) { mutableStateOf(true) }
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
-            .testTag("queue-section-$presentationKey")
-            .animateContentSize(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+    Dialog(
+        onDismissRequest = {},
+        properties = DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false,
         ),
     ) {
-        Column {
-            Row(
-                modifier = Modifier.fillMaxWidth()
-                    .testTag("queue-section-toggle-$presentationKey")
-                    .toggleable(
-                        value = expanded,
-                        role = Role.Button,
-                        onValueChange = { expanded = it },
-                    )
-                    .semantics {
-                        stateDescription = if (expanded) "Развернуто" else "Свернуто"
-                    }
-                    .padding(horizontal = 12.dp, vertical = 14.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+        Box(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Card(
+                modifier = Modifier
+                    .widthIn(max = SLINGER_DIALOG_MAX_WIDTH)
+                    .fillMaxWidth()
+                    .testTag("slinger-task-dialog"),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+                ),
+                border = translucentCardBorder(),
+                elevation = CardDefaults.cardElevation(defaultElevation = 18.dp),
             ) {
-                Text(
-                    taskBoardQueueLabel(section.name),
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Icon(
-                    imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                    contentDescription = if (expanded) "Свернуть очередь" else "Развернуть очередь",
-                )
-            }
-            if (expanded && section.tasks.isEmpty()) {
-                Text(
-                    "В этой очереди пока нет заданий",
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (expanded) {
-                section.tasks.forEach { task ->
-                    TaskRow(
-                        task = task,
-                        kpiPalette = kpiPalette,
-                        onOpen = { onTask(task.entryId) },
-                        presentationKey = "$presentationKey-${task.entryId}",
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(22.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Surface(
+                        color = WorkerStoreNavy.copy(alpha = 0.88f),
+                        contentColor = Color.White,
+                        shape = MaterialTheme.shapes.small,
+                    ) {
+                        Text(
+                            text = "Задание стропальщика",
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    Text(
+                        text = "Приоритетное задание",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
                     )
+                    Text(
+                        text = taskCardTitle(task.unitNumber),
+                        style = MaterialTheme.typography.titleLarge,
+                    )
+                    Text(
+                        text = taskQueueLabel(task.categoryName),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TaskStatusChip(task.status)
+                        Text(
+                            text = "Приоритет ${task.priority}",
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                    }
+                    Text(
+                        text = if (currentTaskVisible) {
+                            "После принятия текущее задание будет приостановлено для всей бригады и автоматически продолжится после этой работы."
+                        } else {
+                            "После принятия это задание станет текущим до завершения работы стропальщика."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    WorkerButton(
+                        onClick = onTake,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp)
+                            .testTag("slinger-task-take"),
+                    ) {
+                        Text(
+                            text = "Взять задание",
+                            fontSize = MaterialTheme.typography.titleMedium.fontSize,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
                 }
             }
         }
     }
 }
 
-/** Renders one expandable task summary and preserves navigation to photo-rich details. */
+/** The one lightly translucent task card used by the worker home screen. */
 @Composable
-private fun TaskRow(
+internal fun SingleTaskCard(
     task: WorkerTaskEntity,
     kpiPalette: WorkerKpiPaletteDto?,
     onOpen: () -> Unit,
-    presentationKey: String,
+    modifier: Modifier = Modifier,
 ) {
-    var expanded by rememberSaveable(presentationKey) { mutableStateOf(false) }
-    val isShadow = task.entryType != REAL_ENTRY_TYPE
+    val timer = queueTaskTimerPresentation(task)
+    val complexity = workerRepairComplexityLabel(task.title)
+    val kpiColor = workerKpiTimeColor(
+        remainingPercent = task.timerRemainingPercent,
+        ranges = kpiPalette?.ranges.orEmpty().map { range ->
+            WorkerKpiColorRange(range.fromPercent, range.toPercent, range.color)
+        },
+        overdueColor = kpiPalette?.overdueColor,
+    )
     val isTransfer = isInterwarehouseTransferTask(task.title, task.taskText)
+
     Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
-            .testTag("task-card-$presentationKey")
-            .alpha(if (isShadow) SHADOW_TASK_ALPHA else 1f)
-            .animateContentSize(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        modifier = modifier.testTag("single-task-card-${task.entryId}"),
+        colors = translucentCardColors(),
+        border = translucentCardBorder(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
     ) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
             Row(
-                modifier = Modifier.fillMaxWidth()
-                    .testTag("task-card-toggle-$presentationKey")
-                    .toggleable(
-                        value = expanded,
-                        role = Role.Button,
-                        onValueChange = { expanded = it },
-                    )
-                    .semantics {
-                        stateDescription = if (expanded) "Развернуто" else "Свернуто"
-                    },
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    taskCardTitle(task.unitNumber),
+                    text = taskCardTitle(task.unitNumber),
                     modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.SemiBold,
                 )
                 TaskStatusChip(task.status)
-                Icon(
-                    imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                    contentDescription = if (expanded) "Свернуть задание" else "Развернуть задание",
-                )
             }
-            val timer = queueTaskTimerPresentation(task)
-            val complexity = workerRepairComplexityLabel(task.title)
-            val kpiColor = workerKpiTimeColor(
-                remainingPercent = task.timerRemainingPercent,
-                ranges = kpiPalette?.ranges.orEmpty().map { range ->
-                    WorkerKpiColorRange(range.fromPercent, range.toPercent, range.color)
-                },
-                overdueColor = kpiPalette?.overdueColor,
+            Text(
+                text = taskQueueLabel(task.categoryName),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (isShadow) {
-                Text(
-                    "Теневая задача · ожидает предыдущего этапа",
-                    modifier = Modifier.testTag("task-shadow-${task.entryId}"),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
             if (isTransfer) {
                 Surface(
                     color = MaterialTheme.colorScheme.secondaryContainer,
                     shape = MaterialTheme.shapes.small,
-                    modifier = Modifier.testTag("task-transfer-${task.entryId}"),
+                    modifier = Modifier.testTag("single-task-transfer-${task.entryId}"),
                 ) {
                     Text(
-                        "Межскладское перемещение",
+                        text = "Межскладское перемещение",
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -474,8 +350,8 @@ private fun TaskRow(
             }
             if (task.status == "WAITING") {
                 Text(
-                    "Выделенное время: ${allocatedQueueDurationLabel(task.plannedDurationMinutes)}",
-                    style = MaterialTheme.typography.labelMedium,
+                    text = "Выделенное время: ${allocatedQueueDurationLabel(task.plannedDurationMinutes)}",
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
@@ -485,67 +361,115 @@ private fun TaskRow(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        "Время работы: ${timer?.elapsed ?: queueTaskElapsedLabel(task)}",
-                        style = MaterialTheme.typography.labelMedium,
+                        text = "Время работы: ${timer?.elapsed ?: queueTaskElapsedLabel(task)}",
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(
-                        "KPI: ${timer?.percent ?: "—"}",
-                        style = MaterialTheme.typography.labelMedium,
+                        text = "KPI: ${timer?.percent ?: "—"}",
+                        style = MaterialTheme.typography.bodyMedium,
                         color = kpiColor ?: MaterialTheme.colorScheme.onSurfaceVariant,
                         fontWeight = if (kpiColor == null) FontWeight.Normal else FontWeight.Bold,
                     )
                 }
             }
             complexity?.let {
-                Text(it, style = MaterialTheme.typography.labelMedium)
+                Text(text = it, style = MaterialTheme.typography.bodyMedium)
             }
-            if (expanded) {
-                Text(
-                    "Этап ${workerTaskStageOrdinal(task.routeStepIndex, task.routeStepCount, " из ")}",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Text(
-                    "Приоритет ${task.priority}",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                task.deadlineAt?.let {
-                    Text("Срок: $it", style = MaterialTheme.typography.bodyMedium)
-                }
-                Text(
-                    "Загружено фото: ${task.readyEvidenceCount}",
-                    style = MaterialTheme.typography.labelMedium,
-                )
-            }
-            OutlinedButton(
-                onClick = onOpen,
-                modifier = Modifier.fillMaxWidth().testTag("task-open-${task.entryId}"),
+            Text(
+                text = "Этап ${workerTaskStageOrdinal(task.routeStepIndex, task.routeStepCount, " из ")}",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text("Открыть задание")
+                Text("Приоритет ${task.priority}", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "Фото: ${task.readyEvidenceCount}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            WorkerButton(
+                onClick = onOpen,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .testTag("task-open-${task.entryId}"),
+            ) {
+                Text(
+                    text = taskOpenActionLabel(task.status),
+                    fontWeight = FontWeight.SemiBold,
+                )
             }
         }
     }
 }
 
-/** Returns the only task-card heading that may represent a cabin-owned task. */
-internal fun taskCardTitle(unitNumber: String?): String =
-    cabinNumberForDisplay(unitNumber) ?: "Задание"
+@Composable
+private fun EmptyTaskCard() {
+    Card(
+        modifier = Modifier
+            .widthIn(max = TASK_CARD_MAX_WIDTH)
+            .fillMaxWidth()
+            .testTag("single-task-empty"),
+        colors = translucentCardColors(),
+        border = translucentCardBorder(),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "Сейчас нет задания",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "Новое задание появится здесь автоматически",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
 
-/** Replaces the backend's technical maintenance queue label in the worker UI. */
-internal fun taskBoardQueueLabel(name: String): String =
-    workerTaskStageLabel(name) ?: name
+@Composable
+private fun NoticeCard(message: String, error: Boolean) {
+    Card(
+        modifier = Modifier.widthIn(max = TASK_CARD_MAX_WIDTH).fillMaxWidth(),
+        colors = translucentCardColors(),
+        border = translucentCardBorder(),
+    ) {
+        Text(
+            text = message,
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
 
-/** Formats the server-issued budget without treating it as elapsed work. */
-internal fun allocatedQueueDurationLabel(minutes: Int?): String = minutes
-    ?.coerceAtLeast(0)
-    ?.let { value -> "%d:%02d:00".format(value / 60, value % 60) }
-    ?: "—"
+private fun taskOpenActionLabel(status: String): String = when (status) {
+    "WAITING" -> "Открыть и взять"
+    "PAUSED" -> "Открыть задание"
+    else -> "Продолжить выполнение"
+}
 
-/**
- * Reports whether a durable progress row is both an active stage and recent
- * enough to prove that synchronization is still running.
- */
-internal fun shouldAnimateTaskBoardRefresh(
+@Composable
+private fun translucentCardColors() = CardDefaults.cardColors(
+    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.74f),
+)
+
+@Composable
+private fun translucentCardBorder() = BorderStroke(
+    width = 1.dp,
+    color = Color.White.copy(alpha = 0.58f),
+)
+
+/** Reports whether a durable progress row proves that synchronization is still running. */
+internal fun shouldAnimateTaskRefresh(
     stage: String?,
     updatedAtEpochMillis: Long?,
     nowEpochMillis: Long,
@@ -556,7 +480,7 @@ internal fun shouldAnimateTaskBoardRefresh(
 }
 
 /** Keeps durable offline or blocked-sync truth without exposing progress chatter. */
-internal fun taskBoardSyncNotice(online: Boolean, stage: String?, message: String?): String? =
+internal fun taskSyncNotice(online: Boolean, stage: String?, message: String?): String? =
     when {
         !online -> "Нет связи с RWMS"
         stage == WAITING_FOR_EVIDENCE_STAGE ->
@@ -579,16 +503,13 @@ private fun rememberFreshSyncProgress(stage: String?, updatedAtEpochMillis: Long
             nowEpochMillis = System.currentTimeMillis()
         }
     }
-    return shouldAnimateTaskBoardRefresh(stage, updatedAtEpochMillis, nowEpochMillis)
+    return shouldAnimateTaskRefresh(stage, updatedAtEpochMillis, nowEpochMillis)
 }
 
-internal const val TASK_BOARD_TITLE = "Доска задач"
-private val TWO_COLUMN_MIN_WIDTH = 720.dp
-private val BOARD_GAP = 12.dp
-private val BOARD_HORIZONTAL_PADDING = 12.dp
+internal const val CURRENT_TASK_TITLE = "Моё задание"
+private val TASK_CARD_MAX_WIDTH = 620.dp
+private val SLINGER_DIALOG_MAX_WIDTH = 560.dp
 private const val REFRESH_ROTATION_DURATION_MILLIS = 900
 private const val SYNC_PROGRESS_FRESHNESS_MILLIS = 60_000L
 private const val WAITING_FOR_EVIDENCE_STAGE = "WAITING_FOR_EVIDENCE"
 private val ACTIVE_SYNC_STAGES = setOf("CONTEXT", "COMMANDS", "EVIDENCE", "UPLOAD")
-private const val REAL_ENTRY_TYPE = "REAL"
-private const val SHADOW_TASK_ALPHA = 0.62f

@@ -67,6 +67,34 @@ logistics-owned публичного photo snapshot. Оно возвращает
 номер, габариты, отделку, категорию, упорядоченные названия характеристик и nullable-линолеум;
 status, rental type, passport JSON, комментарии, tags и equipment исключены.
 
+## Создание бытовки с обязательными фотографиями
+
+`POST /api/asset/v1/rental-item-creation-intents` — команда интерактивного создания бытовки, когда
+вызывающая сторона выбрала обязательные исходные фотографии. В одной asset-транзакции она создаёт
+обычный rental item в статусе `FREE`, durable pending intent и принадлежащую asset-сервису
+operation lease `CABIN_CREATION`. Эта lease исключает новую бытовку из availability до
+терминального состояния intent; существующий endpoint создания rental item без photo intent
+остаётся доступным и не меняется. Повторы создания используют пользовательский
+`Idempotency-Key` и обязаны передавать тот же payload.
+
+Запрос содержит упорядоченный manifest из 1–20 фотографий: индекс, SHA-256, content type и длину.
+Intent хранит этот manifest, стабильный upload-command UUID для каждой позиции, UUID gallery
+folder и канонический hash manifest; исходные имена файлов и media bytes в нём не сохраняются.
+Pending intents можно получить списком по авторизованному складу или прочитать по ID, поэтому
+прерванный клиент восстанавливает точный состав оставшейся загрузки.
+
+Completion использует `expectedVersion` и стабильный idempotency key. До освобождения creation
+lease asset-service читает
+`POST /api/internal/media/v1/assets/cabin-creation-snapshots` под своей service identity и точным
+scope `media.asset`. Media-вызов выполняется вне asset database transaction. Финальная
+asset-транзакция повторно проверяет intent и принимает только ту же бытовку, склад и active folder
+с точным запланированным количеством и manifest текущих `READY` gallery photos и текущей
+обложкой. Ошибка работает fail-closed и оставляет lease активной. Явный abandon также использует
+`expectedVersion`: он переводит незавершённую бытовку из `FREE` в существующий неарендный статус
+`WAREHOUSE`, выпускает обычные rental-item/lease events, отмечает intent как abandoned и только
+после этого освобождает creation lease этого intent. Flyway V45 владеет таблицами intent и
+упорядоченного manifest, constraints и lookup indexes.
+
 ## Мебель заказа и замена бытовок
 
 `equipment_catalog_item.maximum_per_cabin` — nullable asset-owned лимит одной позиции оборудования

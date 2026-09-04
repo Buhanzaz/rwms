@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.logistics.customer.repository;
 
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerCabinProblem;
+import dev.buhanzaz.rwms.logistics.customer.claims.CustomerCabinProblemStatus;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -12,4 +13,11 @@ public interface CustomerCabinProblemRepository extends JpaRepository<CustomerCa
       UUID customerSubjectId, UUID idempotencyKey);
 
   List<CustomerCabinProblem> findAllByBookingIdOrderByReportedAtAscIdAsc(UUID bookingId);
+
+  List<CustomerCabinProblem> findAllByOrderIdOrderByReportedAtAscIdAsc(UUID orderId);
+
+  List<CustomerCabinProblem> findAllByOrderByResolutionDeadlineAscIdAsc();
+
+  List<CustomerCabinProblem> findAllByStatusOrderByResolutionDeadlineAscIdAsc(
+      CustomerCabinProblemStatus status);
 }

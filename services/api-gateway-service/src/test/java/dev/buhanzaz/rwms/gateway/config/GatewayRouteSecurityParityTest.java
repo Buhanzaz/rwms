@@ -451,6 +451,10 @@ class GatewayRouteSecurityParityTest {
                 "logisticsRoutes",
                 configuration.logisticsRoutes(properties, upstream)),
             candidate(
+                "logistics-planner-service",
+                "logisticsPlannerAdminRoutes",
+                configuration.logisticsPlannerAdminRoutes(properties, upstream)),
+            candidate(
                 "assistant-service",
                 "assistantTurnsRoute",
                 configuration.assistantTurnsRoute(properties, upstream, assistantTurns)),
@@ -537,6 +541,7 @@ class GatewayRouteSecurityParityTest {
     properties.getRoutes().setMediaUri(URI.create("http://media.test"));
     properties.getRoutes().setInventoryUri(URI.create("http://inventory.test"));
     properties.getRoutes().setLogisticsUri(URI.create("http://logistics.test"));
+    properties.getRoutes().setLogisticsPlannerUri(URI.create("http://logistics-planner.test"));
     properties.getRoutes().setDossierUri(URI.create("http://dossier.test"));
     properties.getRoutes().setAnalyticsUri(URI.create("http://analytics.test"));
     properties.getRoutes().setAssistantUri(URI.create("http://assistant.test"));

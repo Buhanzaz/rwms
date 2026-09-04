@@ -39,6 +39,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.buhanzaz.rwms.driver.core.database.DriverCategoryEntity
+import dev.buhanzaz.rwms.driver.core.database.DriverTaskEntity
 import dev.buhanzaz.rwms.driver.core.network.DriverKpiPaletteDto
 import dev.buhanzaz.rwms.driver.core.ui.DriverScreenScaffold
 import dev.buhanzaz.rwms.driver.core.ui.SyncStatusBanner
@@ -51,7 +53,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 
-/** Renders the driver's personal logistics tasks for one selected calendar date. */
+/** Renders the driver's personal logistics tasks for one warehouse-local calendar date. */
 @Composable
 fun LogisticsScreen(
     userId: String,
@@ -61,15 +63,6 @@ fun LogisticsScreen(
 ) {
     LaunchedEffect(userId) { viewModel.bind(userId) }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    val today = remember { LocalDate.now() }
-    var selectedDateText by rememberSaveable(userId) { mutableStateOf(today.toString()) }
-    val selectedDate = runCatching { LocalDate.parse(selectedDateText) }.getOrDefault(today)
-    val tasks = buildLogisticsTasksForDate(
-        categories = state.categories,
-        tasks = state.tasks,
-        scheduledDate = selectedDate.toString(),
-        today = today,
-    )
 
     DriverScreenScaffold(
         title = "Логистика",
@@ -88,12 +81,6 @@ fun LogisticsScreen(
                 total = state.progress?.totalUnits ?: 0,
                 message = state.progress?.message,
             )
-            LogisticsDateCarousel(
-                today = today,
-                selectedDate = selectedDate,
-                onDateSelected = { selectedDateText = it.toString() },
-                modifier = Modifier.fillMaxWidth(),
-            )
             if (state.conflicts.isNotEmpty()) {
                 Text(
                     "Есть конфликты синхронизации: ${state.conflicts.size}",
@@ -101,14 +88,67 @@ fun LogisticsScreen(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            LogisticsTaskList(
-                selectedDate = selectedDate,
-                tasks = tasks,
-                kpiPalette = state.kpiPalette,
-                onTask = onTask,
-                modifier = Modifier.fillMaxSize(),
-            )
+            val today = state.warehouseDate
+            if (today == null) {
+                Box(
+                    modifier = Modifier.fillMaxSize().padding(24.dp)
+                        .testTag("warehouse-date-unavailable"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "Не удалось определить дату склада. Синхронизируйте данные.",
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            } else {
+                LogisticsDatedContent(
+                    userId = userId,
+                    today = today,
+                    categories = state.categories,
+                    tasks = state.tasks,
+                    kpiPalette = state.kpiPalette,
+                    onTask = onTask,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
+    }
+}
+
+/** Keeps date selection and shared-task visibility on one warehouse-local `today` value. */
+@Composable
+internal fun LogisticsDatedContent(
+    userId: String,
+    today: LocalDate,
+    categories: List<DriverCategoryEntity>,
+    tasks: List<DriverTaskEntity>,
+    kpiPalette: DriverKpiPaletteDto?,
+    onTask: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var selectedDateText by rememberSaveable(userId, today) { mutableStateOf(today.toString()) }
+    val selectedDate = runCatching { LocalDate.parse(selectedDateText) }.getOrDefault(today)
+    val datedTasks = buildLogisticsTasksForDate(
+        categories = categories,
+        tasks = tasks,
+        scheduledDate = selectedDate.toString(),
+        today = today,
+    )
+    Column(modifier) {
+        LogisticsDateCarousel(
+            today = today,
+            selectedDate = selectedDate,
+            onDateSelected = { selectedDateText = it.toString() },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        LogisticsTaskList(
+            selectedDate = selectedDate,
+            tasks = datedTasks,
+            kpiPalette = kpiPalette,
+            onTask = onTask,
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 }
 
@@ -318,7 +358,7 @@ internal fun LogisticsTaskList(
     }
 }
 
-/** Maps one stable carousel index to a device-local calendar date. */
+/** Maps one stable carousel index to a warehouse-local calendar date. */
 internal fun logisticsDateAt(today: LocalDate, index: Int): LocalDate =
     today.plusDays((index - LOGISTICS_DATE_CENTER_INDEX).toLong())
 

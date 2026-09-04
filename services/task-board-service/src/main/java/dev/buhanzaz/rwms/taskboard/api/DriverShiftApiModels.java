@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.taskboard.api;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import dev.buhanzaz.rwms.taskboard.domain.DefectSeverity;
 import dev.buhanzaz.rwms.taskboard.domain.DefectStatus;
+import dev.buhanzaz.rwms.taskboard.domain.DriverShiftRouteOperationKind;
 import dev.buhanzaz.rwms.taskboard.domain.DriverShiftStatus;
 import dev.buhanzaz.rwms.taskboard.domain.EndVehicleCondition;
 import dev.buhanzaz.rwms.taskboard.domain.InspectionItemState;
@@ -64,7 +65,45 @@ public final class DriverShiftApiModels {
       @JsonInclude(JsonInclude.Include.ALWAYS) InspectionView inspection,
       @JsonInclude(JsonInclude.Include.ALWAYS) TaskSummaryView taskSummary,
       @JsonInclude(JsonInclude.Include.ALWAYS) ClosingReportView closingReport,
+      @NotNull List<RouteOperationView> operations,
       @NotNull List<ShiftPhotoView> photos) {}
+
+  /** One immutable exact-time operation in the plan-version route execution order. */
+  public record RouteOperationView(
+      @Min(1) int sequence,
+      @NotNull DriverShiftRouteOperationKind kind,
+      @JsonInclude(JsonInclude.Include.ALWAYS) UUID warehouseId,
+      @JsonInclude(JsonInclude.Include.ALWAYS) UUID sourceTaskId,
+      @JsonInclude(JsonInclude.Include.ALWAYS) UUID sourceTransferId,
+      @NotBlank String locationLabel,
+      @NotNull OffsetDateTime plannedArrival,
+      @NotNull OffsetDateTime plannedDeparture,
+      @Min(0) int loadBefore,
+      @Min(0) int loadAfter) {
+    /** Preserves source compatibility for operations created before transfer cargo identity. */
+    public RouteOperationView(
+        int sequence,
+        DriverShiftRouteOperationKind kind,
+        UUID warehouseId,
+        UUID sourceTaskId,
+        String locationLabel,
+        OffsetDateTime plannedArrival,
+        OffsetDateTime plannedDeparture,
+        int loadBefore,
+        int loadAfter) {
+      this(
+          sequence,
+          kind,
+          warehouseId,
+          sourceTaskId,
+          null,
+          locationLabel,
+          plannedArrival,
+          plannedDeparture,
+          loadBefore,
+          loadAfter);
+    }
+  }
 
   /** Authoritative state and audit timestamps for one warehouse-local work date. */
   public record DriverShiftView(
@@ -145,8 +184,33 @@ public final class DriverShiftApiModels {
       @JsonInclude(JsonInclude.Include.ALWAYS) String manufacturer,
       @JsonInclude(JsonInclude.Include.ALWAYS) String model,
       @NotNull VehicleConfigurationType configurationType,
+      @JsonInclude(JsonInclude.Include.ALWAYS) @Min(1) @Max(2) Integer cabinCapacity,
       @JsonInclude(JsonInclude.Include.ALWAYS) Long startOdometer,
-      @JsonInclude(JsonInclude.Include.ALWAYS) TrailerView trailer) {}
+      @JsonInclude(JsonInclude.Include.ALWAYS) TrailerView trailer) {
+    /** Preserves source compatibility for response assembly before cabin capacity was exposed. */
+    public VehicleView(
+        UUID id,
+        String name,
+        String registrationNumber,
+        String vehicleType,
+        String manufacturer,
+        String model,
+        VehicleConfigurationType configurationType,
+        Long startOdometer,
+        TrailerView trailer) {
+      this(
+          id,
+          name,
+          registrationNumber,
+          vehicleType,
+          manufacturer,
+          model,
+          configurationType,
+          null,
+          startOdometer,
+          trailer);
+    }
+  }
 
   /** Optional trailer snapshot attached to a vehicle plan. */
   public record TrailerView(
@@ -283,7 +347,38 @@ public final class DriverShiftApiModels {
       @NotNull @Valid PlannedVehicle vehicle,
       @JsonInclude(JsonInclude.Include.ALWAYS) @Valid PlannedTrailer trailer,
       @Min(0) int tripCount,
-      @Min(0) long routeDistanceMeters) {}
+      @Min(0) long routeDistanceMeters,
+      @NotNull @Size(max = 1000) List<@NotNull @Valid RouteOperationView> operations) {
+    public PutDriverShiftPlanRequest {
+      operations = operations == null ? List.of() : List.copyOf(operations);
+    }
+
+    /** Preserves source compatibility for callers predating executable route operations. */
+    public PutDriverShiftPlanRequest(
+        UUID sourcePlanId,
+        long sourcePlanVersion,
+        UUID warehouseId,
+        UUID driverId,
+        String driverName,
+        LocalDate workDate,
+        PlannedVehicle vehicle,
+        PlannedTrailer trailer,
+        int tripCount,
+        long routeDistanceMeters) {
+      this(
+          sourcePlanId,
+          sourcePlanVersion,
+          warehouseId,
+          driverId,
+          driverName,
+          workDate,
+          vehicle,
+          trailer,
+          tripCount,
+          routeDistanceMeters,
+          List.of());
+    }
+  }
 
   /** Vehicle snapshot supplied by the owning logistics plan. */
   public record PlannedVehicle(
@@ -294,7 +389,30 @@ public final class DriverShiftApiModels {
       @JsonInclude(JsonInclude.Include.ALWAYS) @Size(max = 128) String manufacturer,
       @JsonInclude(JsonInclude.Include.ALWAYS) @Size(max = 128) String model,
       @NotNull VehicleConfigurationType configurationType,
-      @JsonInclude(JsonInclude.Include.ALWAYS) @Min(0) Long startOdometer) {}
+      @JsonInclude(JsonInclude.Include.ALWAYS) @Min(1) @Max(2) Integer cabinCapacity,
+      @JsonInclude(JsonInclude.Include.ALWAYS) @Min(0) Long startOdometer) {
+    /** Preserves source compatibility for vehicle snapshots created before cabin capacity. */
+    public PlannedVehicle(
+        UUID id,
+        String name,
+        String registrationNumber,
+        String vehicleType,
+        String manufacturer,
+        String model,
+        VehicleConfigurationType configurationType,
+        Long startOdometer) {
+      this(
+          id,
+          name,
+          registrationNumber,
+          vehicleType,
+          manufacturer,
+          model,
+          configurationType,
+          null,
+          startOdometer);
+    }
+  }
 
   /** Optional trailer snapshot supplied by the owning logistics plan. */
   public record PlannedTrailer(

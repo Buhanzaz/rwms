@@ -109,7 +109,8 @@ class CustomerBookingServiceTest {
     DriverLogisticsTaskMember member = mock(DriverLogisticsTaskMember.class);
     CustomerCabinAcceptance[] saved = new CustomerCabinAcceptance[1];
 
-    when(sessions.findByBookingIdAndCustomerSubjectId(BOOKING, SUBJECT))
+    when(
+            sessions.findByBookingIdAndCustomerSubjectId(BOOKING, SUBJECT))
         .thenReturn(Optional.of(session));
     when(session.getOrderId()).thenReturn(ORDER);
     when(session.getWarehouseId()).thenReturn(WAREHOUSE);
@@ -134,7 +135,8 @@ class CustomerBookingServiceTest {
     when(member.getCabinId()).thenReturn(memberCabinId);
     when(acceptances.findByCustomerSubjectIdAndIdempotencyKey(any(), any()))
         .thenReturn(Optional.empty());
-    when(acceptances.findByBookingIdAndCabinUnitId(BOOKING, CABIN))
+    when(
+            acceptances.findByBookingIdAndCabinUnitId(BOOKING, CABIN))
         .thenReturn(Optional.empty());
     when(acceptances.saveAndFlush(any()))
         .thenAnswer(

@@ -144,6 +144,40 @@ public class DriverLogisticsTask {
   @Column(name = "planned_driver_name_snapshot", length = 512)
   private String plannedDriverNameSnapshot;
 
+  /** Approximate ETA shown only while this task remains an unclaimed shared future preview. */
+  @Column(name = "provisional_eta")
+  private OffsetDateTime provisionalEta;
+
+  @Column(name = "provisional_eta_source_plan_id")
+  private UUID provisionalEtaSourcePlanId;
+
+  @Column(name = "provisional_eta_source_plan_version")
+  private Long provisionalEtaSourcePlanVersion;
+
+  /** Stable standalone-plan lineage proving that this shipment may be revision-replaced. */
+  @Column(name = "source_plan_id")
+  private UUID sourcePlanId;
+
+  @Column(name = "source_plan_version")
+  private Long sourcePlanVersion;
+
+  @Column(name = "source_plan_warehouse_id")
+  private UUID sourcePlanWarehouseId;
+
+  @Column(name = "source_plan_date")
+  private LocalDate sourcePlanDate;
+
+  @Enumerated(EnumType.STRING)
+  @Column(name = "planner_membership_state", nullable = false, length = 16)
+  private DriverTaskPlannerMembershipState plannerMembershipState =
+      DriverTaskPlannerMembershipState.ACTIVE;
+
+  @Column(name = "planner_removed_at")
+  private OffsetDateTime plannerRemovedAt;
+
+  @Column(name = "planner_removed_source_plan_version")
+  private Long plannerRemovedSourcePlanVersion;
+
   @Column(name = "external_task_id", nullable = false)
   private UUID externalTaskId;
 
@@ -191,9 +225,9 @@ public class DriverLogisticsTask {
   private boolean repairPlaceEffectApplied;
 
   /**
-   * A user moved this task out of the current lane and intentionally paused automatic filling for
-   * the warehouse. This is a durable workflow fact, not a browser preference: the relay must not
-   * immediately pull another scheduled cabin into the hole the user just opened before this time.
+   * Legacy storage reused only as a durable marker while an already-scheduled repair delivery's
+   * reservation release is awaiting confirmation. Its timestamp is never a scheduling deadline;
+   * successful release clears it before immediate queue refill.
    */
   @Column(name = "manual_promotion_hold_until")
   private OffsetDateTime manualPromotionHoldUntil;
@@ -730,6 +764,7 @@ public class DriverLogisticsTask {
     scheduledDate = Objects.requireNonNull(date, "date");
     fixedDateLowerBound = scheduledDate;
     planningMode = DriverTaskPlanningMode.FIXED_DATE;
+    clearProvisionalEta();
     applyAudience(audienceMode, workerId, workerName);
     requestSha256 = requireHash(requestHash);
     scheduleImmediately();
@@ -759,6 +794,145 @@ public class DriverLogisticsTask {
     touch();
   }
 
+  /**
+   * Attaches the immutable planner lineage before relay registration. Existing tasks without this
+   * proof remain legacy and cannot later enter the atomic replacement flow.
+   */
+  public void bindPlannerLineage(
+      UUID planId, long planVersion, UUID rootWarehouseId, LocalDate planDate) {
+    if (sourceType != DriverTaskSourceType.LOGISTICS_DOCUMENT
+        || kind != DriverTaskKind.SHIPMENT
+        || planVersion < 1
+        || !scheduledDate.equals(planDate)) {
+      throw new IllegalStateException("Planner lineage requires a dated shipment task");
+    }
+    UUID requiredPlanId = Objects.requireNonNull(planId, "sourcePlanId");
+    UUID requiredWarehouseId = Objects.requireNonNull(rootWarehouseId, "sourcePlanWarehouseId");
+    LocalDate requiredDate = Objects.requireNonNull(planDate, "sourcePlanDate");
+    if (sourcePlanId != null
+        && (!sourcePlanId.equals(requiredPlanId)
+            || !Objects.equals(sourcePlanVersion, planVersion)
+            || !Objects.equals(sourcePlanWarehouseId, requiredWarehouseId)
+            || !Objects.equals(sourcePlanDate, requiredDate))) {
+      throw new IllegalStateException("Driver task already belongs to another planner lineage");
+    }
+    if (sourcePlanId != null) return;
+    sourcePlanId = requiredPlanId;
+    sourcePlanVersion = planVersion;
+    sourcePlanWarehouseId = requiredWarehouseId;
+    sourcePlanDate = requiredDate;
+    touch();
+  }
+
+  /** Applies one pre-start revision and authoritative task-board projection under exact fences. */
+  public void applyPlannerReplacement(
+      long expectedTaskVersion,
+      UUID planId,
+      long expectedPlanVersion,
+      long replacementPlanVersion,
+      DriverTaskAudienceMode audienceMode,
+      UUID workerId,
+      String workerName,
+      OffsetDateTime eta,
+      long observedTaskBoardVersion,
+      UUID observedEntryId) {
+    if (version != expectedTaskVersion
+        || state != DriverTaskState.SCHEDULED
+        || plannerMembershipState != DriverTaskPlannerMembershipState.ACTIVE
+        || sourcePlanId == null
+        || !sourcePlanId.equals(planId)
+        || sourcePlanVersion == null
+        || sourcePlanVersion != expectedPlanVersion
+        || replacementPlanVersion <= expectedPlanVersion
+        || taskBoardTaskId == null
+        || taskBoardEntryId == null
+        || !taskBoardEntryId.equals(observedEntryId)
+        || taskBoardTaskVersion == null
+        || observedTaskBoardVersion < taskBoardTaskVersion
+        || !"WAITING".equals(taskBoardEntryStatus)) {
+      throw new IllegalStateException("Planner replacement task fence changed");
+    }
+    clearProvisionalEta();
+    applyAudience(audienceMode, workerId, workerName);
+    if (eta != null) setProvisionalEta(eta, planId, replacementPlanVersion);
+    sourcePlanVersion = replacementPlanVersion;
+    taskBoardTaskVersion = observedTaskBoardVersion;
+    touch();
+  }
+
+  /**
+   * Retains the original lineage as a terminal tombstone after the task-board owner removed this
+   * pre-start assignment in a strictly newer revision.
+   */
+  public void removeFromPlannerLineage(
+      UUID planId,
+      long expectedPlanVersion,
+      long replacementPlanVersion,
+      OffsetDateTime removedAt) {
+    if (state != DriverTaskState.CANCELLED
+        || plannerMembershipState != DriverTaskPlannerMembershipState.ACTIVE
+        || sourcePlanId == null
+        || !sourcePlanId.equals(planId)
+        || sourcePlanVersion == null
+        || sourcePlanVersion != expectedPlanVersion
+        || replacementPlanVersion <= expectedPlanVersion) {
+      throw new IllegalStateException("Only a cancelled current planner member can be tombstoned");
+    }
+    plannerMembershipState = DriverTaskPlannerMembershipState.REMOVED;
+    plannerRemovedAt = Objects.requireNonNull(removedAt, "plannerRemovedAt");
+    plannerRemovedSourcePlanVersion = replacementPlanVersion;
+    clearProvisionalEta();
+    touch();
+  }
+
+  /** Returns the revision that made this assignment current or removed it from current membership. */
+  public Long getPlannerVisibleSourcePlanVersion() {
+    return plannerRemovedSourcePlanVersion == null
+        ? sourcePlanVersion
+        : plannerRemovedSourcePlanVersion;
+  }
+
+  /** Stores a versioned approximate ETA for an unclaimed shared future task. */
+  public void setProvisionalEta(
+      OffsetDateTime eta, UUID sourcePlanId, long sourcePlanVersion) {
+    if (driverAudienceMode != DriverTaskAudienceMode.WAREHOUSE_DRIVERS
+        || (state != DriverTaskState.REGISTERING && state != DriverTaskState.SCHEDULED)
+        || sourcePlanVersion < 1) {
+      throw new IllegalStateException("Provisional ETA requires unclaimed shared future work");
+    }
+    OffsetDateTime normalizedEta =
+        Objects.requireNonNull(eta, "provisionalEta").truncatedTo(ChronoUnit.MICROS);
+    UUID requiredPlanId = Objects.requireNonNull(sourcePlanId, "sourcePlanId");
+    if (Objects.equals(provisionalEtaSourcePlanId, requiredPlanId)
+        && provisionalEtaSourcePlanVersion != null
+        && sourcePlanVersion < provisionalEtaSourcePlanVersion) {
+      throw new IllegalStateException("Provisional ETA plan version moved backwards");
+    }
+    if (Objects.equals(provisionalEta, normalizedEta)
+        && Objects.equals(provisionalEtaSourcePlanId, requiredPlanId)
+        && Objects.equals(provisionalEtaSourcePlanVersion, sourcePlanVersion)) {
+      return;
+    }
+    provisionalEta = normalizedEta;
+    provisionalEtaSourcePlanId = requiredPlanId;
+    provisionalEtaSourcePlanVersion = sourcePlanVersion;
+    touch();
+  }
+
+  /** Replaces or clears a preview only under the current local aggregate fence. */
+  public void replaceProvisionalEta(
+      long expectedVersion, OffsetDateTime eta, UUID sourcePlanId, long sourcePlanVersion) {
+    if (version != expectedVersion) {
+      throw new IllegalStateException("Driver task version changed");
+    }
+    if (eta == null) {
+      clearProvisionalEta();
+      touch();
+      return;
+    }
+    setProvisionalEta(eta, sourcePlanId, sourcePlanVersion);
+  }
+
   public boolean matchesRequest(String checksum) {
     return requestSha256.equals(checksum);
   }
@@ -779,6 +953,7 @@ public class DriverLogisticsTask {
           "Only an unregistered driver task can be cancelled before registration");
     }
     state = DriverTaskState.CANCELLED;
+    clearProvisionalEta();
     manualPromotionHoldUntil = null;
     clearRetryFailure();
     nextAttemptAt = null;
@@ -805,6 +980,7 @@ public class DriverLogisticsTask {
           "Only a registered pre-start driver task can be cancelled after guard confirmation");
     }
     state = DriverTaskState.CANCELLED;
+    clearProvisionalEta();
     manualPromotionHoldUntil = null;
     if (kind == DriverTaskKind.DELIVER_TO_REPAIR) {
       repairPlaceAllocationId = null;
@@ -834,6 +1010,7 @@ public class DriverLogisticsTask {
     inventoryCancelledBy = inventoryId;
     inventoryCancelledAt = now();
     state = DriverTaskState.CANCELLED;
+    clearProvisionalEta();
     manualPromotionHoldUntil = null;
     repairPlaceAllocationId = null;
     repairPlaceAllocationVersion = null;
@@ -887,6 +1064,7 @@ public class DriverLogisticsTask {
     scheduledDate = observedScheduledDate;
     if ("CANCELLED".equals(taskStatus)) {
       state = DriverTaskState.CANCELLED;
+      clearProvisionalEta();
       clearRetryFailure();
       nextAttemptAt = null;
       touch();
@@ -933,34 +1111,25 @@ public class DriverLogisticsTask {
     taskBoardEntryId = entryId;
     taskBoardEntryStatus = entryStatus;
     state = DriverTaskState.CURRENT;
+    clearProvisionalEta();
     manualPromotionHoldUntil = null;
     resumeAfterSeconds(1);
   }
 
-  public boolean hasManualPromotionHold() {
+  public boolean hasPendingRepairPlaceRelease() {
     return manualPromotionHoldUntil != null;
   }
 
-  public boolean isManualPromotionHeldAt(OffsetDateTime now) {
-    return manualPromotionHoldUntil != null
-        && Objects.requireNonNull(now, "now").isBefore(manualPromotionHoldUntil);
-  }
-
-  public void markManualPromotionHold(int automaticRefillDelayMinutes) {
-    if (state.isTerminal()) {
-      throw new IllegalStateException("A terminal driver task cannot hold scheduling");
+  public void markRepairPlaceReleasePending() {
+    if (state != DriverTaskState.SCHEDULED
+        || !kind.consumesRepairPlace()
+        || repairPlaceAllocationId == null
+        || repairPlaceAllocationVersion == null) {
+      throw new IllegalStateException(
+          "Only a scheduled repair delivery can release reserved capacity");
     }
-    if (automaticRefillDelayMinutes < 1 || automaticRefillDelayMinutes > 1_440) {
-      throw new IllegalArgumentException("automaticRefillDelayMinutes is invalid");
-    }
-    manualPromotionHoldUntil = now().plusMinutes(automaticRefillDelayMinutes);
+    manualPromotionHoldUntil = now();
     scheduleImmediately();
-  }
-
-  public void clearManualPromotionHold() {
-    if (manualPromotionHoldUntil == null) return;
-    manualPromotionHoldUntil = null;
-    touch();
   }
 
   public void markFixedDate(LocalDate date) {
@@ -980,10 +1149,11 @@ public class DriverLogisticsTask {
         || repairPlaceAllocationId == null
         || !repairPlaceAllocationId.equals(allocationId)
         || allocationVersion < repairPlaceAllocationVersion) {
-      throw new IllegalStateException("Manual repair-place release does not match the task");
+      throw new IllegalStateException("Pending repair-place release does not match the task");
     }
     repairPlaceAllocationId = null;
     repairPlaceAllocationVersion = null;
+    manualPromotionHoldUntil = null;
     resumeImmediatelyAfterConfirmation();
   }
 
@@ -1106,6 +1276,7 @@ public class DriverLogisticsTask {
         throw new IllegalArgumentException("Completed driver task has no completion time");
       }
       state = DriverTaskState.FINALIZING;
+      clearProvisionalEta();
       resumeImmediatelyAfterConfirmation();
       return;
     }
@@ -1114,6 +1285,7 @@ public class DriverLogisticsTask {
     }
     state = "CURRENT".equals(lane) ? DriverTaskState.CURRENT : DriverTaskState.SCHEDULED;
     if (state == DriverTaskState.CURRENT) {
+      clearProvisionalEta();
       manualPromotionHoldUntil = null;
     }
     resumeAfterSeconds(1);
@@ -1219,6 +1391,13 @@ public class DriverLogisticsTask {
     driverAudienceMode = requiredMode;
     plannedDriverWorkerId = workerId;
     plannedDriverNameSnapshot = normalizedName;
+    if (requiredMode != DriverTaskAudienceMode.WAREHOUSE_DRIVERS) clearProvisionalEta();
+  }
+
+  private void clearProvisionalEta() {
+    provisionalEta = null;
+    provisionalEtaSourcePlanId = null;
+    provisionalEtaSourcePlanVersion = null;
   }
 
   private static String requireHash(String value) {

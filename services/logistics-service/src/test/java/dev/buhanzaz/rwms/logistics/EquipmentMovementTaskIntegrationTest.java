@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -63,6 +64,8 @@ import tools.jackson.databind.ObjectMapper;
 class EquipmentMovementTaskIntegrationTest {
   private static final UUID ACTOR = UUID.fromString("00000000-0000-0000-0000-000000007101");
   private static final UUID WAREHOUSE = UUID.fromString("00000000-0000-0000-0000-000000007201");
+  private static final UUID TARGET_WAREHOUSE =
+      UUID.fromString("00000000-0000-0000-0000-000000007202");
   private static final UUID EQUIPMENT = UUID.fromString("00000000-0000-0000-0000-000000007301");
   private static final UUID CABIN = UUID.fromString("00000000-0000-0000-0000-000000007401");
 
@@ -112,11 +115,27 @@ class EquipmentMovementTaskIntegrationTest {
                 LogisticsDependencyGateway.WarehouseLifecycleState.ACTIVE,
                 LogisticsDependencyGateway.WarehouseOperationDirection.OUTGOING,
                 true));
+    when(
+            dependencies.warehouseAdmission(
+                TARGET_WAREHOUSE,
+                LogisticsDependencyGateway.WarehouseOperationDirection.INCOMING))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseOperationAdmission(
+                TARGET_WAREHOUSE,
+                23,
+                LogisticsDependencyGateway.WarehouseLifecycleState.ACTIVE,
+                LogisticsDependencyGateway.WarehouseOperationDirection.INCOMING,
+                true));
     when(dependencies.warehouseTimeZoneAt(eq(WAREHOUSE), any(OffsetDateTime.class)))
         .thenAnswer(
             invocation ->
                 new LogisticsDependencyGateway.WarehouseTimeZone(
                     WAREHOUSE, "UTC", invocation.getArgument(1)));
+    when(dependencies.warehouseTimeZoneAt(eq(TARGET_WAREHOUSE), any(OffsetDateTime.class)))
+        .thenAnswer(
+            invocation ->
+                new LogisticsDependencyGateway.WarehouseTimeZone(
+                    TARGET_WAREHOUSE, "UTC", invocation.getArgument(1)));
     when(
             dependencies.acquireEquipmentMovementReservation(
                 any(),
@@ -340,6 +359,7 @@ class EquipmentMovementTaskIntegrationTest {
         .andExpect(status().isBadRequest());
   }
 
+
   @Test
   void cancellationCancelsBoardTaskAndReleasesReservationWithoutPhysicalMove() throws Exception {
     MvcResult created = createTask();
@@ -464,6 +484,19 @@ class EquipmentMovementTaskIntegrationTest {
         .andReturn();
   }
 
+  private MvcResult createTransferTask() throws Exception {
+    OffsetDateTime deadline = OffsetDateTime.now(ZoneOffset.UTC).plusHours(2);
+    return mvc.perform(
+            post("/api/logistics/v1/equipment-movement-tasks")
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(transferTaskBody(deadline, 15))
+                .with(actor()))
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.lines[0].targetWarehouseId").value(TARGET_WAREHOUSE.toString()))
+        .andReturn();
+  }
+
   private static String taskBody(OffsetDateTime deadline, int plannedDurationMinutes) {
     return """
         {"warehouseId":"%s","unitNumber":"CAB-701","plannedDurationMinutes":%d,
@@ -473,6 +506,24 @@ class EquipmentMovementTaskIntegrationTest {
         """
         .formatted(
             WAREHOUSE, plannedDurationMinutes, deadline, EQUIPMENT, CABIN);
+  }
+
+  private static String transferTaskBody(
+      OffsetDateTime deadline, int plannedDurationMinutes) {
+    return """
+        {"warehouseId":"%s","targetWarehouseId":"%s","unitNumber":"CAB-701",
+        "plannedDurationMinutes":%d,"deadlineAt":"%s",
+        "lines":[{"equipmentId":"%s","sourceRentalItemId":null,
+        "sourceLocationKind":"STOCK","expectedSourceBalanceVersion":4,
+        "targetRentalItemId":"%s","targetLocationKind":"CABIN_NON_RENTED","quantity":2}]}
+        """
+        .formatted(
+            WAREHOUSE,
+            TARGET_WAREHOUSE,
+            plannedDurationMinutes,
+            deadline,
+            EQUIPMENT,
+            CABIN);
   }
 
   private static JwtRequestPostProcessor actor() {
@@ -485,7 +536,13 @@ class EquipmentMovementTaskIntegrationTest {
                     .claim("scope", "rwms.read rwms.write")
                     .claim(
                         "warehouse_access",
-                        List.of(Map.of("warehouseId", WAREHOUSE.toString(), "level", "MANAGE"))));
+                        List.of(
+                            Map.of("warehouseId", WAREHOUSE.toString(), "level", "MANAGE"),
+                            Map.of(
+                                "warehouseId",
+                                TARGET_WAREHOUSE.toString(),
+                                "level",
+                                "MANAGE"))));
   }
 
   private JsonNode json(MvcResult result) throws Exception {

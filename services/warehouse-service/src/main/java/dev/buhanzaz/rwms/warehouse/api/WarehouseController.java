@@ -23,9 +23,8 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * Public warehouse directory and administration API.
  *
- * <p>Directory reads deliberately expose the approved global registry rather than filtering it by
- * individual warehouse grants. Mutating operations are reserved for system administrators and
- * delegate concurrency and idempotency rules to {@link WarehouseService}.
+ * <p>Warehouse grants narrow operational access, while global administrators manage the canonical
+ * directory. Mutations delegate concurrency and idempotency rules to {@link WarehouseService}.
  */
 @RestController
 @Validated
@@ -59,7 +58,7 @@ public class WarehouseController {
   public List<WarehouseResponse> list(
       @AuthenticationPrincipal Jwt jwt,
       @RequestParam(defaultValue = "false") boolean includeInactive) {
-    access.requireWarehouseRead(jwt);
+    access.requireWarehouseDirectoryRead(jwt);
     if (includeInactive) access.requireSystemAdmin(jwt);
     return service.list(includeInactive);
   }
@@ -96,7 +95,7 @@ public class WarehouseController {
       @AuthenticationPrincipal Jwt jwt,
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody CreateWarehouseRequest request) {
-    access.requireSystemAdminWrite(jwt);
+    access.requireAdminWrite(jwt);
     WarehouseService.CreateResult result =
         service.create(access.subjectId(jwt), idempotencyKey, request);
     ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.CREATED);
@@ -120,7 +119,7 @@ public class WarehouseController {
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID id,
       @Valid @RequestBody ReplaceWarehouseRequest request) {
-    access.requireSystemAdminWrite(jwt);
+    access.requireAdminWrite(jwt);
     return service.replace(id, request);
   }
 
@@ -139,7 +138,7 @@ public class WarehouseController {
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID id,
       @Valid @RequestBody WarehouseLifecycleTransitionRequest request) {
-    access.requireSystemAdminWrite(jwt);
+    access.requireAdminWrite(jwt);
     return service.startDraining(id, request);
   }
 
@@ -158,7 +157,7 @@ public class WarehouseController {
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID id,
       @Valid @RequestBody WarehouseLifecycleTransitionRequest request) {
-    access.requireSystemAdminWrite(jwt);
+    access.requireAdminWrite(jwt);
     return service.completeInactivation(id, request);
   }
 
@@ -177,7 +176,7 @@ public class WarehouseController {
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID id,
       @Valid @RequestBody ScheduleWarehouseTimeZoneRequest request) {
-    access.requireSystemAdminWrite(jwt);
+    access.requireAdminWrite(jwt);
     return service.scheduleTimeZone(id, request);
   }
 

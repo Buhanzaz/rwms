@@ -54,6 +54,7 @@ class TaskBoardWorkerExecutionService {
   private final DriverTaskAudienceService driverAudiences;
   private final MaintenanceTaskExecutionPackageService executionPackages;
   private final WorkerQueuePlanPolicy workerQueuePlans;
+  private final PlanningReplanHoldFence replanHolds;
 
   TaskBoardWorkerExecutionService(
       BoardTaskRepository tasks,
@@ -73,7 +74,8 @@ class TaskBoardWorkerExecutionService {
       TaskBoardQueuePositionCoordinator queuePositions,
       DriverTaskAudienceService driverAudiences,
       MaintenanceTaskExecutionPackageService executionPackages,
-      WorkerQueuePlanPolicy workerQueuePlans) {
+      WorkerQueuePlanPolicy workerQueuePlans,
+      PlanningReplanHoldFence replanHolds) {
     this.tasks = tasks;
     this.entries = entries;
     this.bindings = bindings;
@@ -92,6 +94,7 @@ class TaskBoardWorkerExecutionService {
     this.driverAudiences = driverAudiences;
     this.executionPackages = executionPackages;
     this.workerQueuePlans = workerQueuePlans;
+    this.replanHolds = replanHolds;
   }
 
   CancelledTaskDto cancelTask(
@@ -277,7 +280,9 @@ class TaskBoardWorkerExecutionService {
 
   /**
    * Takes or joins an entry with the observed version and optionally enforces WorkerApp's current
-   * queue publication window before any assignment transition.
+   * queue publication window before any assignment transition. An authenticated exact driver may
+   * start logistics work at another physical warehouse; shared-pool and secondary participation
+   * retain their same-warehouse workforce fences.
    */
   QueueEntry take(
       UUID warehouseId,
@@ -290,6 +295,7 @@ class TaskBoardWorkerExecutionService {
     // to the loser before it validates WAITING, so a started entry cannot be cancelled by a
     // concurrent source compensation command and a cancelled entry cannot be resurrected.
     var entry = requireEntryForUpdate(warehouseId, entryId);
+    replanHolds.requireExecutionAllowed(entry.getTask());
     checkVersion(entry.getVersion(), request.expectedVersion(), "Этап");
     boolean joiningSecondary = entry.getStatus() == EntryStatus.IN_PROGRESS;
     if (entry.getEntryType() != EntryType.REAL
@@ -313,7 +319,11 @@ class TaskBoardWorkerExecutionService {
     Worker selected =
         request.workerId() == null
             ? null
-            : workforce.requireWorker(warehouseId, request.workerId());
+            : entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER
+                    && !joiningSecondary
+                    && authenticatedWorkerId != null
+                ? driverAudiences.requireExecutableWorker(entry, request.workerId())
+                : workforce.requireWorker(warehouseId, request.workerId());
     if (authenticatedWorkerId != null) {
       if (selected == null || !authenticatedWorkerId.equals(selected.getId()))
         throw new ConflictException("Worker token может взять задачу только на себя");
@@ -381,7 +391,9 @@ class TaskBoardWorkerExecutionService {
       throw new ConflictException("Рабочий не состоит в группе");
     WorkQueueClassBinding takeBinding =
         bindingForTake(queueBindings, assignedGroup, selected, joiningSecondary);
-    if (!queueBindings.isEmpty() && takeBinding == null) {
+    boolean exactAssignedContractor =
+        !joiningSecondary && driverAudiences.isExactAssignedContractor(entry, selected);
+    if (!queueBindings.isEmpty() && takeBinding == null && !exactAssignedContractor) {
       throw new ConflictException(
           joiningSecondary
               ? "Присоединиться может только вторичный класс исполнителей"

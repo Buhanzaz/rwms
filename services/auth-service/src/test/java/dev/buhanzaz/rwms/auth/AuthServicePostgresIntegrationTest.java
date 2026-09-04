@@ -59,7 +59,17 @@ class AuthServicePostgresIntegrationTest {
                         Integer.class))
                 .isEqualTo(1);
         assertThat(jdbc.queryForObject("select count(*) from auth_subject", Integer.class)).isEqualTo(1);
-        assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isEqualTo(9);
+        assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isEqualTo(12);
+        assertThat(clients.findByClientId("rwms-rental-manager-web"))
+                .isNotNull()
+                .satisfies(manager -> assertThat(manager.getScopes())
+                        .containsExactlyInAnyOrder("openid", "profile", "offline_access", "rental.manage")
+                        .doesNotContain("rwms.read", "rwms.write", "admin.manage"));
+        assertThat(clients.findByClientId("rwms-admin-web"))
+                .isNotNull()
+                .satisfies(admin -> assertThat(admin.getScopes())
+                        .containsExactlyInAnyOrder("openid", "profile", "offline_access", "admin.manage")
+                        .doesNotContain("rwms.read", "rwms.write", "rental.manage"));
         assertThat(clients.findByClientId("rwms-driver-android"))
                 .isNotNull()
                 .satisfies(driver -> {

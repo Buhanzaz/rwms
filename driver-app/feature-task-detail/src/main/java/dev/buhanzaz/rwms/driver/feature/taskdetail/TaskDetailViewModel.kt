@@ -19,8 +19,10 @@ import dev.buhanzaz.rwms.driver.core.network.DriverKpiPaletteDto
 import dev.buhanzaz.rwms.driver.core.network.DriverTaskDetailDto
 import dev.buhanzaz.rwms.driver.core.network.GatewayFailureDisposition
 import dev.buhanzaz.rwms.driver.core.network.GatewayProblemException
+import dev.buhanzaz.rwms.driver.core.network.toDriverUserMessage
 import dev.buhanzaz.rwms.driver.core.sync.DriverProjectionWriter
 import dev.buhanzaz.rwms.driver.core.sync.DriverSyncScheduler
+import dev.buhanzaz.rwms.driver.core.sync.DriverWarehouseClock
 import java.time.Instant
 import java.time.LocalDate
 import java.util.UUID
@@ -149,6 +151,8 @@ data class TaskDetailUiState(
     val evidence: List<TaskEvidenceEntity> = emptyList(),
     val retryableEvidenceIds: Set<String> = emptySet(),
     val kpiPalette: DriverKpiPaletteDto? = null,
+    /** Server-anchored date in the assigned warehouse timezone; null disables shared claim. */
+    val warehouseDate: LocalDate? = null,
     val tripDetails: DriverTripDetailsDto? = null,
     val tripRefreshInProgress: Boolean = false,
     val tripRefreshComplete: Boolean = false,
@@ -168,6 +172,7 @@ private data class SupportingState(
     val session: DriverSessionEntity?,
     val categoryPurposes: Map<String, String>,
     val kpiPalette: DriverKpiPaletteDto?,
+    val warehouseDate: LocalDate? = null,
 )
 
 @HiltViewModel
@@ -180,6 +185,7 @@ class TaskDetailViewModel @Inject constructor(
     private val gateway: DriverGatewayClient,
     private val projections: DriverProjectionWriter,
     private val scheduler: DriverSyncScheduler,
+    private val warehouseClock: DriverWarehouseClock,
     private val json: Json,
 ) : ViewModel() {
     private val key = MutableStateFlow<DetailKey?>(null)
@@ -249,6 +255,8 @@ class TaskDetailViewModel @Inject constructor(
                         runCatching { json.decodeFromString<DriverKpiPaletteDto>(encoded) }.getOrNull()
                     },
                 )
+            }.combine(warehouseClock.observeDate(requested.userId)) { supporting, warehouseDate ->
+                supporting.copy(warehouseDate = warehouseDate)
             }.flowOn(Dispatchers.IO)
             combine(
                 localStore.observeTasks(requested.userId),
@@ -271,6 +279,7 @@ class TaskDetailViewModel @Inject constructor(
                     evidence = evidenceWithRetry.evidence.filter { it.entryId == requested.entryId },
                     retryableEvidenceIds = evidenceWithRetry.retryableEvidenceIds,
                     kpiPalette = evidenceWithRetry.kpiPalette,
+                    warehouseDate = evidenceWithRetry.warehouseDate,
                     tripDetails = currentTrip?.details,
                     tripRefreshInProgress = currentTrip?.loading == true,
                     tripRefreshComplete = currentTrip?.complete == true,
@@ -316,11 +325,17 @@ class TaskDetailViewModel @Inject constructor(
             val isCurrent = {
                 key.value == current && refreshGeneration.get() == generation
             }
+            val warehouseDate = warehouseClock.currentDate(current.userId)
+            if (!isCurrent()) return@launch
+            if (warehouseDate == null) {
+                errors.value = WAREHOUSE_DATE_UNAVAILABLE_MESSAGE
+                return@launch
+            }
             val driverAudienceMode = currentDriverAudienceMode(current)
             if (!isCurrent()) return@launch
             val outcome = loadTaskDetail(
                 driverAudienceMode = driverAudienceMode,
-                today = LocalDate.now(),
+                today = warehouseDate,
                 fetchDetail = { gateway.detail(current.entryId) },
                 persistDetail = { projections.applyDetail(current.userId, it) },
                 fetchLogisticsTrip = gateway::logisticsTripDetails,
@@ -352,13 +367,18 @@ class TaskDetailViewModel @Inject constructor(
         val detail = state.detail ?: return
         val source = detail.source
         val claimState = tripSnapshot.value.takeIf { it.key == current }
+        val warehouseDate = state.warehouseDate
+        if (warehouseDate == null) {
+            errors.value = WAREHOUSE_DATE_UNAVAILABLE_MESSAGE
+            return
+        }
         if (
             claimState?.claimInProgress == true || claimState?.claimComplete == true ||
             !canClaimFutureLogisticsTask(
                 sourceType = source?.type,
                 driverAudienceMode = state.task?.driverAudienceMode,
                 scheduledDate = detail.scheduledDate,
-                today = LocalDate.now(),
+                today = warehouseDate,
             )
         ) {
             errors.value = "Дополнительную ходку можно взять только на будущую дату"
@@ -456,7 +476,7 @@ class TaskDetailViewModel @Inject constructor(
             return
         }
         viewModelScope.launch {
-            runCatching {
+            try {
                 val lease = requireNotNull(localStore.leaseFor(current.userId)) { "Офлайн-доступ ещё не подготовлен" }
                 require(lease.isLeaseActive(SystemClock.elapsedRealtime())) { "Срок офлайн-доступа истёк" }
                 val payload = PendingDriverAction(
@@ -483,10 +503,20 @@ class TaskDetailViewModel @Inject constructor(
                     ),
                 )
                 scheduler.request(current.userId)
-            }.onFailure { errors.value = it.message ?: "Не удалось поставить действие в очередь" }
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (exception: Exception) {
+                errors.value = driverTaskActionQueueErrorMessage(exception)
+            }
         }
     }
 }
+
+/** Maps local queueing failures without exposing exception text to the driver. */
+internal fun driverTaskActionQueueErrorMessage(failure: Throwable): String =
+    failure.toDriverUserMessage(
+        "Не удалось поставить действие в очередь. Синхронизируйте задание и повторите попытку.",
+    )
 
 /** Converts typed gateway outcomes into a recovery-oriented driver message. */
 internal fun extraTaskClaimErrorMessage(failure: Throwable): String = when (
@@ -509,3 +539,6 @@ private fun String.statusAfterAction(): String = when (this) {
     "COMPLETE" -> "DONE"
     else -> error("Unknown driver action")
 }
+
+private const val WAREHOUSE_DATE_UNAVAILABLE_MESSAGE =
+    "Не удалось определить дату склада. Синхронизируйте данные."

@@ -3,6 +3,9 @@ package dev.buhanzaz.rwms.logistics.customer.capacity.service;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityCommandReceipt;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityIsochroneTariff;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityJob;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityPriceZone;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityRestrictionKind;
+import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityRestrictionZone;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityShift;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacitySnapshot;
 import dev.buhanzaz.rwms.logistics.customer.capacity.domain.WarehouseCapacityTaskType;
@@ -12,6 +15,8 @@ import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacit
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityIsochroneTariff;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityJobRequest;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityPriceZoneRequest;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityRestrictionZoneRequest;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacityShiftRequest;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningCapacitySnapshotResponse;
 import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.ReplacePlanningCapacitySnapshotRequest;
@@ -27,6 +32,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.ObjectMapper;
 
 /** Owns atomic, idempotent replacement of simulator-only CustomerApp capacity facts. */
 @Service
@@ -42,6 +48,10 @@ public class WarehouseCapacitySnapshotService {
           .thenComparing(PlanningCapacityShiftRequest::sourceShiftId);
   private static final Comparator<PlanningCapacityIsochroneTariff> ISOCHRONE_TARIFF_ORDER =
       Comparator.comparingInt(PlanningCapacityIsochroneTariff::travelMinutes);
+  private static final Comparator<PlanningCapacityPriceZoneRequest> PRICE_ZONE_ORDER =
+      Comparator.comparing(PlanningCapacityPriceZoneRequest::sourceZoneId);
+  private static final Comparator<PlanningCapacityRestrictionZoneRequest> RESTRICTION_ZONE_ORDER =
+      Comparator.comparing(PlanningCapacityRestrictionZoneRequest::sourceZoneId);
 
   private final WarehouseCapacitySnapshotRepository snapshots;
   private final WarehouseCapacityCommandReceiptRepository receipts;
@@ -49,6 +59,7 @@ public class WarehouseCapacitySnapshotService {
   private final LogisticsTransactionLock transactionLock;
   private final CustomerDeliveryCapacityFence capacityFence;
   private final Clock clock;
+  private final ObjectMapper json;
 
   /** Replaces one active warehouse projection while preserving exact command replay semantics. */
   @Transactional
@@ -61,9 +72,19 @@ public class WarehouseCapacitySnapshotService {
         request.shifts().stream().sorted(SHIFT_ORDER).toList();
     List<PlanningCapacityIsochroneTariff> sortedTariffs =
         request.isochroneTariffs().stream().sorted(ISOCHRONE_TARIFF_ORDER).toList();
+    List<PlanningCapacityPriceZoneRequest> sortedPriceZones =
+        request.priceZones().stream().sorted(PRICE_ZONE_ORDER).toList();
+    List<PlanningCapacityRestrictionZoneRequest> sortedRestrictionZones =
+        request.restrictionZones().stream().sorted(RESTRICTION_ZONE_ORDER).toList();
     String requestSha256 =
         WarehouseCapacityChecksum.sha256(
-            warehouseId, request, sortedJobs, sortedShifts, sortedTariffs);
+            warehouseId,
+            request,
+            sortedJobs,
+            sortedShifts,
+            sortedTariffs,
+            sortedPriceZones,
+            sortedRestrictionZones);
     List<WarehouseCapacityJob.Facts> jobFacts = sortedJobs.stream().map(this::jobFacts).toList();
     List<WarehouseCapacityShift.Facts> shiftFacts =
         sortedShifts.stream().map(WarehouseCapacitySnapshotService::shiftFacts).toList();
@@ -74,6 +95,10 @@ public class WarehouseCapacitySnapshotService {
                     new WarehouseCapacityIsochroneTariff.Facts(
                         tariff.travelMinutes(), tariff.priceRubles()))
             .toList();
+    List<WarehouseCapacityPriceZone.Facts> priceZoneFacts =
+        sortedPriceZones.stream().map(this::priceZoneFacts).toList();
+    List<WarehouseCapacityRestrictionZone.Facts> restrictionZoneFacts =
+        sortedRestrictionZones.stream().map(this::restrictionZoneFacts).toList();
     transactionLock.acquire("customer-warehouse-capacity-command:" + idempotencyKey);
     WarehouseCapacityCommandReceipt accepted = receipts.findById(idempotencyKey).orElse(null);
     if (accepted != null) {
@@ -108,6 +133,8 @@ public class WarehouseCapacitySnapshotService {
               jobFacts,
               shiftFacts,
               tariffFacts,
+              priceZoneFacts,
+              restrictionZoneFacts,
               now);
     } else {
       if (request.sourceGeneration() < snapshot.getSourceGeneration()) {
@@ -122,6 +149,8 @@ public class WarehouseCapacitySnapshotService {
           jobFacts,
           shiftFacts,
           tariffFacts,
+          priceZoneFacts,
+          restrictionZoneFacts,
           now);
     }
     WarehouseCapacitySnapshot applied = snapshots.saveAndFlush(snapshot);
@@ -155,6 +184,35 @@ public class WarehouseCapacitySnapshotService {
         request.shiftEnd(),
         request.breakMinutes(),
         request.cabinCapacity());
+  }
+
+  private WarehouseCapacityPriceZone.Facts priceZoneFacts(
+      PlanningCapacityPriceZoneRequest request) {
+    try {
+      return new WarehouseCapacityPriceZone.Facts(
+          request.sourceZoneId(),
+          request.sourceZoneVersion(),
+          request.deliveryPriceRubles(),
+          request.pickupPriceRubles(),
+          json.writeValueAsString(request.geometry()));
+    } catch (Exception exception) {
+      throw new IllegalArgumentException(
+          "Planning price-zone geometry cannot be serialized", exception);
+    }
+  }
+
+  private WarehouseCapacityRestrictionZone.Facts restrictionZoneFacts(
+      PlanningCapacityRestrictionZoneRequest request) {
+    try {
+      return new WarehouseCapacityRestrictionZone.Facts(
+          request.sourceZoneId(),
+          request.sourceZoneVersion(),
+          WarehouseCapacityRestrictionKind.valueOf(request.kind().name()),
+          json.writeValueAsString(request.geometry()));
+    } catch (Exception exception) {
+      throw new IllegalArgumentException(
+          "Planning restriction-zone geometry cannot be serialized", exception);
+    }
   }
 
   private OffsetDateTime now() {

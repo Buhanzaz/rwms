@@ -2,654 +2,1677 @@
 
 # RWMS Product Development Rules
 
-## Current Objective
+## 1. Mission
 
-RWMS is an actively developed product. The objective is to finish, correct and
-extend the supported product flows; there is no active migration program,
-stage pointer, wave sequence or cutover gate.
+RWMS is an actively developed product.
 
-The user's current command selects the scope. Implement that scope as a
-complete, working change across every affected client, contract and owning
-service. Do not start unrelated product work, commit, publish or deploy beyond
-the requested scope.
+The current direct user command defines the task scope.
 
-`panel/` is the primary web panel. `app/` is the manager Android application and
-`worker-app/` is the worker Android application. `wms-panel-old/`, browser
-mocks, `old_db/`, `docs/plans/` and `WMS_ARCHITECTURE_KNOWLEDGE/` are historical
-evidence only. They do not define current behavior and do not restrict current
-development.
+Implement the requested behavior as a complete working change across every component that is genuinely affected by that behavior.
 
-There is no general requirement to preserve compatibility with obsolete mock
-state, old browser data, old schemas, fixtures or abandoned flows. This does
-not authorize deletion of a live database, volume, backup or user data. Any
-destructive data operation still requires an explicit target, impact analysis
-and user authorization.
+The goal is:
 
-## Authority And Sources Of Truth
+> Make the requested change correct with the smallest safe diff.
+
+Do not turn a feature task into a general cleanup, migration, architecture rewrite or repository-wide repair.
+
+Do not start unrelated work.
+
+Do not push, publish or deploy unless the user explicitly requests it or the current command clearly includes that action.
+
+Every completed implementation task must leave no WIP: before the final handoff, finish,
+verify and commit the complete shared change set, leaving `git status --short` empty. Do not
+leave task changes, generated source, partial fixes or deferred integration as an uncommitted
+handoff. An exception requires an explicit user instruction to keep the worktree dirty and must
+name the paths that remain unfinished.
+
+---
+
+# 2. Current Project
+
+Primary active applications:
+
+* `panel/` — primary web panel.
+* `app/` — Manager Android application.
+* `worker-app/` — Worker Android application.
+* `services/` — backend services.
+* `contracts/` — canonical transport contracts.
+* `docs/project-knowledge/` — maintained map of current architecture and business logic.
+
+Other active project directories may exist. Verify their current role from repository sources before changing them.
+
+Historical evidence only:
+
+* `wms-panel-old/`
+* browser mocks
+* `old_db/`
+* `docs/plans/`
+* `WMS_ARCHITECTURE_KNOWLEDGE/`
+
+Historical code, plans, schemas, fixtures and browser state do not define current product behavior unless verified against current authoritative sources.
+
+There is no general requirement to preserve compatibility with abandoned mocks, obsolete schemas, browser state, fixtures or old flows unless the user explicitly requests it.
+
+This does not authorize destructive operations against real data.
+
+Never delete or rewrite a live:
+
+* database;
+* volume;
+* backup;
+* object bucket;
+* user data;
+
+without explicit user authorization and a known target.
+
+---
+
+# 3. Authority And Sources Of Truth
 
 Use authority in this order:
 
-1. the current direct user command;
+1. current direct user command;
 2. this `AGENTS.md`;
-3. canonical transport contracts under `contracts/openapi/` and
-   `contracts/events/`;
-4. the owning service's current domain code, Flyway schema and tests;
-5. the current product knowledge in `docs/project-knowledge/`;
-6. historical plans, migration notes, legacy code and old data as evidence
-   only.
-
-Canonical contracts define component boundaries. The owning service defines
-business transitions and invariants that are not transport concerns. The
-knowledge base is a verified index and explanation of those sources; it never
-overrides them.
-
-If the request, a canonical contract and the owning domain logic disagree, do
-not silently choose one. Gather the exact evidence, explain the conflict and
-ask the user the smallest decision needed before changing contract meaning,
-ownership, identity, status semantics, money, time or destructive behavior.
-
-## Mandatory WIP Readiness Gate
-
-Every task starts with a WIP (`work in progress`) readiness gate. This gate is
-an absolute prerequisite to implementation: do not edit task files, delegate a
-coding lane, generate code, run a task build or test, or update a runtime until
-the relevant WIP is prepared and synchronized. Before the gate passes, perform
-only the read-only inspection and explicitly scoped WIP reconciliation needed
-to establish or restore readiness.
-
-The primary agent must confirm all of the following before starting the task:
-
-- the current branch, `git status --short` and relevant diffs have been read
-  from the actual shared worktree, not inferred from conversation context;
-- every relevant modified, deleted or untracked path belongs to an identified
-  WIP scope and has one active owner; unknown work remains protected and is not
-  treated as available task input;
-- the requested task and every parallel lane have non-overlapping write scopes,
-  frozen shared inputs and an explicit dependency/order map;
-- every participating agent has refreshed the current on-disk files and diffs
-  for its scope after the latest upstream or concurrent change; a forked prompt
-  or an earlier handoff is never accepted as proof of synchronization;
-- no relevant lane is based on stale files, a different worktree or branch, an
-  unreviewed generated artifact, or a contract/change that another lane has not
-  finished handing off.
-
-If any condition fails, do not begin or continue the requested task. WIP repair
-and synchronization become the only active task: pause the affected write
-lanes, collect their exact changed-file and status handoffs, reconcile ownership
-and ordering, refresh every affected agent's inputs from the shared worktree,
-and rerun the readiness checks. Edit or validate only the files required to
-make that WIP ready, under the same ownership and protection rules. Preserve
-all existing work while doing so. If synchronization would require choosing
-between competing changes, discarding or overwriting a hunk, changing branches,
-committing, stashing, resetting, or publishing, stop and ask the user for the
-smallest required decision or authorization.
-
-Parallel work never consists of independent WIPs that are assumed to synchronize
-later. When one lane changes a frozen input, shared file, canonical contract or
-dependency used by another lane, impose a synchronization barrier immediately:
-dependent writes pause, the primary reviews the landed diff, all affected lanes
-refresh and acknowledge the new input, and only then may they continue. Repeat
-the WIP readiness gate before final integration, build, test and publication.
-
-## Mandatory Task Workflow
-
-Every task follows this sequence. The depth is proportional to the risk, but no
-step is skipped.
-
-### 1. Analyze The Task
-
-Before editing:
-
-- state the intended result and measurable acceptance criteria;
-- separate explicit requirements from assumptions;
-- identify unknown product decisions, failure cases, security and data risks;
-- check the current worktree and preserve user or concurrent changes;
-- identify applicable skills and MCP sources, or explicitly record that none
-  are needed.
-
-### 2. Analyze Every Affected Place
-
-Trace the full flow, not only the first matching screen or class. Search for:
-
-- navigation, pages, components, state, query keys, cache and real-time
-  invalidation;
-- client ports, adapters, DTO mappers and same-origin gateway routes;
-- OpenAPI operations, event schemas, producers and every active consumer;
-- controllers, application services, domain transitions, repositories and
-  authorization;
-- JPA mappings, Flyway migrations, constraints, indexes and existing data;
-- idempotency, optimistic concurrency, retries, outbox/inbox and recovery;
-- panel, manager app, worker app and external integrations that consume the
-  changed behavior;
-- focused tests, contract checks, runtime configuration and observability.
-
-Use `rg` or `rg --files` first for repository searches. Do not infer that a
-flow is isolated until its callers and consumers have been checked.
-
-### 3. Create A Plan Before Implementation
-
-Publish a working plan in commentary or the plan tool before changing code.
-For a small task, a concise two- or three-step plan is enough. A non-trivial
-plan must name:
-
-- the owning component and files or areas to change;
-- contract and business-logic impact;
-- persistence, migration and existing-data impact;
-- active consumers and compatibility behavior;
-- obsolete implementation to delete;
-- focused tests and architecture checks;
-- affected runtime services that may need an update;
-- selected skills and MCP tools, including `none` when none apply.
-
-Stop and ask a focused question when implementation would require an
-unrequested breaking contract, a change of domain owner, an unresolved
-business invariant or a destructive data decision. Do not stop for a detail
-that current authoritative sources answer unambiguously.
-
-### 4. Implement The Smallest Complete Change
-
-- Deliver one production implementation of the requested behavior end to end.
-- Do not concentrate independent use-case families in a god class, coordinator,
-  adapter or shared base. A compatibility facade may preserve the public API,
-  but it contains delegation rather than business decisions; each collaborator
-  owns one cohesive workflow and receives only the dependencies it needs.
-  Never disguise the same coupling as a universal `*Support`, dependency bag,
-  inherited repository surface or single mega-coordinator.
-- Change a canonical contract and all affected producers/consumers together
-  when the boundary must evolve.
-- Keep commands and business orchestration in the owning service, not in a UI,
-  gateway or read projection.
-- Remove replaced legacy code, adapters, storage, fixtures, tests and
-  configuration in the same task. Do not hide them behind a flag, unused
-  export, unreachable route, CSS or fallback.
-- Do not fabricate successful data or silently fall back to mocks when a
-  service, token or contract is unavailable.
-- Preserve unrelated dirty-worktree changes and avoid broad mechanical edits.
-
-### 5. Test After Implementation
-
-Run the narrowest checks that cover the final diff and relevant failure paths.
-Tests happen after implementation and fixes continue until the focused gate is
-green or an external blocker is proven.
-
-Never claim a check that was not executed. If infrastructure prevents a test,
-name the exact blocker and run the strongest honest replacement.
-
-### 6. Review Architecture
-
-Before handoff, review the final diff for:
-
-- correct service and data ownership;
-- dependency direction and absence of cross-service persistence coupling;
-- consistency with OpenAPI and event contracts;
-- authentication, authorization and warehouse isolation;
-- transaction boundaries, concurrency, idempotency and retry safety;
-- single source of truth and removal of duplicate business state;
-- cache and real-time invalidation scope;
-- observability and recoverable failure behavior;
-- absence of new legacy paths, compatibility shims and browser-owned domain
-  state.
-
-Fix violations within scope. If fixing one requires a new product decision,
-report it and ask before proceeding.
-
-### 7. Update Documentation And Project Knowledge
-
-Documentation is part of every implementation and refactoring task, not a
-separate optional cleanup:
-
-1. add meaningful JavaDoc/KDoc/GoDoc for every newly added real type declaration,
-   including package-private, private, nested and local classes, interfaces,
-   records, enums and objects; update it for every changed public or
-   architecture-significant type and for every changed method whose ownership,
-   authorization, transaction, fencing, idempotency, retry, time or recovery
-   semantics are not obvious from its signature;
-2. when behavior, dependencies, configuration, API, persistence, events,
-   recovery, operational checks or internal component structure changes,
-   update the owning component's `README.md` and `README.ru.md` together with
-   matching section order and identical facts, warnings, commands and
-   references;
-3. update the relevant structure and flow descriptions in
-   `docs/project-knowledge/` whenever deployables, packages, collaborators,
-   ownership boundaries or cross-component flows change;
-4. cite the authoritative repository paths that prove every durable statement;
-5. append one concise entry to
-   `docs/project-knowledge/change-log.md` when architecture, an owner, a
-   business invariant, a contract or an important cross-component flow changes;
-6. place unresolved decisions in
-   `docs/project-knowledge/open-questions.md` instead of inventing an answer.
-
-If a change has no documentation-visible effect, state that explicitly in the
-handoff after checking the paired README and structure map. Do not add filler
-comments or touch documentation merely to create a diff.
-
-Do not copy complete schemas or implementation details that will immediately
-drift. Link to canonical sources and record the durable meaning.
-
-### 8. Report The Result
-
-Every final response includes:
-
-- what is now working;
-- the main files or areas changed;
-- exact tests and their results;
-- contract and architecture review result;
-- runtime update/status when relevant;
-- skills and MCP tools actually used, or `none`;
-- found remarks, risks, unresolved questions and known follow-up work.
-
-Do not present a partial implementation as complete.
-
-## Project Knowledge Base
-
-`docs/project-knowledge/` is the canonical, maintained map of current RWMS
-architecture and business logic. Start at
-[`docs/project-knowledge/README.md`](docs/project-knowledge/README.md).
-
-The folder contains:
-
-- `architecture.md` — deployables, ownership and dependency boundaries;
-- `service-catalog.md` — current component responsibilities and primary source
-  locations;
-- `runtime-flows.md` — confirmed request, command, event, saga and projection
-  sequences;
-- `cabin-lifecycle.md` / `cabin-lifecycle.ru.md` — the confirmed bilingual
-  end-to-end cabin workflow and its supported variants;
-- `domain-logic.md` — confirmed business responsibilities and invariants;
-- `contracts.md` — contract locations and safe change procedure;
-- `documentation-standard.md` — JavaDoc/KDoc/GoDoc and bilingual README rules;
-- `change-log.md` — append-only record of durable architecture/logic changes;
-- `open-questions.md` — unresolved product decisions and contradictions.
-
-Read only the sections relevant to the task, then verify them against the
-current contracts and code. If a knowledge document is stale, correct it as
-part of the task.
-
-Historical content under `docs/plans/` and `WMS_ARCHITECTURE_KNOWLEDGE/` may be
-used to understand provenance. It must never be copied into current behavior
-without verification.
-
-## Skills And MCP
-
-### Skills
-
-- At task start, inspect the available skills. If the user names a skill or the
-  task clearly matches one, read its complete `SKILL.md` before taking task
-  actions and follow it.
-- Use the smallest set of skills that covers the task. Announce selected skills
-  and why; if no skill applies, say so.
-- A skill does not override the current user command, canonical RWMS contracts
-  or these repository rules.
-- Record durable facts found through a skill in the project knowledge base only
-  after validating them against current repository sources.
-
-### MCP
-
-- Prefer an installed MCP source when it is the direct authority for external
-  context, such as a referenced issue, design, document or repository object.
-- Prefer repository files for repository facts. Do not call MCP or the web only
-  to repeat information already available locally.
-- MCP discovery is read-only by default. External writes, messages, comments,
-  tickets, uploads or document edits require user scope that authorizes them.
-- Never send secrets, tokens, private keys, customer data or unnecessary source
-  code to an external MCP.
-- State which MCP was used and why in the plan and final report. State `none`
-  when no MCP was needed.
-
-## Stack And Deployable Boundaries
-
-- Web panel: React, TypeScript, Vite, React Router, TanStack Query/Table,
-  Tailwind CSS and shadcn-based components under `panel/`.
-- Spring services: Java, Spring Boot, Gradle Kotlin multi-module, Spring Data
-  JPA and PostgreSQL under `services/`.
-- Android clients: the manager app under `app/` and worker app under
-  `worker-app/`.
-- Schema authority: service-local Flyway only. Liquibase and Hibernate schema
-  mutation are forbidden.
-- Authentication: OAuth2/OIDC Authorization Code with PKCE for interactive
-  clients and locally validated Bearer JWTs for APIs.
-- Messaging and objects: Kafka and private MinIO.
-- Edge: stateless `api-gateway-service`.
-- Media: one stateful Go `media-service`; do not create a second photo or media
-  processing deployable.
-
-Every stateful service owns one PostgreSQL database. Cross-database foreign
-keys, joins, shared tables, shared repositories, shared JPA entities and shared
-mutable domain models are forbidden.
-
-## Android Download-Site Ownership
-
-- `worker-download-site/` is the sole download surface for WorkerApp from
-  `worker-app/` (`dev.buhanzaz.rwms.worker`). It publishes only WorkerApp
-  release metadata and APKs. Its `release.json` is the rendered release source;
-  a pending manifest must not expose a download link.
-- `manager-download-site/` is the separate download surface for ManagerApp from
-  `app/` (`dev.buhanzaz.rwms.manager`). It publishes only ManagerApp release
-  metadata and APKs.
-- Every functional update under `app/` must build, install-check and publish the
-  exact resulting ManagerApp APK to `manager-download-site/` / Downloads before
-  handoff. Do not leave an updated ManagerApp APK only in `app/build/`.
-- Never place, link, mirror or describe a WorkerApp APK in
-  `manager-download-site/`, or a ManagerApp APK in `worker-download-site/`.
-  Do not use the panel or either Android app as a release-file host.
-- Each site is deployed independently. Before an authorized publish, identify
-  the exact source revision, reviewed APK, immutable public artifact URL,
-  package/version/signing identity and SHA-256 for that application's own
-  download site. A WorkerApp public URL does not exist until such a release is
-  actually published and verified.
-
-## Domain Ownership
-
-| Flow                                                                                 | Owner                                                            |
-| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
-| Login, users, roles, OAuth/OIDC clients and warehouse access                         | `auth-service`                                                   |
-| Warehouse identity, metadata and timezone                                            | `warehouse-service`                                              |
-| Cabins, status, equipment, balances, holds and leases                                | `asset-service`                                                  |
-| Queues, workforce, assignments and operational board                                 | `task-board-service`                                             |
-| Catalog, estimates, repairs, acceptance and write-off decisions                      | `maintenance-service`                                            |
-| Inventory sessions, findings, completion and publication                             | `inventory-service`                                              |
-| Rental counterparties, inquiries, returns, shipments, transfers and drivers          | `logistics-service`                                              |
-| Media metadata, upload/finalize, originals and transformations                       | `media-service`                                                  |
-| Cross-domain cabin activity                                                          | read-only `dossier-service` projection                           |
-| KPI and dashboard facts                                                              | `analytics-service` projections                                  |
-| Assistant conversations and tool-call history                                        | `assistant-service`; rental availability remains logistics-owned |
-
-`api-gateway-service` owns no database, Kafka participation, token storage,
-workflow, cache or business aggregation. `dossier-service` and analytics
-projections never own commands for producer aggregates.
-
-## Panel, Android And Gateway Rules
-
-- Interactive clients use the public gateway only. Browser requests use
-  same-origin `/auth/**` and `/api/**` routes.
-- Do not put internal service origins or `localhost:<service-port>` into panel
-  runtime configuration.
-- Clients never call `/api/internal/**` or private service routes.
-- Missing token, gateway configuration or service is an explicit error, not a
-  mock fallback.
-- Use the shared Bearer client and map Problem Details consistently.
-- Mutable commands use `expectedVersion`, ETag or another contract-defined
-  fencing token and show a consistent `409` conflict.
-- Retried creates and effects use `Idempotency-Key` or a stable domain external
-  identifier.
-- The panel may combine independent public reads. The gateway must not
-  aggregate business responses.
-- Server data is authoritative. Local storage is allowed only for
-  non-authoritative UI preferences, encrypted client session material where
-  required and explicitly designed offline caches.
-- Real-time messages are invalidation signals unless their contract declares a
-  complete projection. Refresh or patch only affected query/cache entries;
-  avoid global cache clears and stale image URLs after media revisions.
-- Preserve the current supported UX when it matches domain semantics. If no
-  contract exists for a control, make it unavailable and explain the gap; do
-  not fabricate success.
-
-## Contracts, Services And Events
-
-- A service owns its aggregate transitions and server-side orchestration.
-  Browser sagas are forbidden.
-- Internal service calls use private addresses and service credentials, not the
-  public gateway.
-- PostgreSQL event stores and projections are authoritative; Kafka is
-  at-least-once transport, not an archive or database.
-- Preserve transactional outbox/inbox, aggregate-key ordering, deduplication
-  and version-gap handling when a touched service uses them.
-- Effects and consumers must be idempotent. Infinite retry and 2PC are
-  forbidden.
-- The initiating service owns saga state, recovery and compensation. A UI
-  rollback is not a consistency mechanism.
-- Each status and invariant belongs to one service. Consumers store only
-  contract-defined IDs or immutable snapshots and tolerate compatible
-  additions.
-- Generated clients and transport DTOs are boundary types, never persistence
-  entities or shared domain models.
-
-## Spring Data, Flyway, Lombok And MapStruct
-
-Use Spring Data JPA for stateful Spring persistence. When changing a JPA entity,
-repository or projection, apply the available `spring-data-jpa` skill before
-editing.
-
-- JPA mappings define the application model; Hibernate never creates, updates
-  or drops the target schema.
-- Every target profile uses `hibernate.ddl-auto=validate`.
-- Flyway migrations are immutable, ordered and service-local.
-- `baselineOnMigrate` remains false. A non-empty unversioned schema requires an
-  explicit proven adoption procedure.
-- Destructive schema changes use expand/contract and explicit data handling.
-- Run a clean install or affected upgrade path plus JPA validation for schema
-  changes.
-- JPA entities must not use Lombok `@Data`, generated builders,
-  `equals/hashCode/toString`, or generated setters for IDs, versions,
-  timestamps and invariants.
-- Use MapStruct at touched Spring boundaries that map entities/projections to
-  DTOs or sanitized integration payloads. Use Spring component model,
-  constructor injection and `unmappedTargetPolicy=ERROR`.
-- Do not use MapStruct for request-to-entity mutation, security or secret
-  mapping, version mutation, checksums, outbox construction or domain
-  transitions.
-- `platform:technical-contracts` remains framework-neutral and contains no
-  Spring, JPA, Kafka or business-domain model.
-
-## Legacy Removal And Data Safety
-
-- Delete an obsolete runtime path when its replacement is delivered. Also
-  delete its mock selectors, browser stores, seeds, fixtures, compatibility
-  adapters, tests and configuration once no supported flow references them.
-- Do not retain old code as a fallback or automatically import localStorage,
-  IndexedDB, `old_db/` or legacy exports into PostgreSQL.
-- Old data may be disregarded when designing current behavior unless the user
-  explicitly requests import or backward compatibility.
-- Never delete or rewrite an actual database, volume, backup, object bucket or
-  user data merely because it is old. Resolve exact targets and obtain explicit
-  authorization for destructive operations.
-
-## Focused Verification
-
-- Panel change: affected Vitest tests plus `npm run typecheck`; add lint/build
-  when the boundary requires it.
-- Spring change: affected module/package tests or compile check.
-- Contract change: schema validation plus focused producer and consumer
-  compatibility tests.
-- Flyway/JPA change: affected clean install or upgrade path and JPA validation.
-- Go media change: affected Go package tests and build.
-- Auth, authorization, concurrency, cache, SSE and integration changes: cover
-  the smallest relevant success and failure paths.
-- Documentation-only change: validate links/references and run whitespace or
-  formatting checks available in the repository.
-- Android or Android-consumed contract change: run affected unit/contract
-  tests, build the exact APK and update only its owned download site:
-  `worker-download-site/` for WorkerApp or `manager-download-site/` for
-  ManagerApp. Before claiming end-to-end validation, install that APK on an
-  emulator or device, authenticate against the intended public gateway and
-  verify the first workspace request plus the changed flow. Capture a UI tree
-  or screenshot and filtered logcat. If the gateway or credentials are
-  unavailable, report the blocker and do not claim end-to-end validation.
-
-Use full Testcontainers, browser automation, Kafka outage/replay or
-cross-service suites when risk requires them, focused checks reveal a wider
-issue or the user asks.
-
-## Cabin CAD Runtime Diagnostics
-
-- `cabin-cad` runtime diagnostics must be durable and searchable, never
-  console-only. Preserve the bounded browser journal under
-  `cabin-cad/diagnostics/v1`, its explicit NDJSON export, and the local Vite
-  sink at `cabin-cad/.runtime/diagnostics.ndjson` with bounded rotation.
-- Start every `cabin-cad` crash investigation by searching the current and
-  rotated NDJSON files with `rg`, then reproduce the flow and correlate by
-  `sessionId`, `sequence`, `scope` and `event`. If the file sink was not active,
-  inspect the browser journal through `window.cabinCadDiagnostics` or request
-  its exported NDJSON; do not claim that no error occurred from an empty
-  console alone.
-- Log operation boundaries, safe counts, durations, browser/runtime state and
-  original exception stacks. Never log CAD documents, STEP bytes or geometry,
-  embedded texture data, serialized storage payloads, credentials, tokens or
-  customer data. Diagnostic files are local runtime artifacts and must not be
-  committed.
-
-## Agent Coordination
-
-Use one primary agent by default. Additional agents are allowed only for
-concrete parallel coding lanes with explicit, non-overlapping file ownership,
-frozen contracts and independent focused verification. Do not create separate
-discovery, planning, documentation, reviewer, status or QA agents, except for
-the required read-only Luna web UI verification agent below and the lightweight
-operational delegation described next. Additional agents must not create their
-own subagents.
-
-### Lightweight Operational Delegation To Luna
-
-For a bounded, low-risk operational action, start a separate
-`gpt-5.6-luna` agent instead of consuming primary-agent context. This includes
-restarting or starting an already understood service, running a known focused
-command, collecting status or logs, and moving a known file when the source and
-destination are explicit. Give Luna the exact command or file operation,
-expected result, permitted scope and any required verification.
-
-This delegation does not transfer product decisions or safety authority. The
-primary agent must retain actions that change code or contracts, resolve
-conflicts, touch protected dirty files, choose runtime targets, perform
-destructive operations, handle secrets or external writes, or require
-investigation beyond the specified operation. Luna reports the raw command
-output and changed paths; the primary agent validates the result before
-proceeding.
-
-### Web UI Verification With Luna
-
-For every change to the active web panel UI, the focused web UI verification
-must be executed by a separate agent explicitly started with the
-`gpt-5.6-luna` model. This includes component or interaction Vitest suites and
-Playwright or other real-browser flows; panel type checking, linting and builds
-may be included in the same serialized verification gate. The implementation
-agent may write the UI and its tests, but it must not be the only executor or
-approver of those tests.
-
-The primary agent remains responsible for the verdict. Before the Luna run it
-must review and freeze the exact source scope, test inputs, expected user flow,
-commands and required artifacts. After the run it must inspect the raw output,
-test counts, timestamps and any screenshots, traces or reports, compare them
-with the requested behavior, and direct any required fix and rerun. A Luna
-summary alone is not proof that the UI is correct. The Luna verification agent
-is read-only for production and test sources unless it receives a separate,
-explicit coding assignment. Backend-only, contract-only and native Android
-checks continue to follow their own focused-verification rules.
-
-Before starting another coding agent, state its exact outcome, exclusive files
-or directories, frozen inputs, files it must not touch and required checks.
-One owner at a time is mandatory for `AGENTS.md`, shared navigation, a service's
-OpenAPI family, Flyway directory, JPA aggregate and other high-conflict files.
-
-Every agent preserves concurrent changes, does not commit unless assigned and
-reports changed files, checks and remaining risks.
-
-### Shared-Worktree Handoff Protocol
-
-The shared worktree is not a scratch space. Every modified, deleted or
-untracked file that predates an agent's first write is protected work owned by
-the user or another task, even when its author is unknown.
-
-- Before assigning a coding lane or editing a file, the primary agent records
-  `git status --short` and identifies every dirty or untracked target in the
-  task plan/commentary. It must name the active owner of each touched file.
-- A child agent may not touch a protected file unless the primary explicitly
-  assigns that exact file and confirms its pre-existing changes are part of
-  the frozen input. Two agents may never edit the same file concurrently.
-- Before the first write to a protected file, save a local, task-scoped
-  pre-edit diff/content snapshot outside the repository. At handoff, compare
-  the final diff with that snapshot. A pre-existing hunk or untracked file
-  must not disappear, be reverted, be reformatted wholesale or be replaced
-  from `HEAD` unless the user explicitly authorized that exact loss.
-- If a requested edit overlaps an unknown protected hunk, stop and report the
-  conflict. Do not "resolve" it by regenerating the file, applying a broad
-  rewrite, choosing the current branch version, or silently dropping either
-  change.
-- A handoff report must distinguish files changed by that agent from files
-  that were already dirty, and must state whether the protected-diff check
-  passed. The primary performs this check before declaring the task complete.
-
-## Local Runtime And VPS
-
-`compose.yaml` is for isolated local development and test dependencies. Do not
-add production orchestration, ingress, TLS or release infrastructure unless the
-user explicitly requests it.
-
-After a runtime code task, update only the affected running test services on
-the VPS when the environment is available, then inspect their status and logs.
-Documentation-only tasks require no service restart.
-
-### VPS Build And Test Process Cleanup
-
-The VPS is a shared runtime host, not a persistent build workstation. A task
-must not leave compiler daemons, emulators, browsers or local test servers
-consuming CPU, RAM or swap after its last check.
-
-- Record `free -h` and the relevant process baseline before a memory-intensive
-  build or emulator run. On the VPS, invoke Gradle with `--no-daemon` and a
-  bounded worker count such as `--max-workers=2`; Kotlin/Android builds also use
-  `-Pkotlin.compiler.execution.strategy=in-process` unless the project proves
-  that mode unsupported. A justified exception must include an explicit daemon
-  cleanup step.
-- Put cleanup in a `finally`/trap-equivalent path so it runs after success,
-  failure, timeout or interruption. Stop every emulator/QEMU, browser, local
-  test server and compiler process started by the task, then confirm both its
-  PID and its tool-visible registration (for example `adb devices`) are gone.
-- Before `./gradlew --stop` or terminating a `GradleDaemon` or
-  `KotlinCompileDaemon`, verify that no active Gradle client uses it and that it
-  belongs to the completed task. Never kill a concurrent build or a process
-  that predates the task. Stop an idle task-owned daemon through its owning
-  Gradle wrapper first; terminate a remaining Kotlin daemon only when its
-  initiator marker and parentage prove it is the task's orphan.
-- At handoff, rerun `free -h` plus a focused `ps`/`jps` check and report the
-  before/after `MemAvailable`, swap activity and every remaining task-owned
-  process. A build or Android task is not complete while one remains. Do not
-  delete shared Gradle caches, drop Linux page cache or cycle swap merely to
-  improve displayed numbers; those actions require a separate safety reason.
-
-### Publication Guard For Uncommitted Work
-
-Never treat a successful build, a new file timestamp, or an HTTP 200 as proof
-that the intended product change was published. A deployment can otherwise
-replace a working WIP screen with the older `HEAD` version.
-
-- Do not build or publish a panel bundle, APK, service image or other runtime
-  artifact from a clean checkout, another worktree, `HEAD`, or a generated
-  directory when the requested source change exists only as protected
-  uncommitted work in the shared worktree.
-- Before publishing, state the exact source revision and dirty-file scope that
-  the artifact must contain. If the worktree also contains unrelated WIP, stop
-  and ask whether to create an isolated, reviewed release scope; never publish
-  the entire mixed worktree by accident.
-- After publishing, verify the running artifact itself contains the requested
-  behavior (a focused UI/API check or an unambiguous release marker), not just
-  that the deploy command succeeded. For a panel, inspect the served bundle or
-  run the affected UI flow; for an APK, inspect its version/hash and install
-  the exact file tested.
-- If this verification fails, do not describe the change as deployed. Preserve
-  the source WIP, report the mismatch between source and runtime, and request
-  the smallest release decision needed to correct it.
-
-Never expose PostgreSQL, Kafka, MinIO administration, internal service ports or
-management endpoints publicly. Do not commit runtime credentials, private
-keys, generated keystores, logs or secrets.
-
-## Git And Workspace Safety
-
-- Preserve all user and concurrent changes; stage only intended files or
-  hunks.
-- Never use `git reset`, `git checkout`, `git restore`, `git clean`, `git
-  stash`, forced branch switching, broad code formatters or bulk rewrites to
-  clean, hide or reconcile a shared worktree. This includes commands limited
-  to one path: a dirty path is protected until the user explicitly identifies
-  the exact change to discard.
-- Never delete, rename, overwrite or recreate a dirty/untracked file merely
-  because it is unrelated, old, incomplete or conflicts with the task. The
-  user is the only default authority to discard another task's uncommitted
-  work.
-- Do not commit generated binaries, build output, browser artifacts, IDE state
-  or secrets.
-- Do not commit, push or open a pull request unless the user asks.
-- Before a requested commit, verify identity and use `buhanzaz` with the user's
-  configured email and a short human message.
-- Do not put agent, model or tool names in branches, directories, commits or
-  pull-request metadata, and do not use a `codex/` branch prefix.
+3. canonical contracts under:
+
+   * `contracts/openapi/`
+   * `contracts/events/`
+4. current domain code, Flyway schema and tests of the owning service;
+5. current `docs/project-knowledge/`;
+6. historical code, plans and migration notes as evidence only.
+
+Canonical contracts define boundaries between components.
+
+The owning service defines its business transitions and invariants.
+
+`docs/project-knowledge/` is a verified map and explanation of the product. It does not override current contracts or owning domain code.
+
+If the user request conflicts with authoritative sources on:
+
+* ownership;
+* contract meaning;
+* identity;
+* status semantics;
+* money;
+* authorization;
+* time;
+* destructive behavior;
+
+collect the exact evidence and ask only for the smallest product decision required.
+
+Do not ask the user to decide something that current authoritative sources already answer.
+
+---
+
+# 4. Core Scope Discipline
+
+The task is not an invitation to fix every problem discovered in the repository.
+
+A discovered problem may be fixed during the current task only when at least one is true:
+
+1. the current task introduced it;
+2. it directly prevents the requested behavior from working;
+3. the requested change necessarily requires changing the affected contract or invariant;
+4. leaving it unchanged would make the requested implementation knowingly incorrect, unsafe or internally inconsistent.
+
+Otherwise:
+
+* do not fix it;
+* do not refactor around it;
+* record it in the final remarks when useful.
+
+## Forbidden Scope Expansion
+
+Do not perform opportunistic:
+
+* refactoring;
+* renaming;
+* directory reorganization;
+* abstraction extraction;
+* dependency replacement;
+* style cleanup;
+* architecture cleanup;
+* test cleanup;
+* legacy cleanup unrelated to the requested behavior.
+
+Do not change code merely because it can be improved.
+
+Do not generalize a local solution for hypothetical future requirements unless the current behavior requires that abstraction.
+
+Prefer:
+
+> smallest complete vertical change
+
+over:
+
+> broad theoretically cleaner change.
+
+---
+
+# 5. Regression Budget
+
+The regression budget for every task is zero known regressions introduced by the task.
+
+The task is complete when:
+
+1. requested behavior works;
+2. focused verification covering the changed behavior passes;
+3. changed contracts and consumers are consistent;
+4. the final diff introduces no known regression;
+5. unrelated pre-existing problems remain outside scope and are reported rather than absorbed into the task.
+
+Do not hide uncertainty behind a successful build.
+
+A successful build proves only that the build passed.
+
+---
+
+# 6. Worktree Safety Gate
+
+Before the first write:
+
+1. read the current branch;
+2. run `git status --short`;
+3. inspect relevant existing diffs;
+4. identify dirty and untracked files related to the task;
+5. determine whether any intended target already contains protected work.
+
+Every modified, deleted or untracked file that existed before the task is protected work.
+
+It may belong to:
+
+* the user;
+* another Codex task;
+* another agent;
+* unfinished local work.
+
+Do not discard it.
+
+## Never use these to make the workspace convenient
+
+Do not use:
+
+* `git reset`
+* `git clean`
+* `git stash`
+* `git restore` over protected changes
+* `git checkout` over protected changes
+* forced branch switching
+* replacing a dirty file from `HEAD`
+* broad formatter passes over dirty files
+
+unless the user explicitly authorizes that exact destructive action.
+
+If the current requested edit overlaps existing work:
+
+* preserve both when safely possible;
+* inspect exact hunks before editing;
+* do not regenerate the whole file just to avoid merging.
+
+If preserving both requires choosing which existing behavior to discard, stop and request the smallest necessary decision.
+
+## One Shared Completion State
+
+RWMS development has exactly one mutable working state: the current primary repository worktree
+on its current branch. It may be dirty only while an active task is being completed. There is no
+acceptable WIP after a task handoff.
+
+Agents must not create or use a separate:
+
+* Git worktree;
+* clone or copied source tree;
+* branch for task isolation;
+* stash;
+* patch queue;
+* temporary release source checkout.
+
+All implementation, verification and publication must use the same on-disk shared worktree. A
+task may narrow the files it edits or the runtime it restarts, but it must not create an isolated
+source snapshot that can omit shared work.
+
+Before declaring a task complete:
+
+1. inspect the full current diff and `git status --short`;
+2. reconcile every changed or untracked path into the completed task, preserving valid existing
+   work rather than silently dropping it;
+3. run the required verification against that complete state;
+4. create one or more coherent commits that include every remaining change; and
+5. rerun `git status --short` and require empty output.
+
+Do not split one requested behavior into an implemented part and a separate uncommitted WIP.
+Do not start a new implementation task from unknown dirty state. If the existing changes cannot
+be safely reconciled without discarding or choosing between competing work, stop and request the
+smallest necessary direction from the user.
+
+Existing immutable deployment directories under `/var/lib/rwms/releases/` are release records,
+not development WIPs. Do not use them as source for a new build.
+
+---
+
+# 7. Task Workflow
+
+Every implementation task uses the following workflow.
+
+The amount of investigation should be proportional to the task.
+
+Do not turn a small UI correction into a repository-wide investigation.
+
+---
+
+## 7.1 Understand The Requested Result
+
+Before editing determine:
+
+* intended behavior;
+* acceptance criteria;
+* explicit requirements;
+* important assumptions;
+* owning component;
+* affected boundaries;
+* meaningful failure cases;
+* authorization/security implications;
+* data implications.
+
+State a concise working plan before making a non-trivial change.
+
+A small task may need only two or three plan items.
+
+---
+
+## 7.2 Inspect The Affected Flow
+
+Trace enough of the flow to know the change is complete.
+
+Depending on the task inspect affected:
+
+* route/navigation;
+* page/component;
+* state/query;
+* cache/invalidation;
+* client API;
+* gateway route;
+* DTO mapping;
+* OpenAPI operation;
+* event schema;
+* producer/consumer;
+* controller;
+* application service;
+* domain transition;
+* authorization;
+* repository;
+* Flyway schema;
+* concurrency;
+* idempotency;
+* tests.
+
+Do not blindly inspect every layer if the task clearly does not touch it.
+
+Use:
+
+* `rg`
+* `rg --files`
+
+as the default repository search tools.
+
+Search callers and consumers before assuming a changed type, operation or event is isolated.
+
+---
+
+## 7.3 Plan The Smallest Complete Change
+
+For non-trivial work identify:
+
+* owning component;
+* files or areas expected to change;
+* contract impact;
+* persistence impact;
+* active consumers;
+* compatibility implications;
+* tests required;
+* documentation impact;
+* runtime impact.
+
+Do not create speculative work items outside the requested scope.
+
+---
+
+## 7.4 Implement Incrementally
+
+Do not accumulate a large unverified diff.
+
+Implement one meaningful boundary at a time.
+
+Typical sequence:
+
+1. smallest model/contract change;
+2. verify;
+3. owning business logic;
+4. verify;
+5. consumer/client;
+6. verify;
+7. UI behavior;
+8. verify.
+
+The exact sequence depends on the task.
+
+Do not mechanically follow this list when fewer layers are affected.
+
+---
+
+# 8. Incremental Verification
+
+Testing is part of implementation, not a single ceremony performed after dozens of edits.
+
+After each meaningful boundary use the cheapest useful verification.
+
+Examples:
+
+### TypeScript / React
+
+After an important type/state/API change run an affected:
+
+* Vitest test;
+* TypeScript check;
+* focused build when appropriate.
+
+### Spring
+
+After domain/service changes run an affected:
+
+* package test;
+* module test;
+* compile check.
+
+### Contract
+
+After changing a canonical contract validate:
+
+* schema;
+* generated/boundary code when used;
+* relevant producer;
+* relevant consumer.
+
+### Persistence
+
+After JPA/Flyway changes validate:
+
+* migration;
+* JPA mapping;
+* relevant repository/domain test.
+
+### Go
+
+After a Go change run affected:
+
+* package tests;
+* build.
+
+### Android
+
+After a meaningful Android boundary run affected:
+
+* unit/contract tests;
+* compile/build as appropriate.
+
+---
+
+# 9. Handling Test Failures
+
+When verification fails, determine first whether the failure:
+
+1. was introduced by the current diff;
+2. is a pre-existing failure;
+3. is unrelated infrastructure failure;
+4. reveals that the current implementation is incomplete.
+
+Fix failures introduced by the current change.
+
+Fix a pre-existing failure only when it prevents correct implementation or verification of the requested behavior.
+
+Do not begin repairing unrelated failures merely because a broad build exposed them.
+
+Report them separately.
+
+Never claim a test that was not executed.
+
+Never claim E2E verification when only compilation was performed.
+
+If infrastructure blocks the strongest intended verification:
+
+* name the exact blocker;
+* run the strongest honest replacement;
+* do not fabricate success.
+
+---
+
+# 10. Implementation Rules
+
+Deliver one production implementation of the requested behavior.
+
+Do not create competing runtime paths.
+
+Do not create a second implementation simply to avoid understanding the existing one.
+
+When the current task genuinely replaces an obsolete implementation, remove that obsolete path if:
+
+* the replacement is complete;
+* no supported flow still references it;
+* removing it does not expand the task into unrelated cleanup.
+
+Do not retain an obsolete implementation as a silent fallback.
+
+Do not fabricate successful data.
+
+Do not silently fall back to:
+
+* mocks;
+* browser state;
+* fixtures;
+* hardcoded success;
+* stale local data;
+
+when a real service, token or contract is unavailable.
+
+Return or surface the real error.
+
+---
+
+# 11. Business Logic Ownership
+
+Commands and business orchestration belong to the owning service.
+
+Do not put business sagas or authoritative state transitions into:
+
+* React;
+* Android UI;
+* API gateway;
+* read projections.
+
+A compatibility facade may delegate to cohesive collaborators but must not become another business owner.
+
+Avoid:
+
+* god classes;
+* universal `*Support` classes;
+* giant dependency bags;
+* mega coordinators;
+* inheritance used only to expose unrelated repositories.
+
+Each collaborator should own one cohesive workflow and receive only the dependencies it actually needs.
+
+---
+
+# 12. Current Domain Ownership
+
+| Flow                                                                        | Owner                                  |
+| --------------------------------------------------------------------------- | -------------------------------------- |
+| Login, users, roles, OAuth/OIDC clients and warehouse access                | `auth-service`                         |
+| Warehouse identity, metadata and timezone                                   | `warehouse-service`                    |
+| Cabins, status, equipment, balances, holds and leases                       | `asset-service`                        |
+| Queues, workforce, assignments and operational board                        | `task-board-service`                   |
+| Catalog, estimates, repairs, acceptance and write-off decisions             | `maintenance-service`                  |
+| Inventory sessions, findings, completion and publication                    | `inventory-service`                    |
+| Rental counterparties, inquiries, returns, shipments, transfers and drivers | `logistics-service`                    |
+| Media metadata, upload/finalize, originals and transformations              | `media-service`                        |
+| Cross-domain cabin activity                                                 | read-only `dossier-service` projection |
+| KPI and dashboard facts                                                     | `analytics-service` projections        |
+| Assistant conversations and tool-call history                               | `assistant-service`                    |
+| Rental availability                                                         | `logistics-service`                    |
+
+`api-gateway-service` is stateless and owns no business aggregate.
+
+It must not own:
+
+* database state;
+* business workflows;
+* Kafka domain state;
+* token storage;
+* business aggregation.
+
+`dossier-service` and analytics projections are read models.
+
+They do not own commands for producer aggregates.
+
+---
+
+# 13. Stack And Deployable Boundaries
+
+## Panel
+
+`panel/`
+
+Current stack:
+
+* React
+* TypeScript
+* Vite
+* React Router
+* TanStack Query
+* TanStack Table
+* Tailwind CSS
+* shadcn-based components
+
+## Spring services
+
+`services/`
+
+Current stack:
+
+* Java
+* Spring Boot
+* Gradle Kotlin multi-module
+* Spring Data JPA
+* PostgreSQL
+
+## Android
+
+Manager:
+
+`app/`
+
+Worker:
+
+`worker-app/`
+
+## Infrastructure
+
+Authentication:
+
+* OAuth2/OIDC Authorization Code with PKCE for interactive clients.
+* Bearer JWT validation for APIs.
+
+Messaging:
+
+* Kafka.
+
+Object storage:
+
+* private MinIO.
+
+Edge:
+
+* stateless `api-gateway-service`.
+
+Media:
+
+* one stateful Go `media-service`.
+
+Do not create a second photo/media processing service.
+
+---
+
+# 14. Database Ownership
+
+Every stateful service owns its PostgreSQL database.
+
+Forbidden:
+
+* cross-database foreign keys;
+* cross-database joins as domain integration;
+* shared mutable tables;
+* shared repositories;
+* shared JPA entities;
+* shared mutable domain models.
+
+Cross-service integration uses explicit contracts.
+
+---
+
+# 15. Client And Gateway Rules
+
+Interactive clients use the public gateway.
+
+Browser requests use same-origin routes:
+
+* `/auth/**`
+* `/api/**`
+
+Do not put internal service addresses or `localhost:<service-port>` into browser runtime configuration.
+
+Clients do not call:
+
+`/api/internal/**`
+
+Missing:
+
+* token;
+* service;
+* gateway;
+* configuration;
+* contract capability;
+
+is an explicit error.
+
+Do not replace it with mock success.
+
+Use consistent Bearer authentication and Problem Details mapping.
+
+---
+
+# 16. Concurrency And Idempotency
+
+Mutable commands use the concurrency mechanism defined by the owning contract, such as:
+
+* `expectedVersion`;
+* ETag;
+* another fencing token.
+
+Version conflicts must produce consistent conflict behavior, normally `409` when defined by the contract.
+
+Retried creates or external effects use:
+
+* `Idempotency-Key`; or
+* a stable domain external identifier.
+
+Do not create duplicate effects merely because a request may retry.
+
+---
+
+# 17. Client State
+
+Server data is authoritative.
+
+Client-side persistence is allowed only for explicitly non-authoritative concerns such as:
+
+* UI preferences;
+* encrypted session material where required;
+* designed offline caches.
+
+Do not make browser local storage the source of truth for server domain state.
+
+Real-time messages are normally invalidation signals unless their contract explicitly defines them as a complete projection.
+
+Invalidate or patch only affected queries/cache entries.
+
+Avoid global cache clears unless genuinely required.
+
+---
+
+# 18. Contracts And Events
+
+A service owns its aggregate transitions.
+
+A browser does not coordinate business sagas.
+
+Internal services communicate using private service endpoints and appropriate service credentials, not by routing internal orchestration through the public browser gateway.
+
+Kafka is transport, not the authoritative database.
+
+Where present preserve:
+
+* transactional outbox;
+* inbox/deduplication;
+* aggregate ordering;
+* version-gap handling;
+* idempotent consumers.
+
+Infinite retry is forbidden.
+
+Distributed 2PC is forbidden.
+
+The service that initiates a saga owns:
+
+* saga state;
+* recovery;
+* retry policy;
+* compensation.
+
+UI rollback is not a consistency mechanism.
+
+Each status and invariant has one authoritative owner.
+
+Consumers store only what their contract permits:
+
+* IDs;
+* contract-defined immutable snapshots;
+* projection data.
+
+Generated transport DTOs are boundary types.
+
+They are not shared JPA/domain entities.
+
+---
+
+# 19. Contract Changes
+
+Change a canonical contract only when the requested behavior requires it.
+
+When a canonical contract changes:
+
+1. update the contract;
+2. update the owning producer;
+3. update affected active consumers;
+4. validate compatibility;
+5. remove obsolete contract behavior only when no supported flow requires it.
+
+Do not casually add compatibility fields or fallbacks just to avoid updating a consumer.
+
+Do not make unrelated contract cleanup part of the same task.
+
+---
+
+# 20. Spring Data JPA And Flyway
+
+Use Spring Data JPA for stateful Spring persistence.
+
+Flyway is the only schema mutation authority.
+
+Hibernate must not create or update production schemas.
+
+Target profiles use:
+
+`hibernate.ddl-auto=validate`
+
+Existing Flyway migrations are immutable.
+
+`baselineOnMigrate` remains false unless an explicitly approved adoption process requires otherwise.
+
+A destructive schema change requires:
+
+* known target;
+* impact analysis;
+* explicit data handling;
+* expand/contract when appropriate.
+
+When changing schema or entity mappings validate the relevant migration and JPA model.
+
+---
+
+# 21. JPA Entity Rules
+
+Do not use Lombok patterns that hide important entity semantics.
+
+JPA entities must not use `@Data`.
+
+Do not generate uncontrolled setters for:
+
+* IDs;
+* versions;
+* timestamps;
+* invariants.
+
+Avoid generated entity-wide:
+
+* `equals`;
+* `hashCode`;
+* `toString`;
+
+when they can break persistence semantics.
+
+Domain transitions belong in explicit methods/services rather than generic setters.
+
+---
+
+# 22. MapStruct
+
+Use MapStruct at touched Spring boundaries where it provides useful explicit DTO mapping.
+
+Use:
+
+* Spring component model;
+* constructor injection;
+* `unmappedTargetPolicy=ERROR`.
+
+Do not use MapStruct to implement:
+
+* authorization;
+* business transitions;
+* request-to-entity mutation;
+* entity version mutation;
+* secret handling;
+* checksums;
+* outbox construction.
+
+`platform:technical-contracts` remains framework-neutral.
+
+It must not become a shared Spring/JPA/business-domain module.
+
+---
+
+# 23. Documentation
+
+Documentation should preserve durable project knowledge without turning every small task into a documentation project.
+
+Update documentation when the task changes a durable fact.
+
+Examples:
+
+* API contract;
+* event contract;
+* service responsibility;
+* ownership boundary;
+* persistence behavior;
+* runtime configuration;
+* recovery behavior;
+* important business invariant;
+* cross-component flow.
+
+Do not touch documentation merely to produce a documentation diff.
+
+---
+
+## 23.1 Code Documentation
+
+Add meaningful JavaDoc/KDoc/GoDoc for newly introduced real types where the repository standard requires it.
+
+Document changed public or architecture-significant behavior when semantics are not obvious from the signature.
+
+Especially document non-obvious:
+
+* ownership;
+* authorization;
+* transaction behavior;
+* fencing;
+* idempotency;
+* retry;
+* time semantics;
+* recovery.
+
+Do not add filler comments.
+
+---
+
+## 23.2 Component README
+
+When a durable component behavior changes, update the owning:
+
+* `README.md`
+* `README.ru.md`
+
+Keep both versions factually synchronized.
+
+Do not update README files for purely internal changes with no documentation-visible effect.
+
+---
+
+## 23.3 Project Knowledge
+
+`docs/project-knowledge/` is the maintained architecture/business map.
+
+Start from:
+
+`docs/project-knowledge/README.md`
+
+Important files include:
+
+* `architecture.md`
+* `service-catalog.md`
+* `runtime-flows.md`
+* `cabin-lifecycle.md`
+* `cabin-lifecycle.ru.md`
+* `domain-logic.md`
+* `contracts.md`
+* `documentation-standard.md`
+* `change-log.md`
+* `open-questions.md`
+
+Read only sections relevant to the task.
+
+Verify important statements against current repository sources before relying on them.
+
+If the task changes architecture, ownership, a durable invariant, contract or important cross-component flow:
+
+* update the relevant knowledge document;
+* append a concise entry to `change-log.md`.
+
+Put unresolved product decisions in:
+
+`open-questions.md`
+
+Do not invent answers.
+
+---
+
+# 24. Historical And Legacy Code
+
+Historical code may explain why the current implementation exists.
+
+It does not automatically define supported behavior.
+
+Do not restore old behavior merely because it exists in:
+
+* old panel code;
+* mocks;
+* old DB dumps;
+* abandoned plans;
+* migration documents.
+
+Do not automatically import:
+
+* localStorage;
+* IndexedDB;
+* old exports;
+* `old_db/`;
+
+into the current server database.
+
+If the requested change genuinely replaces a legacy runtime path, remove the replaced implementation when safe and directly in scope.
+
+Do not begin a repository-wide legacy purge.
+
+---
+
+# 25. Focused Verification Matrix
+
+Use the narrowest checks that prove the changed behavior.
+
+## Panel
+
+Normally use affected:
+
+* Vitest tests;
+* `npm run typecheck`.
+
+Use lint/build when relevant to the boundary or needed to prove the final artifact.
+
+## Spring
+
+Use affected:
+
+* module/package tests;
+* compile checks.
+
+## Contracts
+
+Use:
+
+* schema validation;
+* affected producer checks;
+* affected consumer checks.
+
+## Flyway / JPA
+
+Use affected:
+
+* migration install/upgrade verification;
+* JPA validation.
+
+## Go
+
+Use affected:
+
+* package tests;
+* build.
+
+## Authentication / authorization / concurrency
+
+Test the relevant success and failure path.
+
+## Real-time/cache
+
+Test affected invalidation behavior rather than clearing everything.
+
+Do not automatically launch large cross-service suites unless:
+
+* risk requires them;
+* focused verification exposes a broader problem;
+* the user explicitly asks.
+
+---
+
+# 26. Panel UI Verification
+
+For a change to active `panel/` UI, focused UI verification must exercise the changed user flow.
+
+When a separate `gpt-5.6-luna` verification agent is available, use it as the independent verifier for active panel UI changes.
+
+Its role is verification, not uncontrolled repository review.
+
+The verifier should receive:
+
+* exact changed flow;
+* expected behavior;
+* relevant test command;
+* read-only production/test source scope unless specifically assigned otherwise.
+
+The primary agent remains responsible for the verdict.
+
+Inspect actual:
+
+* command output;
+* test counts;
+* failures;
+* screenshot/trace/browser artifacts when generated.
+
+A child-agent summary alone is not proof.
+
+If Luna is unavailable, perform the strongest focused verification available and report that fact.
+
+Do not create separate agents merely to:
+
+* brainstorm;
+* plan;
+* write status reports;
+* inspect unrelated architecture;
+* search for extra bugs.
+
+---
+
+# 27. Single Coding Lane
+
+Use one primary coding agent and one shared worktree for implementation and verification.
+
+Do not create coding, inspection or verification subagents. A publication-only helper is allowed
+only when the user explicitly requests it; it must publish the artifact built from the primary
+shared worktree and must not create another branch, worktree, clone or source snapshot.
+
+One task therefore has one ordered diff and one owner. Do not represent parts of the same task as
+separate WIPs that are merged or selected later.
+
+---
+
+# 28. Android Applications
+
+Manager application:
+
+* source: `app/`
+* package: `dev.buhanzaz.rwms.manager`
+
+Worker application:
+
+* source: `worker-app/`
+* package: `dev.buhanzaz.rwms.worker`
+
+Download surfaces:
+
+* Manager → `manager-download-site/`
+* Worker → `worker-download-site/`
+
+Never mix Manager and Worker APKs or metadata.
+
+A normal Android implementation task should:
+
+* run affected tests;
+* build the exact APK when required for verification.
+
+Do not publish an APK merely because code changed.
+
+Publish/update the download site when the user explicitly asks to:
+
+* publish;
+* release;
+* deploy;
+* update the downloadable application.
+
+When publishing verify:
+
+* exact source state;
+* package;
+* version;
+* signing identity;
+* APK hash;
+* correct application download site.
+
+Do not claim an APK is released until the actual released file is verified.
+
+---
+
+# 29. Cabin CAD Diagnostics
+
+For `cabin-cad`, runtime diagnostics must remain durable and searchable.
+
+Use the current diagnostic facilities including:
+
+* browser journal under `cabin-cad/diagnostics/v1`;
+* explicit NDJSON export;
+* local Vite sink:
+  `cabin-cad/.runtime/diagnostics.ndjson`
+
+For crash investigation:
+
+1. inspect current and rotated NDJSON;
+2. reproduce the requested flow;
+3. correlate records by:
+
+   * `sessionId`
+   * `sequence`
+   * `scope`
+   * `event`
+
+If the file sink was unavailable, inspect the browser journal or exported NDJSON.
+
+An empty console does not prove no error occurred.
+
+Never log:
+
+* CAD document contents;
+* STEP bytes;
+* geometry payloads;
+* embedded texture data;
+* complete serialized storage;
+* credentials;
+* tokens;
+* customer data.
+
+Runtime diagnostic files must not be committed.
+
+---
+
+# 30. Current VPS Runtime
+
+The development/runtime environment is already running on the RWMS VPS.
+
+The agent is operating on that VPS.
+
+Do not SSH into the same VPS to perform normal RWMS deployment or publication.
+
+Specifically:
+
+> When the user asks to publish, deploy or update the running RWMS system, perform the operation locally on the current VPS.
+
+Do not attempt an additional SSH connection to:
+
+* the VPS public IP;
+* `localhost`;
+* the same machine through another hostname;
+
+just to deploy code that is already available in the current VPS worktree.
+
+Use the current local shell and existing runtime tooling.
+
+---
+
+# 31. Public RWMS Entry Point
+
+The public RWMS entry point is:
+
+`https://77-90-158-90.sslip.io/`
+
+Public traffic is served through Nginx.
+
+Treat Nginx as the public edge.
+
+Do not bypass the configured Nginx/public gateway when verifying the externally visible product unless debugging an internal service specifically requires local inspection.
+
+When a published user-facing change is complete, verify it through:
+
+`https://77-90-158-90.sslip.io/`
+
+or the appropriate public route below that origin.
+
+---
+
+# 32. Publication Is Explicit Scope
+
+Do not publish simply because implementation succeeded.
+
+Publication becomes part of the task when the user explicitly says or clearly means:
+
+* publish;
+* deploy;
+* update the VPS;
+* roll out;
+* make it available;
+* put it online;
+* release it.
+
+When publication is requested, do not ask whether deployment is intended.
+
+It is intended.
+
+---
+
+# 33. VPS Publication Workflow
+
+When publication is requested:
+
+## 33.1 Determine The Exact Changed Runtime
+
+Identify which runtime component is affected.
+
+Examples:
+
+* panel;
+* API gateway;
+* one Spring service;
+* Go media service;
+* Android download site;
+* Nginx configuration.
+
+Do not restart or rebuild unrelated services.
+
+---
+
+## 33.2 Inspect Existing Deployment Topology
+
+Use the current VPS configuration as authority.
+
+Inspect existing:
+
+* Nginx configuration;
+* running services;
+* systemd units;
+* containers;
+* existing deployment scripts;
+* build output locations;
+
+as relevant.
+
+Do not invent a new deployment architecture when an existing one already works.
+
+Do not replace systemd with Docker, Docker with systemd, or existing Nginx routing with a different approach merely for convenience.
+
+---
+
+## 33.3 Build And Publish The Complete State
+
+A published artifact must contain the complete current source state of every runtime component
+and dependency affected by the requested behavior. A release is never a selection of task hunks,
+files copied from another checkout, or an artifact rebuilt from an earlier revision.
+
+Before publishing confirm:
+
+* current branch/revision;
+* `git status --short` is empty after completion commits;
+* the exact revision currently running on the VPS (the release base);
+* the full repository diff from that release base, not only the current task's hunk list;
+* every changed deployable, runtime component and dependency in that full diff;
+* exact source revision represented by every built artifact.
+
+Build directly in the primary shared worktree at that completed revision. Do not build from
+another checkout, a temporary release worktree, an older
+`/var/lib/rwms/releases/*/source` directory, or a clean `HEAD` that omits completed changes.
+
+If a canonical contract, shared library or cross-component flow changed, publish every affected
+runtime component together in dependency order. No changed deployable may be omitted from a VPS
+release unless its changed files are demonstrably documentation or non-runtime-only. Do not
+publish only the panel, only one service, or only a copied task patch when the full release diff
+requires matching changes elsewhere.
+
+Inspect the full release diff before publication. Do not selectively reconstruct or copy only
+task hunks into an artifact: that produces a truncated release. If the worktree is dirty, the
+release is blocked until the active work is completed, verified and committed, unless the user
+explicitly authorizes a named dirty-state exception.
+
+---
+
+## 33.4 Publish Locally
+
+Execute deployment commands directly on the VPS.
+
+No SSH hop is required.
+
+Use the existing deployment mechanism for that component.
+
+Examples may include:
+
+* replacing a built panel bundle;
+* restarting the affected systemd unit;
+* rebuilding/restarting the affected container;
+* updating the owned Android download site.
+
+Use the repository/runtime configuration to determine the actual mechanism instead of guessing.
+
+---
+
+## 33.5 Nginx
+
+Nginx is the public edge.
+
+Do not modify or restart Nginx for ordinary application deployment unless necessary.
+
+If Nginx configuration changes:
+
+1. inspect the existing configuration;
+2. make the smallest required change;
+3. run configuration validation such as `nginx -t`;
+4. reload rather than unnecessarily stop/start when the existing setup supports it;
+5. verify the public route afterwards.
+
+Preserve existing:
+
+* TLS;
+* proxy routing;
+* headers;
+* upload limits;
+* WebSocket/SSE behavior;
+* static routes;
+
+unless the requested change requires modifying them.
+
+Never publish internal administration ports directly to the internet.
+
+---
+
+## 33.6 Verify The Running Artifact
+
+A successful build or restart does not prove the requested change is live.
+
+After publication verify the running system itself.
+
+For a panel change:
+
+* open/check the public UI through `https://77-90-158-90.sslip.io/`;
+* exercise the changed flow when possible;
+* verify the served artifact is the new one.
+
+For API/backend changes:
+
+* verify the affected public API or user flow through Nginx/public gateway when possible;
+* inspect the affected service status/logs for startup/runtime errors.
+
+For Android release publication:
+
+* verify release metadata;
+* verify APK URL;
+* verify hash/package/version.
+
+Do not report:
+
+> deployed
+
+until runtime verification has succeeded or a precise external blocker is known.
+
+---
+
+# 34. Runtime Failure During Publication
+
+If the newly published component fails:
+
+1. inspect the affected component only;
+2. collect the actual error;
+3. determine whether the current diff caused it;
+4. fix the current change when responsible;
+5. rebuild/redeploy only the affected component;
+6. verify again.
+
+Do not respond to one failed service by beginning unrelated cleanup across the VPS.
+
+Do not hide a failed deployment behind an HTTP `200` from some other route.
+
+---
+
+# 35. VPS Build Resource Safety
+
+The VPS is also a shared runtime host.
+
+Do not leave task-owned build/test processes consuming resources after verification.
+
+For memory-intensive work inspect the current process/memory state before starting.
+
+For Gradle on the VPS prefer:
+
+`--no-daemon --max-workers=2`
+
+For Kotlin/Android builds also prefer:
+
+`-Pkotlin.compiler.execution.strategy=in-process`
+
+unless the repository proves that configuration unsuitable.
+
+After the task stop task-owned:
+
+* emulators;
+* QEMU processes;
+* browsers;
+* local development servers;
+* compiler daemons;
+* test servers.
+
+Do not kill processes that:
+
+* predate the task;
+* belong to another build;
+* belong to production runtime;
+* cannot be confidently identified as task-owned.
+
+Do not clear shared Gradle caches, Linux page cache or swap merely to make memory statistics look better.
+
+---
+
+# 36. Runtime Security
+
+Never expose publicly:
+
+* PostgreSQL;
+* Kafka;
+* MinIO administration;
+* internal service ports;
+* management endpoints;
+
+unless the architecture explicitly defines a secure public surface for them.
+
+Never commit:
+
+* passwords;
+* access tokens;
+* private keys;
+* runtime credentials;
+* generated keystores;
+* secrets;
+* diagnostic logs containing sensitive information.
+
+Never send secrets to external tools or agents unnecessarily.
+
+---
+
+# 37. Git Rules
+
+Preserve user and concurrent changes.
+
+Commit the complete verified task state before handoff so that no WIP remains. A user may
+explicitly authorize named paths to remain dirty; otherwise a clean worktree is mandatory.
+
+Do not push unless the user asks.
+
+Do not open a pull request unless the user asks.
+
+Stage complete coherent change sets. Do not omit a related changed file or hunk merely to make a
+smaller-looking commit or release; that creates a truncated state.
+
+Do not commit:
+
+* generated build output;
+* IDE state;
+* browser artifacts;
+* temporary diagnostics;
+* credentials;
+* secrets;
+
+unless a particular generated release artifact is intentionally versioned by the project.
+
+For a requested commit:
+
+* verify Git identity;
+* use the user's configured identity;
+* use a short human commit message.
+
+Do not put agent, model or tool names in:
+
+* branch names;
+* commit messages;
+* directory names;
+* PR metadata.
+
+---
+
+# 38. Skills And External Tools
+
+At task start inspect available skills only when relevant.
+
+If the task clearly matches an available skill, read and follow it.
+
+Use the smallest useful set.
+
+A skill does not override:
+
+1. the current user command;
+2. canonical RWMS contracts;
+3. this project's ownership rules.
+
+Prefer repository files for repository facts.
+
+Use external MCP/tools when they are the direct authority for external information such as:
+
+* referenced design;
+* issue;
+* document;
+* external repository object.
+
+Do not call external tools merely to rediscover information already present locally.
+
+Do not send:
+
+* secrets;
+* private keys;
+* customer information;
+* unnecessary source code;
+
+to external systems.
+
+---
+
+# 39. Architecture Review
+
+Final architecture review is diagnostic.
+
+Its primary question is:
+
+> Did the current task introduce an architecture or ownership regression?
+
+Review the affected diff for:
+
+* service ownership;
+* data ownership;
+* dependency direction;
+* contract consistency;
+* authorization;
+* warehouse isolation;
+* transaction boundaries;
+* concurrency;
+* idempotency;
+* retry/recovery;
+* duplicate authoritative state;
+* cache invalidation.
+
+Do not turn final review into a repository-wide refactoring pass.
+
+A pre-existing architecture weakness remains outside scope unless:
+
+* it prevents the requested behavior;
+* the current diff depends on it in a knowingly incorrect way;
+* the current diff makes it worse.
+
+Otherwise report it and stop.
+
+---
+
+# 40. Final Diff Review
+
+Before declaring completion inspect the final diff.
+
+Specifically check:
+
+* every changed file is necessary;
+* no unrelated file was modified accidentally;
+* no protected hunk disappeared;
+* no debugging code remains;
+* no mock fallback was introduced;
+* no obsolete competing runtime path remains when replacement was directly in scope;
+* no generated secret or runtime artifact was accidentally added;
+* no known regression was introduced.
+
+Do not perform speculative improvements during this review.
+
+If review discovers a defect introduced by the current task, fix it and rerun the affected verification.
+
+---
+
+# 41. Definition Of Done
+
+An implementation task is done when all applicable conditions are true:
+
+1. requested behavior exists;
+2. intended user flow works;
+3. the owning component contains the business logic;
+4. relevant contracts are consistent;
+5. affected consumers are updated;
+6. focused tests/checks pass;
+7. current diff has no known regression;
+8. protected pre-existing work remains preserved;
+9. durable documentation is updated when necessary;
+10. no task-owned build/test processes remain;
+11. publication has been verified when publication was explicitly requested; and
+12. `git status --short` is empty after the completed work has been committed, unless the user
+    explicitly authorized named remaining WIP paths.
+
+Do not require unrelated repository problems to be solved before completing the task.
+
+---
+
+# 42. Final Handoff
+
+Every final implementation report must be concise and factual.
+
+Include:
+
+### Working
+
+What requested behavior now works.
+
+### Changed
+
+Main files/components changed.
+
+### Verification
+
+Exact tests/checks actually executed and their results.
+
+### Contracts / Architecture
+
+Contract impact and whether ownership/architecture remains valid.
+
+### Runtime
+
+One of:
+
+* not published because publication was not requested;
+* published and verified;
+* publication attempted but blocked, with the exact blocker.
+
+When published, include verification through the public RWMS entry point when relevant:
+
+`https://77-90-158-90.sslip.io/`
+
+### Existing Work
+
+State whether touched files had pre-existing changes and whether they were preserved.
+
+### Tools
+
+Skills/MCP/agents actually used, or `none`.
+
+### Remarks
+
+Only meaningful:
+
+* remaining risks;
+* unrelated pre-existing failures;
+* blockers;
+* unresolved product decisions.
+
+Do not turn the final report into another audit.
+
+Do not list dozens of unrelated improvement ideas unless the user asked for an audit.
+
+---
+
+# 43. Stop Rule
+
+Once all requested acceptance criteria pass:
+
+> Stop changing the repository.
+
+Do not search for additional cleanup opportunities.
+
+Do not start another refactor.
+
+Do not continue changing architecture because the current solution suggests a cleaner future design.
+
+Do not convert completion into a new audit.
+
+If unrelated problems were noticed, mention them briefly in the handoff and leave them untouched.
+
+The successful end state is:
+
+> requested behavior works, focused verification passes, no known regression was introduced, and unrelated project state remains preserved.

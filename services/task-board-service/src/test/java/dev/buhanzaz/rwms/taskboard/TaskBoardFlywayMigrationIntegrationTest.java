@@ -71,7 +71,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
   void cumulativeVersionFourEventSourcingAndTaskSyncMigrateCleanDatabaseAndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(37);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(44);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -127,10 +127,18 @@ class TaskBoardFlywayMigrationIntegrationTest {
             "warehouse_metadata",
             "warehouse_event_inbox",
             "warehouse_kpi_settings",
+            "company_kpi_settings",
             "kpi_palette",
             "kpi_palette_range",
+            "kpi_activation_receipt",
             "kpi_work_schedule",
             "kpi_work_break");
+    assertThat(
+            jdbc.queryForObject(
+                "select indexdef from pg_indexes where schemaname='public' "
+                    + "and indexname='uk_planning_replan_hold_active_source'",
+                String.class))
+        .contains("CREATE UNIQUE INDEX", "(source_plan_id)", "state", "'PREPARED'");
     assertThat(columnCounts())
         .containsAllEntriesOf(
             Map.ofEntries(
@@ -141,7 +149,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
                 Map.entry("task_auto_interruption", 8),
                 Map.entry("task_board_inbox", 7),
                 Map.entry("task_board_outbox", 24),
-                Map.entry("task_sync_source", 6),
+                Map.entry("task_sync_source", 13),
                 Map.entry("task_time_event", 10),
                 Map.entry("task_board_warehouse_lifecycle_intent", 10),
                 Map.entry("warehouse_kpi_settings", 10),
@@ -414,6 +422,20 @@ class TaskBoardFlywayMigrationIntegrationTest {
         .containsEntry("description", "trip only driver commitments")
         .containsEntry("script", "V38__trip_only_driver_commitments.sql")
         .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='47'"))
+        .containsEntry("version", "47")
+        .containsEntry("description", "company kpi work schedule")
+        .containsEntry("script", "V47__company_kpi_work_schedule.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select is_nullable from information_schema.columns "
+                    + "where table_schema='public' and table_name='kpi_work_schedule' "
+                    + "and column_name='company_id'"))
+        .containsEntry("is_nullable", "YES");
     assertThat(
             jdbc.queryForObject(
                 "select to_regclass('public.worker_feed_revision_seq')", String.class))
@@ -2149,7 +2171,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(36);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(41);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
 

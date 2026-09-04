@@ -102,6 +102,26 @@ interface CustomerApi {
     @GET("api/logistics/customer/v1/bookings")
     suspend fun bookings(): List<CustomerBooking>
 
+    @POST("api/logistics/customer/v1/bookings/{bookingId}/cancel")
+    suspend fun cancelBooking(
+        @Path("bookingId") bookingId: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @Body request: CancelCustomerBookingRequest,
+    ): CustomerBooking
+
+    @POST("api/logistics/customer/v1/bookings/{bookingId}/delivery-slots/search")
+    suspend fun searchBookingRescheduleSlots(
+        @Path("bookingId") bookingId: String,
+        @Body request: SearchCustomerBookingRescheduleRequest,
+    ): List<DeliverySlot>
+
+    @POST("api/logistics/customer/v1/bookings/{bookingId}/reschedule")
+    suspend fun rescheduleBooking(
+        @Path("bookingId") bookingId: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @Body request: RescheduleCustomerBookingRequest,
+    ): CustomerBooking
+
     @POST("api/logistics/customer/v1/bookings/{bookingId}/cabins/{cabinId}/acceptance")
     suspend fun acceptCabin(
         @Path("bookingId") bookingId: String,

@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.api;
 
+import dev.buhanzaz.rwms.logistics.domain.CustomerDeliveryPurpose;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsLineState;
@@ -442,6 +443,7 @@ public final class LogisticsApiModels {
       UUID id,
       long version,
       LogisticsDocumentType documentType,
+      CustomerDeliveryPurpose customerDeliveryPurpose,
       LogisticsDocumentState state,
       UUID warehouseId,
       UUID destinationWarehouseId,
@@ -458,7 +460,55 @@ public final class LogisticsApiModels {
       UUID inventorySourceFindingId,
       String inventorySourceDispositionKind,
       OffsetDateTime createdAt,
-      OffsetDateTime updatedAt) {}
+      OffsetDateTime updatedAt) {
+    /** Preserves source compatibility while legacy consumers become purpose-aware. */
+    public LogisticsDocumentSummary(
+        UUID id,
+        long version,
+        LogisticsDocumentType documentType,
+        LogisticsDocumentState state,
+        UUID warehouseId,
+        UUID destinationWarehouseId,
+        String partySnapshot,
+        String driverSnapshot,
+        UUID driverWorkerId,
+        UUID clientId,
+        boolean historicalRentalImport,
+        UUID equipmentMovementTaskId,
+        LocalDate scheduledDate,
+        UUID rentalOrderId,
+        UUID rentalShipmentId,
+        UUID inventorySourceId,
+        UUID inventorySourceFindingId,
+        String inventorySourceDispositionKind,
+        OffsetDateTime createdAt,
+        OffsetDateTime updatedAt) {
+      this(
+          id,
+          version,
+          documentType,
+          documentType == LogisticsDocumentType.SHIPMENT
+              ? CustomerDeliveryPurpose.RENTAL_DELIVERY
+              : null,
+          state,
+          warehouseId,
+          destinationWarehouseId,
+          partySnapshot,
+          driverSnapshot,
+          driverWorkerId,
+          clientId,
+          historicalRentalImport,
+          equipmentMovementTaskId,
+          scheduledDate,
+          rentalOrderId,
+          rentalShipmentId,
+          inventorySourceId,
+          inventorySourceFindingId,
+          inventorySourceDispositionKind,
+          createdAt,
+          updatedAt);
+    }
+  }
 
   public record LogisticsLineView(
       UUID id,
@@ -476,6 +526,7 @@ public final class LogisticsApiModels {
       UUID id,
       long version,
       LogisticsDocumentType documentType,
+      CustomerDeliveryPurpose customerDeliveryPurpose,
       LogisticsDocumentState state,
       UUID warehouseId,
       UUID destinationWarehouseId,
@@ -522,6 +573,9 @@ public final class LogisticsApiModels {
           id,
           version,
           documentType,
+          documentType == LogisticsDocumentType.SHIPMENT
+              ? CustomerDeliveryPurpose.RENTAL_DELIVERY
+              : null,
           state,
           warehouseId,
           destinationWarehouseId,

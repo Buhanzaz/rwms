@@ -11,6 +11,8 @@ import dev.buhanzaz.rwms.logistics.customer.domain.CustomerRentalSession;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerSessionState;
 import dev.buhanzaz.rwms.logistics.customer.security.CustomerAuthorizer;
 import dev.buhanzaz.rwms.logistics.customer.security.CustomerIdentity;
+import dev.buhanzaz.rwms.logistics.customer.service.CustomerRentalSessionStore.CheckoutRecoveryClaim;
+import dev.buhanzaz.rwms.logistics.customer.service.CustomerRentalSessionStore.RecoveryFailure;
 import dev.buhanzaz.rwms.logistics.inquiry.api.RentalInquiryApiModels.ConfirmClientPresentationRequest;
 import dev.buhanzaz.rwms.logistics.inquiry.api.RentalInquiryApiModels.PresentationCabinSelectionInput;
 import dev.buhanzaz.rwms.logistics.inquiry.api.RentalInquiryApiModels.PresentationEquipmentSelectionInput;
@@ -36,6 +38,8 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -47,6 +51,8 @@ import org.springframework.stereotype.Service;
 @Service
 @RequiredArgsConstructor
 public class CustomerCheckoutService {
+  private static final Logger LOGGER = LoggerFactory.getLogger(CustomerCheckoutService.class);
+
   private final CustomerRentalService rentals;
   private final CustomerRentalSessionStore sessions;
   private final CustomerCheckoutStore checkoutStore;
@@ -110,7 +116,7 @@ public class CustomerCheckoutService {
       return customerBookings.response(identity, session, "COMPLETED", null);
     }
     if (preparation.pendingReplay() && session.getBookingId() != null) {
-      return reconcile(identity, session);
+      return reconcileIfDue(identity, session);
     }
     CustomerDeliverySlot slot = preparation.slot();
     UUID presentationKey = deterministic("customer-presentation:" + commandKey);
@@ -150,19 +156,22 @@ public class CustomerCheckoutService {
             booking.bookingId(),
             booking.orderId(),
             token);
-    return reconcile(identity, session);
+    return reconcileIfDue(identity, session);
   }
 
   /** Lists all customer booking outcomes, reconciling known pending receipts first. */
   public List<CustomerBookingResponse> bookings(CustomerIdentity identity) {
     List<CustomerBookingResponse> result = new ArrayList<>();
-    for (CustomerRentalSession session : sessions.list(identity.subjectId())) {
+    for (CustomerRentalSession session :
+        sessions.list(identity.subjectId())) {
       if (session.getBookingId() == null) continue;
       if (session.getState()
           == dev.buhanzaz.rwms.logistics.customer.domain.CustomerSessionState.CHECKOUT_PENDING) {
-        result.add(reconcile(identity, session));
+        result.add(reconcileIfDue(identity, session));
       } else {
-        result.add(customerBookings.response(identity, session, "COMPLETED", null));
+        result.add(
+            customerBookings.response(
+                identity, session, CustomerBookingService.status(session), null));
       }
     }
     return List.copyOf(result);
@@ -173,21 +182,70 @@ public class CustomerCheckoutService {
       fixedDelayString = "${rwms.logistics.customer.booking-reconcile-delay:2s}",
       initialDelayString = "${rwms.logistics.customer.booking-reconcile-initial-delay:3s}")
   public void reconcilePending() {
-    for (CustomerRentalSession session : sessions.pendingBookings()) {
-      if (session.getBookingId() == null || session.getPresentationToken() == null) continue;
+    for (CheckoutRecoveryClaim claim : sessions.claimPendingBookings()) {
+      CustomerIdentity identity =
+          new CustomerIdentity(
+              claim.customerSubjectId(), claim.customerSubjectId().toString());
+      reconcileClaim(identity, claim);
+    }
+  }
+
+  private CustomerBookingResponse reconcileIfDue(
+      CustomerIdentity identity, CustomerRentalSession session) {
+    return sessions
+        .claimPendingBooking(identity.subjectId(), session.getInquiryId())
+        .map(claim -> reconcileClaim(identity, claim))
+        .orElseGet(
+            () -> {
+              CustomerRentalSession current =
+                  sessions.required(
+                      identity.subjectId(), session.getInquiryId());
+              return customerBookings.response(
+                  identity, current, "PENDING", current.getRecoveryLastErrorCode());
+            });
+  }
+
+  private CustomerBookingResponse reconcileClaim(
+      CustomerIdentity identity, CheckoutRecoveryClaim claim) {
+    try {
+      return reconcile(identity, claim.session(), claim.leaseToken());
+    } catch (RuntimeException exception) {
+      String errorCode = safeRecoveryCode(exception);
+      RecoveryFailure failure;
       try {
-        reconcile(
-            new CustomerIdentity(
-                session.getCustomerSubjectId(), session.getCustomerSubjectId().toString()),
-            session);
-      } catch (RuntimeException ignored) {
-        // The durable booking receipt and slot hold remain available for the next bounded retry.
+        failure =
+            sessions.failCheckoutRecovery(
+                identity.subjectId(),
+                claim.inquiryId(),
+                claim.leaseToken(),
+                errorCode);
+      } catch (RuntimeException staleLease) {
+        LOGGER.warn("Customer checkout recovery lease could not be finalized");
+        return customerBookings.response(
+            identity,
+            sessions.required(identity.subjectId(), claim.inquiryId()),
+            "PENDING",
+            "CUSTOMER_CHECKOUT_RECOVERY_PENDING");
       }
+      LOGGER.warn(
+          "Customer checkout recovery deferred: code={}, attempt={}, quarantined={}",
+          errorCode,
+          failure.attemptCount(),
+          failure.quarantined());
+      CustomerRentalSession current =
+          sessions.required(identity.subjectId(), claim.inquiryId());
+      return customerBookings.response(
+          identity,
+          current,
+          "PENDING",
+          failure.quarantined()
+              ? "CUSTOMER_CHECKOUT_RECONCILIATION_REQUIRED"
+              : errorCode);
     }
   }
 
   private CustomerBookingResponse reconcile(
-      CustomerIdentity identity, CustomerRentalSession session) {
+      CustomerIdentity identity, CustomerRentalSession session, UUID recoveryLeaseToken) {
     slots.bindCheckoutBooking(
         identity,
         session.getInquiryId(),
@@ -217,7 +275,8 @@ public class CustomerCheckoutService {
               identity.subjectId(),
               session.getInquiryId(),
               status.bookingId(),
-              status.orderId());
+              status.orderId(),
+              recoveryLeaseToken);
       return customerBookings.response(identity, completed, status.state(), status.errorCode());
     }
     if ("REJECTED".equals(status.state())) {
@@ -226,10 +285,28 @@ public class CustomerCheckoutService {
               identity.subjectId(),
               session.getInquiryId(),
               session.getDeliverySlotId(),
-              status.bookingId());
+              status.bookingId(),
+              recoveryLeaseToken);
       return customerBookings.response(identity, rejected, status.state(), status.errorCode());
     }
-    return customerBookings.response(identity, session, status.state(), status.errorCode());
+    throw new OrderProblemException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        "CUSTOMER_BOOKING_PENDING",
+        "Оформление ещё сверяется; повторная проверка выполнится автоматически");
+  }
+
+  private static String safeRecoveryCode(RuntimeException exception) {
+    if (exception instanceof OrderProblemException problem
+        && problem.code() != null
+        && !problem.code().isBlank()) {
+      return boundedCode(problem.code());
+    }
+    return "CUSTOMER_CHECKOUT_DEPENDENCY_PENDING";
+  }
+
+  private static String boundedCode(String value) {
+    String normalized = value.trim();
+    return normalized.length() > 64 ? normalized.substring(0, 64) : normalized;
   }
 
   private static List<PresentationCabinSelectionInput> selections(

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api, type TrailerInput } from '../src/api/client';
@@ -16,6 +16,7 @@ import { workspaceFixture } from './fixtures';
 
 const trailer: Trailer = {
   id: 'trailer-1',
+  version: 1,
   warehouse_id: 'warehouse-1',
   name: 'Прицеп 1',
   registration_number: 'ТР1234',
@@ -46,82 +47,80 @@ function setNumber(label: string, value: number): void {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('truck vehicle editor', () => {
-  it('derives one- and two-cabin previews, keeps the trailer attached, and submits only persisted values', async () => {
+  it('keeps the vehicle form business-oriented and converts visible metric units for the API', async () => {
     const user = userEvent.setup();
     const submit = vi.fn<(input: VehicleEditorInput) => Promise<void>>(() => Promise.resolve());
-    render(<CatalogDialog kind="vehicle" trailers={[trailer]} busy={false} onClose={() => undefined} onSubmit={(input) => submit(input as VehicleEditorInput)} />);
-
-    expect(within(screen.getByTestId('one-cargo-preview')).getByText(/Не хватает данных/)).toHaveTextContent('длина машины');
-    expect(within(screen.getByTestId('two-cargo-preview')).getByText(/Не хватает данных/)).toHaveTextContent('назначенный совместимый прицеп');
+    render(<CatalogDialog busy={false} onClose={() => undefined} onSubmit={submit} />);
 
     await user.type(screen.getByLabelText('Название'), 'МАЗ 1');
+    await user.type(screen.getByLabelText('Марка авто'), 'МАЗ');
     await user.type(screen.getByLabelText('Госномер'), 'А123БВ');
-    await user.selectOptions(screen.getByLabelText('Грузовой автомобиль'), 'true');
-    await user.selectOptions(screen.getByLabelText('Машина может использовать прицеп'), 'true');
-    await user.selectOptions(screen.getByLabelText('Основной прицеп'), trailer.id);
-    setNumber('Собственная масса машины, кг', 15000);
-    setNumber('Максимальная полная масса машины, кг', 26000);
-    setNumber('Длина машины, мм', 9000);
-    setNumber('Ширина машины, мм', 2500);
-    setNumber('Высота машины, мм', 3000);
-    setNumber('Количество осей машины', 3);
-    setNumber('Допустимая нагрузка на ось машины, кг', 9000);
-    setNumber('Грузоподъёмность машины, кг', 8000);
-    setNumber('Длина платформы машины, мм', 6000);
-    setNumber('Ширина платформы машины, мм', 2500);
-    setNumber('Высота платформы машины от земли, мм', 1500);
-    setNumber('Максимальная масса на платформе машины, кг', 5000);
-    setNumber('Точная полная длина автопоезда, мм', 18000);
-    setNumber('Запас по высоте, мм', 100);
-    setNumber('Запас по ширине, мм', 50);
-    setNumber('Запас по массе, кг', 100);
-    setNumber('Одна бытовка на машине, кг', 8000);
-    setNumber('Две бытовки: машина + прицеп, кг', 8700);
-    setNumber('Длина бытовки для предпросмотра, мм', 6000);
-    setNumber('Ширина бытовки для предпросмотра, мм', 2400);
-    setNumber('Высота бытовки для предпросмотра, мм', 2400);
-    setNumber('Масса бытовки для предпросмотра, кг', 2500);
+    setNumber('Грузоподъёмность, т', 8);
+    setNumber('Габариты (длина), м', 9);
+    setNumber('Габариты (ширина), м', 2.5);
+    setNumber('Габариты (высота), м', 3);
 
-    const one = screen.getByTestId('one-cargo-preview');
-    expect(within(one).getByText('9.00 м')).toBeVisible();
-    expect(within(one).getByText('4.00 м')).toBeVisible();
-    expect(within(one).getByText('17.60 т')).toBeVisible();
-    expect(within(one).getByText('8.00 т')).toBeVisible();
-    const two = screen.getByTestId('two-cargo-preview');
-    expect(within(two).getByText('18.00 м')).toBeVisible();
-    expect(within(two).getByText('24.10 т')).toBeVisible();
-    expect(within(two).getByText('8.70 т')).toBeVisible();
-    expect(screen.getByTestId('retained-trailer-preview')).toHaveTextContent('прицеп остаётся присоединён');
-    expect(screen.getByTestId('retained-trailer-preview')).toHaveTextContent('18.00 м');
+    expect(screen.queryByLabelText('Основной прицеп')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('one-cargo-preview')).not.toBeInTheDocument();
+    expect(screen.getByText('Дополнительные настройки')).toBeVisible();
 
     await user.click(screen.getByRole('button', { name: 'Сохранить' }));
     await waitFor(() => expect(submit).toHaveBeenCalledOnce());
     const input = submit.mock.calls[0]?.[0];
     expect(input).toMatchObject({
       name: 'МАЗ 1',
-      is_hgv: true,
-      tare_weight_kg: 15000,
-      default_trailer_id: trailer.id,
-      combined_length_with_trailer_mm: 18000,
-      height_safety_margin_mm: 100,
+      manufacturer: 'МАЗ',
+      registration_number: 'А123БВ',
+      capacity: 1,
+      payload_capacity_kg: 8000,
+      length_mm: 9000,
+      width_mm: 2500,
+      height_mm: 3000,
+      default_trailer_id: null,
     });
-    expect(input).not.toHaveProperty('preview_cargo_length_mm');
-    expect(input?.load_profiles).toEqual(expect.arrayContaining([
-      { configuration_type: 'CARGO_ON_TRUCK', max_actual_axle_load_kg: 8000 },
-      { configuration_type: 'TWO_CARGO_SPLIT', max_actual_axle_load_kg: 8700 },
-    ]));
-  }, 10_000);
+    expect(input?.load_profiles).toEqual([]);
+  });
 
-  it('submits nullable trailer physical values without manufacturing defaults', async () => {
+  it('preserves hidden routing data when an existing vehicle is renamed', async () => {
+    const user = userEvent.setup();
+    const submit = vi.fn<(input: VehicleEditorInput) => Promise<void>>(() => Promise.resolve());
+    const vehicle = {
+      ...workspaceFixture().vehicles[0]!,
+      manufacturer: 'КАМАЗ',
+      payload_capacity_kg: 10_000,
+      length_mm: 7_200,
+      width_mm: 2_500,
+      height_mm: 3_200,
+      can_use_trailer: true,
+      default_trailer_id: 'trailer-1',
+      axle_count: 3,
+      load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT' as const, max_actual_axle_load_kg: 8_700 }],
+    };
+    render(<CatalogDialog value={vehicle} busy={false} onClose={() => undefined} onSubmit={submit} />);
+
+    await user.clear(screen.getByLabelText('Название'));
+    await user.type(screen.getByLabelText('Название'), 'КАМАЗ 65115');
+    await user.click(screen.getByRole('button', { name: 'Сохранить' }));
+
+    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    expect(submit.mock.calls[0]?.[0]).toMatchObject({
+      name: 'КАМАЗ 65115',
+      can_use_trailer: true,
+      default_trailer_id: 'trailer-1',
+      axle_count: 3,
+      load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT', max_actual_axle_load_kg: 8_700 }],
+    });
+  });
+
+  it('creates a simple trailer record without manufacturing routing properties', async () => {
     const user = userEvent.setup();
     const submit = vi.fn<(input: TrailerInput) => Promise<void>>(() => Promise.resolve());
     render(<TrailerDialog busy={false} onClose={() => undefined} onSubmit={submit} />);
-    await user.type(screen.getByLabelText('Название прицепа'), 'Резервный прицеп');
-    await user.type(screen.getByLabelText('Госномер прицепа'), 'ТР5678');
-    setNumber('Собственная масса прицепа, кг', 3900);
+    await user.type(screen.getByLabelText('Марка'), 'Резервный прицеп');
+    await user.type(screen.getByLabelText('Госномер'), 'ТР5678');
     await user.click(screen.getByRole('button', { name: 'Сохранить прицеп' }));
     await waitFor(() => expect(submit).toHaveBeenCalledOnce());
-    expect(submit.mock.calls[0]?.[0]).toMatchObject({ name: 'Резервный прицеп', tare_weight_kg: 3900, length_mm: null });
+    expect(submit.mock.calls[0]?.[0]).toMatchObject({ name: 'Резервный прицеп', registration_number: 'ТР5678', tare_weight_kg: null, length_mm: null });
   });
 
   it('saves the vehicle and all axle profiles through one atomic API command', async () => {
@@ -134,18 +133,20 @@ describe('truck vehicle editor', () => {
       Object.entries(trailer).filter(([key]) => key !== 'id' && key !== 'warehouse_id'),
     ) as unknown as TrailerInput;
 
-    await api.createTrailer('warehouse-1', trailerInput);
+    await api.createTrailer('warehouse-1', trailerInput, 'trailer-intent');
     await api.createVehicleConfiguration('warehouse-1', {
       vehicle: {
         name: 'МАЗ', registration_number: 'А123БВ', capacity: 2, active: true,
         average_speed_city: 30, average_speed_region: 60, notes: '',
       },
       load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT', max_actual_axle_load_kg: 8700 }],
-    });
+    }, 'vehicle-intent');
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/warehouses/warehouse-1/trailers');
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get('Idempotency-Key')).toBe('trailer-intent');
     expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toMatchObject({ name: 'Прицеп 1', length_mm: 8000 });
     expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/warehouses/warehouse-1/vehicle-configurations');
+    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get('Idempotency-Key')).toBe('vehicle-intent');
     expect(JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string)).toMatchObject({
       vehicle: { name: 'МАЗ', registration_number: 'А123БВ' },
       load_profiles: [{ configuration_type: 'TWO_CARGO_SPLIT', max_actual_axle_load_kg: 8700 }],

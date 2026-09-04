@@ -34,6 +34,12 @@ class LogisticsRecoveryMetricsTest {
           "rwms.logistics.sanitized_dlt.terminal",
           "rwms.logistics.rental_inquiry.outbox.backlog",
           "rwms.logistics.rental_inquiry.outbox.backlog.oldest.age.seconds",
+          "rwms.logistics.presentation_booking.recovery.backlog",
+          "rwms.logistics.presentation_booking.recovery.backlog.oldest.age.seconds",
+          "rwms.logistics.presentation_booking.recovery.quarantined",
+          "rwms.logistics.customer_checkout.recovery.backlog",
+          "rwms.logistics.customer_checkout.recovery.backlog.oldest.age.seconds",
+          "rwms.logistics.customer_checkout.recovery.quarantined",
           "rwms.logistics.warehouse_mark.backlog",
           "rwms.logistics.warehouse_mark.backlog.oldest.age.seconds",
           "rwms.logistics.warehouse_mark.terminal",
@@ -83,6 +89,10 @@ class LogisticsRecoveryMetricsTest {
     when(fixture.observations.findOldestSanitizedDltBacklogCreatedAt())
         .thenReturn(Optional.of(future));
     when(fixture.observations.findOldestRentalInquiryOutboxBacklogCreatedAt())
+        .thenReturn(Optional.of(future));
+    when(fixture.observations.findOldestPresentationBookingRecoveryCreatedAt())
+        .thenReturn(Optional.of(future));
+    when(fixture.observations.findOldestCustomerCheckoutRecoveryCreatedAt())
         .thenReturn(Optional.of(future));
     when(fixture.observations.findOldestWarehouseMarkBacklogCreatedAt())
         .thenReturn(Optional.of(future));
@@ -137,6 +147,12 @@ class LogisticsRecoveryMetricsTest {
     when(observations.countTerminalSanitizedDlt()).thenThrow(failure);
     when(observations.countRentalInquiryOutboxBacklog()).thenThrow(failure);
     when(observations.findOldestRentalInquiryOutboxBacklogCreatedAt()).thenThrow(failure);
+    when(observations.countPresentationBookingRecoveryBacklog()).thenThrow(failure);
+    when(observations.findOldestPresentationBookingRecoveryCreatedAt()).thenThrow(failure);
+    when(observations.countQuarantinedPresentationBookings()).thenThrow(failure);
+    when(observations.countCustomerCheckoutRecoveryBacklog()).thenThrow(failure);
+    when(observations.findOldestCustomerCheckoutRecoveryCreatedAt()).thenThrow(failure);
+    when(observations.countQuarantinedCustomerCheckouts()).thenThrow(failure);
     when(observations.countWarehouseMarkBacklog()).thenThrow(failure);
     when(observations.findOldestWarehouseMarkBacklogCreatedAt()).thenThrow(failure);
     when(observations.countTerminalWarehouseMarks()).thenThrow(failure);

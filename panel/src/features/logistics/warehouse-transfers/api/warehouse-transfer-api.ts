@@ -25,8 +25,9 @@ export const warehouseTransferClient = new HttpWarehouseTransferClient()
 
 export const listWarehouseTransfers = (
   accessToken: string,
-  warehouseId: string
-) => warehouseTransferClient.list(accessToken, warehouseId)
+  warehouseId: string,
+  scheduledDate?: string
+) => warehouseTransferClient.list(accessToken, warehouseId, scheduledDate)
 
 export const getWarehouseTransfer = (accessToken: string, documentId: string) =>
   warehouseTransferClient.get(accessToken, documentId)

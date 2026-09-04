@@ -65,6 +65,7 @@ func TestAssetImportPreflightRequiresExactServiceScopeAndNeverEchoesSource(t *te
 			t.Fatalf("response=%d calls=%d body=%s", response.Code, service.preflightCalls, response.Body.String())
 		}
 	})
+
 }
 
 func TestAssetImportReplacementRequiresExactServiceScopeAndNeverEchoesSource(t *testing.T) {

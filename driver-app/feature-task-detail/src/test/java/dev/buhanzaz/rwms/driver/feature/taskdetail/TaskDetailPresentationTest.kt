@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.driver.feature.taskdetail
 
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.driver.core.database.DriverAssignmentEntity
+import dev.buhanzaz.rwms.driver.core.database.ServerTimeAnchor
 import dev.buhanzaz.rwms.driver.core.network.DriverTripActualEquipmentDto
 import dev.buhanzaz.rwms.driver.core.network.DriverTripCabinDto
 import dev.buhanzaz.rwms.driver.core.network.DriverTripDesiredDeliveryWindowDto
@@ -11,18 +12,26 @@ import dev.buhanzaz.rwms.driver.core.network.DriverTaskTimerSnapshotDto
 import dev.buhanzaz.rwms.driver.core.network.DriverMediaReferenceDto
 import dev.buhanzaz.rwms.driver.core.network.DriverWorkDto
 import dev.buhanzaz.rwms.driver.core.ui.cabinNumberForDisplay
+import dev.buhanzaz.rwms.driver.core.sync.DriverWarehouseClockSnapshot
 import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class TaskDetailPresentationTest {
     @Test
-    fun `trip operation labels preserve unknown server values`() {
-        assertThat(driverTripOperationLabel("SHIPMENT")).isEqualTo("Доставка / аренда")
-        assertThat(driverTripOperationLabel("RETURN")).isEqualTo("Вывоз")
-        assertThat(driverTripOperationLabel("TRANSFER")).isEqualTo("Перемещение")
-        assertThat(driverTripOperationLabel("CUSTOM_OPERATION")).isEqualTo("CUSTOM_OPERATION")
+    fun `trip operation labels distinguish customer delivery purposes`() {
+        assertThat(driverTripOperationLabel("SHIPMENT", "RENTAL_DELIVERY"))
+            .isEqualTo("Доставка в аренду")
+        assertThat(driverTripOperationLabel("SHIPMENT", "SALE_DELIVERY"))
+            .isEqualTo("Доставка на продажу")
+        assertThat(driverTripOperationLabel("SHIPMENT", "CUSTOMER_RELOCATION"))
+            .isEqualTo("Переезд клиента")
+        assertThat(driverTripOperationLabel("SHIPMENT", null)).isEqualTo("Доставка")
+        assertThat(driverTripOperationLabel("RETURN", null)).isEqualTo("Вывоз")
+        assertThat(driverTripOperationLabel("TRANSFER", null)).isEqualTo("Перемещение")
+        assertThat(driverTripOperationLabel("CUSTOM_OPERATION", null)).isEqualTo("CUSTOM_OPERATION")
     }
 
     @Test
@@ -231,6 +240,73 @@ class TaskDetailPresentationTest {
                 today = today,
             ),
         ).isFalse()
+    }
+
+    @Test
+    fun `warehouse midnight removes both shared preview and claim availability together`() {
+        val clock = DriverWarehouseClockSnapshot(
+            serverTimeAnchor = ServerTimeAnchor(
+                serverEpochMillis = Instant.parse("2026-08-31T18:59:59Z").toEpochMilli(),
+                elapsedRealtimeAtSyncMillis = 10_000L,
+                leaseExpiresAtEpochMillis = Instant.parse("2026-09-02T00:00:00Z").toEpochMilli(),
+            ),
+            timeZone = ZoneId.of("Asia/Yekaterinburg"),
+        )
+        val beforeMidnight = clock.localDateAt(10_999L)
+        val afterMidnight = clock.localDateAt(11_000L)
+
+        assertThat(
+            canReadRichLogisticsDetails(
+                sourceType = "LOGISTICS_DRIVER_TASK",
+                driverAudienceMode = WAREHOUSE_DRIVERS_AUDIENCE_MODE,
+                scheduledDate = "2026-09-01",
+                today = beforeMidnight,
+            ),
+        ).isTrue()
+        assertThat(
+            canClaimFutureLogisticsTask(
+                sourceType = "LOGISTICS_DRIVER_TASK",
+                driverAudienceMode = WAREHOUSE_DRIVERS_AUDIENCE_MODE,
+                scheduledDate = "2026-09-01",
+                today = beforeMidnight,
+            ),
+        ).isTrue()
+        assertThat(
+            canReadRichLogisticsDetails(
+                sourceType = "LOGISTICS_DRIVER_TASK",
+                driverAudienceMode = WAREHOUSE_DRIVERS_AUDIENCE_MODE,
+                scheduledDate = "2026-09-01",
+                today = afterMidnight,
+            ),
+        ).isFalse()
+        assertThat(
+            canClaimFutureLogisticsTask(
+                sourceType = "LOGISTICS_DRIVER_TASK",
+                driverAudienceMode = WAREHOUSE_DRIVERS_AUDIENCE_MODE,
+                scheduledDate = "2026-09-01",
+                today = afterMidnight,
+            ),
+        ).isFalse()
+    }
+
+    @Test
+    fun `missing warehouse clock fails shared claim closed without hiding assigned detail`() {
+        assertThat(
+            canClaimFutureLogisticsTask(
+                sourceType = "LOGISTICS_DRIVER_TASK",
+                driverAudienceMode = WAREHOUSE_DRIVERS_AUDIENCE_MODE,
+                scheduledDate = "2026-09-01",
+                today = null,
+            ),
+        ).isFalse()
+        assertThat(
+            canReadRichLogisticsDetails(
+                sourceType = "LOGISTICS_DRIVER_TASK",
+                driverAudienceMode = ASSIGNED_DRIVER_AUDIENCE_MODE,
+                scheduledDate = "2026-09-01",
+                today = null,
+            ),
+        ).isTrue()
     }
 
     @Test
@@ -756,6 +832,7 @@ class TaskDetailPresentationTest {
         taskNumber = "123",
         tripNumber = 1,
         operationType = "SHIPMENT",
+        customerDeliveryPurpose = "RENTAL_DELIVERY",
         clientName = "ООО Стройка",
         address = "Санкт-Петербург",
         latitude = 59.9,

@@ -376,27 +376,23 @@ class AuthServiceIntegrationTest {
     @Test
     void eventingRecoveryRequiresSystemAdminRole() throws Exception {
         mvc.perform(post("/api/admin/eventing/outbox/{eventId}/requeue", UUID.randomUUID())
-                        .with(jwt().jwt(token -> token.subject("wms.admin"))
-                                .authorities(new SimpleGrantedAuthority("ROLE_WMS_ADMIN")))
+                        .with(adminAppJwt("wms.admin", "WMS_ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"expectedAttemptCount\":4}"))
                 .andExpect(status().isForbidden());
         mvc.perform(post("/api/admin/eventing/outbox/{eventId}/requeue", UUID.randomUUID())
-                        .with(jwt().jwt(token -> token.subject("admin"))
-                                .authorities(new SimpleGrantedAuthority("ROLE_SYSTEM_ADMIN")))
+                        .with(adminAppJwt("admin", "SYSTEM_ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"expectedAttemptCount\":4}"))
                 .andExpect(status().isConflict());
         mvc.perform(post("/api/admin/eventing/shadow/rebuild")
-                        .with(jwt().jwt(token -> token.subject("wms.admin"))
-                                .authorities(new SimpleGrantedAuthority("ROLE_WMS_ADMIN")))
+                        .with(adminAppJwt("wms.admin", "WMS_ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"operationId\":\"" + UUID.randomUUID()
                                 + "\",\"reason\":\"Unauthorized replay canary\"}"))
                 .andExpect(status().isForbidden());
         mvc.perform(post("/api/admin/eventing/shadow/rebuild")
-                        .with(jwt().jwt(token -> token.subject("admin"))
-                                .authorities(new SimpleGrantedAuthority("ROLE_SYSTEM_ADMIN")))
+                        .with(adminAppJwt("admin", "SYSTEM_ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isBadRequest());
@@ -446,14 +442,19 @@ class AuthServiceIntegrationTest {
         assertThat(signedAccessToken.getHeader().getAlgorithm()).isEqualTo(JWSAlgorithm.RS256);
         assertThat(accessTokenClaims.getSubject()).isEqualTo(admin.getId().toString());
         assertThat(accessTokenClaims.getStringClaim("preferred_username")).isEqualTo("admin");
+        assertThat(accessTokenClaims.getClaims()).doesNotContainKey("company_id");
         assertThat(accessTokenClaims.getBooleanClaim("rentalAccess")).isTrue();
+        assertThat(accessTokenClaims.getBooleanClaim("warehouse_access_all")).isTrue();
+        assertThat(accessTokenClaims.getListClaim("warehouse_access")).isEmpty();
         assertThat(idTokenClaims.getSubject()).isEqualTo(admin.getId().toString());
         assertThat(idTokenClaims.getStringClaim("preferred_username")).isEqualTo("admin");
+        assertThat(idTokenClaims.getClaims()).doesNotContainKey("company_id");
         assertThat(idTokenClaims.getBooleanClaim("rentalAccess")).isTrue();
 
         mvc.perform(get("/api/users/me").header("Authorization", "Bearer " + accessToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(admin.getId().toString()))
+                .andExpect(jsonPath("$.companyId").doesNotExist())
                 .andExpect(jsonPath("$.username").value("admin"))
                 .andExpect(jsonPath("$.principalType").value("USER"))
                 .andExpect(jsonPath("$.rentalAccess").value(true));
@@ -671,7 +672,9 @@ class AuthServiceIntegrationTest {
                 .andExpect(forwardedUrl("/index.html"));
         mvc.perform(get("/index.html"))
                 .andExpect(status().isOk());
-        mvc.perform(get("/wms-login-cover.png"))
+        mvc.perform(get("/assets/background.webm"))
+                .andExpect(status().isOk());
+        mvc.perform(get("/assets/block-box-logo.svg"))
                 .andExpect(status().isOk());
 
         mvc.perform(get("/api/auth/csrf"))
@@ -824,8 +827,7 @@ class AuthServiceIntegrationTest {
     @Test
     void serviceTokenNeverInheritsCollidingUserRoleAndClientIdsAreReserved() throws Exception {
         mvc.perform(post("/api/admin/users")
-                        .with(jwt().jwt(token -> token.subject("admin"))
-                                .authorities(new SimpleGrantedAuthority("ROLE_SYSTEM_ADMIN")))
+                        .with(adminAppJwt("admin", "SYSTEM_ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
@@ -895,8 +897,7 @@ class AuthServiceIntegrationTest {
     @Test
     void viewerMeUsesEffectiveViewAccessAndAdminDeleteIsFailClosed() throws Exception {
         String createBody = mvc.perform(post("/api/admin/users")
-                        .with(jwt().jwt(token -> token.subject("admin"))
-                                .authorities(new SimpleGrantedAuthority("ROLE_SYSTEM_ADMIN")))
+                        .with(adminAppJwt("admin", "SYSTEM_ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
@@ -914,8 +915,7 @@ class AuthServiceIntegrationTest {
                 .isEqualTo("00000000-0000-0000-0000-000000000001");
 
         mvc.perform(put("/api/admin/users/{id}/warehouse-accesses", userId)
-                        .with(jwt().jwt(token -> token.subject("admin"))
-                                .authorities(new SimpleGrantedAuthority("ROLE_SYSTEM_ADMIN")))
+                        .with(adminAppJwt("admin", "SYSTEM_ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
@@ -927,8 +927,7 @@ class AuthServiceIntegrationTest {
                 .andExpect(jsonPath("$.version").value(version));
 
         mvc.perform(put("/api/admin/users/{id}", userId)
-                        .with(jwt().jwt(token -> token.subject("admin"))
-                                .authorities(new SimpleGrantedAuthority("ROLE_SYSTEM_ADMIN")))
+                        .with(adminAppJwt("admin", "SYSTEM_ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
@@ -949,9 +948,8 @@ class AuthServiceIntegrationTest {
                 .andExpect(jsonPath("$.warehouseAccesses[0].level").value("VIEW"))
                 .andExpect(jsonPath("$.warehouseAccesses[0].accessLevel").doesNotExist());
 
-        mvc.perform(delete("/api/admin/users/{id}", userId).with(jwt()
-                        .jwt(token -> token.subject("admin"))
-                        .authorities(new SimpleGrantedAuthority("ROLE_SYSTEM_ADMIN"))))
+        mvc.perform(delete("/api/admin/users/{id}", userId)
+                        .with(adminAppJwt("admin", "SYSTEM_ADMIN")))
                 .andExpect(status().isConflict());
     }
 
@@ -960,8 +958,7 @@ class AuthServiceIntegrationTest {
         AuthSubject admin = subjects.findByUsernameIgnoreCase("admin").orElseThrow();
         String adminId = admin.getId().toString();
         mvc.perform(put("/api/admin/users/{id}", adminId)
-                        .with(jwt().jwt(token -> token.subject("admin"))
-                                .authorities(new SimpleGrantedAuthority("ROLE_SYSTEM_ADMIN")))
+                        .with(adminAppJwt("admin", "SYSTEM_ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
@@ -988,8 +985,7 @@ class AuthServiceIntegrationTest {
                         true,
                         List.of()),
                 adminAuthentication());
-        var wmsJwt = jwt().jwt(token -> token.subject("wms.admin.boundary"))
-                .authorities(new SimpleGrantedAuthority("ROLE_WMS_ADMIN"));
+        var wmsJwt = adminAppJwt("wms.admin.boundary", "WMS_ADMIN");
 
         mvc.perform(post("/api/admin/users")
                         .with(wmsJwt)
@@ -1004,8 +1000,7 @@ class AuthServiceIntegrationTest {
                 .andExpect(status().isConflict());
 
         mvc.perform(post("/api/admin/users")
-                        .with(jwt().jwt(token -> token.subject("wms.admin.boundary"))
-                                .authorities(new SimpleGrantedAuthority("ROLE_WMS_ADMIN")))
+                        .with(adminAppJwt("wms.admin.boundary", "WMS_ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
@@ -1018,8 +1013,7 @@ class AuthServiceIntegrationTest {
 
         AuthSubject systemAdmin = subjects.findByUsernameIgnoreCase("admin").orElseThrow();
         mvc.perform(put("/api/admin/users/{id}/password", systemAdmin.getId())
-                        .with(jwt().jwt(token -> token.subject("wms.admin.boundary"))
-                                .authorities(new SimpleGrantedAuthority("ROLE_WMS_ADMIN")))
+                        .with(adminAppJwt("wms.admin.boundary", "WMS_ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"password":"new-admin-secret","expectedVersion":%d}
@@ -1027,8 +1021,7 @@ class AuthServiceIntegrationTest {
                 .andExpect(status().isConflict());
 
         mvc.perform(put("/api/admin/users/{id}/warehouse-accesses", systemAdmin.getId())
-                        .with(jwt().jwt(token -> token.subject("wms.admin.boundary"))
-                                .authorities(new SimpleGrantedAuthority("ROLE_WMS_ADMIN")))
+                        .with(adminAppJwt("wms.admin.boundary", "WMS_ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"expectedVersion":%d,"accesses":[]}
@@ -1216,6 +1209,16 @@ class AuthServiceIntegrationTest {
 
     private UsernamePasswordAuthenticationToken adminAuthentication() {
         return UsernamePasswordAuthenticationToken.authenticated("admin", "", List.of());
+    }
+
+    private SecurityMockMvcRequestPostProcessors.JwtRequestPostProcessor adminAppJwt(
+            String subject, String role) {
+        return jwt().jwt(token -> token.subject(subject))
+                .authorities(
+                        new SimpleGrantedAuthority("ROLE_USER"),
+                        new SimpleGrantedAuthority("ROLE_" + role),
+                        new SimpleGrantedAuthority("CLIENT_rwms-admin-web"),
+                        new SimpleGrantedAuthority("SCOPE_admin.manage"));
     }
 
     private String signedJwt(List<String> audience, Instant expiresAt) throws Exception {

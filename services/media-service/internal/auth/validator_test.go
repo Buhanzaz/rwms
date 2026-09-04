@@ -549,7 +549,8 @@ func (fixture *jwtFixture) validWorkerClaims(warehouseID, workerID uuid.UUID) jw
 	return jwt.MapClaims{
 		"iss": fixture.issuer, "aud": fixture.audience, "sub": uuid.NewString(),
 		"iat": now.Add(-time.Minute).Unix(), "nbf": now.Add(-time.Minute).Unix(), "exp": now.Add(5 * time.Minute).Unix(),
-		"principal_type": "WORKER", "worker_id": workerID.String(), "warehouse_id": warehouseID.String(),
+		"principal_type": "WORKER",
+		"worker_id":      workerID.String(), "warehouse_id": warehouseID.String(),
 		"scope": "openid profile worker.tasks",
 	}
 }

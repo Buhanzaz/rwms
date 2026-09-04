@@ -8,6 +8,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import jakarta.persistence.Version;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -24,7 +25,16 @@ import org.hibernate.proxy.HibernateProxy;
  * Authentication data and password material never cross this aggregate.
  */
 @Entity
-@Table(name = "customer_profile")
+@Table(
+    name = "customer_profile",
+    uniqueConstraints = {
+      @UniqueConstraint(
+          name = "uk_customer_profile_auth_subject",
+          columnNames = "auth_subject_id"),
+      @UniqueConstraint(
+          name = "uk_customer_profile_client",
+          columnNames = "client_id")
+    })
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class CustomerProfile {
@@ -37,10 +47,10 @@ public class CustomerProfile {
   @Column(name = "version", nullable = false)
   private long version;
 
-  @Column(name = "auth_subject_id", nullable = false, unique = true)
+  @Column(name = "auth_subject_id", nullable = false)
   private UUID authSubjectId;
 
-  @Column(name = "client_id", nullable = false, unique = true)
+  @Column(name = "client_id", nullable = false)
   private UUID clientId;
 
   @Enumerated(EnumType.STRING)

@@ -16,6 +16,7 @@ from app.schemas.domain import (
     WorkloadGenerationResult,
     WorkloadGeneratorInput,
 )
+from tests.auth import admin_principal
 
 
 @pytest.mark.asyncio
@@ -28,7 +29,6 @@ async def test_generation_succeeds_locally_when_test_capacity_publication_fails(
     start_date = date(2026, 8, 30)
     generated = WorkloadGenerationResult(
         warehouse_id=warehouse_id,
-        seed=17,
         start_date=start_date,
         end_date=start_date,
         created_requests=2,
@@ -72,13 +72,13 @@ async def test_generation_succeeds_locally_when_test_capacity_publication_fails(
             deliveries_per_day=1,
             pickups_per_day=1,
             alternative_dates_count=0,
-            seed=17,
         ),
         session,
         AsyncMock(),
         AsyncMock(),
         settings,
         AsyncMock(),
+        admin_principal(),
     )
 
     assert result.created_requests == 2

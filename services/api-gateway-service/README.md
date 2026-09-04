@@ -107,15 +107,19 @@ replacement for the owning service's OpenAPI contract.
 | `/api/maintenance/**` | maintenance-service, unchanged | Internal paths are denied. |
 | `/api/media/**` | media-service, unchanged | Internal and private paths are denied. Source/variant upload content and SSE use dedicated handlers. |
 | `/api/inventory/**` | inventory-service, unchanged | Internal and private paths are denied. Completed-outcome recalculation uses a dedicated 60-second handler; every other inventory request keeps the ordinary timeout. |
-| `/api/logistics/**` | logistics-service, unchanged | Internal and private paths are denied; the explicitly public client-presentation path is an exception to normal authentication. CustomerApp routes remain authenticated and logistics enforces their exact CUSTOMER/client/scope combination. |
+| `/api/logistics/**` | logistics-service, unchanged | Internal and private paths are denied. Exact signed client-presentation, cabin-photo-presentation, and contractor-route capability operations are the only anonymous exceptions; CustomerApp routes remain authenticated and logistics enforces their exact CUSTOMER/client/scope combination. |
 | `/api/assistant/**` | assistant-service, unchanged | Internal and private paths are denied. Conversation turns use a dedicated streaming handler. |
 | `/api/dossier/**` | dossier-service, unchanged | `GET` only: dossier is a read projection and receives no public command route. |
 | `/api/analytics/v1/**` | analytics-service; external prefix becomes downstream `/api/v1/**` | Authenticated `GET` only. |
 
 The gateway remains stateless and does not keep a source-address rate-limit
-store. Production ingress must throttle the anonymous customer-registration
-surface; CSRF protection prevents cross-site submission but is not abuse
-throttling.
+store. It strips caller-supplied forwarding headers and supplies auth-service
+with the canonical immediate TCP peer address; auth-service owns the durable
+per-source and global registration budgets. Production ingress throttling
+remains defence in depth. When a reverse proxy is introduced, its trusted-peer
+boundary must be configured explicitly or multiple users behind that proxy
+will intentionally share one immediate-peer budget. CSRF protection prevents
+cross-site submission but is not abuse throttling.
 
 The dedicated routes are intentionally more specific than their general service
 routes:
@@ -136,6 +140,16 @@ routes:
   headers are forwarded unchanged and cookies are removed.
 - `POST /api/assistant/v1/conversations/*/turns` uses the assistant streaming
   proxy so a valid streamed answer does not inherit the ordinary read deadline.
+- Exact contractor-route capability paths allow anonymous route reads, entry
+  actions, bounded evidence uploads, and scoped image reads. They strip cookies
+  and authorization, preserve idempotency plus evidence checksum/capture-time
+  headers, and do not authorize a broader `/api/logistics/public/**` subtree.
+  Before proxying evidence bytes, an exact-path servlet boundary requires a
+  declared length and accepts only JPEG up to 15 MiB or WebP up to 1 MiB;
+  it replaces any caller-supplied private relay length with that validated
+  value because the MVC proxy uses chunked downstream transfer. Logistics
+  requires this relay assertion and repeats the check against the actual body
+  and checksum.
 
 An endpoint belongs in this route table only after its public contract and
 owning service are clear. A new route must never expose `/internal/**` or
@@ -153,8 +167,8 @@ implements the following policy:
   from the private auth-service target, never through the browser-visible
   gateway route.
 - `/api/**` is authenticated by default. Private routes are denied explicitly;
-  public OIDC, health, Android App Links, and the documented public client
-  presentation are narrow exceptions.
+  public OIDC, health, Android App Links, and the documented signed logistics
+  capability operations are narrow exceptions.
 - The WorkerApp task-board namespace requires exactly `SCOPE_worker.tasks` and
   the DriverApp namespace requires exactly `SCOPE_driver.tasks` at the edge;
   neither native token crosses into the other surface. Services still make
@@ -246,7 +260,7 @@ gate verifies owner-specific task-board and analytics path rewrites, dedicated S
 inventory-recalculation/assistant route precedence, unambiguous exclusion of the recalculation
 command from the generic inventory route, zero routing for every canonical internal operation and reserved
 private/internal alias, and the real edge security classification. All public domain operations
-require Bearer authentication except the four explicitly anonymous logistics client-presentation
+require Bearer authentication except the explicitly classified signed logistics capability
 operations. The delegated auth partition separately validates both Bearer and the exact
 `csrfCookie + csrfHeader` OpenAPI requirement; CSRF remains an auth-service check rather than
 duplicated state in the gateway.

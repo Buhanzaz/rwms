@@ -15,32 +15,24 @@ export type RepairComplexityColorsCommand = Pick<
   "version" | "lightColor" | "mediumColor" | "complexColor" | "capitalColor"
 >
 
-function endpoint(warehouseId: string) {
-  const value = new URL(
-    `${getGatewayRuntimeConfig().maintenanceApiBaseUrl}/v1/settings/repair-complexity-colors`
-  )
-  value.searchParams.set("warehouseId", warehouseId)
-  return value
+function endpoint() {
+  return `${getGatewayRuntimeConfig().maintenanceApiBaseUrl}/v1/settings/repair-complexity-colors`
 }
 
-export function getRepairComplexityColors(
-  accessToken: string,
-  warehouseId: string
-) {
+export function getRepairComplexityColors(accessToken: string) {
   return bearerRequest<RepairComplexityColorsDto>(
     accessToken,
-    endpoint(warehouseId)
+    endpoint()
   )
 }
 
 export function saveRepairComplexityColors(
   accessToken: string,
-  warehouseId: string,
   command: RepairComplexityColorsCommand
 ) {
   return bearerRequest<RepairComplexityColorsDto>(
     accessToken,
-    endpoint(warehouseId),
+    endpoint(),
     {
       method: "PUT",
       body: JSON.stringify({

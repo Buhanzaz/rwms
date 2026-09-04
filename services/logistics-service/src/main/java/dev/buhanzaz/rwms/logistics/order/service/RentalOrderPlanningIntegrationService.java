@@ -1,33 +1,40 @@
 package dev.buhanzaz.rwms.logistics.order.service;
 
+import dev.buhanzaz.rwms.logistics.domain.CustomerDeliveryPurpose;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.AppliedPlanningAssignment;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.ApplyPlanningAssignmentsRequest;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.ApplyPlanningAssignmentsResponse;
+import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningAssignmentRequest;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningAssignmentStatus;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningAssignmentStatusResponse;
-import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningAssignmentRequest;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningAssignmentType;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDateOption;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverAudienceMode;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftPlanRequest;
+import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftRouteOperationKind;
+import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftRouteOperationRequest;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftTrailerRequest;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftVehicleRequest;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningRequestFeedResponse;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningRequestResponse;
+import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.ReplacePlanningAssignmentsRequest;
+import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningUnitReservation;
 import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.RejectedPlanningAssignment;
 
-import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlot;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotKind;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerDeliverySlotStore;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskAudienceMode;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType;
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState;
 import dev.buhanzaz.rwms.logistics.driver.repository.DriverLogisticsTaskRepository;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.PlanningReplacementShift;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRentalShipmentRequest;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
@@ -81,8 +88,13 @@ public class RentalOrderPlanningIntegrationService {
   private final LogisticsWarehouseLifecycle warehouseLifecycle;
   private final LogisticsDependencyGateway dependencies;
   private final CustomerDeliverySlotStore customerDeliverySlots;
+  private final TransferRouteCargoEnricher transferRouteCargoEnricher;
 
-  /** Returns saved orders with at least one still-unplanned cabin and an eligible requested date. */
+  /**
+   * Returns saved orders with at least one still-unplanned cabin and an eligible requested date.
+   * Every cabin retains its owner-authoritative physical source independently from the order's
+   * service warehouse.
+   */
   public PlanningRequestFeedResponse feed(
       UUID warehouseId, LocalDate dateFrom, LocalDate dateTo) {
     requireFeedRange(warehouseId, dateFrom, dateTo);
@@ -125,40 +137,74 @@ public class RentalOrderPlanningIntegrationService {
         }
       }
       if (options.isEmpty()) continue;
+      List<LogisticsDependencyGateway.OrderUnitReservation> reservations =
+          reads.readUnitsForShipment(order).stream()
+              .sorted(
+                  java.util.Comparator.comparing(
+                      LogisticsDependencyGateway.OrderUnitReservation::unitId))
+              .toList();
       List<UUID> unitIds =
-          reads.readUnits(order).stream()
+          reservations.stream()
               .map(LogisticsDependencyGateway.OrderUnitReservation::unitId)
-              .sorted()
               .toList();
       if (unitIds.isEmpty()) continue;
+      if (Set.copyOf(unitIds).size() != unitIds.size()) {
+        throw new LogisticsConflictException(
+            "Order reservation feed contains duplicate cabin identities");
+      }
       Set<UUID> assigned =
           Set.copyOf(documentLines.findAssignedRentalShipmentAssetIds(order.getId(), unitIds));
-      List<UUID> available = unitIds.stream().filter(id -> !assigned.contains(id)).toList();
-      if (available.isEmpty()) continue;
+      List<PlanningUnitReservation> availableReservations =
+          reservations.stream()
+              .filter(reservation -> !assigned.contains(reservation.unitId()))
+              .map(
+                  reservation ->
+                      new PlanningUnitReservation(
+                          reservation.unitId(), reservation.warehouseId()))
+              .toList();
+      if (availableReservations.isEmpty()) continue;
+      List<UUID> available =
+          availableReservations.stream().map(PlanningUnitReservation::unitId).toList();
       Boolean trailerAccessAllowed =
           customerSlot == null ? null : customerSlot.getSiteCabinCapacity() >= 2;
       Long deliveryPriceRubles =
           customerSlot == null ? null : customerSlot.getDeliveryPriceRubles();
       Integer priceIsochroneMinutes =
           customerSlot == null ? null : customerSlot.getPriceIsochroneMinutes();
+      String contactName =
+          order.getClient().getContactPerson() == null
+              ? order.getClient().getDisplayName()
+              : order.getClient().getContactPerson();
+      String contactPhone =
+          order.getContactPhone() == null
+              ? order.getClient().getPhone()
+              : order.getContactPhone();
       result.add(
           new PlanningRequestResponse(
               order.getId(),
               order.getVersion(),
               PlanningRequestRevision.sha256(
                   order,
-                  available,
+                  availableReservations,
                   options,
                   trailerAccessAllowed,
                   deliveryPriceRubles,
-                  priceIsochroneMinutes),
+                  priceIsochroneMinutes,
+                  order.getClient().getClientType(),
+                  contactName,
+                  contactPhone),
+              CustomerDeliveryPurpose.RENTAL_DELIVERY,
               order.getOrderNumber(),
               order.getClient().getDisplayName(),
+              order.getClient().getClientType(),
+              contactName,
+              contactPhone,
               order.getDeliveryAddress(),
               order.getLatitude(),
               order.getLongitude(),
               available.size(),
               available,
+              availableReservations,
               options,
               trailerAccessAllowed,
               deliveryPriceRubles,
@@ -200,6 +246,13 @@ public class RentalOrderPlanningIntegrationService {
             DriverTaskSourceType.LOGISTICS_DOCUMENT, documentIds)) {
       tasksByDocument.computeIfAbsent(task.getSourceId(), ignored -> new ArrayList<>()).add(task);
     }
+    Map<UUID, RentalOrder> ordersById =
+        orders.findAllWithClientByIdIn(
+                plannerDocuments.stream().map(LogisticsDocument::getRentalOrderId).toList())
+            .stream()
+            .collect(
+                java.util.stream.Collectors.toMap(
+                    RentalOrder::getId, java.util.function.Function.identity()));
 
     List<PlanningAssignmentStatus> assignments = new ArrayList<>(plannerDocuments.size());
     for (LogisticsDocument document : plannerDocuments) {
@@ -212,17 +265,24 @@ public class RentalOrderPlanningIntegrationService {
             "Planner shipment has incomplete or ambiguous driver-task projection");
       }
       DriverLogisticsTask task = projections.getFirst();
+      RentalOrder order = ordersById.get(document.getRentalOrderId());
       if (task.getKind() != DriverTaskKind.SHIPMENT
           || !warehouseId.equals(task.getWarehouseId())
-          || !date.equals(task.getScheduledDate())) {
+          || !date.equals(task.getScheduledDate())
+          || order == null) {
         throw new LogisticsConflictException(
             "Planner shipment driver-task projection does not match its document");
       }
       PlanningDriverAudienceMode audience = planningAudience(task.getDriverAudienceMode());
       assignments.add(
-          new PlanningAssignmentStatus(
-              document.getRentalOrderId(),
-              document.getId(),
+            new PlanningAssignmentStatus(
+                document.getRentalOrderId(),
+                order.getVersion(),
+                document.getId(),
+              task.getExternalTaskId(),
+              task.getVersion(),
+              task.getSourcePlanId(),
+              task.getPlannerVisibleSourcePlanVersion(),
               document.getScheduledDate(),
               membership.stream().map(LogisticsDocumentLine::getAssetId).toList(),
               audience,
@@ -230,13 +290,29 @@ public class RentalOrderPlanningIntegrationService {
               task.getPlannedDriverNameSnapshot(),
               task.getState().name()));
     }
+    assignments.stream()
+        .filter(assignment -> assignment.sourcePlanId() != null)
+        .collect(
+            java.util.stream.Collectors.groupingBy(
+                PlanningAssignmentStatus::sourcePlanId,
+                java.util.stream.Collectors.mapping(
+                    PlanningAssignmentStatus::sourcePlanVersion,
+                    java.util.stream.Collectors.toSet())))
+        .forEach(
+            (sourcePlanId, versions) -> {
+              if (versions.size() != 1 || versions.contains(null)) {
+                throw new LogisticsConflictException(
+                    "Planner lineage contains mixed source revisions");
+              }
+            });
     return new PlanningAssignmentStatusResponse(
         warehouseId, date, List.copyOf(assignments));
   }
 
   /**
    * Applies every valid assignment independently and reports domain rejections without hiding a
-   * successfully created shipment from the caller.
+   * successfully created shipment from the caller. A driver shift is published only after every
+   * route assignment for that driver and local work date was created or replayed successfully.
    */
   public ApplyPlanningAssignmentsResponse apply(
       UUID batchIdempotencyKey, ApplyPlanningAssignmentsRequest request) {
@@ -249,17 +325,26 @@ public class RentalOrderPlanningIntegrationService {
       throw new IllegalArgumentException("Planner command identity is required");
     }
     requireUniqueAssignments(request.assignments());
+    request = transferRouteCargoEnricher.enrich(request);
     requireValidShiftPlans(request);
     OffsetDateTime generatedAt = now();
     String timeZone =
         dependencies.warehouseTimeZoneAt(request.warehouseId(), generatedAt).timeZone();
     LocalDate today = generatedAt.toInstant().atZone(ZoneId.of(timeZone)).toLocalDate();
-    registerShiftPlans(request);
+    requireAuthorizedShiftPlans(request);
     List<AppliedPlanningAssignment> applied = new ArrayList<>();
     List<RejectedPlanningAssignment> rejected = new ArrayList<>();
+    Set<String> appliedDriverWorkdays = new HashSet<>();
+    request.driverShiftPlans().stream()
+        .filter(RentalOrderPlanningIntegrationService::hasTransferOperation)
+        .map(plan -> driverWorkdayKey(plan.driverId(), plan.workDate()))
+        .forEach(appliedDriverWorkdays::add);
+    Set<String> rejectedDriverWorkdays = new HashSet<>();
     for (PlanningAssignmentRequest assignment : request.assignments()) {
       UUID serviceWarehouseId = effectiveServiceWarehouse(request, assignment);
       UUID commandKey = commandKey(batchIdempotencyKey, request, assignment);
+      OrderActor plannerActor = plannerActor();
+      String driverWorkday = routeAssignmentDriverWorkday(assignment);
       CreateOrderRentalShipmentRequest shipmentRequest =
           new CreateOrderRentalShipmentRequest(
               assignment.expectedOrderVersion(),
@@ -267,21 +352,36 @@ public class RentalOrderPlanningIntegrationService {
               assignment.driverWorkerId(),
               assignment.scheduledDate(),
               List.copyOf(assignment.unitIds()),
-              assignment.driverAudienceMode() == PlanningDriverAudienceMode.WAREHOUSE_DRIVERS);
+              assignment.driverAudienceMode() == PlanningDriverAudienceMode.WAREHOUSE_DRIVERS,
+              assignment.inventorySourceWarehouseId());
       try {
         var replay =
             rentalOrders.replayRentalShipment(
-                plannerActor(), assignment.orderId(), commandKey, shipmentRequest);
+                plannerActor, assignment.orderId(), commandKey, shipmentRequest);
         if (replay != null) {
+          TaskIdentity taskIdentity =
+              exactExternalTaskIdentity(replay.response().id(), request, assignment);
           applied.add(
               new AppliedPlanningAssignment(
-                  assignment.orderId(), replay.response().id(), true));
+                  assignment.orderId(),
+                  replay.response().id(),
+                  taskIdentity.externalTaskId(),
+                  taskIdentity.version(),
+                  true,
+                  currentOrderVersion(assignment.orderId())));
+          if (driverWorkday != null) appliedDriverWorkdays.add(driverWorkday);
           continue;
         }
         LocalDate serviceToday = warehouseToday(serviceWarehouseId, generatedAt);
         RentalOrder order = validateAssignment(serviceWarehouseId, serviceToday, assignment);
         requireAuthorizedSupport(
             request.warehouseId(), serviceWarehouseId, assignment.scheduledDate());
+        UUID inventorySourceWarehouseId =
+            rentalOrders.rentalShipmentAdmissionWarehouse(
+                plannerActor,
+                order.getId(),
+                assignment.scheduledDate(),
+                assignment.inventorySourceWarehouseId());
         var admission =
             warehouseLifecycle.prepareDocument(
                 PLANNER_SUBJECT,
@@ -289,31 +389,96 @@ public class RentalOrderPlanningIntegrationService {
                 commandKey,
                 List.of(
                     new AdmissionRequirement(
-                        serviceWarehouseId, WarehouseOperationDirection.OUTGOING)));
+                        inventorySourceWarehouseId, WarehouseOperationDirection.OUTGOING)));
         var result =
             rentalOrders.createRentalShipment(
-                plannerActor(),
+                plannerActor,
                 order.getId(),
                 commandKey,
                 deterministic("planning-correlation:" + commandKey),
                 shipmentRequest,
                 admission);
+        TaskIdentity taskIdentity =
+            exactExternalTaskIdentity(result.response().id(), request, assignment);
         applied.add(
             new AppliedPlanningAssignment(
-                order.getId(), result.response().id(), result.replayed()));
+                order.getId(),
+                result.response().id(),
+                taskIdentity.externalTaskId(),
+                taskIdentity.version(),
+                result.replayed(),
+                currentOrderVersion(order.getId())));
+        if (driverWorkday != null) appliedDriverWorkdays.add(driverWorkday);
       } catch (OrderProblemException exception) {
         if (exception.status().is5xxServerError()) throw exception;
+        if (driverWorkday != null) rejectedDriverWorkdays.add(driverWorkday);
         rejected.add(
             new RejectedPlanningAssignment(
                 assignment.orderId(), exception.code(), exception.getMessage()));
       } catch (LogisticsConflictException exception) {
+        if (driverWorkday != null) rejectedDriverWorkdays.add(driverWorkday);
         rejected.add(
             new RejectedPlanningAssignment(
                 assignment.orderId(), "LOGISTICS_CONFLICT", exception.getMessage()));
       }
     }
+    registerShiftPlans(request, appliedDriverWorkdays, rejectedDriverWorkdays);
     return new ApplyPlanningAssignmentsResponse(List.copyOf(applied), List.copyOf(rejected));
   }
+
+  /**
+   * Resolves the durable document-owned driver task produced by the existing shipment workflow. The
+   * value is read from the local aggregate and is never derived from a plan or document UUID.
+   */
+  private TaskIdentity exactExternalTaskIdentity(
+      UUID documentId,
+      ApplyPlanningAssignmentsRequest request,
+      PlanningAssignmentRequest assignment) {
+    List<DriverLogisticsTask> tasks =
+        driverTasks.findAllBySourceTypeAndSourceIdIn(
+            DriverTaskSourceType.LOGISTICS_DOCUMENT, List.of(documentId));
+    List<DriverLogisticsTask> shipments =
+        tasks.stream().filter(task -> task.getKind() == DriverTaskKind.SHIPMENT).toList();
+    if (shipments.size() != 1 || shipments.getFirst().getExternalTaskId() == null) {
+      throw new LogisticsConflictException(
+          "Planner shipment has no unique durable external driver-task identity");
+    }
+    DriverLogisticsTask task = shipments.getFirst();
+    if (task.getSourcePlanId() == null
+        && task.getState() == DriverTaskState.REGISTERING
+        && task.getTaskBoardTaskId() == null) {
+      task.bindPlannerLineage(
+          request.planId(),
+          request.planVersion(),
+          request.warehouseId(),
+          assignment.scheduledDate());
+    } else if (task.getSourcePlanId() != null) {
+      task.bindPlannerLineage(
+          request.planId(),
+          request.planVersion(),
+          request.warehouseId(),
+          assignment.scheduledDate());
+    }
+    if (assignment.provisionalEta() != null) {
+      task.setProvisionalEta(
+          assignment.provisionalEta(), request.planId(), request.planVersion());
+    }
+    driverTasks.saveAndFlush(task);
+    return new TaskIdentity(task.getExternalTaskId(), task.getVersion());
+  }
+
+  private long currentOrderVersion(UUID orderId) {
+    return orders
+        .findPlanningCandidateById(orderId)
+        .orElseThrow(
+            () ->
+                new LogisticsConflictException(
+                    "Planner shipment order disappeared after publication"))
+        .getVersion();
+  }
+
+  /** Durable driver-task identity and optimistic fence returned to the planner. */
+  private record TaskIdentity(UUID externalTaskId, long version) {}
 
   private RentalOrder validateAssignment(
       UUID warehouseId, LocalDate today, PlanningAssignmentRequest assignment) {
@@ -344,6 +509,7 @@ public class RentalOrderPlanningIntegrationService {
     }
     requireAssignmentType(assignment);
     requireDriverAudience(today, assignment);
+    requireProvisionalEta(warehouseId, assignment);
     if (assignment.assignmentType() == PlanningAssignmentType.ROUTE_PLAN
         && assignment.driverAudienceMode() == PlanningDriverAudienceMode.ASSIGNED_DRIVER
         && assignment.scheduledDate().isBefore(today.plusDays(2))) {
@@ -364,8 +530,10 @@ public class RentalOrderPlanningIntegrationService {
           "DELIVERY_DATE_NOT_ACCEPTED",
           "Клиент не подтвердил выбранную планировщиком дату");
     }
+    List<LogisticsDependencyGateway.OrderUnitReservation> activeReservations =
+        reads.readUnitsForShipment(order);
     List<UUID> activeUnitIds =
-        reads.readUnits(order).stream()
+        activeReservations.stream()
             .map(LogisticsDependencyGateway.OrderUnitReservation::unitId)
             .toList();
     Set<UUID> selected = Set.copyOf(assignment.unitIds());
@@ -375,6 +543,17 @@ public class RentalOrderPlanningIntegrationService {
           HttpStatus.CONFLICT,
           "ORDER_UNITS_CHANGED",
           "Состав бытовок заказа изменился после синхронизации");
+    }
+    if (assignment.inventorySourceWarehouseId() != null
+        && activeReservations.stream()
+            .filter(reservation -> selected.contains(reservation.unitId()))
+            .anyMatch(
+                reservation ->
+                    !assignment.inventorySourceWarehouseId().equals(reservation.warehouseId()))) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "INVENTORY_SOURCE_WAREHOUSE_MISMATCH",
+          "Выбранные бытовки физически находятся на другом складе-источнике");
     }
     Set<UUID> alreadyAssigned =
         Set.copyOf(documentLines.findAssignedRentalShipmentAssetIds(order.getId(), activeUnitIds));
@@ -419,6 +598,23 @@ public class RentalOrderPlanningIntegrationService {
           HttpStatus.CONFLICT,
           "SHARED_TASK_REQUIRES_FUTURE_DATE",
           "В общий пул водителей можно опубликовать только будущую доставку");
+    }
+  }
+
+  private void requireProvisionalEta(
+      UUID serviceWarehouseId, PlanningAssignmentRequest assignment) {
+    if (assignment.provisionalEta() == null) return;
+    String timeZone =
+        dependencies
+            .warehouseTimeZoneAt(serviceWarehouseId, assignment.provisionalEta())
+            .timeZone();
+    LocalDate etaDate =
+        assignment.provisionalEta().toInstant().atZone(ZoneId.of(timeZone)).toLocalDate();
+    if (!assignment.scheduledDate().equals(etaDate)) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "PROVISIONAL_ETA_DATE_MISMATCH",
+          "Предварительное время прибытия относится к другому дню");
     }
   }
 
@@ -480,26 +676,425 @@ public class RentalOrderPlanningIntegrationService {
         throw new IllegalArgumentException(
             "Driver shift plans must belong to the exact planner command");
       }
+      Set<UUID> serviceWarehouseIds =
+          request.assignments().stream()
+              .filter(
+                  assignment ->
+                      assignment.assignmentType() == PlanningAssignmentType.ROUTE_PLAN
+                          && assignment.driverAudienceMode()
+                              == PlanningDriverAudienceMode.ASSIGNED_DRIVER
+                          && plan.driverId().equals(assignment.driverWorkerId())
+                          && plan.workDate().equals(assignment.scheduledDate()))
+              .map(assignment -> effectiveServiceWarehouse(request, assignment))
+              .collect(java.util.stream.Collectors.toUnmodifiableSet());
+      if (serviceWarehouseIds.size() > 1) {
+        throw new IllegalArgumentException(
+            "One driver shift route can serve only one warehouse");
+      }
+      UUID serviceWarehouseId =
+          serviceWarehouseIds.isEmpty()
+              ? routeServiceWarehouse(plan)
+              : serviceWarehouseIds.iterator().next();
+      requireValidRouteOperations(plan, serviceWarehouseId);
     }
   }
 
-  private void registerShiftPlans(ApplyPlanningAssignmentsRequest request) {
+  private static void requireValidRouteOperations(
+      PlanningDriverShiftPlanRequest plan, UUID serviceWarehouseId) {
+    List<PlanningDriverShiftRouteOperationRequest> operations = plan.operations();
+    int priorLoad = 0;
+    OffsetDateTime priorEnd = null;
+    for (int index = 0; index < operations.size(); index++) {
+      PlanningDriverShiftRouteOperationRequest operation = operations.get(index);
+      if (operation == null
+          || operation.sequence() != index + 1
+          || operation.kind() == null
+          || operation.locationLabel() == null
+          || operation.locationLabel().isBlank()
+          || operation.plannedArrival() == null
+          || operation.plannedDeparture() == null) {
+        throw new IllegalArgumentException(
+            "Driver route operations must form one contiguous executable order");
+      }
+      boolean positioning =
+          switch (operation.kind()) {
+            case INBOUND_POSITIONING, RETURN_POSITIONING -> true;
+            default -> false;
+          };
+      OffsetDateTime operationStart =
+          positioning ? operation.plannedDeparture() : operation.plannedArrival();
+      OffsetDateTime operationEnd =
+          positioning ? operation.plannedArrival() : operation.plannedDeparture();
+      if (operationStart.isAfter(operationEnd)
+          || (priorEnd != null && operationStart.isBefore(priorEnd))) {
+        throw new IllegalArgumentException("Driver route operation timing is invalid");
+      }
+      boolean customer =
+          switch (operation.kind()) {
+            case DELIVERY, PICKUP -> true;
+            default -> false;
+          };
+      boolean transfer =
+          switch (operation.kind()) {
+            case TRANSFER_LOAD, TRANSFER_UNLOAD -> true;
+            default -> false;
+          };
+      if ((customer
+              && (operation.sourceTaskId() == null
+                  || operation.sourceTransferId() != null
+                  || operation.warehouseId() != null))
+          || (transfer
+              && (operation.sourceTaskId() != null
+                  || operation.sourceTransferId() == null
+                  || operation.warehouseId() == null))
+          || (!customer
+              && !transfer
+              && (operation.sourceTaskId() != null
+                  || operation.sourceTransferId() != null
+                  || operation.warehouseId() == null))
+          || operation.loadBefore() != priorLoad) {
+        throw new IllegalArgumentException(
+            "Driver route operation identity or load chain is invalid");
+      }
+      Integer cabinCapacity = plan.vehicle().cabinCapacity();
+      if (transfer && cabinCapacity == null) {
+        throw new IllegalArgumentException(
+            "Transfer route operations require exact vehicle cabin capacity");
+      }
+      if (cabinCapacity != null
+          && (operation.loadBefore() > cabinCapacity
+              || operation.loadAfter() > cabinCapacity)) {
+        throw new IllegalArgumentException("Driver route operation exceeds vehicle cabin capacity");
+      }
+      if ((operation.kind() == PlanningDriverShiftRouteOperationKind.TRANSFER_LOAD
+              && operation.loadAfter() < operation.loadBefore())
+          || (operation.kind() == PlanningDriverShiftRouteOperationKind.TRANSFER_UNLOAD
+              && operation.loadAfter() > operation.loadBefore())) {
+        throw new IllegalArgumentException("Transfer route load direction is invalid");
+      }
+      if ((positioning
+              || operation.kind() == PlanningDriverShiftRouteOperationKind.ORIGIN_START)
+          && operation.loadBefore() != operation.loadAfter()) {
+        throw new IllegalArgumentException("Positioning cannot change the planned vehicle load");
+      }
+      priorLoad = operation.loadAfter();
+      priorEnd = operationEnd;
+    }
+    requireValidPositioningShape(plan, serviceWarehouseId, operations);
+  }
+
+  private static void requireValidPositioningShape(
+      PlanningDriverShiftPlanRequest plan,
+      UUID serviceWarehouseId,
+      List<PlanningDriverShiftRouteOperationRequest> operations) {
+    UUID routeOriginWarehouseId = effectiveRouteOrigin(plan);
+    boolean crossWarehouse = !routeOriginWarehouseId.equals(serviceWarehouseId);
+    long syntheticCount =
+        operations.stream()
+            .filter(
+                operation ->
+                    operation.kind() == PlanningDriverShiftRouteOperationKind.ORIGIN_START
+                        || operation.kind()
+                            == PlanningDriverShiftRouteOperationKind.INBOUND_POSITIONING
+                        || operation.kind()
+                            == PlanningDriverShiftRouteOperationKind.RETURN_POSITIONING)
+            .count();
+    if (!crossWarehouse) {
+      if (syntheticCount != 0
+          || hasTransferOperation(plan)
+          || operations.stream()
+              .filter(operation -> operation.warehouseId() != null)
+              .anyMatch(operation -> !serviceWarehouseId.equals(operation.warehouseId()))) {
+        throw new IllegalArgumentException(
+            "A local route operation must belong to the plan warehouse");
+      }
+      return;
+    }
+    int inboundIndex =
+        indexOf(operations, PlanningDriverShiftRouteOperationKind.INBOUND_POSITIONING);
+    if (operations.size() < 4
+        || syntheticCount != 3
+        || operations.getFirst().kind()
+            != PlanningDriverShiftRouteOperationKind.ORIGIN_START
+        || inboundIndex < 1
+        || operations.getLast().kind()
+            != PlanningDriverShiftRouteOperationKind.RETURN_POSITIONING) {
+      throw new IllegalArgumentException(
+          "A cross-warehouse route requires origin, inbound, and return positioning");
+    }
+    PlanningDriverShiftRouteOperationRequest origin = operations.getFirst();
+    PlanningDriverShiftRouteOperationRequest inbound = operations.get(inboundIndex);
+    PlanningDriverShiftRouteOperationRequest returned = operations.getLast();
+    if (operations.subList(1, inboundIndex).stream()
+        .anyMatch(
+            operation ->
+                operation.kind() != PlanningDriverShiftRouteOperationKind.TRANSFER_LOAD)) {
+      throw new IllegalArgumentException(
+          "Only transfer loading may precede inbound positioning");
+    }
+    int serviceOperationStart = inboundIndex + 1;
+    while (serviceOperationStart < operations.size() - 1
+        && operations.get(serviceOperationStart).kind()
+            == PlanningDriverShiftRouteOperationKind.TRANSFER_UNLOAD) {
+      serviceOperationStart++;
+    }
+    if (operations.subList(serviceOperationStart, operations.size() - 1).stream()
+        .anyMatch(RentalOrderPlanningIntegrationService::isTransferOperation)) {
+      throw new IllegalArgumentException(
+          "Transfer unloading must immediately follow inbound positioning");
+    }
+    Map<UUID, Integer> loadedTransfers = new LinkedHashMap<>();
+    for (PlanningDriverShiftRouteOperationRequest operation :
+        operations.subList(1, inboundIndex)) {
+      if (!routeOriginWarehouseId.equals(operation.warehouseId())
+          || !operation.plannedArrival().equals(inbound.plannedDeparture())
+          || !operation.plannedDeparture().equals(inbound.plannedDeparture())
+          || loadedTransfers.put(
+                  operation.sourceTransferId(), operation.loadAfter() - operation.loadBefore())
+              != null) {
+        throw new IllegalArgumentException("Transfer loading endpoints are invalid");
+      }
+    }
+    Map<UUID, Integer> unloadedTransfers = new LinkedHashMap<>();
+    for (PlanningDriverShiftRouteOperationRequest operation :
+        operations.subList(inboundIndex + 1, serviceOperationStart)) {
+      if (!serviceWarehouseId.equals(operation.warehouseId())
+          || !operation.plannedArrival().equals(inbound.plannedArrival())
+          || !operation.plannedDeparture().equals(inbound.plannedArrival())
+          || unloadedTransfers.put(
+                  operation.sourceTransferId(), operation.loadBefore() - operation.loadAfter())
+              != null) {
+        throw new IllegalArgumentException("Transfer unloading endpoints are invalid");
+      }
+    }
+    if (!loadedTransfers.equals(unloadedTransfers)) {
+      throw new IllegalArgumentException(
+          "Transfer route load and unload operations are unbalanced");
+    }
+    if (!routeOriginWarehouseId.equals(origin.warehouseId())
+        || !serviceWarehouseId.equals(inbound.warehouseId())
+        || !routeOriginWarehouseId.equals(returned.warehouseId())
+        || !origin.plannedArrival().equals(origin.plannedDeparture())
+        || !origin.plannedDeparture().equals(inbound.plannedDeparture())
+        || operations.subList(serviceOperationStart, operations.size() - 1).stream()
+            .filter(operation -> operation.warehouseId() != null)
+            .anyMatch(operation -> !serviceWarehouseId.equals(operation.warehouseId()))) {
+      throw new IllegalArgumentException("Cross-warehouse positioning endpoints are invalid");
+    }
+  }
+
+  private void registerShiftPlans(
+      ApplyPlanningAssignmentsRequest request,
+      Set<String> appliedDriverWorkdays,
+      Set<String> rejectedDriverWorkdays) {
     for (PlanningDriverShiftPlanRequest plan : request.driverShiftPlans()) {
+      String driverWorkday = driverWorkdayKey(plan.driverId(), plan.workDate());
+      if (!appliedDriverWorkdays.contains(driverWorkday)
+          || rejectedDriverWorkdays.contains(driverWorkday)) {
+        continue;
+      }
       dependencies.registerDriverShiftPlan(
           driverShiftPlanKey(plan),
           plan.sourceShiftId(),
           new LogisticsDependencyGateway.DriverShiftPlanSnapshot(
               plan.sourcePlanId(),
               plan.sourcePlanVersion(),
-              plan.warehouseId(),
+              effectiveRouteOrigin(plan),
               plan.driverId(),
               plan.driverName(),
               plan.workDate(),
               vehicleSnapshot(plan.vehicle()),
               trailerSnapshot(plan.trailer()),
               plan.tripCount(),
-              plan.routeDistanceMeters()));
+              plan.routeDistanceMeters(),
+              routeOperationSnapshots(plan.operations())));
     }
+  }
+
+  /**
+   * Reuses the canonical route, support-link, audience, and provisional-ETA checks before an
+   * existing planner revision is sent to task-board's atomic replacement boundary.
+   */
+  public List<PlanningReplacementShift> validateAndSnapshotReplacement(
+      UUID sourcePlanId, ReplacePlanningAssignmentsRequest request) {
+    List<PlanningAssignmentRequest> assignments =
+        request.assignments().stream()
+            .map(
+                assignment ->
+                    new PlanningAssignmentRequest(
+                        assignment.orderId(),
+                        assignment.serviceWarehouseId(),
+                        null,
+                        assignment.expectedOrderVersion(),
+                        assignment.scheduledDate(),
+                        PlanningAssignmentType.ROUTE_PLAN,
+                        assignment.driverAudienceMode(),
+                        assignment.driverWorkerId(),
+                        assignment.driverName(),
+                        assignment.unitIds(),
+                        assignment.provisionalEta()))
+            .toList();
+    ApplyPlanningAssignmentsRequest validation =
+        new ApplyPlanningAssignmentsRequest(
+            request.warehouseId(),
+            sourcePlanId,
+            request.replacementPlanVersion(),
+            assignments,
+            request.driverShiftPlans());
+    requireUniqueAssignments(assignments);
+    requireValidShiftPlans(validation);
+    requireAuthorizedShiftPlans(validation);
+    OffsetDateTime generatedAt = now();
+    for (PlanningAssignmentRequest assignment : assignments) {
+      UUID serviceWarehouseId = effectiveServiceWarehouse(validation, assignment);
+      String timeZone =
+          dependencies.warehouseTimeZoneAt(serviceWarehouseId, generatedAt).timeZone();
+      LocalDate today = generatedAt.toInstant().atZone(ZoneId.of(timeZone)).toLocalDate();
+      requireDriverAudience(today, assignment);
+      requireProvisionalEta(serviceWarehouseId, assignment);
+    }
+    return request.driverShiftPlans().stream()
+        .map(
+            plan ->
+                new PlanningReplacementShift(
+                    plan.sourceShiftId(),
+                    new LogisticsDependencyGateway.DriverShiftPlanSnapshot(
+                        plan.sourcePlanId(),
+                        plan.sourcePlanVersion(),
+                        effectiveRouteOrigin(plan),
+                        plan.driverId(),
+                        plan.driverName(),
+                        plan.workDate(),
+                        vehicleSnapshot(plan.vehicle()),
+                        trailerSnapshot(plan.trailer()),
+                        plan.tripCount(),
+                        plan.routeDistanceMeters(),
+                        routeOperationSnapshots(plan.operations()))))
+        .toList();
+  }
+
+  /** Stable service identity attached to every route-planner-created shipment document. */
+  public static UUID plannerSubjectId() {
+    return PLANNER_SUBJECT;
+  }
+
+  private void requireAuthorizedShiftPlans(ApplyPlanningAssignmentsRequest request) {
+    for (PlanningDriverShiftPlanRequest plan : request.driverShiftPlans()) {
+      List<PlanningAssignmentRequest> routeAssignments =
+          request.assignments().stream()
+              .filter(
+                  assignment ->
+                      assignment.assignmentType() == PlanningAssignmentType.ROUTE_PLAN
+                          && assignment.driverAudienceMode()
+                              == PlanningDriverAudienceMode.ASSIGNED_DRIVER
+                          && plan.driverId().equals(assignment.driverWorkerId())
+                          && plan.workDate().equals(assignment.scheduledDate()))
+              .toList();
+      if (routeAssignments.isEmpty() && !hasTransferOperation(plan)) continue;
+      UUID routeOriginWarehouseId = effectiveRouteOrigin(plan);
+      boolean carriesTransfer = hasTransferOperation(plan);
+      boolean carriesTransferCabins =
+          plan.operations().stream()
+              .anyMatch(
+                  operation ->
+                      operation.kind() == PlanningDriverShiftRouteOperationKind.TRANSFER_LOAD
+                          && operation.loadAfter() > operation.loadBefore());
+      Set<UUID> crossWarehouseServices = new HashSet<>();
+      routeAssignments.stream()
+          .map(assignment -> effectiveServiceWarehouse(request, assignment))
+          .filter(serviceWarehouseId -> !routeOriginWarehouseId.equals(serviceWarehouseId))
+          .forEach(crossWarehouseServices::add);
+      plan.operations().stream()
+          .filter(
+              operation ->
+                  operation.kind() == PlanningDriverShiftRouteOperationKind.TRANSFER_UNLOAD)
+          .map(PlanningDriverShiftRouteOperationRequest::warehouseId)
+          .filter(serviceWarehouseId -> !routeOriginWarehouseId.equals(serviceWarehouseId))
+          .forEach(crossWarehouseServices::add);
+      if (crossWarehouseServices.isEmpty()) {
+        if (plan.supportWarehouseLinkId() != null) {
+          throw new OrderProblemException(
+              HttpStatus.CONFLICT,
+              "SHIFT_SUPPORT_LINK_NOT_APPLICABLE",
+              "Для локального рейса не требуется связь опорных складов");
+        }
+        continue;
+      }
+      if (plan.supportWarehouseLinkId() == null) {
+        throw new OrderProblemException(
+            HttpStatus.CONFLICT,
+            "SHIFT_SUPPORT_LINK_REQUIRED",
+            "Для межскладского обслуживания требуется связь опорных складов");
+      }
+      List<LogisticsDependencyGateway.WarehouseSupportLink> network =
+          dependencies.listWarehouseSupportNetwork(routeOriginWarehouseId);
+      for (UUID serviceWarehouseId : crossWarehouseServices) {
+        boolean authorized =
+            network != null
+                && network.stream()
+                    .filter(java.util.Objects::nonNull)
+                    .anyMatch(
+                        link ->
+                            plan.supportWarehouseLinkId().equals(link.id())
+                                && supportLinkAllowsDriver(
+                                    link,
+                                    routeOriginWarehouseId,
+                                    serviceWarehouseId,
+                                    plan.workDate(),
+                                    carriesTransfer,
+                                    carriesTransferCabins));
+        if (!authorized) {
+          throw new OrderProblemException(
+              HttpStatus.CONFLICT,
+              "SHIFT_SUPPORT_LINK_NOT_AUTHORIZED",
+              "Связь складов не разрешает этот рейс водителя в выбранную дату");
+        }
+      }
+    }
+  }
+
+  private static boolean supportLinkAllowsDriver(
+      LogisticsDependencyGateway.WarehouseSupportLink link,
+      UUID routeOriginWarehouseId,
+      UUID serviceWarehouseId,
+      LocalDate workDate,
+      boolean carriesTransfer,
+      boolean carriesTransferCabins) {
+    return link.supportWarehouse() != null
+        && routeOriginWarehouseId.equals(link.supportWarehouse().id())
+        && link.supportWarehouse().active()
+        && link.servedWarehouse() != null
+        && serviceWarehouseId.equals(link.servedWarehouse().id())
+        && link.servedWarehouse().active()
+        && link.allowDrivers()
+        && (!carriesTransfer || link.allowInterwarehouseTransfer())
+        && (!carriesTransferCabins || link.allowInventory())
+        && link.allowedWeekdays() != null
+        && link.allowedDates() != null
+        && link.excludedDates() != null
+        && !link.excludedDates().contains(workDate)
+        && (link.allowedDates().contains(workDate)
+            || link.allowedWeekdays().isEmpty()
+            || link.allowedWeekdays().contains(workDate.getDayOfWeek()));
+  }
+
+  private static UUID effectiveRouteOrigin(PlanningDriverShiftPlanRequest plan) {
+    return plan.routeOriginWarehouseId() == null
+        ? plan.warehouseId()
+        : plan.routeOriginWarehouseId();
+  }
+
+  private static String routeAssignmentDriverWorkday(PlanningAssignmentRequest assignment) {
+    if (assignment.assignmentType() != PlanningAssignmentType.ROUTE_PLAN
+        || assignment.driverAudienceMode() != PlanningDriverAudienceMode.ASSIGNED_DRIVER
+        || assignment.driverWorkerId() == null) {
+      return null;
+    }
+    return driverWorkdayKey(assignment.driverWorkerId(), assignment.scheduledDate());
+  }
+
+  private static String driverWorkdayKey(UUID driverId, LocalDate workDate) {
+    return driverId + ":" + workDate;
   }
 
   private static LogisticsDependencyGateway.DriverShiftPlanVehicle vehicleSnapshot(
@@ -512,6 +1107,7 @@ public class RentalOrderPlanningIntegrationService {
         vehicle.manufacturer(),
         vehicle.model(),
         vehicle.configurationType().name(),
+        vehicle.cabinCapacity(),
         vehicle.startOdometer());
   }
 
@@ -520,6 +1116,56 @@ public class RentalOrderPlanningIntegrationService {
     if (trailer == null) return null;
     return new LogisticsDependencyGateway.DriverShiftPlanTrailer(
         trailer.id(), trailer.name(), trailer.registrationNumber());
+  }
+
+  private static List<LogisticsDependencyGateway.DriverShiftRouteOperation>
+      routeOperationSnapshots(List<PlanningDriverShiftRouteOperationRequest> operations) {
+    return operations.stream()
+        .map(
+            operation ->
+                new LogisticsDependencyGateway.DriverShiftRouteOperation(
+                    operation.sequence(),
+                    operation.kind().name(),
+                    operation.warehouseId(),
+                    operation.sourceTaskId(),
+                    operation.sourceTransferId(),
+                    operation.locationLabel(),
+                    operation.plannedArrival(),
+                    operation.plannedDeparture(),
+                    operation.loadBefore(),
+                    operation.loadAfter()))
+        .toList();
+  }
+
+  private static UUID routeServiceWarehouse(PlanningDriverShiftPlanRequest plan) {
+    return plan.operations().stream()
+        .filter(
+            operation ->
+                operation.kind() == PlanningDriverShiftRouteOperationKind.INBOUND_POSITIONING)
+        .map(PlanningDriverShiftRouteOperationRequest::warehouseId)
+        .filter(java.util.Objects::nonNull)
+        .findFirst()
+        .orElse(plan.warehouseId());
+  }
+
+  private static int indexOf(
+      List<PlanningDriverShiftRouteOperationRequest> operations,
+      PlanningDriverShiftRouteOperationKind kind) {
+    for (int index = 0; index < operations.size(); index++) {
+      if (operations.get(index).kind() == kind) return index;
+    }
+    return -1;
+  }
+
+  private static boolean hasTransferOperation(PlanningDriverShiftPlanRequest plan) {
+    return plan.operations().stream()
+        .anyMatch(RentalOrderPlanningIntegrationService::isTransferOperation);
+  }
+
+  private static boolean isTransferOperation(
+      PlanningDriverShiftRouteOperationRequest operation) {
+    return operation.kind() == PlanningDriverShiftRouteOperationKind.TRANSFER_LOAD
+        || operation.kind() == PlanningDriverShiftRouteOperationKind.TRANSFER_UNLOAD;
   }
 
   private static UUID driverShiftPlanKey(PlanningDriverShiftPlanRequest plan) {
@@ -597,13 +1243,13 @@ public class RentalOrderPlanningIntegrationService {
                 .filter(java.util.Objects::nonNull)
                 .anyMatch(
                     link ->
-                        rootWarehouseId.equals(link.supportWarehouse().id())
-                            && serviceWarehouseId.equals(link.servedWarehouse().id())
-                            && link.allowDrivers()
-                            && !link.excludedDates().contains(scheduledDate)
-                            && (link.allowedDates().contains(scheduledDate)
-                                || link.allowedWeekdays().isEmpty()
-                                || link.allowedWeekdays().contains(scheduledDate.getDayOfWeek())));
+                        supportLinkAllowsDriver(
+                            link,
+                            rootWarehouseId,
+                            serviceWarehouseId,
+                            scheduledDate,
+                            false,
+                            false));
     if (!eligible) {
       throw new OrderProblemException(
           HttpStatus.CONFLICT,

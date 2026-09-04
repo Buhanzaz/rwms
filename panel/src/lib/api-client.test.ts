@@ -6,12 +6,24 @@ afterEach(() => vi.unstubAllGlobals())
 
 describe("bearerRequest", () => {
   it.each([
-    [401, "AUTHENTICATION_REQUIRED"],
-    [403, "WAREHOUSE_ACCESS_FORBIDDEN"],
-    [409, "ENTRY_VERSION_CONFLICT"],
+    [
+      401,
+      "AUTHENTICATION_REQUIRED",
+      "Сеанс завершён. Войдите в систему и повторите действие.",
+    ],
+    [
+      403,
+      "WAREHOUSE_ACCESS_FORBIDDEN",
+      "У вас нет доступа к выбранному складу. Выберите доступный склад или обратитесь к администратору.",
+    ],
+    [
+      409,
+      "ENTRY_VERSION_CONFLICT",
+      "Данные уже изменились. Обновите страницу и повторите действие.",
+    ],
   ])(
-    "preserves the authoritative HTTP %s Problem Details status",
-    async (status, code) => {
+    "preserves HTTP %s and domain code while rendering safe copy",
+    async (status, code, expectedMessage) => {
       vi.stubGlobal(
         "fetch",
         vi.fn().mockResolvedValue(
@@ -42,7 +54,8 @@ describe("bearerRequest", () => {
       expect(failure).toMatchObject({
         status,
         code,
-        message: `Ошибка ${status}`,
+        message: expectedMessage,
+        diagnosticMessage: `Ошибка ${status}`,
       })
     }
   )
@@ -69,7 +82,85 @@ describe("bearerRequest", () => {
     expect(failure).toMatchObject({
       status: 502,
       code: null,
-      message: "Запрос завершился с ошибкой 502",
+      message: "Сервис временно недоступен. Повторите попытку позже.",
+    })
+  })
+
+  it.each([
+    [
+      400,
+      { detail: "RMS Logistics Service returned HTTP 400" },
+      "Не удалось выполнить действие. Проверьте введённые данные и повторите попытку.",
+    ],
+    [
+      500,
+      { detail: "java.lang.IllegalStateException: planner failed" },
+      "Сервис временно недоступен. Повторите попытку позже.",
+    ],
+    [
+      400,
+      { detail: '{"exception":"SQL error","trace":"secret"}' },
+      "Не удалось выполнить действие. Проверьте введённые данные и повторите попытку.",
+    ],
+  ])(
+    "does not expose technical Problem Details for HTTP %s",
+    async (status, body, expectedMessage) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify(body), {
+            status,
+            headers: { "Content-Type": "application/problem+json" },
+          })
+        )
+      )
+
+      await expect(
+        bearerRequest("access-token", "/api/example")
+      ).rejects.toMatchObject({ status, message: expectedMessage })
+    }
+  )
+
+  it("turns a network failure into safe Russian copy", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new TypeError("Failed to fetch"))
+    )
+
+    await expect(
+      bearerRequest("access-token", "/api/example")
+    ).rejects.toMatchObject({
+      status: 0,
+      code: "NETWORK_ERROR",
+      message:
+        "Не удалось связаться с сервером. Проверьте подключение и повторите попытку.",
+      diagnosticMessage: "Failed to fetch",
+    })
+  })
+
+  it("keeps an actionable Russian domain detail", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            detail: "Временное окно уже занято. Выберите другое время.",
+            code: "DELIVERY_WINDOW_CONFLICT",
+          }),
+          {
+            status: 409,
+            headers: { "Content-Type": "application/problem+json" },
+          }
+        )
+      )
+    )
+
+    await expect(
+      bearerRequest("access-token", "/api/example")
+    ).rejects.toMatchObject({
+      status: 409,
+      code: "DELIVERY_WINDOW_CONFLICT",
+      message: "Временное окно уже занято. Выберите другое время.",
     })
   })
 })
