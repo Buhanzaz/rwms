@@ -3,7 +3,12 @@ import type { WarehouseKindMetadata } from '../api/warehouse-directory';
 
 /** Canonical admin flags, joined only to warehouses already admitted to this workspace. */
 export function warehouseMapKind(warehouse: Pick<Warehouse, 'external_warehouse_id' | 'representative'>, metadata?: WarehouseKindMetadata) {
-  if (!metadata || metadata.id !== warehouse.external_warehouse_id || metadata.representative !== warehouse.representative) {
+  const inconsistentClassification = metadata && (
+    metadata.representative
+      ? metadata.production || metadata.mainWarehouse
+      : !metadata.production && !metadata.mainWarehouse
+  );
+  if (!metadata || inconsistentClassification || metadata.id !== warehouse.external_warehouse_id || metadata.representative !== warehouse.representative) {
     return { glyph: '?', label: 'Тип склада не подтверждён', known: false };
   }
   if (metadata.representative) return { glyph: 'ПС', label: 'Представительский склад', known: true };

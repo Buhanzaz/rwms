@@ -6,7 +6,12 @@ const warehouseKindSchema = z.object({
   representative: z.boolean(),
   production: z.boolean(),
   mainWarehouse: z.boolean(),
-});
+}).refine(
+  ({ representative, production, mainWarehouse }) => (
+    representative ? !production && !mainWarehouse : production || mainWarehouse
+  ),
+  { message: 'Warehouse classification is inconsistent' },
+);
 
 export type WarehouseKindMetadata = z.infer<typeof warehouseKindSchema>;
 

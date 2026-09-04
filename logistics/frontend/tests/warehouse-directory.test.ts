@@ -25,7 +25,13 @@ describe('canonical warehouse kind directory', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it.each([[{ id, representative: false }], [record, record], [{ ...record, production: 'false' }]])('rejects missing, duplicate or malformed type data: %j', async (...rows) => {
+  it.each([
+    [{ id, representative: false }],
+    [record, record],
+    [{ ...record, production: 'false' }],
+    [{ ...record, representative: true }],
+    [{ ...record, production: false, mainWarehouse: false }],
+  ])('rejects missing, duplicate or malformed type data: %j', async (...rows) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(rows))));
     await expect(loadWarehouseKinds()).rejects.toThrow('неподтверждённые типы');
   });
