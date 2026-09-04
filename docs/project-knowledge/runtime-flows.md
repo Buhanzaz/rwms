@@ -1160,6 +1160,12 @@ Evidence:
    old/new confirmed slots in one transaction; failure retains the original
    booking and slot. CustomerApp refreshes authoritative bookings after success
    and never edits the old date locally.
+   The separate versioned rental-settings boundary now stores advance notice in
+   warehouse-local calendar days (default 2), a nullable FIXED/PERCENT fee rule
+   and the company's optional support phone. Fee values cross HTTP as exact
+   decimal strings; null means unconfigured, not a zero charge. These settings
+   alone do not assess a booking fee or implement payment/waiver: booking-change
+   settlement and the customer dialog integration remain separate work.
 10. A confirmed fixed choice enters the logistics-owned planning feed with hard
    bounds; a confirmed `DURING_DAY` choice enters as a soft date-only option
    with null planner bounds. Informational `travelZoneHours` and the site-derived
@@ -2397,13 +2403,20 @@ and
 
 ### Driver Up daily shift lifecycle
 
-1. A closed planner day publishes concrete driver-shift snapshots through
+1. A separately confirmed planner revision publishes concrete driver-shift snapshots through
    logistics' private, exact-scope adapter. Task-board stores the source plan
    idempotently and fences a worker to one plan/shift for one work date. Generated or manual
    simulator jobs never enter this boundary; only the concrete assigned resource snapshot and
    RWMS task summary do. Logistics registers the snapshot only after every assignment for that
    driver/date has applied or replayed without rejection; a partial batch cannot freeze an empty
    authoritative shift.
+   Closing request acceptance alone does not apply assignments. Every ordinary
+   apply attempt revalidates current truck/trailer proofs, resources, warehouse
+   restrictions and exact request states under the planner's NOWAIT local fence.
+   A stale retry stops before the mutating owner call but does not establish the
+   outcome of an earlier lost response; owner status/reconciliation remains
+   authoritative. The fence is released before that mutating call and does not
+   create a distributed transaction.
 2. After DriverApp authentication, `GET /driver/v1/shift/today` resolves the authenticated
    `worker_id`, its plan, and current owner-held warehouse identity through warehouse-service.
    The work date is the warehouse-local calendar date after 06:00 and the previous date before
