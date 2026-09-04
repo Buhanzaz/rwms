@@ -144,6 +144,17 @@ leaves the full configured interval for mandatory exact-candidate routing;
 interrupted candidates are still discarded and only fully verified cycles are
 persisted. See [`app/planner/heuristic.py`](app/planner/heuristic.py).
 
+## Offline native-solver comparison
+
+Install `.[dev,solver-benchmark]`, then run
+`python -m scripts.compare_planner_candidates --sizes 5 10 20 50 100 --repeat 3`.
+The optional pinned OR-Tools CP-SAT library compares immutable, already routed candidates;
+it is not a second production planner and never writes assignments or product data.
+Synthetic travel is explicitly labelled. `--valhalla-url` requires `--osm-data-version`
+and fails without a synthetic fallback. OPTIMAL means optimal only within the collected
+pool; inspect `mandatory_unassigned` before treating any result as operationally complete.
+See [`../../logistic-update.md`](../../logistic-update.md) for measured results and limits.
+
 ## Integrations and configuration
 
 RWMS OAuth uses only `logistics.planning`. Required runtime variables are
