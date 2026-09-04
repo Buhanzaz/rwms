@@ -6,6 +6,7 @@ import android.content.ContextWrapper
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -13,7 +14,10 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
@@ -43,12 +47,12 @@ private val CustomerLightColors = lightColorScheme(
     onTertiaryContainer = Color(0xFF204B79),
     background = Color.Transparent,
     onBackground = Color(0xFF173C63),
-    surface = Color.White.copy(alpha = 0.70f),
+    surface = Color.White.copy(alpha = 0.86f),
     onSurface = Color(0xFF173C63),
-    surfaceVariant = Color.White.copy(alpha = 0.54f),
+    surfaceVariant = Color.White.copy(alpha = 0.68f),
     onSurfaceVariant = Color(0xFF315A80),
-    surfaceContainer = Color.White.copy(alpha = 0.58f),
-    surfaceContainerHigh = Color.White.copy(alpha = 0.72f),
+    surfaceContainer = Color.White.copy(alpha = 0.76f),
+    surfaceContainerHigh = Color.White.copy(alpha = 0.92f),
     outline = Color(0xFF204B79).copy(alpha = 0.62f),
     outlineVariant = Color.White.copy(alpha = 0.62f),
     inverseSurface = Color(0xE6204B79),
@@ -72,12 +76,12 @@ private val CustomerDarkColors = darkColorScheme(
     onTertiaryContainer = Color.White,
     background = Color.Transparent,
     onBackground = Color.White,
-    surface = Color(0xD9204B79),
+    surface = Color(0xEB173C63),
     onSurface = Color.White,
-    surfaceVariant = Color(0xC7315A80),
+    surfaceVariant = Color(0xD9244F7A),
     onSurfaceVariant = Color(0xFFE1F1FA),
-    surfaceContainer = Color(0xD1244F7A),
-    surfaceContainerHigh = Color(0xE62A567F),
+    surfaceContainer = Color(0xE6204B79),
+    surfaceContainerHigh = Color(0xF2244F7A),
     outline = Color(0xFFA9D9F5).copy(alpha = 0.72f),
     outlineVariant = Color.White.copy(alpha = 0.34f),
     inverseSurface = Color.White.copy(alpha = 0.88f),
@@ -87,11 +91,20 @@ private val CustomerDarkColors = darkColorScheme(
 )
 
 private val CustomerShapes = Shapes(
-    extraSmall = RoundedCornerShape(8.dp),
+    extraSmall = RoundedCornerShape(16.dp),
     small = RoundedCornerShape(12.dp),
     medium = RoundedCornerShape(16.dp),
     large = RoundedCornerShape(22.dp),
     extraLarge = RoundedCornerShape(30.dp),
+)
+
+private val CustomerTypography = Typography(
+    headlineSmall = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 24.sp, lineHeight = 30.sp),
+    titleLarge = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 21.sp, lineHeight = 28.sp),
+    titleMedium = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 16.sp, lineHeight = 24.sp),
+    bodyLarge = TextStyle(fontSize = 16.sp, lineHeight = 24.sp),
+    bodyMedium = TextStyle(fontSize = 14.sp, lineHeight = 21.sp),
+    labelLarge = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 14.sp, lineHeight = 20.sp),
 )
 
 /** Explicit CustomerApp appearance choices; no device-driven appearance is supported. */
@@ -145,6 +158,7 @@ fun CustomerTheme(
     MaterialTheme(
         colorScheme = if (darkTheme) CustomerDarkColors else CustomerLightColors,
         shapes = CustomerShapes,
+        typography = CustomerTypography,
         content = content,
     )
 }

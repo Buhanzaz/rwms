@@ -524,12 +524,29 @@ fun BookingsScreen(
             if (visible.isEmpty()) item { Text("Оформленных заказов пока нет") }
             items(visible, key = { it.bookingId ?: it.inquiryId }) { booking ->
                 OutlinedCard(Modifier.fillMaxWidth().widthIn(max = 760.dp)) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("Заказ ${booking.orderId ?: "создаётся"}", fontWeight = FontWeight.SemiBold)
-                        Text("Статус: ${CustomerBookingLifecyclePolicy.statusLabel(booking.status)}")
-                        booking.deliveryAddress?.let { Text("Доставка: $it") }
+                    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            if (booking.orderId == null) "Оформляем заказ" else "Аренда бытовок",
+                            style = MaterialTheme.typography.titleLarge,
+                        )
+                        Text(
+                            "Статус: ${CustomerBookingLifecyclePolicy.statusLabel(booking.status)}",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        booking.deliveryAddress?.let { address ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Icon(Icons.Default.LocationOn, contentDescription = null)
+                                Text(address, style = MaterialTheme.typography.bodyLarge)
+                            }
+                        }
                         if (booking.deliveryDate != null) {
-                            Text("${booking.deliveryDate} · ${booking.windowStart?.take(5)}–${booking.windowEnd?.take(5)}")
+                            Text(
+                                formatDeliveryDate(booking.deliveryDate) +
+                                    if (booking.windowStart != null && booking.windowEnd != null) {
+                                        " · ${booking.windowStart.take(5)}–${booking.windowEnd.take(5)}"
+                                    } else "",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
                         }
                         CustomerBookingLifecyclePolicy.cancellationFeeLabel(booking.cancellationFeeRubles)?.let { fee ->
                             Text("Стоимость отмены: $fee")
@@ -549,7 +566,7 @@ fun BookingsScreen(
                                         if (cabin.arrivalEligible) "Прибыла" else "Ожидает доставки",
                                         color = if (cabin.arrivalEligible) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
-                                    cabin.acceptance?.let { Text("Принята ${it.acceptedAt}") }
+                                    cabin.acceptance?.let { Text("Принята ${formatDeliveryDate(it.acceptedAt.take(10))}") }
                                     cabin.problems.forEach { problem ->
                                         Text("Проблема: ${problem.description}", style = MaterialTheme.typography.bodySmall)
                                     }
@@ -626,7 +643,7 @@ fun BookingsScreen(
             onDismissRequest = { if (!busy) cancellationTarget = null },
             title = { Text("Отменить заказ?") },
             text = {
-                Text("RWMS проверит, что заказ ещё не передан в погрузку или исполнение, и освободит его резервы.")
+                Text("Заказ можно отменить, пока бытовки не переданы в погрузку. Проверим его состояние перед отменой.")
             },
             confirmButton = {
                 Button(
@@ -702,7 +719,7 @@ private fun BookingRescheduleDialog(
                                     modifier = Modifier.padding(start = 8.dp),
                                     verticalArrangement = Arrangement.spacedBy(2.dp),
                                 ) {
-                                    Text(slot.date, fontWeight = FontWeight.SemiBold)
+                                    Text(formatDeliveryDate(slot.date), fontWeight = FontWeight.SemiBold)
                                     Text(deliverySlotTimeLabel(slot))
                                     slot.deliveryPriceRubles?.let { price ->
                                         Text(

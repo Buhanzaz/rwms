@@ -40,7 +40,12 @@ same-origin поток `/api/media/v1/**` upload-session/content/finalize. Се�
 через crop/zoom, бесконечно повторяется, приостанавливает декодирование вне активного
 lifecycle и освобождается вместе с корневой composition, не создаваясь заново между
 экранами. Поля auth/профиля и действия приложения переиспользуют полупрозрачные поля
-с радиусом 16 dp, градиентные кнопки, press-анимацию и тени. Motion foreground — в
+с радиусом 16 dp, градиентные кнопки, press-анимацию и тени. Рабочие экраны используют
+более читаемые полупрозрачные поверхности, отдельный контурный стиль второстепенных
+действий и области нажатия от 48 dp. Общие тени рисует native graphics layer без
+выделения программного bitmap на каждый элемент. Выбор даты и времени показывает
+адрес, серверные предложения и цену без внутренних счётчиков вместимости и габаритов
+профиля машины; подтверждённое условие проезда остаётся на экране оформления. Motion foreground — в
 [`CustomerStoreWelcomeScreen.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerStoreWelcomeScreen.kt),
 общий visual/player слой — в
 [`CustomerStoreDesign.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerStoreDesign.kt),

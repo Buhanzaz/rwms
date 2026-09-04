@@ -10,6 +10,7 @@ import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -46,6 +47,7 @@ import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -494,16 +496,10 @@ fun DeliveryDatesScreen(
                         modifier = Modifier.testTag("delivery-price"),
                     )
                     Text("Выберите удобный день", style = MaterialTheme.typography.headlineSmall)
-                    Text("Показаны только даты, которые Logistics подтвердил для выбранного адреса.")
-                    state.slots.firstOrNull()?.routeProfile?.let { profile ->
-                        val vehicle = if (state.siteCabinCapacity == 2) "автопоезда" else "машины без прицепа"
-                        Text(
-                            "Маршрут проверен для $vehicle: ${profile.combinationHeightMeters} м высота, " +
-                                "${profile.combinationWidthMeters} м ширина, ${profile.combinationLengthMeters} м длина.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                    Text(
+                        "Учли маршрут до вашего адреса и занятость машин.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
             items(dates, key = DeliveryDateAvailability::date) { availability ->
@@ -578,12 +574,28 @@ fun DeliverySlotsScreen(
                     Modifier.fillMaxWidth().widthIn(max = 760.dp).padding(horizontal = 16.dp, vertical = 12.dp),
                 ) {
                     Text("Выберите время", style = MaterialTheme.typography.headlineSmall)
-                    Text("Свободность будет повторно проверена перед закреплением.")
+                    Text(
+                        state.address,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
             items(slots, key = DeliverySlot::slotId) { slot ->
                 OutlinedCard(
                     onClick = { onSelectSlot(slot.slotId) },
+                    enabled = !state.busy,
+                    border = BorderStroke(
+                        if (selected?.slotId == slot.slotId) 2.dp else 1.dp,
+                        if (selected?.slotId == slot.slotId) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outlineVariant,
+                    ),
+                    colors = CardDefaults.outlinedCardColors(
+                        containerColor = if (selected?.slotId == slot.slotId) {
+                            MaterialTheme.colorScheme.surfaceContainerHigh
+                        } else {
+                            MaterialTheme.colorScheme.surface
+                        },
+                    ),
                     modifier = Modifier
                         .fillMaxWidth()
                         .widthIn(max = 760.dp)
@@ -602,16 +614,8 @@ fun DeliverySlotsScreen(
                                 fontWeight = FontWeight.SemiBold,
                             )
                             Text(
-                                "Маршрут подтверждён · вариантов: ${slot.capacityRemaining}",
+                                CustomerMoneyFormatter.wholeRubles(slot.deliveryPriceRubles),
                                 style = MaterialTheme.typography.bodyMedium,
-                            )
-                            Text(
-                                if (slot.siteCabinCapacity == 2) {
-                                    "Объект принимает 2 бытовки — машина с прицепом"
-                                } else {
-                                    "Объект принимает 1 бытовку — машина без прицепа"
-                                },
-                                style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
@@ -713,18 +717,15 @@ fun DeliveryConfirmationScreen(
                             ConfirmationFact(
                                 "Проезд к объекту",
                                 if (held.siteCabinCapacity == 2) {
-                                    "До 2 бытовок, машина с прицепом"
+                                    "До 2 бытовок за один приезд"
                                 } else {
-                                    "1 бытовка, машина без прицепа"
+                                    "По 1 бытовке за один приезд"
                                 },
                             )
                             ConfirmationFact(
                                 "Стоимость доставки",
                                 CustomerMoneyFormatter.wholeRubles(held.deliveryPriceRubles),
                             )
-                            DeliverySlotPolicy.deliveryTariffSource(listOf(held))?.let { source ->
-                                ConfirmationFact("Источник тарифа", source)
-                            }
                         }
                     }
                 }
@@ -1120,7 +1121,7 @@ private fun ConfirmationFact(label: String, value: String) {
     }
 }
 
-private fun formatDeliveryDate(isoDate: String): String = runCatching {
+internal fun formatDeliveryDate(isoDate: String): String = runCatching {
     LocalDate.parse(isoDate).format(DateTimeFormatter.ofPattern("d MMMM, EEEE", Locale.forLanguageTag("ru")))
 }.getOrDefault(isoDate)
 

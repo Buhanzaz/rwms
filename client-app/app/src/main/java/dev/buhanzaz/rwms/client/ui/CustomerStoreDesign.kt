@@ -1,12 +1,7 @@
 package dev.buhanzaz.rwms.client.ui
 
 import android.annotation.SuppressLint
-import android.graphics.Canvas as AndroidCanvas
 import android.graphics.Color as AndroidColor
-import android.graphics.Paint
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffXfermode
-import android.graphics.RectF
 import androidx.annotation.RawRes
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -29,6 +24,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -37,6 +33,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -47,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
@@ -58,7 +56,6 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -75,7 +72,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.graphics.createBitmap
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -86,9 +82,6 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import dev.buhanzaz.rwms.client.R
-import kotlin.math.abs
-import kotlin.math.ceil
-import kotlin.math.max
 
 internal val CustomerStoreNavy = Color(0xFF204B79)
 internal val CustomerStoreBlue = Color(0xFF549AC5)
@@ -160,14 +153,14 @@ internal fun Button(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     shape: Shape = RoundedCornerShape(16.dp),
-    border: BorderStroke? = null,
+    border: BorderStroke? = BorderStroke(1.dp, Color.White.copy(alpha = 0.22f)),
     contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
     interactionSource: MutableInteractionSource? = null,
     content: @Composable RowScope.() -> Unit,
 ) {
     CustomerStyledButton(
         onClick = onClick,
-        modifier = modifier,
+        modifier = modifier.heightIn(min = 48.dp),
         enabled = enabled,
         shape = shape,
         border = border,
@@ -180,8 +173,8 @@ internal fun Button(
 }
 
 /**
- * Drop-in secondary button used throughout CustomerApp so outlined actions share the translucent
- * login gradient while retaining their explicit border and semantics.
+ * Secondary app action uses the translucent field surface so the main gradient action remains
+ * visually distinct. The signed-out login and registration keep their supplied prototype styles.
  */
 @Composable
 internal fun OutlinedButton(
@@ -194,16 +187,20 @@ internal fun OutlinedButton(
     interactionSource: MutableInteractionSource? = null,
     content: @Composable RowScope.() -> Unit,
 ) {
-    CustomerStyledButton(
+    androidx.compose.material3.OutlinedButton(
         onClick = onClick,
-        modifier = modifier,
+        modifier = modifier.heightIn(min = 48.dp),
         enabled = enabled,
         shape = shape,
         border = border,
         contentPadding = contentPadding,
         interactionSource = interactionSource,
-        normalStyle = CustomerLoginButtonStyle,
-        pressedStyle = CustomerRegistrationButtonStyle,
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f),
+            disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+        ),
         content = content,
     )
 }
@@ -471,60 +468,14 @@ internal fun CustomerTextAction(
     }
 }
 
-/** Draws the supplied soft shadow without forcing a Material surface color over the video. */
-internal fun Modifier.figmaButtonShadow(): Modifier = drawWithCache {
-    val cornerRadiusPx = 16.dp.toPx()
-    val offsetXPx = 0.dp.toPx()
-    val offsetYPx = 10.dp.toPx()
-    val blurPx = 24.dp.toPx()
-    val spreadPx = (-6).dp.toPx()
-    val shadowCornerRadiusPx = (cornerRadiusPx + spreadPx).coerceAtLeast(0f)
-    val extraSpacePx = blurPx + abs(spreadPx) + max(abs(offsetXPx), abs(offsetYPx))
-    val bitmapWidth = ceil(size.width + extraSpacePx * 2f).toInt().coerceAtLeast(1)
-    val bitmapHeight = ceil(size.height + extraSpacePx * 2f).toInt().coerceAtLeast(1)
-    val shadowBitmap = createBitmap(bitmapWidth, bitmapHeight)
-    val shadowCanvas = AndroidCanvas(shadowBitmap)
-    val buttonRight = extraSpacePx + size.width
-    val buttonBottom = extraSpacePx + size.height
-    val shadowBounds = RectF(
-        extraSpacePx - spreadPx,
-        extraSpacePx - spreadPx,
-        buttonRight + spreadPx,
-        buttonBottom + spreadPx,
-    )
-    val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-        color = AndroidColor.BLACK
-        setShadowLayer(
-            blurPx,
-            offsetXPx,
-            offsetYPx,
-            AndroidColor.argb((255f * 0.251f).toInt(), 0, 0, 0),
-        )
-    }
-    shadowCanvas.drawRoundRect(
-        shadowBounds,
-        shadowCornerRadiusPx,
-        shadowCornerRadiusPx,
-        shadowPaint,
-    )
-    shadowPaint.clearShadowLayer()
-    val clearPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-        xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
-    }
-    shadowCanvas.drawRoundRect(
-        RectF(extraSpacePx, extraSpacePx, buttonRight, buttonBottom),
-        cornerRadiusPx,
-        cornerRadiusPx,
-        clearPaint,
-    )
-    clearPaint.xfermode = null
-    val shadowImage = shadowBitmap.asImageBitmap()
-    onDrawBehind {
-        drawImage(shadowImage, topLeft = Offset(-extraSpacePx, -extraSpacePx))
-    }
-}
+/** Uses the graphics layer's shadow without allocating a software bitmap for each control. */
+internal fun Modifier.figmaButtonShadow(): Modifier = shadow(
+    elevation = 8.dp,
+    shape = RoundedCornerShape(16.dp),
+    clip = false,
+    ambientColor = CustomerStoreNavy.copy(alpha = 0.16f),
+    spotColor = CustomerStoreNavy.copy(alpha = 0.24f),
+)
 
 /**
  * Plays the imported caustic WebM as a silent cropped infinite loop. Playback starts only after the

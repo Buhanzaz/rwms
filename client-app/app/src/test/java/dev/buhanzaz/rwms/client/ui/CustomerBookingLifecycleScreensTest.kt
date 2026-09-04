@@ -91,7 +91,7 @@ class CustomerBookingLifecycleScreensTest {
         }
 
         composeRule.onNodeWithTag("booking-reschedule-dialog").assertExists()
-        composeRule.onNodeWithText("2026-09-02").assertExists()
+        composeRule.onNodeWithText("2 сентября, среда").assertExists()
         composeRule.onNodeWithText("12:00–15:00").assertExists()
         composeRule.onNodeWithText("Стоимость доставки: 10 000 ₽").assertExists()
         composeRule.onNodeWithTag("booking-confirm-reschedule").assertIsNotEnabled()

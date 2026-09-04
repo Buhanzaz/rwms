@@ -122,6 +122,8 @@ class DeliveryFlowScreensTest {
         }
 
         composeRule.onNodeWithTag("delivery-slot-chosen").assertExists()
+        composeRule.onNodeWithText("Маршрут подтверждён · вариантов:", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithText("12 500 ₽").assertExists()
         composeRule.onNodeWithText("В течение дня. Точное время подтвердит логист").assertExists()
         composeRule.onNodeWithTag("delivery-slot-other-date").assertDoesNotExist()
         composeRule.onNodeWithTag("private-site-access-confirmation").assertDoesNotExist()

@@ -40,7 +40,11 @@ behind every CustomerApp route. It uses crop/zoom, repeats the asset indefinitel
 pauses decoding outside the active lifecycle, and is released with the root
 composition instead of being recreated between screens. Auth/profile fields and
 app actions reuse the translucent 16 dp field, gradient button, press, and shadow
-components. The motion foreground is in
+components. Operational screens use clearer translucent surfaces, a distinct outlined secondary
+action, and 48 dp action targets. Shared shadows use the native graphics layer rather than
+allocating a software bitmap per control. Date and time selection shows the address, available
+server offers and price without internal capacity counters or vehicle-profile dimensions; the
+confirmed site-access requirement remains visible at checkout. The motion foreground is in
 [`CustomerStoreWelcomeScreen.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerStoreWelcomeScreen.kt),
 the shared visual/player layer is in
 [`CustomerStoreDesign.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerStoreDesign.kt),
