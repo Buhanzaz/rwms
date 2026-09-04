@@ -110,9 +110,9 @@ function CycleCard({ cycle, requestsByTaskId, timeZone, readOnly, onSelect, onTo
       </div>
       <div className="entity-card__row" style={{ padding: '0 9px 8px' }}>
         <span><small>{formatDistance(cycle.total_distance_meters)} · {formatDuration(cycle.total_travel_seconds)}</small></span>
-        <span><Badge tone="accent">score {cycle.score.toFixed(1)}</Badge>{cycle.manually_changed ? <Badge tone="warning">ручной</Badge> : null}</span>
+        <span>{cycle.manually_changed ? <Badge tone="warning">ручной</Badge> : null}</span>
       </div>
-      {cycle.explanation.length ? <div className="explanation"><strong>Почему так:</strong>{cycle.explanation.map((line, index) => <div key={`${line}-${index}`}>• {line}</div>)}</div> : null}
+      {cycle.explanation.length ? <details className="explanation plan-details"><summary>Почему выбран этот рейс</summary>{cycle.explanation.map((line, index) => <div key={`${line}-${index}`}>{line}</div>)}</details> : null}
       {cycle.warnings.map((warning) => <div className="explanation" key={`${warning.code}-${warning.message}`} style={{ borderColor: '#fbbf24' }}>⚠ {validationMessageRu(warning.code, warning.message)}</div>)}
     </article>
   );

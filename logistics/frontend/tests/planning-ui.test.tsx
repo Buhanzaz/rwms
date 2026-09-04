@@ -170,6 +170,17 @@ describe('application shell', () => {
         (call) => call[1] === '2026-09-01',
       ),
     ).toBe(true);
+    const map = screen.getByTestId('map-canvas');
+    fireEvent.click(within(screen.getByRole('complementary', { name: 'Панель логистики' })).getByRole('button', { name: 'Скрыть панель логистики' }));
+    expect(screen.queryByRole('complementary', { name: 'Панель логистики' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('map-canvas')).toBe(map);
+    fireEvent.click(screen.getByRole('button', { name: 'Водители' }));
+    expect(screen.getByRole('complementary', { name: 'Панель логистики' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Проверить слот' }));
+    expect(screen.queryByRole('complementary', { name: 'Панель логистики' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('map-canvas')).toBe(map);
+    fireEvent.click(screen.getByRole('button', { name: 'Открыть панель логистики' }));
+    expect(screen.getByRole('complementary', { name: 'Панель логистики' })).toBeVisible();
   });
 
   it('keeps implementation-provider text out of the working sidebar', () => {
@@ -382,6 +393,9 @@ describe('built plan UI', () => {
     await user.click(screen.getByRole('button', { name: /Водитель 1/i }));
     expect(onSelectDriverRoute).toHaveBeenCalledWith('shift');
     expect(screen.getByLabelText('Цепочка загрузки цикла 1')).toHaveTextContent('2 → 1 → 0 → 1 → 2 → 0');
+    expect(screen.getByText(/окна доставок совместимы/)).not.toBeVisible();
+    expect(screen.queryByText(/score/i)).not.toBeInTheDocument();
+    await user.click(screen.getByText('Почему выбран этот рейс'));
     expect(screen.getByText(/окна доставок совместимы/)).toBeVisible();
     const onReschedule = vi.fn();
     rerender(<PlanPanel plan={plan} timeZone="Europe/Moscow" showUnassignedOnly onSelectCycle={() => undefined} onSelectDriverRoute={() => undefined} onMove={() => undefined} onToggleLock={() => undefined} onRescheduleUnassigned={onReschedule} />);
@@ -679,6 +693,8 @@ describe('simulation plan inspector', () => {
     expect(within(currentRoute).getByText(/ETA: 09:00/)).toBeVisible();
     expect(within(currentRoute).getByText('DRIVING')).toBeVisible();
     expect(screen.getByText('План на 25 августа 2026 г.')).toBeVisible();
+    expect(screen.getByText('Пары вывозов')).not.toBeVisible();
+    fireEvent.click(screen.getByText('Подробная статистика'));
     expect(screen.getByText('Пары вывозов')).toBeVisible();
     expect(screen.getByTestId('cycle-cycle')).toBeVisible();
     expect(screen.getByLabelText('Цепочка загрузки цикла 1')).toHaveTextContent('2 → 1 → 0 → 1 → 2 → 0');

@@ -33,6 +33,7 @@ import { formatTime } from '../utils/format';
 import { userFacingErrorDetail } from '../utils/user-facing-error';
 import { deriveSimulationRouteLayers } from '../simulation/route-layers';
 import { RequestMapPopup } from './RequestMapCard';
+import type { MapInsets } from '../app/map-layout';
 import type { PlanMove } from '../features/planning/PlanPanel';
 import type { SlotPlanningGeoJson, SlotPlanningMapPresentation } from '../features/slot-availability/types';
 import {
@@ -188,6 +189,7 @@ export interface PendingWarehouseMapPoint {
 }
 
 interface MapCanvasProps {
+  cameraPadding?: MapInsets;
   workspace: WarehouseWorkspace;
   plan: RoutePlan | null;
   simulation: SimulationDerivedState | null;
@@ -489,9 +491,12 @@ export function MapCanvas({
   planningCheck,
   onPlanningCheckPoint,
   pendingWarehousePoint,
+  cameraPadding,
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
+  const cameraPaddingRef = useRef(cameraPadding);
+  cameraPaddingRef.current = cameraPadding;
   const markersRef = useRef<Marker[]>([]);
   const truckRestrictionPopupRef = useRef<Popup | null>(null);
   const truckRestrictionAbortRef = useRef<AbortController | null>(null);
@@ -593,6 +598,10 @@ export function MapCanvas({
       mapRef.current = null;
     };
   }, [onMapError, styleUrl]);
+
+  useEffect(() => {
+    if (mapReady && cameraPadding) mapRef.current?.setPadding(cameraPadding);
+  }, [mapReady, cameraPadding]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1012,7 +1021,7 @@ export function MapCanvas({
     }));
     if (pointCount >= 2) {
       fittedPlanIdRef.current = plan.id;
-      map.fitBounds(bounds, { padding: { top: 74, bottom: 74, left: 74, right: 290 }, maxZoom: 12, duration: 450 });
+      map.fitBounds(bounds, { padding: cameraPaddingRef.current ?? { top: 74, bottom: 74, left: 74, right: 290 }, maxZoom: 12, duration: 450 });
     }
   }, [allRoutes, mapReady, plan, workspace.warehouse.id]);
 

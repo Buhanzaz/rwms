@@ -21,6 +21,11 @@ and the optional map style. A source manifest rebuilds the derived admin,
 routing-tile and tile-extract files whenever either PBF changes.
 If the MapLibre style cannot load, the editor falls back to its coordinate grid
 while warehouse selection and saved-route simulation remain available.
+The workspace keeps one full-screen map underneath floating navigation and a
+collapsible inspector. Slot checking replaces that inspector, and camera insets
+follow the visible panels, header and simulation bar. Detailed plan statistics
+and route explanations are expandable; errors and required operator decisions
+remain visible. Translucency is limited to the main surfaces.
 The map is one common canvas for every active canonical RWMS warehouse with an
 owner-held coordinate pair. Directory reconciliation creates or updates its
 planner projection under the same UUID; there is no second connect action or

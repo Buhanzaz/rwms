@@ -6,6 +6,7 @@ import {
   Plus,
   Trash2,
   MapPinPlus,
+  X,
 } from 'lucide-react';
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
 import type {
@@ -79,6 +80,7 @@ interface InspectorProps {
   onLoadMoreRequests: () => Promise<void>;
   inspectorWidth: number;
   onInspectorWidthChange: (width: number) => void;
+  onClose?: () => void;
 }
 
 function EntityCard({ title, subtitle, badges, onClick, onEdit, onDelete }: {
@@ -100,7 +102,6 @@ function EntityCard({ title, subtitle, badges, onClick, onEdit, onDelete }: {
 
 function Metrics({ metrics }: { metrics: PlanMetrics }) {
   const values: Array<[string, string]> = [
-    ['Распределено', `${metrics.assigned_count}/${metrics.request_count} · ${metrics.assignment_percent.toFixed(0)}%`],
     ['Циклов', String(metrics.cycle_count)],
     ['Общий пробег', formatDistance(metrics.total_distance_meters)],
     ['Пустой пробег', `${formatDistance(metrics.empty_distance_meters)} · ${metrics.empty_distance_percent.toFixed(0)}%`],
@@ -113,9 +114,15 @@ function Metrics({ metrics }: { metrics: PlanMetrics }) {
     ['Средняя загрузка', metrics.average_load.toFixed(2)],
     ['Переработка', formatDuration(metrics.overtime_seconds)],
     ['Минимальный резерв', formatDuration(metrics.minimum_buffer_seconds)],
-    ['Score', metrics.score.toFixed(1)],
   ];
-  return <div className="metrics-grid">{values.map(([label, value]) => <div className="metric" key={label}><small>{label}</small><strong>{value}</strong></div>)}</div>;
+  return <>
+    <div className="metrics-grid metrics-grid--summary" aria-label="Итог плана">
+      <div className="metric"><small>Назначено</small><strong>{metrics.assigned_count}/{metrics.request_count}</strong></div>
+      <div className="metric"><small>Без маршрута</small><strong>{metrics.unassigned_count}</strong></div>
+      <div className="metric"><small>Пробег</small><strong>{formatDistance(metrics.total_distance_meters)}</strong></div>
+    </div>
+    <details className="plan-details"><summary>Подробная статистика</summary><div className="metrics-grid">{values.map(([label, value]) => <div className="metric" key={label}><small>{label}</small><strong>{value}</strong></div>)}</div></details>
+  </>;
 }
 
 function WarehouseSection({ props }: { props: InspectorProps }) {
@@ -304,7 +311,7 @@ export function Inspector(props: InspectorProps) {
   ));
   const beginResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
     event.preventDefault();
-    const resize = (pointerEvent: PointerEvent) => props.onInspectorWidthChange(window.innerWidth - pointerEvent.clientX);
+    const resize = (pointerEvent: PointerEvent) => props.onInspectorWidthChange(window.innerWidth - pointerEvent.clientX - 12);
     const stop = () => {
       window.removeEventListener('pointermove', resize);
       window.removeEventListener('pointerup', stop);
@@ -362,7 +369,8 @@ export function Inspector(props: InspectorProps) {
       />
     ); break;
   }
-  return <aside className="inspector" aria-label="Панель логистики">
+  return <aside id="logistics-inspector" className="inspector" aria-label="Панель логистики">
+    {props.onClose ? <div className="inspector__chrome"><span>Логистика</span><Button size="sm" variant="ghost" aria-label="Скрыть панель логистики" onClick={props.onClose}><X size={16} aria-hidden="true" /></Button></div> : null}
     <button
       type="button"
       className="inspector__resize-handle"

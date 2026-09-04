@@ -2,11 +2,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ChevronDown,
   LockKeyhole,
+  PanelRight,
   PlayCircle,
   RefreshCw,
   Route as RouteIcon,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   api,
   ApiError,
@@ -60,6 +61,8 @@ import { ContractorAssignmentDialog } from '../features/contractors/ContractorAs
 import { userFacingErrorDetail } from '../utils/user-facing-error';
 import { UnassignedDeliveryRescheduleDialog } from '../features/planning/UnassignedDeliveryRescheduleDialog';
 import { warehouseDisplayName } from '../domain/warehouse-presentation';
+import { useMapLayout } from './map-layout';
+import logotypeUrl from '../assets/logotype.svg';
 
 type DialogState =
   | { kind: 'workload-generator' }
@@ -185,6 +188,7 @@ export function App() {
   const [slotPlannerPoint, setSlotPlannerPoint] = useState<{ latitude: number; longitude: number } | null>(null);
   const [slotPlanningMap, setSlotPlanningMap] = useState<SlotPlanningMapPresentation | null>(null);
   const [inspectorWidth, setInspectorWidth] = useState(savedInspectorWidth);
+  const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 760);
   const [routesNeedRefresh, setRoutesNeedRefresh] = useState(false);
   const [loadedRequestPage, setLoadedRequestPage] = useState<{
     contextKey: string;
@@ -203,6 +207,7 @@ export function App() {
   const warehouseSelectorRef = useRef<HTMLDivElement>(null);
   const warehouseSelectionWasExplicitRef = useRef(warehouseId !== null);
   const mode = useUiStore((state) => state.mode);
+  const mapLayout = useMapLayout(inspectorWidth, inspectorOpen || slotPlannerOpen, mode === 'SIMULATION' && plan !== null);
   const setMode = useUiStore((state) => state.setMode);
   const setSection = useUiStore((state) => state.setSection);
   const mapTool = useUiStore((state) => state.mapTool);
@@ -1088,10 +1093,11 @@ export function App() {
   ));
 
   return (
-    <div className={`app-shell ${mode === 'SIMULATION' ? 'app-shell--simulation' : 'app-shell--plan'} ${workspaceWarning ? 'app-shell--refresh-warning' : ''}`}>
+    <div className={`app-shell app-shell--map ${mode === 'SIMULATION' ? 'app-shell--simulation' : 'app-shell--plan'}`} style={mapLayout.style}>
+      <div className="workspace-chrome" ref={mapLayout.chromeRef}>
       <header className="topbar">
         <div className="topbar__brand">
-          <Button className="brand-mark" onClick={() => { setMode('PLAN_DAY'); setSection('WAREHOUSE'); setMapTool('SELECT'); setSelected({ kind: 'warehouse', id: warehouseId }); }} aria-label="Открыть склад" title="Открыть склад">L</Button>
+          <Button className="brand-mark" onClick={() => { setMode('PLAN_DAY'); setSection('WAREHOUSE'); setInspectorOpen(true); closeSlotPlanner(); setMapTool('SELECT'); setSelected({ kind: 'warehouse', id: warehouseId }); }} aria-label="Открыть склад" title="Открыть склад"><img src={logotypeUrl} width={26} height={25} alt="" /></Button>
           <div className="topbar__warehouse-selector" ref={warehouseSelectorRef}>
             <button
               type="button"
@@ -1137,13 +1143,16 @@ export function App() {
           <DatePicker className="topbar-date-picker" label="Дата планирования" value={planningDate} onChange={selectPlanningDate} />
         </div>
         <div className="topbar__actions">
+          <Button aria-label={inspectorOpen && !slotPlannerOpen ? 'Скрыть панель логистики' : 'Открыть панель логистики'} aria-expanded={inspectorOpen && !slotPlannerOpen} aria-controls="logistics-inspector" onClick={() => { closeSlotPlanner(); setInspectorOpen(slotPlannerOpen || !inspectorOpen); }}><PanelRight size={16} aria-hidden="true" /></Button>
           <Button
             variant={acceptingRequests ? 'secondary' : 'ghost'}
+            aria-label={planningDayStatusQuery.isPending ? 'Проверяем приём доставок' : planningDayStatusQuery.isError ? 'Статус приёма недоступен' : acceptingRequests ? 'Закрыть приём доставок' : 'Приём закрыт'}
+            title="Управление приёмом доставок"
             disabled={busy || planningDayStatusQuery.isPending || !acceptingRequests}
             onClick={() => setDialog({ kind: 'close-planning-day', date: planningDate })}
           ><LockKeyhole size={15} aria-hidden="true" /><span>{planningDayStatusQuery.isPending ? 'Проверяем приём…' : planningDayStatusQuery.isError ? 'Статус приёма недоступен' : acceptingRequests ? 'Закрыть приём доставок' : 'Приём закрыт'}</span></Button>
-          <Button disabled={!acceptingRequests} variant={slotPlannerOpen ? 'primary' : 'secondary'} onClick={() => slotPlannerOpen ? closeSlotPlanner() : setSlotPlannerOpen(true)}><RouteIcon size={15} aria-hidden="true" /><span>Проверить слот</span></Button>
-          {currentRun && !isTerminal(currentRun.status) ? <Button variant="danger" disabled={busy || currentRun.cancel_requested} onClick={() => void cancelOptimization()}><span>{currentRun.cancel_requested ? 'Отменяем…' : 'Отменить'}</span></Button> : null}
+          <Button aria-label="Проверить слот" title="Проверить слот" disabled={!acceptingRequests} variant={slotPlannerOpen ? 'primary' : 'secondary'} onClick={() => slotPlannerOpen ? closeSlotPlanner() : setSlotPlannerOpen(true)}><RouteIcon size={15} aria-hidden="true" /><span>Проверить слот</span></Button>
+          {currentRun && !isTerminal(currentRun.status) ? <Button className="topbar__cancel" variant="danger" disabled={busy || currentRun.cancel_requested} onClick={() => void cancelOptimization()}><span>{currentRun.cancel_requested ? 'Отменяем…' : 'Отменить'}</span></Button> : null}
           <div className="segmented" aria-label="Режим приложения">{([['PLAN_DAY', 'План дня'], ['SIMULATION', 'Симуляция']] as const).map(([value, label]) => <button type="button" key={value} aria-pressed={mode === value} onClick={() => changeMode(value)}>{value === 'PLAN_DAY' ? <RouteIcon size={13} aria-hidden="true" /> : <PlayCircle size={13} aria-hidden="true" />}{label}</button>)}</div>
           <ThemeSwitch />
           <NotificationCenter />
@@ -1155,14 +1164,13 @@ export function App() {
           <span>{workspaceWarning}</span>
         </div>
       ) : null}
-      <div
-        className="workspace"
-        style={{ '--inspector-width': `${inspectorWidth}px` } as CSSProperties}
-      >
+      </div>
+      <div className="workspace">
         <Sidebar
           workspace={workspace}
           plan={plan}
           pendingActionCount={planningDayStatusQuery.data?.pending_action_count ?? 0}
+          onNavigate={() => { closeSlotPlanner(); setInspectorOpen(true); }}
         />
         <MapCanvas
           workspace={workspace}
@@ -1184,8 +1192,9 @@ export function App() {
           planningCheck={slotPlanningMap}
           onPlanningCheckPoint={setSlotPlannerPoint}
           pendingWarehousePoint={null}
+          cameraPadding={mapLayout.padding}
         />
-        <Inspector
+        {inspectorOpen && !slotPlannerOpen ? <Inspector
           workspace={workspace} plan={plan} simulation={simulationState} validation={validation} busy={busy}
           onCreate={openCreate} onEdit={openEdit} onDelete={(entityKind, id, label, expectedVersion) => setDialog({ kind: 'delete-entity', entityKind, id, label, expectedVersion })}
           onGenerateWorkload={() => setDialog({ kind: 'workload-generator' })}
@@ -1236,9 +1245,10 @@ export function App() {
           onSplitRequest={splitRequestIntoSubtasks}
           loadingMoreRequests={requestsLoadingMore}
           onLoadMoreRequests={loadMoreRequests}
-          inspectorWidth={inspectorWidth}
+          inspectorWidth={mapLayout.panelWidth}
           onInspectorWidthChange={resizeInspector}
-        />
+          onClose={() => setInspectorOpen(false)}
+        /> : null}
       </div>
       {slotPlannerOpen ? <SlotAvailabilityPanel
         warehouseId={workspace.warehouse.id}
@@ -1253,7 +1263,7 @@ export function App() {
         resolveAddressSuggestion={api.resolveAddressSuggestion}
         reverseGeocode={api.reverseGeocode}
       /> : null}
-      {mode === 'SIMULATION' && plan && simulationState && simulationTimestamp !== null ? <SimulationBar plan={plan} state={simulationState} timestamp={simulationTimestamp} timeZone={workspace.warehouse.timezone} playing={simulationPlaying} speed={simulationSpeed} overrides={simulationOverrides} onTimestamp={setSimulationTimestamp} onPlaying={setSimulationPlaying} onSpeed={setSimulationSpeed} /> : null}
+      {mode === 'SIMULATION' && plan && simulationState && simulationTimestamp !== null ? <div className="simulation-dock" ref={mapLayout.simulationRef}><SimulationBar plan={plan} state={simulationState} timestamp={simulationTimestamp} timeZone={workspace.warehouse.timezone} playing={simulationPlaying} speed={simulationSpeed} overrides={simulationOverrides} onTimestamp={setSimulationTimestamp} onPlaying={setSimulationPlaying} onSpeed={setSimulationSpeed} /></div> : null}
 
       {dialog?.kind === 'workload-generator' ? <WorkloadGeneratorDialog
         planningDate={planningDate}

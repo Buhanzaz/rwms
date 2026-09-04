@@ -25,10 +25,11 @@ const nav: Array<{ id: LeftSection; label: string; icon: ReactNode; count?: (wor
   { id: 'SETTINGS', label: 'Настройки', icon: <Settings2 size={17} /> },
 ];
 
-export function Sidebar({ workspace, plan, pendingActionCount = 0 }: {
+export function Sidebar({ workspace, plan, pendingActionCount = 0, onNavigate }: {
   workspace: WarehouseWorkspace;
   plan: RoutePlan | null;
   pendingActionCount?: number;
+  onNavigate?: () => void;
 }) {
   const section = useUiStore((state) => state.section);
   const setSection = useUiStore((state) => state.setSection);
@@ -39,7 +40,7 @@ export function Sidebar({ workspace, plan, pendingActionCount = 0 }: {
           const count = item.id === 'PLAN_DAY' && pendingActionCount > 0
             ? pendingActionCount
             : item.count?.(workspace, plan);
-          return <button className="nav-item" aria-current={section === item.id ? 'page' : undefined} key={item.id} onClick={() => setSection(item.id)} title={item.label}>
+          return <button className="nav-item" aria-label={item.label} aria-current={section === item.id ? 'page' : undefined} key={item.id} onClick={() => { setSection(item.id); onNavigate?.(); }} title={item.label}>
             {item.icon}<span className="nav-item__label">{item.label}</span>{count !== undefined ? <span className="nav-item__count">{count}</span> : null}
           </button>;
         })}

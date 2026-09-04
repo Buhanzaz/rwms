@@ -35,7 +35,7 @@
   --warning-text: #fde68a;
   --control-height: 36px;
   --control-height-sm: 30px;
-  --control-radius: 8px;
+  --control-radius: 11px;
 }
 
 html[data-theme="light"] {
@@ -76,10 +76,14 @@ button { color: inherit; }
 :where(button, input, select, textarea) { touch-action: manipulation; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.app-shell { height: 100%; min-width: 1100px; display: grid; grid-template-rows: 64px minmax(0, 1fr); background: var(--bg); }
+.app-shell { height: 100%; min-width: 0; display: grid; grid-template-rows: 64px minmax(0, 1fr); background: var(--bg); }
 .app-shell--simulation { grid-template-rows: 64px minmax(0, 1fr) 112px; }
 .app-shell--refresh-warning { grid-template-rows: 64px auto minmax(0, 1fr); }
 .app-shell--simulation.app-shell--refresh-warning { grid-template-rows: 64px auto minmax(0, 1fr) 112px; }
+.app-shell--map { position: relative; isolation: isolate; display: block; }
+.workspace-chrome { position: absolute; z-index: 40; inset: 12px 12px auto; display: grid; gap: 8px; }
+.app-shell--map .topbar { min-height: 64px; padding: 12px; border: 1px solid var(--line); border-radius: 18px; }
+.app-shell--map .topbar, .app-shell--map .sidebar, .app-shell--map .inspector, .app-shell--map .slot-planner { background: color-mix(in srgb, var(--panel) 90%, transparent); box-shadow: 0 12px 36px var(--shadow), inset 0 1px 0 color-mix(in srgb, var(--text) 7%, transparent); backdrop-filter: blur(14px); }
 .topbar { display: grid; grid-template-columns: minmax(270px, 1fr) auto auto; gap: 16px; align-items: center; padding: 0 18px; background: var(--panel); border-bottom: 1px solid var(--line); z-index: 40; }
 .topbar > * { min-width: 0; }
 .topbar__brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
@@ -106,7 +110,7 @@ button { color: inherit; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .topbar__date, .topbar__actions { display: flex; align-items: center; gap: 7px; }
 .topbar .button, .topbar .date-picker__trigger, .topbar .segmented, .topbar__warehouse-selector-trigger { height: var(--control-height); min-height: var(--control-height); }
-.workspace-refresh-warning { display: flex; align-items: center; gap: 10px; padding: 8px 18px; border-bottom: 1px solid var(--warning-border); background: var(--warning-bg); color: var(--warning-text); font-size: 11px; }
+.workspace-refresh-warning { display: flex; align-items: center; gap: 10px; padding: 8px 18px; border: 1px solid var(--warning-border); border-radius: 12px; background: var(--warning-bg); color: var(--warning-text); font-size: 11px; }
 .workspace-refresh-warning strong { white-space: nowrap; }
 .date-picker { position: relative; min-width: 0; }
 .date-picker__trigger { min-height: var(--control-height); display: inline-flex; align-items: center; justify-content: flex-start; gap: 8px; padding: 0 11px; border: 1px solid var(--line); border-radius: var(--control-radius); background: var(--input-bg); color: var(--text); cursor: pointer; white-space: nowrap; }
@@ -125,16 +129,15 @@ button { color: inherit; }
 .segmented button:hover { background: var(--hover); color: var(--text); }
 .segmented button[aria-pressed="true"] { border-color: var(--line-strong); background: var(--panel-raised); color: var(--text); }
 
-.workspace { min-height: 0; display: grid; grid-template-columns: 258px minmax(320px, 1fr) var(--inspector-width, 420px); }
+.workspace { display: contents; }
 .bootstrap-workspace { position: relative; min-height: 0; overflow: hidden; }
 .warehouse-sync-list { width: min(560px, calc(100vw - 36px)); max-height: min(420px, 55vh); display: grid; gap: 8px; overflow: auto; margin-top: 16px; }
 .bootstrap-onboarding { position: absolute; z-index: 35; top: 18px; right: 18px; width: min(390px, calc(100vw - 36px)); padding: 18px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--glass); box-shadow: 0 20px 60px var(--shadow); }
 .bootstrap-onboarding > svg { color: var(--accent); }
 .bootstrap-onboarding h1 { margin: 10px 0 7px; font-size: 18px; }
 .bootstrap-onboarding p { margin: 0 0 14px; color: var(--muted); font-size: 11px; line-height: 1.55; }
-.app-shell--plan .workspace { grid-template-columns: 258px minmax(320px, 1fr) var(--inspector-width, 420px); }
-.sidebar, .inspector { min-height: 0; background: var(--panel); border-right: 1px solid var(--line); overflow: hidden; }
-.sidebar { display: flex; flex-direction: column; }
+.sidebar, .inspector { min-height: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; overflow: hidden; }
+.sidebar { position: absolute; z-index: 30; top: var(--workspace-top, 88px); left: 12px; bottom: var(--workspace-bottom, 12px); width: var(--sidebar-width, 220px); display: flex; flex-direction: column; }
 .sidebar__nav { flex: 1; overflow: auto; padding: 8px; }
 .nav-item { width: 100%; display: grid; grid-template-columns: 24px minmax(0, 1fr) 30px; align-items: center; gap: 9px; border: 0; border-radius: 8px; padding: 9px 8px; margin-bottom: 2px; color: var(--muted); background: transparent; cursor: pointer; text-align: left; }
 .nav-item:hover { background: var(--hover); color: var(--text); }
@@ -142,14 +145,16 @@ button { color: inherit; }
 .nav-item__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-item__count { min-width: 26px; justify-self: end; text-align: center; padding: 2px 5px; border-radius: 10px; font-size: 10px; font-variant-numeric: tabular-nums; background: var(--panel-raised); color: var(--muted); }
 .map-stage { position: relative; min-width: 0; min-height: 0; overflow: hidden; background-color: var(--panel-soft); background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px); background-size: 42px 42px; }
+.app-shell--map .map-stage { position: absolute; inset: 0; z-index: 0; }
 .map-container { position: absolute; inset: 0; }
 .map-overlay { position: absolute; z-index: 12; pointer-events: none; }
-.map-toolbar { top: 12px; left: 12px; display: flex; gap: 5px; padding: 5px; pointer-events: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--glass); box-shadow: 0 10px 30px var(--shadow); }
+.map-toolbar { top: var(--workspace-top, 12px); left: var(--map-controls-left, 12px); display: flex; gap: 5px; padding: 5px; pointer-events: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--glass); box-shadow: 0 10px 30px var(--shadow); }
 .map-toolbar button { width: 34px; height: 34px; display: grid; place-items: center; padding: 0; }
 .map-toolbar button[aria-pressed="true"] { color: var(--accent-foreground); background: var(--accent); }
 .map-toolbar .map-toolbar__warehouse-activate { width: auto; min-width: 34px; display: inline-flex; gap: 7px; padding: 0 10px; }
 .map-toolbar__warehouse-activate span { font-size: 11px; font-weight: 750; }
-.map-overlay-stack { top: 12px; right: 12px; width: 224px; max-height: calc(100% - 24px); display: flex; flex-direction: column; gap: 8px; overflow: auto; pointer-events: auto; }
+.map-overlay-stack { top: calc(var(--workspace-top, 12px) + 54px); left: var(--map-controls-left, 12px); width: min(224px, calc(100% - 24px)); max-height: calc(100% - var(--workspace-top, 12px) - var(--map-controls-bottom, 12px) - 70px); display: flex; flex-direction: column; gap: 8px; overflow: auto; pointer-events: auto; }
+.app-shell--map .maplibregl-ctrl-bottom-right { bottom: var(--map-controls-bottom, 12px); right: var(--map-controls-right, 12px); }
 .layer-menu { flex: 0 0 auto; width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--glass); box-shadow: 0 10px 30px var(--shadow); }
 .layer-menu h3 { margin: 0 0 8px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
 .layer-menu .checkbox-field { margin: 5px 0; }
@@ -236,8 +241,12 @@ button { color: inherit; }
 .truck-restriction-popup dt { color: var(--muted); font-size: 9px; overflow-wrap: anywhere; }
 .truck-restriction-popup dd { margin: 0; color: var(--text); font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
 
-.inspector { position: relative; border-right: 0; border-left: 1px solid var(--line); container-type: inline-size; }
-.inspector__body { height: 100%; overflow: auto; padding: 12px; }
+.inspector { position: absolute; z-index: 30; top: var(--panel-top, 88px); right: 12px; bottom: var(--workspace-bottom, 12px); width: var(--inspector-width, 420px); max-width: calc(100% - 24px); display: flex; flex-direction: column; container-type: inline-size; }
+.inspector__chrome { display: flex; align-items: center; justify-content: space-between; padding: 7px 12px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+.inspector__body { flex: 1; min-height: 0; overflow: auto; padding: 16px; overscroll-behavior: contain; }
+.metrics-grid.metrics-grid--summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.plan-details { margin-top: 10px; font-size: 11px; }
+.plan-details summary { padding: 7px 0; color: var(--muted); cursor: pointer; }
 .inspector__resize-handle { position: absolute; z-index: 5; inset: 0 auto 0 -5px; width: 10px; padding: 0; border: 0; background: transparent; cursor: col-resize; touch-action: none; }
 .inspector__resize-handle::after { content: ''; position: absolute; inset: 0 auto 0 4px; width: 2px; background: transparent; transition: background .15s ease; }
 .inspector__resize-handle:hover::after, .inspector__resize-handle:focus-visible::after { background: var(--accent); }
@@ -388,8 +397,8 @@ button { color: inherit; }
 .button-link:hover { color: var(--accent-strong); }
 .button--md { height: var(--control-height); min-height: var(--control-height); padding: 0 11px; font-size: 12px; }
 .button--sm { height: var(--control-height-sm); min-height: var(--control-height-sm); padding: 0 8px; font-size: 11px; }
-.button--primary { border-color: var(--accent); background: var(--accent-strong); color: var(--accent-foreground); font-weight: 800; }
-.button--primary:hover:not(:disabled) { background: var(--accent); }
+.button--primary { border-color: color-mix(in srgb, var(--accent) 70%, #204b79); background: linear-gradient(165deg, #326f9d, #204b79); color: #fff; font-weight: 700; box-shadow: inset 0 1px 0 #ffffff26, 0 3px 8px #204b7933; }
+.button--primary:hover:not(:disabled) { background: linear-gradient(165deg, #35769e, #285b8d); }
 .button--secondary { background: var(--panel-raised); color: var(--text); }
 .button--secondary:hover:not(:disabled), .button--ghost:hover:not(:disabled) { background: var(--hover); }
 .button--ghost { border-color: transparent; background: transparent; color: var(--muted); }
@@ -630,12 +639,14 @@ textarea.input { resize: vertical; min-height: 74px; }
 .unassigned-card ul { margin: 7px 0; padding-left: 17px; color: var(--danger-text); font-size: 10px; line-height: 1.5; }
 .unassigned-card .recommendation { padding: 7px; border-radius: 6px; background: var(--warning-bg); color: var(--warning-text); font-size: 10px; }
 
-.progress-card { position: absolute; z-index: 15; left: 50%; top: 14px; transform: translateX(-50%); width: 390px; padding: 11px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--glass); box-shadow: 0 12px 35px var(--shadow); }
+.progress-card { position: absolute; z-index: 15; left: var(--map-controls-left, 12px); right: var(--map-controls-right, 12px); bottom: calc(var(--map-controls-bottom, 12px) + 42px); width: min(390px, calc(100% - 24px)); max-width: calc(100% - var(--map-controls-left, 12px) - var(--map-controls-right, 12px)); padding: 11px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--glass); box-shadow: 0 12px 35px var(--shadow); }
 .progress-card__line { display: flex; justify-content: space-between; margin-bottom: 7px; font-size: 11px; }
 .progress-track { height: 5px; overflow: hidden; border-radius: 5px; background: #18352f; }
 .progress-track i { display: block; height: 100%; background: var(--accent); transition: width .25s; }
 
 .simulation-bar { display: grid; grid-template-columns: auto minmax(240px, 1fr) 250px; gap: 18px; align-items: center; padding: 12px 18px; border-top: 1px solid var(--line); background: var(--panel); z-index: 35; }
+.simulation-dock { position: absolute; z-index: 35; inset: auto 12px 12px; }
+.app-shell--map .simulation-bar { min-height: 100px; border: 1px solid var(--line); border-radius: 18px; }
 .simulation-controls { display: flex; align-items: center; gap: 6px; }
 .simulation-controls .button { width: 34px; padding: 0; }
 .simulation-time { display: grid; gap: 7px; }
@@ -646,7 +657,7 @@ textarea.input { resize: vertical; min-height: 74px; }
 .simulation-events p { margin: 0 0 5px; color: #b9c8d7; font-size: 9px; }
 .simulation-events time { color: var(--accent); margin-right: 5px; }
 
-.slot-planner { position: fixed; z-index: 44; top: 76px; bottom: 16px; left: 270px; width: min(430px, calc(100vw - 700px)); min-width: 390px; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--glass); box-shadow: 0 20px 60px var(--shadow); }
+.slot-planner { position: absolute; z-index: 35; top: var(--panel-top, 88px); bottom: var(--workspace-bottom, 12px); right: 12px; width: var(--inspector-width, 420px); max-width: calc(100% - 24px); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 18px; background: var(--glass); box-shadow: 0 20px 60px var(--shadow); }
 .slot-planner__header { min-height: 46px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--panel-raised); }
 .slot-planner__header > span { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 12px; }
 .slot-planner__header > span svg { color: var(--accent); }
@@ -716,10 +727,37 @@ textarea.input { resize: vertical; min-height: 74px; }
 .slot-timeline__stop--warehouse_unload, .slot-timeline__stop--depot_unload { border-left-color: #f472b6; }
 
 @media (max-width: 1250px) {
-  .workspace { grid-template-columns: 228px minmax(320px, 1fr) var(--inspector-width, 420px); }
-  .app-shell--plan .workspace { grid-template-columns: 228px minmax(320px, 1fr) var(--inspector-width, 420px); }
-  .topbar__actions > .button > span { display: none; }
-  .slot-planner { left: 240px; width: 400px; min-width: 400px; }
+  .topbar__actions > .button:not(.topbar__cancel) > span { display: none; }
+  .nav-item { position: relative; display: flex; justify-content: center; min-height: 44px; padding: 8px; }
+  .nav-item__label { display: none; }
+  .nav-item__count { position: absolute; top: 0; right: -2px; min-width: 15px; padding: 1px 3px; font-size: 8px; }
+}
+
+@media (max-width: 1450px) {
+  .app-shell--map .topbar { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+  .app-shell--map .topbar__actions { grid-column: 1 / -1; justify-content: flex-end; }
+}
+
+@media (max-width: 760px) {
+  .app-shell--map .topbar { padding: 8px; }
+  .topbar__brand { gap: 6px; }
+  .topbar__warehouse-selector-trigger { min-width: 0; }
+  .topbar-date-picker .date-picker__trigger { min-width: 0; }
+  .app-shell--map .topbar__actions { justify-content: flex-start; flex-wrap: wrap; }
+  .topbar__actions > * { flex-shrink: 0; }
+  .app-shell--map .brand-mark { display: none; }
+  .sidebar { top: auto; bottom: 12px; right: 12px; width: auto; height: 52px; }
+  .sidebar__nav { display: flex; padding: 3px; }
+  .nav-item { width: 48px; flex: 0 0 48px; margin: 0; }
+  .inspector, .slot-planner { width: calc(100% - 24px); }
+  .inspector__resize-handle { display: none; }
+  .workspace-refresh-warning { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .simulation-dock { bottom: 72px; }
+  .app-shell--map .simulation-bar { grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 8px; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .app-shell--map .topbar, .app-shell--map .sidebar, .app-shell--map .inspector, .app-shell--map .slot-planner { backdrop-filter: none; background: var(--panel); }
 }
 
 @media (prefers-reduced-motion: reduce) {

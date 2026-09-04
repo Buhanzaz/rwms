@@ -14,6 +14,7 @@ const mapState = vi.hoisted(() => ({
     emitLayer: (event: string, layer: string, payload: unknown) => void;
   },
   easeTo: vi.fn(),
+  setPadding: vi.fn(),
   fitBounds: vi.fn(),
   constructorOptions: null as null | { center?: [number, number]; zoom?: number },
   center: [37.6176, 55.7558] as [number, number],
@@ -57,6 +58,7 @@ vi.mock('maplibre-gl', () => {
     }
 
     addControl() { return this; }
+    setPadding(value: unknown) { mapState.setPadding(value); return this; }
     addSource(id: string, options: Record<string, unknown>) {
       mapState.sourceOptions.set(id, options);
       this.sources.set(id, { setData: vi.fn((data: unknown) => mapState.sourceData.set(id, data)) });
@@ -136,6 +138,7 @@ describe('warehouse selection on the shared map', () => {
     mapState.center = [37.6176, 55.7558];
     mapState.zoom = 8.6;
     mapState.easeTo.mockReset();
+    mapState.setPadding.mockReset();
     mapState.fitBounds.mockReset();
     window.localStorage.clear();
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
@@ -188,12 +191,15 @@ describe('warehouse selection on the shared map', () => {
       onPlanningCheckPoint: vi.fn(),
       pendingWarehousePoint: null,
     };
-    const view = render(<MapCanvas {...commonProps} selected={null} />);
+    const padding = { top: 148, left: 256, right: 456, bottom: 36 };
+    const view = render(<MapCanvas {...commonProps} cameraPadding={padding} selected={null} />);
 
     expect(screen.queryByRole('button', { name: 'Нарисовать зону' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Вырезать область внутри зоны' })).not.toBeInTheDocument();
 
     await waitFor(() => expect(mapState.markers.some((marker) => marker.getAttribute('aria-label') === 'Склад: Склад Великий Новгород')).toBe(true));
+    expect(mapState.setPadding).toHaveBeenLastCalledWith(padding);
+    const originalMap = mapState.activeMap;
     const targetMarker = mapState.markers.find((marker) => marker.getAttribute('aria-label') === 'Склад: Склад Великий Новгород');
     const zoomCallsBeforeSelection = mapState.easeTo.mock.calls.length;
     fireEvent.click(targetMarker as HTMLElement);
@@ -202,7 +208,9 @@ describe('warehouse selection on the shared map', () => {
     expect(onWarehouseActivate).not.toHaveBeenCalled();
     expect(mapState.easeTo).toHaveBeenCalledTimes(zoomCallsBeforeSelection);
 
-    view.rerender(<MapCanvas {...commonProps} selected={{ kind: 'warehouse', id: targetWarehouse.id }} />);
+    view.rerender(<MapCanvas {...commonProps} cameraPadding={{ ...padding, right: 24 }} selected={{ kind: 'warehouse', id: targetWarehouse.id }} />);
+    expect(mapState.activeMap).toBe(originalMap);
+    expect(mapState.setPadding).toHaveBeenLastCalledWith({ ...padding, right: 24 });
     fireEvent.click(screen.getByRole('button', { name: `Перейти к складу ${targetWarehouse.name}` }));
     expect(onWarehouseActivate).toHaveBeenCalledWith(targetWarehouse.id);
   });
