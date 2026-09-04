@@ -1089,6 +1089,40 @@ async def _confirm_plan_locked(
 ) -> RoutePlan:
     """Confirm a valid plan and audit an explicitly accepted empty support leg."""
 
+    plan = await lock_plan_execution_resources(session, plan_id, expected_version)
+    return await _confirm_reserved_plan(
+        session, plan, planner=planner, accept_warnings=accept_warnings,
+        empty_positioning_reason=empty_positioning_reason, confirmed_by=confirmed_by,
+    )
+
+
+async def lock_plan_execution_resources(
+    session: AsyncSession, plan_id: UUID, expected_version: int,
+) -> RoutePlan:
+    """Fence current local facts for confirmation or publication until transaction end.
+
+    Every lock is NOWAIT because catalog and incident commands use different
+    aggregate orders. Shift identities are locked before reading their current
+    driver/vehicle references. Recheck the fresh plan and membership last so a
+    concurrent edit cannot replace resources outside this fence.
+    """
+
+    try:
+        return await _lock_plan_execution_resources(session, plan_id, expected_version)
+    except DBAPIError as exc:
+        if getattr(exc.orig, "sqlstate", None) != "55P03":
+            raise
+        raise ApiError(
+            409, "PLAN_RESOURCES_BUSY",
+            "Resources are being updated; reload the plan and retry",
+        ) from exc
+
+
+async def _lock_plan_execution_resources(
+    session: AsyncSession, plan_id: UUID, expected_version: int,
+) -> RoutePlan:
+    """Acquire one local execution fence without retries or external mutations."""
+
     plan_identity = (
         await session.execute(
             select(RoutePlan.warehouse_id, RoutePlan.date).where(RoutePlan.id == plan_id)
@@ -1097,41 +1131,46 @@ async def _confirm_plan_locked(
     if plan_identity is None:
         raise not_found("route_plan", plan_id)
     referenced_request_ids = await _plan_referenced_request_ids(session, plan_id)
+    warehouse_ids = {plan_identity.warehouse_id}
     if referenced_request_ids:
-        locked_request_ids = tuple(
+        requests = tuple(
             await session.scalars(
-                select(LogisticsRequest.id)
+                select(LogisticsRequest)
                 .where(LogisticsRequest.id.in_(referenced_request_ids))
                 .order_by(LogisticsRequest.id)
-                .with_for_update()
+                .with_for_update(nowait=True)
+                .execution_options(populate_existing=True)
             )
         )
-        if locked_request_ids != referenced_request_ids:
+        if tuple(request.id for request in requests) != referenced_request_ids:
             raise ApiError(
                 409,
                 "PLAN_REQUEST_MISSING",
                 "A request referenced by the plan no longer exists",
             )
-    # Catalog and incident commands own different lock orders. Never wait while
-    # holding this cross-resource fence, which must remain through the commit.
-    shift_ids = select(RouteCycle.driver_shift_id).where(RouteCycle.route_plan_id == plan_id)
-    driver_ids = select(DriverShift.driver_id).where(DriverShift.id.in_(shift_ids))
-    await session.scalars(
-        select(Driver).where(Driver.id.in_(driver_ids))
-        .order_by(Driver.id).with_for_update(nowait=True)
-        .execution_options(populate_existing=True)
-    )
-    await session.scalars(
+        warehouse_ids.update(request.warehouse_id for request in requests)
+    shift_ids = tuple(sorted(set(await session.scalars(
+        select(RouteCycle.driver_shift_id).where(RouteCycle.route_plan_id == plan_id)
+    )), key=str))
+    shifts = tuple(await session.scalars(
         select(DriverShift).where(DriverShift.id.in_(shift_ids))
         .order_by(DriverShift.id).with_for_update(nowait=True)
         .execution_options(populate_existing=True)
+    ))
+    if tuple(shift.id for shift in shifts) != shift_ids:
+        raise ApiError(409, "PLAN_REFRESH_REQUIRED", "A planned driver shift no longer exists")
+    warehouse_ids.update(shift.warehouse_id for shift in shifts)
+    await session.scalars(
+        select(Driver).where(Driver.id.in_({shift.driver_id for shift in shifts}))
+        .order_by(Driver.id).with_for_update(nowait=True)
+        .execution_options(populate_existing=True)
     )
-    vehicle_ids = select(DriverShift.vehicle_id).where(DriverShift.id.in_(shift_ids))
     vehicles = tuple(await session.scalars(
-        select(Vehicle).where(Vehicle.id.in_(vehicle_ids))
+        select(Vehicle).where(Vehicle.id.in_({shift.vehicle_id for shift in shifts}))
         .order_by(Vehicle.id).with_for_update(nowait=True)
         .execution_options(populate_existing=True)
     ))
+    warehouse_ids.update(vehicle.warehouse_id for vehicle in vehicles)
     trailer_ids = [vehicle.default_trailer_id for vehicle in vehicles
                    if vehicle.default_trailer_id is not None]
     if trailer_ids:
@@ -1140,19 +1179,41 @@ async def _confirm_plan_locked(
             .order_by(Trailer.id).with_for_update(nowait=True)
             .execution_options(populate_existing=True)
         )
-    warehouse = await session.scalar(
-        select(Warehouse).where(Warehouse.id == plan_identity.warehouse_id)
-        .with_for_update(nowait=True)
-    )
-    if warehouse is None:
+    locked_warehouses = tuple(await session.scalars(
+        select(Warehouse.id).where(Warehouse.id.in_(warehouse_ids))
+        .order_by(Warehouse.id).with_for_update(nowait=True)
+    ))
+    if set(locked_warehouses) != warehouse_ids:
         raise not_found("warehouse", plan_identity.warehouse_id)
-    plan = await assert_plan_version(session, plan_id, expected_version, nowait=True)
-    if await _plan_referenced_request_ids(session, plan_id) != referenced_request_ids:
+    plan = await get_plan(
+        session, plan_id, for_update=True, populate_existing=True, nowait=True,
+    )
+    if plan.version != expected_version:
+        raise ApiError(
+            409, "PLAN_VERSION_CONFLICT", "The route plan changed after it was loaded",
+            extra={"expected_version": expected_version, "actual_version": plan.version},
+        )
+    if (
+        plan.warehouse_id != plan_identity.warehouse_id
+        or plan.date != plan_identity.date
+        or tuple(sorted({cycle.driver_shift_id for cycle in plan.cycles}, key=str)) != shift_ids
+        or await _plan_referenced_request_ids(session, plan_id) != referenced_request_ids
+    ):
         raise ApiError(
             409,
             "PLAN_MEMBERSHIP_CHANGED",
             "The plan membership changed before its requests could be reserved",
         )
+    await fence_plan_request_reschedules(session, plan.id)
+    return plan
+
+
+async def _confirm_reserved_plan(
+    session: AsyncSession, plan: RoutePlan, *, planner: PlannerFacade,
+    accept_warnings: bool, empty_positioning_reason: str | None, confirmed_by: str,
+) -> RoutePlan:
+    """Reserve a validated draft while the caller holds its complete resource fence."""
+
     if PENDING_REQUEST_REFRESH_METRIC in plan.metrics:
         raise ApiError(
             409,
@@ -1197,7 +1258,7 @@ async def _confirm_plan_locked(
     await planner.validate_confirmation(session, plan, accept_warnings=accept_warnings)
     # Refreshing catalog projections can expire inverse task/request relations.
     # Reload the complete command graph before reservation and notice creation.
-    plan = await get_plan(session, plan_id)
+    plan = await get_plan(session, plan.id)
     version_before = plan.version
     await _reserve_plan_requests(session, plan)
     await _create_simulated_notification_logs(session, plan)

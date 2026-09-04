@@ -73,6 +73,7 @@ from app.schemas.domain import (
 from app.schemas.geocoding import ResolvedAddress
 from app.security import WarehouseAccessLevel
 from app.services import catalog
+from app.services.plans import UnavailablePlannerFacade
 from tests.auth import admin_access_token_verifier, admin_principal
 from tests.factories import make_vehicle, make_warehouse
 
@@ -345,6 +346,7 @@ async def test_rwms_publication_requires_confirmed_plan(
             db_session,
             plan.id,
             RwmsPlanApplyRequest(expected_version=plan.version),
+            planner=UnavailablePlannerFacade(),
         )
 
     assert rejected.value.code == "PLAN_NOT_CONFIRMED"

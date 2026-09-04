@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 from geoalchemy2.shape import from_shape
 from shapely.geometry import LineString, shape
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -534,6 +534,18 @@ class RuntimePlannerFacade:
 
         snapshot = await self._load_snapshot(
             session, plan.warehouse_id, plan.date, None, None, refresh_current=True,
+            recovery_task_ids=(
+                frozenset(
+                    stop.task_id for cycle in plan.cycles for stop in cycle.stops
+                    if stop.task_id is not None
+                ) if plan.status == PlanStatus.CONFIRMED else None
+            ),
+            request_scope=(
+                frozenset(
+                    stop.task.request_id for cycle in plan.cycles for stop in cycle.stops
+                    if stop.task is not None
+                ) if plan.status == PlanStatus.CONFIRMED else None
+            ),
         )
         for cycle in plan.cycles:
             shift = self._shift_for_persisted_cycle(cycle, snapshot)
@@ -1199,6 +1211,7 @@ class RuntimePlannerFacade:
         request_date_overrides: Mapping[UUID, date] | None = None,
         recovery_task_ids: frozenset[UUID] | None = None,
         refresh_current: bool = False,
+        request_scope: frozenset[UUID] | None = None,
     ) -> _RuntimeSnapshot:
         """Load one complete warehouse graph and translate it into planner value objects."""
 
@@ -1240,7 +1253,7 @@ class RuntimePlannerFacade:
             select(PlanningDayPolicy).where(
                 PlanningDayPolicy.warehouse_id == warehouse_id,
                 PlanningDayPolicy.date == planning_date,
-            )
+            ).execution_options(populate_existing=refresh_current)
         )
         day_mode = PlanningDayMode(
             day_policy.mode
@@ -1386,7 +1399,9 @@ class RuntimePlannerFacade:
                     .where(
                         DbLogisticsRequest.warehouse_id.in_(
                             tuple(member.id for member in planning_members)
-                        )
+                        ),
+                        DbLogisticsRequest.id.in_(request_scope)
+                        if request_scope is not None else true(),
                     )
                     .options(
                         selectinload(DbLogisticsRequest.date_options),
@@ -1441,6 +1456,7 @@ class RuntimePlannerFacade:
                     )
                 )
                 .order_by(WarehousePolicyZone.warehouse_id, WarehousePolicyZone.id)
+                .execution_options(populate_existing=refresh_current)
             )
         )
         ready_request_entities = tuple(

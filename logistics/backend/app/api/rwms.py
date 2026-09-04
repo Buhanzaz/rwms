@@ -181,11 +181,12 @@ async def apply_rwms_plan(
     session: SessionDep,
     client: RwmsClientDep,
     principal: CurrentUserDep,
+    planner: PlannerDep,
 ) -> RwmsApplyResult:
     """Submit the exact plan version and return all upstream rejections unchanged."""
 
     await require_plan_access(session, principal, plan_id, WarehouseAccessLevel.EDIT)
-    return await apply_plan_to_rwms(session, plan_id, payload, client)
+    return await apply_plan_to_rwms(session, plan_id, payload, client, planner=planner)
 
 
 @router.get("/plans/{plan_id}/rwms/status", response_model=RwmsPlanStatusResult)

@@ -28,7 +28,7 @@ from app.models import (
     Vehicle,
     Warehouse,
 )
-from app.models.domain import PlanStatus, StopType
+from app.models.domain import PlanStatus, RequestStatus, StopType, TaskStatus
 from app.schemas.domain import (
     RwmsApplyResult,
     RwmsAssignmentsCommand,
@@ -52,7 +52,7 @@ from app.schemas.domain import (
     RwmsWarehouseSyncResult,
 )
 from app.schemas.geocoding import ResolvedAddress
-from app.services import catalog
+from app.services import catalog, plans
 from app.services.auto_planning import generate_missing_draft_plans
 from app.services.plans import PlannerFacade
 from app.slot_planning.configuration import effective_vehicle_cabin_capacity
@@ -1111,14 +1111,22 @@ async def apply_plan_to_rwms(
     plan_id: UUID,
     command: RwmsPlanApplyRequest,
     client: RwmsPlanningClient,
+    *,
+    planner: PlannerFacade,
 ) -> RwmsApplyResult:
-    """Freeze an exact plan command, release local locks, then call RWMS idempotently."""
+    """Revalidate each attempt, release local locks, then call RWMS idempotently.
+
+    A stale retry is not sent again, but an earlier timed-out attempt may already
+    have taken effect in RWMS. Its outcome must be checked through owner status
+    and reconciliation, never inferred from the local rejection.
+    """
 
     client.ensure_enabled()
     assignments, idempotency_key = await prepare_plan_for_rwms_apply(
         session,
         plan_id,
         command,
+        planner=planner,
     )
     await session.commit()
     return await client.apply_assignments(
@@ -1131,26 +1139,65 @@ async def prepare_plan_for_rwms_apply(
     session: AsyncSession,
     plan_id: UUID,
     command: RwmsPlanApplyRequest,
+    *,
+    planner: PlannerFacade,
 ) -> tuple[RwmsAssignmentsCommand, str]:
-    """Build and validate one immutable assignment command without committing it."""
+    """Check current resources and build this attempt's fenced outbound command."""
 
-    plan = await _load_plan_for_rwms_apply(session, plan_id)
-    if plan.version != command.expected_version:
-        raise ApiError(
-            409,
-            "PLAN_VERSION_CONFLICT",
-            "The route plan changed after it was loaded",
-            extra={"current_version": plan.version},
-        )
+    plan = await plans.lock_plan_execution_resources(session, plan_id, command.expected_version)
     if plan.status != PlanStatus.CONFIRMED:
         raise ApiError(
             409,
             "PLAN_NOT_CONFIRMED",
             "Only a confirmed route plan can be published to RWMS",
         )
+    if plans.PENDING_REQUEST_REFRESH_METRIC in plan.metrics:
+        raise ApiError(409, "PLAN_REFRESH_REQUIRED", "Request routing facts changed")
+    _require_publishable_task_states(plan, set(command.publish_unassigned_task_ids))
+    await planner.validate_confirmation(session, plan, accept_warnings=True)
+    # The current-facts refresh can expire inverse ORM relations. Reload the
+    # publication graph before accessing exact source-unit slices and depots.
+    plan = await _load_plan_for_rwms_apply(session, plan_id)
     assignments = build_assignments_command(plan, set(command.publish_unassigned_task_ids))
     idempotency_key = str(rwms_plan_idempotency_key(plan.id, plan.version))
     return assignments, idempotency_key
+
+
+def _require_publishable_task_states(plan: RoutePlan, publish_unassigned_ids: set[UUID]) -> None:
+    """Do not mistake a recovery-only READY projection for execution permission."""
+
+    assigned_request_ids: set[UUID] = set()
+    for cycle in plan.cycles:
+        for stop in cycle.stops:
+            if stop.task_id is None:
+                continue
+            task = stop.task
+            if (
+                task is None
+                or task.status != TaskStatus.PLANNED
+                or task.request.status != RequestStatus.PLANNED
+                or task.request.scheduled_date != plan.date
+            ):
+                raise ApiError(
+                    409, "PLAN_REFRESH_REQUIRED",
+                    "Task execution state changed; check RWMS status before retrying",
+                )
+            assigned_request_ids.add(task.request_id)
+    for item in plan.unassigned_tasks:
+        if item.task_id not in publish_unassigned_ids:
+            continue
+        task = item.task
+        request = task.request
+        request_available = request.status in (RequestStatus.READY, RequestStatus.UNASSIGNED) or (
+            request.status == RequestStatus.PLANNED
+            and request.id in assigned_request_ids
+            and request.scheduled_date == plan.date
+        )
+        if task.status not in (TaskStatus.READY, TaskStatus.UNASSIGNED) or not request_available:
+            raise ApiError(
+                409, "PLAN_REFRESH_REQUIRED",
+                "Unassigned task state changed; check RWMS status before retrying",
+            )
 
 
 def rwms_plan_idempotency_key(plan_id: UUID, plan_version: int) -> UUID:

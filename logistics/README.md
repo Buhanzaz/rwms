@@ -757,6 +757,17 @@ competing mutable plans on alternative dates. Only the separately confirmed
 exact plan/version may cross `/rwms/apply`; a stale version fails instead of
 overwriting a newer plan.
 
+Every `/rwms/apply` attempt also rechecks the current driver, shift, truck,
+trailer, request state, day mode and warehouse restrictions under a local
+NOWAIT resource fence. Load-specific route proofs must still match the current
+physical facts and road-data version. Unrelated new requests cannot block this
+validation of an accepted route. Stale facts reject the attempt before sending
+assignments; historical plan and task states are not rewritten. Local locks are
+released before the mutating owner call. If an earlier response was lost, a new
+local rejection does not prove the earlier command had no effect: check RWMS
+status and use the existing recovery workflow, rather than blindly replaying
+an unsafe route. Prepared dynamic-recovery commands remain a separate workflow.
+
 Capacity publication is a separate opt-in and requires synchronization. A
 daytime or overnight shift is publishable only when its break is shorter than
 its complete interval; periods may cross a month boundary but contain at most
