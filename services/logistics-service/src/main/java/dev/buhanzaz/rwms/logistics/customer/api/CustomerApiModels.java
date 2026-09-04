@@ -303,7 +303,15 @@ public final class CustomerApiModels {
       @NotNull @Min(0) Long slotVersion) {}
 
   /** Cancels one completed booking under its current CustomerApp projection version. */
-  public record CancelCustomerBookingRequest(@NotNull @Min(0) Long expectedVersion) {}
+  public record CancelCustomerBookingRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      @NotNull UUID changeQuoteId,
+      @NotNull @Min(0) Long changeQuoteVersion,
+      boolean testPaymentRequested) {
+    public CancelCustomerBookingRequest(Long expectedVersion) {
+      this(expectedVersion, null, null, false);
+    }
+  }
 
   /** Searches replacement delivery slots without reopening the original cart or its contents. */
   public record SearchCustomerBookingRescheduleRequest(
@@ -313,7 +321,15 @@ public final class CustomerApiModels {
   public record RescheduleCustomerBookingRequest(
       @NotNull @Min(0) Long expectedVersion,
       @NotNull UUID slotId,
-      @NotNull @Min(0) Long slotVersion) {}
+      @NotNull @Min(0) Long slotVersion,
+      @NotNull UUID changeQuoteId,
+      @NotNull @Min(0) Long changeQuoteVersion,
+      boolean testPaymentRequested) {
+    /** Dispatcher recovery is company-initiated and never enters customer fee admission. */
+    public RescheduleCustomerBookingRequest(Long expectedVersion, UUID slotId, Long slotVersion) {
+      this(expectedVersion, slotId, slotVersion, null, null, false);
+    }
+  }
 
   /** Durable presentation booking created by checkout. */
   public record CustomerBookingResponse(

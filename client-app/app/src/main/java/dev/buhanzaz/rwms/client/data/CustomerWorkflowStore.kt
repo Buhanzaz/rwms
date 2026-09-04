@@ -37,6 +37,15 @@ internal data class CustomerWorkflowReference(
 private val Context.customerWorkflowDataStore by preferencesDataStore(name = "customer_workflow_recovery")
 private val workflowReferenceKey = stringPreferencesKey("active_inquiry_v1")
 private val pendingIdempotencyOperationsKey = stringPreferencesKey("pending_idempotency_operations_v1")
+private val bookingChangeReferencesKey = stringPreferencesKey("booking_change_references_v1")
+
+/** Recovery identity only: neither payment, money, nor application state is persisted. */
+@Serializable
+internal data class CustomerBookingChangeReference(
+    val bookingId: String,
+    val quoteId: String,
+    val commandFingerprint: String? = null,
+)
 
 /** Persists bounded, non-authoritative inquiry and mutation recovery identities atomically. */
 @Singleton
@@ -45,6 +54,44 @@ class CustomerWorkflowStore @Inject constructor(
     private val json: Json,
 ) {
     private val applicationContext = context.applicationContext
+
+    /** Lists exact owner references that must be reloaded after process recreation. */
+    internal suspend fun bookingChangeReferences(): List<CustomerBookingChangeReference> {
+        val encoded = applicationContext.customerWorkflowDataStore.data.first()[bookingChangeReferencesKey]
+            ?: return emptyList()
+        return json.decodeFromString<List<CustomerBookingChangeReference>>(encoded)
+    }
+
+    /** Writes identity before a remotely effective command; it contains no authoritative result. */
+    internal suspend fun rememberBookingChange(reference: CustomerBookingChangeReference) {
+        require(reference.bookingId.isNotBlank() && reference.quoteId.isNotBlank())
+        applicationContext.customerWorkflowDataStore.edit { preferences ->
+            val references = preferences[bookingChangeReferencesKey]
+                ?.let { json.decodeFromString<List<CustomerBookingChangeReference>>(it) }.orEmpty()
+            val updated = references.filterNot { it.quoteId == reference.quoteId } + reference
+            if (updated.size > MAX_PENDING_CUSTOMER_IDEMPOTENCY_OPERATIONS) {
+                throw CustomerApiException(null, "Слишком много незавершённых изменений. Проверьте их статус.")
+            }
+            preferences[bookingChangeReferencesKey] = json.encodeToString(updated)
+        }
+    }
+
+    /**
+     * Forgets an owner-confirmed offered/applied quote and its abandoned retry identity.
+     * Callers must not use this for an uncertain or APPLYING effect.
+     */
+    internal suspend fun forgetBookingChange(quoteId: String) {
+        applicationContext.customerWorkflowDataStore.edit { preferences ->
+            val references = preferences[bookingChangeReferencesKey]
+                ?.let { json.decodeFromString<List<CustomerBookingChangeReference>>(it) }.orEmpty()
+            references.firstOrNull { it.quoteId == quoteId }?.commandFingerprint?.let { operation ->
+                val pending = decodePendingOperations(preferences[pendingIdempotencyOperationsKey]).toMutableMap()
+                pending.remove(operation)
+                writePendingOperations(preferences, pending)
+            }
+            preferences[bookingChangeReferencesKey] = json.encodeToString(references.filterNot { it.quoteId == quoteId })
+        }
+    }
 
     /**
      * Returns the durable UUID for an unresolved mutation, creating it atomically when necessary.
@@ -185,6 +232,7 @@ class CustomerWorkflowStore @Inject constructor(
         applicationContext.customerWorkflowDataStore.edit { preferences ->
             preferences.remove(workflowReferenceKey)
             preferences.remove(pendingIdempotencyOperationsKey)
+            preferences.remove(bookingChangeReferencesKey)
         }
     }
 

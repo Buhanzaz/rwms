@@ -102,6 +102,19 @@ interface CustomerApi {
     @GET("api/logistics/customer/v1/bookings")
     suspend fun bookings(): List<CustomerBooking>
 
+    @POST("api/logistics/customer/v1/bookings/{bookingId}/change-quotes")
+    suspend fun createBookingChangeQuote(
+        @Path("bookingId") bookingId: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @Body request: CreateBookingChangeQuoteRequest,
+    ): CustomerBookingChangeQuote
+
+    @GET("api/logistics/customer/v1/bookings/{bookingId}/change-quotes/{quoteId}")
+    suspend fun bookingChangeQuote(
+        @Path("bookingId") bookingId: String,
+        @Path("quoteId") quoteId: String,
+    ): CustomerBookingChangeQuote
+
     @POST("api/logistics/customer/v1/bookings/{bookingId}/cancel")
     suspend fun cancelBooking(
         @Path("bookingId") bookingId: String,

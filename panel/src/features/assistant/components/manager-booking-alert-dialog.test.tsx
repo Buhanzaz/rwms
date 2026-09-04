@@ -5,12 +5,22 @@ import { MemoryRouter, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { RentalBookingAlert } from "@/features/assistant/api/rental-presentations-api"
+import type { RentalBookingChangeAlert } from "@/features/assistant/api/rental-booking-change-alerts-api"
+import { ApiError } from "@/lib/api-client"
 
 const rentalBookingAlertsApi = vi.hoisted(() => ({
   getRentalBookingAlerts: vi.fn(),
   actOnRentalBookingAlert: vi.fn(),
 }))
 const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }))
+const changesApi = vi.hoisted(() => ({
+  getRentalBookingChangeAlerts: vi.fn(),
+  acknowledgeRentalBookingChangeAlert: vi.fn(),
+}))
+vi.mock(
+  "@/features/assistant/api/rental-booking-change-alerts-api",
+  () => changesApi
+)
 
 vi.mock(
   "@/features/assistant/api/rental-presentations-api",
@@ -23,6 +33,7 @@ vi.mock("@/features/auth/use-auth", () => ({
     currentUser: {
       id: "11111111-1111-4111-8111-111111111111",
       rentalAccess: true,
+      globalRole: "RENTAL_MANAGER",
     },
   }),
 }))
@@ -100,6 +111,22 @@ const secondAlert: RentalBookingAlert = {
   ],
 }
 
+const firstChange: RentalBookingChangeAlert = {
+  mutationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  version: 3,
+  bookingId: firstAlert.bookingId,
+  orderId: firstAlert.orderId,
+  warehouseId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  canOpenOrder: true,
+  operation: "RESCHEDULE",
+  occurredAt: "2026-09-05T10:00:00Z",
+  previousDeliveryDate: "2026-09-07",
+  newDeliveryDate: "2026-09-09",
+  deliveryAddress: "Москва, ул. Лесная, 10",
+  feeRubles: "1500",
+  settlement: "TEST_PAID",
+}
+
 function LocationProbe() {
   const { pathname } = useLocation()
   return <output data-testid="location">{pathname}</output>
@@ -128,11 +155,189 @@ beforeEach(() => {
   rentalBookingAlertsApi.actOnRentalBookingAlert.mockReset()
   toast.error.mockReset()
   toast.success.mockReset()
+  changesApi.getRentalBookingChangeAlerts.mockReset().mockResolvedValue([])
+  changesApi.acknowledgeRentalBookingChangeAlert
+    .mockReset()
+    .mockResolvedValue(undefined)
 })
 
 afterEach(cleanup)
 
 describe("ManagerBookingAlertDialog", () => {
+  it("shows the actual reschedule dates and server settlement without customer PII", async () => {
+    rentalBookingAlertsApi.getRentalBookingAlerts.mockResolvedValue([])
+    changesApi.getRentalBookingChangeAlerts.mockResolvedValue([firstChange])
+    renderDialog()
+    expect(
+      await screen.findByRole("heading", { name: "Клиент перенёс доставку" })
+    ).toBeTruthy()
+    expect(screen.getByText(firstChange.deliveryAddress)).toBeTruthy()
+    expect(screen.getByText("7 сент. 2026 г.")).toBeTruthy()
+    expect(screen.getByText("9 сент. 2026 г.")).toBeTruthy()
+    expect(screen.getByText("Подтверждена тестовая оплата")).toBeTruthy()
+    expect(screen.queryByText(firstAlert.client.displayName)).toBeNull()
+  })
+
+  it("shows cancellation and keeps zero different from an unspecified fee", async () => {
+    rentalBookingAlertsApi.getRentalBookingAlerts.mockResolvedValue([])
+    changesApi.getRentalBookingChangeAlerts.mockResolvedValue([
+      {
+        ...firstChange,
+        operation: "CANCEL",
+        newDeliveryDate: null,
+        feeRubles: "0",
+        settlement: "NOT_REQUIRED",
+        canOpenOrder: false,
+      },
+    ])
+    renderDialog()
+    expect(
+      await screen.findByRole("heading", { name: "Клиент отменил заказ" })
+    ).toBeTruthy()
+    expect(screen.getByText("Отменённая дата")).toBeTruthy()
+    expect(screen.getByText("0 ₽")).toBeTruthy()
+    expect(screen.queryByText("Не указана")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Открыть заказ" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Понятно" })).toBeTruthy()
+  })
+
+  it("does not interpret an unconfigured policy as a free or paid change", async () => {
+    rentalBookingAlertsApi.getRentalBookingAlerts.mockResolvedValue([])
+    changesApi.getRentalBookingChangeAlerts.mockResolvedValue([
+      { ...firstChange, feeRubles: null, settlement: "POLICY_UNCONFIGURED" },
+    ])
+    renderDialog()
+    expect(await screen.findByText("Не указана")).toBeTruthy()
+    expect(screen.getByText("Правило неустойки не настроено")).toBeTruthy()
+    expect(screen.queryByText("Оплата не требуется")).toBeNull()
+  })
+
+  it("formats the full ruble range without rounding", async () => {
+    rentalBookingAlertsApi.getRentalBookingAlerts.mockResolvedValue([])
+    changesApi.getRentalBookingChangeAlerts.mockResolvedValue([
+      { ...firstChange, feeRubles: "9223372036854775807" },
+    ])
+    renderDialog()
+    const dialog = await screen.findByRole("alertdialog")
+    expect(dialog.textContent?.replace(/\s/g, "")).toContain(
+      "9223372036854775807₽"
+    )
+  })
+
+  it("acknowledges each mutation independently even when they share one booking", async () => {
+    const user = userEvent.setup()
+    const secondChange = {
+      ...firstChange,
+      mutationId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      operation: "CANCEL" as const,
+      newDeliveryDate: null,
+    }
+    rentalBookingAlertsApi.getRentalBookingAlerts.mockResolvedValue([
+      firstAlert,
+    ])
+    changesApi.getRentalBookingChangeAlerts.mockResolvedValue([
+      firstChange,
+      secondChange,
+    ])
+    renderDialog()
+    await user.click(await screen.findByRole("button", { name: "Понятно" }))
+    await waitFor(() =>
+      expect(
+        changesApi.acknowledgeRentalBookingChangeAlert
+      ).toHaveBeenCalledWith({
+        accessToken: "manager-access-token",
+        mutationId: firstChange.mutationId,
+        expectedVersion: 3,
+        idempotencyKey: "99999999-9999-4999-8999-999999999999",
+      })
+    )
+    expect(
+      await screen.findByRole("heading", { name: "Клиент отменил заказ" })
+    ).toBeTruthy()
+    expect(screen.getAllByRole("alertdialog")).toHaveLength(1)
+    await user.click(screen.getByRole("button", { name: "Понятно" }))
+    expect(
+      await screen.findByRole("heading", {
+        name: "Клиент «ООО Север» подтвердил выбор",
+      })
+    ).toBeTruthy()
+    expect(
+      changesApi.acknowledgeRentalBookingChangeAlert
+    ).toHaveBeenLastCalledWith(
+      expect.objectContaining({ mutationId: secondChange.mutationId })
+    )
+    expect(
+      rentalBookingAlertsApi.actOnRentalBookingAlert
+    ).not.toHaveBeenCalled()
+  })
+
+  it("retains failed acknowledgement, reuses its identity, and opens only after success", async () => {
+    const user = userEvent.setup()
+    rentalBookingAlertsApi.getRentalBookingAlerts.mockResolvedValue([])
+    changesApi.getRentalBookingChangeAlerts.mockResolvedValue([firstChange])
+    changesApi.acknowledgeRentalBookingChangeAlert.mockRejectedValueOnce(
+      new ApiError("Unavailable", 503)
+    )
+    renderDialog()
+    await user.click(
+      await screen.findByRole("button", { name: "Открыть заказ" })
+    )
+    expect(await screen.findByText("Уведомление не подтверждено")).toBeTruthy()
+    expect(screen.getByTestId("location").textContent).toBe("/assistant")
+    await user.click(screen.getByRole("button", { name: "Открыть заказ" }))
+    await waitFor(() =>
+      expect(screen.getByTestId("location").textContent).toBe(
+        `/orders/${firstChange.orderId}`
+      )
+    )
+    expect(
+      changesApi.acknowledgeRentalBookingChangeAlert.mock.calls[0]
+    ).toEqual(changesApi.acknowledgeRentalBookingChangeAlert.mock.calls[1])
+  })
+
+  it("keeps both acknowledgement actions disabled while pending", async () => {
+    const user = userEvent.setup()
+    rentalBookingAlertsApi.getRentalBookingAlerts.mockResolvedValue([])
+    changesApi.getRentalBookingChangeAlerts.mockResolvedValue([firstChange])
+    let resolve: (() => void) | undefined
+    changesApi.acknowledgeRentalBookingChangeAlert.mockImplementationOnce(
+      () =>
+        new Promise<void>((done) => {
+          resolve = done
+        })
+    )
+    renderDialog()
+    await user.click(await screen.findByRole("button", { name: "Понятно" }))
+    expect(
+      (screen.getByRole("button", { name: "Понятно" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(true)
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Открыть заказ",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true)
+    resolve?.()
+  })
+
+  it("shows feed errors instead of reporting that there are no changes", async () => {
+    const user = userEvent.setup()
+    rentalBookingAlertsApi.getRentalBookingAlerts.mockResolvedValue([])
+    changesApi.getRentalBookingChangeAlerts
+      .mockRejectedValueOnce(new Error("Feed unavailable"))
+      .mockResolvedValue([firstChange])
+    renderDialog()
+    expect(
+      await screen.findByText("Не удалось проверить изменения заказов")
+    ).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Повторить" }))
+    expect(
+      await screen.findByRole("heading", { name: "Клиент перенёс доставку" })
+    ).toBeTruthy()
+  })
+
   it("stays hidden when the manager has no pending alerts", async () => {
     rentalBookingAlertsApi.getRentalBookingAlerts.mockResolvedValue([])
 

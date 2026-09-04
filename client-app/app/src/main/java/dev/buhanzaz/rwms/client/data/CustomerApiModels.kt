@@ -325,7 +325,12 @@ data class CheckoutRequest(
 
 /** Cancels one completed booking under the exact authoritative booking version. */
 @Serializable
-data class CancelCustomerBookingRequest(val expectedVersion: Long)
+data class CancelCustomerBookingRequest(
+    val expectedVersion: Long,
+    val changeQuoteId: String,
+    val changeQuoteVersion: Long,
+    val testPaymentRequested: Boolean = false,
+)
 
 /** Recalculates replacement offers from server-owned order contents and address facts. */
 @Serializable
@@ -337,6 +342,9 @@ data class RescheduleCustomerBookingRequest(
     val expectedVersion: Long,
     val slotId: String,
     val slotVersion: Long,
+    val changeQuoteId: String,
+    val changeQuoteVersion: Long,
+    val testPaymentRequested: Boolean = false,
 )
 
 /** Exact shipment-line media scope authorized for one delivered cabin. */

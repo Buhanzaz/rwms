@@ -245,12 +245,14 @@ class CustomerBackendContractDecodingTest {
                 expectedVersion = 14,
                 slotId = "slot-new",
                 slotVersion = 6,
+                changeQuoteId = "quote-a",
+                changeQuoteVersion = 2,
             ),
         )
 
         assertThat(search).isEqualTo("{\"expectedVersion\":14}")
         assertThat(confirmation)
-            .isEqualTo("{\"expectedVersion\":14,\"slotId\":\"slot-new\",\"slotVersion\":6}")
+            .isEqualTo("{\"expectedVersion\":14,\"slotId\":\"slot-new\",\"slotVersion\":6,\"changeQuoteId\":\"quote-a\",\"changeQuoteVersion\":2}")
         assertThat(confirmation).doesNotContain("cabin")
         assertThat(confirmation).doesNotContain("equipment")
     }

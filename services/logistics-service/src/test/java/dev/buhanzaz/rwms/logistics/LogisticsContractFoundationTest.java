@@ -784,6 +784,13 @@ class LogisticsContractFoundationTest {
             "publishRentalInquiryClientPresentation",
             "revokeRentalInquiryClientPresentation",
             "listRentalBookingAlerts",
+            "listRentalBookingChangeAlerts",
+            "acknowledgeRentalBookingChangeAlert",
+            "listManageableCustomerBookingChangeQuotes",
+            "listPendingCustomerBookingChangeQuotes",
+            "waiveCustomerBookingChangeCharge",
+            "createCustomerBookingChangeQuote",
+            "getCustomerBookingChangeQuote",
             "actOnRentalBookingAlert",
             "getRentalSettings",
             "updateRentalSettings",
@@ -1524,7 +1531,8 @@ class LogisticsContractFoundationTest {
     Map<String, Object> source = child(child(create, "properties"), "inventorySourceWarehouseId");
     assertThat(source.get("type")).isEqualTo(List.of("string", "null"));
     assertThat(source.get("format")).isEqualTo("uuid");
-    assertThat(source.get("description").toString()).contains("Physical source", "service warehouse");
+    assertThat(source.get("description").toString())
+        .contains("Physical source", "service warehouse");
 
     Map<String, Object> line = child(schemas, "LogisticsLine");
     assertThat(((List<?>) line.get("required")).stream().map(String.class::cast).toList())

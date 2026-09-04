@@ -212,22 +212,102 @@ class CustomerRepository @Inject constructor(
     /** Lists real customer bookings independently of any logistics simulator scenario. */
     suspend fun bookings(): List<CustomerBooking> = call { api.bookings() }
 
-    /** Submits one service-owned cancellation with a process-durable command identity. */
-    suspend fun cancelBooking(booking: CustomerBooking): CustomerBooking {
+    /** Creates an exact owner quote without changing the booking or confirming any payment. */
+    suspend fun createBookingChangeQuote(
+        booking: CustomerBooking,
+        operation: BookingChangeOperation,
+        slot: DeliverySlot? = null,
+    ): CustomerBookingChangeQuote {
+        val bookingId = booking.bookingId
+            ?: throw CustomerApiException(409, "Заказ ещё не готов к изменению")
+        requireBookingVersion(booking)
+        if ((operation == BookingChangeOperation.RESCHEDULE) != (slot != null)) {
+            throw CustomerApiException(422, "Выберите новое время доставки")
+        }
+        val request = CreateBookingChangeQuoteRequest(booking.version, operation, slot?.slotId, slot?.version)
+        return durableIdempotent(
+            operation = "booking-change-quote:$bookingId:${booking.version}:${operation.name}:${slot?.slotId}:${slot?.version}",
+            reconcile = { null },
+        ) { key ->
+            api.createBookingChangeQuote(bookingId, key, request).validated().also { quote ->
+                requireChangeQuote(booking, quote, operation, slot?.slotId, slot?.version)
+                workflowStore.rememberBookingChange(CustomerBookingChangeReference(bookingId, quote.quoteId))
+            }
+        }
+    }
+
+    /** Reads only the exact owner quote; booking status is never used as payment evidence. */
+    suspend fun bookingChangeQuote(bookingId: String, quoteId: String): CustomerBookingChangeQuote = call {
+        exactBookingChangeQuote(bookingId, quoteId).also { quote ->
+            if (quote.applicationState != BookingChangeApplicationState.OFFERED) {
+                workflowStore.bookingChangeReferences().firstOrNull { it.quoteId == quoteId }
+                    ?.commandFingerprint?.let { workflowStore.completeIdempotentOperations(it) }
+            }
+        }
+    }
+
+    /** Applies quoted cancellation and verifies its exact outcome before clearing the durable key. */
+    suspend fun cancelBooking(
+        booking: CustomerBooking,
+        quote: CustomerBookingChangeQuote,
+        testPaymentRequested: Boolean,
+    ): CustomerBookingChangeResult {
         val bookingId = booking.bookingId
             ?: throw CustomerApiException(409, "Заказ ещё не готов к отмене")
         requireBookingVersion(booking)
-        val operation = "booking-cancel:$bookingId:${booking.version}"
-        return durableIdempotent(
-            operation = operation,
-            reconcile = {
-                api.bookings().firstOrNull { current ->
-                    current.bookingId == bookingId &&
-                        current.status in setOf("CANCELLATION_PENDING", "CANCELLED")
-                }
-            },
-        ) { key ->
-            api.cancelBooking(bookingId, key, CancelCustomerBookingRequest(booking.version))
+        requireChangeQuote(booking, quote, BookingChangeOperation.CANCEL)
+        val operation = "booking-cancel:$bookingId:${booking.version}:${quote.quoteId}:${quote.version}:$testPaymentRequested"
+        return quotedBookingMutation(operation, quote) { key ->
+            api.cancelBooking(
+                bookingId,
+                key,
+                CancelCustomerBookingRequest(booking.version, quote.quoteId, quote.version, testPaymentRequested),
+            )
+        }
+    }
+
+    /** Retains command identity until exact APPLIED/APPLYING owner state proves the POST outcome. */
+    private suspend fun quotedBookingMutation(
+        operation: String,
+        quote: CustomerBookingChangeQuote,
+        command: suspend (String) -> CustomerBooking,
+    ): CustomerBookingChangeResult = durableIdempotent(
+        operation = operation,
+        reconcile = {
+            exactBookingChangeQuote(quote.bookingId, quote.quoteId)
+                .takeIf { it.applicationState != BookingChangeApplicationState.OFFERED }
+                ?.let { CustomerBookingChangeResult(null, it) }
+        },
+    ) { key ->
+        workflowStore.rememberBookingChange(CustomerBookingChangeReference(quote.bookingId, quote.quoteId, operation))
+        val booking = command(key)
+        val confirmed = exactBookingChangeQuote(quote.bookingId, quote.quoteId)
+        if (confirmed.applicationState == BookingChangeApplicationState.OFFERED) {
+            throw CustomerApiException(502, "Изменение ещё не подтверждено. Обновите его статус.")
+        }
+        CustomerBookingChangeResult(booking, confirmed)
+    }
+
+    private suspend fun exactBookingChangeQuote(bookingId: String, quoteId: String): CustomerBookingChangeQuote =
+        api.bookingChangeQuote(bookingId, quoteId).validated().also { quote ->
+            if (quote.bookingId != bookingId || quote.quoteId != quoteId) {
+                throw CustomerApiException(502, "Сервис вернул условия другого изменения. Обновите заказ.")
+            }
+        }
+
+    private fun requireChangeQuote(
+        booking: CustomerBooking,
+        quote: CustomerBookingChangeQuote,
+        operation: BookingChangeOperation,
+        slotId: String? = null,
+        slotVersion: Long? = null,
+    ) {
+        quote.validated()
+        if (quote.bookingId != booking.bookingId || quote.bookingVersion != booking.version ||
+            quote.oldSlotId != booking.slotId || quote.operation != operation ||
+            quote.slotId != slotId || quote.slotVersion != slotVersion
+        ) {
+            throw CustomerApiException(409, "Условия изменения устарели. Рассчитайте их заново.", "CUSTOMER_CHANGE_QUOTE_STALE")
         }
     }
 
@@ -244,34 +324,32 @@ class CustomerRepository @Inject constructor(
         }
     }
 
-    /** Atomically swaps one booking to a server offer with a process-durable command identity. */
+    /** Applies the exact quoted slot identity, including after process death, without fabricating an offer. */
     suspend fun rescheduleBooking(
         booking: CustomerBooking,
-        slot: DeliverySlot,
-    ): CustomerBooking {
+        quote: CustomerBookingChangeQuote,
+        testPaymentRequested: Boolean,
+    ): CustomerBookingChangeResult {
         val bookingId = booking.bookingId
             ?: throw CustomerApiException(409, "Заказ ещё не готов к переносу")
         requireBookingVersion(booking)
+        requireChangeQuote(booking, quote, BookingChangeOperation.RESCHEDULE, quote.slotId, quote.slotVersion)
+        val slotId = requireNotNull(quote.slotId)
+        val slotVersion = requireNotNull(quote.slotVersion)
         val operation =
-            "booking-reschedule:$bookingId:${booking.version}:${slot.slotId}:${slot.version}"
-        return durableIdempotent(
-            operation = operation,
-            reconcile = {
-                api.bookings().firstOrNull { current ->
-                    current.bookingId == bookingId &&
-                        current.version > booking.version &&
-                        current.slotId == slot.slotId &&
-                        current.status == "COMPLETED"
-                }
-            },
-        ) { key ->
+            "booking-reschedule:$bookingId:${booking.version}:$slotId:$slotVersion:" +
+                "${quote.quoteId}:${quote.version}:$testPaymentRequested"
+        return quotedBookingMutation(operation, quote) { key ->
             api.rescheduleBooking(
                 bookingId,
                 key,
                 RescheduleCustomerBookingRequest(
                     expectedVersion = booking.version,
-                    slotId = slot.slotId,
-                    slotVersion = slot.version,
+                    slotId = slotId,
+                    slotVersion = slotVersion,
+                    changeQuoteId = quote.quoteId,
+                    changeQuoteVersion = quote.version,
+                    testPaymentRequested = testPaymentRequested,
                 ),
             )
         }

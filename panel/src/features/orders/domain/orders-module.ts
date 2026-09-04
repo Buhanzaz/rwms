@@ -49,4 +49,6 @@ export type OrdersModuleRuntime = {
   currentUser: OrdersModuleUser | null
   warehouses: OrdersModuleWarehouse[]
   capabilities: OrdersModuleCapabilities
+  /** UI hint only; the owner rechecks scopes, warehouse access and order visibility. */
+  canManageBookingChanges: (warehouseId: string) => boolean
 }

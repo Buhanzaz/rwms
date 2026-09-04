@@ -174,9 +174,18 @@ cleared.
 My Orders also supports service-owned cancellation and delivery rescheduling only for an identified
 `COMPLETED` booking. Both commands carry the exact booking version; cancellation and atomic slot
 replacement additionally use a process-durable `Idempotency-Key`. Replacement offers are searched
-against that booking alone and confirmation sends only the selected server slot ID/version, never
-the original cart, cabin, or equipment payload. The command response is shown immediately and then
-reconciled from the authoritative booking list, so a failed replacement leaves the old delivery
+against that booking alone and confirmation sends the selected server slot ID/version and a required
+change-quote ID/version, never the original cart, cabin, or equipment payload. Before applying either
+change, CustomerApp displays the service quote, including its exact string-encoded whole-ruble fee
+and the replacement date/window snapshot. Test payment is explicit consent in that same command;
+only an exact quote GET reporting `TEST_PAID`/`APPLIED` displays the non-financial test marker, with
+no second confirmation. `APPLYING` permits status checks, not another payment. The workflow store
+retains only quote/booking identities and retry fingerprints across process death, never payment
+state or money. Valid quoted replacements, including manager waivers, recover without fabricating
+slot offers. Expired/unconfigured offered terms can be recalculated; an expired waiver is retained
+with a manager-contact explanation rather than silently replaced by paid terms. The supplied support
+phone opens Android `ACTION_DIAL`, never an automatic call; missing phone/dialer is explicit.
+The command response is reconciled from the authoritative booking list, so a failed replacement leaves the old delivery
 projection intact. `CANCELLATION_PENDING` and `CANCELLED` have customer-facing Russian labels,
 stable domain codes become actionable Russian messages, and an absent `cancellationFeeRubles` is
 not rendered as zero. The transport and recovery behavior is owned by

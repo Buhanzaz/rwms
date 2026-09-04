@@ -130,6 +130,19 @@ fun CustomerApp(viewModel: CustomerAppViewModel = hiltViewModel()) {
                 onSelectBookingRescheduleSlot = viewModel::selectBookingRescheduleSlot,
                 onConfirmBookingReschedule = viewModel::confirmBookingReschedule,
                 onDismissBookingReschedule = viewModel::dismissBookingReschedule,
+                onApplyBookingChange = viewModel::applyBookingChange,
+                onRefreshBookingChange = { viewModel.refreshBookingChange() },
+                onResumeBookingChange = { viewModel.refreshBookingChange(it) },
+                onDismissBookingChange = viewModel::dismissBookingChange,
+                onCallBookingChangeSupport = { phone ->
+                    when (openCustomerSupportDialer(context, phone)) {
+                        CustomerSupportDialResult.OPENED -> Unit
+                        CustomerSupportDialResult.PHONE_UNAVAILABLE ->
+                            viewModel.reportBookingChangeContactError("Телефон менеджера недоступен.")
+                        CustomerSupportDialResult.DIALER_UNAVAILABLE ->
+                            viewModel.reportBookingChangeContactError("На устройстве нет доступного приложения для звонков.")
+                    }
+                },
                 onAcceptCabin = viewModel::acceptCabin,
                 onReportProblem = viewModel::reportCabinProblem,
                 onDismissError = viewModel::dismissError,
@@ -174,6 +187,11 @@ fun CustomerAppContent(
     onSelectBookingRescheduleSlot: (String) -> Unit = {},
     onConfirmBookingReschedule: () -> Unit = {},
     onDismissBookingReschedule: () -> Unit = {},
+    onApplyBookingChange: (Boolean) -> Unit = {},
+    onRefreshBookingChange: () -> Unit = {},
+    onResumeBookingChange: (String) -> Unit = {},
+    onDismissBookingChange: () -> Unit = {},
+    onCallBookingChangeSupport: (String) -> Unit = {},
     onAcceptCabin: (String, String, List<dev.buhanzaz.rwms.client.data.CustomerSignatureStroke>) -> Unit = { _, _, _ -> },
     onReportProblem: (String, String, String, String, List<dev.buhanzaz.rwms.client.data.CustomerEvidenceFile>) -> Unit = { _, _, _, _, _ -> },
     onDismissError: () -> Unit = {},
@@ -234,6 +252,11 @@ fun CustomerAppContent(
                     onSelectBookingRescheduleSlot = onSelectBookingRescheduleSlot,
                     onConfirmBookingReschedule = onConfirmBookingReschedule,
                     onDismissBookingReschedule = onDismissBookingReschedule,
+                    onApplyBookingChange = onApplyBookingChange,
+                    onRefreshBookingChange = onRefreshBookingChange,
+                    onResumeBookingChange = onResumeBookingChange,
+                    onDismissBookingChange = onDismissBookingChange,
+                    onCallBookingChangeSupport = onCallBookingChangeSupport,
                     onAcceptCabin = onAcceptCabin,
                     onReportProblem = onReportProblem,
                     onDismissError = onDismissError,
@@ -274,6 +297,11 @@ private fun SignedInNavigation(
     onSelectBookingRescheduleSlot: (String) -> Unit,
     onConfirmBookingReschedule: () -> Unit,
     onDismissBookingReschedule: () -> Unit,
+    onApplyBookingChange: (Boolean) -> Unit,
+    onRefreshBookingChange: () -> Unit,
+    onResumeBookingChange: (String) -> Unit,
+    onDismissBookingChange: () -> Unit,
+    onCallBookingChangeSupport: (String) -> Unit,
     onAcceptCabin: (String, String, List<dev.buhanzaz.rwms.client.data.CustomerSignatureStroke>) -> Unit,
     onReportProblem: (String, String, String, String, List<dev.buhanzaz.rwms.client.data.CustomerEvidenceFile>) -> Unit,
     onDismissError: () -> Unit,
@@ -292,7 +320,8 @@ private fun SignedInNavigation(
         coroutineScope.launch { drawerState.close() }
     }
 
-    LaunchedEffect(state.error) {
+    LaunchedEffect(state.error, state.bookingChangeDialogVisible) {
+        if (state.bookingChangeDialogVisible) return@LaunchedEffect
         state.error?.let { message ->
             snackbar.showSnackbar(message)
             onDismissError()
@@ -302,6 +331,9 @@ private fun SignedInNavigation(
         if (CustomerBookingPolicy.locksCart(state.booking)) {
             topLevel(BookingsRoute)
         }
+    }
+    LaunchedEffect(state.bookingChangeDialogVisible) {
+        if (state.bookingChangeDialogVisible) topLevel(BookingsRoute)
     }
     LaunchedEffect(current, state.booking?.status, state.inquiryId) {
         if (current is CatalogRoute || current is CartRoute) onEnsureActiveInquiry()
@@ -477,6 +509,17 @@ private fun SignedInNavigation(
                                 onSelectRescheduleSlot = onSelectBookingRescheduleSlot,
                                 onConfirmReschedule = onConfirmBookingReschedule,
                                 onDismissReschedule = onDismissBookingReschedule,
+                                changeQuote = state.bookingChangeQuote,
+                                changeDialogVisible = state.bookingChangeDialogVisible,
+                                changeNeedsRefresh = state.bookingChangeNeedsRefresh,
+                                changeError = state.error,
+                                changeUnavailableReason = state.bookingChangeUnavailableReason,
+                                onApplyChange = onApplyBookingChange,
+                                onRefreshChange = onRefreshBookingChange,
+                                pendingChangeBookingIds = state.bookingChangeReferences.keys,
+                                onResumeChange = onResumeBookingChange,
+                                onDismissChange = onDismissBookingChange,
+                                onCallChangeSupport = onCallBookingChangeSupport,
                                 onAccept = onAcceptCabin,
                                 onReport = onReportProblem,
                             )

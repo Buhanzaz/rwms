@@ -73,6 +73,21 @@ class CustomerWorkflowStoreTest {
     }
 
     @Test
+    fun `quote references survive recreation without persisting payment or application state`() = runTest {
+        val first = CustomerBookingChangeReference("booking-a", "quote-a", "booking-cancel:booking-a:7:quote-a:0:true")
+        val second = CustomerBookingChangeReference("booking-b", "quote-b")
+        store.rememberBookingChange(first)
+        store.rememberBookingChange(second)
+        val recreated = CustomerWorkflowStore(RuntimeEnvironment.getApplication(), Json { ignoreUnknownKeys = true })
+
+        assertThat(recreated.bookingChangeReferences()).containsExactly(first, second)
+        recreated.forgetBookingChange(first.quoteId)
+        assertThat(store.bookingChangeReferences()).containsExactly(second)
+        store.clear()
+        assertThat(recreated.bookingChangeReferences()).isEmpty()
+    }
+
+    @Test
     fun `terminal inquiry restart preserves warehouse preference and rotates create identity`() = runTest {
         val warehouseId = UUID.randomUUID().toString()
         val firstInquiryId = UUID.randomUUID().toString()

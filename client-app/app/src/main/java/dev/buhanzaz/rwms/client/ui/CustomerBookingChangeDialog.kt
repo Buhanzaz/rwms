@@ -27,11 +27,15 @@ internal enum class CustomerBookingChangeOperation {
 
 /** Server-confirmed settlement projected into the dialog, never changed by a button locally. */
 internal enum class CustomerBookingChangeSettlement {
+    POLICY_UNCONFIGURED,
     PAYMENT_REQUIRED,
     TEST_PAID,
     WAIVED,
     NOT_REQUIRED,
 }
+
+/** Exact owner application outcome, independent of settlement and booking status. */
+internal enum class CustomerBookingChangeApplicationState { OFFERED, APPLYING, APPLIED }
 
 /**
  * Controlled presentation of one server fee quote. Missing or invalid amounts remain unavailable;
@@ -45,11 +49,15 @@ internal data class CustomerBookingChangeDialogState(
     val supportPhone: String? = null,
     val pending: Boolean = false,
     val errorMessage: String? = null,
+    val applicationState: CustomerBookingChangeApplicationState = CustomerBookingChangeApplicationState.OFFERED,
+    val needsRefresh: Boolean = false,
+    val targetDeliveryLabel: String? = null,
+    val unavailableReason: String? = null,
 )
 
 /**
- * Confirms a service-owned fee or an already settled change using the existing CustomerApp style.
- * Clicking pay only invokes [onPay]; TEST_PAID must arrive in a subsequent server projection.
+ * Applies the quoted operation with optional test consent using the existing CustomerApp style.
+ * Clicking pay only invokes [onPay]; TEST_PAID/APPLIED arrives from the server and offers only Done.
  */
 @Composable
 internal fun CustomerBookingChangeDialog(
@@ -58,12 +66,19 @@ internal fun CustomerBookingChangeDialog(
     onConfirm: () -> Unit,
     onCallSupport: (String) -> Unit,
     onDismiss: () -> Unit,
+    onRefresh: () -> Unit = {},
 ) {
     val amount = state.amountRubles?.takeIf { it >= 0 }
     val phone = customerSupportDialNumber(state.supportPhone)
     val paymentRequired = state.settlement == CustomerBookingChangeSettlement.PAYMENT_REQUIRED
-    val actionEnabled = !state.pending && amount != null &&
-        (!paymentRequired || (amount > 0 && state.testPaymentAvailable))
+    val applied = state.applicationState == CustomerBookingChangeApplicationState.APPLIED
+    val applying = state.applicationState == CustomerBookingChangeApplicationState.APPLYING
+    val mustRefresh = applying || state.needsRefresh
+    val actionEnabled = !state.pending && (applied || mustRefresh ||
+        (amount != null && state.unavailableReason == null &&
+            state.settlement != CustomerBookingChangeSettlement.POLICY_UNCONFIGURED &&
+            state.settlement != CustomerBookingChangeSettlement.TEST_PAID &&
+            (!paymentRequired || (amount > 0 && state.testPaymentAvailable))))
     val operationLabel = when (state.operation) {
         CustomerBookingChangeOperation.CANCEL -> "отмену"
         CustomerBookingChangeOperation.RESCHEDULE -> "перенос"
@@ -83,6 +98,7 @@ internal fun CustomerBookingChangeDialog(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                state.targetDeliveryLabel?.let { Text("Новое время доставки: $it") }
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = MaterialTheme.shapes.medium,
@@ -102,6 +118,8 @@ internal fun CustomerBookingChangeDialog(
                 }
                 Text(
                     when (state.settlement) {
+                        CustomerBookingChangeSettlement.POLICY_UNCONFIGURED ->
+                            "Условия изменения пока не настроены. Свяжитесь с менеджером."
                         CustomerBookingChangeSettlement.PAYMENT_REQUIRED ->
                             "Изменение бронирования предусматривает неустойку. Если нужна помощь, свяжитесь с менеджером."
                         CustomerBookingChangeSettlement.TEST_PAID -> "Оплачено — тестовый режим"
@@ -112,13 +130,13 @@ internal fun CustomerBookingChangeDialog(
                         .testTag("booking-change-settlement")
                         .semantics { liveRegion = LiveRegionMode.Polite },
                 )
-                if (paymentRequired && state.testPaymentAvailable) {
+                if (paymentRequired && state.testPaymentAvailable && !applying) {
                     Text(
                         "Тестовая оплата: реальные деньги не списываются.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                } else if (paymentRequired) {
+                } else if (paymentRequired && !applying) {
                     Text("Тестовая оплата сейчас недоступна. Свяжитесь с менеджером.")
                 }
                 if (phone == null) {
@@ -128,14 +146,17 @@ internal fun CustomerBookingChangeDialog(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                if (state.pending) {
+                if (state.pending || mustRefresh) {
                     Text(
-                        "Ожидаем подтверждение сервиса…",
+                        if (applying) "Изменение принято и выполняется. Проверьте статус позже."
+                        else "Ожидаем подтверждение сервиса…",
                         modifier = Modifier
                             .testTag("booking-change-pending")
                             .semantics { liveRegion = LiveRegionMode.Polite },
                     )
                 }
+                if (applied) Text("Изменение выполнено.")
+                state.unavailableReason?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 state.errorMessage?.takeIf(String::isNotBlank)?.let { message ->
                     Text(
                         message,
@@ -153,17 +174,35 @@ internal fun CustomerBookingChangeDialog(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Button(
-                    onClick = { if (paymentRequired) onPay() else onConfirm() },
+                    onClick = {
+                        when {
+                            applied -> onDismiss()
+                            mustRefresh -> onRefresh()
+                            paymentRequired -> onPay()
+                            else -> onConfirm()
+                        }
+                    },
                     enabled = actionEnabled,
                     modifier = Modifier.fillMaxWidth().testTag("booking-change-confirm"),
                 ) {
                     Text(
-                        if (paymentRequired) {
-                            "Оплатить (тестовый режим)"
-                        } else {
-                            "Подтвердить $operationLabel"
+                        when {
+                            applied -> "Готово"
+                            mustRefresh -> "Проверить статус"
+                            paymentRequired -> when (state.operation) {
+                                CustomerBookingChangeOperation.CANCEL -> "Оплатить и отменить (тест)"
+                                CustomerBookingChangeOperation.RESCHEDULE -> "Оплатить и перенести (тест)"
+                            }
+                            else -> "Подтвердить $operationLabel"
                         },
                     )
+                }
+                if (!applied && !mustRefresh) {
+                    OutlinedButton(
+                        onClick = onRefresh,
+                        enabled = !state.pending,
+                        modifier = Modifier.fillMaxWidth().testTag("booking-change-refresh"),
+                    ) { Text("Обновить условия") }
                 }
                 OutlinedButton(
                     onClick = { phone?.let(onCallSupport) },

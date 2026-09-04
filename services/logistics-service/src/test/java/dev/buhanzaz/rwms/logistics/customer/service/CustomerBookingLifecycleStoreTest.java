@@ -4,6 +4,7 @@ package dev.buhanzaz.rwms.logistics.customer.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
@@ -64,8 +65,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.InOrder;
 import org.springframework.http.HttpStatus;
-import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 /** Verifies ownership, no-start guards and the transactional ordering of booking mutations. */
 class CustomerBookingLifecycleStoreTest {
@@ -82,6 +83,44 @@ class CustomerBookingLifecycleStoreTest {
   private static final LocalDate NEW_DATE = LocalDate.of(2026, 9, 5);
   private static final Clock CLOCK =
       Clock.fixed(Instant.parse("2026-08-31T08:00:00Z"), ZoneOffset.UTC);
+
+  @Test
+  void unpaidCancellationCannotCreateMutationOrChangeBooking() {
+    Fixture fixture = fixture();
+    when(fixture.orderLifecycle().requireCancellation(any(), eq(ORDER))).thenReturn(fence(8));
+    doThrow(
+            new OrderProblemException(
+                HttpStatus.CONFLICT, "CUSTOMER_CHANGE_PAYMENT_REQUIRED", "Consent required"))
+        .when(fixture.changeCharges())
+        .admit(any(), any(), any(), any(), any(), any(), any(), anyBoolean());
+    assertThatThrownBy(
+            () -> fixture.store().prepareCancellation(identity(), BOOKING, KEY, "a".repeat(64), 4))
+        .isInstanceOf(OrderProblemException.class);
+    verify(fixture.mutations(), never()).saveAndFlush(any());
+    verify(fixture.session(), never()).beginCancellation(any(Long.class), any());
+    verify(fixture.oldSlot(), never()).releaseConfirmed(any(), any());
+  }
+
+  @Test
+  void rejectedQuoteCannotChangeOrderDateOrReleaseTheOldSlot() {
+    Fixture fixture = fixture();
+    fixture.stubRescheduleInputs();
+    doThrow(
+            new OrderProblemException(
+                HttpStatus.CONFLICT, "CUSTOMER_CHANGE_QUOTE_STALE", "Stale quote"))
+        .when(fixture.changeCharges())
+        .admit(any(), any(), any(), any(), any(), any(), any(), anyBoolean());
+    assertThatThrownBy(
+            () ->
+                fixture
+                    .store()
+                    .reschedule(identity(), BOOKING, KEY, "b".repeat(64), fixture.decision()))
+        .isInstanceOf(OrderProblemException.class);
+    verify(fixture.orderLifecycle(), never()).reschedule(any(), any(), any());
+    verify(fixture.oldSlot(), never()).releaseConfirmed(any(), any());
+    verify(fixture.newSlot(), never()).confirmReschedule(any(), any(), any(Integer.class));
+    verify(fixture.mutations(), never()).saveAndFlush(any());
+  }
 
   @Test
   void anotherCustomersBookingIsMaskedAsNotFoundBeforeOrderOrAssetAccess() {
@@ -645,6 +684,7 @@ class CustomerBookingLifecycleStoreTest {
 
   private static Fixture fixture(ObjectMapper objectMapper) {
     CustomerBookingMutationRepository mutations = mock(CustomerBookingMutationRepository.class);
+    when(mutations.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
     CustomerRentalSessionRepository sessions = mock(CustomerRentalSessionRepository.class);
     CustomerDeliverySlotRepository slots = mock(CustomerDeliverySlotRepository.class);
     LogisticsDocumentRepository documents = mock(LogisticsDocumentRepository.class);
@@ -707,9 +747,11 @@ class CustomerBookingLifecycleStoreTest {
     when(access.orderActor(any(), eq(WAREHOUSE))).thenReturn(actor());
     when(publishedRescheduleSagas.findAllForBookingAdmission(ORDER, BOOKING))
         .thenReturn(List.of());
+    CustomerBookingChangeChargeStore changeCharges = mock(CustomerBookingChangeChargeStore.class);
     return new Fixture(
         new CustomerBookingLifecycleStore(
             mutations,
+            changeCharges,
             sessions,
             slots,
             documents,
@@ -732,6 +774,7 @@ class CustomerBookingLifecycleStoreTest {
             objectMapper,
             CLOCK),
         mutations,
+        changeCharges,
         sessions,
         slots,
         documents,
@@ -781,6 +824,7 @@ class CustomerBookingLifecycleStoreTest {
   private record Fixture(
       CustomerBookingLifecycleStore store,
       CustomerBookingMutationRepository mutations,
+      CustomerBookingChangeChargeStore changeCharges,
       CustomerRentalSessionRepository sessions,
       CustomerDeliverySlotRepository slots,
       LogisticsDocumentRepository documents,

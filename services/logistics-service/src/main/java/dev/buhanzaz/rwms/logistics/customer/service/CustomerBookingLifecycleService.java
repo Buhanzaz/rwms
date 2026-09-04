@@ -11,8 +11,9 @@ import dev.buhanzaz.rwms.logistics.customer.security.CustomerIdentity;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerBookingLifecycleStore.CancellationClaim;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerBookingLifecycleStore.CancellationFailure;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerBookingLifecycleStore.CancellationStart;
-import dev.buhanzaz.rwms.logistics.customer.service.CustomerBookingLifecycleStore.RescheduleDecision;
+import dev.buhanzaz.rwms.logistics.customer.service.CustomerBookingLifecycleStore.ChangeConsent;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerBookingLifecycleStore.RescheduleAudit;
+import dev.buhanzaz.rwms.logistics.customer.service.CustomerBookingLifecycleStore.RescheduleDecision;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
 import dev.buhanzaz.rwms.logistics.order.service.RentalOrderService;
@@ -54,10 +55,27 @@ public class CustomerBookingLifecycleService {
       UUID bookingId,
       UUID idempotencyKey,
       CancelCustomerBookingRequest request) {
-    String requestHash = sha256("CANCEL\n" + bookingId + "\n" + request.expectedVersion());
+    String requestHash =
+        sha256(
+            "CANCEL\n"
+                + bookingId
+                + "\n"
+                + request.expectedVersion()
+                + consentHash(
+                    request.changeQuoteId(),
+                    request.changeQuoteVersion(),
+                    request.testPaymentRequested()));
     CancellationStart start =
         store.prepareCancellation(
-            identity, bookingId, idempotencyKey, requestHash, request.expectedVersion());
+            identity,
+            bookingId,
+            idempotencyKey,
+            requestHash,
+            request.expectedVersion(),
+            new ChangeConsent(
+                request.changeQuoteId(),
+                request.changeQuoteVersion(),
+                request.testPaymentRequested()));
     if (start.mutation().getState() == CustomerBookingMutationState.COMPLETED) {
       return bookings.response(identity, start.session(), "CANCELLED", null);
     }
@@ -97,7 +115,11 @@ public class CustomerBookingLifecycleService {
                 + "\n"
                 + request.slotId()
                 + "\n"
-                + request.slotVersion());
+                + request.slotVersion()
+                + consentHash(
+                    request.changeQuoteId(),
+                    request.changeQuoteVersion(),
+                    request.testPaymentRequested()));
     Optional<CustomerBookingRescheduleReceipt> replay =
         store.rescheduleReplay(identity, bookingId, idempotencyKey, requestHash);
     if (replay.isPresent()) {
@@ -115,7 +137,11 @@ public class CustomerBookingLifecycleService {
             idempotencyKey,
             requestHash,
             decision,
-            currentProjection.cabins());
+            currentProjection.cabins(),
+            new ChangeConsent(
+                request.changeQuoteId(),
+                request.changeQuoteVersion(),
+                request.testPaymentRequested()));
     return receipt.customerResponse();
   }
 
@@ -379,6 +405,10 @@ public class CustomerBookingLifecycleService {
   private static String bounded(String value) {
     String normalized = value.trim();
     return normalized.length() > 64 ? normalized.substring(0, 64) : normalized;
+  }
+
+  private static String consentHash(UUID quoteId, Long quoteVersion, boolean testPaymentRequested) {
+    return "\nQUOTE\n" + quoteId + "\n" + quoteVersion + "\n" + testPaymentRequested;
   }
 
   private static String sha256(String value) {

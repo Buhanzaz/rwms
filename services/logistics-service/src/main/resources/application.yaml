@@ -171,6 +171,7 @@ rwms:
     client-presentation:
       token-secret: ${CLIENT_PRESENTATION_TOKEN_SECRET:rwms-local-client-presentation-secret-change-me}
     customer:
+      test-change-payment-enabled: ${LOGISTICS_CUSTOMER_TEST_CHANGE_PAYMENT_ENABLED:true}
       booking-reconcile-delay: ${LOGISTICS_CUSTOMER_BOOKING_RECONCILE_DELAY:2s}
       booking-reconcile-initial-delay: ${LOGISTICS_CUSTOMER_BOOKING_RECONCILE_INITIAL_DELAY:3s}
       delivery:

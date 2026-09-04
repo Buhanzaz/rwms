@@ -3,6 +3,7 @@ import { Route, Routes } from "react-router-dom"
 
 import { ManagerBookingAlertDialog } from "@/features/assistant/components/manager-booking-alert-dialog"
 import { useAuth } from "@/features/auth/use-auth"
+import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import {
   RWMS_ORDERS_CAPABILITIES,
   type OrdersModuleCapabilities,
@@ -39,6 +40,18 @@ export function VaultPanelOrdersModuleAdapter({
         address: warehouse.address,
       })),
       capabilities,
+      canManageBookingChanges: (warehouseId) =>
+        Boolean(
+          accessToken &&
+          currentUser?.rentalAccess &&
+          [
+            "SYSTEM_ADMIN",
+            "WMS_ADMIN",
+            "WAREHOUSE_MANAGER",
+            "RENTAL_MANAGER",
+          ].includes(currentUser.globalRole) &&
+          hasWarehouseAccess(currentUser, warehouseId, "EDIT")
+        ),
     }),
     [accessToken, capabilities, currentUser, warehouses]
   )

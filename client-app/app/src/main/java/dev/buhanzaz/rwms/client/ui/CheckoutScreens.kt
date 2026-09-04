@@ -488,6 +488,17 @@ fun BookingsScreen(
     onSelectRescheduleSlot: (String) -> Unit = {},
     onConfirmReschedule: () -> Unit = {},
     onDismissReschedule: () -> Unit = {},
+    changeQuote: dev.buhanzaz.rwms.client.data.CustomerBookingChangeQuote? = null,
+    changeDialogVisible: Boolean = false,
+    changeNeedsRefresh: Boolean = false,
+    changeError: String? = null,
+    changeUnavailableReason: String? = null,
+    onApplyChange: (Boolean) -> Unit = {},
+    onRefreshChange: () -> Unit = {},
+    onDismissChange: () -> Unit = {},
+    onCallChangeSupport: (String) -> Unit = {},
+    pendingChangeBookingIds: Set<String> = emptySet(),
+    onResumeChange: (String) -> Unit = {},
 ) {
     val visible = CustomerBookingPolicy.visible(latest, bookings)
     var acceptanceTarget by androidx.compose.runtime.remember {
@@ -495,9 +506,6 @@ fun BookingsScreen(
     }
     var problemTarget by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf<Pair<String, dev.buhanzaz.rwms.client.data.CustomerBookingCabin>?>(null)
-    }
-    var cancellationTarget by androidx.compose.runtime.remember {
-        androidx.compose.runtime.mutableStateOf<String?>(null)
     }
     androidx.compose.runtime.LaunchedEffect(visible, busy, acceptanceTarget) {
         val (bookingId, target) = acceptanceTarget ?: return@LaunchedEffect
@@ -602,13 +610,18 @@ fun BookingsScreen(
                                 Text("Перенести доставку")
                             }
                             OutlinedButton(
-                                onClick = { cancellationTarget = bookingId },
+                                onClick = { onCancel(bookingId) },
                                 enabled = !busy,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .testTag("booking-cancel-$bookingId"),
                             ) {
                                 Text("Отменить заказ")
+                            }
+                        }
+                        if (booking.bookingId in pendingChangeBookingIds && !changeDialogVisible) {
+                            OutlinedButton(onClick = { booking.bookingId?.let(onResumeChange) }, enabled = !busy) {
+                                Text("Проверить изменение")
                             }
                         }
                     }
@@ -638,34 +651,31 @@ fun BookingsScreen(
             },
         )
     }
-    cancellationTarget?.let { bookingId ->
-        AlertDialog(
-            onDismissRequest = { if (!busy) cancellationTarget = null },
-            title = { Text("Отменить заказ?") },
-            text = {
-                Text("Заказ можно отменить, пока бытовки не переданы в погрузку. Проверим его состояние перед отменой.")
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        cancellationTarget = null
-                        onCancel(bookingId)
-                    },
-                    enabled = !busy,
-                    modifier = Modifier.testTag("booking-confirm-cancel"),
-                ) {
-                    Text("Отменить заказ")
-                }
-            },
-            dismissButton = {
-                OutlinedButton(onClick = { cancellationTarget = null }, enabled = !busy) {
-                    Text("Оставить заказ")
-                }
-            },
-            modifier = Modifier.fillMaxWidth().widthIn(max = 760.dp),
+    if (changeDialogVisible && changeQuote != null) {
+        CustomerBookingChangeDialog(
+            state = CustomerBookingChangeDialogState(
+                operation = CustomerBookingChangeOperation.valueOf(changeQuote.operation.name),
+                amountRubles = changeQuote.amountAsLongOrNull(),
+                settlement = CustomerBookingChangeSettlement.valueOf(changeQuote.settlement.name),
+                applicationState = CustomerBookingChangeApplicationState.valueOf(changeQuote.applicationState.name),
+                testPaymentAvailable = changeQuote.testPaymentAvailable,
+                supportPhone = changeQuote.supportPhone,
+                pending = busy,
+                needsRefresh = changeNeedsRefresh,
+                errorMessage = changeError,
+                unavailableReason = changeUnavailableReason,
+                targetDeliveryLabel = changeQuote.targetDeliveryDate?.let { date ->
+                    formatDeliveryDate(date) + " · ${changeQuote.targetWindowStart?.take(5)}–${changeQuote.targetWindowEnd?.take(5)}"
+                },
+            ),
+            onPay = { onApplyChange(true) },
+            onConfirm = { onApplyChange(false) },
+            onCallSupport = onCallChangeSupport,
+            onDismiss = onDismissChange,
+            onRefresh = onRefreshChange,
         )
     }
-    if (rescheduleBookingId != null) {
+    if (rescheduleBookingId != null && !changeDialogVisible) {
         BookingRescheduleDialog(
             slots = rescheduleSlots,
             selectedSlotId = selectedRescheduleSlotId,

@@ -1163,9 +1163,21 @@ Evidence:
    The separate versioned rental-settings boundary now stores advance notice in
    warehouse-local calendar days (default 2), a nullable FIXED/PERCENT fee rule
    and the company's optional support phone. Fee values cross HTTP as exact
-   decimal strings; null means unconfigured, not a zero charge. These settings
-   alone do not assess a booking fee or implement payment/waiver: booking-change
-   settlement and the customer dialog integration remain separate work.
+   decimal strings; null means unconfigured, not a zero charge. V95 quote creation
+   snapshots the exact booking/source slot, replacement date/window and current
+   policy. Late percentages use the original confirmed delivery price, rounded
+   once HALF_UP to whole RUB. Expiry is the earlier of fifteen minutes and
+   warehouse-local midnight; all existing slot and road/capacity checks still apply.
+   Public cancel/reschedule require the quote ID/version and explicit test-payment
+   consent when needed. `TEST_PAID` is a simulation, recorded only with the completed
+   owner mutation; pending cancellation is `APPLYING`. Exact quote GET, not booking
+   status or local storage, proves the outcome after a lost response or process death.
+   A staff waiver requires rental write access, warehouse EDIT, a reason, exact quote
+   version and idempotency key; original fee facts are retained. The limited pending-fee
+   feed exposes only the fee intent and does not widen full order visibility.
+   V96 completed-change alerts fan out to all rental managers with current warehouse
+   READ/rental access. Acknowledgements belong to individual managers, not to the
+   booking, and cannot hide another manager's unread notification.
 10. A confirmed fixed choice enters the logistics-owned planning feed with hard
    bounds; a confirmed `DURING_DAY` choice enters as a soft date-only option
    with null planner bounds. Informational `travelZoneHours` and the site-derived

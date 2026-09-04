@@ -22,6 +22,7 @@ import { RENTAL_MANAGER_ORDERS_CAPABILITIES } from "@/features/orders/domain/ord
 import { OrdersRoutes } from "@/features/orders/orders-routes"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { cn } from "@/lib/utils"
+import { ManagerBookingChangeQuotes } from "@/apps/manager/manager-booking-change-quotes"
 
 type ManagerNavigationItem = {
   to: string
@@ -138,6 +139,7 @@ function ManagerLayout() {
               </AlertDescription>
             </Alert>
           ) : null}
+          <ManagerBookingChangeQuotes />
           <Routes>
             <Route path="/assistant" element={<AssistantPage />} />
             <Route

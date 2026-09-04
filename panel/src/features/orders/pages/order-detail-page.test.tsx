@@ -64,6 +64,7 @@ vi.mock("@/features/orders/orders-module-context", () => ({
       },
     ],
     capabilities: ordersRuntime.capabilities,
+    canManageBookingChanges: () => false,
   }),
 }))
 vi.mock("@/features/orders/components/order-unit-dossier-evidence", () => ({
@@ -262,6 +263,57 @@ afterEach(() => {
 })
 
 describe("OrderDetailPage cabin entry", () => {
+  it("shows a waiver reason and exact fee only for the owner charge audit subject", async () => {
+    const audit = {
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      orderId: ORDER_ID,
+      eventType: "ORDER_CHANGED",
+      actorSubjectId: baseOrder.managerId,
+      actorRole: "WAREHOUSE_MANAGER",
+      subjectId: CLIENT_ID,
+      subjectType: "CUSTOMER_BOOKING_CHANGE_CHARGE",
+      occurredAt: "2026-09-05T10:00:00Z",
+      previousValues: {
+        settlement: "PAYMENT_REQUIRED",
+        amountRubles: "9223372036854775807",
+      },
+      newValues: {
+        settlement: "WAIVED",
+        amountRubles: "0",
+        reason: "Перекрытие дороги подтверждено",
+        unexpected: "Скрытый JSON",
+      },
+    }
+    ordersApi.listOrderHistory.mockResolvedValue([
+      audit,
+      {
+        ...audit,
+        id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        subjectType: "ORDER",
+        previousValues: null,
+        newValues: {
+          reason: "Не показывать чужую причину",
+          settlement: "WAIVED",
+          amountRubles: "12345",
+        },
+      },
+    ])
+    renderPage(baseOrder)
+    expect(
+      await screen.findByText(
+        "Стало: Неустойка отменена · Неустойка: 0 ₽ · Причина: Перекрытие дороги подтверждено"
+      )
+    ).toBeTruthy()
+    expect(
+      screen.getByText(
+        "Было: Ожидает оплаты · Неустойка: 9 223 372 036 854 775 807 ₽"
+      )
+    ).toBeTruthy()
+    expect(
+      screen.queryByText(/Не показывать чужую причину|Скрытый JSON/)
+    ).toBeNull()
+  })
+
   it("removes the old inline grid and offers exactly two order-linked paths", async () => {
     const user = userEvent.setup()
     renderPage(baseOrder)

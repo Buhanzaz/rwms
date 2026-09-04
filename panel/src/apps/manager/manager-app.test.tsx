@@ -28,6 +28,9 @@ vi.mock("@/features/clients/clients-routes", () => ({
 vi.mock("@/features/orders/orders-routes", () => ({
   OrdersRoutes: () => <div>Рабочие заказы</div>,
 }))
+vi.mock("@/apps/manager/manager-booking-change-quotes", () => ({
+  ManagerBookingChangeQuotes: () => <div>Неустойки клиента</div>,
+}))
 vi.mock("@/features/claims/claims-page", () => ({
   ClaimsPage: () => <div>Рабочие претензии</div>,
 }))
@@ -57,6 +60,7 @@ describe("ManagerApp", () => {
     )
 
     expect(screen.getByText("Рабочие клиенты")).toBeTruthy()
+    expect(screen.getByText("Неустойки клиента")).toBeTruthy()
     expect(
       screen
         .getByRole("link", { name: "BLOCKBOX: менеджер аренды" })

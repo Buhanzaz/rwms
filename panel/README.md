@@ -30,6 +30,25 @@ Russian version: [README.ru.md](README.ru.md).
   user with `rentalAccess=true` and exactly `rental.manage`. Its shared warehouse
   provider keeps only explicitly granted warehouses; an empty grant set is
   explained without blocking chat or client lookup.
+- Rental-manager notification dialogs also consume the logistics-owned
+  `/api/logistics/v1/rental-booking-change-alerts` feed. Completed cancellations
+  and reschedules use distinct mutation IDs, server calendar dates and exact
+  ruble strings. Acknowledgement is version-fenced and idempotent for the current
+  user; it never changes the order or payment. The order link appears only when
+  the server returns `canOpenOrder=true`. Feed errors remain visible and never
+  become fabricated empty or paid results.
+- The manager shell has a collapsed fee-only entry backed by
+  `/api/logistics/v1/rental-booking-change-quotes`. It shows only pending proposals
+  in editable warehouses, without requesting full orders or customer contacts.
+  Existing order details reuse the same waiver form where order visibility is
+  already granted; neither path grants additional order access. Fee commands
+  require a staff role, rental access, effective write scope and warehouse EDIT.
+  Only current, unexpired OFFERED quotes are listed. An outstanding
+  or unconfigured fee can be waived with a trimmed 1–2000 character reason and
+  its own quote version/idempotency key. A conflict reloads the quote but retains
+  the reason and never resubmits automatically. Waiver neither changes the
+  booking nor extends the quote deadline; the waiver reason and exact settlement
+  are displayed only for charge entries in existing order audit.
 - The Vite proxy is a local-development convenience only. Production browser
   requests remain same-origin and must be served behind the public gateway.
 

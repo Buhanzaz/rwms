@@ -180,8 +180,8 @@ quarantine make a lost response recoverable without browser rollback. From check
 until completion, every ordinary order command first locks the same rental-order row and rejects the
 open customer cancellation; only the order-owned recovery path bypasses that admission check. This
 prevents a planner or concurrent user command from restarting work in the gap before the durable
-order mutation is created. No cancellation fee policy is invented: `cancellationFeeRubles` remains
-null. Reschedule search reuses the booked order's exact
+order mutation is created. The legacy booking field `cancellationFeeRubles` remains null;
+operation-specific fees are exposed only through the quote workflow below. Reschedule search reuses the booked order's exact
 cabins, address, attestations, truck routing, capacity fingerprint and tariff rules while excluding
 the current confirmed slot from workload. Confirmation locks both capacity dates, rechecks the
 fresh offer, changes only the order delivery date, confirms the replacement and releases the old
@@ -195,6 +195,33 @@ cart, cabin selection and furniture selection are never reopened. See
 [`RentalOrderCustomerLifecycleService`](src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderCustomerLifecycleService.java)
 and
 [`V80`](src/main/resources/db/migration/V80__customer_booking_cancellation_and_reschedule.sql).
+
+### Customer booking change quotes and manager notifications
+
+V95 stores immutable policy, booking/source-slot and replacement-slot snapshots. Customer
+`POST /api/logistics/customer/v1/bookings/{bookingId}/change-quotes` requires an idempotency key;
+exact quote GET recovers its result after a lost response. Cancellation/reschedule require the
+quote identity/version in addition to existing booking/slot fences. Free notice compares calendar
+dates in the canonical warehouse timezone (default two days), never elapsed 48-hour intervals.
+Late PERCENT uses the original confirmed delivery price, rounds once HALF_UP to whole RUB, and
+all quote/alert/audit amounts use exact strings. Missing policy or timezone never means free.
+Quotes expire after fifteen minutes or warehouse-local midnight, whichever comes first; slot
+expiry and current road/capacity checks remain mandatory. Replacement date/window snapshots let
+CustomerApp recover the chosen target without constructing a fictional delivery offer.
+
+`LOGISTICS_CUSTOMER_TEST_CHANGE_PAYMENT_ENABLED` defaults to true for the explicitly requested
+simulation. It authorizes no money transfer: `TEST_PAID` is recorded only in the transaction that
+completes the exact booking mutation. An accepted cancellation remains `APPLYING` until owner
+recovery finishes; a failed slot swap cannot leave a paid fee. Disabling the flag rejects test
+consent. Company-initiated dispatcher recovery does not enter customer fee assessment.
+
+Staff with rental write authority and warehouse EDIT may waive a current unexpired quote with
+a mandatory reason, quote version and idempotency key. The limited pending-fee feed is independent
+of full order visibility; it grants no other order access. Original fee facts remain stored,
+payable amount becomes zero, and the order audit records the actor/reason. V96 adds independent
+read receipts: completed cancellation/reschedule notifications reach **every RENTAL_MANAGER with
+current warehouse READ and rental access**, not only a responsible manager. Reading by one
+manager does not hide the change from another. The bounded feeds batch their dependent reads.
 
 ### Planner recovery owner boundaries
 

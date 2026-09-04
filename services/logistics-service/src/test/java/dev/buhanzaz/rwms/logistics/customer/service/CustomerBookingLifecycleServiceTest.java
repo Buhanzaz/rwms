@@ -48,7 +48,7 @@ class CustomerBookingLifecycleServiceTest {
     Fixture fixture = fixture();
     CustomerBookingMutation mutation = mutation(CustomerBookingMutationState.PENDING);
     CancellationClaim claim = claim();
-    when(fixture.store().prepareCancellation(any(), eq(BOOKING), eq(KEY), any(), eq(4L)))
+    when(fixture.store().prepareCancellation(any(), eq(BOOKING), eq(KEY), any(), eq(4L), any()))
         .thenReturn(new CancellationStart(mutation, fixture.session(), false));
     when(fixture.store().claim(MUTATION)).thenReturn(Optional.of(claim));
     OrderDetailResponse cancelledOrder = cancelledOrder();
@@ -71,7 +71,7 @@ class CustomerBookingLifecycleServiceTest {
   void completedCancellationReplayDoesNotRepeatOrderOrAssetEffects() {
     Fixture fixture = fixture();
     CustomerBookingMutation mutation = mutation(CustomerBookingMutationState.COMPLETED);
-    when(fixture.store().prepareCancellation(any(), eq(BOOKING), eq(KEY), any(), eq(5L)))
+    when(fixture.store().prepareCancellation(any(), eq(BOOKING), eq(KEY), any(), eq(5L), any()))
         .thenReturn(new CancellationStart(mutation, fixture.session(), true));
     when(fixture.bookings().response(any(), eq(fixture.session()), eq("CANCELLED"), eq(null)))
         .thenReturn(fixture.response());
@@ -89,7 +89,7 @@ class CustomerBookingLifecycleServiceTest {
   void failedRemoteReleaseStaysPendingAndNeverReleasesTheConfirmedSlotLocally() {
     Fixture fixture = fixture();
     CustomerBookingMutation mutation = mutation(CustomerBookingMutationState.PENDING);
-    when(fixture.store().prepareCancellation(any(), eq(BOOKING), eq(KEY), any(), eq(4L)))
+    when(fixture.store().prepareCancellation(any(), eq(BOOKING), eq(KEY), any(), eq(4L), any()))
         .thenReturn(new CancellationStart(mutation, fixture.session(), false));
     when(fixture.store().claim(MUTATION))
         .thenReturn(Optional.of(claim()));
@@ -159,7 +159,7 @@ class CustomerBookingLifecycleServiceTest {
     when(fixture
             .store()
             .rescheduleWithCustomerProjection(
-                any(), eq(BOOKING), eq(KEY), any(), eq(decision), eq(java.util.List.of())))
+                any(), eq(BOOKING), eq(KEY), any(), eq(decision), eq(java.util.List.of()), any()))
         .thenReturn(frozenA);
 
     CustomerBookingResponse response =

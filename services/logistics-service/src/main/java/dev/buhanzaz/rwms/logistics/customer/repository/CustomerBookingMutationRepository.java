@@ -10,6 +10,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
@@ -33,6 +34,22 @@ public interface CustomerBookingMutationRepository
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select mutation from CustomerBookingMutation mutation where mutation.id = :id")
   Optional<CustomerBookingMutation> findForUpdate(@Param("id") UUID id);
+
+  /** Bounded, warehouse-filtered completed changes, with read receipts scoped to this manager. */
+  @Query(
+      """
+      select mutation from CustomerBookingMutation mutation
+      join CustomerDeliverySlot slot on slot.id = mutation.oldSlotId
+      where mutation.state = :state and slot.warehouseId in :warehouseIds
+        and not exists (select ack.id from CustomerBookingChangeAlertAcknowledgement ack
+          where ack.mutationId = mutation.id and ack.managerId = :managerId)
+      order by mutation.completedAt, mutation.id
+      """)
+  List<CustomerBookingMutation> findUnreadChanges(
+      @Param("managerId") UUID managerId,
+      @Param("warehouseIds") Collection<UUID> warehouseIds,
+      @Param("state") CustomerBookingMutationState state,
+      Pageable page);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query(

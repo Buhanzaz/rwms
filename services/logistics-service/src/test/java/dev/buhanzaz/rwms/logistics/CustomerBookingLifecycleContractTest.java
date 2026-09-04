@@ -38,9 +38,20 @@ class CustomerBookingLifecycleContractTest {
             "SearchCustomerBookingRescheduleRequest",
             "RescheduleCustomerBookingRequest");
     assertThat(required(child(schemas, "CancelCustomerBookingRequest")))
-        .containsExactly("expectedVersion");
+        .containsExactly("expectedVersion", "changeQuoteId", "changeQuoteVersion");
     assertThat(required(child(schemas, "RescheduleCustomerBookingRequest")))
-        .containsExactly("expectedVersion", "slotId", "slotVersion");
+        .containsExactly(
+            "expectedVersion", "slotId", "slotVersion", "changeQuoteId", "changeQuoteVersion");
+
+    Map<String, Object> quote = child(schemas, "CustomerBookingChangeQuote");
+    assertThat(required(quote))
+        .contains("targetDeliveryDate", "targetWindowStart", "targetWindowEnd", "applicationState");
+    assertThat(child(child(quote, "properties"), "amountRubles").get("type"))
+        .asList()
+        .containsExactly("string", "null");
+    assertThat(child(child(quote, "properties"), "settlement").get("enum"))
+        .asList()
+        .contains("POLICY_UNCONFIGURED", "TEST_PAID", "WAIVED");
 
     Map<String, Object> booking = child(schemas, "CustomerBooking");
     assertThat(required(booking)).contains("version", "cancellationFeeRubles");

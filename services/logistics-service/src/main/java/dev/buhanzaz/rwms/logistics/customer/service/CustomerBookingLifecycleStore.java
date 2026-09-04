@@ -14,6 +14,7 @@ import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacit
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacityShiftRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.repository.WarehouseCapacitySnapshotRepository;
 import dev.buhanzaz.rwms.logistics.customer.capacity.service.CustomerDeliveryCapacityFence;
+import dev.buhanzaz.rwms.logistics.customer.domain.CustomerBookingChangeCharge;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerBookingMutation;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerBookingMutationOperation;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerBookingMutationState;
@@ -81,6 +82,7 @@ class CustomerBookingLifecycleStore {
           PlanningPublishedRescheduleSagaState.RELEASED);
 
   private final CustomerBookingMutationRepository mutations;
+  private final CustomerBookingChangeChargeStore changeCharges;
   private final CustomerRentalSessionRepository sessions;
   private final CustomerDeliverySlotRepository slots;
   private final LogisticsDocumentRepository documents;
@@ -114,6 +116,26 @@ class CustomerBookingLifecycleStore {
       UUID idempotencyKey,
       String requestSha256,
       long expectedSessionVersion) {
+    return prepareCancellation(
+        identity,
+        bookingId,
+        idempotencyKey,
+        requestSha256,
+        expectedSessionVersion,
+        new ChangeConsent(null, null, false));
+  }
+
+  /**
+   * Requires quoted customer consent inside the same transaction as the cancellation checkpoint.
+   */
+  @Transactional
+  CancellationStart prepareCancellation(
+      CustomerIdentity identity,
+      UUID bookingId,
+      UUID idempotencyKey,
+      String requestSha256,
+      long expectedSessionVersion,
+      ChangeConsent consent) {
     acquire(identity.subjectId(), idempotencyKey);
     CustomerBookingMutation replay =
         mutations
@@ -139,6 +161,16 @@ class CustomerBookingLifecycleStore {
         orderLifecycle.requireCancellation(
             access.orderActor(identity, session.getWarehouseId()), session.getOrderId());
     CustomerDeliverySlot slot = lockedConfirmedSlot(session);
+    CustomerBookingChangeCharge charge =
+        changeCharges.admit(
+            session,
+            slot,
+            CustomerBookingMutationOperation.CANCEL,
+            null,
+            null,
+            consent.quoteId(),
+            consent.quoteVersion(),
+            consent.testPaymentRequested());
     cancelUntouchedFurniturePreparation(identity.subjectId(), session);
     cancelUntouchedShipmentDrafts(identity.subjectId(), session.getOrderId());
 
@@ -158,6 +190,7 @@ class CustomerBookingLifecycleStore {
                 order.version(),
                 slot.getId(),
                 timestamp));
+    changeCharges.bind(charge, mutation.getId(), consent.testPaymentRequested());
     return new CancellationStart(mutation, session, false);
   }
 
@@ -207,6 +240,7 @@ class CustomerBookingLifecycleStore {
     sessions.saveAndFlush(session);
     mutation.complete(leaseToken, timestamp);
     mutations.saveAndFlush(mutation);
+    changeCharges.complete(mutation.getId());
     return session;
   }
 
@@ -252,6 +286,26 @@ class CustomerBookingLifecycleStore {
       String requestSha256,
       RescheduleDecision decision,
       List<CustomerBookingCabin> customerCabins) {
+    return rescheduleWithCustomerProjection(
+        identity,
+        bookingId,
+        idempotencyKey,
+        requestSha256,
+        decision,
+        customerCabins,
+        new ChangeConsent(null, null, false));
+  }
+
+  /** Quotes are admitted only after the unchanged route-capacity and owner editability fences. */
+  @Transactional
+  CustomerBookingRescheduleReceipt rescheduleWithCustomerProjection(
+      CustomerIdentity identity,
+      UUID bookingId,
+      UUID idempotencyKey,
+      String requestSha256,
+      RescheduleDecision decision,
+      List<CustomerBookingCabin> customerCabins,
+      ChangeConsent consent) {
     return reschedule(
         identity,
         bookingId,
@@ -260,7 +314,8 @@ class CustomerBookingLifecycleStore {
         decision,
         new RescheduleAudit("CUSTOMER_SELECTED_SLOT", identity.subjectId(), null),
         null,
-        customerCabins);
+        customerCabins,
+        consent);
   }
 
   /** Applies an audited dispatcher-approved reschedule through the same atomic booking mutation. */
@@ -273,7 +328,7 @@ class CustomerBookingLifecycleStore {
       RescheduleDecision decision,
       RescheduleAudit audit) {
     return reschedule(
-        identity, bookingId, idempotencyKey, requestSha256, decision, audit, null, List.of());
+        identity, bookingId, idempotencyKey, requestSha256, decision, audit, null, List.of(), null);
   }
 
   /**
@@ -297,7 +352,8 @@ class CustomerBookingLifecycleStore {
         decision,
         audit,
         idempotencyKey,
-        List.of());
+        List.of(),
+        null);
   }
 
   private CustomerBookingRescheduleReceipt reschedule(
@@ -308,7 +364,8 @@ class CustomerBookingLifecycleStore {
       RescheduleDecision decision,
       RescheduleAudit audit,
       UUID owningPublishedSagaId,
-      List<CustomerBookingCabin> customerCabins) {
+      List<CustomerBookingCabin> customerCabins,
+      ChangeConsent consent) {
     acquire(identity.subjectId(), idempotencyKey);
     CustomerBookingMutation replay =
         mutations
@@ -353,6 +410,19 @@ class CustomerBookingLifecycleStore {
     String currentFingerprint = workloadFingerprint(newSlot, oldSlot.getId(), timestamp);
     if (!decision.workloadSha256().equals(currentFingerprint)) throw slotTaken();
 
+    CustomerBookingChangeCharge charge =
+        consent == null
+            ? null
+            : changeCharges.admit(
+                session,
+                oldSlot,
+                CustomerBookingMutationOperation.RESCHEDULE,
+                newSlot.getId(),
+                newSlot.getVersion(),
+                consent.quoteId(),
+                consent.quoteVersion(),
+                consent.testPaymentRequested());
+
     CustomerOrderFence order;
     if (owningPublishedSagaId != null) {
       if (decision.expectedOrderVersion() == null) {
@@ -385,25 +455,33 @@ class CustomerBookingLifecycleStore {
     sessions.saveAndFlush(session);
     CustomerBookingRescheduleReceipt receipt = receipt(order, session, newSlot, customerCabins);
     String receiptJson = encodeReceipt(receipt);
-    mutations.saveAndFlush(
-        CustomerBookingMutation.completedReschedule(
-            identity.subjectId(),
-            bookingId,
-            session.getInquiryId(),
-            session.getOrderId(),
-            idempotencyKey,
-            requestSha256,
-            decision.expectedSessionVersion(),
-            order.version(),
-            oldSlot.getId(),
-            newSlot.getId(),
-            audit.decisionCode(),
-            audit.actorSubjectId(),
-            audit.reason(),
-            receiptJson,
-            timestamp));
+    CustomerBookingMutation mutation =
+        mutations.saveAndFlush(
+            CustomerBookingMutation.completedReschedule(
+                identity.subjectId(),
+                bookingId,
+                session.getInquiryId(),
+                session.getOrderId(),
+                idempotencyKey,
+                requestSha256,
+                decision.expectedSessionVersion(),
+                order.version(),
+                oldSlot.getId(),
+                newSlot.getId(),
+                audit.decisionCode(),
+                audit.actorSubjectId(),
+                audit.reason(),
+                receiptJson,
+                timestamp));
+    if (consent != null) {
+      changeCharges.bind(charge, mutation.getId(), consent.testPaymentRequested());
+      changeCharges.complete(mutation.getId());
+    }
     return receipt;
   }
+
+  /** Untrusted customer consent is checked against the persisted quote before any fee settles. */
+  record ChangeConsent(UUID quoteId, Long quoteVersion, boolean testPaymentRequested) {}
 
   /** Returns an exact completed reschedule replay before stale request fences are recalculated. */
   @Transactional
@@ -725,7 +803,8 @@ class CustomerBookingLifecycleStore {
     return new OrderProblemException(
         HttpStatus.CONFLICT,
         "CUSTOMER_BOOKING_PUBLISHED_CHANGE_IN_PROGRESS",
-        "Изменение опубликованной доставки ещё выполняется; обновите бронирование и повторите действие");
+        "Изменение опубликованной доставки ещё выполняется; обновите бронирование и повторите"
+            + " действие");
   }
 
   private static OrderProblemException unsupportedRescheduleReplay() {

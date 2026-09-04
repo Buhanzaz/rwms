@@ -122,6 +122,12 @@ private fun customerProblemCodeMessage(code: String?): String? = when (code) {
         "Заказ уже передан в работу. Отменить или перенести доставку больше нельзя."
     "CUSTOMER_BOOKING_VERSION_CONFLICT" ->
         "Заказ изменился. Обновите его и повторите действие."
+    "CUSTOMER_CHANGE_QUOTE_REQUIRED" -> "Сначала рассчитайте условия изменения заказа."
+    "CUSTOMER_CHANGE_QUOTE_STALE" -> "Условия изменения устарели. Рассчитайте доступное время и неустойку заново."
+    "CUSTOMER_CHANGE_QUOTE_NOT_FOUND" -> "Условия изменения не найдены. Обновите заказ."
+    "CUSTOMER_CHANGE_QUOTE_INVALID" -> "Не удалось подтвердить условия изменения. Рассчитайте их заново."
+    "CUSTOMER_CHANGE_POLICY_UNCONFIGURED" -> "Условия изменения пока не настроены. Свяжитесь с менеджером."
+    "CUSTOMER_CHANGE_PAYMENT_REQUIRED" -> "Для изменения нужна оплата неустойки. Проверьте условия или свяжитесь с менеджером."
     "CUSTOMER_BOOKING_CANCELLATION_PENDING" ->
         "Отмена заказа уже выполняется. Обновите статус немного позже."
     "ORDER_MUTATION_PENDING" ->

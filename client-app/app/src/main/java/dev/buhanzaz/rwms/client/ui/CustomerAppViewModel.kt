@@ -7,11 +7,15 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.buhanzaz.rwms.client.auth.CustomerAuthRepository
 import dev.buhanzaz.rwms.client.auth.CustomerAuthState
 import dev.buhanzaz.rwms.client.data.AvailableEquipment
+import dev.buhanzaz.rwms.client.data.BookingChangeApplicationState
+import dev.buhanzaz.rwms.client.data.BookingChangeOperation
+import dev.buhanzaz.rwms.client.data.BookingChangeSettlement
 import dev.buhanzaz.rwms.client.data.CabinFacets
 import dev.buhanzaz.rwms.client.data.CabinFilters
 import dev.buhanzaz.rwms.client.data.CheckoutRequest
 import dev.buhanzaz.rwms.client.data.CustomerApiException
 import dev.buhanzaz.rwms.client.data.CustomerBooking
+import dev.buhanzaz.rwms.client.data.CustomerBookingChangeQuote
 import dev.buhanzaz.rwms.client.data.CustomerCabin
 import dev.buhanzaz.rwms.client.data.CustomerCart
 import dev.buhanzaz.rwms.client.data.CustomerEntityType
@@ -26,6 +30,7 @@ import dev.buhanzaz.rwms.client.data.DeliverySlot
 import dev.buhanzaz.rwms.client.data.DeliverySlotSearchRequest
 import dev.buhanzaz.rwms.client.data.HeldDeliverySlot
 import dev.buhanzaz.rwms.client.data.InquirySession
+import java.time.Instant
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -81,8 +86,15 @@ data class CustomerWorkflowState(
     val booking: CustomerBooking? = null,
     val bookings: List<CustomerBooking> = emptyList(),
     val bookingRescheduleId: String? = null,
+    val bookingRescheduleVersion: Long? = null,
+    val bookingRescheduleSourceSlotId: String? = null,
     val bookingRescheduleSlots: List<DeliverySlot> = emptyList(),
     val selectedBookingRescheduleSlotId: String? = null,
+    val bookingChangeQuote: CustomerBookingChangeQuote? = null,
+    val bookingChangeDialogVisible: Boolean = false,
+    val bookingChangeNeedsRefresh: Boolean = false,
+    val bookingChangeUnavailableReason: String? = null,
+    val bookingChangeReferences: Map<String, String> = emptyMap(),
 )
 
 /**
@@ -157,9 +169,68 @@ internal fun CustomerWorkflowState.withSuccessfulBookingReschedule(
         booking = latest,
         bookings = CustomerBookingPolicy.replace(updated, bookings),
         bookingRescheduleId = null,
+        bookingRescheduleVersion = null,
+        bookingRescheduleSourceSlotId = null,
         bookingRescheduleSlots = emptyList(),
         selectedBookingRescheduleSlotId = null,
     )
+}
+
+/** Keeps replacement offers only while the refreshed booking matches their exact search source. */
+internal fun CustomerWorkflowState.withReconciledBookings(
+    refreshedBookings: List<CustomerBooking>,
+): CustomerWorkflowState {
+    val latest = booking?.let { current -> CustomerBookingPolicy.reconcile(current, refreshedBookings) }
+    val rescheduleId = bookingRescheduleId?.takeIf { bookingId ->
+        bookingRescheduleVersion != null && refreshedBookings.any { refreshed ->
+            refreshed.bookingId == bookingId &&
+                CustomerBookingLifecyclePolicy.canChange(refreshed) &&
+                refreshed.version == bookingRescheduleVersion &&
+                refreshed.slotId == bookingRescheduleSourceSlotId
+        }
+    }
+    return copy(
+        booking = latest,
+        bookings = refreshedBookings,
+        bookingRescheduleId = rescheduleId,
+        bookingRescheduleVersion = if (rescheduleId == null) null else bookingRescheduleVersion,
+        bookingRescheduleSourceSlotId = if (rescheduleId == null) null else bookingRescheduleSourceSlotId,
+        bookingRescheduleSlots = if (rescheduleId == null) emptyList() else bookingRescheduleSlots,
+        selectedBookingRescheduleSlotId = if (rescheduleId == null) null else selectedBookingRescheduleSlotId,
+    )
+}
+
+/** Refreshes expired/unconfigured offered terms, but never silently replaces a manager waiver. */
+internal fun CustomerBookingChangeQuote.requiresFreshBookingChangeTerms(now: Instant): Boolean =
+    applicationState == BookingChangeApplicationState.OFFERED && settlement != BookingChangeSettlement.WAIVED &&
+        (settlement == BookingChangeSettlement.POLICY_UNCONFIGURED || !now.isBefore(Instant.parse(expiresAt)))
+
+/** Only a newer exact waiver may replace a rejected payment consent with a fresh free confirmation. */
+internal fun CustomerWorkflowState.canConfirmRecoveredBookingChangeWaiver(
+    previous: CustomerBookingChangeQuote?,
+    recovered: CustomerBookingChangeQuote?,
+    failureCode: String?,
+    bookingReloaded: Boolean,
+    now: Instant,
+): Boolean {
+    if (failureCode != "CUSTOMER_CHANGE_QUOTE_STALE" || !bookingReloaded || previous == null || recovered == null) {
+        return false
+    }
+    val currentBooking = bookings.firstOrNull { it.bookingId == recovered.bookingId } ?: return false
+    return previous.applicationState == BookingChangeApplicationState.OFFERED &&
+        previous.settlement == BookingChangeSettlement.PAYMENT_REQUIRED &&
+        recovered.applicationState == BookingChangeApplicationState.OFFERED &&
+        recovered.settlement == BookingChangeSettlement.WAIVED && recovered.amountRubles == "0" &&
+        recovered.quoteId == previous.quoteId && recovered.version > previous.version &&
+        recovered.bookingId == previous.bookingId && recovered.bookingVersion == previous.bookingVersion &&
+        recovered.oldSlotId == previous.oldSlotId && recovered.operation == previous.operation &&
+        recovered.slotId == previous.slotId && recovered.slotVersion == previous.slotVersion &&
+        recovered.targetDeliveryDate == previous.targetDeliveryDate &&
+        recovered.targetWindowStart == previous.targetWindowStart && recovered.targetWindowEnd == previous.targetWindowEnd &&
+        recovered.noticeDays == previous.noticeDays && recovered.deliveryDate == previous.deliveryDate &&
+        recovered.warehouseTimeZone == previous.warehouseTimeZone && recovered.expiresAt == previous.expiresAt &&
+        now.isBefore(Instant.parse(recovered.expiresAt)) && CustomerBookingLifecyclePolicy.canChange(currentBooking) &&
+        currentBooking.version == recovered.bookingVersion && currentBooking.slotId == recovered.oldSlotId
 }
 
 /** App-level conditional state consumed by Navigation 3. */
@@ -613,19 +684,23 @@ class CustomerAppViewModel @Inject constructor(
         )
     }
 
-    /** Submits cancellation with the exact booking version and then reconciles the server list. */
+    /** Requests server terms before allowing cancellation or consent to a test charge. */
     fun cancelBooking(bookingId: String) = launchMutation {
+        if (showExistingBookingChange(bookingId)) return@launchMutation
         val booking = requireChangeableBooking(bookingId)
-        applyBookingResponse(repository.cancelBooking(booking))
-        reconcileBookings(repository.bookings())
+        val quote = repository.createBookingChangeQuote(booking, BookingChangeOperation.CANCEL)
+        showBookingChangeQuote(quote)
     }
 
     /** Loads replacement slots derived solely from the server-owned booking contents. */
     fun openBookingReschedule(bookingId: String) = launchMutation {
+        if (showExistingBookingChange(bookingId)) return@launchMutation
         val booking = requireChangeableBooking(bookingId)
         val slots = repository.searchBookingRescheduleSlots(booking)
         mutableWorkflow.value = mutableWorkflow.value.copy(
             bookingRescheduleId = bookingId,
+            bookingRescheduleVersion = booking.version,
+            bookingRescheduleSourceSlotId = booking.slotId,
             bookingRescheduleSlots = CustomerBookingLifecyclePolicy.orderedSlots(slots),
             selectedBookingRescheduleSlotId = null,
         )
@@ -644,12 +719,14 @@ class CustomerAppViewModel @Inject constructor(
         if (mutationGate.isActive()) return
         mutableWorkflow.value = mutableWorkflow.value.copy(
             bookingRescheduleId = null,
+            bookingRescheduleVersion = null,
+            bookingRescheduleSourceSlotId = null,
             bookingRescheduleSlots = emptyList(),
             selectedBookingRescheduleSlotId = null,
         )
     }
 
-    /** Confirms an atomic server slot swap and refreshes the authoritative booking projection. */
+    /** Quotes the selected replacement offer; this does not move the booking or settle a charge. */
     fun confirmBookingReschedule() = launchMutation {
         val current = mutableWorkflow.value
         val bookingId = current.bookingRescheduleId
@@ -659,9 +736,140 @@ class CustomerAppViewModel @Inject constructor(
             ?: throw CustomerApiException(422, "Выберите новое время доставки")
         val slot = current.bookingRescheduleSlots.singleOrNull { offer -> offer.slotId == slotId }
             ?: throw CustomerApiException(409, "Выбранное время устарело. Рассчитайте варианты заново")
-        val updated = repository.rescheduleBooking(booking, slot)
-        mutableWorkflow.value = mutableWorkflow.value.withSuccessfulBookingReschedule(updated)
+        val quote = repository.createBookingChangeQuote(booking, BookingChangeOperation.RESCHEDULE, slot)
+        showBookingChangeQuote(quote)
+    }
+
+    /** Atomically applies the quoted change; TEST_PAID is shown only from the subsequent exact GET. */
+    fun applyBookingChange(testPaymentRequested: Boolean) = launchMutation {
+        val current = mutableWorkflow.value
+        val quote = current.bookingChangeQuote
+            ?: throw CustomerApiException(409, "Сначала рассчитайте условия изменения")
+        if (current.bookingChangeNeedsRefresh || quote.applicationState != BookingChangeApplicationState.OFFERED) {
+            throw CustomerApiException(409, "Сначала проверьте статус изменения")
+        }
+        current.bookingChangeUnavailableReason?.let { throw CustomerApiException(409, it) }
+        val paymentRequired = quote.settlement == BookingChangeSettlement.PAYMENT_REQUIRED
+        if (quote.settlement == BookingChangeSettlement.POLICY_UNCONFIGURED ||
+            testPaymentRequested != paymentRequired || (paymentRequired && !quote.testPaymentAvailable)
+        ) {
+            throw CustomerApiException(409, "Изменение пока недоступно. Свяжитесь с менеджером.")
+        }
+        mutableWorkflow.value = mutableWorkflow.value.copy(bookingChangeNeedsRefresh = true)
+        val booking = requireChangeableBooking(quote.bookingId)
+        val result = when (quote.operation) {
+            BookingChangeOperation.CANCEL -> repository.cancelBooking(booking, quote, testPaymentRequested)
+            BookingChangeOperation.RESCHEDULE -> repository.rescheduleBooking(booking, quote, testPaymentRequested)
+        }
+        showBookingChangeQuote(result.quote)
+        result.booking?.let { updated ->
+            if (quote.operation == BookingChangeOperation.RESCHEDULE) {
+                mutableWorkflow.value = mutableWorkflow.value.withSuccessfulBookingReschedule(updated)
+            } else {
+                applyBookingResponse(updated)
+            }
+        }
         reconcileBookings(repository.bookings())
+    }
+
+    /** Refreshes an exact pending/uncertain quote without issuing another mutation. */
+    fun refreshBookingChange(bookingId: String? = null) = launchMutation {
+        val current = mutableWorkflow.value
+        val id = bookingId ?: current.bookingChangeQuote?.bookingId ?: return@launchMutation
+        val quoteId = current.bookingChangeReferences[id] ?: return@launchMutation
+        val refreshed = repository.bookingChangeQuote(id, quoteId)
+        showBookingChangeQuote(refreshed)
+        reconcileBookings(repository.bookings())
+        presentRecoveredBookingChange(refreshed)
+    }
+
+    /** Hides pending owner work without discarding its exact reference or implying a reversal. */
+    fun dismissBookingChange() = launchMutation {
+        val current = mutableWorkflow.value
+        val keepReference = current.bookingChangeNeedsRefresh ||
+            current.bookingChangeQuote?.applicationState == BookingChangeApplicationState.APPLYING ||
+            (current.bookingChangeQuote?.applicationState == BookingChangeApplicationState.OFFERED &&
+                current.bookingChangeQuote.settlement == BookingChangeSettlement.WAIVED)
+        val discardOffers = keepReference ||
+            current.bookingChangeQuote?.applicationState == BookingChangeApplicationState.APPLIED
+        if (!keepReference) current.bookingChangeQuote?.let { workflowStore.forgetBookingChange(it.quoteId) }
+        mutableWorkflow.value = current.copy(
+            bookingChangeQuote = current.bookingChangeQuote.takeIf { keepReference },
+            bookingChangeDialogVisible = false,
+            error = null,
+            bookingChangeReferences = workflowStore.bookingChangeReferences().associate { it.bookingId to it.quoteId },
+            bookingRescheduleId = if (discardOffers) null else current.bookingRescheduleId,
+            bookingRescheduleVersion = if (discardOffers) null else current.bookingRescheduleVersion,
+            bookingRescheduleSourceSlotId = if (discardOffers) null else current.bookingRescheduleSourceSlotId,
+            bookingRescheduleSlots = if (discardOffers) emptyList() else current.bookingRescheduleSlots,
+            selectedBookingRescheduleSlotId = if (discardOffers) null else current.selectedBookingRescheduleSlotId,
+        )
+    }
+
+    /** Reports a missing dialer as presentation failure, never as an attempted phone call. */
+    fun reportBookingChangeContactError(message: String) {
+        mutableWorkflow.value = mutableWorkflow.value.copy(error = message)
+    }
+
+    private fun showBookingChangeQuote(quote: CustomerBookingChangeQuote) {
+        mutableWorkflow.value = mutableWorkflow.value.copy(
+            bookingChangeQuote = quote,
+            bookingChangeDialogVisible = true,
+            bookingChangeNeedsRefresh = false,
+            bookingChangeUnavailableReason = if (quote.applicationState == BookingChangeApplicationState.OFFERED &&
+                quote.settlement == BookingChangeSettlement.WAIVED && !Instant.now().isBefore(Instant.parse(quote.expiresAt))
+            ) "Выбранное время устарело. Свяжитесь с менеджером, чтобы сохранить освобождение от неустойки."
+            else null,
+            bookingChangeReferences = mutableWorkflow.value.bookingChangeReferences + (quote.bookingId to quote.quoteId),
+        )
+    }
+
+    private suspend fun showExistingBookingChange(bookingId: String): Boolean {
+        val quoteId = mutableWorkflow.value.bookingChangeReferences[bookingId] ?: return false
+        val quote = repository.bookingChangeQuote(bookingId, quoteId)
+        showBookingChangeQuote(quote)
+        reconcileBookings(repository.bookings())
+        presentRecoveredBookingChange(quote)
+        return true
+    }
+
+    private suspend fun presentRecoveredBookingChange(quote: CustomerBookingChangeQuote) {
+        if (quote.applicationState != BookingChangeApplicationState.OFFERED) return
+        val current = mutableWorkflow.value
+        val booking = CustomerBookingPolicy.visible(current.booking, current.bookings)
+            .firstOrNull { it.bookingId == quote.bookingId }
+        val sourceUnchanged = booking != null && CustomerBookingLifecyclePolicy.canChange(booking) &&
+            booking.version == quote.bookingVersion && booking.slotId == quote.oldSlotId
+        if (quote.settlement == BookingChangeSettlement.WAIVED) {
+            if (!sourceUnchanged) {
+                mutableWorkflow.value = current.copy(
+                    bookingChangeUnavailableReason = "Заказ изменился. Свяжитесь с менеджером, чтобы сохранить освобождение от неустойки.",
+                )
+            }
+            return
+        }
+        if (sourceUnchanged && !quote.requiresFreshBookingChangeTerms(Instant.now())) return
+        // An exact OFFERED response proves there is no accepted effect to preserve or retry.
+        workflowStore.forgetBookingChange(quote.quoteId)
+        mutableWorkflow.value = current.copy(
+            bookingChangeQuote = null,
+            bookingChangeDialogVisible = false,
+            bookingChangeNeedsRefresh = false,
+            bookingChangeReferences = workflowStore.bookingChangeReferences().associate { it.bookingId to it.quoteId },
+        )
+        val editable = requireChangeableBooking(quote.bookingId)
+        if (quote.operation == BookingChangeOperation.CANCEL) {
+            showBookingChangeQuote(repository.createBookingChangeQuote(editable, BookingChangeOperation.CANCEL))
+        } else {
+            val slots = repository.searchBookingRescheduleSlots(editable)
+            mutableWorkflow.value = mutableWorkflow.value.copy(
+                bookingRescheduleId = quote.bookingId,
+                bookingRescheduleVersion = editable.version,
+                bookingRescheduleSourceSlotId = editable.slotId,
+                bookingRescheduleSlots = CustomerBookingLifecyclePolicy.orderedSlots(slots),
+                selectedBookingRescheduleSlotId = null,
+            )
+        }
     }
 
     /** Accepts one arrived cabin and reloads its authoritative reception state. */
@@ -711,6 +919,17 @@ class CustomerAppViewModel @Inject constructor(
         workflowStore.read()?.takeIf(CustomerWorkflowReference::rememberWarehouse)?.let { reference ->
             resumeWorkflow(reference, warehouses)
         }
+        val changeReferences = workflowStore.bookingChangeReferences()
+        mutableWorkflow.value = mutableWorkflow.value.copy(
+            bookingChangeReferences = changeReferences.associate { it.bookingId to it.quoteId },
+        )
+        if (changeReferences.isNotEmpty()) {
+            reconcileBookings(repository.bookings())
+            val reference = changeReferences.first()
+            val quote = repository.bookingChangeQuote(reference.bookingId, reference.quoteId)
+            showBookingChangeQuote(quote)
+            presentRecoveredBookingChange(quote)
+        }
     }
 
     private fun launchMutation(showBusy: Boolean = true, block: suspend () -> Unit) {
@@ -726,8 +945,51 @@ class CustomerAppViewModel @Inject constructor(
                     mutableWorkflow.value = mutableWorkflow.value.copy(error = recoverArchivedWorkflow())
                 } else {
                     if (failure.status == 401) authRepository.invalidate(failure.message)
-                    if (failure.status == 409) reloadAfterConflict()
-                    mutableWorkflow.value = mutableWorkflow.value.copy(error = failure.message)
+                    val quote = mutableWorkflow.value.bookingChangeQuote
+                    val recoveredQuote = if (quote != null && mutableWorkflow.value.bookingChangeNeedsRefresh) {
+                        try {
+                            repository.bookingChangeQuote(quote.bookingId, quote.quoteId).also(::showBookingChangeQuote)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Throwable) {
+                            null
+                        }
+                    } else null
+                    val acceptedChange = recoveredQuote != null &&
+                        recoveredQuote.applicationState != BookingChangeApplicationState.OFFERED
+                    val bookingReloaded = if (failure.status == 409) reloadAfterConflict() else false
+                    val recoveredWaiver = mutableWorkflow.value.canConfirmRecoveredBookingChangeWaiver(
+                        previous = quote,
+                        recovered = recoveredQuote,
+                        failureCode = failure.code,
+                        bookingReloaded = bookingReloaded,
+                        now = Instant.now(),
+                    )
+                    val staleChange = failure.code in setOf(
+                        "CUSTOMER_CHANGE_QUOTE_STALE", "CUSTOMER_BOOKING_VERSION_CONFLICT",
+                        "CUSTOMER_DELIVERY_SLOT_EXPIRED", "CUSTOMER_DELIVERY_SLOT_NOT_FOUND", "CUSTOMER_DELIVERY_SLOT_TAKEN",
+                    )
+                    if (staleChange && mutableWorkflow.value.bookingChangeQuote?.settlement == BookingChangeSettlement.WAIVED) {
+                        mutableWorkflow.value = mutableWorkflow.value.copy(
+                            bookingChangeUnavailableReason = if (recoveredWaiver) null
+                            else "Условия изменились. Свяжитесь с менеджером, чтобы сохранить освобождение от неустойки.",
+                        )
+                    } else if (staleChange && !mutableWorkflow.value.bookingChangeNeedsRefresh && !acceptedChange
+                    ) {
+                        mutableWorkflow.value.bookingChangeQuote?.let { workflowStore.forgetBookingChange(it.quoteId) }
+                        mutableWorkflow.value = mutableWorkflow.value.copy(
+                            bookingChangeQuote = null,
+                            bookingChangeDialogVisible = false,
+                            bookingChangeNeedsRefresh = false,
+                            bookingRescheduleId = null,
+                            bookingRescheduleVersion = null,
+                            bookingRescheduleSourceSlotId = null,
+                            bookingRescheduleSlots = emptyList(),
+                            selectedBookingRescheduleSlotId = null,
+                            bookingChangeReferences = workflowStore.bookingChangeReferences().associate { it.bookingId to it.quoteId },
+                        )
+                    }
+                    mutableWorkflow.value = mutableWorkflow.value.copy(error = failure.message.takeUnless { acceptedChange || recoveredWaiver })
                 }
             } catch (_: Throwable) {
                 mutableWorkflow.value = mutableWorkflow.value.copy(error = "Не удалось выполнить действие")
@@ -738,9 +1000,10 @@ class CustomerAppViewModel @Inject constructor(
         }
     }
 
-    private suspend fun reloadAfterConflict() {
-        runCatching { repository.bookings() }.getOrNull()?.let(::reconcileBookings)
-        val inquiryId = mutableWorkflow.value.inquiryId ?: return
+    private suspend fun reloadAfterConflict(): Boolean {
+        val bookings = runCatching { repository.bookings() }.getOrNull()
+        bookings?.let(::reconcileBookings)
+        val inquiryId = mutableWorkflow.value.inquiryId ?: return bookings != null
         runCatching { repository.cart(inquiryId) }.getOrNull()?.let { cart ->
             val selectedIds = cart.cabins.mapTo(mutableSetOf()) { it.unitId }
             mutableWorkflow.value = mutableWorkflow.value.copy(
@@ -761,6 +1024,7 @@ class CustomerAppViewModel @Inject constructor(
                 heldSlot = null,
             )
         }
+        return bookings != null
     }
 
     private fun requireChangeableBooking(bookingId: String): CustomerBooking {
@@ -795,24 +1059,7 @@ class CustomerAppViewModel @Inject constructor(
     }
 
     private fun reconcileBookings(bookings: List<CustomerBooking>) {
-        val current = mutableWorkflow.value
-        val latest = current.booking?.let { booking -> CustomerBookingPolicy.reconcile(booking, bookings) }
-        val rescheduleId = current.bookingRescheduleId?.takeIf { bookingId ->
-            bookings.any { booking ->
-                booking.bookingId == bookingId && CustomerBookingLifecyclePolicy.canChange(booking)
-            }
-        }
-        mutableWorkflow.value = current.copy(
-            booking = latest,
-            bookings = bookings,
-            bookingRescheduleId = rescheduleId,
-            bookingRescheduleSlots = if (rescheduleId == null) emptyList() else current.bookingRescheduleSlots,
-            selectedBookingRescheduleSlotId = if (rescheduleId == null) {
-                null
-            } else {
-                current.selectedBookingRescheduleSlotId
-            },
-        )
+        mutableWorkflow.value = mutableWorkflow.value.withReconciledBookings(bookings)
     }
 
     private suspend fun resumeWorkflow(

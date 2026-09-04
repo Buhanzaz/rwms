@@ -29,6 +29,7 @@ class CustomerBookingChangeDialogTest {
     fun `pay delegates once and remains unpaid until the server projection changes`() {
         val payCalls = AtomicInteger()
         val confirmCalls = AtomicInteger()
+        val dismissCalls = AtomicInteger()
         val current = mutableStateOf(quote())
         composeRule.setContent {
             CustomerTheme {
@@ -37,7 +38,7 @@ class CustomerBookingChangeDialogTest {
                     onPay = { payCalls.incrementAndGet() },
                     onConfirm = { confirmCalls.incrementAndGet() },
                     onCallSupport = {},
-                    onDismiss = {},
+                    onDismiss = { dismissCalls.incrementAndGet() },
                 )
             }
         }
@@ -52,15 +53,20 @@ class CustomerBookingChangeDialogTest {
             assertThat(payCalls.get()).isEqualTo(1)
             assertThat(confirmCalls.get()).isEqualTo(0)
             assertThat(current.value.settlement).isEqualTo(CustomerBookingChangeSettlement.PAYMENT_REQUIRED)
-            current.value = current.value.copy(settlement = CustomerBookingChangeSettlement.TEST_PAID)
+            current.value = current.value.copy(
+                settlement = CustomerBookingChangeSettlement.TEST_PAID,
+                applicationState = CustomerBookingChangeApplicationState.APPLIED,
+            )
         }
 
         composeRule.onNodeWithText("Оплачено — тестовый режим").assertExists()
         composeRule.onNodeWithText("Оплатить (тестовый режим)").assertDoesNotExist()
-        composeRule.onNodeWithText("Подтвердить перенос").performClick()
+        composeRule.onNodeWithText("Подтвердить перенос").assertDoesNotExist()
+        composeRule.onNodeWithText("Готово").performClick()
         composeRule.runOnIdle {
             assertThat(payCalls.get()).isEqualTo(1)
-            assertThat(confirmCalls.get()).isEqualTo(1)
+            assertThat(confirmCalls.get()).isEqualTo(0)
+            assertThat(dismissCalls.get()).isEqualTo(1)
         }
     }
 
@@ -81,6 +87,47 @@ class CustomerBookingChangeDialogTest {
         }
         composeRule.runOnIdle { assertThat(calls.get()).isEqualTo(0) }
         composeRule.onNodeWithText("Оплачено — тестовый режим").assertDoesNotExist()
+    }
+
+    @Test
+    fun `accepted cancellation checks exact status instead of paying again and allows leaving`() {
+        val refreshCalls = AtomicInteger()
+        render(
+            quote().copy(applicationState = CustomerBookingChangeApplicationState.APPLYING, testPaymentAvailable = false),
+            onPay = { error("A pending change cannot be paid again") },
+            onRefresh = { refreshCalls.incrementAndGet() },
+        )
+        composeRule.onNodeWithText("Проверить статус").assertIsEnabled().performClick()
+        composeRule.onNodeWithTag("booking-change-dismiss").assertIsEnabled()
+        composeRule.onNodeWithText("Оплачено — тестовый режим").assertDoesNotExist()
+        composeRule.runOnIdle { assertThat(refreshCalls.get()).isEqualTo(1) }
+    }
+
+    @Test
+    fun `unconfigured policy cannot be treated as free even when a zero amount is supplied`() {
+        render(quote().copy(settlement = CustomerBookingChangeSettlement.POLICY_UNCONFIGURED, amountRubles = 0))
+        composeRule.onNodeWithTag("booking-change-confirm").assertIsNotEnabled()
+        composeRule.onNodeWithTag("booking-change-call-support").assertIsEnabled()
+    }
+
+    @Test
+    fun `expired waived target keeps manager access without confirming or replacing its terms`() {
+        render(quote().copy(
+            settlement = CustomerBookingChangeSettlement.WAIVED,
+            amountRubles = 0,
+            unavailableReason = "Время устарело. Свяжитесь с менеджером, чтобы сохранить освобождение.",
+        ))
+        composeRule.onNodeWithTag("booking-change-confirm").assertIsNotEnabled()
+        composeRule.onNodeWithTag("booking-change-call-support").assertIsEnabled()
+        composeRule.onNodeWithText("Время устарело. Свяжитесь с менеджером, чтобы сохранить освобождение.").assertExists()
+    }
+
+    @Test
+    fun `uncertain response offers only exact status verification`() {
+        val refreshCalls = AtomicInteger()
+        render(quote().copy(needsRefresh = true), onRefresh = { refreshCalls.incrementAndGet() })
+        composeRule.onNodeWithText("Проверить статус").performClick()
+        composeRule.runOnIdle { assertThat(refreshCalls.get()).isEqualTo(1) }
     }
 
     @Test
@@ -182,10 +229,11 @@ class CustomerBookingChangeDialogTest {
         onConfirm: () -> Unit = {},
         onCallSupport: (String) -> Unit = {},
         onDismiss: () -> Unit = {},
+        onRefresh: () -> Unit = {},
     ) {
         composeRule.setContent {
             CustomerTheme {
-                CustomerBookingChangeDialog(state, onPay, onConfirm, onCallSupport, onDismiss)
+                CustomerBookingChangeDialog(state, onPay, onConfirm, onCallSupport, onDismiss, onRefresh)
             }
         }
     }

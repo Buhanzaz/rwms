@@ -2,12 +2,15 @@ package dev.buhanzaz.rwms.logistics.customer.api;
 
 import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.*;
 
+import dev.buhanzaz.rwms.logistics.customer.api.CustomerBookingChangeApiModels.CreateCustomerBookingChangeQuoteRequest;
+import dev.buhanzaz.rwms.logistics.customer.api.CustomerBookingChangeApiModels.CustomerBookingChangeQuoteResponse;
 import dev.buhanzaz.rwms.logistics.customer.security.CustomerAuthorizer;
 import dev.buhanzaz.rwms.logistics.customer.security.CustomerIdentity;
+import dev.buhanzaz.rwms.logistics.customer.service.CustomerBookingChangeService;
+import dev.buhanzaz.rwms.logistics.customer.service.CustomerBookingLifecycleService;
+import dev.buhanzaz.rwms.logistics.customer.service.CustomerBookingService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerCabinCatalogService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerCheckoutService;
-import dev.buhanzaz.rwms.logistics.customer.service.CustomerBookingService;
-import dev.buhanzaz.rwms.logistics.customer.service.CustomerBookingLifecycleService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerDeliverySlotService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerProfileService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerRentalService;
@@ -52,6 +55,7 @@ public class CustomerController {
   private final CustomerCheckoutService checkout;
   private final CustomerBookingService customerBookings;
   private final CustomerBookingLifecycleService bookingLifecycle;
+  private final CustomerBookingChangeService bookingChanges;
 
   /** Returns the logistics profile of the authenticated customer. */
   @GetMapping("/profile")
@@ -253,7 +257,24 @@ public class CustomerController {
     return checkout.bookings(identity(jwt));
   }
 
-  /** Cancels an untouched completed booking without reopening its original cart. */
+  /** Quotes an exact booking change without reserving capacity or starting the change. */
+  @PostMapping("/bookings/{bookingId}/change-quotes")
+  public CustomerBookingChangeQuoteResponse quoteBookingChange(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID bookingId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody CreateCustomerBookingChangeQuoteRequest request) {
+    return bookingChanges.create(identity(jwt), bookingId, idempotencyKey, request);
+  }
+
+  /** Returns the exact settlement/application result after a lost response or app restart. */
+  @GetMapping("/bookings/{bookingId}/change-quotes/{quoteId}")
+  public CustomerBookingChangeQuoteResponse bookingChangeQuote(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID bookingId, @PathVariable UUID quoteId) {
+    return bookingChanges.get(identity(jwt), bookingId, quoteId);
+  }
+
+  /** Cancels an untouched completed booking using an explicitly accepted fee quote. */
   @PostMapping("/bookings/{bookingId}/cancel")
   public CustomerBookingResponse cancelBooking(
       @AuthenticationPrincipal Jwt jwt,

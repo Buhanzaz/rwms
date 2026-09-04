@@ -46,6 +46,7 @@ import {
 import { OrderCommandIdentityRegistry } from "@/features/orders/api/order-command-identity"
 import { AddCabinsDialog } from "@/features/orders/components/add-cabins-dialog"
 import { OrderDeliveryDialog } from "@/features/orders/components/order-delivery-dialog"
+import { OrderBookingChangeQuotesCard } from "@/features/orders/components/order-booking-change-quotes-card"
 import { OrderRentalTermExtensionDialog } from "@/features/orders/components/order-rental-term-extension-dialog"
 import { OrderUnitReplacementDialog } from "@/features/orders/components/order-unit-replacement-dialog"
 import { isOrderDeliveryComplete } from "@/features/orders/domain/order-delivery-readiness"
@@ -63,9 +64,7 @@ import {
   type OrderMovement,
   type OrderUnitCandidate,
 } from "@/features/orders/domain/orders"
-import {
-  CUSTOMER_DELIVERY_PURPOSE_LABELS,
-} from "@/features/logistics/customer-delivery-purpose"
+import { CUSTOMER_DELIVERY_PURPOSE_LABELS } from "@/features/logistics/customer-delivery-purpose"
 import { useOrdersModule } from "@/features/orders/orders-module-context"
 import { RentalItemStatusBadge } from "@/features/rental-items/rental-item-status-badge"
 import { ApiError } from "@/lib/api-client"
@@ -87,6 +86,14 @@ const RESERVATION_STATE_LABELS: Record<string, string> = {
   RELEASED: "освобождён",
 }
 
+const CHANGE_FEE_SETTLEMENT_LABELS: Record<string, string> = {
+  POLICY_UNCONFIGURED: "Правило неустойки не настроено",
+  PAYMENT_REQUIRED: "Ожидает оплаты",
+  NOT_REQUIRED: "Оплата не требуется",
+  TEST_PAID: "Подтверждена тестовая оплата",
+  WAIVED: "Неустойка отменена",
+}
+
 const MOVEMENT_TYPE_LABELS: Record<OrderMovement["documentType"], string> = {
   SHIPMENT: "Отвоз клиенту",
   RETURN: "Возврат от клиента",
@@ -96,7 +103,29 @@ function isUuid(value: unknown) {
   return typeof value === "string" && UUID_PATTERN.test(value)
 }
 
-function auditValue(key: string, value: unknown) {
+function auditValue(key: string, value: unknown, subjectType: string) {
+  if (subjectType === "CUSTOMER_BOOKING_CHANGE_CHARGE") {
+    if (key === "reason")
+      return typeof value === "string" && value.trim()
+        ? `Причина: ${value}`
+        : null
+    if (key === "settlement")
+      return typeof value === "string" &&
+        Object.hasOwn(CHANGE_FEE_SETTLEMENT_LABELS, value)
+        ? CHANGE_FEE_SETTLEMENT_LABELS[value]
+        : null
+    if (key === "amountRubles") {
+      if (value === null) return "Неустойка: не указана"
+      if (
+        typeof value !== "string" ||
+        !/^(0|[1-9][0-9]{0,18})$/.test(value) ||
+        BigInt(value) > 9223372036854775807n
+      )
+        return null
+      return `Неустойка: ${new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB", maximumFractionDigits: 0 }).format(BigInt(value))}`
+    }
+    return null
+  }
   if (isUuid(value) || value === null || value === undefined) return null
 
   switch (key) {
@@ -134,10 +163,13 @@ function auditValue(key: string, value: unknown) {
   }
 }
 
-function formatAuditValues(values: Record<string, unknown> | null) {
+function formatAuditValues(
+  values: Record<string, unknown> | null,
+  subjectType: string
+) {
   if (!values || Object.keys(values).length === 0) return null
   const formatted = Object.entries(values)
-    .map(([key, value]) => auditValue(key, value))
+    .map(([key, value]) => auditValue(key, value, subjectType))
     .filter((value): value is string => value !== null)
     .join(" · ")
   return formatted || null
@@ -647,9 +679,7 @@ export function OrderDetailPage() {
             </p>
           </div>
           <div>
-            <p className="text-xs text-muted-foreground">
-              Назначение доставки
-            </p>
+            <p className="text-xs text-muted-foreground">Назначение доставки</p>
             <p className="font-medium">
               {CUSTOMER_DELIVERY_PURPOSE_LABELS[order.customerDeliveryPurpose]}
             </p>
@@ -783,6 +813,11 @@ export function OrderDetailPage() {
           </div>
         </CardContent>
       </Card>
+
+      <OrderBookingChangeQuotesCard
+        orderId={order.id}
+        warehouseId={order.warehouseId}
+      />
 
       <Card size="sm">
         <CardHeader>
@@ -1082,8 +1117,11 @@ export function OrderDetailPage() {
             </p>
           ) : (
             history.map((event) => {
-              const previous = formatAuditValues(event.previousValues)
-              const next = formatAuditValues(event.newValues)
+              const previous = formatAuditValues(
+                event.previousValues,
+                event.subjectType
+              )
+              const next = formatAuditValues(event.newValues, event.subjectType)
               const context = auditContext(
                 event,
                 order,
@@ -1106,12 +1144,14 @@ export function OrderDetailPage() {
                     <span className="text-muted-foreground">{context}</span>
                   ) : null}
                   {previous ? (
-                    <span className="text-muted-foreground">
+                    <span className="break-words text-muted-foreground">
                       Было: {previous}
                     </span>
                   ) : null}
                   {next ? (
-                    <span className="text-muted-foreground">Стало: {next}</span>
+                    <span className="break-words text-muted-foreground">
+                      Стало: {next}
+                    </span>
                   ) : null}
                 </div>
               )

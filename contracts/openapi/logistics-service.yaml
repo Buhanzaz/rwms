@@ -2444,6 +2444,136 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/rental-booking-change-alerts:
+    get:
+      operationId: listRentalBookingChangeAlerts
+      description: >-
+        Returns at most fifty oldest unread completed CustomerApp booking mutations for a
+        RENTAL_MANAGER with rental access and current warehouse READ permission. Each manager
+        has independent acknowledgements. No assignment to a responsible manager is required.
+        canOpenOrder preserves existing order visibility; this notification grants no wider order access.
+      responses:
+        "200":
+          description: Warehouse-authorized completed changes; pending mutations are excluded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CustomerBookingChangeAlert" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /api/logistics/v1/rental-booking-change-alerts/{mutationId}/acknowledgement:
+    parameters:
+      - name: mutationId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: acknowledgeRentalBookingChangeAlert
+      description: >-
+        Acknowledges a completed mutation for this authenticated rental manager only, using its
+        exact version and Idempotency-Key. Requires current warehouse READ, never changes the
+        booking, and cannot dismiss another manager's alert.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion]
+              properties:
+                expectedVersion: { type: integer, format: int64, minimum: 0 }
+      responses:
+        "204": { description: Acknowledged or exact replay. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/logistics/v1/rental-booking-change-quotes:
+    get:
+      operationId: listPendingCustomerBookingChangeQuotes
+      description: >-
+        At most fifty current, unexpired OFFERED quotes requiring payment or policy configuration,
+        scoped to the staff actor's editable warehouses and rental write authority.
+        Exposes only the fee intent, not the full order. A waiver does not grant order visibility.
+      responses:
+        "200":
+          description: Pending fee decisions ordered by creation time and identity.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PendingCustomerBookingChangeQuote" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /api/logistics/v1/orders/{orderId}/booking-change-quotes:
+    parameters:
+      - name: orderId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: listManageableCustomerBookingChangeQuotes
+      description: >-
+        Staff rental access, effective write scope and warehouse EDIT are required for this
+        limited fee view; full order visibility is unchanged. Returns only OFFERED, unexpired quotes matching the current customer
+        booking version and original slot. Historical completed changes remain in order audit.
+      responses:
+        "200":
+          description: Current fee quotes, including current waived and zero-fee quotes.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CustomerBookingChangeQuote" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/logistics/v1/orders/{orderId}/booking-change-quotes/{quoteId}/waiver:
+    parameters:
+      - name: orderId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: quoteId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: waiveCustomerBookingChangeCharge
+      description: >-
+        Same staff/warehouse authority as the quote-management read. A current OFFERED,
+        unexpired PAYMENT_REQUIRED or POLICY_UNCONFIGURED quote may be waived with a mandatory
+        audited reason, expected quote version and Idempotency-Key. Original fee facts remain
+        stored; payable amount becomes zero. Does not cancel an order, extend expiry or move a slot.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion, reason]
+              properties:
+                expectedVersion: { type: integer, format: int64, minimum: 0 }
+                reason: { type: string, minLength: 1, maxLength: 2000 }
+      responses:
+        "200":
+          description: Exact waived quote; original amount and reason retained in audit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerBookingChangeQuote" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/logistics/v1/rental-booking-alerts:
     get:
       operationId: listRentalBookingAlerts
@@ -3452,6 +3582,59 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/customer/v1/bookings/{bookingId}/change-quotes:
+    parameters:
+      - $ref: "#/components/parameters/CustomerBookingId"
+    post:
+      operationId: createCustomerBookingChangeQuote
+      description: >-
+        Quotes one customer-initiated change under the exact booking and replacement-slot fences.
+        Notice is measured in calendar dates of the canonical warehouse timezone (default two),
+        not rolling 48 hours. Percentage uses the original confirmed delivery price and rounds
+        HALF_UP once to whole RUB. Missing policy remains unavailable, not zero. The immutable
+        quote expires after fifteen minutes or at the next warehouse-local midnight, whichever
+        comes first. Creation neither changes capacity nor settles a fee.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateCustomerBookingChangeQuoteRequest" }
+      responses:
+        "200":
+          description: Exact quote or its idempotent replay.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerBookingChangeQuote" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/customer/v1/bookings/{bookingId}/change-quotes/{quoteId}:
+    parameters:
+      - $ref: "#/components/parameters/CustomerBookingId"
+      - name: quoteId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getCustomerBookingChangeQuote
+      description: >-
+        Reads the exact customer-owned application and settlement, including after a lost response.
+        APPLYING is not payment success. TEST_PAID is recorded only when the linked booking mutation
+        completes; it is explicitly simulated and does not move real money.
+      responses:
+        "200":
+          description: Durable quote and exact linked application result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerBookingChangeQuote" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/logistics/customer/v1/bookings/{bookingId}/cancel:
     parameters:
       - $ref: "#/components/parameters/CustomerBookingId"
@@ -3460,8 +3643,9 @@ paths:
       description: >-
         Idempotently cancels only a completed CustomerApp checkout whose SAVED order, shipment
         draft and furniture preparation have not started. The durable response may remain
-        CANCELLATION_PENDING while existing order/asset release recovery continues. No
-        cancellation fee is calculated by this API.
+        CANCELLATION_PENDING while existing order/asset release recovery continues. The exact
+        accepted quote is bound to this mutation before external effects. Test settlement is
+        recorded only together with durable completion; a pending cancellation is not paid.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -3518,6 +3702,8 @@ paths:
         Idempotently and atomically rechecks a freshly calculated offer, replaces the SAVED
         order's desired delivery date and confirms the new slot before committing release of the
         old slot. On any failure the original confirmed slot and order date remain unchanged.
+        The customer must submit the exact accepted quote and explicit test-payment consent when
+        required. Settlement and slot replacement commit atomically; a stale/full slot is not paid.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -4265,9 +4451,12 @@ components:
     CancelCustomerBookingRequest:
       type: object
       additionalProperties: false
-      required: [expectedVersion]
+      required: [expectedVersion, changeQuoteId, changeQuoteVersion]
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
+        changeQuoteId: { type: string, format: uuid }
+        changeQuoteVersion: { type: integer, format: int64, minimum: 0 }
+        testPaymentRequested: { type: boolean, default: false }
     SearchCustomerBookingRescheduleRequest:
       type: object
       additionalProperties: false
@@ -4277,11 +4466,86 @@ components:
     RescheduleCustomerBookingRequest:
       type: object
       additionalProperties: false
-      required: [expectedVersion, slotId, slotVersion]
+      required: [expectedVersion, slotId, slotVersion, changeQuoteId, changeQuoteVersion]
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         slotId: { type: string, format: uuid }
         slotVersion: { type: integer, format: int64, minimum: 0 }
+        changeQuoteId: { type: string, format: uuid }
+        changeQuoteVersion: { type: integer, format: int64, minimum: 0 }
+        testPaymentRequested: { type: boolean, default: false }
+    CreateCustomerBookingChangeQuoteRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, operation, slotId, slotVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        operation: { type: string, enum: [CANCEL, RESCHEDULE] }
+        slotId: { type: [string, "null"], format: uuid }
+        slotVersion: { type: [integer, "null"], format: int64, minimum: 0 }
+      description: CANCEL requires both slot fields null; RESCHEDULE requires both populated.
+    CustomerBookingChangeAlert:
+      type: object
+      additionalProperties: false
+      required: [mutationId, version, bookingId, orderId, warehouseId, operation, occurredAt, previousDeliveryDate, newDeliveryDate, deliveryAddress, feeRubles, settlement, canOpenOrder]
+      properties:
+        mutationId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        bookingId: { type: string, format: uuid }
+        orderId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        operation: { type: string, enum: [CANCEL, RESCHEDULE] }
+        occurredAt: { type: string, format: date-time }
+        previousDeliveryDate: { type: string, format: date }
+        newDeliveryDate: { type: [string, "null"], format: date }
+        deliveryAddress: { type: string }
+        feeRubles:
+          type: [string, "null"]
+          pattern: '^(0|[1-9][0-9]{0,18})$'
+          description: Exact whole RUB through 9223372036854775807; null has no settlement meaning.
+        settlement:
+          type: [string, "null"]
+          enum: [POLICY_UNCONFIGURED, PAYMENT_REQUIRED, NOT_REQUIRED, TEST_PAID, WAIVED, null]
+        canOpenOrder: { type: boolean }
+    PendingCustomerBookingChangeQuote:
+      type: object
+      additionalProperties: false
+      required: [orderId, warehouseId, quote]
+      properties:
+        orderId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        quote: { $ref: "#/components/schemas/CustomerBookingChangeQuote" }
+    CustomerBookingChangeQuote:
+      type: object
+      additionalProperties: false
+      required: [quoteId, version, bookingId, bookingVersion, operation, oldSlotId, slotId, slotVersion, amountRubles, settlement, applicationState, testPaymentAvailable, supportPhone, expiresAt, noticeDays, deliveryDate, warehouseTimeZone, targetDeliveryDate, targetWindowStart, targetWindowEnd]
+      properties:
+        quoteId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        bookingId: { type: string, format: uuid }
+        bookingVersion: { type: integer, format: int64, minimum: 0 }
+        operation: { type: string, enum: [CANCEL, RESCHEDULE] }
+        oldSlotId: { type: string, format: uuid }
+        slotId: { type: [string, "null"], format: uuid }
+        slotVersion: { type: [integer, "null"], format: int64, minimum: 0 }
+        amountRubles:
+          type: [string, "null"]
+          pattern: '^(0|[1-9][0-9]{0,18})$'
+          description: Exact whole RUB through 9223372036854775807; null means unknown, waiver returns zero.
+        settlement:
+          type: string
+          enum: [POLICY_UNCONFIGURED, PAYMENT_REQUIRED, NOT_REQUIRED, TEST_PAID, WAIVED]
+        applicationState: { type: string, enum: [OFFERED, APPLYING, APPLIED] }
+        testPaymentAvailable: { type: boolean }
+        supportPhone: { type: [string, "null"], pattern: '^\+[1-9][0-9]{7,14}$' }
+        expiresAt: { type: string, format: date-time }
+        noticeDays: { type: integer, minimum: 0 }
+        deliveryDate: { type: string, format: date }
+        warehouseTimeZone: { type: string }
+        targetDeliveryDate: { type: [string, "null"], format: date }
+        targetWindowStart: { type: [string, "null"], format: time }
+        targetWindowEnd: { type: [string, "null"], format: time }
+      description: Target date and window are immutable replacement slot facts, all null for CANCEL and all non-null for RESCHEDULE.
     CustomerBooking:
       type: object
       additionalProperties: false
@@ -4306,7 +4570,7 @@ components:
           type: [integer, "null"]
           format: int64
           minimum: 0
-          description: Always null until a separate authoritative fee policy is introduced.
+          description: Legacy booking field remains null; the exact operation-specific amount and settlement are authoritative only in CustomerBookingChangeQuote.
         cabins:
           type: array
           maxItems: 100
