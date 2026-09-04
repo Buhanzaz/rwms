@@ -9,6 +9,19 @@ transfers, driver work and logistics orchestration. It owns document/workflow st
 equipment, repair or warehouse aggregates. Effects on those owners use narrow private APIs and
 durable logistics recovery work.
 
+Global `GET/PUT /api/logistics/v1/settings/rental` also owns late-change policy.
+V94 adds `lateChangeNoticeDays` (default 2 warehouse-local calendar days), nullable
+`lateChangeFeeMode` (`FIXED`/`PERCENT`), exact decimal-string `lateChangeFeeValue`,
+and a nullable international `rentalSupportPhone`. Both fee fields null means
+unconfigured, not zero. FIXED accepts whole rubles through `Long.MAX_VALUE`;
+PERCENT accepts 0–100 with at most two fractional digits. A complete PUT requires
+all existing hold durations, policy fields and `expectedVersion`, requires global
+administration with write access, and returns 409 on a stale version. Migration
+preserves existing durations. `RentalSettingsService.lateChangePolicy()` provides
+an immutable versioned read-only snapshot without inserting missing settings or
+assessing/collecting a fee. The support number is configured, never inferred from
+customer contact data.
+
 The authoritative HTTP and event contracts are
 [`contracts/openapi/logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml) and
 [`contracts/events/logistics-events.yaml`](../../contracts/events/logistics-events.yaml). Start

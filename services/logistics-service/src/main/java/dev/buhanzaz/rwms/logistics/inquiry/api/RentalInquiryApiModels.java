@@ -1,6 +1,9 @@
 package dev.buhanzaz.rwms.logistics.inquiry.api;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import dev.buhanzaz.rwms.logistics.inquiry.domain.ClientPresentationMode;
+import dev.buhanzaz.rwms.logistics.inquiry.domain.LateChangeFeeMode;
 import dev.buhanzaz.rwms.logistics.inquiry.domain.PresentationBookingManagerAction;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AdditionalContactInput;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.ClientResponse;
@@ -17,6 +20,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -243,6 +247,10 @@ public final class RentalInquiryApiModels {
       int manualBookingHoldMinutes,
       int presentationHoldMinutes,
       int draftReservationHoldMinutes,
+      int lateChangeNoticeDays,
+      LateChangeFeeMode lateChangeFeeMode,
+      @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal lateChangeFeeValue,
+      String rentalSupportPhone,
       UUID updatedBy,
       OffsetDateTime updatedAt) {}
 
@@ -251,7 +259,16 @@ public final class RentalInquiryApiModels {
       @NotNull @Min(1) @Max(1_440) Integer chatSelectionHoldMinutes,
       @NotNull @Min(5) @Max(1_440) Integer manualBookingHoldMinutes,
       @NotNull @Min(5) @Max(1_440) Integer presentationHoldMinutes,
-      @NotNull @Min(1_440) @Max(14_400) Integer draftReservationHoldMinutes) {}
+      @NotNull @Min(1_440) @Max(14_400) Integer draftReservationHoldMinutes,
+      @NotNull @Min(0) Integer lateChangeNoticeDays,
+      @JsonProperty(required = true) LateChangeFeeMode lateChangeFeeMode,
+      @DecimalMin("0")
+          @Digits(integer = 19, fraction = 2)
+          @JsonProperty(required = true)
+          @JsonFormat(shape = JsonFormat.Shape.STRING)
+          BigDecimal lateChangeFeeValue,
+      @JsonProperty(required = true) @Pattern(regexp = "\\+[1-9][0-9]{7,14}")
+          String rentalSupportPhone) {}
 
   public record ManualBookingDraftHoldsRequest(
       @NotNull UUID warehouseId,

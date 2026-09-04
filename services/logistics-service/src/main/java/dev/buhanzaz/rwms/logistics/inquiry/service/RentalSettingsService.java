@@ -2,10 +2,12 @@ package dev.buhanzaz.rwms.logistics.inquiry.service;
 
 import dev.buhanzaz.rwms.logistics.inquiry.api.RentalInquiryApiModels.RentalSettingsResponse;
 import dev.buhanzaz.rwms.logistics.inquiry.api.RentalInquiryApiModels.UpdateRentalSettingsRequest;
+import dev.buhanzaz.rwms.logistics.inquiry.domain.LateChangeFeeMode;
 import dev.buhanzaz.rwms.logistics.inquiry.domain.RentalSettings;
 import dev.buhanzaz.rwms.logistics.inquiry.mapper.RentalInquiryResponseMapper;
 import dev.buhanzaz.rwms.logistics.inquiry.repository.RentalSettingsRepository;
 import dev.buhanzaz.rwms.logistics.order.security.OrderActor;
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
@@ -53,6 +55,10 @@ public class RentalSettingsService {
         request.manualBookingHoldMinutes(),
         request.presentationHoldMinutes(),
         request.draftReservationHoldMinutes(),
+        request.lateChangeNoticeDays(),
+        request.lateChangeFeeMode(),
+        request.lateChangeFeeValue(),
+        request.rentalSupportPhone(),
         actor.subjectId(),
         now());
     return mapper.toResponse(settings.saveAndFlush(value));
@@ -77,6 +83,30 @@ public class RentalSettingsService {
   public int draftReservationHoldMinutes(OrderActor actor) {
     return loadOrCreate(actor).getDraftReservationHoldMinutes();
   }
+
+  /** Reads one immutable policy revision without creating settings or applying any fee. */
+  @Transactional(readOnly = true)
+  public LateChangePolicy lateChangePolicy() {
+    return settings
+        .findById(RentalSettings.SINGLETON_ID)
+        .map(
+            value ->
+                new LateChangePolicy(
+                    value.getVersion(),
+                    value.getLateChangeNoticeDays(),
+                    value.getLateChangeFeeMode(),
+                    value.getLateChangeFeeValue(),
+                    value.getRentalSupportPhone()))
+        .orElseGet(() -> new LateChangePolicy(0, 2, null, null, null));
+  }
+
+  /** Notice uses warehouse-local calendar days; null fee fields mean unconfigured, not free. */
+  public record LateChangePolicy(
+      long settingsVersion,
+      int noticeDays,
+      LateChangeFeeMode feeMode,
+      BigDecimal feeValue,
+      String supportPhone) {}
 
   private RentalSettings loadOrCreate(OrderActor actor) {
     return settings

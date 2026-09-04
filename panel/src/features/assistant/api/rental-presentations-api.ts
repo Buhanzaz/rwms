@@ -112,6 +112,10 @@ export type RentalSettings = {
   manualBookingHoldMinutes: number
   presentationHoldMinutes: number
   draftReservationHoldMinutes: number
+  lateChangeNoticeDays: number
+  lateChangeFeeMode: "FIXED" | "PERCENT" | null
+  lateChangeFeeValue: string | null
+  rentalSupportPhone: string | null
   updatedBy: string | null
   updatedAt: string
 }
@@ -201,34 +205,84 @@ export function getClientPresentation(params: {
   )
 }
 
-export function getRentalSettings(accessToken: string) {
-  return bearerRequest<RentalSettings>(
-    accessToken,
-    logisticsV1("/settings/rental")
+function parseRentalSettings(value: RentalSettings): RentalSettings {
+  if (
+    !value ||
+    !Number.isSafeInteger(value.version) ||
+    value.version < 0 ||
+    !Number.isInteger(value.lateChangeNoticeDays) ||
+    value.lateChangeNoticeDays < 0 ||
+    value.lateChangeNoticeDays > 2147483647 ||
+    (value.lateChangeFeeMode !== null &&
+      value.lateChangeFeeMode !== "FIXED" &&
+      value.lateChangeFeeMode !== "PERCENT") ||
+    (value.rentalSupportPhone !== null &&
+      (typeof value.rentalSupportPhone !== "string" ||
+        !/^\+[1-9][0-9]{7,14}$/.test(value.rentalSupportPhone))) ||
+    !validRentalFee(value.lateChangeFeeMode, value.lateChangeFeeValue)
+  )
+    throw invalidApiResponseError(new Error("Invalid rental policy settings"))
+  return value
+}
+
+/** Decimal strings preserve the full server ruble range without floating-point rounding. */
+export function validRentalFee(
+  mode: RentalSettings["lateChangeFeeMode"],
+  value: unknown
+): boolean {
+  if (mode === null) return value === null
+  if (
+    typeof value !== "string" ||
+    !/^(0|[1-9][0-9]{0,18})(\.[0-9]{1,2})?$/.test(value)
+  )
+    return false
+  if (mode === "FIXED") {
+    const [whole, fraction = ""] = value.split(".")
+    return !/[1-9]/.test(fraction) && BigInt(whole) <= 9223372036854775807n
+  }
+  return mode === "PERCENT" && Number(value) <= 100
+}
+
+export async function getRentalSettings(accessToken: string) {
+  return parseRentalSettings(
+    await bearerRequest<RentalSettings>(
+      accessToken,
+      logisticsV1("/settings/rental")
+    )
   )
 }
 
-export function updateRentalSettings(params: {
+export async function updateRentalSettings(params: {
   accessToken: string
   expectedVersion: number
   chatSelectionHoldMinutes: number
   manualBookingHoldMinutes: number
   presentationHoldMinutes: number
   draftReservationHoldMinutes: number
+  lateChangeNoticeDays: number
+  lateChangeFeeMode: RentalSettings["lateChangeFeeMode"]
+  lateChangeFeeValue: string | null
+  rentalSupportPhone: string | null
 }) {
-  return bearerRequest<RentalSettings>(
-    params.accessToken,
-    logisticsV1("/settings/rental"),
-    {
-      method: "PUT",
-      body: JSON.stringify({
-        expectedVersion: params.expectedVersion,
-        chatSelectionHoldMinutes: params.chatSelectionHoldMinutes,
-        manualBookingHoldMinutes: params.manualBookingHoldMinutes,
-        presentationHoldMinutes: params.presentationHoldMinutes,
-        draftReservationHoldMinutes: params.draftReservationHoldMinutes,
-      }),
-    }
+  return parseRentalSettings(
+    await bearerRequest<RentalSettings>(
+      params.accessToken,
+      logisticsV1("/settings/rental"),
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          expectedVersion: params.expectedVersion,
+          chatSelectionHoldMinutes: params.chatSelectionHoldMinutes,
+          manualBookingHoldMinutes: params.manualBookingHoldMinutes,
+          presentationHoldMinutes: params.presentationHoldMinutes,
+          draftReservationHoldMinutes: params.draftReservationHoldMinutes,
+          lateChangeNoticeDays: params.lateChangeNoticeDays,
+          lateChangeFeeMode: params.lateChangeFeeMode,
+          lateChangeFeeValue: params.lateChangeFeeValue,
+          rentalSupportPhone: params.rentalSupportPhone,
+        }),
+      }
+    )
   )
 }
 

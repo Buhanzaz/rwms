@@ -901,6 +901,23 @@ class LogisticsContractFoundationTest {
             "manualBookingHoldMinutes",
             "presentationHoldMinutes",
             "draftReservationHoldMinutes");
+    assertThat(settingsRequired)
+        .contains(
+            "lateChangeNoticeDays",
+            "lateChangeFeeMode",
+            "lateChangeFeeValue",
+            "rentalSupportPhone");
+    assertThat(updateRequired)
+        .contains(
+            "lateChangeNoticeDays",
+            "lateChangeFeeMode",
+            "lateChangeFeeValue",
+            "rentalSupportPhone");
+    assertThat(child(settingsProperties, "lateChangeNoticeDays"))
+        .containsEntry("default", 2)
+        .containsEntry("minimum", 0);
+    assertThat(child(settingsProperties, "lateChangeFeeValue"))
+        .containsEntry("type", List.of("string", "null"));
     assertThat(child(settingsProperties, "chatSelectionHoldMinutes"))
         .containsEntry("minimum", 1)
         .containsEntry("maximum", 1440);

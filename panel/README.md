@@ -54,6 +54,14 @@ Russian version: [README.ru.md](README.ru.md).
 
 ## Product surface and state ownership
 
+`/admin/rental` saves all rental hold durations and late-change settings in one
+version-fenced logistics command. Advance notice uses warehouse-local calendar
+days (default 2). The fee is unconfigured (null mode/value), fixed whole RUB, or
+0–100 percent with up to two decimal places; decimal strings preserve exact
+amounts. The optional international rental-support phone is never taken from
+customer data. Conflicts retain the draft until an explicit reload. Configuring
+a rule does not itself assess or collect a fee.
+
 The router exposes the operational panel for warehouse/equipment, rentals and
 orders, inventory, maintenance/acceptance, logistics, task board, assistant,
 write-offs, and settings. The current user profile determines which warehouse

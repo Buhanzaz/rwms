@@ -85,6 +85,51 @@ class LogisticsFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void rentalLateChangeSettingsUpgradePreservesHoldsAndValidatesJpa() {
+    configuration(MIGRATIONS).target("93").load().migrate();
+    jdbc.update(
+        "update rental_settings set version=7, chat_selection_hold_minutes=12,"
+            + " manual_booking_hold_minutes=75, presentation_hold_minutes=90,"
+            + " draft_reservation_hold_minutes=2880");
+    Flyway upgraded = flyway(MIGRATIONS);
+    upgraded.migrate();
+    upgraded.validate();
+    Map<String, Object> row = jdbc.queryForMap("select * from rental_settings");
+    assertThat(row)
+        .containsEntry("version", 7L)
+        .containsEntry("chat_selection_hold_minutes", 12)
+        .containsEntry("manual_booking_hold_minutes", 75)
+        .containsEntry("presentation_hold_minutes", 90)
+        .containsEntry("draft_reservation_hold_minutes", 2880)
+        .containsEntry("late_change_notice_days", 2)
+        .containsEntry("late_change_fee_mode", null)
+        .containsEntry("late_change_fee_value", null)
+        .containsEntry("rental_support_phone", null);
+    jdbc.update(
+        "update rental_settings set late_change_fee_mode='FIXED',"
+            + " late_change_fee_value=9223372036854775807, rental_support_phone='+74951234567'");
+    assertThat(
+            jdbc.queryForObject(
+                "select late_change_fee_value from rental_settings", java.math.BigDecimal.class))
+        .isEqualByComparingTo("9223372036854775807");
+    assertThatThrownBy(
+            () ->
+                jdbc.update("update rental_settings set late_change_fee_value=9223372036854775808"))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThatThrownBy(() -> jdbc.update("update rental_settings set late_change_fee_mode=null"))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update rental_settings set late_change_fee_mode='PERCENT',"
+                        + " late_change_fee_value=100.01"))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThatThrownBy(() -> jdbc.update("update rental_settings set late_change_notice_days=-1"))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertJpaValidationStarts();
+  }
+
+  @Test
   void cleanInstallIsRepeatSafeAndCreatesOnlyLogisticsOwnedState() {
     Flyway flyway = flyway(MIGRATIONS);
     int pendingMigrations = flyway.info().pending().length;

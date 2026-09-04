@@ -5,6 +5,7 @@ import {
   confirmPublicPresentation,
   getPublicPresentation,
   getRentalBookingAlerts,
+  getRentalSettings,
   publishClientPresentation,
   updateRentalSettings,
 } from "@/features/assistant/api/rental-presentations-api"
@@ -28,6 +29,10 @@ describe("rental presentation API", () => {
           manualBookingHoldMinutes: 60,
           presentationHoldMinutes: 60,
           draftReservationHoldMinutes: 1440,
+          lateChangeNoticeDays: 2,
+          lateChangeFeeMode: "FIXED",
+          lateChangeFeeValue: "9223372036854775807",
+          rentalSupportPhone: "+74951234567",
           updatedBy: "admin",
           updatedAt: "2026-07-27T09:00:00Z",
         }),
@@ -43,6 +48,10 @@ describe("rental presentation API", () => {
       manualBookingHoldMinutes: 60,
       presentationHoldMinutes: 60,
       draftReservationHoldMinutes: 1440,
+      lateChangeNoticeDays: 2,
+      lateChangeFeeMode: "FIXED",
+      lateChangeFeeValue: "9223372036854775807",
+      rentalSupportPhone: "+74951234567",
     })
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
@@ -57,7 +66,63 @@ describe("rental presentation API", () => {
       manualBookingHoldMinutes: 60,
       presentationHoldMinutes: 60,
       draftReservationHoldMinutes: 1440,
+      lateChangeNoticeDays: 2,
+      lateChangeFeeMode: "FIXED",
+      lateChangeFeeValue: "9223372036854775807",
+      rentalSupportPhone: "+74951234567",
     })
+  })
+
+  it.each([
+    { lateChangeFeeMode: undefined },
+    { lateChangeFeeMode: "UNKNOWN" },
+    { lateChangeFeeMode: "FIXED", lateChangeFeeValue: 1500 },
+    { lateChangeFeeMode: "FIXED", lateChangeFeeValue: "9223372036854775808" },
+    { lateChangeFeeMode: "FIXED", lateChangeFeeValue: "1.25" },
+    { lateChangeFeeMode: "PERCENT", lateChangeFeeValue: "100.01" },
+    { lateChangeFeeMode: "PERCENT", lateChangeFeeValue: "1.001" },
+    { lateChangeFeeMode: null, lateChangeFeeValue: "0" },
+    { lateChangeNoticeDays: -1 },
+    { rentalSupportPhone: "customer phone" },
+  ])("rejects incomplete or unsafe rental settings: %j", async (invalid) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            version: 0,
+            lateChangeNoticeDays: 2,
+            lateChangeFeeMode: null,
+            lateChangeFeeValue: null,
+            rentalSupportPhone: null,
+            ...invalid,
+          }),
+          { status: 200 }
+        )
+      )
+    )
+    await expect(getRentalSettings("access-token")).rejects.toMatchObject({
+      code: "INVALID_API_RESPONSE",
+    })
+  })
+
+  it("preserves unconfigured policy as null instead of zero", async () => {
+    const settings = {
+      version: 0,
+      lateChangeNoticeDays: 2,
+      lateChangeFeeMode: null,
+      lateChangeFeeValue: null,
+      rentalSupportPhone: null,
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify(settings), { status: 200 })
+        )
+    )
+    await expect(getRentalSettings("access-token")).resolves.toEqual(settings)
   })
 
   it("publishes the exact selected groups through authenticated logistics", async () => {

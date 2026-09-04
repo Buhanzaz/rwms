@@ -9,6 +9,19 @@
 document/workflow state, но не агрегатами кабин, оборудования, ремонта или склада. Effects для этих
 владельцев используют узкие private APIs и durable logistics recovery work.
 
+Глобальный `GET/PUT /api/logistics/v1/settings/rental` также владеет правилом
+позднего изменения. V94 добавляет `lateChangeNoticeDays` (по умолчанию 2 календарных
+дня в часовом поясе склада), nullable `lateChangeFeeMode` (`FIXED`/`PERCENT`),
+точную десятичную строку `lateChangeFeeValue` и nullable международный
+`rentalSupportPhone`. Оба поля неустойки null означают «не настроено», а не ноль.
+FIXED допускает целые рубли до `Long.MAX_VALUE`; PERCENT — 0–100 с максимум двумя
+дробными знаками. Полный PUT требует все прежние сроки удержания, поля правила и
+`expectedVersion`, права глобального администратора с записью и возвращает 409
+при устаревшей версии. Миграция сохраняет прежние сроки.
+`RentalSettingsService.lateChangePolicy()` возвращает неизменяемый версионированный
+снимок без создания отсутствующих настроек, начисления или списания денег. Номер
+поддержки задаётся отдельно и никогда не выводится из контактных данных клиента.
+
 Авторитетные HTTP- и event-контракты находятся в
 [`contracts/openapi/logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml) и
 [`contracts/events/logistics-events.yaml`](../../contracts/events/logistics-events.yaml).

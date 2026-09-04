@@ -8633,6 +8633,10 @@ components:
           manualBookingHoldMinutes,
           presentationHoldMinutes,
           draftReservationHoldMinutes,
+          lateChangeNoticeDays,
+          lateChangeFeeMode,
+          lateChangeFeeValue,
+          rentalSupportPhone,
           updatedBy,
           updatedAt,
         ]
@@ -8642,6 +8646,24 @@ components:
         manualBookingHoldMinutes: { type: integer, minimum: 5, maximum: 1440 }
         presentationHoldMinutes: { type: integer, minimum: 5, maximum: 1440 }
         draftReservationHoldMinutes: { type: integer, minimum: 1440, maximum: 14400 }
+        lateChangeNoticeDays:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+          default: 2
+          description: Advance notice in calendar days of the affected warehouse timezone, not rolling 24-hour periods.
+        lateChangeFeeMode:
+          type: [string, "null"]
+          enum: [FIXED, PERCENT, null]
+          description: Null together with lateChangeFeeValue means not configured, never an implicit zero fee.
+        lateChangeFeeValue:
+          type: [string, "null"]
+          pattern: '^(0|[1-9][0-9]{0,18})(\.[0-9]{1,2})?$'
+          description: Exact decimal string. FIXED is whole RUB from 0 through 9223372036854775807; PERCENT is 0 through 100 with at most two decimal places. Must be null exactly when mode is null. This setting alone neither assesses nor collects a fee.
+        rentalSupportPhone:
+          type: [string, "null"]
+          pattern: '^\+[1-9][0-9]{7,14}$'
+          description: Configured rental support dialer number in international format, not the customer's phone. Null means unavailable.
         updatedBy: { type: string, format: uuid }
         updatedAt: { type: string, format: date-time }
     ShipmentTaskSettings:
@@ -8665,13 +8687,21 @@ components:
       type: object
       additionalProperties: false
       required:
-        [expectedVersion, chatSelectionHoldMinutes, manualBookingHoldMinutes, presentationHoldMinutes, draftReservationHoldMinutes]
+        [expectedVersion, chatSelectionHoldMinutes, manualBookingHoldMinutes, presentationHoldMinutes, draftReservationHoldMinutes, lateChangeNoticeDays, lateChangeFeeMode, lateChangeFeeValue, rentalSupportPhone]
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         chatSelectionHoldMinutes: { type: integer, minimum: 1, maximum: 1440 }
         manualBookingHoldMinutes: { type: integer, minimum: 5, maximum: 1440 }
         presentationHoldMinutes: { type: integer, minimum: 5, maximum: 1440 }
         draftReservationHoldMinutes: { type: integer, minimum: 1440, maximum: 14400 }
+        lateChangeNoticeDays:
+          $ref: "#/components/schemas/RentalSettings/properties/lateChangeNoticeDays"
+        lateChangeFeeMode:
+          $ref: "#/components/schemas/RentalSettings/properties/lateChangeFeeMode"
+        lateChangeFeeValue:
+          $ref: "#/components/schemas/RentalSettings/properties/lateChangeFeeValue"
+        rentalSupportPhone:
+          $ref: "#/components/schemas/RentalSettings/properties/rentalSupportPhone"
     ManualBookingDraftHoldsRequest:
       type: object
       additionalProperties: false

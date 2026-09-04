@@ -1669,7 +1669,17 @@ class RentalInquiryPresentationIntegrationTest {
 
     RentalSettingsResponse updated =
         settings.update(
-            administrator, new UpdateRentalSettingsRequest(initial.version(), 12, 75, 90, 2_880));
+            administrator,
+            new UpdateRentalSettingsRequest(
+                initial.version(),
+                12,
+                75,
+                90,
+                2_880,
+                initial.lateChangeNoticeDays(),
+                initial.lateChangeFeeMode(),
+                initial.lateChangeFeeValue(),
+                initial.rentalSupportPhone()));
 
     assertThat(updated.version()).isEqualTo(initial.version() + 1);
     assertThat(updated.chatSelectionHoldMinutes()).isEqualTo(12);
