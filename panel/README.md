@@ -43,7 +43,10 @@ Russian version: [README.ru.md](README.ru.md).
   general settings. The object-settings selector admits only active,
   non-representative production and/or main objects. Vehicle and trailer catalog
   calls use public `/api/logistics-planner/v1/admin/**`; relocating a resource
-  changes its permanent catalog home, not a logistics trip.
+  changes its permanent catalog home, not a logistics trip. Its editor saves
+  nullable documented dimensions and weights, vehicle route margins and speeds,
+  measured axle-load profiles, and a same-object default trailer as one
+  version-fenced configuration; an empty physical field means unknown, not zero.
 - Repair-place settings are count-only and refill becomes eligible immediately.
   The object work schedule combines task-board work time with inventory holiday
   days; drivers set their own shifts, and inventory has no per-day cabin quota
