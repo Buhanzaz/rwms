@@ -164,6 +164,7 @@ async def confirm_plan(
     plan_id: UUID,
     payload: ConfirmPlanRequest,
     session: SessionDep,
+    planner: PlannerDep,
     principal: CurrentUserDep,
 ) -> RoutePlanRead:
     """Confirm an error-free plan with explicit warning acknowledgement."""
@@ -173,6 +174,7 @@ async def confirm_plan(
         session,
         plan_id,
         payload.expected_version,
+        planner=planner,
         accept_warnings=payload.accept_warnings,
         empty_positioning_reason=payload.empty_positioning_reason,
         confirmed_by=principal.audit_actor,

@@ -24,10 +24,12 @@ from app.services.planner_runtime import RuntimePlannerFacade
 from tests.factories import (
     make_driver,
     make_request,
+    make_routable_vehicle,
     make_shift,
     make_vehicle,
     make_warehouse,
 )
+from tests.test_truck_cycle_router import RecordingTruckProvider
 
 pytestmark = pytest.mark.integration
 TEST_ACTOR = "test-logistics-user"
@@ -205,11 +207,91 @@ async def test_mandatory_unassigned_task_prevents_plan_confirmation(
             accept_warnings=True,
             empty_positioning_reason=None,
             confirmed_by=TEST_ACTOR,
+            planner=RuntimePlannerFacade(),
         )
 
     assert rejected.value.status_code == 409
     assert rejected.value.code == "MANDATORY_TASKS_UNASSIGNED"
     assert rejected.value.extra == {"task_ids": [str(unassigned.task_id)]}
+
+
+@pytest.mark.asyncio
+async def test_confirmation_rejects_legacy_route_without_exact_truck_proof(
+    db_session: AsyncSession,
+) -> None:
+    """An old matrix plan must not reach production confirmation despite stored valid=True."""
+
+    _, plan, _ = await _mixed_generated_plan(db_session)
+    original_version = plan.version
+    with pytest.raises(ApiError) as rejected:
+        await plans.confirm_plan(
+            db_session, plan.id, plan.version,
+            planner=RuntimePlannerFacade(
+                routing_provider="valhalla", osm_data_version="test-graph",
+            ),
+            accept_warnings=True, empty_positioning_reason=None, confirmed_by=TEST_ACTOR,
+        )
+    assert rejected.value.code == "PLAN_TRUCK_ROUTE_STALE"
+    assert plan.status != PlanStatus.CONFIRMED
+    assert plan.version == original_version
+
+
+@pytest.mark.asyncio
+async def test_confirmation_rechecks_vehicle_after_catalog_change(
+    db_session: AsyncSession,
+) -> None:
+    """Disabling a truck cannot leave a previously valid draft confirmable."""
+
+    planner, plan, _ = await _mixed_generated_plan(db_session)
+    vehicle = plan.cycles[0].driver_shift.vehicle
+    vehicle.active = False
+    vehicle.version += 1
+    await db_session.flush()
+    with pytest.raises(ApiError) as rejected:
+        await plans.confirm_plan(
+            db_session, plan.id, plan.version, planner=planner,
+            accept_warnings=True, empty_positioning_reason=None, confirmed_by=TEST_ACTOR,
+        )
+    assert rejected.value.code == "PLAN_REFRESH_REQUIRED"
+    assert plan.status != PlanStatus.CONFIRMED
+
+
+@pytest.mark.asyncio
+async def test_exact_truck_proof_survives_database_reload_and_confirmation(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fresh proof is confirmable after JSON and timestamptz persistence, without rerouting."""
+
+    planning_date = date(2026, 8, 30)
+    warehouse = await make_warehouse(db_session, default_planning_date=planning_date)
+    await make_request(db_session, warehouse, planning_date=planning_date, quantity=1)
+    driver = await make_driver(db_session, warehouse)
+    vehicle = await make_routable_vehicle(db_session, warehouse)
+    await make_shift(
+        db_session, warehouse, driver, vehicle,
+        date_from=planning_date, date_to=planning_date,
+    )
+    runtime = RuntimePlannerFacade(routing_provider="valhalla", osm_data_version="test-graph")
+    provider = RecordingTruckProvider()
+    monkeypatch.setattr(provider, "aclose", AsyncMock(), raising=False)
+    monkeypatch.setattr(runtime, "_provider", lambda _snapshot: provider)
+    run = await runtime.generate_plan(
+        db_session, warehouse.id, GeneratePlanRequest(date=planning_date, seed=warehouse.seed),
+    )
+    assert run.plan_id is not None
+    plan_id = run.plan_id
+    db_session.expire_all()
+    plan = await plans.get_plan(db_session, plan_id)
+    assert plan.cycles
+    previous_calls = len(provider.profiles)
+
+    confirmed = await plans.confirm_plan(
+        db_session, plan.id, plan.version, planner=runtime,
+        accept_warnings=True, empty_positioning_reason=None, confirmed_by=TEST_ACTOR,
+    )
+
+    assert confirmed.status == PlanStatus.CONFIRMED
+    assert len(provider.profiles) == previous_calls
 
 
 @pytest.mark.asyncio
@@ -235,6 +317,7 @@ async def test_pending_request_refresh_prevents_stale_plan_confirmation(
             accept_warnings=True,
             empty_positioning_reason=None,
             confirmed_by=TEST_ACTOR,
+            planner=RuntimePlannerFacade(),
         )
 
     assert rejected.value.code == "PLAN_REFRESH_REQUIRED"
@@ -261,6 +344,7 @@ async def test_empty_support_positioning_requires_reason_and_audits_once(
             accept_warnings=True,
             empty_positioning_reason=None,
             confirmed_by=TEST_ACTOR,
+            planner=RuntimePlannerFacade(),
         )
     assert rejected.value.code == "EMPTY_POSITIONING_REASON_REQUIRED"
 
@@ -271,6 +355,7 @@ async def test_empty_support_positioning_requires_reason_and_audits_once(
         accept_warnings=True,
         empty_positioning_reason="Нет подходящего попутного груза",
         confirmed_by=TEST_ACTOR,
+        planner=RuntimePlannerFacade(),
     )
     repeated = await plans.confirm_plan(
         db_session,
@@ -279,6 +364,7 @@ async def test_empty_support_positioning_requires_reason_and_audits_once(
         accept_warnings=True,
         empty_positioning_reason=None,
         confirmed_by=TEST_ACTOR,
+        planner=RuntimePlannerFacade(),
     )
 
     audits = list(
@@ -398,6 +484,7 @@ async def test_manual_phase_order_and_metadata_refresh_preserve_operator_order(
         accept_warnings=True,
         empty_positioning_reason=None,
         confirmed_by=TEST_ACTOR,
+        planner=planner,
     )
     assert confirmed.status == PlanStatus.CONFIRMED
 

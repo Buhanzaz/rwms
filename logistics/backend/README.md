@@ -131,6 +131,13 @@ applies assigned RWMS deliveries with a plan-version idempotency key. See
 [`app/services/planning_days.py`](app/services/planning_days.py) and
 [`app/routing/valhalla.py`](app/routing/valhalla.py).
 
+Plan confirmation locks current drivers, shifts, vehicles and assigned trailers before
+reserving requests. It rechecks availability, windows, request points and exact per-leg
+truck evidence against current cargo, equipment and the configured road-data version.
+Proofs bind directed endpoints and departure instants. A stale or legacy draft returns
+`PLAN_TRUCK_ROUTE_STALE` / `PLAN_REFRESH_REQUIRED` and requires regeneration; it is
+never silently rerouted during confirmation. Confirmed history remains unchanged.
+
 Sparse-matrix preparation and candidate optimization each receive one bounded
 interval equal to `max_optimization_seconds`. A completed matrix therefore
 leaves the full configured interval for mandatory exact-candidate routing;

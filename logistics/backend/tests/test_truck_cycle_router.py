@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -757,6 +758,80 @@ def test_legacy_locked_cycle_cannot_bypass_truck_verification() -> None:
         RuntimePlannerFacade._assert_truck_verified_locked_cycles((legacy,))
 
     assert any("routing_profile_snapshot" in item for item in captured.value.missing_fields)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "change", ("vehicle", "trailer", "cargo", "graph", "endpoint", "departure", "missing"),
+)
+async def test_saved_truck_proof_rejects_changed_routing_inputs(change: str) -> None:
+    """A physically valid new configuration must not inherit another route's proof."""
+
+    provider = RecordingTruckProvider()
+    router = ExactTruckCycleRouter(
+        provider, provider_name="valhalla", osm_data_version="2026-08-24", now=lambda: START,
+    )
+    tasks = (_task("first", FIRST, 1), _task("second", SECOND, 1))
+    vehicle = _vehicle()
+    routed = await router.route_candidate(
+        _cycle(tasks), tasks=tasks, vehicle=vehicle, shift=_shift(), settings=PlanningSettings(),
+    )
+    router.assert_current_route(routed, tasks=tasks, vehicle=vehicle)
+    original_calls = len(provider.profiles)
+    if change == "vehicle":
+        assert vehicle.routing_spec is not None
+        vehicle = replace(vehicle, routing_spec=replace(
+            vehicle.routing_spec, height_safety_margin_mm=250,
+        ))
+    elif change == "trailer":
+        assert vehicle.default_trailer is not None
+        vehicle = replace(vehicle, default_trailer=replace(
+            vehicle.default_trailer, tare_weight_kg=3_600,
+        ))
+    elif change == "cargo":
+        tasks = (replace(tasks[0], cargo_dimensions=replace(CARGO, weight_kg=2_600)), tasks[1])
+    elif change == "graph":
+        router = ExactTruckCycleRouter(
+            provider, provider_name="valhalla", osm_data_version="new-graph", now=lambda: START,
+        )
+    elif change == "endpoint":
+        routed = replace(routed, stops=(
+            replace(routed.stops[0], point=GeoPoint(lon=37.41, lat=55.75)), *routed.stops[1:],
+        ))
+    elif change == "departure":
+        routed = replace(routed, legs=(
+            replace(
+                routed.legs[0], departure_at=routed.legs[0].departure_at + timedelta(minutes=1),
+            ),
+            *routed.legs[1:],
+        ))
+    else:
+        routed = replace(routed, legs=(
+            replace(routed.legs[0], routing_profile_snapshot=None), *routed.legs[1:],
+        ))
+
+    with pytest.raises(CandidateRouteRejected):
+        router.assert_current_route(routed, tasks=tasks, vehicle=vehicle)
+    assert len(provider.profiles) == original_calls
+
+
+@pytest.mark.asyncio
+async def test_saved_proof_compares_instants_not_database_timezone_representation() -> None:
+    """PostgreSQL UTC normalization does not invalidate an unchanged Moscow departure."""
+
+    router = ExactTruckCycleRouter(
+        RecordingTruckProvider(), provider_name="valhalla",
+        osm_data_version="2026-08-24", now=lambda: START,
+    )
+    tasks = (_task("only", FIRST, 1),)
+    routed = await router.route_candidate(
+        _cycle(tasks), tasks=tasks, vehicle=_vehicle(), shift=_shift(), settings=PlanningSettings(),
+    )
+    reloaded = replace(routed, legs=tuple(
+        replace(leg, departure_at=leg.departure_at.astimezone(ZoneInfo("Europe/Moscow")))
+        for leg in routed.legs
+    ))
+    router.assert_current_route(reloaded, tasks=tasks, vehicle=_vehicle())
 
 
 def test_verified_locked_cycle_remains_eligible_without_rerouting() -> None:

@@ -448,6 +448,7 @@ class RuntimePlannerFacade:
             )
                 if route_evaluator is not None:
                     self._assert_truck_verified_locked_cycles(locked_cycles)
+                    await self._assert_current_truck_cycles(snapshot, locked_cycles)
                 engine = HeuristicPlanner(
                     self._candidate_provider(snapshot),
                     route_evaluator,
@@ -525,6 +526,83 @@ class RuntimePlannerFacade:
                 if task_id is not None:
                     result[task_id] = stop.planned_arrival
         return result
+
+    async def validate_confirmation(
+        self, session: AsyncSession, plan: RoutePlan, *, accept_warnings: bool,
+    ) -> None:
+        """Recheck current physical facts without changing the accepted draft or history."""
+
+        snapshot = await self._load_snapshot(
+            session, plan.warehouse_id, plan.date, None, None, refresh_current=True,
+        )
+        for cycle in plan.cycles:
+            shift = self._shift_for_persisted_cycle(cycle, snapshot)
+            if shift is None or not shift.active:
+                raise ApiError(
+                    409, "PLAN_REFRESH_REQUIRED", "Driver or vehicle is no longer available",
+                )
+            for stop in cycle.stops:
+                if stop.task_id is None:
+                    continue
+                task = snapshot.core_task_by_uuid.get(stop.task_id)
+                if (
+                    task is None
+                    or stop.task_id in snapshot.policy_unassigned_by_task
+                    or task.point.lon != stop.longitude
+                    or task.point.lat != stop.latitude
+                ):
+                    raise ApiError(409, "PLAN_REFRESH_REQUIRED", "Request routing facts changed")
+        cycles = tuple(self._core_cycle(cycle, snapshot) for cycle in plan.cycles)
+        validation = validate_route_plan(
+            cycles, warehouse=snapshot.input_data.warehouse,
+            shifts=snapshot.input_data.shifts, vehicles=snapshot.input_data.vehicles,
+            settings=snapshot.settings, total_tasks=self._plan_task_count(plan, cycles),
+            unassigned_tasks=len(plan.unassigned_tasks), score=plan.score,
+        )
+        if not validation.valid:
+            raise ApiError(409, "PLAN_REFRESH_REQUIRED", "Current resources no longer fit the plan")
+        if validation.warnings and not accept_warnings:
+            raise ApiError(
+                409, "PLAN_WARNINGS_REQUIRE_CONFIRMATION",
+                "Current route warnings require explicit acknowledgement",
+            )
+        await self._assert_current_truck_cycles(snapshot, cycles)
+
+    async def _assert_current_truck_cycles(
+        self, snapshot: _RuntimeSnapshot, cycles: tuple[RouteCycle, ...],
+    ) -> None:
+        """Verify persisted load proofs locally; never fall back to passenger-car routing."""
+
+        if self._routing_provider != "valhalla" or not cycles:
+            return
+        provider = self._provider(snapshot)
+        try:
+            evaluator = ExactTruckCycleRouter(
+                provider, provider_name="valhalla",
+                osm_data_version=self._osm_data_version, now=utc_now,
+            )
+            vehicles = {vehicle.id: vehicle for vehicle in snapshot.input_data.vehicles}
+            tasks = {task.id: task for task in snapshot.core_task_by_uuid.values()}
+            for cycle in cycles:
+                vehicle = vehicles.get(cycle.vehicle_id)
+                if vehicle is None or not vehicle.active:
+                    raise ApiError(409, "PLAN_REFRESH_REQUIRED", "Vehicle is no longer available")
+                if any(
+                    stop.task_id is not None and (
+                        stop.task_id not in tasks
+                        or tasks[stop.task_id].point.coordinates != stop.point.coordinates
+                    )
+                    for stop in cycle.stops
+                ):
+                    raise ApiError(409, "PLAN_REFRESH_REQUIRED", "Route address changed")
+                evaluator.assert_current_route(
+                    cycle, vehicle=vehicle,
+                    tasks=tuple(tasks[task_id] for task_id in cycle.task_ids if task_id in tasks),
+                )
+        except CandidateRouteRejected as exc:
+            raise ApiError(409, "PLAN_TRUCK_ROUTE_STALE", str(exc)) from exc
+        finally:
+            await provider.aclose()
 
     async def validate_plan(
         self,
@@ -1120,6 +1198,7 @@ class RuntimePlannerFacade:
         *,
         request_date_overrides: Mapping[UUID, date] | None = None,
         recovery_task_ids: frozenset[UUID] | None = None,
+        refresh_current: bool = False,
     ) -> _RuntimeSnapshot:
         """Load one complete warehouse graph and translate it into planner value objects."""
 
@@ -1135,7 +1214,9 @@ class RuntimePlannerFacade:
                 selectinload(DbWarehouse.requests).selectinload(DbLogisticsRequest.tasks),
             )
         )
-        workspace = await session.scalar(statement)
+        workspace = await session.scalar(
+            statement.execution_options(populate_existing=refresh_current)
+        )
         if workspace is None:
             raise not_found("warehouse", warehouse_id)
         planning_group = (
@@ -2482,6 +2563,7 @@ class RuntimePlannerFacade:
             )
             if route_evaluator is not None:
                 self._assert_truck_verified_locked_cycles(locked_cycles)
+                await self._assert_current_truck_cycles(snapshot, locked_cycles)
             engine = HeuristicPlanner(candidate_provider, route_evaluator)
             result = await engine.generate_plan(
                 replace(snapshot.input_data, locked_cycles=locked_cycles),

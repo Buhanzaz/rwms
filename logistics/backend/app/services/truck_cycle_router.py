@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 
 from app.planner.engine import CandidateRouteRejected
@@ -73,17 +73,14 @@ class ExactTruckCycleRouter:
             warehouse_delay_attempt=0,
         )
 
-    async def _route_candidate(
+    def _cycle_profiles(
         self,
         cycle: RouteCycle,
         *,
         tasks: tuple[PlanningTask, ...],
         vehicle: Vehicle,
-        shift: DriverShift,
-        settings: PlanningSettings,
-        warehouse_delay_attempt: int,
-    ) -> RouteCycle:
-        """Route one candidate, retrying from a later depot start when feasible."""
+    ) -> tuple[EffectiveTruckProfile, ...]:
+        """Calculate every physical transition for routing and saved-proof validation."""
 
         if vehicle.routing_spec is None:
             raise CandidateRouteRejected(
@@ -123,6 +120,100 @@ class ExactTruckCycleRouter:
                 missing_fields=("route.initial_cargo_placements",),
             )
 
+        profiles: list[EffectiveTruckProfile] = []
+        for target in ordered_stops[1:]:
+            try:
+                profiles.append(self._calculator.calculate(
+                    vehicle=vehicle.routing_spec,
+                    load=LoadConfiguration(
+                        vehicle_id=vehicle.id,
+                        trailer_attached=trailer_attached,
+                        trailer_id=trailer.trailer_id if trailer is not None else None,
+                        cargo_placements=tuple(placements),
+                    ),
+                    axle_profiles=vehicle.axle_load_profiles,
+                    trailer=trailer,
+                ))
+            except TruckProfileError as exc:
+                raise CandidateRouteRejected(
+                    UnassignedReasonCode(exc.code.value), exc.detail,
+                    missing_fields=exc.missing_fields,
+                ) from exc
+            placements = self._placements_after_stop(
+                placements, target, task_by_id, trailer_attached=trailer_attached,
+            )
+            if len(placements) != target.load_after:
+                raise CandidateRouteRejected(
+                    UnassignedReasonCode.ROUTING_PROFILE_INCOMPLETE,
+                    "Cargo placement transition does not match the planned load",
+                    missing_fields=(f"route.stop[{target.sequence}].cargo_placements",),
+                )
+        return tuple(profiles)
+
+    def assert_current_route(
+        self, cycle: RouteCycle, *, tasks: tuple[PlanningTask, ...], vehicle: Vehicle,
+    ) -> None:
+        """Reject a saved proof when equipment, load, road data or leg inputs changed.
+
+        This is a local comparison, not a replacement road calculation. A rejected
+        draft must be explicitly regenerated; historical confirmed routes stay intact.
+        """
+
+        profiles = self._cycle_profiles(cycle, tasks=tasks, vehicle=vehicle)
+        stops = tuple(sorted(cycle.stops, key=lambda item: item.sequence))
+        if len(cycle.legs) != len(profiles):
+            raise CandidateRouteRejected(
+                UnassignedReasonCode.ROUTING_PROFILE_INCOMPLETE,
+                "Saved route has no complete exact truck proof",
+            )
+        for (source, target), leg, profile in zip(
+            pairwise(stops), cycle.legs, profiles, strict=True,
+        ):
+            expected = profile.to_snapshot(
+                provider=self._provider_name, osm_data_version=self._osm_data_version,
+                calculated_at=leg.routed_at,
+            )
+            expected.update(self._leg_inputs(source, target, leg.departure_at))
+            if (
+                leg.routing_profile_snapshot != expected
+                or leg.routing_provider != self._provider_name
+                or leg.osm_data_version != self._osm_data_version
+                or leg.routed_at is None
+                or leg.from_stop_sequence != source.sequence
+                or leg.to_stop_sequence != target.sequence
+            ):
+                raise CandidateRouteRejected(
+                    UnassignedReasonCode.ROUTING_PROFILE_INCOMPLETE,
+                    "Saved truck route is stale; regenerate it before confirmation",
+                )
+
+    @staticmethod
+    def _leg_inputs(
+        source: RouteStop, target: RouteStop, departure: datetime,
+    ) -> dict[str, object]:
+        """Bind a profile proof to the directed endpoints and actual departure."""
+
+        return {
+            "fromCoordinates": list(source.point.coordinates),
+            "toCoordinates": list(target.point.coordinates),
+            "departureAt": departure.astimezone(UTC).isoformat(),
+        }
+
+    async def _route_candidate(
+        self,
+        cycle: RouteCycle,
+        *,
+        tasks: tuple[PlanningTask, ...],
+        vehicle: Vehicle,
+        shift: DriverShift,
+        settings: PlanningSettings,
+        warehouse_delay_attempt: int,
+    ) -> RouteCycle:
+        """Route one candidate, retrying from a later depot start when feasible."""
+
+        ordered_stops = tuple(sorted(cycle.stops, key=lambda item: item.sequence))
+        profiles = self._cycle_profiles(cycle, tasks=tasks, vehicle=vehicle)
+
         start = max(cycle.planned_start, shift.start_at)
         first = replace(
             ordered_stops[0],
@@ -141,26 +232,8 @@ class ExactTruckCycleRouter:
         )
         calculated_at = self._now()
 
-        for source, target in pairwise(ordered_stops):
+        for (source, target), profile in zip(pairwise(ordered_stops), profiles, strict=True):
             routed_source = routed_stops[-1]
-            try:
-                profile = self._calculator.calculate(
-                    vehicle=vehicle.routing_spec,
-                    load=LoadConfiguration(
-                        vehicle_id=vehicle.id,
-                        trailer_attached=trailer_attached,
-                        trailer_id=(trailer.trailer_id if trailer is not None else None),
-                        cargo_placements=tuple(placements),
-                    ),
-                    axle_profiles=vehicle.axle_load_profiles,
-                    trailer=trailer,
-                )
-            except TruckProfileError as exc:
-                raise CandidateRouteRejected(
-                    UnassignedReasonCode(exc.code.value),
-                    exc.detail,
-                    missing_fields=exc.missing_fields,
-                ) from exc
 
             try:
                 route, leg_departure, arrival = await self._route_leg(
@@ -252,6 +325,7 @@ class ExactTruckCycleRouter:
                 osm_data_version=self._osm_data_version,
                 calculated_at=calculated_at,
             )
+            snapshot.update(self._leg_inputs(source, target, leg_departure))
             routed_legs.append(
                 PlannedLeg(
                     from_stop_sequence=source.sequence,
@@ -267,21 +341,9 @@ class ExactTruckCycleRouter:
                     routed_at=calculated_at,
                 )
             )
-            if not placements:
+            if profile.cargo_count == 0:
                 empty_distance_meters += road_leg.distance_meters
             routed_stops.append(routed_target)
-            placements = self._placements_after_stop(
-                placements,
-                routed_target,
-                task_by_id,
-                trailer_attached=trailer_attached,
-            )
-            if len(placements) != routed_target.load_after:
-                raise CandidateRouteRejected(
-                    UnassignedReasonCode.ROUTING_PROFILE_INCOMPLETE,
-                    "Cargo placement transition does not match the planned load",
-                    missing_fields=(f"route.stop[{target.sequence}].cargo_placements",),
-                )
 
         finish = routed_stops[-1].planned_departure
         overtime_seconds = max(0, round((finish - shift.end_at).total_seconds()))

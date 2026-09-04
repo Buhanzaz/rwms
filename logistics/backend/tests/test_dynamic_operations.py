@@ -637,6 +637,7 @@ async def _confirmed_rwms_day(
         accept_warnings=True,
         empty_positioning_reason=None,
         confirmed_by="dispatcher",
+        planner=runtime,
     )
     assignment = assignment.model_copy(
         update={"source_plan_id": plan.id, "source_plan_version": plan.version}
@@ -2166,6 +2167,7 @@ async def test_recovery_persists_unaffected_locked_task_identity_without_duplica
         accept_warnings=True,
         empty_positioning_reason=None,
         confirmed_by="dispatcher",
+        planner=runtime,
     )
     source = await plans.get_plan(db_session, source.id)
     affected_cycle, locked_cycle = source.cycles[:2]

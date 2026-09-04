@@ -103,6 +103,7 @@ async def test_confirming_flexible_request_archives_competing_date_plan(
         accept_warnings=True,
         empty_positioning_reason=None,
         confirmed_by="lifecycle-test",
+        planner=planner,
     )
     await db_session.refresh(second_plan)
 

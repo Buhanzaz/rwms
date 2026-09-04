@@ -28,6 +28,7 @@ from app.models import (
     RoutePlan,
     RouteSegment,
     RouteStop,
+    Trailer,
     UnassignedTask,
     Vehicle,
     Warehouse,
@@ -74,6 +75,11 @@ class PlannerFacade(Protocol):
         self, session: AsyncSession, plan_id: UUID, expected_version: int
     ) -> RoutePlan:
         """Fully validate a saved plan without accepting stale input."""
+
+    async def validate_confirmation(
+        self, session: AsyncSession, plan: RoutePlan, *, accept_warnings: bool,
+    ) -> None:
+        """Check current resources and route evidence inside the confirmation fence."""
 
     async def refresh_plan_after_request_changes(
         self,
@@ -1038,6 +1044,7 @@ async def confirm_plan(
     plan_id: UUID,
     expected_version: int,
     *,
+    planner: PlannerFacade,
     accept_warnings: bool,
     empty_positioning_reason: str | None,
     confirmed_by: str,
@@ -1067,6 +1074,34 @@ async def confirm_plan(
                 "PLAN_REQUEST_MISSING",
                 "A request referenced by the plan no longer exists",
             )
+    # Catalog edits lock equipment before advancing warehouse capacity. Use the
+    # same order, then keep those rows fenced through the confirmation commit.
+    shift_ids = select(RouteCycle.driver_shift_id).where(RouteCycle.route_plan_id == plan_id)
+    driver_ids = select(DriverShift.driver_id).where(DriverShift.id.in_(shift_ids))
+    await session.scalars(
+        select(Driver).where(Driver.id.in_(driver_ids))
+        .order_by(Driver.id).with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    await session.scalars(
+        select(DriverShift).where(DriverShift.id.in_(shift_ids))
+        .order_by(DriverShift.id).with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    vehicle_ids = select(DriverShift.vehicle_id).where(DriverShift.id.in_(shift_ids))
+    vehicles = tuple(await session.scalars(
+        select(Vehicle).where(Vehicle.id.in_(vehicle_ids))
+        .order_by(Vehicle.id).with_for_update()
+        .execution_options(populate_existing=True)
+    ))
+    trailer_ids = [vehicle.default_trailer_id for vehicle in vehicles
+                   if vehicle.default_trailer_id is not None]
+    if trailer_ids:
+        await session.scalars(
+            select(Trailer).where(Trailer.id.in_(trailer_ids))
+            .order_by(Trailer.id).with_for_update()
+            .execution_options(populate_existing=True)
+        )
     warehouse = await session.scalar(
         select(Warehouse).where(Warehouse.id == plan_identity.warehouse_id).with_for_update()
     )
@@ -1109,6 +1144,8 @@ async def confirm_plan(
         )
     if plan.status == PlanStatus.CONFIRMED:
         return plan
+    if plan.status not in MUTABLE_PLAN_STATUSES:
+        raise ApiError(409, "PLAN_NOT_CONFIRMABLE", "Only a current draft can be confirmed")
     positioning_distance = plan.metrics.get("support_positioning_distance_meters", 0)
     empty_positioning = isinstance(positioning_distance, (int, float)) and positioning_distance > 0
     normalized_reason = (empty_positioning_reason or "").strip()
@@ -1118,6 +1155,10 @@ async def confirm_plan(
             "EMPTY_POSITIONING_REASON_REQUIRED",
             "Confirming an empty cross-warehouse positioning leg requires a reason",
         )
+    await planner.validate_confirmation(session, plan, accept_warnings=accept_warnings)
+    # Refreshing catalog projections can expire inverse task/request relations.
+    # Reload the complete command graph before reservation and notice creation.
+    plan = await get_plan(session, plan_id)
     version_before = plan.version
     await _reserve_plan_requests(session, plan)
     await _create_simulated_notification_logs(session, plan)

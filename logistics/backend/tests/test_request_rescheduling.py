@@ -49,6 +49,7 @@ from app.schemas.operations import (
 )
 from app.services import catalog
 from app.services import plans as plan_service
+from app.services.planner_runtime import RuntimePlannerFacade
 from app.services.request_reschedule_worker import process_pending_request_reschedules
 from app.services.request_rescheduling import ExistingRequestReschedulingService
 from tests.auth import TEST_USER_ID, admin_access_token_verifier
@@ -1155,6 +1156,7 @@ async def test_owner_call_hold_blocks_unassigned_only_plan_confirmation(
                 accept_warnings=True,
                 empty_positioning_reason=None,
                 confirmed_by="test",
+                planner=RuntimePlannerFacade(),
             )
         except ApiError as exc:
             blocked_code = exc.code
