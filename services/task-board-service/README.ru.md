@@ -388,8 +388,8 @@ Public gateway преобразует `/api/task-board/**` в downstream `/api/*
 | `/api/warehouses/{warehouseId}/work-queues` | Warehouse-authorized user | Physical queue projections и capabilities |
 | `/api/warehouses/{warehouseId}/task-board/**` | Warehouse-authorized user | Чтение агрегированной ordinary board и поддерживаемые task-команды |
 | `/api/warehouses/{warehouseId}/task-board/daily-brigade-activity` | Warehouse-authorized user | Фактические интервалы assignments, пересекающие текущий warehouse-local день |
-| `/api/task-board/kpi-palette` | Authenticated user; global management для `PUT` | Одна version-fenced KPI palette для всех складов установки |
-| `/api/task-board/kpi-settings/**` | Authenticated user; global management для mutations | Один version-fenced рабочий график для всех складов установки; выбор склада отсутствует |
+| `/api/kpi-palette` | Authenticated user; global management для `PUT` | Одна version-fenced KPI palette для всех складов установки |
+| `/api/kpi-settings/**` | Authenticated user; global management для mutations | Один version-fenced рабочий график для всех складов установки; выбор склада отсутствует |
 | `/api/worker/v1/**` | Worker credential и `worker.tasks` scope | Context, feed, detail, actions, evidence reservations, devices и events |
 | `/api/driver/v1/**` | Worker credential и `driver.tasks` scope | Driver-only context, primary feed, actions, evidence reservations, devices и events |
 | `/api/driver/v1/shift/today` и `/api/driver/v1/shifts/{shiftId}/**` | Точная identity водителя и `driver.tasks` | Startup aggregate и version-fenced переходы ежедневной смены |

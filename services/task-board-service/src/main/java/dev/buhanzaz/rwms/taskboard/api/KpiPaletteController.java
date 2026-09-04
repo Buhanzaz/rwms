@@ -19,7 +19,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequiredArgsConstructor
 @Validated
-@RequestMapping("/api/task-board/kpi-palette")
+@RequestMapping("/api/kpi-palette")
 public class KpiPaletteController {
   private final KpiPaletteService service;
   private final WarehouseAccessAuthorizer access;

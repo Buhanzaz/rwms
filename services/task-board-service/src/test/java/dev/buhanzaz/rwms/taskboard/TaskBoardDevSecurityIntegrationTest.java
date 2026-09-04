@@ -21,6 +21,14 @@ class TaskBoardDevSecurityIntegrationTest extends PostgresIntegrationTestSupport
   }
 
   @Test
+  void servesGlobalKpiConfigurationOnCanonicalServicePaths() throws Exception {
+    mockMvc.perform(get("/api/kpi-palette")).andExpect(status().isOk());
+    mockMvc.perform(get("/api/kpi-settings")).andExpect(status().isOk());
+    mockMvc.perform(get("/api/task-board/kpi-palette")).andExpect(status().isNotFound());
+    mockMvc.perform(get("/api/task-board/kpi-settings")).andExpect(status().isNotFound());
+  }
+
+  @Test
   void keepsInternalApiAuthenticatedDuringDevelopmentBypass() throws Exception {
     mockMvc.perform(get("/api/internal/work-queues")).andExpect(status().isUnauthorized());
   }

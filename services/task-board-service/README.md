@@ -380,8 +380,8 @@ The public gateway maps `/api/task-board/**` to this service's downstream
 | `/api/warehouses/{warehouseId}/work-queues` | Warehouse-authorized user | Physical queue projections and capabilities |
 | `/api/warehouses/{warehouseId}/task-board/**` | Warehouse-authorized user | Aggregate ordinary-board read and supported task commands |
 | `/api/warehouses/{warehouseId}/task-board/daily-brigade-activity` | Warehouse-authorized user | Actual task-assignment intervals overlapping the current warehouse-local day |
-| `/api/task-board/kpi-palette` | Authenticated user; global management for `PUT` | One version-fenced KPI palette shared by every installation warehouse |
-| `/api/task-board/kpi-settings/**` | Authenticated user; global management for mutations | One version-fenced work schedule shared by every installation warehouse; no warehouse selector |
+| `/api/kpi-palette` | Authenticated user; global management for `PUT` | One version-fenced KPI palette shared by every installation warehouse |
+| `/api/kpi-settings/**` | Authenticated user; global management for mutations | One version-fenced work schedule shared by every installation warehouse; no warehouse selector |
 | `/api/worker/v1/**` | Worker credential and `worker.tasks` scope | Context, feed, detail, actions, evidence reservations, devices, and events |
 | `/api/driver/v1/**` | Worker credential and `driver.tasks` scope | Driver-only context, primary feed, actions, evidence reservations, devices, and events |
 | `/api/driver/v1/shift/today` and `/api/driver/v1/shifts/{shiftId}/**` | Exact driver identity and `driver.tasks` | Startup aggregate and version-fenced daily-shift transitions |

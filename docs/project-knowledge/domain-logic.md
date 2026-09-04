@@ -280,7 +280,8 @@ pre-start updates in
 so a producer cannot make a later phase executable by changing array order.
 
 The KPI display palette is an installation-wide, version-fenced task-board aggregate:
-`GET`/`PUT /api/task-board/kpi-palette` have no scope selector,
+the public gateway `GET`/`PUT /api/task-board/kpi-palette` requests map to the owner's
+service-local `/api/kpi-palette` boundary and have no scope selector,
 and one replacement applies to every warehouse and native worker. Legacy warehouse palette records are not selected as an implicit
 baseline. KPI schedule revisions remain effective-dated in the warehouse time zone. Saving
 creates or updates the pending `DRAFT`; activation of a revision effective

@@ -17,6 +17,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -209,6 +210,27 @@ class GatewayRouteIntegrationTest {
       assertThat(request.path()).isEqualTo("/api/warehouses/warehouse-1/task-board");
       assertThat(request.authorization()).isEqualTo("Bearer original-token");
     });
+  }
+
+  @Test
+  void routesGlobalKpiConfigurationToCanonicalTaskBoardPaths() throws Exception {
+    TASK_BOARD_REQUESTS.clear();
+
+    for (var mapping :
+        Map.of(
+                "/api/task-board/kpi-palette", "/api/kpi-palette",
+                "/api/task-board/kpi-settings", "/api/kpi-settings")
+            .entrySet()) {
+      mvc.perform(
+              publicGet(mapping.getKey())
+                  .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.path").value(mapping.getValue()));
+    }
+
+    assertThat(TASK_BOARD_REQUESTS)
+        .extracting(CapturedRequest::path)
+        .containsExactlyInAnyOrder("/api/kpi-palette", "/api/kpi-settings");
   }
 
   @Test

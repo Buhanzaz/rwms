@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Task Board Service API
-  version: 1.17.0
+  version: 1.17.1
   description: >-
     Canonical F2 inventory of the active task-board, workforce and queue
     registry HTTP API. All warehouse-scoped operations validate the warehouse
@@ -383,7 +383,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /task-board/kpi-palette:
+  /kpi-palette:
     get:
       operationId: getKpiPalette
       description: >-
@@ -408,7 +408,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /task-board/kpi-settings:
+  /kpi-settings:
     get:
       operationId: getKpiSettings
       description: >-
@@ -417,7 +417,7 @@ paths:
         '200': { $ref: '#/components/responses/KpiSettingsOk' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
-  /task-board/kpi-settings/work-schedule:
+  /kpi-settings/work-schedule:
     put:
       operationId: replacePendingKpiWorkSchedule
       description: >-
@@ -436,7 +436,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /task-board/kpi-settings/work-schedule/pending:
+  /kpi-settings/work-schedule/pending:
     delete:
       operationId: deletePendingKpiWorkSchedule
       parameters:
@@ -448,7 +448,7 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /task-board/kpi-settings/activate:
+  /kpi-settings/activate:
     post:
       operationId: activateKpiSettings
       description: >-

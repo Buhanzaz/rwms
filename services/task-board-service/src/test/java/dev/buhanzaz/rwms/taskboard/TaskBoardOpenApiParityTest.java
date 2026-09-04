@@ -214,7 +214,7 @@ class TaskBoardOpenApiParityTest {
     Map<String, Object> paths = child(document, "paths");
     Map<String, Object> schemas = child(child(document, "components"), "schemas");
 
-    Map<String, Object> palettePath = child(paths, "/task-board/kpi-palette");
+    Map<String, Object> palettePath = child(paths, "/kpi-palette");
     assertThat(palettePath).containsOnlyKeys("get", "put");
 
     Map<String, Object> get = child(palettePath, "get");
@@ -235,24 +235,27 @@ class TaskBoardOpenApiParityTest {
     assertThat(list(palette.get("required"))).containsExactly("version", "palette");
     assertThat(child(palette, "properties")).containsKeys("version", "palette");
 
-    Map<String, Object> settingsPath = child(paths, "/task-board/kpi-settings");
+    Map<String, Object> settingsPath = child(paths, "/kpi-settings");
     assertThat(settingsPath).containsOnlyKeys("get");
     assertThat(child(settingsPath, "get").get("operationId")).isEqualTo("getKpiSettings");
     assertThat(paths)
         .containsKeys(
-            "/task-board/kpi-settings/work-schedule",
-            "/task-board/kpi-settings/work-schedule/pending",
-            "/task-board/kpi-settings/activate")
-        .doesNotContainKey("/warehouses/{warehouseId}/task-board/kpi-settings");
+            "/kpi-settings/work-schedule",
+            "/kpi-settings/work-schedule/pending",
+            "/kpi-settings/activate")
+        .doesNotContainKeys(
+            "/task-board/kpi-palette",
+            "/task-board/kpi-settings",
+            "/warehouses/{warehouseId}/task-board/kpi-settings");
     assertThat(
-            child(child(paths, "/task-board/kpi-settings/work-schedule"), "put")
+            child(child(paths, "/kpi-settings/work-schedule"), "put")
                 .get("operationId"))
         .isEqualTo("replacePendingKpiWorkSchedule");
     assertThat(
-            child(child(paths, "/task-board/kpi-settings/work-schedule/pending"), "delete")
+            child(child(paths, "/kpi-settings/work-schedule/pending"), "delete")
                 .get("operationId"))
         .isEqualTo("deletePendingKpiWorkSchedule");
-    assertThat(child(child(paths, "/task-board/kpi-settings/activate"), "post").get("operationId"))
+    assertThat(child(child(paths, "/kpi-settings/activate"), "post").get("operationId"))
         .isEqualTo("activateKpiSettings");
 
     Map<String, Object> settings = child(schemas, "KpiSettingsResponse");

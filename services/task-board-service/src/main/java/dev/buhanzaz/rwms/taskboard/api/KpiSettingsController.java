@@ -32,7 +32,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequiredArgsConstructor
 @Validated
-@RequestMapping("/api/task-board/kpi-settings")
+@RequestMapping("/api/kpi-settings")
 public class KpiSettingsController {
   private final KpiSettingsService service;
   private final WarehouseAccessAuthorizer access;
