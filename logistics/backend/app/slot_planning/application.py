@@ -54,6 +54,11 @@ from app.schemas.slot_planning import (
     SlotTimelineStopRead,
 )
 from app.services.planning_group import resolve_planning_warehouse_group
+from app.services.resource_incidents import (
+    NO_RESOURCE_RESTRICTIONS,
+    DayResourceRestrictions,
+    load_resource_restrictions,
+)
 from app.services.support_resource_candidates import (
     SupportResourceFacts,
     load_support_resource_facts,
@@ -110,6 +115,7 @@ class SlotPlanningContext:
     support_facts: SupportResourceFacts | None
     policy_zones: tuple[WarehousePolicyZone, ...] = ()
     special_price_zone: WarehousePolicyZone | None = None
+    resource_restrictions: DayResourceRestrictions = NO_RESOURCE_RESTRICTIONS
 
 
 class SlotPlanningApplication:
@@ -521,6 +527,11 @@ class SlotPlanningApplication:
                 for hold in active_holds
             ),
         )
+        resource_restrictions = (
+            await load_resource_restrictions(
+                session, planning_group.root.id, command.date, command.date,
+            )
+        ).get(command.date, DayResourceRestrictions())
         day_plan, equipment = self._build_day_plan(
             warehouse,
             command.date,
@@ -529,6 +540,7 @@ class SlotPlanningApplication:
             requests=active_requests,
             request_policies=request_policies,
             hold_policies=hold_policies,
+            resource_restrictions=resource_restrictions,
         )
         support_facts: SupportResourceFacts | None = None
         revision = self._source_revision(
@@ -538,6 +550,7 @@ class SlotPlanningApplication:
             planning_root_warehouse_id=planning_group.root.id,
             planning_day_mode=day_mode,
             planning_day_mode_version=(day_policy.version if day_policy is not None else 0),
+            resource_restrictions=resource_restrictions,
         )
         if self._settings.rwms_sync_enabled:
             zone = ZoneInfo(warehouse.timezone)
@@ -550,7 +563,10 @@ class SlotPlanningApplication:
                     datetime.combine(command.date, slot_start, tzinfo=zone)
                     for slot_start, _ in configuration.customer_slots
                 ),
-                vehicle_equipment_snapshot,
+                lambda vehicle, settings: vehicle_equipment_snapshot(
+                    vehicle, settings, resource_restrictions.trailer_ids,
+                ),
+                resource_restrictions=resource_restrictions,
             )
             equipment.update(support_facts.equipment)
             revision = sha256(
@@ -568,6 +584,7 @@ class SlotPlanningApplication:
             support_facts=support_facts,
             policy_zones=policy_zones,
             special_price_zone=policies.special_price,
+            resource_restrictions=resource_restrictions,
         )
 
     def _build_day_plan(
@@ -580,6 +597,7 @@ class SlotPlanningApplication:
         requests: list[LogisticsRequest],
         request_policies: Mapping[UUID, PolicyZoneClassification],
         hold_policies: Mapping[UUID, PolicyZoneClassification],
+        resource_restrictions: DayResourceRestrictions = NO_RESOURCE_RESTRICTIONS,
     ) -> tuple[DayPlan, dict[str, VehicleEquipmentSnapshot]]:
         """Translate current persistence and policy facts into immutable planner inputs."""
 
@@ -591,6 +609,7 @@ class SlotPlanningApplication:
             and item.active
             and item.driver.active
             and item.vehicle.active
+            and resource_restrictions.allows_shift(item.id, item.vehicle_id)
         ]
         shifts.sort(key=lambda item: (item.start_time, item.driver_id, item.id))
         latest_plan = self._latest_plan(warehouse.plans, warehouse.id, planning_date)
@@ -752,8 +771,12 @@ class SlotPlanningApplication:
                     datetime.combine(planning_date, shift.end_time, tzinfo=zone),
                     datetime.combine(planning_date, configuration.hard_finish, tzinfo=zone),
                 ),
-                vehicle_capacity=effective_vehicle_cabin_capacity(shift.vehicle),
-                has_trailer=vehicle_has_available_trailer(shift.vehicle),
+                vehicle_capacity=effective_vehicle_cabin_capacity(
+                    shift.vehicle, resource_restrictions.trailer_ids,
+                ),
+                has_trailer=vehicle_has_available_trailer(
+                    shift.vehicle, resource_restrictions.trailer_ids,
+                ),
                 trips=tuple(trips_by_shift[shift.id]),
                 resource_origin_warehouse_id=str(warehouse.external_warehouse_id),
                 available_from=max(
@@ -776,6 +799,7 @@ class SlotPlanningApplication:
             str(shift.vehicle.id): vehicle_equipment_snapshot(
                 shift.vehicle,
                 warehouse.settings,
+                resource_restrictions.trailer_ids,
             )
             for shift in shifts
         }
@@ -895,9 +919,11 @@ class SlotPlanningApplication:
                 shift_start=item.available_at_served,
                 shift_end=item.latest_served_finish,
                 vehicle_capacity=effective_vehicle_cabin_capacity(
-                    item.fact.shift.vehicle
+                    item.fact.shift.vehicle, context.resource_restrictions.trailer_ids,
                 ),
-                has_trailer=vehicle_has_available_trailer(item.fact.shift.vehicle),
+                has_trailer=vehicle_has_available_trailer(
+                    item.fact.shift.vehicle, context.resource_restrictions.trailer_ids,
+                ),
                 resource_origin_warehouse_id=str(
                     item.fact.support_warehouse.external_warehouse_id
                 ),
@@ -1449,6 +1475,7 @@ class SlotPlanningApplication:
         planning_root_warehouse_id: UUID | None = None,
         planning_day_mode: PlanningDayMode = PlanningDayMode.DELIVERIES_AND_PICKUPS,
         planning_day_mode_version: int = 0,
+        resource_restrictions: DayResourceRestrictions = NO_RESOURCE_RESTRICTIONS,
     ) -> str:
         """Hash every durable day fact that can change exact slot feasibility."""
 
@@ -1471,6 +1498,11 @@ class SlotPlanningApplication:
                 ],
             },
             "date": planning_date.isoformat(),
+            "resource_incidents": {
+                "vehicles": sorted(resource_restrictions.vehicle_ids),
+                "shifts": sorted(resource_restrictions.shift_ids),
+                "trailers": sorted(resource_restrictions.trailer_ids),
+            },
             "planning_day_policy": {
                 "root_warehouse_id": str(planning_root_warehouse_id or warehouse.id),
                 "mode": planning_day_mode.value,

@@ -225,6 +225,39 @@ def test_combined_length_can_be_computed_from_explicit_coupling_length() -> None
     assert profile.length_meters == 18.5
 
 
+@pytest.mark.parametrize(
+    "positions",
+    (
+        (CargoPosition.TRUCK_PLATFORM, CargoPosition.TRUCK_PLATFORM),
+        (CargoPosition.TRAILER_PLATFORM, CargoPosition.TRAILER_PLATFORM),
+        (
+            CargoPosition.TRUCK_PLATFORM,
+            CargoPosition.TRAILER_PLATFORM,
+            CargoPosition.TRUCK_PLATFORM,
+        ),
+    ),
+)
+def test_each_attached_platform_rejects_a_second_cabin(
+    positions: tuple[CargoPosition, ...],
+) -> None:
+    """An attached trailer never permits stacking two cabins on either platform or a third cabin."""
+
+    vehicle, trailer = _vehicle(), _trailer()
+    with pytest.raises(TruckProfileError) as captured:
+        EffectiveTruckProfileCalculator().calculate(
+            vehicle=vehicle,
+            trailer=trailer,
+            load=LoadConfiguration(
+                vehicle_id=vehicle.vehicle_id,
+                trailer_id=trailer.trailer_id,
+                trailer_attached=True,
+                cargo_placements=tuple(_cargo(position) for position in positions),
+            ),
+            axle_profiles=_profiles(),
+        )
+    assert captured.value.code is TruckProfileErrorCode.NO_COMPATIBLE_TRAILER
+
+
 def test_two_cargo_without_trailer_is_rejected_before_routing() -> None:
     """Two physical units cannot be placed on the supported truck-only configuration."""
 

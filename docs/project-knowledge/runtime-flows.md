@@ -1743,6 +1743,12 @@ and
 The planner records truck/trailer incidents in the root warehouse's local day and
 disables the exact resource. Trailer impact follows saved routed-segment identity;
 it does not disable a healthy tractor or reuse a failed trailer after a catalog edit.
+The same group/day incident exclusions feed exact slots, support-resource positioning
+and capacity publication, including representative warehouse resources. A truck supplies
+one cabin platform and a compatible available trailer at most one more. Day incidents
+cannot be erased by catalog reactivation; replacing the exact trailer can restore its
+second platform, and later dates consult current availability. Exclusions enter slot
+revision fences, while capacity reads batch the requested date range once.
 The incident dialog offers AUTO or MANUAL. AUTO commits the event before invoking
 the existing version-fenced proposal/owner-replacement saga with the authenticated
 subject and a stable event-derived key. Failures retain the source and expose

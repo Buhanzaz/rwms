@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from datetime import time
 from typing import Any
 
@@ -28,20 +28,31 @@ from .models import WarehouseSlotConfiguration
 from .routing_adapter import CachedTruckTravelTimeProvider, VehicleEquipmentSnapshot
 
 
-def vehicle_has_available_trailer(vehicle: Vehicle) -> bool:
+def vehicle_has_available_trailer(
+    vehicle: Vehicle,
+    unavailable_trailer_ids: Collection[str] = (),
+) -> bool:
     """Return whether the current vehicle snapshot can actually use its assigned trailer."""
 
     return (
         vehicle.can_use_trailer is True
         and vehicle.default_trailer is not None
         and vehicle.default_trailer.active
+        and str(vehicle.default_trailer.id) not in unavailable_trailer_ids
     )
 
 
-def effective_vehicle_cabin_capacity(vehicle: Vehicle) -> int:
-    """Return the shared one-or-two-cabin capacity for planning and slot calculations."""
+def effective_vehicle_cabin_capacity(
+    vehicle: Vehicle,
+    unavailable_trailer_ids: Collection[str] = (),
+) -> int:
+    """One truck platform plus at most one available trailer platform, never more than two."""
 
-    return min(2, vehicle.capacity) if vehicle_has_available_trailer(vehicle) else 1
+    return (
+        min(2, vehicle.capacity)
+        if vehicle_has_available_trailer(vehicle, unavailable_trailer_ids)
+        else 1
+    )
 
 
 def warehouse_slot_configuration(warehouse: Warehouse) -> WarehouseSlotConfiguration:
@@ -119,10 +130,15 @@ def truck_travel_time_provider(
 def vehicle_equipment_snapshot(
     vehicle: Vehicle,
     settings: Mapping[str, Any],
+    unavailable_trailer_ids: Collection[str] = (),
 ) -> VehicleEquipmentSnapshot:
     """Build the shared complete physical snapshot used by truck-profile routing."""
 
-    trailer = vehicle.default_trailer if vehicle_has_available_trailer(vehicle) else None
+    trailer = (
+        vehicle.default_trailer
+        if vehicle_has_available_trailer(vehicle, unavailable_trailer_ids)
+        else None
+    )
     return VehicleEquipmentSnapshot(
         vehicle_id=str(vehicle.id),
         vehicle=VehicleRoutingSpec(

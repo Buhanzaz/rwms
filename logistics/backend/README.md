@@ -289,6 +289,12 @@ Truck and trailer breakdowns support `recovery_mode: AUTO | MANUAL` (API default
 requires `trailer_id` and disables the trailer, not the healthy tractor. Impact
 uses the trailer identity saved in routed segments rather than a later catalog
 attachment. Capacity publication is invalidated for the planning group.
+Each truck carries at most one cabin on its platform; an available compatible trailer
+adds one more, never a third. Day plans, exact slots, support positioning and published
+capacity use the same root-group day exclusions. Reactivating the failed resource in the
+catalog does not erase that day's incident; another healthy trailer can supply the second
+platform. Later days use current catalog availability. Incident reads are batched by date
+range, and exact slot revisions include exclusions so holds recheck changed resources.
 AUTO commits the incident before running the same version-fenced recovery saga
 as manual application. Event replay never duplicates a completed or failed attempt.
 Replacement departures cannot precede either the incident or apply time; original

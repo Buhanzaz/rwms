@@ -19,6 +19,7 @@ from app.integrations.rwms import RwmsPlanningClient
 from app.models import DriverShift, Vehicle, Warehouse
 from app.routing import GeoJsonLineString, GeoPoint
 from app.schemas.domain import RwmsDriverIdentity, RwmsWarehouseSupportLink
+from app.services.resource_incidents import NO_RESOURCE_RESTRICTIONS, DayResourceRestrictions
 from app.slot_planning.configuration import vehicle_has_available_trailer
 from app.slot_planning.models import (
     PlanningReason,
@@ -55,6 +56,7 @@ class SupportResourceFacts:
     contractor_fallback_allowed: bool
     had_local_staff_fact: bool
     local_identities: tuple[RwmsDriverIdentity, ...]
+    resource_restrictions: DayResourceRestrictions = NO_RESOURCE_RESTRICTIONS
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +96,8 @@ async def load_support_resource_facts(
     planning_date: date,
     planning_instants: Iterable[datetime],
     equipment_factory: EquipmentFactory,
+    *,
+    resource_restrictions: DayResourceRestrictions = NO_RESOURCE_RESTRICTIONS,
 ) -> SupportResourceFacts:
     """Load owner-filtered links, exact workers, and existing local shifts without writes."""
 
@@ -218,6 +222,7 @@ async def load_support_resource_facts(
                 and shift.date_from <= planning_date <= shift.date_to
                 and shift.driver.active
                 and shift.vehicle.active
+                and resource_restrictions.allows_shift(shift.id, shift.vehicle_id)
                 and shift.driver.external_worker_id is not None
             ):
                 continue
@@ -260,6 +265,11 @@ async def load_support_resource_facts(
         )
     )
     revision_payload = {
+        "resourceIncidents": {
+            "vehicles": sorted(resource_restrictions.vehicle_ids),
+            "shifts": sorted(resource_restrictions.shift_ids),
+            "trailers": sorted(resource_restrictions.trailer_ids),
+        },
         "queries": query_facts,
         "localSupportFacts": [
             {
@@ -301,6 +311,7 @@ async def load_support_resource_facts(
         ).encode()
     ).hexdigest()
     return SupportResourceFacts(
+        resource_restrictions=resource_restrictions,
         candidates=ordered,
         equipment=equipment,
         source_revision=revision,
@@ -357,12 +368,14 @@ async def route_support_resource_facts(
             fact.link.support_warehouse.latitude,  # type: ignore[arg-type]
             is_city=True,
         )
-        has_trailer = vehicle_has_available_trailer(shift.vehicle)
+        has_trailer = vehicle_has_available_trailer(
+            shift.vehicle, facts.resource_restrictions.trailer_ids,
+        )
         vehicle_state = VehicleLegState(
             vehicle_id=str(shift.vehicle_id),
             trailer_attached=has_trailer and shift.vehicle.capacity > 1,
             current_load=0,
-            trip_peak_load=min(2, shift.vehicle.capacity),
+            trip_peak_load=min(2, shift.vehicle.capacity) if has_trailer else 1,
         )
         try:
             inbound = await provider.travel_time(

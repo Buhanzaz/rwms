@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime, time
 from types import SimpleNamespace
 from typing import Any, cast
@@ -13,7 +14,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.services.planner_runtime as runtime_module
-from app.models import PlanningDayMode, WarehouseIsochroneTariff
+from app.models import PlanningDayMode, Trailer, WarehouseIsochroneTariff
 from app.models import Vehicle as DbVehicle
 from app.models import Warehouse as DbWarehouse
 from app.planner import (
@@ -38,6 +39,7 @@ from app.services.planner_runtime import (
     warehouse_shift_interval,
 )
 from app.services.planning_group import PlanningWarehouseGroup
+from app.services.resource_incidents import NO_RESOURCE_RESTRICTIONS, DayResourceRestrictions
 from app.slot_planning.models import PlanningReason
 from tests.factories import make_driver, make_routable_vehicle, make_shift, make_warehouse
 
@@ -149,20 +151,33 @@ def snapshot(served: DbWarehouse) -> _RuntimeSnapshot:
         support_reason_codes=(),
         support_source_revision=None,
         day_mode=PlanningDayMode.DELIVERIES_AND_PICKUPS,
-        unavailable_vehicle_ids=frozenset(),
-        unavailable_shift_ids=frozenset(),
+        resource_restrictions=NO_RESOURCE_RESTRICTIONS,
     )
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failed_trailer", (False, True))
 async def test_day_plan_appends_routed_support_shift_without_repositioning(
     monkeypatch: pytest.MonkeyPatch,
+    failed_trailer: bool,
 ) -> None:
     """Expose an external shift only after arrival and retain its original base warehouse."""
 
     served = warehouse()
     support_id = uuid4()
     support_vehicle = vehicle(support_id)
+    original = snapshot(served)
+    if failed_trailer:
+        trailer_id = uuid4()
+        support_vehicle.capacity = 2
+        support_vehicle.can_use_trailer = True
+        support_vehicle.default_trailer = Trailer(id=trailer_id, active=True)
+        original = replace(
+            original,
+            resource_restrictions=DayResourceRestrictions(
+                trailer_ids=frozenset({str(trailer_id)}),
+            ),
+        )
     shift_id = uuid4()
     worker_id = uuid4()
     link_id = uuid4()
@@ -240,7 +255,7 @@ async def test_day_plan_appends_routed_support_shift_without_repositioning(
         rwms_client=cast(Any, rwms_client_without_vehicle_assignments())
     )
     augmented = await facade._with_support_resources(
-        cast(AsyncSession, object()), snapshot(served)
+        cast(AsyncSession, object()), original
     )
 
     assert [item.id for item in augmented.input_data.shifts] == [str(shift_id)]
@@ -258,6 +273,8 @@ async def test_day_plan_appends_routed_support_shift_without_repositioning(
         str(support_vehicle.id)
     ]
     assert augmented.input_data.warehouse_id == str(served.id)
+    assert augmented.input_data.vehicles[0].capacity == 1
+    assert augmented.input_data.vehicles[0].default_trailer is None
     assert augmented.warehouse is served
     assert augmented.input_data.warehouse.id == str(served.id)
 
@@ -287,7 +304,8 @@ async def test_day_plan_appends_routed_support_shift_without_repositioning(
     assert metrics["changes_operational_warehouse"] is False
     assert metrics["available_transfer_cabin_capacity"] == 1
     assert metrics["trailer_available"] is False
-    assert "VEHICLE_CAPACITY_ONE_CABIN" in metrics["reason_codes"]
+    capacity_reason = "TRAILER_REQUIRED" if failed_trailer else "VEHICLE_CAPACITY_ONE_CABIN"
+    assert capacity_reason in metrics["reason_codes"]
     assert metrics["inbound_distance_meters"] == 200_000
     assert metrics["return_distance_meters"] == 210_000
     assert metrics["inbound_departure_at"] == "2026-09-14T08:50:00+03:00"
@@ -301,7 +319,7 @@ async def test_day_plan_appends_routed_support_shift_without_repositioning(
     assert metrics["reason_codes"] == [
         "SUPPORT_DRIVER_AVAILABLE",
         "SLOT_AFTER_RESOURCE_ARRIVAL",
-        "VEHICLE_CAPACITY_ONE_CABIN",
+        capacity_reason,
     ]
 
 

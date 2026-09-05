@@ -35,3 +35,20 @@ def test_every_equipment_projection_excludes_unavailable_trailer(
     assert effective_vehicle_cabin_capacity(vehicle) == (2 if available else 1)
     assert (vehicle_equipment_snapshot(vehicle, {}).trailer is not None) is available
     assert (RuntimePlannerFacade._trailer_spec(trailer) is not None) is active
+
+
+@pytest.mark.parametrize("catalog_capacity", (1, 2, 3, 10))
+@pytest.mark.parametrize("incident", (False, True))
+def test_each_platform_holds_at_most_one_cabin(catalog_capacity: int, incident: bool) -> None:
+    """A catalog number never creates more than one truck and one trailer platform."""
+
+    trailer = Trailer(id=uuid4(), active=True)
+    vehicle = Vehicle(
+        id=uuid4(), name="Truck", capacity=catalog_capacity, active=True,
+        can_use_trailer=True, default_trailer=trailer, load_profiles=[],
+    )
+    excluded = {str(trailer.id)} if incident else set()
+    expected = 1 if incident else min(2, catalog_capacity)
+    assert effective_vehicle_cabin_capacity(vehicle, excluded) == expected
+    assert RuntimePlannerFacade._core_vehicle(vehicle, excluded).capacity == expected
+    assert (vehicle_equipment_snapshot(vehicle, {}, excluded).trailer is None) is incident

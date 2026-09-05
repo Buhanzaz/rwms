@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import asdict, dataclass, fields, replace
 from datetime import date, datetime, time, timedelta
 from enum import StrEnum
@@ -117,6 +117,7 @@ from app.schemas.domain import (
 )
 from app.services import plans as plan_service
 from app.services.planning_group import resolve_planning_warehouse_group
+from app.services.resource_incidents import DayResourceRestrictions
 from app.services.support_resource_candidates import (
     RoutedSupportResource,
     deduplicate_routed_support_resources,
@@ -182,8 +183,7 @@ class _RuntimeSnapshot:
     support_reason_codes: tuple[str, ...]
     support_source_revision: str | None
     day_mode: PlanningDayMode
-    unavailable_vehicle_ids: frozenset[str]
-    unavailable_shift_ids: frozenset[str]
+    resource_restrictions: DayResourceRestrictions
 
 
 def request_is_available_on_date(
@@ -1294,24 +1294,7 @@ class RuntimePlannerFacade:
                 )
             )
         )
-        unavailable_vehicle_ids = {
-            str(value)
-            for event in day_resource_events
-            if event.event_type == LogisticsEventType.VEHICLE_BREAKDOWN
-            and (value := event.facts.get("vehicle_id")) is not None
-        }
-        unavailable_shift_ids = {
-            str(value)
-            for event in day_resource_events
-            if event.event_type == LogisticsEventType.DRIVER_UNAVAILABLE
-            and (value := event.facts.get("driver_shift_id")) is not None
-        }
-        unavailable_trailer_ids = {
-            str(value)
-            for event in day_resource_events
-            if event.event_type == LogisticsEventType.TRAILER_BREAKDOWN
-            and (value := event.facts.get("trailer_id")) is not None
-        }
+        resource_restrictions = DayResourceRestrictions.from_events(day_resource_events)
         blocked_task_ids = {
             event.task_id
             for event in day_resource_events
@@ -1615,7 +1598,7 @@ class RuntimePlannerFacade:
             ),
         }
         vehicles_by_id = {
-            str(vehicle.id): self._core_vehicle(vehicle)
+            str(vehicle.id): self._core_vehicle(vehicle, resource_restrictions.trailer_ids)
             for member in planning_members
             for vehicle in sorted(member.vehicles, key=lambda item: str(item.id))
         }
@@ -1647,7 +1630,7 @@ class RuntimePlannerFacade:
                     continue
                 vehicles_by_id.setdefault(
                     str(shift.vehicle.id),
-                    self._core_vehicle(shift.vehicle),
+                    self._core_vehicle(shift.vehicle, resource_restrictions.trailer_ids),
                 )
                 shifts_by_id.setdefault(
                     str(shift.id),
@@ -1663,8 +1646,7 @@ class RuntimePlannerFacade:
                             shift.active
                             and shift.driver.active
                             and shift.vehicle.active
-                            and str(shift.id) not in unavailable_shift_ids
-                            and str(shift.vehicle_id) not in unavailable_vehicle_ids
+                            and resource_restrictions.allows_shift(shift.id, shift.vehicle_id)
                         ),
                         resource_origin_warehouse_id=str(
                             member.external_warehouse_id
@@ -1677,13 +1659,7 @@ class RuntimePlannerFacade:
                         ),
                     ),
                 )
-        vehicles = tuple(
-            replace(vehicle, default_trailer=None)
-            if vehicle.default_trailer is not None
-            and str(vehicle.default_trailer.trailer_id) in unavailable_trailer_ids
-            else vehicle
-            for vehicle in sorted(vehicles_by_id.values(), key=lambda item: item.id)
-        )
+        vehicles = tuple(sorted(vehicles_by_id.values(), key=lambda item: item.id))
         shifts = tuple(
             sorted(
                 shifts_by_id.values(),
@@ -1849,8 +1825,7 @@ class RuntimePlannerFacade:
             support_reason_codes=(),
             support_source_revision=None,
             day_mode=day_mode,
-            unavailable_vehicle_ids=frozenset(unavailable_vehicle_ids),
-            unavailable_shift_ids=frozenset(unavailable_shift_ids),
+            resource_restrictions=resource_restrictions,
         )
         return await self._with_support_resources(
             session,
@@ -1914,7 +1889,10 @@ class RuntimePlannerFacade:
                 served_member,
                 snapshot.input_data.planning_date,
                 planning_instants,
-                vehicle_equipment_snapshot,
+                lambda vehicle, settings: vehicle_equipment_snapshot(
+                    vehicle, settings, snapshot.resource_restrictions.trailer_ids,
+                ),
+                resource_restrictions=snapshot.resource_restrictions,
             )
             contractor_fallback_allowed |= facts.contractor_fallback_allowed
             if not facts.candidates:
@@ -2003,9 +1981,9 @@ class RuntimePlannerFacade:
                 candidate
                 for candidate in resolution.candidates
                 if (
-                    str(candidate.fact.shift.id) not in snapshot.unavailable_shift_ids
-                    and str(candidate.fact.shift.vehicle_id)
-                    not in snapshot.unavailable_vehicle_ids
+                    snapshot.resource_restrictions.allows_shift(
+                        candidate.fact.shift.id, candidate.fact.shift.vehicle_id,
+                    )
                     and
                     (
                         home_external_id := support_home_external_by_local_id.get(
@@ -2066,7 +2044,9 @@ class RuntimePlannerFacade:
         default_configuration = next(iter(configuration_by_served_id.values()))
         for candidate in external_candidates:
             fact = candidate.fact
-            vehicle = self._core_vehicle(fact.shift.vehicle)
+            vehicle = self._core_vehicle(
+                fact.shift.vehicle, snapshot.resource_restrictions.trailer_ids,
+            )
             vehicles_by_id.setdefault(vehicle.id, vehicle)
             served_identity = getattr(fact.link, "served_warehouse", None)
             served_external_id = getattr(served_identity, "warehouse_id", None)
@@ -2399,16 +2379,23 @@ class RuntimePlannerFacade:
         )
 
     @staticmethod
-    def _core_vehicle(vehicle: DbVehicle) -> Vehicle:
+    def _core_vehicle(
+        vehicle: DbVehicle,
+        unavailable_trailer_ids: Collection[str] = (),
+    ) -> Vehicle:
         """Translate one active-or-inactive catalog vehicle without changing ownership."""
 
         return Vehicle(
             id=str(vehicle.id),
             name=vehicle.name,
-            capacity=vehicle.capacity,
+            capacity=effective_vehicle_cabin_capacity(vehicle, unavailable_trailer_ids),
             active=vehicle.active,
             routing_spec=RuntimePlannerFacade._vehicle_routing_spec(vehicle),
-            default_trailer=RuntimePlannerFacade._trailer_spec(vehicle.default_trailer),
+            default_trailer=(
+                RuntimePlannerFacade._trailer_spec(vehicle.default_trailer)
+                if vehicle_has_available_trailer(vehicle, unavailable_trailer_ids)
+                else None
+            ),
             axle_load_profiles=tuple(
                 OperationalAxleLoadProfile(
                     configuration_type=TruckConfigurationType(profile.configuration_type),
@@ -3139,9 +3126,13 @@ class RuntimePlannerFacade:
                 )
             return metrics
         vehicle = support.fact.shift.vehicle
-        trailer_available = vehicle_has_available_trailer(vehicle)
+        trailer_available = vehicle_has_available_trailer(
+            vehicle, snapshot.resource_restrictions.trailer_ids,
+        )
         raw_capacity = min(2, vehicle.capacity)
-        transfer_capacity = effective_vehicle_cabin_capacity(vehicle)
+        transfer_capacity = effective_vehicle_cabin_capacity(
+            vehicle, snapshot.resource_restrictions.trailer_ids,
+        )
         capacity_reasons: list[PlanningReason] = []
         if transfer_capacity == 1:
             capacity_reasons.append(

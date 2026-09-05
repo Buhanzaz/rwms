@@ -9,20 +9,106 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import Settings
 from app.db import utc_now
 from app.errors import ApiError
-from app.models import LogisticsEventType, RecoveryProposal, RecoveryProposalStatus, Trailer
+from app.models import (
+    LogisticsEvent,
+    LogisticsEventType,
+    RecoveryProposal,
+    RecoveryProposalStatus,
+    Trailer,
+)
 from app.models.domain import PlanStatus
 from app.schemas.operations import LogisticsEventCreate
+from app.schemas.slot_planning import SlotAvailabilityRequest
 from app.services import plans
+from app.services.capacity_projection import build_capacity_projection
 from app.services.dynamic_impacts import LogisticsImpactAnalyzer
 from app.services.dynamic_operations import DynamicLogisticsService
 from app.services.dynamic_support import event_command_hash
-from tests.factories import make_warehouse
-from tests.test_dynamic_operations import PLANNING_DATE, ZONE, _confirmed_rwms_day, _generated_day
+from app.slot_planning.application import SlotPlanningApplication
+from tests.factories import make_driver, make_shift, make_vehicle, make_warehouse
+from tests.test_dynamic_operations import (
+    PLANNING_DATE,
+    ZONE,
+    _confirmed_rwms_day,
+    _generated_day,
+    _PlanningGroupClient,
+    _support_link,
+)
 
 pytestmark = pytest.mark.integration
 ACTOR = UUID("00000000-0000-0000-0000-000000000001")
+
+
+@pytest.mark.parametrize("foreign_event", (False, True))
+async def test_representative_capacity_uses_its_root_incidents_without_cross_group_leaks(
+    db_session: AsyncSession,
+    foreign_event: bool,
+) -> None:
+    root = await make_warehouse(db_session, default_planning_date=PLANNING_DATE)
+    representative = await make_warehouse(db_session, default_planning_date=PLANNING_DATE)
+    representative.representative = True
+    representative.capacity_generation = 1
+    foreign = await make_warehouse(db_session, default_planning_date=PLANNING_DATE)
+    driver = await make_driver(db_session, representative)
+    vehicle = await make_vehicle(db_session, representative)
+    vehicle.capacity = 2
+    vehicle.can_use_trailer = True
+    trailer = Trailer(
+        warehouse_id=representative.id,
+        name="Reactivated",
+        registration_number=str(uuid4()),
+    )
+    db_session.add(trailer)
+    vehicle.default_trailer = trailer
+    await make_shift(
+        db_session, representative, driver, vehicle, date_from=PLANNING_DATE, date_to=PLANNING_DATE
+    )
+    await db_session.flush()
+    db_session.add(
+        LogisticsEvent(
+            warehouse_id=foreign.id if foreign_event else root.id,
+            day=PLANNING_DATE,
+            event_type=LogisticsEventType.TRAILER_BREAKDOWN,
+            actor="test",
+            idempotency_key=str(uuid4()),
+            occurred_at=datetime.combine(PLANNING_DATE, time(9), tzinfo=ZONE),
+            facts={"trailer_id": str(trailer.id)},
+        )
+    )
+    await db_session.flush()
+    client = _PlanningGroupClient(_support_link(root, representative))
+    projection = await build_capacity_projection(
+        db_session,
+        representative.id,
+        client,  # type: ignore[arg-type]
+    )
+    expected = 2 if foreign_event else 1
+    assert [item.cabin_capacity for item in projection.command.shifts] == [expected]
+    context = await SlotPlanningApplication(
+        Settings(
+            rwms_sync_enabled=True,
+            rwms_logistics_base_url="http://rwms.test",
+            rwms_token_url="http://auth.test/token",
+            rwms_client_secret="test-only",
+        ),
+        client,  # type: ignore[arg-type]
+    )._load_context(
+        db_session,
+        SlotAvailabilityRequest(
+            warehouse_id=representative.id,
+            date=PLANNING_DATE,
+            address="Review address",
+            latitude=representative.latitude,
+            longitude=representative.longitude,
+            cabin_count=2,
+            site_cabin_capacity=2,
+        ),
+    )
+    assert context.day_plan.drivers[0].vehicle_capacity == expected
+    assert trailer.active
 
 
 @pytest.fixture(autouse=True)
@@ -172,6 +258,8 @@ async def test_trailer_breakdown_keeps_tractor_and_invalidates_capacity(
     db_session: AsyncSession,
 ) -> None:
     runtime, source, _, vehicle, _ = await _generated_day(db_session)
+    vehicle.capacity = 2
+    vehicle.can_use_trailer = True
     trailer = Trailer(
         warehouse_id=source.warehouse_id,
         name="Trailer",
@@ -214,6 +302,120 @@ async def test_trailer_breakdown_keeps_tractor_and_invalidates_capacity(
             item for item in snapshot.input_data.vehicles if item.id == str(vehicle.id)
         ).default_trailer
         is None
+    )
+    projection = await build_capacity_projection(db_session, source.warehouse_id)
+    assert [
+        shift.cabin_capacity
+        for shift in projection.command.shifts
+        if shift.delivery_date == PLANNING_DATE
+    ] == [1]
+    assert [
+        shift.cabin_capacity
+        for shift in projection.command.shifts
+        if shift.delivery_date == PLANNING_DATE + timedelta(days=1)
+    ] == [2]
+    context = await SlotPlanningApplication(Settings(rwms_sync_enabled=False))._load_context(
+        db_session,
+        SlotAvailabilityRequest(
+            warehouse_id=source.warehouse_id,
+            date=PLANNING_DATE,
+            address="Review address",
+            latitude=source.warehouse.latitude,
+            longitude=source.warehouse.longitude,
+            cabin_count=2,
+            site_cabin_capacity=2,
+        ),
+    )
+    assert len(context.day_plan.drivers) == 1
+    assert context.day_plan.drivers[0].vehicle_capacity == 1
+    assert not context.day_plan.drivers[0].has_trailer
+    assert context.equipment[str(vehicle.id)].trailer is None
+    assert (
+        next(item for item in snapshot.input_data.vehicles if item.id == str(vehicle.id)).capacity
+        == 1
+    )
+
+    # Attaching a different, healthy trailer can restore only its own second platform.
+    previous_revision = context.source_revision
+    replacement = Trailer(
+        warehouse_id=source.warehouse_id,
+        name="Replacement",
+        registration_number=str(uuid4()),
+    )
+    db_session.add(replacement)
+    vehicle.default_trailer = replacement
+    await db_session.flush()
+    context = await SlotPlanningApplication(Settings(rwms_sync_enabled=False))._load_context(
+        db_session,
+        SlotAvailabilityRequest(
+            warehouse_id=source.warehouse_id,
+            date=PLANNING_DATE,
+            address="Review address",
+            latitude=source.warehouse.latitude,
+            longitude=source.warehouse.longitude,
+            cabin_count=2,
+            site_cabin_capacity=2,
+        ),
+    )
+    assert context.source_revision != previous_revision
+    assert context.day_plan.drivers[0].vehicle_capacity == 2
+    assert context.equipment[str(vehicle.id)].trailer.trailer_id == replacement.id
+
+
+@pytest.mark.parametrize(
+    "event_type",
+    (
+        LogisticsEventType.VEHICLE_BREAKDOWN,
+        LogisticsEventType.DRIVER_UNAVAILABLE,
+    ),
+)
+async def test_day_incident_excludes_reactivated_shift_from_slots_and_capacity(
+    db_session: AsyncSession,
+    event_type: LogisticsEventType,
+) -> None:
+    runtime, source, _, vehicle, shift = await _generated_day(db_session)
+    await DynamicLogisticsService(runtime, None).register_event(
+        db_session,
+        source.warehouse_id,
+        PLANNING_DATE,
+        LogisticsEventCreate(
+            event_type=event_type,
+            plan_id=source.id,
+            expected_plan_version=source.version,
+            vehicle_id=vehicle.id if event_type == LogisticsEventType.VEHICLE_BREAKDOWN else None,
+            driver_shift_id=shift.id
+            if event_type == LogisticsEventType.DRIVER_UNAVAILABLE
+            else None,
+            occurred_at=datetime.combine(PLANNING_DATE, time(9), tzinfo=ZONE),
+            reason="Unavailable for this day",
+        ),
+        actor="dispatcher",
+        idempotency_key=str(uuid4()),
+    )
+    vehicle.active = True
+    await db_session.flush()
+    snapshot = await runtime._load_snapshot(
+        db_session, source.warehouse_id, PLANNING_DATE, None, None
+    )
+    assert not any(item.active for item in snapshot.input_data.shifts)
+    context = await SlotPlanningApplication(Settings(rwms_sync_enabled=False))._load_context(
+        db_session,
+        SlotAvailabilityRequest(
+            warehouse_id=source.warehouse_id,
+            date=PLANNING_DATE,
+            address="Review address",
+            latitude=source.warehouse.latitude,
+            longitude=source.warehouse.longitude,
+            cabin_count=1,
+            site_cabin_capacity=1,
+        ),
+    )
+    assert not context.day_plan.drivers
+    projection = await build_capacity_projection(db_session, source.warehouse_id)
+    assert not any(item.delivery_date == PLANNING_DATE for item in projection.command.shifts)
+    assert any(
+        item.delivery_date == PLANNING_DATE + timedelta(days=1)
+        for item in projection.command.shifts
     )
 
 

@@ -17,6 +17,7 @@ from app.models import Driver, DriverShift, Warehouse
 from app.routing import GeoJsonLineString, GeoPoint
 from app.schemas.domain import RwmsDriverIdentity, RwmsWarehouseSupportLink
 from app.schemas.slot_planning import SlotAvailabilityRequest
+from app.services.resource_incidents import DayResourceRestrictions
 from app.services.support_resource_candidates import (
     SupportResourceFact,
     SupportResourceFacts,
@@ -230,6 +231,45 @@ def _facts(*items: SupportResourceFact) -> SupportResourceFacts:
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("incident", (False, True))
+async def test_support_positioning_does_not_reattach_an_incident_trailer(incident: bool) -> None:
+    """A borrowed tractor uses the same one-plus-one incident policy before road calls."""
+
+    fact = _fact()
+    trailer_id = uuid4()
+    fact.shift.vehicle.capacity = 2
+    fact.shift.vehicle.can_use_trailer = True
+    fact.shift.vehicle.default_trailer = SimpleNamespace(id=trailer_id, active=True)
+    restrictions = DayResourceRestrictions(
+        trailer_ids=frozenset({str(trailer_id)}) if incident else frozenset(),
+    )
+    states: list[VehicleLegState] = []
+
+    class RecordingProvider(DirectedRoadProvider):
+        """Record the actual physical state sent to the directed road provider."""
+
+        async def travel_time(
+            self,
+            origin: GeoPoint,
+            destination: GeoPoint,
+            departure_at: datetime,
+            vehicle_state: VehicleLegState,
+        ) -> RoadMetric:
+            states.append(vehicle_state)
+            return await super().travel_time(origin, destination, departure_at, vehicle_state)
+
+    result = await route_support_resource_facts(
+        replace(_facts(fact), resource_restrictions=restrictions),
+        _configuration(),
+        RecordingProvider(inbound_minutes=60, return_minutes=60),
+    )
+    assert len(result.candidates) == 1
+    assert states
+    assert all(state.trailer_attached is not incident for state in states)
+    assert all(state.trip_peak_load == (1 if incident else 2) for state in states)
+
+
 def test_identity_rank_compares_aware_availability_as_absolute_instants() -> None:
     """Different UTC offsets cannot make a later incoming fact win lexically."""
 
@@ -261,9 +301,7 @@ async def test_support_arrival_and_operations_delay_exact_customer_slots() -> No
     assert len(resolution.candidates) == 1
     routed = resolution.candidates[0]
     assert routed.inbound_departure_at == datetime(2026, 9, 14, 8, tzinfo=UTC)
-    assert routed.inbound_raw_arrival_at == datetime(
-        2026, 9, 14, 11, 20, tzinfo=UTC
-    )
+    assert routed.inbound_raw_arrival_at == datetime(2026, 9, 14, 11, 20, tzinfo=UTC)
     assert routed.inbound_arrival_at == datetime(2026, 9, 14, 11, 20, tzinfo=UTC)
     assert routed.inbound_travel_seconds == 12_000
     assert routed.return_travel_seconds == 3_600
@@ -429,8 +467,7 @@ async def test_same_physical_shift_keeps_distinct_served_demand_options() -> Non
     )
 
     assert {
-        candidate.fact.link.served_warehouse.warehouse_id
-        for candidate in resolution.candidates
+        candidate.fact.link.served_warehouse.warehouse_id for candidate in resolution.candidates
     } == {SERVED_WAREHOUSE_ID, served_b_id}
 
 

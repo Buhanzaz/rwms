@@ -5,13 +5,14 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import ApiError
-from app.models import LogisticsRequest, ManualChangeAudit, RoutePlan, UnassignedTask
+from app.models import LogisticsRequest, ManualChangeAudit, RoutePlan, Trailer, UnassignedTask
 from app.models.domain import PlanStatus
 from app.schemas.domain import (
     GeneratePlanRequest,
@@ -110,6 +111,10 @@ async def _mixed_generated_plan(
         task.type = "PICKUP"
     driver = await make_driver(session, warehouse)
     vehicle = await make_vehicle(session, warehouse)
+    vehicle.can_use_trailer = True
+    vehicle.default_trailer = Trailer(
+        warehouse_id=warehouse.id, name="Two-platform trailer", registration_number=str(uuid4()),
+    )
     await make_shift(
         session,
         warehouse,
@@ -163,6 +168,10 @@ async def _two_cycle_generated_plan(
     )
     driver = await make_driver(session, warehouse)
     vehicle = await make_vehicle(session, warehouse)
+    vehicle.can_use_trailer = True
+    vehicle.default_trailer = Trailer(
+        warehouse_id=warehouse.id, name="Two-platform trailer", registration_number=str(uuid4()),
+    )
     await make_shift(
         session,
         warehouse,

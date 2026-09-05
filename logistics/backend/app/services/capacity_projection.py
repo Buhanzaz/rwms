@@ -49,6 +49,7 @@ from app.services.planning_group import (
     link_allows_planning_date,
     resolve_planning_warehouse_group,
 )
+from app.services.resource_incidents import DayResourceRestrictions, load_resource_restrictions
 from app.services.workload_generator import GENERATOR_SOURCE_SYSTEM
 from app.slot_planning.configuration import effective_vehicle_cabin_capacity
 
@@ -314,6 +315,16 @@ async def build_capacity_projection(
                 for link in incoming_links
             )
         }
+    restrictions_by_day = (
+        await load_resource_restrictions(
+            session,
+            planning_group.root.id,
+            min(shift.date_from for shift in active_shifts),
+            max(shift.date_to for shift in active_shifts),
+        )
+        if active_shifts
+        else {}
+    )
     shifts: list[RwmsPlanningCapacityShift] = []
     for shift in active_shifts:
         if not shift.driver.active or not shift.vehicle.active:
@@ -326,7 +337,12 @@ async def build_capacity_projection(
             )
         current_date = shift.date_from
         while current_date <= shift.date_to:
-            if current_date not in closed_dates and current_date not in pickup_only_dates:
+            restrictions = restrictions_by_day.get(current_date, DayResourceRestrictions())
+            if (
+                current_date not in closed_dates
+                and current_date not in pickup_only_dates
+                and restrictions.allows_shift(shift.id, shift.vehicle_id)
+            ):
                 shifts.append(
                     RwmsPlanningCapacityShift(
                         source_shift_id=uuid5(
@@ -341,7 +357,10 @@ async def build_capacity_projection(
                             settings,
                         ),
                         break_minutes=shift.break_minutes,
-                        cabin_capacity=effective_vehicle_cabin_capacity(shift.vehicle),
+                        cabin_capacity=effective_vehicle_cabin_capacity(
+                            shift.vehicle,
+                            restrictions.trailer_ids,
+                        ),
                     )
                 )
             current_date += timedelta(days=1)
