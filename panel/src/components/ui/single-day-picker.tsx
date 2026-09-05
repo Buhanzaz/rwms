@@ -1,4 +1,4 @@
-import { useId, useState } from "react"
+import { useId, useState, type AriaAttributes } from "react"
 import { Calendar03Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ru } from "date-fns/locale"
@@ -54,33 +54,52 @@ function compactCalendarDateLabel(value: Date | undefined) {
     : "Не выбрано"
 }
 
-/**
- * Selects one date-only business value without converting it through the browser timezone.
- */
-export function SingleDayPicker({
-  id: idProp,
-  label,
-  value,
-  disabled = false,
-  className,
-  triggerClassName,
-  hideLabel = false,
-  triggerLabel,
-  onValueChange,
-}: {
+/** Date-only form value, including the owning workflow's calendar limits. */
+export interface SingleDayPickerProps {
   id?: string
+  name?: string
   label: string
   value: string
+  min?: string
+  max?: string
   disabled?: boolean
+  readOnly?: boolean
+  required?: boolean
+  allowClear?: boolean
   className?: string
   triggerClassName?: string
   hideLabel?: boolean
   triggerLabel?: string
-  onValueChange: (value: string) => void
-}) {
+  "aria-invalid"?: AriaAttributes["aria-invalid"]
+  "aria-describedby"?: string
+  onValueChange?: (value: string) => void
+}
+
+/** Selects a business date without converting it through the browser timezone. */
+export function SingleDayPicker({
+  id: idProp,
+  name,
+  label,
+  value,
+  min,
+  max,
+  disabled = false,
+  readOnly = false,
+  required = false,
+  allowClear = false,
+  className,
+  triggerClassName,
+  hideLabel = false,
+  triggerLabel,
+  "aria-invalid": invalid,
+  "aria-describedby": describedBy,
+  onValueChange,
+}: SingleDayPickerProps) {
   const generatedId = useId()
   const id = idProp ?? generatedId
   const selected = parseCalendarDate(value)
+  const minimum = min ? parseCalendarDate(min) : undefined
+  const maximum = max ? parseCalendarDate(max) : undefined
   const [open, setOpen] = useState(false)
   const [month, setMonth] = useState(() => selected ?? new Date())
   const [monthValue, setMonthValue] = useState(value)
@@ -98,25 +117,40 @@ export function SingleDayPicker({
   return (
     <Field className={cn("min-w-0", className)}>
       {!hideLabel ? <FieldLabel htmlFor={id}>{label}</FieldLabel> : null}
+      {required || name ? (
+        <input
+          type="text"
+          className="sr-only"
+          tabIndex={-1}
+          aria-hidden="true"
+          name={name}
+          value={selected ? value : ""}
+          required={required}
+          disabled={disabled || readOnly}
+          onChange={() => undefined}
+          onInvalid={(event) => {
+            event.preventDefault()
+            setOpen(true)
+          }}
+        />
+      ) : null}
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <Button
             id={id}
             type="button"
             variant="outline"
-            disabled={disabled}
+            disabled={disabled || readOnly}
             className={cn(
-              "relative w-full min-w-0 justify-center rounded-lg text-sm font-medium",
+              "w-full min-w-0 justify-start rounded-lg text-sm font-normal",
               triggerClassName
             )}
             aria-label={`${label}: ${selectedLabel}`}
+            aria-invalid={invalid}
+            aria-describedby={describedBy}
           >
-            <HugeiconsIcon
-              icon={Calendar03Icon}
-              aria-hidden="true"
-              className="absolute left-3"
-            />
-            <span className="inline-flex min-w-0 max-w-full items-baseline justify-center gap-1 text-center text-sm leading-5">
+            <HugeiconsIcon icon={Calendar03Icon} aria-hidden="true" />
+            <span className="inline-flex max-w-full min-w-0 items-baseline gap-1 text-sm leading-5">
               {triggerLabel ? (
                 <span className="shrink-0">{triggerLabel}</span>
               ) : null}
@@ -128,12 +162,18 @@ export function SingleDayPicker({
           align="start"
           side="bottom"
           collisionPadding={8}
-          className="!w-[var(--radix-popover-trigger-width)] max-w-[calc(100vw-1rem)] overflow-hidden rounded-lg p-0"
+          aria-label={`${label}: выбор даты`}
+          className="w-auto max-w-[calc(100vw-1rem)] gap-0 overflow-hidden rounded-xl bg-popover/85 p-0 shadow-xl backdrop-blur-xl [@media(prefers-reduced-transparency:reduce)]:bg-popover"
         >
           <Calendar
-            className="!w-full"
+            className="bg-transparent"
             mode="single"
             locale={ru}
+            autoFocus
+            disabled={[
+              ...(minimum ? [{ before: minimum }] : []),
+              ...(maximum ? [{ after: maximum }] : []),
+            ]}
             labels={{
               labelNav: () => "Навигация по календарю",
               labelNext: () => "Следующий месяц",
@@ -153,10 +193,26 @@ export function SingleDayPicker({
             aria-label={`${label}: календарь`}
             onSelect={(date) => {
               if (!date) return
-              onValueChange(calendarDateValue(date))
+              onValueChange?.(calendarDateValue(date))
               setOpen(false)
             }}
           />
+          {allowClear && !required ? (
+            <div className="border-t p-2">
+              <Button
+                type="button"
+                variant="ghost"
+                className="w-full"
+                disabled={!value}
+                onClick={() => {
+                  onValueChange?.("")
+                  setOpen(false)
+                }}
+              >
+                Очистить дату
+              </Button>
+            </div>
+          ) : null}
         </PopoverContent>
       </Popover>
     </Field>
