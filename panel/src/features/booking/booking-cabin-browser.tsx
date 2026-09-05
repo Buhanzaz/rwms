@@ -5,7 +5,7 @@ import {
   type ReactNode,
   type UIEvent,
 } from "react"
-import { useQueries, useQuery } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { Grid2X2 } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 
@@ -47,11 +47,8 @@ import {
   RENTAL_ITEM_COVERS_QUERY_KEY,
 } from "@/features/rental-items/use-rental-item-covers"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
-import {
-  cabinRentalPricesKey,
-  formatMonthlyRentalPrice,
-  getCabinRentalPrices,
-} from "@/features/assistant/api/rental-pricing-api"
+import { formatMonthlyRentalPrice } from "@/features/assistant/api/rental-pricing-api"
+import { useCabinRentalPrices } from "@/features/assistant/use-cabin-rental-prices"
 
 const BOOKING_QUERY_CACHE_TIME_MS = 2 * 60 * 60 * 1_000
 const COVER_BATCH_SIZE = 200
@@ -96,10 +93,10 @@ function buildFilterOptions(items: RentalItemDto[]) {
   }))
 }
 
-function splitIds(ids: readonly string[], batchSize = COVER_BATCH_SIZE) {
+function splitIds(ids: readonly string[]) {
   const batches: string[][] = []
-  for (let index = 0; index < ids.length; index += batchSize) {
-    batches.push(ids.slice(index, index + batchSize))
+  for (let index = 0; index < ids.length; index += COVER_BATCH_SIZE) {
+    batches.push(ids.slice(index, index + COVER_BATCH_SIZE))
   }
   return batches
 }
@@ -183,32 +180,12 @@ export function BookingCabinBrowser({
   )
 
   const itemIds = useMemo(() => items.map((item) => item.id), [items])
-  const priceBatches = splitIds(itemIds, 100)
-  const priceQueries = useQueries({
-    queries: priceBatches.map((batch) => ({
-      queryKey: [...cabinRentalPricesKey, subjectId, warehouseId, batch],
-      queryFn: ({ signal }: { signal: AbortSignal }) =>
-        getCabinRentalPrices(accessToken, warehouseId, batch, signal),
-      enabled: Boolean(accessToken.trim()),
-      retry: false,
-      staleTime: 30_000,
-      refetchInterval: 30_000,
-      refetchOnWindowFocus: "always" as const,
-    })),
+  const prices = useCabinRentalPrices({
+    accessToken,
+    subjectId,
+    warehouseId,
+    rentalItemIds: itemIds,
   })
-  const pricesById = new Map(
-    priceQueries
-      .flatMap((query) =>
-        query.isError || !accessToken.trim() ? [] : (query.data?.cabins ?? [])
-      )
-      .map((price) => [price.rentalItemId, price])
-  )
-  const failedPriceIds = new Set(
-    priceQueries.flatMap((query, index) =>
-      query.isError ? priceBatches[index] : []
-    )
-  )
-  const priceError = priceQueries.find((query) => query.isError)?.error
   const coverQuery = useQuery({
     queryKey: [
       ...RENTAL_ITEM_COVERS_QUERY_KEY,
@@ -312,18 +289,15 @@ export function BookingCabinBrowser({
           filters={effectiveFilters}
           onFiltersChange={setFilters}
         />
-        {priceError && (
+        {prices.error && (
           <Alert variant="destructive">
             <AlertTitle>Не удалось загрузить часть цен аренды</AlertTitle>
             <AlertDescription>
-              {priceError.message}
+              {prices.error.message}
               <Button
                 variant="outline"
-                disabled={priceQueries.some((query) => query.isFetching)}
-                onClick={() => {
-                  for (const query of priceQueries)
-                    if (query.isError) void query.refetch()
-                }}
+                disabled={prices.isFetching}
+                onClick={prices.retry}
               >
                 Повторить загрузку цен
               </Button>
@@ -352,7 +326,7 @@ export function BookingCabinBrowser({
             const checked = selectedIds.has(item.id)
             const staged = stagedIds.has(item.id)
             const checkboxId = `booking-cabin-${item.id}`
-            const price = pricesById.get(item.id)
+            const price = prices.pricesById.get(item.id)
             return (
               <>
                 <Badge
@@ -362,7 +336,7 @@ export function BookingCabinBrowser({
                 >
                   {price
                     ? formatMonthlyRentalPrice(price.monthlyPriceRubles)
-                    : failedPriceIds.has(item.id) || !accessToken.trim()
+                    : prices.failedIds.has(item.id)
                       ? "Цена недоступна"
                       : "Загружаем цену…"}
                 </Badge>

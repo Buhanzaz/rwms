@@ -15,6 +15,25 @@ const coverQueryFixture = vi.hoisted(() => ({
     placeholderData?: (previousData: unknown) => unknown
   }[],
 }))
+const priceFixture = vi.hoisted(() => ({
+  prices: new Map<string, { monthlyPriceRubles: string }>(),
+  failed: new Set<string>(),
+  error: null as Error | null,
+  retry: vi.fn(),
+  request: vi.fn(),
+}))
+vi.mock("@/features/assistant/use-cabin-rental-prices", () => ({
+  useCabinRentalPrices: (request: unknown) => {
+    priceFixture.request(request)
+    return {
+      pricesById: priceFixture.prices,
+      failedIds: priceFixture.failed,
+      error: priceFixture.error,
+      retry: priceFixture.retry,
+      isFetching: false,
+    }
+  },
+}))
 
 vi.mock("@tanstack/react-query", () => ({
   keepPreviousData: (previousData: unknown) => previousData,
@@ -104,11 +123,25 @@ vi.mock("@/features/rental-items/use-rental-item-covers", () => ({
   }),
 }))
 
-import { AssistantSearchResults } from "@/features/assistant/components/assistant-search-results"
+import { AssistantSearchResults as SubjectAssistantSearchResults } from "@/features/assistant/components/assistant-search-results"
+
+function AssistantSearchResults(
+  props: Omit<
+    React.ComponentProps<typeof SubjectAssistantSearchResults>,
+    "subjectId"
+  >
+) {
+  return <SubjectAssistantSearchResults subjectId="manager-1" {...props} />
+}
 
 afterEach(() => {
   coverQueryFixture.items = []
   coverQueryFixture.queryOptions = []
+  priceFixture.prices.clear()
+  priceFixture.failed.clear()
+  priceFixture.error = null
+  priceFixture.retry.mockClear()
+  priceFixture.request.mockClear()
   cleanup()
 })
 
@@ -205,6 +238,48 @@ function renderResults(count: number) {
 }
 
 describe("AssistantSearchResults layout", () => {
+  it("shows exact monthly prices for each cabin using the authenticated manager scope", () => {
+    priceFixture.prices.set("cabin-1", { monthlyPriceRubles: "0" })
+    priceFixture.prices.set("cabin-2", {
+      monthlyPriceRubles: "9223372036854775807",
+    })
+    renderResults(2)
+    expect(
+      screen.getByText("0 ₽/мес.").closest("a")?.getAttribute("aria-label")
+    ).toBe("Открыть бытовку БЫТ-1")
+    expect(
+      screen
+        .getByText(
+          (text) => text.replace(/\s/g, "") === "9223372036854775807₽/мес."
+        )
+        .closest("a")
+        ?.getAttribute("aria-label")
+    ).toBe("Открыть бытовку БЫТ-2")
+    expect(priceFixture.request).toHaveBeenCalledWith({
+      accessToken: "token",
+      subjectId: "manager-1",
+      warehouseId: "warehouse-1",
+      rentalItemIds: ["cabin-1", "cabin-2"],
+      enabled: true,
+    })
+  })
+  it("shows a price failure without zero fallback and retries through the shared price reader", async () => {
+    const user = userEvent.setup()
+    priceFixture.failed.add("cabin-1")
+    priceFixture.error = new Error("Нет связи")
+    renderResults(1)
+    expect(
+      screen
+        .getByText("Цена недоступна")
+        .closest("a")
+        ?.getAttribute("aria-label")
+    ).toBe("Открыть бытовку БЫТ-1")
+    expect(screen.queryByText("0 ₽/мес.")).toBeNull()
+    await user.click(
+      screen.getByRole("button", { name: "Повторить загрузку цен" })
+    )
+    expect(priceFixture.retry).toHaveBeenCalledOnce()
+  })
   it.each([
     [1, "max-w-sm"],
     [2, "max-w-2xl"],

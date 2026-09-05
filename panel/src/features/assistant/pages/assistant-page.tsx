@@ -330,6 +330,7 @@ export function AssistantPage() {
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">
           {activeConversationId && !creatingNew ? (
             <ConversationWorkspace
+              subjectId={currentUser.id}
               key={activeConversationId}
               accessToken={accessToken}
               conversationId={activeConversationId}
@@ -731,6 +732,7 @@ function ClientGate({
 
 function ConversationWorkspace({
   accessToken,
+  subjectId,
   conversationId,
   clientName,
   archived,
@@ -740,6 +742,7 @@ function ConversationWorkspace({
 }: {
   accessToken: string
   conversationId: string
+  subjectId: string
   clientName: string
   archived: boolean
   onOpenHistory: () => void
@@ -1256,6 +1259,7 @@ function ConversationWorkspace({
         <div className="shrink-0">
           <AssistantSearchResults
             accessToken={accessToken}
+            subjectId={subjectId}
             result={visibleSearchResult}
             selectedIds={selectedIds}
             onSelectionChange={handleSelectionChange}

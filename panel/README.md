@@ -103,6 +103,9 @@ by cabin UUID from `/api/logistics/v1/cabins/rental-prices`, in independent batc
 of at most 100 scoped to the user and warehouse. A failed batch can be retried
 without hiding successful prices or changing the selection; a confirmed zero
 tariff is distinct from unavailable data. These reads do not freeze booking terms.
+Assistant search cards use the same price reader and caller-scoped cache; collapsing
+the search pauses its price requests. An admin tariff update invalidates these price
+queries only, leaving unrelated cabin/media state intact.
 
 The router exposes the operational panel for warehouse/equipment, rentals and
 orders, inventory, maintenance/acceptance, logistics, task board, assistant,

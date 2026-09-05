@@ -10,6 +10,7 @@ import { Link } from "react-router-dom"
 
 import { PhotoCarousel } from "@/components/media/photo-carousel"
 import { Badge } from "@/components/ui/badge"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
   Carousel,
@@ -34,9 +35,12 @@ import {
   useRentalItemCardPhotos,
 } from "@/features/rental-items/use-rental-item-covers"
 import { cn } from "@/lib/utils"
+import { formatMonthlyRentalPrice } from "@/features/assistant/api/rental-pricing-api"
+import { useCabinRentalPrices } from "@/features/assistant/use-cabin-rental-prices"
 
 export function AssistantSearchResults({
   accessToken,
+  subjectId,
   result,
   selectedIds,
   onSelectionChange,
@@ -46,6 +50,7 @@ export function AssistantSearchResults({
   footer,
 }: {
   accessToken: string
+  subjectId: string
   result: CabinSearchResult
   selectedIds: ReadonlySet<string>
   onSelectionChange: (next: Set<string>) => void
@@ -87,6 +92,21 @@ export function AssistantSearchResults({
     enabled: cabinIds.length > 0,
     placeholderData: keepPreviousData,
   })
+  const prices = useCabinRentalPrices({
+    accessToken,
+    subjectId,
+    warehouseId: result.warehouseId,
+    rentalItemIds: cabinIds,
+    enabled: !collapsed,
+  })
+  function priceLabel(cabinId: string) {
+    const price = prices.pricesById.get(cabinId)
+    return price
+      ? formatMonthlyRentalPrice(price.monthlyPriceRubles)
+      : prices.failedIds.has(cabinId)
+        ? "Цена недоступна"
+        : "Загружаем цену…"
+  }
   const projections = useMemo(
     () =>
       new Map(
@@ -138,6 +158,21 @@ export function AssistantSearchResults({
           </Button>
         </div>
         <Tabs value={resolvedActiveGroupKey} onValueChange={setActiveGroupKey}>
+          {!collapsed && prices.error && (
+            <Alert variant="destructive">
+              <AlertTitle>Не удалось загрузить часть цен аренды</AlertTitle>
+              <AlertDescription>
+                {prices.error.message}
+                <Button
+                  variant="outline"
+                  onClick={prices.retry}
+                  disabled={prices.isFetching}
+                >
+                  Повторить загрузку цен
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
           <div className="mb-3 min-w-0 [scrollbar-width:none] overflow-x-auto pb-1 [&::-webkit-scrollbar]:hidden">
             <TabsList
               aria-label="Группы найденных бытовок"
@@ -184,6 +219,7 @@ export function AssistantSearchResults({
                       <AssistantCabinSearchCard
                         accessToken={accessToken}
                         cabin={cabin}
+                        priceLabel={priceLabel(cabin.id)}
                         projection={projections.get(cabin.id)}
                         coverAvailability={coverAvailability}
                         selectedIds={selectedIds}
@@ -223,6 +259,7 @@ export function AssistantSearchResults({
                     <AssistantCabinSearchCard
                       accessToken={accessToken}
                       cabin={cabin}
+                      priceLabel={priceLabel(cabin.id)}
                       projection={projections.get(cabin.id)}
                       coverAvailability={coverAvailability}
                       selectedIds={selectedIds}
@@ -251,6 +288,7 @@ export function AssistantSearchResults({
 function AssistantCabinSearchCard({
   accessToken,
   cabin,
+  priceLabel,
   projection,
   coverAvailability,
   selectedIds,
@@ -259,6 +297,7 @@ function AssistantCabinSearchCard({
 }: {
   accessToken: string
   cabin: AvailableCabin
+  priceLabel: string
   projection: CabinCoverProjection | undefined
   coverAvailability: "loading" | "available" | "unavailable"
   selectedIds: ReadonlySet<string>
@@ -269,6 +308,7 @@ function AssistantCabinSearchCard({
     <AssistantCabinCard
       accessToken={accessToken}
       cabin={cabin}
+      priceLabel={priceLabel}
       projection={projection}
       coverAvailability={coverAvailability}
       selected={selectedIds.has(cabin.id)}
@@ -286,6 +326,7 @@ function AssistantCabinSearchCard({
 function AssistantCabinCard({
   accessToken,
   cabin,
+  priceLabel,
   projection,
   coverAvailability,
   selected,
@@ -294,6 +335,7 @@ function AssistantCabinCard({
 }: {
   accessToken: string
   cabin: AvailableCabin
+  priceLabel: string
   projection: CabinCoverProjection | undefined
   coverAvailability: "loading" | "available" | "unavailable"
   selected: boolean
@@ -344,6 +386,7 @@ function AssistantCabinCard({
       <Link
         to={`/warehouse/${cabin.id}`}
         aria-label={`Открыть бытовку ${cabinNumber}`}
+        aria-describedby={`assistant-cabin-price-${cabin.id}`}
         className="flex flex-1 flex-col gap-3 p-4 transition-colors hover:bg-muted/50 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
       >
         <div className="flex items-start justify-between gap-3">
@@ -367,6 +410,12 @@ function AssistantCabinCard({
             {cabin.characteristics}
           </p>
         ) : null}
+        <p
+          id={`assistant-cabin-price-${cabin.id}`}
+          className="text-sm font-medium"
+        >
+          {priceLabel}
+        </p>
       </Link>
     </article>
   )
