@@ -1330,6 +1330,7 @@ class OrderApiIntegrationTest {
         .andExpect(jsonPath("$.version").value(3))
         .andExpect(jsonPath("$.status").value("SAVED"))
         .andExpect(jsonPath("$.unitCount").value(1));
+    seedConfirmedPaymentForFulfillmentScenario(orderId);
     mvc.perform(
             post("/api/logistics/v1/orders/{orderId}/save", orderId)
                 .param("expectedVersion", "2")
@@ -1430,6 +1431,7 @@ class OrderApiIntegrationTest {
                 .header("Idempotency-Key", UUID.randomUUID())
                 .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isOk());
+    seedConfirmedPaymentForFulfillmentScenario(orderId);
 
     UUID idempotencyKey = UUID.randomUUID();
     String request = rentalShipmentBody(3, "Водитель replay", shipmentDate, UNIT_1);
@@ -1508,6 +1510,7 @@ class OrderApiIntegrationTest {
                 .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.status").value("SAVED"));
+    seedConfirmedPaymentForFulfillmentScenario(orderId);
 
     JsonNode shipment =
         createRentalShipment(orderId, MANAGER_1, 3, UNIT_1, shipmentDate, "Водитель");
@@ -1555,6 +1558,7 @@ class OrderApiIntegrationTest {
                 .header("Idempotency-Key", UUID.randomUUID())
                 .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isOk());
+    seedConfirmedPaymentForFulfillmentScenario(orderId);
     JsonNode firstShipment =
         createRentalShipment(orderId, MANAGER_1, 4, UNIT_1, shipmentDate, "Водитель 1");
     long currentOrderVersion =
@@ -1609,6 +1613,7 @@ class OrderApiIntegrationTest {
                 .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.status").value("SAVED"));
+    seedConfirmedPaymentForFulfillmentScenario(orderId);
 
     JsonNode shipment =
         createRentalShipment(orderId, MANAGER_1, 3, UNIT_1, shipmentDate, "Водитель");
@@ -1647,6 +1652,7 @@ class OrderApiIntegrationTest {
                 .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.permissions.canExtendRentalTerms").value(true));
+    seedConfirmedPaymentForFulfillmentScenario(orderId);
 
     jdbc.update("update rental_order set status='FULFILLED' where id=?", orderId);
 
@@ -1704,6 +1710,7 @@ class OrderApiIntegrationTest {
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.version").value(4))
         .andExpect(jsonPath("$.status").value("SAVED"));
+    seedConfirmedPaymentForFulfillmentScenario(orderId);
 
     JsonNode firstShipment =
         json(
@@ -1822,6 +1829,7 @@ class OrderApiIntegrationTest {
                 .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.version").value(4));
+    seedConfirmedPaymentForFulfillmentScenario(orderId);
     jdbc.update(
         """
         insert into shipment_task_settings(
@@ -2183,6 +2191,7 @@ class OrderApiIntegrationTest {
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.status").value("SAVED"))
         .andExpect(jsonPath("$.desiredDeliveryWindows.length()").value(0));
+    seedConfirmedPaymentForFulfillmentScenario(orderId);
     mvc.perform(
             post("/api/logistics/v1/orders/{orderId}/shipments", orderId)
                 .header("Idempotency-Key", UUID.randomUUID())
@@ -2578,6 +2587,329 @@ class OrderApiIntegrationTest {
                 String.class,
                 orderId))
         .isEqualTo("SYSTEM_ADMIN");
+  }
+
+  @Test
+  void firstSaveIssuesAnImmutableBillAndFiveMinutePaymentWindowWithoutExtendingOnReplay()
+      throws Exception {
+    UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент первого счёта");
+    selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
+    addUnit(orderId, MANAGER_1, UNIT_1, 1);
+    seedClientSelectedRentalTerms(orderId, Map.of(UNIT_1, 2L));
+    UUID saveKey = UUID.randomUUID();
+
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/save", orderId)
+                .param("expectedVersion", "2")
+                .header("Idempotency-Key", saveKey)
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.version").value(3))
+        .andExpect(jsonPath("$.status").value("SAVED"))
+        .andExpect(jsonPath("$.permissions.canEdit").value(false));
+    JsonNode payment = readOrderPayment(orderId);
+    assertThat(payment.get("orderId").stringValue()).isEqualTo(orderId.toString());
+    assertThat(payment.get("orderVersion").longValue()).isEqualTo(3);
+    assertThat(payment.get("state").stringValue()).isEqualTo("PENDING");
+    assertThat(payment.get("canConfirm").booleanValue()).isTrue();
+    assertThat(payment.get("source").isNull()).isTrue();
+    assertThat(payment.get("resolvedAt").isNull()).isTrue();
+    OffsetDateTime startedAt = OffsetDateTime.parse(payment.get("startedAt").stringValue());
+    OffsetDateTime expiresAt = OffsetDateTime.parse(payment.get("expiresAt").stringValue());
+    assertThat(expiresAt).isEqualTo(startedAt.plusMinutes(5));
+    assertThat(OffsetDateTime.parse(payment.get("serverTime").stringValue()))
+        .isBetween(startedAt, expiresAt);
+    JsonNode receipt = payment.get("receipt");
+    assertThat(receipt.get("issuedAt").stringValue())
+        .isEqualTo(payment.get("startedAt").stringValue());
+    assertThat(receipt.get("currency").stringValue()).isEqualTo("RUB");
+    assertThat(receipt.get("deliveryIncluded").booleanValue()).isFalse();
+    assertThat(receipt.get("totalRubles").stringValue()).isEqualTo("2000");
+    assertThat(receipt.get("lines")).hasSize(1);
+    assertThat(receipt.at("/lines/0/kind").stringValue()).isEqualTo("CABIN");
+    assertThat(receipt.at("/lines/0/rentalItemId").stringValue()).isEqualTo(UNIT_1.toString());
+    assertThat(receipt.at("/lines/0/rentalMonths").longValue()).isEqualTo(2);
+    assertThat(receipt.at("/lines/0/unitPriceRubles").stringValue()).isEqualTo("1000");
+    assertThat(receipt.at("/lines/0/amountRubles").stringValue()).isEqualTo("2000");
+    assertThat(receipt.at("/lines/0/pricingVersion").longValue()).isZero();
+    String persistedReceipt =
+        jdbc.queryForObject(
+            "select receipt_json from rental_order_payment_receipt where order_id=?",
+            String.class,
+            orderId);
+
+    mvc.perform(
+            put("/api/logistics/v1/orders/{orderId}", orderId)
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(updateOrderBody(3, orderClientId(orderId)))
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("ORDER_PAYMENT_PENDING"));
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/save", orderId)
+                .param("expectedVersion", "2")
+                .header("Idempotency-Key", saveKey)
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.version").value(3));
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/save", orderId)
+                .param("expectedVersion", "3")
+                .header("Idempotency-Key", UUID.randomUUID())
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("ORDER_PAYMENT_PENDING"));
+
+    JsonNode afterReplay = readOrderPayment(orderId);
+    assertThat(afterReplay.get("startedAt")).isEqualTo(payment.get("startedAt"));
+    assertThat(afterReplay.get("expiresAt")).isEqualTo(payment.get("expiresAt"));
+    assertThat(afterReplay.get("receipt")).isEqualTo(receipt);
+    assertThat(
+            jdbc.queryForObject(
+                "select receipt_json from rental_order_payment_receipt where order_id=?",
+                String.class,
+                orderId))
+        .isEqualTo(persistedReceipt);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from rental_order_payment_receipt where order_id=?",
+                Long.class,
+                orderId))
+        .isOne();
+    assertAuditCount(orderId, "ORDER_SAVED", 1);
+  }
+
+  @Test
+  void managerConfirmsTheIssuedBillOverHttpWithVersionAndReplayFencesBeforeShipment()
+      throws Exception {
+    UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент подтверждения оплаты");
+    selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
+    addUnit(orderId, MANAGER_1, UNIT_1, 1);
+    seedClientSelectedRentalTerms(orderId, Map.of(UNIT_1, 2L));
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/save", orderId)
+                .param("expectedVersion", "2")
+                .header("Idempotency-Key", UUID.randomUUID())
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk());
+    JsonNode pending = readOrderPayment(orderId);
+    String shipmentDate = futureDate(1);
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/shipments", orderId)
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(rentalShipmentBody(3, "Водитель", shipmentDate, UNIT_1))
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("ORDER_PAYMENT_REQUIRED"));
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/payment/confirm", orderId)
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":2}")
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("ORDER_VERSION_CONFLICT"));
+    mvc.perform(
+            get("/api/logistics/v1/orders/{orderId}/payment", orderId)
+                .with(readOnlyViewer(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.canConfirm").value(false));
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/payment/confirm", orderId)
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":3}")
+                .with(readOnlyViewer(MANAGER_1, "manager-one")))
+        .andExpect(status().isForbidden());
+
+    UUID paymentKey = UUID.randomUUID();
+    JsonNode confirmed =
+        json(
+            mvc.perform(
+                    post("/api/logistics/v1/orders/{orderId}/payment/confirm", orderId)
+                        .header("Idempotency-Key", paymentKey)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"expectedVersion\":3}")
+                        .with(androidManager(MANAGER_1, "manager-one")))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.state").value("CONFIRMED"))
+                .andExpect(jsonPath("$.orderVersion").value(4))
+                .andExpect(jsonPath("$.source").value("MANAGER_CONFIRMATION"))
+                .andExpect(jsonPath("$.canConfirm").value(false))
+                .andReturn());
+    assertThat(confirmed.get("receipt")).isEqualTo(pending.get("receipt"));
+    assertThat(confirmed.get("startedAt")).isEqualTo(pending.get("startedAt"));
+    assertThat(confirmed.get("expiresAt")).isEqualTo(pending.get("expiresAt"));
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/payment/confirm", orderId)
+                .header("Idempotency-Key", paymentKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":3}")
+                .with(androidManager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.orderVersion").value(4))
+        .andExpect(jsonPath("$.state").value("CONFIRMED"));
+    assertThat(
+            jdbc.queryForObject(
+                "select payment_confirmed_by_subject_id from rental_order where id=?",
+                UUID.class,
+                orderId))
+        .isEqualTo(MANAGER_1);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from rental_order_audit_event where order_id=?"
+                    + " and subject_type='ORDER_PAYMENT'",
+                Long.class,
+                orderId))
+        .isOne();
+    createRentalShipment(orderId, MANAGER_1, 4, UNIT_1, shipmentDate, "Водитель");
+  }
+
+  @Test
+  void confirmedOrderResaveKeepsItsOriginalBillWhenLaterBookingPriceFactsChange() throws Exception {
+    UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент неизменяемого счёта");
+    selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
+    addUnit(orderId, MANAGER_1, UNIT_1, 1);
+    seedClientSelectedRentalTerms(orderId, Map.of(UNIT_1, 2L));
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/save", orderId)
+                .param("expectedVersion", "2")
+                .header("Idempotency-Key", UUID.randomUUID())
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk());
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/payment/confirm", orderId)
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":3}")
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk());
+    JsonNode original = readOrderPayment(orderId);
+
+    // Simulate later paid-booking facts; this fixture does not execute a repricing workflow.
+    jdbc.update(
+        "update rental_order_unit_term set pricing_version=1,monthly_price_rubles=9000"
+            + " where order_id=? and rental_item_id=?",
+        orderId,
+        UNIT_1);
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/save", orderId)
+                .param("expectedVersion", "4")
+                .header("Idempotency-Key", UUID.randomUUID())
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.version").value(4));
+
+    JsonNode resaved = readOrderPayment(orderId);
+    assertThat(resaved.get("receipt")).isEqualTo(original.get("receipt"));
+    assertThat(resaved.at("/receipt/totalRubles").stringValue()).isEqualTo("2000");
+    assertThat(resaved.get("startedAt")).isEqualTo(original.get("startedAt"));
+    assertThat(resaved.get("expiresAt")).isEqualTo(original.get("expiresAt"));
+    assertThat(resaved.get("resolvedAt")).isEqualTo(original.get("resolvedAt"));
+    assertThat(resaved.get("state").stringValue()).isEqualTo("CONFIRMED");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from rental_order_payment_receipt where order_id=?",
+                Long.class,
+                orderId))
+        .isOne();
+    assertAuditCount(orderId, "ORDER_SAVED", 1);
+  }
+
+  @Test
+  void savingAHistoricalSavedOrderDoesNotBackfillABillOrStartAPaymentWindow() throws Exception {
+    UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент исторического заказа");
+    selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
+    addUnit(orderId, MANAGER_1, UNIT_1, 1);
+    seedClientSelectedRentalTerms(orderId, Map.of(UNIT_1, 2L));
+    jdbc.update("update rental_order set status='SAVED' where id=?", orderId);
+
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/save", orderId)
+                .param("expectedVersion", "2")
+                .header("Idempotency-Key", UUID.randomUUID())
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.version").value(2))
+        .andExpect(jsonPath("$.status").value("SAVED"));
+    JsonNode payment = readOrderPayment(orderId);
+    assertThat(payment.get("state").isNull()).isTrue();
+    assertThat(payment.get("startedAt").isNull()).isTrue();
+    assertThat(payment.get("expiresAt").isNull()).isTrue();
+    assertThat(payment.get("receipt").isNull()).isTrue();
+    assertThat(payment.get("canConfirm").booleanValue()).isFalse();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from rental_order_payment_receipt where order_id=?",
+                Long.class,
+                orderId))
+        .isZero();
+    assertAuditCount(orderId, "ORDER_SAVED", 0);
+  }
+
+  @Test
+  void missingQuotedCabinPriceRejectsSaveWithoutPartialBillWindowOrSavedOrder() throws Exception {
+    UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент без согласованной цены");
+    selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
+    addUnit(orderId, MANAGER_1, UNIT_1, 1);
+    seedClientSelectedRentalTerms(orderId, Map.of(UNIT_1, 2L));
+    jdbc.update(
+        "update rental_order_unit_term set pricing_version=null,monthly_price_rubles=null"
+            + " where order_id=?",
+        orderId);
+    UUID saveKey = UUID.randomUUID();
+
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/save", orderId)
+                .param("expectedVersion", "2")
+                .header("Idempotency-Key", saveKey)
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("ORDER_RECEIPT_PRICE_UNAVAILABLE"));
+    assertThat(
+            jdbc.queryForMap(
+                "select status,version,payment_state,payment_started_at,payment_expires_at"
+                    + " from rental_order where id=?",
+                orderId))
+        .containsEntry("status", "DRAFT")
+        .containsEntry("version", 2L)
+        .containsEntry("payment_state", null)
+        .containsEntry("payment_started_at", null)
+        .containsEntry("payment_expires_at", null);
+    assertThat(readOrderPayment(orderId).get("receipt").isNull()).isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from rental_order_payment_receipt where order_id=?",
+                Long.class,
+                orderId))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from rental_order_command_receipt where order_id=?"
+                    + " and operation_name='SAVE_ORDER'",
+                Long.class,
+                orderId))
+        .isZero();
+    assertAuditCount(orderId, "ORDER_SAVED", 0);
+    assertThat(activeUnitOwners.get(UNIT_1)).isEqualTo(orderId);
+
+    jdbc.update(
+        "update rental_order_unit_term set pricing_version=0,monthly_price_rubles=1000"
+            + " where order_id=?",
+        orderId);
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/save", orderId)
+                .param("expectedVersion", "2")
+                .header("Idempotency-Key", saveKey)
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("SAVED"))
+        .andExpect(jsonPath("$.version").value(3));
+    assertThat(readOrderPayment(orderId).get("state").stringValue()).isEqualTo("PENDING");
   }
 
   @Test
@@ -3127,13 +3459,39 @@ class OrderApiIntegrationTest {
             jdbc.update(
                 """
                 insert into rental_order_unit_term(
-                  id,version,order_id,rental_item_id,rental_months,created_at,updated_at)
-                values (?,0,?,?,?,clock_timestamp(),clock_timestamp())
+                  id,version,order_id,rental_item_id,rental_months,pricing_version,
+                  monthly_price_rubles,created_at,updated_at)
+                values (?,0,?,?,?,0,1000,clock_timestamp(),clock_timestamp())
                 """,
                 UUID.randomUUID(),
                 orderId,
                 unitId,
                 rentalMonths));
+  }
+
+  /** Keeps fulfillment-focused fixtures explicitly paid without altering their version fences. */
+  private void seedConfirmedPaymentForFulfillmentScenario(UUID orderId) {
+    assertThat(
+            jdbc.update(
+                """
+                update rental_order
+                set payment_state='CONFIRMED', payment_source='MANAGER_CONFIRMATION',
+                    payment_confirmed_by_subject_id=manager_id,
+                    payment_resolved_at=payment_started_at+interval '1 second'
+                where id=? and status='SAVED' and payment_state='PENDING'
+                """,
+                orderId))
+        .isOne();
+  }
+
+  private JsonNode readOrderPayment(UUID orderId) throws Exception {
+    return json(
+        mvc.perform(
+                get("/api/logistics/v1/orders/{orderId}/payment", orderId)
+                    .with(manager(MANAGER_1, "manager-one")))
+            .andExpect(status().isOk())
+            .andExpect(header().string("Cache-Control", "no-store"))
+            .andReturn());
   }
 
   private JsonNode createRentalShipment(

@@ -78,6 +78,7 @@ class RentalOrderReservationService {
   private final OrderAuditEventRepository auditEvents;
   private final RentalOrderEquipmentRequirementRepository equipmentRequirements;
   private final RentalOrderUnitTermRepository rentalTerms;
+  private final RentalOrderPaymentReceiptStore paymentReceipts;
   private final OrderAuditService audit;
   private final OrderAuthorizer access;
   private final LogisticsDependencyGateway dependencies;
@@ -1051,7 +1052,9 @@ class RentalOrderReservationService {
     units = synchronizeOrderUnits(order, actor, units);
     requireCompleteRentalTerms(order, units);
     if (firstSave) {
+      var receipt = paymentReceipts.capture(order, units);
       order.saveForFulfillment();
+      order.startPaymentReservation(receipt.issuedAt());
       store.persist(order);
     }
     if (firstSave) {

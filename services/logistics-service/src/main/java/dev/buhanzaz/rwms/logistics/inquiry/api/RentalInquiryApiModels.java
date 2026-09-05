@@ -337,6 +337,7 @@ public final class RentalInquiryApiModels {
       List<DesiredDeliveryWindowResponse> desiredDeliveryWindows,
       List<PresentationEquipmentAvailability> equipmentAvailability,
       List<PresentationGroup> groups,
+      UUID bookingId,
       UUID bookedOrderId) {}
 
   public record PresentationBookingResponse(

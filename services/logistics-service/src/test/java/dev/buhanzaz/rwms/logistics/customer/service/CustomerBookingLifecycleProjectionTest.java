@@ -16,11 +16,63 @@ import dev.buhanzaz.rwms.logistics.inquiry.service.PresentationBookingService;
 import dev.buhanzaz.rwms.logistics.service.CabinFurnitureTaskService;
 import dev.buhanzaz.rwms.logistics.order.service.RentalOrderPaymentService;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 /** Pins cancelled and rescheduled sessions in the existing CustomerApp booking-list projection. */
 class CustomerBookingLifecycleProjectionTest {
+  @Test
+  void expiryWinningAgainstCheckoutRecoveryDoesNotResurrectPendingStatus() {
+    UUID subject = UUID.randomUUID();
+    UUID inquiry = UUID.randomUUID();
+    UUID booking = UUID.randomUUID();
+    UUID lease = UUID.randomUUID();
+    var identity = new CustomerIdentity(subject, "Customer");
+    var pending = mock(CustomerRentalSession.class);
+    var cancelled = mock(CustomerRentalSession.class);
+    when(pending.getBookingId()).thenReturn(booking);
+    when(pending.getInquiryId()).thenReturn(inquiry);
+    when(pending.getState()).thenReturn(CustomerSessionState.CHECKOUT_PENDING);
+    when(pending.getPresentationToken()).thenReturn("token");
+    when(cancelled.getState()).thenReturn(CustomerSessionState.CANCELLED);
+    var sessions = mock(CustomerRentalSessionStore.class);
+    when(sessions.list(subject)).thenReturn(List.of(pending));
+    when(sessions.claimPendingBooking(subject, inquiry))
+        .thenReturn(
+            Optional.of(
+                new CustomerRentalSessionStore.CheckoutRecoveryClaim(
+                    subject, inquiry, lease, pending)));
+    when(sessions.required(subject, inquiry)).thenReturn(cancelled);
+    when(sessions.failCheckoutRecovery(
+            org.mockito.ArgumentMatchers.eq(subject),
+            org.mockito.ArgumentMatchers.eq(inquiry),
+            org.mockito.ArgumentMatchers.eq(lease),
+            org.mockito.ArgumentMatchers.anyString()))
+        .thenThrow(new IllegalStateException("Lease ended"));
+    var presentationBookings = mock(PresentationBookingService.class);
+    when(presentationBookings.status("token", booking))
+        .thenThrow(new IllegalStateException("Concurrent expiry"));
+    var bookings = mock(CustomerBookingService.class);
+    var response = mock(CustomerBookingResponse.class);
+    when(bookings.response(identity, cancelled, "CANCELLED", null)).thenReturn(response);
+    var service =
+        new CustomerCheckoutService(
+            mock(CustomerRentalService.class),
+            sessions,
+            mock(CustomerCheckoutStore.class),
+            mock(CustomerEquipmentCodec.class),
+            mock(CustomerRentalTermCodec.class),
+            mock(CustomerDeliverySlotService.class),
+            bookings,
+            mock(CustomerAuthorizer.class),
+            mock(ClientPresentationService.class),
+            presentationBookings,
+            mock(CabinFurnitureTaskService.class),
+            mock(RentalOrderPaymentService.class));
+    assertThat(service.bookings(identity)).containsExactly(response);
+  }
+
   @Test
   void bookingListKeepsCancelledAndRescheduledOutcomesAfterReload() {
     UUID subjectId = UUID.randomUUID();

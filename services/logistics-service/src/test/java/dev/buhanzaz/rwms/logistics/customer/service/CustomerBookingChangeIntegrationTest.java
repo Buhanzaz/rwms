@@ -80,6 +80,8 @@ class CustomerBookingChangeIntegrationTest {
   dev.buhanzaz.rwms.logistics.inquiry.service.ClientPresentationTokenService presentationTokens;
 
   @Autowired CustomerRentalSessionStore checkoutSessions;
+  @Autowired CustomerCheckoutService customerCheckout;
+  @Autowired dev.buhanzaz.rwms.logistics.order.service.RentalOrderService rentalOrders;
   @Autowired LogisticsTransactionLock paymentCommandLock;
   @Autowired CustomerBookingChangeService service;
   @Autowired CustomerBookingChangeChargeStore store;
@@ -249,6 +251,111 @@ class CustomerBookingChangeIntegrationTest {
         .isEqualTo(RentalOrderPaymentState.CONFIRMED);
   }
 
+  @Test
+  void firstCustomerSaveIssuesDeliveryBillAndOnlyConfirmedPaymentCompletesCheckout() {
+    UUID cabin = UUID.randomUUID();
+    UUID key =
+        jdbc.queryForObject(
+            "select idempotency_key from presentation_booking where id=?", UUID.class, booking);
+    UUID presentation =
+        jdbc.queryForObject(
+            "select presentation_id from presentation_booking where id=?", UUID.class, booking);
+    jdbc.update(
+        "update customer_rental_session set state='CHECKOUT_PENDING',pending_command_key=?,"
+            + " pending_command_sha256=?,checkout_command_key=?,checkout_command_sha256=?,presentation_token=?,recovery_next_attempt_at=clock_timestamp() where inquiry_id=?",
+        key,
+        "a".repeat(64),
+        key,
+        "a".repeat(64),
+        presentationTokens.issue(presentation, 1),
+        inquiry);
+    jdbc.update("update customer_delivery_slot set state='CHECKOUT_PENDING' where id=?", oldSlot);
+    jdbc.update(
+        "update rental_order set contact_phone='+79990000001',delivery_address='Москва' where id=?",
+        order);
+    jdbc.update(
+        "insert into rental_order_unit_term(id,version,order_id,rental_item_id,rental_months,pricing_version,monthly_price_rubles,created_at,updated_at)"
+            + " values (?,0,?,?,2,7,1000,clock_timestamp(),clock_timestamp())",
+        UUID.randomUUID(),
+        order,
+        cabin);
+    var timestamp = OffsetDateTime.now(ZoneOffset.UTC);
+    var unit =
+        new LogisticsDependencyGateway.OrderRentalItem(
+            cabin,
+            1,
+            warehouse,
+            "CUSTOMER-1",
+            "READY",
+            "CABIN",
+            "6×2.4",
+            null,
+            null,
+            null,
+            null,
+            List.of(),
+            List.of(),
+            timestamp,
+            timestamp);
+    var reservation =
+        new LogisticsDependencyGateway.OrderUnitReservation(
+            UUID.randomUUID(),
+            1,
+            order,
+            cabin,
+            warehouse,
+            "ACTIVE",
+            subject,
+            "CUSTOMER",
+            timestamp,
+            null,
+            false,
+            unit);
+    when(dependencies.readOrderUnits(order)).thenReturn(List.of(reservation));
+    when(dependencies.reserveOrderUnit(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.eq(order),
+            org.mockito.ArgumentMatchers.eq(warehouse),
+            org.mockito.ArgumentMatchers.eq(cabin),
+            org.mockito.ArgumentMatchers.eq(client),
+            org.mockito.ArgumentMatchers.anyString(),
+            org.mockito.ArgumentMatchers.isNull(),
+            org.mockito.ArgumentMatchers.eq(subject),
+            org.mockito.ArgumentMatchers.eq("CUSTOMER")))
+        .thenReturn(reservation);
+    var identity = new CustomerIdentity(subject, "Customer");
+    var actor =
+        new dev.buhanzaz.rwms.logistics.customer.security.CustomerAuthorizer()
+            .orderActor(identity, warehouse);
+    rentalOrders.save(actor, order, 0L, UUID.randomUUID(), booking);
+    var payment = initialPayments.getCustomer(identity, booking);
+    assertThat(payment.state()).isEqualTo(RentalOrderPaymentState.PENDING);
+    assertThat(payment.receipt().totalRubles()).isEqualTo("12000");
+    assertThat(payment.receipt().deliveryIncluded()).isTrue();
+    assertThat(payment.expiresAt()).isEqualTo(payment.startedAt().plusMinutes(5));
+    var pending = customerCheckout.bookings(identity).getFirst();
+    assertThat(pending.status()).isEqualTo("PENDING");
+    assertThat(slots.findById(oldSlot).orElseThrow().getState())
+        .isEqualTo(CustomerDeliverySlotState.CHECKOUT_PENDING);
+    assertThat(sessions.findByInquiryId(inquiry).orElseThrow().getRecoveryAttemptCount()).isZero();
+    initialPayments.confirmCustomer(
+        identity,
+        booking,
+        UUID.randomUUID(),
+        new ConfirmOrderPaymentRequest(payment.orderVersion()));
+    jdbc.update(
+        "update customer_rental_session set recovery_next_attempt_at=clock_timestamp() where inquiry_id=?",
+        inquiry);
+    var completed = customerCheckout.bookings(identity).getFirst();
+    assertThat(completed.status()).isEqualTo("COMPLETED");
+    assertThat(slots.findById(oldSlot).orElseThrow().getState())
+        .isEqualTo(CustomerDeliverySlotState.CONFIRMED);
+    assertThat(sessions.findByInquiryId(inquiry).orElseThrow().getState())
+        .isEqualTo(CustomerSessionState.BOOKED);
+    assertThat(initialPayments.getCustomer(identity, booking).receipt())
+        .isEqualTo(payment.receipt());
+  }
+
   @org.junit.jupiter.params.ParameterizedTest
   @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
   void paymentExpiryReleasesCapacityAndNotifiesExactlyOnceEvenAfterLostCheckoutResponse(
@@ -377,6 +484,48 @@ class CustomerBookingChangeIntegrationTest {
             org.mockito.ArgumentMatchers.eq(order),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq("LOGISTICS_SERVICE"));
+  }
+
+  @Test
+  void customerInboxHttpIsSubjectOwnedAndAcknowledgementPersistsOnlyOnce() throws Exception {
+    UUID own = UUID.randomUUID();
+    UUID foreign = UUID.randomUUID();
+    UUID otherSubject = UUID.randomUUID();
+    for (var entry : Map.of(own, subject, foreign, otherSubject).entrySet()) {
+      jdbc.update(
+          "insert into customer_notification(id,customer_subject_id,order_id,booking_id,kind,message,created_at)"
+              + " values (?,?,?,?,'PAYMENT_EXPIRED','Резерв снят',clock_timestamp())",
+          entry.getKey(),
+          entry.getValue(),
+          order,
+          booking);
+    }
+    String path = "/api/logistics/customer/v1/notifications";
+    mvc.perform(get(path).with(customer(subject)))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Cache-Control", "no-store"))
+        .andExpect(jsonPath("$.length()").value(1))
+        .andExpect(jsonPath("$[0].id").value(own.toString()))
+        .andExpect(jsonPath("$[0].customerSubjectId").doesNotExist());
+    mvc.perform(get(path).with(manager(UUID.randomUUID(), warehouse, "EDIT")))
+        .andExpect(status().isForbidden());
+    mvc.perform(post(path + "/" + foreign + "/read").with(customer(subject)))
+        .andExpect(status().isNotFound());
+    mvc.perform(post(path + "/" + own + "/read").with(customer(subject)))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Cache-Control", "no-store"))
+        .andExpect(jsonPath("$.readAt").isNotEmpty());
+    var first = jdbc.queryForMap("select * from customer_notification where id=?", own);
+    mvc.perform(post(path + "/" + own + "/read").with(customer(subject)))
+        .andExpect(status().isOk());
+    assertThat(jdbc.queryForMap("select * from customer_notification where id=?", own))
+        .isEqualTo(first);
+    mvc.perform(get(path).with(customer(subject)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.length()").value(0));
+    mvc.perform(get(path).with(customer(otherSubject)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$[0].id").value(foreign.toString()));
   }
 
   @Test

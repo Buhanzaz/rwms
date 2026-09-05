@@ -165,6 +165,7 @@ class LogisticsContractFoundationTest {
             "ManualBookingDraftHolds",
             "ClientPresentation",
             "PublicClientPresentation",
+            "CustomerNotification",
             "PresentationBooking",
             "RentalSettings",
             "ShipmentTaskSettings",
@@ -405,6 +406,8 @@ class LogisticsContractFoundationTest {
             "/api/logistics/customer/v1/profile/avatar-upload",
             "/api/logistics/customer/v1/profile/avatar",
             "/api/logistics/customer/v1/warehouses",
+            "/api/logistics/customer/v1/notifications",
+            "/api/logistics/customer/v1/notifications/{notificationId}/read",
             "/api/logistics/customer/v1/inquiries",
             "/api/logistics/customer/v1/inquiries/{inquiryId}",
             "/api/logistics/customer/v1/inquiries/{inquiryId}/facets",
@@ -427,6 +430,7 @@ class LogisticsContractFoundationTest {
             "CustomerProfileAvatar",
             "CustomerProfile",
             "CustomerWarehouse",
+            "CustomerNotification",
             "CreateCustomerInquiryRequest",
             "CustomerInquiry",
             "CustomerCabin",
@@ -459,6 +463,33 @@ class LogisticsContractFoundationTest {
                 "depotLongitude"));
     assertThat(child(customerWarehouse, "properties"))
         .containsKeys("depotLatitude", "depotLongitude");
+
+    Map<String, Object> notifications =
+        child(child(paths, "/api/logistics/customer/v1/notifications"), "get");
+    Map<String, Object> acknowledgeNotification =
+        child(
+            child(paths, "/api/logistics/customer/v1/notifications/{notificationId}/read"),
+            "post");
+    assertThat(notifications.get("operationId")).isEqualTo("listCustomerNotifications");
+    assertThat(acknowledgeNotification.get("operationId"))
+        .isEqualTo("acknowledgeCustomerNotification");
+    assertThat(child(notifications, "responses")).containsKeys("200", "401", "403");
+    assertThat(child(acknowledgeNotification, "responses"))
+        .containsKeys("200", "401", "403", "404");
+    for (Map<String, Object> response :
+        List.of(
+            child(child(notifications, "responses"), "200"),
+            child(child(acknowledgeNotification, "responses"), "200"))) {
+      assertThat(child(child(response, "headers"), "Cache-Control"))
+          .containsEntry("required", true)
+          .containsEntry("schema", Map.of("type", "string", "const", "no-store"));
+    }
+    Map<String, Object> notification = child(schemas, "CustomerNotification");
+    assertThat(notification.get("required"))
+        .isEqualTo(
+            List.of("id", "orderId", "bookingId", "kind", "message", "createdAt", "readAt"));
+    assertThat(child(notification, "properties"))
+        .containsOnlyKeys("id", "orderId", "bookingId", "kind", "message", "createdAt", "readAt");
 
     Map<String, Object> createInquiry =
         child(child(paths, "/api/logistics/customer/v1/inquiries"), "post");
@@ -679,6 +710,8 @@ class LogisticsContractFoundationTest {
             "prepareCustomerProfileAvatarUpload",
             "setCustomerProfileAvatar",
             "listCustomerWarehouses",
+            "listCustomerNotifications",
+            "acknowledgeCustomerNotification",
             "createCustomerInquiry",
             "getCustomerInquiry",
             "getCustomerCabinFacets",
@@ -891,6 +924,17 @@ class LogisticsContractFoundationTest {
         .isEqualTo(Map.of("$ref", "#/components/responses/Conflict"));
     assertThat(responses.get("503"))
         .isEqualTo(Map.of("$ref", "#/components/responses/DependencyUnavailable"));
+  }
+
+  @Test
+  void publicClientPresentationExposesOnlyTheCurrentRevisionBookingIdentity() throws Exception {
+    Map<String, Object> schema =
+        child(child(child(openApi(), "components"), "schemas"), "PublicClientPresentation");
+
+    assertThat(((List<?>) schema.get("required")).contains("bookingId")).isTrue();
+    Map<String, Object> bookingId = child(child(schema, "properties"), "bookingId");
+    assertThat(bookingId).containsEntry("format", "uuid");
+    assertThat(bookingId.get("type")).isEqualTo(List.of("string", "null"));
   }
 
   @Test

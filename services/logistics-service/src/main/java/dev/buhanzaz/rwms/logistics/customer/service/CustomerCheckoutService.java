@@ -227,11 +227,14 @@ public class CustomerCheckoutService {
                 errorCode);
       } catch (RuntimeException staleLease) {
         LOGGER.warn("Customer checkout recovery lease could not be finalized");
+        CustomerRentalSession current = sessions.required(identity.subjectId(), claim.inquiryId());
         return customerBookings.response(
             identity,
-            sessions.required(identity.subjectId(), claim.inquiryId()),
-            "PENDING",
-            "CUSTOMER_CHECKOUT_RECOVERY_PENDING");
+            current,
+            CustomerBookingService.status(current),
+            current.getState() == CustomerSessionState.CANCELLED
+                ? null
+                : "CUSTOMER_CHECKOUT_RECOVERY_PENDING");
       }
       LOGGER.warn(
           "Customer checkout recovery deferred: code={}, attempt={}, quarantined={}",
@@ -243,10 +246,8 @@ public class CustomerCheckoutService {
       return customerBookings.response(
           identity,
           current,
-          "PENDING",
-          failure.quarantined()
-              ? "CUSTOMER_CHECKOUT_RECONCILIATION_REQUIRED"
-              : errorCode);
+          CustomerBookingService.status(current),
+          failure.quarantined() ? "CUSTOMER_CHECKOUT_RECONCILIATION_REQUIRED" : errorCode);
     }
   }
 

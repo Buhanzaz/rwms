@@ -1952,7 +1952,12 @@ paths:
       description: >-
         Locks a non-empty DRAFT order whose complete rental-duration vector, client-confirmed
         delivery address, contact phone and non-empty date-only desired delivery window list are
-        configured. Coordinates remain optional as one pair.
+        configured. Coordinates remain optional as one pair. The first DRAFT-to-SAVED transition
+        atomically issues the immutable initial bill from known cabin quotes and current furniture
+        tariffs, including accepted delivery where present, and starts one five-minute database-time
+        payment window. Unknown required prices fail closed. PENDING composition is frozen until
+        confirmation; replay never reissues the bill or extends time. Previously SAVED historical
+        orders retain their existing null payment evidence.
         Saving does not implicitly choose a shipment batch; create one explicitly with selected
         unitIds.
       responses:
@@ -3543,6 +3548,53 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/customer/v1/notifications:
+    get:
+      operationId: listCustomerNotifications
+      description: >-
+        Returns at most fifty unread durable inbox entries owned by the authenticated CustomerApp
+        subject, oldest first. Acknowledging entries exposes the next bounded unread batch, so
+        unread entries are never silently omitted by pagination. This response is no-store.
+      responses:
+        "200":
+          description: Oldest unread customer notifications, at most fifty.
+          headers:
+            Cache-Control:
+              required: true
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 50
+                items: { $ref: "#/components/schemas/CustomerNotification" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /api/logistics/customer/v1/notifications/{notificationId}/read:
+    parameters:
+      - name: notificationId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: acknowledgeCustomerNotification
+      description: >-
+        Idempotently records the first read acknowledgement for one exact notification owned by
+        the authenticated CustomerApp subject. A missing or other customer's entry is not found.
+        The acknowledgement timestamp is taken from the logistics database clock.
+      responses:
+        "200":
+          description: Current notification after its monotone acknowledgement.
+          headers:
+            Cache-Control:
+              required: true
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerNotification" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/logistics/customer/v1/inquiries:
     post:
       operationId: createCustomerInquiry
@@ -9725,6 +9777,7 @@ components:
           desiredDeliveryWindows,
           equipmentAvailability,
           groups,
+          bookingId,
           bookedOrderId,
         ]
       properties:
@@ -9757,7 +9810,25 @@ components:
         groups:
           type: array
           items: { $ref: "#/components/schemas/PresentationGroup" }
+        bookingId:
+          type: [string, "null"]
+          format: uuid
+          description: >-
+            Current-revision presentation booking identity, including PENDING selection. It is
+            null only when the current presentation revision has no booking.
         bookedOrderId: { type: [string, "null"], format: uuid }
+    CustomerNotification:
+      type: object
+      additionalProperties: false
+      required: [id, orderId, bookingId, kind, message, createdAt, readAt]
+      properties:
+        id: { type: string, format: uuid }
+        orderId: { type: string, format: uuid }
+        bookingId: { type: [string, "null"], format: uuid }
+        kind: { type: string, enum: [PAYMENT_EXPIRED] }
+        message: { type: string }
+        createdAt: { type: string, format: date-time }
+        readAt: { type: [string, "null"], format: date-time }
     PresentationBooking:
       type: object
       additionalProperties: false

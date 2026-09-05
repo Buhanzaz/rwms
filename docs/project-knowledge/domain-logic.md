@@ -937,6 +937,10 @@ public test payment are separate server-derived sources; none claims a provider 
 version, database deadline and open expiry/cancellation/replacement checks precede the atomic
 confirmation/audit/idempotency commit. Order state is loaded after the command lock so concurrent
 replay sees the committed result. Reads never issue a bill or activate/extend a timer.
+The first DRAFT-to-SAVED transition captures the immutable bill and starts one five-minute window
+in the same order transaction. Pending composition is frozen until confirmation; save replay and
+historical already-SAVED rows never restart the deadline. Public presentation responses expose the
+exact current-revision booking identity, including pending bookings, for reload recovery.
 Customer checkout keeps its slot pending and creates no furniture work until payment admission.
 Normal waiting releases the checkout lease without spending failure retries; incomplete order-ID
 attachment is recovered through the customer's existing booking. A released order cannot rebind
@@ -947,6 +951,9 @@ entry cannot be reported as completed separately. A lost checkout response resol
 persisted presentation booking and checkout command key, including a provisional slot identity.
 Local completion failures retain the existing finite mutation retry/quarantine policy. Manager
 orders notify an existing exact client/account binding, never a guessed phone-number match.
+The customer inbox API returns at most 50 oldest unread entries; an owned idempotent acknowledgement
+records its first database timestamp and reveals the next batch. No subject is exposed and foreign
+entries return 404. This is durable inbox delivery, not an external push-provider claim.
 Evidence: [`payment owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderPaymentService.java),
 [`contract`](../../contracts/openapi/logistics-service.yaml).
 

@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.logistics.order.service;
 
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentState;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import dev.buhanzaz.rwms.logistics.order.security.OrderActor;
 import dev.buhanzaz.rwms.logistics.order.security.OrderAuthorizer;
@@ -71,6 +72,7 @@ class RentalOrderEditabilityService {
         || activeUnits == null
         || activeUnits.isEmpty()
         || (!actor.globalAdministrator() && !actor.localAdministrator())
+        || !RentalOrderPaymentState.allowsFulfillment(order.getPaymentState())
         || !actor.writeScope()
         || !access.isVisible(actor, order)
         || order.getWarehouseId() == null

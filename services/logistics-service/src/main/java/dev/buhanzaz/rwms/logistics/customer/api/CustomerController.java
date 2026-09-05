@@ -12,6 +12,7 @@ import dev.buhanzaz.rwms.logistics.customer.service.CustomerBookingService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerCabinCatalogService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerCheckoutService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerDeliverySlotService;
+import dev.buhanzaz.rwms.logistics.customer.service.CustomerNotificationService;
 import dev.buhanzaz.rwms.logistics.order.api.ConfirmOrderPaymentRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderPaymentResponse;
 import dev.buhanzaz.rwms.logistics.order.service.RentalOrderPaymentService;
@@ -60,6 +61,7 @@ public class CustomerController {
   private final RentalOrderPaymentService payments;
   private final CustomerBookingLifecycleService bookingLifecycle;
   private final CustomerBookingChangeService bookingChanges;
+  private final CustomerNotificationService notifications;
 
   /** Returns the logistics profile of the authenticated customer. */
   @GetMapping("/profile")
@@ -104,6 +106,24 @@ public class CustomerController {
   public List<CustomerWarehouseResponse> warehouses(@AuthenticationPrincipal Jwt jwt) {
     identity(jwt);
     return warehouses.list();
+  }
+
+  /** Returns the oldest unread durable inbox entries; acknowledgements reveal the next batch. */
+  @GetMapping("/notifications")
+  public ResponseEntity<List<CustomerNotificationResponse>> notifications(
+      @AuthenticationPrincipal Jwt jwt) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(notifications.unread(identity(jwt)));
+  }
+
+  /** Monotonically acknowledges one exact inbox entry owned by the authenticated customer. */
+  @PostMapping("/notifications/{notificationId}/read")
+  public ResponseEntity<CustomerNotificationResponse> markNotificationRead(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID notificationId) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(notifications.markRead(identity(jwt), notificationId));
   }
 
   /** Starts a customer-owned rental inquiry and cart. */

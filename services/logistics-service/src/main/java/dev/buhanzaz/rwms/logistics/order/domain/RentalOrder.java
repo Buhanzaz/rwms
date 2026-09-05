@@ -521,6 +521,9 @@ public class RentalOrder {
     if (status != RentalOrderStatus.DRAFT && status != RentalOrderStatus.SAVED) {
       throw new IllegalStateException("Order is not editable");
     }
+    if (paymentState == RentalOrderPaymentState.PENDING) {
+      throw new IllegalStateException("Order composition is frozen while payment is pending");
+    }
     if (paymentState == RentalOrderPaymentState.EXPIRING) {
       throw new IllegalStateException("Order payment reservation is being released");
     }

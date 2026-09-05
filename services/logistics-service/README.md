@@ -90,12 +90,14 @@ and may exceed `long`. The accepted CustomerApp delivery quote is included once,
 session has attached the order ID. Unquoted manager-link delivery remains explicitly excluded.
 Missing cabin prices or a missing customer delivery quote fail closed. Reads and capture replays
 return the original receipt without consulting changed tariffs/composition. Existing orders have
-no fabricated historical bill. This storage step does not yet start a payment window.
+no fabricated historical bill. The first DRAFT-to-SAVED transition captures this bill and starts
+one five-minute database-time payment window in the same transaction. Pending composition is
+frozen; reads, save replays and later saves never reissue or extend it.
 
 An order with payment evidence enters the route-planning feed only in `CONFIRMED`. Assignment,
 shipment creation and shipment furniture/replacement preparation independently reject an unpaid
 order with `ORDER_PAYMENT_REQUIRED` before effects. Historical null-payment orders retain their
-existing admission; timer activation and CustomerApp checkout coordination are separate steps.
+existing admission. CustomerApp checkout retains pending delivery capacity until confirmation.
 
 V100 adds nullable order-owned payment reservation evidence: a non-renewable five-minute window,
 explicit `CUSTOMER_TEST`/`MANAGER_CONFIRMATION` provenance, and separate pending, confirmed,
@@ -116,8 +118,14 @@ payment without collecting real money. The server derives source/identity, valid
 or booking/token scope, and locks before reading mutable payment state. `expectedVersion` and
 actor/source-scoped `Idempotency-Key` fence confirmation and its single audit event. Concurrent
 replay reads committed state after the command lock; it never reissues the bill or extends time.
-Draft/historical unknowns remain null, and a public booking waits for manager save. These API
-operations do not themselves issue an initial bill or activate new checkout payment windows.
+Draft/historical unknowns remain null, and a public booking waits for manager save. Payment reads
+and confirmation do not themselves issue the bill. Public presentation responses include the exact
+current-revision `bookingId` (also while pending), so reload can recover booking/payment state.
+
+Customer `GET /notifications` returns up to 50 oldest unread inbox entries. A subject-owned,
+idempotent `POST /notifications/{notificationId}/read` records the first database acknowledgement
+time; acknowledgement exposes the next batch. Both responses are `no-store`, foreign entries are
+404, and no customer subject is exposed. This durable inbox does not claim external push delivery.
 
 Expiry completion also locks customer capacity and the checkout before the order, releases only
 that checkout's delivery slot, and marks its session `CANCELLED`. V106 commits a deduplicated

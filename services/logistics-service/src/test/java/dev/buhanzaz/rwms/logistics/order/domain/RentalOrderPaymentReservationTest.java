@@ -25,6 +25,9 @@ class RentalOrderPaymentReservationTest {
     assertThat(order.getPaymentResolvedAt()).isNull();
     assertThat(order.isPaymentConfirmedOrNotRequired()).isFalse();
     assertThatThrownBy(order::fulfill).hasMessage("Order payment is not confirmed");
+    assertThatThrownBy(order::requireEditable).hasMessageContaining("frozen");
+    assertThatThrownBy(() -> order.replaceClientDeliveryDetails("Changed", null, null, List.of()))
+        .hasMessageContaining("frozen");
   }
 
   @ParameterizedTest
@@ -44,6 +47,7 @@ class RentalOrderPaymentReservationTest {
     assertThat(order.getPaymentConfirmedByBookingId()).isNull();
     assertThat(order.beginPaymentExpiry(START.plusMinutes(6))).isFalse();
     assertThat(order.isPaymentConfirmedOrNotRequired()).isTrue();
+    order.requireEditable();
     assertThat(order.fulfill()).isTrue();
   }
 

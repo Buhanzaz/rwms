@@ -2919,6 +2919,7 @@ class RentalInquiryPresentationIntegrationTest {
     assertThat(republished.groups().getFirst().cabins())
         .extracting(PresentationCabin::id)
         .containsExactly(CABIN_2);
+    assertThat(presentations.publicPresentation(token(republished)).bookingId()).isNull();
     assertThat(presentationHolds.get(inquiry.id()).holds())
         .extracting(LogisticsDependencyGateway.PresentationHold::rentalItemId)
         .containsExactly(CABIN_2);
@@ -2946,6 +2947,8 @@ class RentalInquiryPresentationIntegrationTest {
     PresentationBookingResponse pending =
         bookings.confirm(token(pendingPresentation), UUID.randomUUID(), confirmation(CABIN_1));
     assertThat(pending.state()).isEqualTo("PENDING");
+    assertThat(presentations.publicPresentation(token(pendingPresentation)).bookingId())
+        .isEqualTo(pending.bookingId());
     clearInvocations(dependencies);
     assertThatThrownBy(() -> publish(pendingInquiry.id(), List.of(CABIN_2)))
         .isInstanceOfSatisfying(

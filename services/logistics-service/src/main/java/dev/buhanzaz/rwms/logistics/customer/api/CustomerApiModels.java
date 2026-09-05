@@ -103,6 +103,16 @@ public final class CustomerApiModels {
       BigDecimal depotLatitude,
       BigDecimal depotLongitude) {}
 
+  /** Durable subject-owned inbox entry; the subject binding itself is never returned. */
+  public record CustomerNotificationResponse(
+      UUID id,
+      UUID orderId,
+      UUID bookingId,
+      String kind,
+      String message,
+      OffsetDateTime createdAt,
+      OffsetDateTime readAt) {}
+
   /** Starts a new customer cart at one delivery-enabled warehouse. */
   public record CreateCustomerInquiryRequest(@NotNull UUID warehouseId) {}
 

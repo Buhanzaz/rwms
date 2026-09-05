@@ -96,6 +96,12 @@ public class OrderAuthorizer {
     if (order.getWarehouseId() != null && !canEditWarehouse(actor, order.getWarehouseId())) {
       throw new AccessDeniedException("Insufficient warehouse access");
     }
+    if (!RentalOrderPaymentState.allowsFulfillment(order.getPaymentState())) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "ORDER_PAYMENT_PENDING",
+          "Состав заказа зафиксирован на время оплаты или освобождения резерва");
+    }
   }
 
   /** Actor/warehouse authorization for selecting a partial shipment batch. */
@@ -168,10 +174,10 @@ public class OrderAuthorizer {
   public boolean canEdit(OrderActor actor, RentalOrder order) {
     return actor.writeScope()
         && isVisible(actor, order)
+        && RentalOrderPaymentState.allowsFulfillment(order.getPaymentState())
         && (order.getStatus() == RentalOrderStatus.DRAFT
             || order.getStatus() == RentalOrderStatus.SAVED)
-        && (order.getWarehouseId() == null
-            || canEditWarehouse(actor, order.getWarehouseId()));
+        && (order.getWarehouseId() == null || canEditWarehouse(actor, order.getWarehouseId()));
   }
 
   /**

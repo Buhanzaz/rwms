@@ -303,6 +303,12 @@ public class ClientPresentationService {
 
   public PublicClientPresentationResponse publicPresentation(String token) {
     ClientPresentation presentation = resolve(token);
+    UUID bookingId =
+        bookings
+            .findByPresentationIdAndPresentationRevision(
+                presentation.getId(), presentation.getRevision())
+            .map(booking -> booking.getId())
+            .orElse(null);
     ClientPresentationResponse internal = response(presentation, token);
     List<LocalDate> requestableDeliveryDates =
         internal.mode() == ClientPresentationMode.NORMAL
@@ -322,6 +328,7 @@ public class ClientPresentationService {
         internal.desiredDeliveryWindows(),
         internal.equipmentAvailability(),
         internal.groups(),
+        bookingId,
         internal.bookedOrderId());
   }
 
