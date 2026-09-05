@@ -26,9 +26,11 @@ not opened. Registration first obtains CSRF metadata, posts the confirmed
 password, and then runs the same PKCE login.
 
 Every process launch first renders the exact imported BLOCK BOX vector for
-three seconds. The start actions then enter from opposite edges and below with
-the supplied scale/fade motion. Login, registration, and recovery are states of
-one signed-out screen, so `Вход` cannot resolve to registration. Registration
+three seconds. The start actions enter from opposite screen edges without a parent alpha
+layer clipping their travel. The logo spans the action width and moves above the form;
+the IME collapses its reserved space while the whole form remains scrollable. Login,
+registration, and recovery use short page transitions in one signed-out screen. Login has
+an explicit `Вход` heading and `Войти` action, and back navigation follows the same transition. Registration
 collects login, email, confirmed password, and phone; the auth boundary still
 receives only its contract fields, while email and phone prefill the mandatory
 individual logistics profile after sign-in. `Продолжить без аккаунта` remains
@@ -39,10 +41,11 @@ One silent Media3 player renders the exact imported `background_caustic.webm`
 behind every CustomerApp route. It uses crop/zoom, repeats the asset indefinitely,
 pauses decoding outside the active lifecycle, and is released with the root
 composition instead of being recreated between screens. Auth/profile fields and
-app actions reuse the translucent 16 dp field, gradient button, press, and shadow
-components. Operational screens use clearer translucent surfaces, a distinct outlined secondary
-action, and 48 dp action targets. Shared shadows use the native graphics layer rather than
-allocating a software bitmap per control. Date and time selection shows the address, available
+app actions reuse translucent 12 dp fields and gradient buttons, with a restrained press motion.
+Manrope headings and Golos Text body copy include Cyrillic glyphs and are packaged with their
+SIL Open Font Licenses under `app/src/main/assets/licenses/`. Operational screens use clearer translucent surfaces, a distinct outlined secondary
+action, and 48 dp action targets. Button shadows use Compose's cached shape-aware `dropShadow`, independently of the
+translucent fill; text fields use a light rim without an elevation layer. Date and time selection shows the address, available
 server offers and price without internal capacity counters or vehicle-profile dimensions; the
 confirmed site-access requirement remains visible at checkout. The motion foreground is in
 [`CustomerStoreWelcomeScreen.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerStoreWelcomeScreen.kt),

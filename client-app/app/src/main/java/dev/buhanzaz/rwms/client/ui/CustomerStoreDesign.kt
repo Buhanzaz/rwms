@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -44,10 +43,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
-import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -58,17 +56,18 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -97,15 +96,15 @@ internal data class CustomerActionButtonStyle(
 )
 
 internal val CustomerLoginButtonStyle = CustomerActionButtonStyle(
-    gradientStart = CustomerStoreBlue,
-    gradientEnd = CustomerStoreNavy,
-    fillOpacity = 0.31f,
+    gradientStart = Color(0xFF78B4D5),
+    gradientEnd = Color(0xFF3F79AB),
+    fillOpacity = 0.74f,
 )
 
 internal val CustomerRegistrationButtonStyle = CustomerActionButtonStyle(
     gradientStart = CustomerStoreBlue,
     gradientEnd = CustomerStoreNavy,
-    fillOpacity = 0.84f,
+    fillOpacity = 0.94f,
 )
 
 /** Lets JVM Compose tests replace Media3 with the deterministic water base color. */
@@ -115,7 +114,7 @@ internal val LocalCustomerStoreVideoBackgroundEnabled = staticCompositionLocalOf
 @Composable
 internal fun CustomerStoreLogo(
     modifier: Modifier = Modifier,
-    horizontalPadding: Dp = 38.dp,
+    horizontalPadding: Dp = 0.dp,
 ) {
     Image(
         painter = painterResource(R.drawable.block_box_logo_svg),
@@ -152,7 +151,7 @@ internal fun Button(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    shape: Shape = RoundedCornerShape(16.dp),
+    shape: Shape = RoundedCornerShape(12.dp),
     border: BorderStroke? = BorderStroke(1.dp, Color.White.copy(alpha = 0.22f)),
     contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
     interactionSource: MutableInteractionSource? = null,
@@ -181,7 +180,7 @@ internal fun OutlinedButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    shape: Shape = RoundedCornerShape(16.dp),
+    shape: Shape = RoundedCornerShape(12.dp),
     border: BorderStroke? = BorderStroke(1.dp, Color.White.copy(alpha = 0.55f)),
     contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
     interactionSource: MutableInteractionSource? = null,
@@ -237,7 +236,7 @@ private fun CustomerStyledButton(
     onClick: () -> Unit,
     modifier: Modifier,
     enabled: Boolean,
-    shape: Shape = RoundedCornerShape(16.dp),
+    shape: Shape = RoundedCornerShape(12.dp),
     border: BorderStroke? = null,
     contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
     interactionSource: MutableInteractionSource? = null,
@@ -249,7 +248,7 @@ private fun CustomerStyledButton(
     val isPressed by source.collectIsPressedAsState()
     val targetStyle = if (isPressed && enabled) pressedStyle else normalStyle
     val pressScale by animateFloatAsState(
-        targetValue = if (isPressed && enabled) 0.96f else 1f,
+        targetValue = if (isPressed && enabled) 0.985f else 1f,
         animationSpec = tween(
             durationMillis = if (isPressed) 90 else 160,
             easing = FastOutSlowInEasing,
@@ -291,7 +290,7 @@ private fun CustomerStyledButton(
                 scaleX = pressScale
                 scaleY = pressScale
             }
-            .figmaButtonShadow()
+            .figmaButtonShadow(shape)
             .clip(shape)
             .drawWithCache {
                 val gradient = Brush.linearGradient(
@@ -323,17 +322,15 @@ internal fun CustomerStoreInputField(
     height: Dp = 56.dp,
     singleLine: Boolean = true,
 ) {
-    val shape = RoundedCornerShape(16.dp)
+    val shape = RoundedCornerShape(12.dp)
     BasicTextField(
         value = value,
         onValueChange = onValueChange,
         enabled = enabled,
         singleLine = singleLine,
         minLines = if (singleLine) 1 else 3,
-        textStyle = TextStyle(
-            color = CustomerStoreFieldText.copy(alpha = 0.90f),
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
+        textStyle = MaterialTheme.typography.bodyLarge.copy(
+            color = MaterialTheme.colorScheme.onSurface,
         ),
         cursorBrush = SolidColor(CustomerStoreNavy),
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = imeAction),
@@ -341,22 +338,24 @@ internal fun CustomerStoreInputField(
         visualTransformation = visualTransformation,
         modifier = modifier
             .fillMaxWidth()
-            .height(height)
+            .heightIn(min = height)
             .then(if (focusRequester == null) Modifier else Modifier.focusRequester(focusRequester))
-            .figmaButtonShadow()
             .clip(shape)
-            .background(Color.White.copy(alpha = 0.60f), shape),
+            .background(MaterialTheme.colorScheme.surfaceVariant, shape)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape),
         decorationBox = { innerTextField ->
             Box(
-                modifier = Modifier.fillMaxSize().paddingHorizontal(20.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = height)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
                 if (value.isEmpty()) {
                     Text(
                         text = placeholder,
-                        color = CustomerStoreFieldText.copy(alpha = 0.67f),
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyLarge,
                     )
                 }
                 innerTextField()
@@ -434,7 +433,7 @@ internal fun CustomerTextAction(
     val source = remember { MutableInteractionSource() }
     val isPressed by source.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
-        targetValue = if (isPressed && enabled) 0.96f else 1f,
+        targetValue = if (isPressed && enabled) 0.985f else 1f,
         animationSpec = tween(if (isPressed) 90 else 160, easing = FastOutSlowInEasing),
         label = "customer-text-action-scale",
     )
@@ -468,13 +467,17 @@ internal fun CustomerTextAction(
     }
 }
 
-/** Uses the graphics layer's shadow without allocating a software bitmap for each control. */
-internal fun Modifier.figmaButtonShadow(): Modifier = shadow(
-    elevation = 8.dp,
-    shape = RoundedCornerShape(16.dp),
-    clip = false,
-    ambientColor = CustomerStoreNavy.copy(alpha = 0.16f),
-    spotColor = CustomerStoreNavy.copy(alpha = 0.24f),
+/** A cached shape shadow stays independent of translucent fills and pressed content layers. */
+internal fun Modifier.figmaButtonShadow(
+    shape: Shape = RoundedCornerShape(12.dp),
+): Modifier = dropShadow(
+    shape = shape,
+    shadow = Shadow(
+        radius = 10.dp,
+        spread = 0.dp,
+        color = CustomerStoreNavy.copy(alpha = 0.18f),
+        offset = DpOffset(0.dp, 4.dp),
+    ),
 )
 
 /**

@@ -57,6 +57,38 @@ class CustomerStoreWelcomeScreenTest {
     }
 
     @Test
+    fun `start logo spans the action width and login moves it clear of the form`() {
+        setAuthContent()
+        val logo = composeRule.onNodeWithTag("customer-auth-logo").fetchSemanticsNode().boundsInRoot
+        val action = composeRule.onNodeWithTag("customer-auth-login").fetchSemanticsNode().boundsInRoot
+        assertThat(logo.width).isWithin(1f).of(action.width)
+        assertThat(logo.bottom).isLessThan(action.top)
+
+        composeRule.onNodeWithTag("customer-auth-login").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Вход").assertExists()
+        composeRule.onNodeWithText("Войти").assertExists()
+        val movedLogo = composeRule.onNodeWithTag("customer-auth-logo").fetchSemanticsNode().boundsInRoot
+        val login = composeRule.onNodeWithTag("customer-login-username").fetchSemanticsNode().boundsInRoot
+        assertThat(movedLogo.top).isLessThan(logo.top)
+        assertThat(movedLogo.bottom).isAtMost(login.top)
+    }
+
+    @Test
+    fun `back from recovery returns to login and then to the start actions`() {
+        setAuthContent()
+        composeRule.onNodeWithTag("customer-auth-login").performClick()
+        composeRule.onNodeWithTag("customer-login-recovery").performClick()
+        composeRule.onNodeWithTag("customer-password-recovery-screen").assertExists()
+        composeRule.onNodeWithTag("customer-auth-back").performClick()
+        composeRule.onNodeWithTag("customer-login-screen").assertExists()
+        composeRule.onNodeWithTag("customer-password-recovery-screen").assertDoesNotExist()
+        composeRule.onNodeWithTag("customer-auth-back").performClick()
+        composeRule.onNodeWithTag("customer-auth-login").assertIsEnabled()
+        composeRule.onNodeWithTag("customer-login-screen").assertDoesNotExist()
+    }
+
+    @Test
     fun `login selection opens login and forwards remember choice`() {
         val submission = AtomicReference<Triple<String, String, Boolean>?>()
         setAuthContent(

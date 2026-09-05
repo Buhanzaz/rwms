@@ -14,7 +14,11 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -23,6 +27,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import dev.buhanzaz.rwms.client.R
 import java.io.IOException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -46,10 +51,10 @@ private val CustomerLightColors = lightColorScheme(
     tertiaryContainer = Color.White.copy(alpha = 0.52f),
     onTertiaryContainer = Color(0xFF204B79),
     background = Color.Transparent,
-    onBackground = Color(0xFF173C63),
-    surface = Color.White.copy(alpha = 0.86f),
-    onSurface = Color(0xFF173C63),
-    surfaceVariant = Color.White.copy(alpha = 0.68f),
+    onBackground = Color(0xFF1C3247),
+    surface = Color(0xFFF9FCFF).copy(alpha = 0.80f),
+    onSurface = Color(0xFF1C3247),
+    surfaceVariant = Color(0xFFF5FAFF).copy(alpha = 0.64f),
     onSurfaceVariant = Color(0xFF315A80),
     surfaceContainer = Color.White.copy(alpha = 0.76f),
     surfaceContainerHigh = Color.White.copy(alpha = 0.92f),
@@ -91,20 +96,133 @@ private val CustomerDarkColors = darkColorScheme(
 )
 
 private val CustomerShapes = Shapes(
-    extraSmall = RoundedCornerShape(16.dp),
+    extraSmall = RoundedCornerShape(8.dp),
     small = RoundedCornerShape(12.dp),
-    medium = RoundedCornerShape(16.dp),
-    large = RoundedCornerShape(22.dp),
-    extraLarge = RoundedCornerShape(30.dp),
+    medium = RoundedCornerShape(12.dp),
+    large = RoundedCornerShape(16.dp),
+    extraLarge = RoundedCornerShape(20.dp),
+)
+
+@OptIn(ExperimentalTextApi::class)
+private val CustomerHeadingFont = FontFamily(
+    Font(
+        resId = R.font.manrope,
+        weight = FontWeight.SemiBold,
+        variationSettings = FontVariation.Settings(FontVariation.weight(600)),
+    ),
+    Font(
+        resId = R.font.manrope,
+        weight = FontWeight.Bold,
+        variationSettings = FontVariation.Settings(FontVariation.weight(700)),
+    ),
+)
+@OptIn(ExperimentalTextApi::class)
+private val CustomerBodyFont = FontFamily(
+    Font(
+        resId = R.font.golos_text,
+        weight = FontWeight.Normal,
+        variationSettings = FontVariation.Settings(FontVariation.weight(400)),
+    ),
+    Font(
+        resId = R.font.golos_text,
+        weight = FontWeight.Medium,
+        variationSettings = FontVariation.Settings(FontVariation.weight(500)),
+    ),
+    Font(
+        resId = R.font.golos_text,
+        weight = FontWeight.SemiBold,
+        variationSettings = FontVariation.Settings(FontVariation.weight(600)),
+    ),
 )
 
 private val CustomerTypography = Typography(
-    headlineSmall = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 24.sp, lineHeight = 30.sp),
-    titleLarge = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 21.sp, lineHeight = 28.sp),
-    titleMedium = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 16.sp, lineHeight = 24.sp),
-    bodyLarge = TextStyle(fontSize = 16.sp, lineHeight = 24.sp),
-    bodyMedium = TextStyle(fontSize = 14.sp, lineHeight = 21.sp),
-    labelLarge = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 14.sp, lineHeight = 20.sp),
+    displayLarge = TextStyle(
+        fontFamily = CustomerHeadingFont,
+        fontWeight = FontWeight.Bold,
+        fontSize = 42.sp,
+        lineHeight = 50.sp,
+    ),
+    displayMedium = TextStyle(
+        fontFamily = CustomerHeadingFont,
+        fontWeight = FontWeight.Bold,
+        fontSize = 36.sp,
+        lineHeight = 44.sp,
+    ),
+    displaySmall = TextStyle(
+        fontFamily = CustomerHeadingFont,
+        fontWeight = FontWeight.Bold,
+        fontSize = 32.sp,
+        lineHeight = 40.sp,
+    ),
+    headlineLarge = TextStyle(
+        fontFamily = CustomerHeadingFont,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 28.sp,
+        lineHeight = 36.sp,
+    ),
+    headlineMedium = TextStyle(
+        fontFamily = CustomerHeadingFont,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 26.sp,
+        lineHeight = 34.sp,
+    ),
+    headlineSmall = TextStyle(
+        fontFamily = CustomerHeadingFont,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 24.sp,
+        lineHeight = 32.sp,
+    ),
+    titleLarge = TextStyle(
+        fontFamily = CustomerHeadingFont,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 20.sp,
+        lineHeight = 28.sp,
+    ),
+    titleMedium = TextStyle(
+        fontFamily = CustomerHeadingFont,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 16.sp,
+        lineHeight = 24.sp,
+    ),
+    titleSmall = TextStyle(
+        fontFamily = CustomerBodyFont,
+        fontWeight = FontWeight.Medium,
+        fontSize = 14.sp,
+        lineHeight = 20.sp,
+    ),
+    bodyLarge = TextStyle(
+        fontFamily = CustomerBodyFont,
+        fontSize = 16.sp,
+        lineHeight = 24.sp,
+    ),
+    bodyMedium = TextStyle(
+        fontFamily = CustomerBodyFont,
+        fontSize = 14.sp,
+        lineHeight = 22.sp,
+    ),
+    bodySmall = TextStyle(
+        fontFamily = CustomerBodyFont,
+        fontSize = 12.sp,
+        lineHeight = 18.sp,
+    ),
+    labelLarge = TextStyle(
+        fontFamily = CustomerBodyFont,
+        fontWeight = FontWeight.Medium,
+        fontSize = 14.sp,
+        lineHeight = 20.sp,
+    ),
+    labelMedium = TextStyle(
+        fontFamily = CustomerBodyFont,
+        fontWeight = FontWeight.Medium,
+        fontSize = 12.sp,
+        lineHeight = 18.sp,
+    ),
+    labelSmall = TextStyle(
+        fontFamily = CustomerBodyFont,
+        fontWeight = FontWeight.Medium,
+        fontSize = 11.sp,
+        lineHeight = 16.sp,
+    ),
 )
 
 /** Explicit CustomerApp appearance choices; no device-driven appearance is supported. */
