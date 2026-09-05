@@ -694,6 +694,8 @@ class LogisticsContractFoundationTest {
             "holdCustomerDeliverySlot",
             "checkoutCustomerInquiry",
             "listCustomerBookings",
+            "getCustomerBookingPayment",
+            "confirmCustomerBookingTestPayment",
             "cancelCustomerBooking",
             "searchCustomerBookingRescheduleSlots",
             "rescheduleCustomerBooking",
@@ -772,6 +774,8 @@ class LogisticsContractFoundationTest {
             "listOrders",
             "createOrder",
             "getOrder",
+            "getOrderPayment",
+            "confirmOrderPayment",
             "updateOrder",
             "cancelOrder",
             "saveOrder",
@@ -830,6 +834,8 @@ class LogisticsContractFoundationTest {
             "getPublicCabinPhotoPresentationMedia",
             "confirmPublicClientPresentation",
             "getPublicClientPresentationBooking",
+            "getPublicClientPresentationPayment",
+            "confirmPublicClientPresentationTestPayment",
             "getPublicClientPresentationMedia",
             "reconcileDocument");
     assertThat(paths.keySet())

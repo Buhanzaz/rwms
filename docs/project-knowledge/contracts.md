@@ -49,6 +49,14 @@ The customer `CustomerCabin` projection requires `pricingVersion` and the same e
 checks and uses current asset classification, not display names. These are informational monthly
 prices, separate from delivery; missing dependencies are errors and booked snapshots are unchanged.
 
+Initial order payment has one `OrderPayment` projection for manager, CustomerApp booking and
+exact public presentation-token/booking scopes. `receipt` is an immutable non-fiscal bill;
+whole-RUB amounts/totals are exact decimal strings, with totals allowed beyond int64. Null receipt
+or state is explicit unknown evidence, not zero or paid. Manager `/payment/confirm` and customer/
+public `/payment/confirm-test` require `expectedVersion` and `Idempotency-Key`; source and identity
+are server-derived. Confirmation is local, strictly before the database deadline, and serialized
+against expiry/cancellation. Reads/replays never issue or reprice a bill or extend the timer.
+
 [`auth-service.yaml`](../../contracts/openapi/auth-service.yaml) defines the
 anonymous GET `/api/auth/csrf` bootstrap and CSRF-protected POST
 `/api/customer/v1/registrations`. Through the gateway they are delegated under

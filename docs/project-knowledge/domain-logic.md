@@ -931,6 +931,15 @@ without impersonating a user. V105 enforces exclusive booking/subject payment pr
 retains the same strict five-minute deadline for all sources.
 Evidence: [`V105`](../../services/logistics-service/src/main/resources/db/migration/V105__presentation_payment_provenance.sql).
 
+One payment API serves authorized manager reads, exact CustomerApp booking ownership and exact
+public presentation revision/booking capabilities. Manager acknowledgement and explicit customer/
+public test payment are separate server-derived sources; none claims a provider charge. Receipt,
+version, database deadline and open expiry/cancellation/replacement checks precede the atomic
+confirmation/audit/idempotency commit. Order state is loaded after the command lock so concurrent
+replay sees the committed result. Reads never issue a bill or activate/extend a timer.
+Evidence: [`payment owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderPaymentService.java),
+[`contract`](../../contracts/openapi/logistics-service.yaml).
+
 Public return, shipment and transfer list reads preserve their array payload but
 are bounded to `page/size` with a maximum of 100 documents. Pagination metadata
 is carried in fixed response headers, and all lines for one document page are

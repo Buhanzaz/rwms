@@ -6,6 +6,9 @@ import dev.buhanzaz.rwms.logistics.inquiry.domain.PresentationBookingState;
 import dev.buhanzaz.rwms.logistics.inquiry.service.ClientPresentationService;
 import dev.buhanzaz.rwms.logistics.inquiry.service.PresentationBookingService;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.order.api.ConfirmOrderPaymentRequest;
+import dev.buhanzaz.rwms.logistics.order.api.OrderPaymentResponse;
+import dev.buhanzaz.rwms.logistics.order.service.RentalOrderPaymentService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
@@ -34,6 +37,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class PublicClientPresentationController {
   private final ClientPresentationService presentations;
   private final PresentationBookingService bookings;
+  private final RentalOrderPaymentService payments;
 
   @GetMapping("/{token}")
   public ResponseEntity<PublicClientPresentationResponse> get(
@@ -58,6 +62,26 @@ public class PublicClientPresentationController {
       @PathVariable @Size(min = 40, max = 256) String token,
       @PathVariable UUID bookingId) {
     return bookingResponse(bookings.status(token, bookingId));
+  }
+
+  @GetMapping("/{token}/bookings/{bookingId}/payment")
+  public ResponseEntity<OrderPaymentResponse> payment(
+      @PathVariable @Size(min = 40, max = 256) String token, @PathVariable UUID bookingId) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(payments.getPresentation(token, bookingId));
+  }
+
+  /** The exact presentation capability authorizes a test payment, never a manager action. */
+  @PostMapping("/{token}/bookings/{bookingId}/payment/confirm-test")
+  public ResponseEntity<OrderPaymentResponse> confirmTestPayment(
+      @PathVariable @Size(min = 40, max = 256) String token,
+      @PathVariable UUID bookingId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody ConfirmOrderPaymentRequest request) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(payments.confirmPresentation(token, bookingId, idempotencyKey, request));
   }
 
   @GetMapping(

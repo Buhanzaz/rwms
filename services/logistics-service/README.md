@@ -108,6 +108,17 @@ V105 distinguishes public-link test confirmation as `PRESENTATION_TEST`, attribu
 presentation booking, never an invented user or manager. Database constraints enforce exclusive
 subject-versus-booking provenance; the same strict deadline applies to all confirmation sources.
 
+`GET /orders/{orderId}/payment`, CustomerApp `GET /bookings/{bookingId}/payment` and public
+`GET /client-presentations/{token}/bookings/{bookingId}/payment` expose the same frozen bill and
+database-time window with `Cache-Control: no-store`. Manager `POST /payment/confirm` records an
+authorized acknowledgement; customer/public `POST /payment/confirm-test` explicitly simulate
+payment without collecting real money. The server derives source/identity, validates exact order
+or booking/token scope, and locks before reading mutable payment state. `expectedVersion` and
+actor/source-scoped `Idempotency-Key` fence confirmation and its single audit event. Concurrent
+replay reads committed state after the command lock; it never reissues the bill or extends time.
+Draft/historical unknowns remain null, and a public booking waits for manager save. These API
+operations do not themselves issue an initial bill or activate new checkout payment windows.
+
 V101 extends the existing order mutation recovery with `EXPIRE_UNPAID_ORDER`. A database-time
 claim locks a due unpaid order, marks it `EXPIRING`, and persists `READ_UNITS` before any remote
 call. The validated snapshot, cabin release and empty furniture replacement are checkpointed

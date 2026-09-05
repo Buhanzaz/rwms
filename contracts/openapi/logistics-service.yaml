@@ -1902,6 +1902,46 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/ApiProblem" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/orders/{orderId}/payment:
+    parameters:
+      - $ref: "#/components/parameters/OrderId"
+    get:
+      operationId: getOrderPayment
+      description: >-
+        Reads the immutable initial non-fiscal bill and database-time payment window under order
+        visibility and warehouse read authorization. Does not issue a bill or start/extend a timer.
+        Drafts and historical orders retain explicit null evidence, never fabricated free payment.
+      responses:
+        "200": { $ref: "#/components/responses/OrderPayment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/logistics/v1/orders/{orderId}/payment/confirm:
+    parameters:
+      - $ref: "#/components/parameters/OrderId"
+    post:
+      operationId: confirmOrderPayment
+      description: >-
+        Records MANAGER_CONFIRMATION for SYSTEM_ADMIN, WMS_ADMIN, WAREHOUSE_MANAGER or RENTAL_MANAGER
+        with order visibility, write scope and warehouse edit access. Confirms only a receipted
+        SAVED/PENDING order strictly before its deadline. Locks against cancellation/expiry;
+        expectedVersion and Idempotency-Key fence the command. Source and identity are server-owned.
+        Exact replay returns current payment state and the original bill without repeating effects.
+        This explicit acknowledgement does not claim a provider charge or issue a fiscal receipt.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConfirmOrderPaymentRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/OrderPayment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/logistics/v1/orders/{orderId}/save:
     parameters:
       - $ref: "#/components/parameters/OrderId"
@@ -3305,6 +3345,57 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PresentationBooking" }
+  /api/logistics/public/v1/client-presentations/{token}/bookings/{bookingId}/payment:
+    parameters:
+      - $ref: "#/components/parameters/PublicPresentationToken"
+      - $ref: "#/components/parameters/PresentationBookingId"
+    get:
+      security: []
+      operationId: getPublicClientPresentationPayment
+      description: >-
+        Returns payment only for the completed booking of this exact valid, non-revoked token
+        revision and its bound order. A DRAFT order returns null receipt/state until manager save.
+        This read does not start or extend a timer. A different booking is not found.
+      responses:
+        "200": { $ref: "#/components/responses/OrderPayment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "410":
+          description: The presentation capability is no longer viewable.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ApiProblem" }
+  /api/logistics/public/v1/client-presentations/{token}/bookings/{bookingId}/payment/confirm-test:
+    parameters:
+      - $ref: "#/components/parameters/PublicPresentationToken"
+      - $ref: "#/components/parameters/PresentationBookingId"
+    post:
+      security: []
+      operationId: confirmPublicClientPresentationTestPayment
+      description: >-
+        Explicit simulated payment of the bound order's frozen initial bill, not a real charge.
+        The exact valid token/revision/completed booking authorizes only its own order. Records
+        PRESENTATION_TEST with booking provenance, never a manager or fabricated user identity.
+        The same receipt, version, strict deadline, cancellation and expiry fences apply.
+        Replay returns current payment state without another effect and never extends the window.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConfirmOrderPaymentRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/OrderPayment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "410":
+          description: The presentation capability is no longer viewable.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ApiProblem" }
   /api/logistics/public/v1/client-presentations/{token}/media/{cabinId}/{mediaId}/{generation}/{variant}:
     parameters:
       - $ref: "#/components/parameters/PublicPresentationToken"
@@ -3809,6 +3900,46 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/customer/v1/bookings/{bookingId}/payment:
+    parameters:
+      - $ref: "#/components/parameters/CustomerBookingId"
+    get:
+      operationId: getCustomerBookingPayment
+      description: >-
+        Reads the initial bill and payment window of a booking owned by the exact authenticated
+        CustomerApp subject. Checkout may still be awaiting payment. Never issues or reprices a
+        bill, starts a timer, grants manager permissions, or falls back to another customer's order.
+      responses:
+        "200": { $ref: "#/components/responses/OrderPayment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/logistics/customer/v1/bookings/{bookingId}/payment/confirm-test:
+    parameters:
+      - $ref: "#/components/parameters/CustomerBookingId"
+    post:
+      operationId: confirmCustomerBookingTestPayment
+      description: >-
+        Explicit simulated payment, not a provider charge. Exact CustomerApp booking ownership,
+        order access, an issued bill, expectedVersion and Idempotency-Key are required. Records
+        CUSTOMER_TEST for the authenticated subject only while SAVED/PENDING and strictly before
+        expiry. Serializes against cancellation/expiry; replay returns current payment evidence and
+        the same initial bill without extending the window or repeating effects.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConfirmOrderPaymentRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/OrderPayment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/logistics/customer/v1/bookings/{bookingId}/change-quotes:
     parameters:
       - $ref: "#/components/parameters/CustomerBookingId"
@@ -8288,6 +8419,81 @@ components:
             True when the current actor may submit the existing extension command for this SAVED or
             FULFILLED order. The command still requires each selected cabin to have shipped.
         canViewOtherManagers: { type: boolean }
+    ConfirmOrderPaymentRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+    OrderPayment:
+      type: object
+      additionalProperties: false
+      required: [orderId, orderVersion, orderStatus, state, startedAt, expiresAt, resolvedAt, source, serverTime, canConfirm, receipt]
+      properties:
+        orderId: { type: string, format: uuid }
+        orderVersion: { type: integer, format: int64, minimum: 0 }
+        orderStatus: { type: string, enum: [DRAFT, SAVED, FULFILLED, CLOSED, CANCELLED] }
+        state:
+          type: [string, "null"]
+          enum: [PENDING, CONFIRMED, EXPIRING, EXPIRED, CANCELLED, null]
+          description: Null means no payment window was issued; it is not proof of a payment.
+        startedAt: { type: [string, "null"], format: date-time }
+        expiresAt:
+          type: [string, "null"]
+          format: date-time
+          description: Exactly five minutes after startedAt; retries never extend it.
+        resolvedAt: { type: [string, "null"], format: date-time }
+        source:
+          type: [string, "null"]
+          enum: [CUSTOMER_TEST, PRESENTATION_TEST, MANAGER_CONFIRMATION, null]
+        serverTime: { type: string, format: date-time }
+        canConfirm:
+          type: boolean
+          description: Server authorization and current deadline affordance; command admission is rechecked.
+        receipt:
+          oneOf:
+            - $ref: "#/components/schemas/OrderPaymentReceipt"
+            - { type: "null" }
+    OrderPaymentReceipt:
+      type: object
+      additionalProperties: false
+      description: >-
+        One immutable initial non-fiscal bill. Exact whole-RUB strings preserve arithmetic beyond
+        int64. Cabin prices are the booked offer; furniture is per unit per month per cabin.
+        Accepted delivery is charged once. Excluded delivery is explicitly unknown, never free.
+      required: [schemaVersion, orderId, orderNumber, issuedAt, currency, deliveryIncluded, lines, totalRubles]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        orderId: { type: string, format: uuid }
+        orderNumber: { type: string }
+        issuedAt: { type: string, format: date-time }
+        currency: { type: string, const: RUB }
+        deliveryIncluded: { type: boolean }
+        lines:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/OrderPaymentReceiptLine" }
+        totalRubles: { type: string, pattern: '^(0|[1-9][0-9]{0,79})$' }
+    OrderPaymentReceiptLine:
+      type: object
+      additionalProperties: false
+      description: >-
+        amountRubles = quantity × unitPriceRubles × rentalMonths for CABIN/FURNITURE.
+        CABIN has quantity 1 and no equipmentId. DELIVERY has quantity 1, no IDs, months or
+        pricingVersion, and amountRubles = unitPriceRubles. Unit price and quantity fit int64,
+        while multiplied amounts may exceed it. A bill contains at least one cabin and at most
+        one delivery; deliveryIncluded is true exactly when that line exists.
+      required: [kind, rentalItemId, equipmentId, label, quantity, rentalMonths, unitPriceRubles, amountRubles, pricingVersion]
+      properties:
+        kind: { type: string, enum: [CABIN, FURNITURE, DELIVERY] }
+        rentalItemId: { type: [string, "null"], format: uuid }
+        equipmentId: { type: [string, "null"], format: uuid }
+        label: { type: string, minLength: 1, maxLength: 600 }
+        quantity: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        rentalMonths: { type: [integer, "null"], format: int64, minimum: 1, maximum: 120 }
+        unitPriceRubles: { type: string, pattern: '^(0|[1-9][0-9]{0,18})$' }
+        amountRubles: { type: string, pattern: '^(0|[1-9][0-9]{0,79})$' }
+        pricingVersion: { type: [integer, "null"], format: int64, minimum: 0 }
     OrderDetail:
       type: object
       additionalProperties: false
@@ -9637,6 +9843,15 @@ components:
         status: { type: integer }
         code: { type: string }
   responses:
+    OrderPayment:
+      description: Current payment evidence and the exact original initial bill, never a fiscal receipt.
+      headers:
+        Cache-Control:
+          required: true
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/OrderPayment" }
     DriverBoardCard:
       description: Current task-board placement for one driver movement.
       headers:

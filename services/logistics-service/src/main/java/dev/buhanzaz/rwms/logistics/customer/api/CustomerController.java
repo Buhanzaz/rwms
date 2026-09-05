@@ -12,6 +12,9 @@ import dev.buhanzaz.rwms.logistics.customer.service.CustomerBookingService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerCabinCatalogService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerCheckoutService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerDeliverySlotService;
+import dev.buhanzaz.rwms.logistics.order.api.ConfirmOrderPaymentRequest;
+import dev.buhanzaz.rwms.logistics.order.api.OrderPaymentResponse;
+import dev.buhanzaz.rwms.logistics.order.service.RentalOrderPaymentService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerProfileService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerRentalService;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerWarehouseService;
@@ -54,6 +57,7 @@ public class CustomerController {
   private final CustomerDeliverySlotService deliverySlots;
   private final CustomerCheckoutService checkout;
   private final CustomerBookingService customerBookings;
+  private final RentalOrderPaymentService payments;
   private final CustomerBookingLifecycleService bookingLifecycle;
   private final CustomerBookingChangeService bookingChanges;
 
@@ -255,6 +259,26 @@ public class CustomerController {
   @GetMapping("/bookings")
   public List<CustomerBookingResponse> bookings(@AuthenticationPrincipal Jwt jwt) {
     return checkout.bookings(identity(jwt));
+  }
+
+  @GetMapping("/bookings/{bookingId}/payment")
+  public ResponseEntity<OrderPaymentResponse> bookingPayment(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID bookingId) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(payments.getCustomer(identity(jwt), bookingId));
+  }
+
+  /** Explicitly simulated initial-bill payment; no real money is collected. */
+  @PostMapping("/bookings/{bookingId}/payment/confirm-test")
+  public ResponseEntity<OrderPaymentResponse> confirmTestBookingPayment(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID bookingId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody ConfirmOrderPaymentRequest request) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(payments.confirmCustomer(identity(jwt), bookingId, idempotencyKey, request));
   }
 
   /** Quotes an exact booking change without reserving capacity or starting the change. */

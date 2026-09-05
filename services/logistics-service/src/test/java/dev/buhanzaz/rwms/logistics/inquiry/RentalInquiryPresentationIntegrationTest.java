@@ -14,11 +14,14 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
@@ -3460,6 +3463,117 @@ class RentalInquiryPresentationIntegrationTest {
         .containsEntry("monthly_price_rubles", null);
     assertThatThrownBy(() -> jdbc.update("update client_presentation_item set pricing_version=1"))
         .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+  }
+
+  @Test
+  void publicInitialPaymentIsBoundToTheExactBookingAndNeverImpersonatesAManager() throws Exception {
+    jdbc.update(
+        "insert into rental_pricing_rate values ('00000000-0000-0000-0000-000000000001',?,?,?)",
+        PRICE_TYPE,
+        PRICE_CATEGORY,
+        Long.MAX_VALUE);
+    ClientPresentationResponse sent = publish(createInquiry().id(), List.of(CABIN_1));
+    var booked = bookings.confirm(token(sent), UUID.randomUUID(), confirmation(CABIN_1, 2L));
+    String paymentPath =
+        "/api/logistics/public/v1/client-presentations/"
+            + token(sent)
+            + "/bookings/"
+            + booked.bookingId()
+            + "/payment";
+    mockMvc
+        .perform(get(paymentPath))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.orderStatus").value("DRAFT"))
+        .andExpect(jsonPath("$.state").isEmpty())
+        .andExpect(jsonPath("$.receipt").isEmpty())
+        .andExpect(jsonPath("$.canConfirm").value(false));
+    assertThat(jdbc.queryForObject("select count(*) from rental_order_payment_receipt", Long.class))
+        .isZero();
+    var tx = new TransactionTemplate(transactionManager);
+    tx.executeWithoutResult(
+        status -> {
+          var order = orderRepository.findForUpdate(booked.orderId()).orElseThrow();
+          var receipt = paymentReceipts.capture(order, orderReservations.get(booked.orderId()));
+          order.saveForFulfillment();
+          order.startPaymentReservation(receipt.issuedAt());
+          orderRepository.saveAndFlush(order);
+        });
+    long version =
+        jdbc.queryForObject(
+            "select version from rental_order where id=?", Long.class, booked.orderId());
+    var before =
+        jdbc.queryForMap(
+            "select * from rental_order_payment_receipt where order_id=?", booked.orderId());
+    String total =
+        java.math.BigInteger.valueOf(Long.MAX_VALUE).multiply(java.math.BigInteger.TWO).toString();
+    jdbc.update("update rental_pricing_rate set monthly_price_rubles=1");
+    clearInvocations(dependencies);
+    mockMvc
+        .perform(get(paymentPath))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Cache-Control", "no-store"))
+        .andExpect(jsonPath("$.state").value("PENDING"))
+        .andExpect(jsonPath("$.canConfirm").value(true))
+        .andExpect(jsonPath("$.receipt.totalRubles").value(total));
+    mockMvc
+        .perform(
+            get(paymentPath.replace(booked.bookingId().toString(), UUID.randomUUID().toString())))
+        .andExpect(status().isNotFound());
+    UUID key = UUID.randomUUID();
+    mockMvc
+        .perform(
+            post(paymentPath + "/confirm-test")
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":" + (version + 1) + "}"))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("ORDER_VERSION_CONFLICT"));
+    String request = "{\"expectedVersion\":" + version + "}";
+    mockMvc
+        .perform(
+            post(paymentPath + "/confirm-test")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(request))
+        .andExpect(status().isBadRequest());
+    for (int attempt = 0; attempt < 2; attempt++) {
+      mockMvc
+          .perform(
+              post(paymentPath + "/confirm-test")
+                  .header("Idempotency-Key", key)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(request))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.state").value("CONFIRMED"))
+          .andExpect(jsonPath("$.source").value("PRESENTATION_TEST"))
+          .andExpect(jsonPath("$.receipt.totalRubles").value(total))
+          .andExpect(jsonPath("$.orderVersion").value(version + 1));
+    }
+    assertThat(
+            jdbc.queryForMap(
+                "select payment_confirmed_by_subject_id,payment_confirmed_by_booking_id from rental_order where id=?",
+                booked.orderId()))
+        .containsEntry("payment_confirmed_by_subject_id", null)
+        .containsEntry("payment_confirmed_by_booking_id", booked.bookingId());
+    assertThat(
+            jdbc.queryForMap(
+                "select * from rental_order_payment_receipt where order_id=?", booked.orderId()))
+        .isEqualTo(before);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from rental_order_audit_event where order_id=? and subject_type='ORDER_PAYMENT'",
+                Long.class,
+                booked.orderId()))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "select actor_role from rental_order_audit_event where order_id=? and subject_type='ORDER_PAYMENT'",
+                String.class,
+                booked.orderId()))
+        .isEqualTo("LOGISTICS_SERVICE");
+    verify(dependencies, never()).readCabinPricingReferences(any(), anyList());
+    verifyNoInteractions(dependencies);
+    jdbc.update("update client_presentation set state='REVOKED' where id=?", sent.id());
+    mockMvc.perform(get(paymentPath)).andExpect(status().isGone());
   }
 
   @Test

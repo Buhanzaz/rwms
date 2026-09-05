@@ -20,6 +20,7 @@ import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import dev.buhanzaz.rwms.logistics.order.security.OrderActor;
 import dev.buhanzaz.rwms.logistics.order.security.OrderAuthorizer;
 import dev.buhanzaz.rwms.logistics.order.service.OrderClientService;
+import dev.buhanzaz.rwms.logistics.order.service.RentalOrderPaymentService;
 import dev.buhanzaz.rwms.logistics.order.service.RentalOrderService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
@@ -34,6 +35,7 @@ import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -57,6 +59,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class OrderController {
   private final RentalOrderService orders;
+  private final RentalOrderPaymentService payments;
   private final OrderClientService clients;
   private final OrderAuthorizer access;
   private final LogisticsWarehouseLifecycle warehouseLifecycle;
@@ -106,6 +109,25 @@ public class OrderController {
   @GetMapping("/orders/{orderId}")
   public OrderDetailResponse get(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID orderId) {
     return orders.get(access.readActor(jwt), orderId);
+  }
+
+  @GetMapping("/orders/{orderId}/payment")
+  public ResponseEntity<OrderPaymentResponse> payment(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID orderId) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(payments.get(access.readActor(jwt), orderId));
+  }
+
+  @PostMapping("/orders/{orderId}/payment/confirm")
+  public ResponseEntity<OrderPaymentResponse> confirmPayment(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID orderId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody ConfirmOrderPaymentRequest request) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(payments.confirmManager(access.writeActor(jwt), orderId, idempotencyKey, request));
   }
 
   @PutMapping("/orders/{orderId}")

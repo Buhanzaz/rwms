@@ -7,13 +7,16 @@ import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderDesiredEquipmen
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderHistoryEventResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderRentalTermResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderSummaryResponse;
+import dev.buhanzaz.rwms.logistics.order.api.OrderPaymentResponse;
 import dev.buhanzaz.rwms.logistics.order.domain.AdditionalContact;
 import dev.buhanzaz.rwms.logistics.order.domain.DesiredDeliveryWindow;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderAuditEvent;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderEquipmentRequirement;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderReceiptData;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderUnitTerm;
+import java.time.OffsetDateTime;
 import org.mapstruct.InjectionStrategy;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
@@ -53,6 +56,27 @@ public interface RentalOrderResponseMapper {
   @Mapping(source = "order.createdAt", target = "createdAt")
   @Mapping(source = "order.updatedAt", target = "updatedAt")
   OrderSummaryResponse toSummaryResponse(RentalOrder order, long unitCount);
+
+  @Mapping(source = "order.id", target = "orderId")
+  @Mapping(source = "order.version", target = "orderVersion")
+  @Mapping(source = "order.status", target = "orderStatus")
+  @Mapping(source = "order.paymentState", target = "state")
+  @Mapping(source = "order.paymentStartedAt", target = "startedAt")
+  @Mapping(source = "order.paymentExpiresAt", target = "expiresAt")
+  @Mapping(source = "order.paymentResolvedAt", target = "resolvedAt")
+  @Mapping(source = "order.paymentSource", target = "source")
+  @Mapping(source = "serverTime", target = "serverTime")
+  @Mapping(source = "canConfirm", target = "canConfirm")
+  @Mapping(source = "receipt", target = "receipt")
+  OrderPaymentResponse toPaymentResponse(
+      RentalOrder order,
+      RentalOrderReceiptData receipt,
+      OffsetDateTime serverTime,
+      boolean canConfirm);
+
+  OrderPaymentResponse.Receipt toPaymentReceipt(RentalOrderReceiptData receipt);
+
+  OrderPaymentResponse.Line toPaymentLine(RentalOrderReceiptData.Line line);
 
   @Mapping(source = "eventType", target = "eventType")
   OrderHistoryEventResponse toHistoryResponse(OrderAuditEvent event);
