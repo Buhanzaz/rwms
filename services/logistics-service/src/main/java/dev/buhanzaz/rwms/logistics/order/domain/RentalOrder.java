@@ -58,6 +58,26 @@ public class RentalOrder {
   @Column(name = "status", nullable = false, length = 24)
   private RentalOrderStatus status;
 
+  @Enumerated(EnumType.STRING)
+  @Column(name = "payment_state", length = 24)
+  private RentalOrderPaymentState paymentState;
+
+  @Column(name = "payment_started_at")
+  private OffsetDateTime paymentStartedAt;
+
+  @Column(name = "payment_expires_at")
+  private OffsetDateTime paymentExpiresAt;
+
+  @Column(name = "payment_resolved_at")
+  private OffsetDateTime paymentResolvedAt;
+
+  @Enumerated(EnumType.STRING)
+  @Column(name = "payment_source", length = 32)
+  private RentalOrderPaymentSource paymentSource;
+
+  @Column(name = "payment_confirmed_by_subject_id")
+  private UUID paymentConfirmedBySubjectId;
+
   @ManyToOne(fetch = FetchType.LAZY, optional = false)
   @JoinColumn(name = "client_id", nullable = false)
   private OrderClient client;
@@ -299,6 +319,7 @@ public class RentalOrder {
     requireDraft();
     status = RentalOrderStatus.CANCELLED;
     updatedAt = nextUpdatedAt();
+    cancelUnpaidReservation(updatedAt);
   }
 
   /** Cancels a SAVED customer booking only after the service-layer pre-start guard has passed. */
@@ -308,6 +329,80 @@ public class RentalOrder {
     }
     status = RentalOrderStatus.CANCELLED;
     updatedAt = nextUpdatedAt();
+    cancelUnpaidReservation(updatedAt);
+  }
+
+  /**
+   * Starts one non-renewable five-minute payment window under the order lock, using database time.
+   * The caller explicitly admits new bookings; old orders are never backfilled on read.
+   */
+  public boolean startPaymentReservation(OffsetDateTime timestamp) {
+    if (status != RentalOrderStatus.SAVED) {
+      throw new IllegalStateException("Payment reservation requires a saved order");
+    }
+    if (paymentState != null) return false;
+    paymentStartedAt = Objects.requireNonNull(timestamp, "timestamp");
+    paymentExpiresAt = timestamp.plusMinutes(5);
+    paymentState = RentalOrderPaymentState.PENDING;
+    updatedAt = nextUpdatedAt();
+    return true;
+  }
+
+  /** Confirms strictly before the deadline; command admission and idempotency belong to the owner. */
+  public void confirmPayment(
+      RentalOrderPaymentSource source, UUID actorSubjectId, OffsetDateTime timestamp) {
+    Objects.requireNonNull(source, "source");
+    Objects.requireNonNull(actorSubjectId, "actorSubjectId");
+    Objects.requireNonNull(timestamp, "timestamp");
+    if (status != RentalOrderStatus.SAVED
+        || paymentState != RentalOrderPaymentState.PENDING
+        || timestamp.isBefore(paymentStartedAt)
+        || !timestamp.isBefore(paymentExpiresAt)) {
+      throw new IllegalStateException("Payment reservation cannot be confirmed");
+    }
+    paymentState = RentalOrderPaymentState.CONFIRMED;
+    paymentSource = source;
+    paymentConfirmedBySubjectId = actorSubjectId;
+    paymentResolvedAt = timestamp;
+    updatedAt = nextUpdatedAt();
+  }
+
+  /** Fences payment before any remote release; the durable release command commits atomically. */
+  public boolean beginPaymentExpiry(OffsetDateTime timestamp) {
+    Objects.requireNonNull(timestamp, "timestamp");
+    if (status != RentalOrderStatus.SAVED
+        || paymentState != RentalOrderPaymentState.PENDING
+        || timestamp.isBefore(paymentExpiresAt)) return false;
+    paymentState = RentalOrderPaymentState.EXPIRING;
+    updatedAt = nextUpdatedAt();
+    return true;
+  }
+
+  /** Marks expiry only after both cabin and furniture release receipts have been validated. */
+  public void completePaymentExpiry(OffsetDateTime timestamp) {
+    Objects.requireNonNull(timestamp, "timestamp");
+    if (status != RentalOrderStatus.SAVED
+        || paymentState != RentalOrderPaymentState.EXPIRING
+        || timestamp.isBefore(paymentExpiresAt)) {
+      throw new IllegalStateException("Payment reservation expiry is not pending");
+    }
+    status = RentalOrderStatus.CANCELLED;
+    paymentState = RentalOrderPaymentState.EXPIRED;
+    paymentResolvedAt = timestamp;
+    updatedAt = nextUpdatedAt();
+  }
+
+  /** Historical orders retain their former admission without inventing a confirmation. */
+  public boolean isPaymentConfirmedOrNotRequired() {
+    return paymentState == null || paymentState == RentalOrderPaymentState.CONFIRMED;
+  }
+
+  private void cancelUnpaidReservation(OffsetDateTime timestamp) {
+    if (paymentState == RentalOrderPaymentState.PENDING
+        || paymentState == RentalOrderPaymentState.EXPIRING) {
+      paymentState = RentalOrderPaymentState.CANCELLED;
+      paymentResolvedAt = timestamp.isBefore(paymentStartedAt) ? paymentStartedAt : timestamp;
+    }
   }
 
   public void saveForFulfillment() {
@@ -328,6 +423,9 @@ public class RentalOrder {
     if (status == RentalOrderStatus.FULFILLED) return false;
     if (status != RentalOrderStatus.SAVED) {
       throw new IllegalStateException("Order cannot be fulfilled in its current state");
+    }
+    if (!isPaymentConfirmedOrNotRequired()) {
+      throw new IllegalStateException("Order payment is not confirmed");
     }
     // New saves already enforce delivery details. Legacy SAVED rows remain fulfillable after the
     // additive V42 migration without fabricating historical dates or contact facts.
@@ -371,6 +469,7 @@ public class RentalOrder {
       status = RentalOrderStatus.CLOSED;
     }
     updatedAt = nextUpdatedAt();
+    cancelUnpaidReservation(updatedAt);
   }
 
   public void requireDraft() {
@@ -397,6 +496,9 @@ public class RentalOrder {
   public void requireEditable() {
     if (status != RentalOrderStatus.DRAFT && status != RentalOrderStatus.SAVED) {
       throw new IllegalStateException("Order is not editable");
+    }
+    if (paymentState == RentalOrderPaymentState.EXPIRING) {
+      throw new IllegalStateException("Order payment reservation is being released");
     }
   }
 

@@ -67,6 +67,13 @@ items with two null price fields; historical photo metadata also decodes to null
 return those explicit unknowns instead of inventing historical zero prices. Delivery and other
 charges remain separate. A missing price dependency prevents publication with an explicit error.
 
+V100 adds nullable order-owned payment reservation evidence: a non-renewable five-minute window,
+explicit `CUSTOMER_TEST`/`MANAGER_CONFIRMATION` provenance, and separate pending, confirmed,
+releasing, expired and cancelled outcomes. The domain rejects confirmation at the deadline and
+fulfillment before confirmation; completed expiry requires validated release receipts from its
+caller. Historical rows retain null evidence and their previous admission. This additive storage
+step does not itself start timers or collect money.
+
 The authoritative HTTP and event contracts are
 [`contracts/openapi/logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml) and
 [`contracts/events/logistics-events.yaml`](../../contracts/events/logistics-events.yaml). Start

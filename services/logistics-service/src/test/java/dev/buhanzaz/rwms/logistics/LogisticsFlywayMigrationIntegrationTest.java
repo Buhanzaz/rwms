@@ -47,6 +47,104 @@ class LogisticsFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void paymentReservationUpgradePreservesHistoricalOrdersAndRejectsFalsePaymentEvidence() {
+    configuration(MIGRATIONS).target("99").load().migrate();
+    UUID subjectId = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into order_client(
+          id,version,client_type,display_name,normalized_name,phone,normalized_phone,
+          responsible_manager_id,created_by_subject_id,creation_idempotency_key,
+          creation_request_sha256,created_at,updated_at)
+        values (?,0,'INDIVIDUAL','Payment client',?,'+79990000100','+79990000100',
+          ?,?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        clientId,
+        "payment-client-" + clientId,
+        subjectId,
+        subjectId,
+        UUID.randomUUID(),
+        "a".repeat(64));
+    jdbc.update(
+        """
+        insert into rental_order(
+          id,version,order_number,status,client_id,manager_id,manager_display_name,
+          created_by_subject_id,created_by_display_name,created_by_role,warehouse_id,
+          creation_idempotency_key,creation_request_sha256,created_at,updated_at)
+        values (?,7,'ORD-990100','SAVED',?,?,'Manager',?,'Manager',
+          'RENTAL_MANAGER',?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        orderId,
+        clientId,
+        subjectId,
+        subjectId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "b".repeat(64));
+    Map<String, Object> previous =
+        jdbc.queryForMap("select * from rental_order where id=?", orderId);
+
+    Flyway upgraded = flyway(MIGRATIONS);
+    upgraded.migrate();
+    upgraded.validate();
+    assertThat(jdbc.queryForMap("select * from rental_order where id=?", orderId))
+        .containsAllEntriesOf(previous)
+        .containsEntry("payment_state", null)
+        .containsEntry("payment_started_at", null)
+        .containsEntry("payment_expires_at", null)
+        .containsEntry("payment_resolved_at", null)
+        .containsEntry("payment_source", null)
+        .containsEntry("payment_confirmed_by_subject_id", null);
+    assertThat(toRegclass("idx_rental_order_pending_payment")).isNotNull();
+    assertThatThrownBy(
+            () ->
+                jdbc.update("update rental_order set payment_state='PENDING' where id=?", orderId))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update rental_order set payment_state='PENDING', payment_started_at=current_timestamp,"
+                        + " payment_expires_at=current_timestamp+interval '6 minutes' where id=?",
+                    orderId))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    jdbc.update(
+        "update rental_order set payment_state='PENDING', payment_started_at=current_timestamp,"
+            + " payment_expires_at=current_timestamp+interval '5 minutes' where id=?",
+        orderId);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update rental_order set payment_state='CONFIRMED', payment_resolved_at=payment_started_at,"
+                        + " payment_confirmed_by_subject_id=? where id=?",
+                    subjectId,
+                    orderId))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update rental_order set payment_state='CONFIRMED', payment_resolved_at=payment_expires_at,"
+                        + " payment_source='CUSTOMER_TEST', payment_confirmed_by_subject_id=? where id=?",
+                    subjectId,
+                    orderId))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update rental_order set payment_state='EXPIRED', payment_resolved_at=payment_expires_at"
+                        + " where id=?",
+                    orderId))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    jdbc.update(
+        "update rental_order set payment_state='CONFIRMED', payment_resolved_at=payment_started_at,"
+            + " payment_source='MANAGER_CONFIRMATION', payment_confirmed_by_subject_id=? where id=?",
+        subjectId,
+        orderId);
+    assertJpaValidationStarts();
+  }
+
+  @Test
   void planningCommitmentAndRetentionFoundationMigratesOnACleanSchema() {
     Flyway flyway = flyway(MIGRATIONS);
 

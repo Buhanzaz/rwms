@@ -851,6 +851,14 @@ preserves existing reservation evidence. Evidence:
 [`OrderAssetService`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/OrderAssetService.java),
 [`V49`](../../services/asset-service/src/main/resources/db/migration/V49__logistics_service_reservation_release_actor.sql).
 
+V100 stores an order-owned, non-renewable five-minute payment window and explicit confirmation
+provenance. Null evidence preserves historical admission rather than fabricating payment.
+Confirmation must precede the exact deadline; `EXPIRING` fences payment and edits, and `EXPIRED`
+denotes a cancelled order only after release validation by its caller. The model blocks unpaid
+fulfillment; this storage boundary alone does not admit new windows or perform remote effects.
+Evidence: [`RentalOrder`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/domain/RentalOrder.java),
+[`V100`](../../services/logistics-service/src/main/resources/db/migration/V100__rental_order_payment_reservations.sql).
+
 Global cabin monthly prices belong to logistics, not asset passport metadata. V98 seeds a
 separate versioned singleton with positive whole-ruble overrides for asset-owned type/category
 UUID pairs; every omitted pair means zero. No catalog names or cross-database foreign keys are
