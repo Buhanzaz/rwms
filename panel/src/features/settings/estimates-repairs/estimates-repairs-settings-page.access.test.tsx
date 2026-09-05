@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -10,6 +11,7 @@ import {
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { MemoryRouter, useLocation } from "react-router-dom"
+import { ApiError } from "@/lib/api-client"
 
 import type {
   CurrentUser,
@@ -380,24 +382,21 @@ function renderPage(
     mocks.getCatalog.mockResolvedValue(catalogResult)
   }
   mocks.getCatalogCanvas.mockResolvedValue(canvas)
-
-  return render(
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  })
+  const rendered = render(
     <MemoryRouter initialEntries={initialEntries}>
-      <QueryClientProvider
-        client={
-          new QueryClient({
-            defaultOptions: {
-              queries: { retry: false },
-              mutations: { retry: false },
-            },
-          })
-        }
-      >
+      <QueryClientProvider client={queryClient}>
         <EstimatesRepairsSettingsPage />
         <LocationSearchProbe />
       </QueryClientProvider>
     </MemoryRouter>
   )
+  return { ...rendered, queryClient }
 }
 
 function findCatalogSection(name: string) {
@@ -484,7 +483,18 @@ afterEach(() => {
 describe("maintenance catalog settings", () => {
   it("edits the four repair type colors through the global estimate setting", async () => {
     const user = userEvent.setup()
-    renderPage("MANAGE")
+    const { queryClient } = renderPage("MANAGE")
+    const overviewKey = ["maintenance", "repairs", WAREHOUSE_ID, "overview"]
+    const otherWarehouseKey = [
+      "maintenance",
+      "repairs",
+      "other-warehouse",
+      "task-board-complexities",
+    ]
+    const unrelatedKey = ["asset-rental-items", WAREHOUSE_ID]
+    queryClient.setQueryData(overviewKey, {})
+    queryClient.setQueryData(otherWarehouseKey, {})
+    queryClient.setQueryData(unrelatedKey, {})
 
     await user.click(await findCatalogSection("Цветовая индикация кнопок"))
     expect(
@@ -518,6 +528,83 @@ describe("maintenance catalog settings", () => {
           capitalColor: "#DC2626",
         }
       )
+    )
+    await waitFor(() =>
+      expect(queryClient.getQueryState(overviewKey)?.isInvalidated).toBe(true)
+    )
+    expect(queryClient.getQueryState(otherWarehouseKey)?.isInvalidated).toBe(
+      true
+    )
+    expect(queryClient.getQueryState(unrelatedKey)?.isInvalidated).toBe(false)
+  })
+
+  it("keeps an unsaved complexity palette through a remote revision and a failed refresh", async () => {
+    const user = userEvent.setup()
+    const { queryClient } = renderPage("MANAGE")
+    await user.click(await findCatalogSection("Цветовая индикация кнопок"))
+    const input = await screen.findByLabelText("Лёгкий ремонт")
+    fireEvent.change(input, { target: { value: "#112233" } })
+    const key = ["maintenance", "repair-complexity-colors"]
+    const latest = {
+      ...(await mocks.getComplexityColors()),
+      version: 4,
+      lightColor: "#445566",
+    }
+    await act(async () => {
+      queryClient.setQueryData(key, latest)
+    })
+    expect(input).toHaveProperty("value", "#112233")
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Сохранить цвета типов ремонта" })
+      ).toHaveProperty("disabled", true)
+    )
+    mocks.getComplexityColors.mockRejectedValueOnce(new Error("Связь прервана"))
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: key })
+    })
+    expect(screen.getByLabelText("Лёгкий ремонт")).toHaveProperty(
+      "value",
+      "#112233"
+    )
+    expect(await screen.findByText(/Не удалось обновить палитру/)).toBeTruthy()
+    await user.click(
+      screen.getByRole("button", { name: "Загрузить актуальные цвета" })
+    )
+    expect(screen.getByLabelText("Лёгкий ремонт")).toHaveProperty(
+      "value",
+      "#445566"
+    )
+    expect(mocks.saveComplexityColors).not.toHaveBeenCalled()
+  })
+
+  it("retains the draft after a version conflict and reads the winning palette", async () => {
+    const user = userEvent.setup()
+    renderPage("MANAGE")
+    await user.click(await findCatalogSection("Цветовая индикация кнопок"))
+    const input = await screen.findByLabelText("Лёгкий ремонт")
+    fireEvent.change(input, { target: { value: "#112233" } })
+    const latest = {
+      ...(await mocks.getComplexityColors()),
+      version: 4,
+      lightColor: "#445566",
+    }
+    mocks.getComplexityColors.mockResolvedValue(latest)
+    mocks.saveComplexityColors.mockRejectedValueOnce(
+      new ApiError("Конфликт версий", 409)
+    )
+    await user.click(
+      screen.getByRole("button", { name: "Сохранить цвета типов ремонта" })
+    )
+    await screen.findByRole("button", { name: "Загрузить актуальные цвета" })
+    expect(input).toHaveProperty("value", "#112233")
+    expect(mocks.toastSuccess).not.toHaveBeenCalled()
+    await user.click(
+      screen.getByRole("button", { name: "Загрузить актуальные цвета" })
+    )
+    expect(screen.getByLabelText("Лёгкий ремонт")).toHaveProperty(
+      "value",
+      "#445566"
     )
   })
 

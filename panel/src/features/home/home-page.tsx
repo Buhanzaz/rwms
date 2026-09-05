@@ -347,6 +347,7 @@ function HomeContent({
     queryKey: kpiSettingsKeys.settings,
     queryFn: () => getKpiSettings(accessToken),
     staleTime: 60_000,
+    refetchInterval: 30_000,
   })
   const activeRepairSourceIds = useMemo(
     () =>
@@ -376,6 +377,7 @@ function HomeContent({
         activeRepairSourceIds
       ),
     enabled: activeRepairSourceIds.length > 0,
+    refetchInterval: 30_000,
   })
   const repairComplexities = useMemo(
     () =>

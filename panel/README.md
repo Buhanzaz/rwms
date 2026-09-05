@@ -174,6 +174,11 @@ contexts and screens are usable.
   explicit reload, and failed reads visibly fall back to the base visual palette.
   Logout and permission-boundary remounts remove session overrides. This does not
   change status meanings or the native Android theme.
+- Open task-board and home views refresh global KPI settings and visible repair
+  complexity colors every 30 seconds. Saving complexity colors invalidates only
+  maintenance repair projections across warehouses. Its editor preserves unsaved
+  changes across refresh errors and version conflicts until the user explicitly
+  reloads the current palette.
 - The rental-item dossier consumes the complete canonical activity vocabulary.
   Maintenance repair transfer preparation and completion are shown in the
   repair history using the immutable warehouse snapshot returned by

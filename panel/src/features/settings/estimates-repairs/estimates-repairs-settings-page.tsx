@@ -10,6 +10,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
+import { ApiError } from "@/lib/api-client"
 import {
   Add01Icon,
   AlertCircleIcon,
@@ -3916,16 +3917,14 @@ function RepairComplexityColorSettings({
   request: RepairEstimateCatalogRequest
   readOnly: boolean
 }) {
-  const queryKey = [
-    "maintenance",
-    "repair-complexity-colors",
-  ] as const
+  const queryKey = ["maintenance", "repair-complexity-colors"] as const
   const colorsQuery = useQuery({
     queryKey,
     queryFn: () => getRepairComplexityColors(request.accessToken),
+    refetchInterval: 30_000,
   })
 
-  if (colorsQuery.error) {
+  if (colorsQuery.error && !colorsQuery.data) {
     return (
       <ErrorBox>
         {colorsQuery.error instanceof Error
@@ -3939,13 +3938,19 @@ function RepairComplexityColorSettings({
   }
 
   return (
-    <RepairComplexityColorForm
-      key={`${colorsQuery.data.version}`}
-      request={request}
-      readOnly={readOnly}
-      queryKey={queryKey}
-      initialColors={colorsQuery.data}
-    />
+    <>
+      {colorsQuery.error ? (
+        <ErrorBox>
+          Не удалось обновить палитру: {colorsQuery.error.message}
+        </ErrorBox>
+      ) : null}
+      <RepairComplexityColorForm
+        request={request}
+        readOnly={readOnly}
+        queryKey={queryKey}
+        initialColors={colorsQuery.data}
+      />
+    </>
   )
 }
 
@@ -3962,7 +3967,9 @@ function RepairComplexityColorForm({
 }) {
   const queryClient = useQueryClient()
   const fieldIdPrefix = useId()
-  const [draft, setDraft] = useState<RepairComplexityColorsDto>(initialColors)
+  const [edited, setDraft] = useState<RepairComplexityColorsDto | null>(null)
+  const draft = edited ?? initialColors
+  const stale = Boolean(edited && edited.version !== initialColors.version)
   const [error, setError] = useState<string | null>(null)
   const invalid = REPAIR_COMPLEXITY_COLOR_FIELDS.some(
     ({ key }) => !DISPLAY_COLOR_PATTERN.test(draft[key])
@@ -3976,18 +3983,24 @@ function RepairComplexityColorForm({
         complexColor: draft.complexColor,
         capitalColor: draft.capitalColor,
       }),
-    onSuccess: (saved) => {
+    onSuccess: async (saved) => {
+      await queryClient.cancelQueries({ queryKey })
       queryClient.setQueryData(queryKey, saved)
-      setDraft(saved)
+      setDraft(null)
       setError(null)
       toast.success("Цвета типов ремонта сохранены.")
+      await queryClient.invalidateQueries({
+        queryKey: ["maintenance", "repairs"],
+      })
     },
-    onError: (mutationError) => {
+    onError: async (mutationError) => {
       setError(
         mutationError instanceof Error
           ? mutationError.message
           : "Не удалось сохранить цвета типов ремонта."
       )
+      if (mutationError instanceof ApiError && mutationError.status === 409)
+        await queryClient.invalidateQueries({ queryKey })
     },
   })
 
@@ -3996,7 +4009,7 @@ function RepairComplexityColorForm({
       className="flex flex-col gap-4"
       onSubmit={(event) => {
         event.preventDefault()
-        if (!readOnly && !invalid && !mutation.isPending) {
+        if (!readOnly && edited && !stale && !invalid && !mutation.isPending) {
           mutation.mutate()
         }
       }}
@@ -4036,7 +4049,7 @@ function RepairComplexityColorForm({
                     className="rwms-color-picker size-9 shrink-0 cursor-pointer"
                     onChange={(event) =>
                       setDraft((current) => ({
-                        ...current,
+                        ...(current ?? initialColors),
                         [key]: event.target.value.toUpperCase(),
                       }))
                     }
@@ -4049,7 +4062,7 @@ function RepairComplexityColorForm({
                     className="w-28"
                     onChange={(event) =>
                       setDraft((current) => ({
-                        ...current,
+                        ...(current ?? initialColors),
                         [key]: event.target.value,
                       }))
                     }
@@ -4063,10 +4076,32 @@ function RepairComplexityColorForm({
           )
         })}
       </FieldGroup>
+      {stale ? (
+        <ErrorBox>
+          Палитра изменена в другом окне. Черновик сохранён; загрузите
+          актуальные цвета перед редактированием.
+        </ErrorBox>
+      ) : null}
       {error ? <ErrorBox>{error}</ErrorBox> : null}
       {!readOnly ? (
-        <div className="flex justify-end">
-          <Button type="submit" disabled={invalid || mutation.isPending}>
+        <div className="flex justify-end gap-2">
+          {edited ? (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={mutation.isPending}
+              onClick={() => {
+                setDraft(null)
+                setError(null)
+              }}
+            >
+              {stale ? "Загрузить актуальные цвета" : "Отменить изменения"}
+            </Button>
+          ) : null}
+          <Button
+            type="submit"
+            disabled={!edited || stale || invalid || mutation.isPending}
+          >
             <HugeiconsIcon icon={FloppyDiskIcon} data-icon="inline-start" />
             Сохранить цвета типов ремонта
           </Button>

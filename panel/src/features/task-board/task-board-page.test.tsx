@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -132,7 +133,12 @@ vi.mock("@/features/task-board/task-board-column", () => ({
           .map((entry) => entry.externalTaskId ?? entry.taskId)
           .join(",")}
       </span>
-      <span data-testid="visible-repair-complexities">
+      <span
+        data-testid="visible-repair-complexities"
+        data-colors={[...repairComplexitiesByRepairId.values()]
+          .map((item) => item.color)
+          .join(",")}
+      >
         {visibleEntries
           .map((entry) =>
             entry.source?.type === "MAINTENANCE_REPAIR"
@@ -382,6 +388,7 @@ function LocationProbe() {
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
   vi.clearAllMocks()
   window.localStorage.clear()
 })
@@ -489,6 +496,76 @@ describe("task board warehouse access", () => {
       .setup()
       .type(screen.getByLabelText("Поиск по доске задач"), "вторая")
     expect(commandState.dataset.reorderDisabled).toBe("true")
+  })
+
+  it("refreshes global KPI and repair colors in an already open board", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const repairId = "repair-1"
+    renderPage("EDIT", {
+      currentBoard: {
+        ...board,
+        queues: [
+          {
+            ...board.queues[0]!,
+            entries: [
+              {
+                ...taskEntry("repair-stage", "Работа"),
+                source: { type: "MAINTENANCE_REPAIR", sourceId: repairId },
+              },
+            ],
+          },
+        ],
+      },
+      maintenanceRepairs: [
+        {
+          id: repairId,
+          complexity: {
+            type: "LIGHT",
+            name: "Лёгкий ремонт",
+            color: "#16A34A",
+          },
+        },
+      ],
+    })
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("visible-repair-complexities").dataset.colors
+      ).toBe("#16A34A")
+    )
+    const settings = await mocks.getKpiSettings.mock.results[0]!.value
+    mocks.getKpiSettings.mockResolvedValue({
+      ...settings,
+      palette: {
+        ...settings.palette,
+        ranges: [{ fromPercent: 0, toPercent: 100, color: "#112233" }],
+      },
+    })
+    mocks.listMaintenanceRepairs.mockResolvedValue({
+      items: [
+        {
+          id: repairId,
+          complexity: {
+            type: "LIGHT",
+            name: "Лёгкий ремонт",
+            color: "#445566",
+          },
+        },
+      ],
+      page: 0,
+      size: 200,
+      totalElements: 1,
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_001)
+    })
+    expect(mocks.getKpiSettings).toHaveBeenCalledTimes(2)
+    expect(mocks.listMaintenanceRepairs).toHaveBeenCalledTimes(2)
+    expect(
+      screen.getByTestId("task-board-command-state").dataset.paletteColor
+    ).toBe("#112233")
+    expect(
+      screen.getByTestId("visible-repair-complexities").dataset.colors
+    ).toBe("#445566")
   })
 
   it("loads service-issued complexities in bounded active-repair requests", async () => {

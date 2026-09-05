@@ -437,6 +437,7 @@ function TaskBoardWarehousePage() {
     queryFn: () => getKpiSettings(accessToken!),
     enabled: Boolean(accessToken && warehouseId),
     staleTime: 60_000,
+    refetchInterval: 30_000,
   })
   const taskBoardPalette = paletteForTaskBoard(kpiSettingsQuery.data ?? null)
   const maintenanceRepairSourceIds = useMemo(
@@ -471,6 +472,7 @@ function TaskBoardWarehousePage() {
     enabled: Boolean(
       accessToken && warehouseId && maintenanceRepairSourceIds.length > 0
     ),
+    refetchInterval: 30_000,
   })
   const repairComplexitiesByRepairId = useMemo(() => {
     const visibleSourceIds = new Set(maintenanceRepairSourceIds)
