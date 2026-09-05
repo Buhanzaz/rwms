@@ -71,6 +71,181 @@
         "title": "AdminCatalogRelocationRequest",
         "type": "object"
       },
+      "AdminPlanningSettingsRead": {
+        "additionalProperties": false,
+        "description": "Current configuration and map context, without private warehouse identities.",
+        "properties": {
+          "capacity_publish_status": {
+            "enum": [
+              "NOT_REQUESTED",
+              "PENDING",
+              "PUBLISHED",
+              "FAILED"
+            ],
+            "title": "Capacity Publish Status",
+            "type": "string"
+          },
+          "isochrone_tariffs": {
+            "items": {
+              "$ref": "#/components/schemas/IsochroneTariff"
+            },
+            "title": "Isochrone Tariffs",
+            "type": "array"
+          },
+          "latitude": {
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "title": "Longitude",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/PlanningSettings"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "warehouse_id": {
+            "format": "uuid",
+            "title": "Warehouse Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "warehouse_id",
+          "version",
+          "name",
+          "timezone",
+          "latitude",
+          "longitude",
+          "settings",
+          "isochrone_tariffs",
+          "capacity_publish_status"
+        ],
+        "title": "AdminPlanningSettingsRead",
+        "type": "object"
+      },
+      "AdminPlanningSettingsUpdate": {
+        "additionalProperties": false,
+        "description": "Replace observed settings and the complete contiguous tariff ladder together.",
+        "properties": {
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "isochrone_tariffs": {
+            "items": {
+              "$ref": "#/components/schemas/IsochroneTariff"
+            },
+            "maxItems": 12,
+            "minItems": 1,
+            "title": "Isochrone Tariffs",
+            "type": "array"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/PlanningSettings"
+          }
+        },
+        "required": [
+          "expected_version",
+          "settings",
+          "isochrone_tariffs"
+        ],
+        "title": "AdminPlanningSettingsUpdate",
+        "type": "object"
+      },
+      "AdminPolicyZoneRead": {
+        "additionalProperties": false,
+        "description": "Policy evidence whose warehouse_id is the canonical warehouse-service UUID.",
+        "properties": {
+          "color": {
+            "title": "Color",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "delivery_price_rubles": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Price Rubles"
+          },
+          "geometry": {
+            "$ref": "#/components/schemas/GeoJsonMultiPolygon"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PolicyZoneKind"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "pickup_price_rubles": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pickup Price Rubles"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "warehouse_id": {
+            "format": "uuid",
+            "title": "Warehouse Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "warehouse_id",
+          "name",
+          "kind",
+          "color",
+          "geometry",
+          "version",
+          "delivery_price_rubles",
+          "pickup_price_rubles",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AdminPolicyZoneRead",
+        "type": "object"
+      },
       "AdminTrailerRead": {
         "additionalProperties": false,
         "description": "Administrative trailer view keyed by the canonical warehouse UUID.",
@@ -10780,6 +10955,359 @@
         "summary": "Admin Relocate Vehicle",
         "tags": [
           "admin catalog"
+        ]
+      }
+    },
+    "/api/admin/warehouses/{warehouse_id}/planning-settings": {
+      "get": {
+        "operationId": "plannerAdminGetPlanningSettings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminPlanningSettingsRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Planning Settings",
+        "tags": [
+          "admin planning settings"
+        ]
+      },
+      "put": {
+        "description": "Version-fence the existing owner configuration and publish capacity after its commit.",
+        "operationId": "plannerAdminReplacePlanningSettings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminPlanningSettingsUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminPlanningSettingsRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Replace Planning Settings",
+        "tags": [
+          "admin planning settings"
+        ]
+      }
+    },
+    "/api/admin/warehouses/{warehouse_id}/policy-zones": {
+      "get": {
+        "operationId": "plannerAdminListPolicyZones",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AdminPolicyZoneRead"
+                  },
+                  "title": "Response Planneradminlistpolicyzones",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Admin Policy Zones",
+        "tags": [
+          "admin planning settings"
+        ]
+      },
+      "post": {
+        "description": "Retain create receipts, exact polygon validation and capacity/plan invalidation.",
+        "operationId": "plannerAdminCreatePolicyZone",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "pattern": "^[\\x21-\\x7e]+$",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyZoneCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminPolicyZoneRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Admin Policy Zone",
+        "tags": [
+          "admin planning settings"
+        ]
+      }
+    },
+    "/api/admin/warehouses/{warehouse_id}/policy-zones/{zone_id}": {
+      "delete": {
+        "operationId": "plannerAdminDeletePolicyZone",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "zone_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Zone Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_version",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Expected Version",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Admin Policy Zone",
+        "tags": [
+          "admin planning settings"
+        ]
+      },
+      "patch": {
+        "operationId": "plannerAdminUpdatePolicyZone",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "zone_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Zone Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyZoneUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminPolicyZoneRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Admin Policy Zone",
+        "tags": [
+          "admin planning settings"
         ]
       }
     },

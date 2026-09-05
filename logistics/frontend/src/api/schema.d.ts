@@ -112,6 +112,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/warehouses/{warehouse_id}/planning-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Planning Settings */
+        get: operations["plannerAdminGetPlanningSettings"];
+        /**
+         * Replace Planning Settings
+         * @description Version-fence the existing owner configuration and publish capacity after its commit.
+         */
+        put: operations["plannerAdminReplacePlanningSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/warehouses/{warehouse_id}/policy-zones": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Admin Policy Zones */
+        get: operations["plannerAdminListPolicyZones"];
+        put?: never;
+        /**
+         * Create Admin Policy Zone
+         * @description Retain create receipts, exact polygon validation and capacity/plan invalidation.
+         */
+        post: operations["plannerAdminCreatePolicyZone"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/warehouses/{warehouse_id}/policy-zones/{zone_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Admin Policy Zone */
+        delete: operations["plannerAdminDeletePolicyZone"];
+        options?: never;
+        head?: never;
+        /** Update Admin Policy Zone */
+        patch: operations["plannerAdminUpdatePolicyZone"];
+        trace?: never;
+    };
     "/api/admin/warehouses/{warehouse_id}/trailers": {
         parameters: {
             query?: never;
@@ -1617,6 +1677,84 @@ export interface components {
              * @description Canonical warehouse-service UUID of the new owning object.
              */
             target_warehouse_id: string;
+        };
+        /**
+         * AdminPlanningSettingsRead
+         * @description Current configuration and map context, without private warehouse identities.
+         */
+        AdminPlanningSettingsRead: {
+            /**
+             * Capacity Publish Status
+             * @enum {string}
+             */
+            capacity_publish_status: "NOT_REQUESTED" | "PENDING" | "PUBLISHED" | "FAILED";
+            /** Isochrone Tariffs */
+            isochrone_tariffs: components["schemas"]["IsochroneTariff"][];
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+            /** Name */
+            name: string;
+            settings: components["schemas"]["PlanningSettings"];
+            /** Timezone */
+            timezone: string;
+            /** Version */
+            version: number;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
+        };
+        /**
+         * AdminPlanningSettingsUpdate
+         * @description Replace observed settings and the complete contiguous tariff ladder together.
+         */
+        AdminPlanningSettingsUpdate: {
+            /** Expected Version */
+            expected_version: number;
+            /** Isochrone Tariffs */
+            isochrone_tariffs: components["schemas"]["IsochroneTariff"][];
+            settings: components["schemas"]["PlanningSettings"];
+        };
+        /**
+         * AdminPolicyZoneRead
+         * @description Policy evidence whose warehouse_id is the canonical warehouse-service UUID.
+         */
+        AdminPolicyZoneRead: {
+            /** Color */
+            color: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Delivery Price Rubles */
+            delivery_price_rubles: number | null;
+            geometry: components["schemas"]["GeoJsonMultiPolygon"];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            kind: components["schemas"]["PolicyZoneKind"];
+            /** Name */
+            name: string;
+            /** Pickup Price Rubles */
+            pickup_price_rubles: number | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Version */
+            version: number;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             */
+            warehouse_id: string;
         };
         /**
          * AdminTrailerRead
@@ -5853,6 +5991,208 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminVehicleRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plannerAdminGetPlanningSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminPlanningSettingsRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plannerAdminReplacePlanningSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminPlanningSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminPlanningSettingsRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plannerAdminListPolicyZones: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminPolicyZoneRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plannerAdminCreatePolicyZone: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PolicyZoneCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminPolicyZoneRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plannerAdminDeletePolicyZone: {
+        parameters: {
+            query: {
+                expected_version: number;
+            };
+            header?: never;
+            path: {
+                warehouse_id: string;
+                zone_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plannerAdminUpdatePolicyZone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+                zone_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PolicyZoneUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminPolicyZoneRead"];
                 };
             };
             /** @description Validation Error */

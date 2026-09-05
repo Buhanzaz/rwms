@@ -1473,6 +1473,17 @@ Only the configured residual wait may remain between customer stops
 (`max_customer_wait_minutes`, 120 by default). A larger forced gap makes that
 combination infeasible so the tasks can be assigned to separate warehouse
 cycles. Exact Valhalla legs use the resulting actual departure timestamps.
+Planner configuration also has an isolated administrative boundary under
+`/api/logistics-planner/v1/admin/warehouses/{canonicalWarehouseId}`. It requires
+the `rwms-admin` client, `SYSTEM_ADMIN` and `admin.manage`; private planner IDs
+are never accepted as canonical warehouse identities. Settings and the complete
+isochrone tariff ladder share one observed warehouse version. Exceptional map
+policies retain their own version fence and idempotent create receipts, and
+representatives keep their own settings. The existing planner owner handles
+capacity publication after commit and invalidation of mutable policy-stale plans.
+Evidence: [`admin settings API`](../../logistics/backend/app/api/admin_settings.py)
+and [`canonical contract`](../../contracts/openapi/logistics-planner-service.yaml).
+
 The planner timeline starts at the earliest assigned shift, keeping every
 pre-cycle warehouse wait seekable as `WAITING_SHIFT` at the depot.
 

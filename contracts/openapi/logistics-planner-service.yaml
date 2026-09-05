@@ -1,11 +1,11 @@
 openapi: 3.1.0
 info:
   title: RWMS Logistics Planner Administration API
-  version: 1.0.0
+  version: 1.1.0
   x-rwms-owner: logistics-planner-service
   x-rwms-stability: admin-catalog-v1
   description: >-
-    Canonical API for the logistics planner's catalog-home vehicles and trailers.
+    Canonical API for the logistics planner's catalog-home vehicles, trailers and warehouse planning settings.
     Browser traffic enters only through the same-origin gateway prefix
     /api/logistics-planner/v1/admin; the gateway rewrites that prefix to the
     planner's private FastAPI implementation path /api/admin. This contract does
@@ -17,6 +17,8 @@ security:
 tags:
   - name: Planner administration catalog
     description: SYSTEM_ADMIN-only permanent catalog-home administration.
+  - name: Planner administration settings
+    description: SYSTEM_ADMIN-only planning, tariffs and exceptional map policies.
 paths:
   /admin/warehouses/{warehouse_id}/vehicles:
     parameters:
@@ -297,6 +299,288 @@ paths:
         '422': {$ref: '#/components/responses/ValidationFailed'}
         '502': {$ref: '#/components/responses/DependencyFailure'}
         '503': {$ref: '#/components/responses/DependencyUnavailable'}
+  /admin/warehouses/{warehouse_id}/planning-settings:
+    get:
+      operationId: plannerAdminGetPlanningSettings
+      parameters:
+      - in: path
+        name: warehouse_id
+        required: true
+        schema:
+          format: uuid
+          title: Warehouse Id
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminPlanningSettingsRead'
+          description: Successful Response
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/DependencyFailure'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+      security:
+      - bearerJwt: []
+      summary: Get Planning Settings
+      tags:
+      - Planner administration settings
+      description: SYSTEM_ADMIN only, using the isolated rwms-admin client and admin.manage scope. warehouse_id is
+        the canonical warehouse-service UUID. Representative warehouses retain their own configuration. Returns the
+        owning planner configuration and effective defaults; an unconfigured workspace is an explicit error.
+    put:
+      description: SYSTEM_ADMIN only, using the isolated rwms-admin client and admin.manage scope. warehouse_id is
+        the canonical warehouse-service UUID. Representative warehouses retain their own configuration. Replaces the
+        observed settings and contiguous tariff ladder atomically with expected_version. Publishes capacity after
+        commit and reports its actual outcome.
+      operationId: plannerAdminReplacePlanningSettings
+      parameters:
+      - in: path
+        name: warehouse_id
+        required: true
+        schema:
+          format: uuid
+          title: Warehouse Id
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminPlanningSettingsUpdate'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminPlanningSettingsRead'
+          description: Successful Response
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/DependencyFailure'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      security:
+      - bearerJwt: []
+      summary: Replace Planning Settings
+      tags:
+      - Planner administration settings
+  /admin/warehouses/{warehouse_id}/policy-zones:
+    get:
+      operationId: plannerAdminListPolicyZones
+      parameters:
+      - in: path
+        name: warehouse_id
+        required: true
+        schema:
+          format: uuid
+          title: Warehouse Id
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/AdminPolicyZoneRead'
+                title: Response Planneradminlistpolicyzones
+                type: array
+          description: Successful Response
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/DependencyFailure'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+      security:
+      - bearerJwt: []
+      summary: List Admin Policy Zones
+      tags:
+      - Planner administration settings
+      description: 'SYSTEM_ADMIN only, using the isolated rwms-admin client and admin.manage scope. warehouse_id is
+        the canonical warehouse-service UUID. Policies apply only inside the ordinary isochrone limit. Mutations retain
+        the existing owner validation, version fencing, mutable-plan invalidation and capacity publication. '
+    post:
+      description: SYSTEM_ADMIN only, using the isolated rwms-admin client and admin.manage scope. warehouse_id is
+        the canonical warehouse-service UUID. Policies apply only inside the ordinary isochrone limit. Mutations retain
+        the existing owner validation, version fencing, mutable-plan invalidation and capacity publication. Requires
+        Idempotency-Key; an identical actor and payload replay returns the original polygon.
+      operationId: plannerAdminCreatePolicyZone
+      parameters:
+      - in: path
+        name: warehouse_id
+        required: true
+        schema:
+          format: uuid
+          title: Warehouse Id
+          type: string
+      - in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          maxLength: 200
+          minLength: 1
+          pattern: ^[\x21-\x7e]+$
+          title: Idempotency-Key
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyZoneCreate'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminPolicyZoneRead'
+          description: Successful Response
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/DependencyFailure'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      security:
+      - bearerJwt: []
+      summary: Create Admin Policy Zone
+      tags:
+      - Planner administration settings
+  /admin/warehouses/{warehouse_id}/policy-zones/{zone_id}:
+    delete:
+      operationId: plannerAdminDeletePolicyZone
+      parameters:
+      - in: path
+        name: warehouse_id
+        required: true
+        schema:
+          format: uuid
+          title: Warehouse Id
+          type: string
+      - in: path
+        name: zone_id
+        required: true
+        schema:
+          format: uuid
+          title: Zone Id
+          type: string
+      - in: query
+        name: expected_version
+        required: true
+        schema:
+          minimum: 1
+          title: Expected Version
+          type: integer
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/DependencyFailure'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      security:
+      - bearerJwt: []
+      summary: Delete Admin Policy Zone
+      tags:
+      - Planner administration settings
+      description: 'SYSTEM_ADMIN only, using the isolated rwms-admin client and admin.manage scope. warehouse_id is
+        the canonical warehouse-service UUID. Policies apply only inside the ordinary isochrone limit. Mutations retain
+        the existing owner validation, version fencing, mutable-plan invalidation and capacity publication. '
+    patch:
+      operationId: plannerAdminUpdatePolicyZone
+      parameters:
+      - in: path
+        name: warehouse_id
+        required: true
+        schema:
+          format: uuid
+          title: Warehouse Id
+          type: string
+      - in: path
+        name: zone_id
+        required: true
+        schema:
+          format: uuid
+          title: Zone Id
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyZoneUpdate'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminPolicyZoneRead'
+          description: Successful Response
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/DependencyFailure'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      security:
+      - bearerJwt: []
+      summary: Update Admin Policy Zone
+      tags:
+      - Planner administration settings
+      description: 'SYSTEM_ADMIN only, using the isolated rwms-admin client and admin.manage scope. warehouse_id is
+        the canonical warehouse-service UUID. Policies apply only inside the ordinary isochrone limit. Mutations retain
+        the existing owner validation, version fencing, mutable-plan invalidation and capacity publication. '
 components:
   securitySchemes:
     bearerJwt:
@@ -776,3 +1060,494 @@ components:
           items:
             type: object
             additionalProperties: true
+    AdminPlanningSettingsRead:
+      additionalProperties: false
+      description: Current configuration and map context, without private warehouse identities.
+      properties:
+        capacity_publish_status:
+          enum:
+          - NOT_REQUESTED
+          - PENDING
+          - PUBLISHED
+          - FAILED
+          title: Capacity Publish Status
+          type: string
+        isochrone_tariffs:
+          items:
+            $ref: '#/components/schemas/IsochroneTariff'
+          title: Isochrone Tariffs
+          type: array
+        latitude:
+          title: Latitude
+          type: number
+        longitude:
+          title: Longitude
+          type: number
+        name:
+          title: Name
+          type: string
+        settings:
+          $ref: '#/components/schemas/PlanningSettings'
+        timezone:
+          title: Timezone
+          type: string
+        version:
+          title: Version
+          type: integer
+        warehouse_id:
+          format: uuid
+          title: Warehouse Id
+          type: string
+      required:
+      - warehouse_id
+      - version
+      - name
+      - timezone
+      - latitude
+      - longitude
+      - settings
+      - isochrone_tariffs
+      - capacity_publish_status
+      title: AdminPlanningSettingsRead
+      type: object
+    AdminPlanningSettingsUpdate:
+      additionalProperties: false
+      description: Replace observed settings and the complete contiguous tariff ladder together.
+      properties:
+        expected_version:
+          minimum: 1.0
+          title: Expected Version
+          type: integer
+        isochrone_tariffs:
+          items:
+            $ref: '#/components/schemas/IsochroneTariff'
+          maxItems: 12
+          minItems: 1
+          title: Isochrone Tariffs
+          type: array
+        settings:
+          $ref: '#/components/schemas/PlanningSettings'
+      required:
+      - expected_version
+      - settings
+      - isochrone_tariffs
+      title: AdminPlanningSettingsUpdate
+      type: object
+    AdminPolicyZoneRead:
+      additionalProperties: false
+      description: Policy evidence whose warehouse_id is the canonical warehouse-service UUID.
+      properties:
+        color:
+          title: Color
+          type: string
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        delivery_price_rubles:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Delivery Price Rubles
+        geometry:
+          $ref: '#/components/schemas/GeoJsonMultiPolygon'
+        id:
+          format: uuid
+          title: Id
+          type: string
+        kind:
+          $ref: '#/components/schemas/PolicyZoneKind'
+        name:
+          title: Name
+          type: string
+        pickup_price_rubles:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Pickup Price Rubles
+        updated_at:
+          format: date-time
+          title: Updated At
+          type: string
+        version:
+          title: Version
+          type: integer
+        warehouse_id:
+          format: uuid
+          title: Warehouse Id
+          type: string
+      required:
+      - id
+      - warehouse_id
+      - name
+      - kind
+      - color
+      - geometry
+      - version
+      - delivery_price_rubles
+      - pickup_price_rubles
+      - created_at
+      - updated_at
+      title: AdminPolicyZoneRead
+      type: object
+    GeoJsonMultiPolygon:
+      additionalProperties: false
+      description: Validated WGS84 GeoJSON MultiPolygon used at every policy boundary.
+      properties:
+        coordinates:
+          $ref: '#/components/schemas/MultiPolygonCoordinates'
+        type:
+          const: MultiPolygon
+          title: Type
+          type: string
+      required:
+      - type
+      - coordinates
+      title: GeoJsonMultiPolygon
+      type: object
+    IsochroneTariff:
+      additionalProperties: false
+      description: One contiguous hourly road-travel price tier.
+      properties:
+        price_rubles:
+          minimum: 0.0
+          title: Price Rubles
+          type: integer
+        travel_minutes:
+          maximum: 720.0
+          minimum: 60.0
+          multipleOf: 60.0
+          title: Travel Minutes
+          type: integer
+      required:
+      - travel_minutes
+      - price_rubles
+      title: IsochroneTariff
+      type: object
+    Latitude:
+      maximum: 90.0
+      minimum: -90.0
+      type: number
+    LinearRing:
+      items:
+        $ref: '#/components/schemas/Position'
+      minItems: 4
+      type: array
+    Longitude:
+      maximum: 180.0
+      minimum: -180.0
+      type: number
+    MultiPolygonCoordinates:
+      items:
+        $ref: '#/components/schemas/PolygonCoordinates'
+      minItems: 1
+      type: array
+    PlanningSettings:
+      additionalProperties: false
+      description: Tunable deterministic planner and mock-routing settings.
+      properties:
+        additional_resource_activation_penalty:
+          default: 180
+          minimum: 0.0
+          title: Additional Resource Activation Penalty
+          type: number
+        allow_soft_overtime:
+          default: false
+          title: Allow Soft Overtime
+          type: boolean
+        city_speed_kmh:
+          default: 35
+          exclusiveMinimum: 0.0
+          title: City Speed Kmh
+          type: number
+        default_buffer_minutes:
+          default: 15
+          minimum: 0.0
+          title: Default Buffer Minutes
+          type: integer
+        default_cargo_height_mm:
+          default: 2400
+          exclusiveMinimum: 0.0
+          maximum: 10000.0
+          title: Default Cargo Height Mm
+          type: integer
+        default_cargo_length_mm:
+          default: 6000
+          exclusiveMinimum: 0.0
+          maximum: 30000.0
+          title: Default Cargo Length Mm
+          type: integer
+        default_cargo_weight_kg:
+          default: 1200
+          exclusiveMinimum: 0.0
+          maximum: 100000.0
+          title: Default Cargo Weight Kg
+          type: integer
+        default_cargo_width_mm:
+          default: 2400
+          exclusiveMinimum: 0.0
+          maximum: 10000.0
+          title: Default Cargo Width Mm
+          type: integer
+        default_depot_turnaround_minutes:
+          default: 15
+          minimum: 0.0
+          title: Default Depot Turnaround Minutes
+          type: integer
+        default_load_minutes:
+          default: 30
+          minimum: 0.0
+          title: Default Load Minutes
+          type: integer
+        default_pickup_minutes:
+          default: 30
+          minimum: 0.0
+          title: Default Pickup Minutes
+          type: integer
+        default_route_buffer_minutes:
+          default: 15
+          minimum: 0.0
+          title: Default Route Buffer Minutes
+          type: integer
+        default_service_minutes:
+          default: 30
+          minimum: 0.0
+          title: Default Service Minutes
+          type: integer
+        default_unload_minutes:
+          default: 30
+          minimum: 0.0
+          title: Default Unload Minutes
+          type: integer
+        deliveries_before_pickups:
+          const: true
+          default: true
+          title: Deliveries Before Pickups
+          type: boolean
+        detour_weight:
+          default: 1.2
+          minimum: 0.0
+          title: Detour Weight
+          type: number
+        driver_workload_weight:
+          default: 3
+          minimum: 0.0
+          title: Driver Workload Weight
+          type: number
+        empty_travel_weight:
+          default: 1.5
+          minimum: 0.0
+          title: Empty Travel Weight
+          type: number
+        evening_traffic_multiplier:
+          default: 1.2
+          minimum: 1.0
+          title: Evening Traffic Multiplier
+          type: number
+        last_available_date_penalty:
+          default: 10000
+          minimum: 0.0
+          title: Last Available Date Penalty
+          type: number
+        max_candidate_neighbors:
+          default: 8
+          minimum: 1.0
+          title: Max Candidate Neighbors
+          type: integer
+        max_customer_wait_minutes:
+          default: 120
+          minimum: 0.0
+          title: Max Customer Wait Minutes
+          type: integer
+        max_delivery_stops:
+          default: 2
+          maximum: 2.0
+          minimum: 1.0
+          title: Max Delivery Stops
+          type: integer
+        max_detour_minutes:
+          default: 35
+          minimum: 0.0
+          title: Max Detour Minutes
+          type: integer
+        max_detour_ratio:
+          default: 1.5
+          minimum: 0.0
+          title: Max Detour Ratio
+          type: number
+        max_local_search_iterations:
+          default: 100
+          minimum: 0.0
+          title: Max Local Search Iterations
+          type: integer
+        max_optimization_seconds:
+          default: 5
+          exclusiveMinimum: 0.0
+          title: Max Optimization Seconds
+          type: number
+        max_pickup_stops:
+          default: 2
+          maximum: 2.0
+          minimum: 1.0
+          title: Max Pickup Stops
+          type: integer
+        max_trace_events:
+          default: 2000
+          minimum: 0.0
+          title: Max Trace Events
+          type: integer
+        morning_traffic_multiplier:
+          default: 1.25
+          minimum: 1.0
+          title: Morning Traffic Multiplier
+          type: number
+        paired_delivery_bonus:
+          default: 20
+          minimum: 0.0
+          title: Paired Delivery Bonus
+          type: number
+        paired_pickup_bonus:
+          default: 15
+          minimum: 0.0
+          title: Paired Pickup Bonus
+          type: number
+        preferred_shift_utilization_percent:
+          default: 80
+          exclusiveMinimum: 0.0
+          maximum: 100.0
+          title: Preferred Shift Utilization Percent
+          type: number
+        region_speed_kmh:
+          default: 65
+          exclusiveMinimum: 0.0
+          title: Region Speed Kmh
+          type: number
+        road_factor:
+          default: 1.25
+          minimum: 1.0
+          title: Road Factor
+          type: number
+        soft_overtime_limit_minutes:
+          default: 0
+          minimum: 0.0
+          title: Soft Overtime Limit Minutes
+          type: integer
+        trace_sample_rate:
+          default: 1
+          minimum: 1.0
+          title: Trace Sample Rate
+          type: integer
+        unassigned_hard_task_penalty:
+          default: 100000
+          minimum: 0.0
+          title: Unassigned Hard Task Penalty
+          type: number
+        vehicle_capacity:
+          const: 2
+          default: 2
+          title: Vehicle Capacity
+          type: integer
+      title: PlanningSettings
+      type: object
+    PolicyZoneCreate:
+      additionalProperties: false
+      description: Create one exceptional policy without any ordinary delivery-region meaning.
+      properties:
+        color:
+          anyOf:
+          - pattern: ^#[0-9A-Fa-f]{6}$
+            type: string
+          - type: 'null'
+          title: Color
+        delivery_price_rubles:
+          anyOf:
+          - minimum: 0.0
+            type: integer
+          - type: 'null'
+          title: Delivery Price Rubles
+        geometry:
+          $ref: '#/components/schemas/GeoJsonMultiPolygon'
+        kind:
+          $ref: '#/components/schemas/PolicyZoneKind'
+        name:
+          maxLength: 200
+          minLength: 1
+          title: Name
+          type: string
+        pickup_price_rubles:
+          anyOf:
+          - minimum: 0.0
+            type: integer
+          - type: 'null'
+          title: Pickup Price Rubles
+      required:
+      - name
+      - kind
+      - geometry
+      title: PolicyZoneCreate
+      type: object
+    PolicyZoneKind:
+      description: Supported exceptional policies layered over ordinary isochrone coverage.
+      enum:
+      - SPECIAL_PRICE
+      - FORBIDDEN
+      - NO_TRAILER
+      title: PolicyZoneKind
+      type: string
+    PolicyZoneUpdate:
+      additionalProperties: false
+      description: Optimistically fenced partial update for one exceptional policy.
+      properties:
+        color:
+          anyOf:
+          - pattern: ^#[0-9A-Fa-f]{6}$
+            type: string
+          - type: 'null'
+          title: Color
+        delivery_price_rubles:
+          anyOf:
+          - minimum: 0.0
+            type: integer
+          - type: 'null'
+          title: Delivery Price Rubles
+        expected_version:
+          minimum: 1.0
+          title: Expected Version
+          type: integer
+        geometry:
+          anyOf:
+          - $ref: '#/components/schemas/GeoJsonMultiPolygon'
+          - type: 'null'
+        kind:
+          anyOf:
+          - $ref: '#/components/schemas/PolicyZoneKind'
+          - type: 'null'
+        name:
+          anyOf:
+          - maxLength: 200
+            minLength: 1
+            type: string
+          - type: 'null'
+          title: Name
+        pickup_price_rubles:
+          anyOf:
+          - minimum: 0.0
+            type: integer
+          - type: 'null'
+          title: Pickup Price Rubles
+      required:
+      - expected_version
+      title: PolicyZoneUpdate
+      type: object
+    PolygonCoordinates:
+      items:
+        $ref: '#/components/schemas/LinearRing'
+      minItems: 1
+      type: array
+    Position:
+      maxItems: 2
+      minItems: 2
+      prefixItems:
+      - $ref: '#/components/schemas/Longitude'
+      - $ref: '#/components/schemas/Latitude'
+      type: array

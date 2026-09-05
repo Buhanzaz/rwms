@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 
 from app.api import (
     admin_catalog,
+    admin_settings,
     catalog,
     dynamic_operations,
     geocoding,
@@ -21,6 +22,7 @@ api_router = APIRouter(prefix="/api")
 api_router.include_router(health.router)
 admin_router = APIRouter(prefix="/admin", dependencies=[Depends(get_current_admin)])
 admin_router.include_router(admin_catalog.router)
+admin_router.include_router(admin_settings.router)
 api_router.include_router(admin_router)
 protected_router = APIRouter(dependencies=[Depends(get_current_user)])
 protected_router.include_router(catalog.router)

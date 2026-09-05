@@ -686,6 +686,15 @@ resource nor mutates a transfer. If no exact calculation is currently possible,
 the draft remains explicit with no fabricated arrival and can be completed at
 the existing confirmation stage.
 
+The isolated administration API exposes planning settings, the contiguous
+isochrone tariff ladder and exceptional map policies under
+`/api/logistics-planner/v1/admin/warehouses/{canonicalWarehouseId}`. It requires
+the `rwms-admin` client, `SYSTEM_ADMIN` and `admin.manage`. Settings and tariffs
+share the observed warehouse version; policy commands retain their own version
+and idempotent create receipts. Representatives retain their own settings.
+The existing planner owner publishes capacity after committed mutations and
+invalidates mutable plans after policy edits; a publication failure is reported.
+
 Planner settings submit only fields accepted by the strict backend
 `PlanningSettings` schema. The obsolete browser-only `trace_enabled` switch was
 removed; trace event bounds and sampling remain supported settings.
