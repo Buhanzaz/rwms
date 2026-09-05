@@ -1,10 +1,39 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { PlanningDayRequests } from '../src/features/planning/PlanningDayRequests';
 import { requestFixture, workspaceFixture } from './fixtures';
 
 describe('planning-day request preparation', () => {
+  it('shows rental purpose, contact, agreed time and lifecycle separately from readiness', async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    const request = requestFixture({
+      name: 'Заказ RENTAL-7',
+      customer_delivery_purpose: 'RENTAL_DELIVERY',
+      status: 'IN_PROGRESS',
+      contact_name: 'Анна',
+      contact_phone: '+7 (900) 123-45-67',
+      notes: 'Позвонить перед въездом',
+      date_options: [{ date: '2026-08-30', priority: 1, window_start: '09:00', window_end: '12:00', is_hard: true }],
+    });
+    render(<PlanningDayRequests workspace={workspaceFixture({ requests: [request] })} planningDate="2026-08-30" busy={false} onPlanningDateChange={() => undefined} onSave={() => Promise.resolve()} onSplit={() => Promise.resolve()} onSelect={onSelect} />);
+
+    const card = within(screen.getByTestId(`planning-request-${request.id}`));
+    expect(card.getByText('Доставка в аренду')).toBeVisible();
+    expect(card.getByText('В работе')).toBeVisible();
+    expect(card.queryByText('IN_PROGRESS')).not.toBeInTheDocument();
+    expect(card.getByText('09:00–12:00 · строго по времени')).toBeVisible();
+    expect(card.getByText('Анна')).toBeVisible();
+    expect(card.getByRole('link', { name: '+7 (900) 123-45-67' })).toHaveAttribute('href', 'tel:+79001234567');
+    expect(card.getByText('Позвонить перед въездом')).toBeVisible();
+    await user.click(card.getByLabelText('Контактное лицо'));
+    expect(onSelect).not.toHaveBeenCalled();
+    card.getByRole('button', { name: 'Открыть заявку №RENTAL-7 на карте' }).focus();
+    await user.keyboard('{Enter}');
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith(request.id);
+  });
+
   it('navigates adjacent dates through the shared planning-date handler', async () => {
     const user = userEvent.setup();
     const onPlanningDateChange = vi.fn();

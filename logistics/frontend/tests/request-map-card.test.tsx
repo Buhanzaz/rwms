@@ -94,6 +94,16 @@ function cycle(id: string, shiftId: string, taskId: string | null): RouteCycle {
 describe('request map card', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('shows the rental purpose and a callable contact without presenting delivery cost as rent', () => {
+    render(<RequestMapCard request={{ ...request, customer_delivery_purpose: 'RENTAL_DELIVERY', contact_name: 'Анна', contact_phone: '+7 900 123-45-67', delivery_price_rubles: 28500 }} planningDate="2026-08-25" busy={false} onSchedule={() => undefined} onUnschedule={() => undefined} onClose={() => undefined} />);
+    expect(screen.getByText('Доставка в аренду')).toBeVisible();
+    expect(screen.getByText('Анна')).toBeVisible();
+    expect(screen.getByRole('link', { name: '+7 900 123-45-67' })).toHaveAttribute('href', 'tel:+79001234567');
+    expect(screen.getByText('Стоимость доставки')).toBeVisible();
+    expect(screen.getByText(/28\s500 ₽/)).toBeVisible();
+    expect(screen.queryByText(/Стоимость аренды/)).not.toBeInTheDocument();
+  });
+
   it('anchors the card above the selected marker with a native map popup', async () => {
     const onClose = vi.fn();
     const map = { id: 'map-instance' };
@@ -160,14 +170,14 @@ describe('request map card', () => {
     expect(screen.getByText('Москва, Тестовая улица, 25')).toBeVisible();
     expect(screen.getByText('2 бытов. · обслуживание 35 мин')).toBeVisible();
     expect(screen.getByText('Не рассчитана')).toBeVisible();
-    expect(screen.getByText(/рассчитывается по времени пути в изохроне склада/)).toBeVisible();
+    expect(screen.getByText('Контактное лицо')).toBeVisible();
     expect(screen.getByText(/25 августа 2026.*09:00–11:00.*жёстко/)).toBeVisible();
 
     await user.click(screen.getByRole('button', { name: 'Выставить на 25 августа 2026 г.' }));
     expect(onSchedule).toHaveBeenCalledWith('request-142', '2026-08-25', false);
   });
 
-  it('shows the warehouse isochrone tariff for a pickup', () => {
+  it('shows an explicit missing pickup price', () => {
     render(
       <RequestMapCard
         request={{ ...request, type: 'PICKUP', name: 'Вывоз №142' }}
@@ -179,7 +189,7 @@ describe('request map card', () => {
       />,
     );
 
-    expect(screen.getByText(/рассчитывается по времени пути в изохроне склада/)).toBeVisible();
+    expect(screen.getByText('Не рассчитана')).toBeVisible();
   });
 
   it('shows the persisted delivery price and contractor handoff', () => {
@@ -200,7 +210,7 @@ describe('request map card', () => {
       />,
     );
 
-    expect(screen.getByText(/28\s500 ₽ · изохрона до 3 ч/)).toBeVisible();
+    expect(screen.getByText(/28\s500 ₽ · до 3 ч в пути от склада/)).toBeVisible();
     expect(screen.getByText(/Передано наёмному водителю:/)).toHaveTextContent('Иван Петров');
   });
 

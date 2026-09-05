@@ -1,4 +1,4 @@
-import { Banknote, CalendarCheck2, CalendarX2, Clock3, MapPin, PackageOpen, Route, UserRound, UserRoundCheck, X } from 'lucide-react';
+import { Banknote, CalendarCheck2, CalendarX2, MapPin, PackageOpen, Phone, Route, UserRound, UserRoundCheck, X } from 'lucide-react';
 import maplibregl, { type Map as MapLibreMap } from 'maplibre-gl';
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -6,7 +6,8 @@ import type { LogisticsRequest, PlanningTask, RouteCycle, RoutePlan, UUID, Wareh
 import type { PlanMove } from '../features/planning/PlanPanel';
 import { formatDate, formatDeliveryPrice, formatTime } from '../utils/format';
 import { DatePicker } from '../components/DatePicker';
-import { customerLegalTypeFromRequest, customerLegalTypeLabel } from '../utils/customer-presentation';
+import { customerDeliveryPurposeFromRequest, customerDeliveryPurposeLabel, customerLegalTypeFromRequest, customerLegalTypeLabel } from '../utils/customer-presentation';
+import { requestStatusLabels } from '../domain/request-presentation';
 
 interface RequestMapCardProps {
   request: LogisticsRequest;
@@ -23,16 +24,6 @@ interface RequestMapCardProps {
 interface RequestMapPopupProps extends RequestMapCardProps {
   map: MapLibreMap;
 }
-
-const requestStatusLabels: Record<LogisticsRequest['status'], string> = {
-  DRAFT: 'Черновик',
-  READY: 'Готово',
-  PLANNED: 'В плане',
-  IN_PROGRESS: 'В работе',
-  COMPLETED: 'Выполнена',
-  CANCELLED: 'Отменена',
-  UNASSIGNED: 'Не распределена',
-};
 
 function initialDate(request: LogisticsRequest, planningDate: string): string {
   if (request.scheduled_date) return request.scheduled_date;
@@ -114,7 +105,7 @@ export function RequestMapCard({
   return (
     <section className="request-map-menu" aria-label={request.type === 'DELIVERY' ? 'Доставка на карте' : 'Вывоз на карте'} aria-busy={busy} data-testid="request-map-menu">
       <div className="request-map-menu__head">
-        <strong className={`request-kind request-kind--${request.type.toLowerCase()}`}>{request.type === 'DELIVERY' ? 'Доставка' : 'Вывоз'}</strong>
+        <strong className={`request-kind request-kind--${request.type.toLowerCase()}`}>{request.type === 'DELIVERY' ? customerDeliveryPurposeLabel(customerDeliveryPurposeFromRequest(request)) : 'Вывоз'}</strong>
         <button type="button" aria-label="Закрыть карточку доставки или вывоза" onClick={onClose}><X size={16} aria-hidden="true" /></button>
       </div>
 
@@ -123,10 +114,11 @@ export function RequestMapCard({
       {serviceWarehouse?.representative ? <div className="request-map-menu__service-warehouse">Склад обслуживания: <strong>{serviceWarehouse.name}</strong></div> : null}
       <dl className="request-map-menu__details">
         <div><dt><UserRound size={12} aria-hidden="true" />Тип клиента</dt><dd>{customerLegalTypeLabel(customerLegalTypeFromRequest(request))}</dd></div>
-        <div><dt><MapPin size={12} aria-hidden="true" />Адрес</dt><dd>{request.address_label}</dd></div>
+        <div><dt><UserRound size={12} aria-hidden="true" />Контактное лицо</dt><dd>{request.contact_name || 'Не указано'}</dd></div>
+        <div><dt><Phone size={12} aria-hidden="true" />Телефон</dt><dd>{request.contact_phone ? <a href={`tel:${request.contact_phone.replace(/[^+\d]/gu, '')}`}>{request.contact_phone}</a> : 'Не указан'}</dd></div>
+        <div><dt><MapPin size={12} aria-hidden="true" />Адрес</dt><dd>{request.address_label || 'Не указан'}</dd></div>
         <div><dt><PackageOpen size={12} aria-hidden="true" />Объём</dt><dd>{request.quantity} бытов. · обслуживание {request.service_minutes} мин</dd></div>
-        <div><dt><Banknote size={12} aria-hidden="true" />Стоимость доставки</dt><dd>{formatDeliveryPrice(request.delivery_price_rubles)}{request.price_isochrone_minutes ? ` · изохрона до ${request.price_isochrone_minutes / 60} ч` : ''}</dd></div>
-        <div><dt><Clock3 size={12} aria-hidden="true" />Тариф</dt><dd>рассчитывается по времени пути в изохроне склада</dd></div>
+        <div><dt><Banknote size={12} aria-hidden="true" />{request.type === 'DELIVERY' ? 'Стоимость доставки' : 'Стоимость вывоза'}</dt><dd>{formatDeliveryPrice(request.delivery_price_rubles)}{request.price_isochrone_minutes ? ` · до ${request.price_isochrone_minutes / 60} ч в пути от склада` : ''}</dd></div>
       </dl>
       {request.assignment_type === 'CONTRACTOR_HANDOFF' ? <div className="request-map-menu__contractor"><UserRoundCheck size={13} aria-hidden="true" />Передано наёмному водителю: <strong>{request.assigned_contractor_name}</strong></div> : null}
       {request.notes ? <p className="request-map-menu__notes">{request.notes}</p> : null}

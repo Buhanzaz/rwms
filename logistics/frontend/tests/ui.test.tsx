@@ -588,7 +588,7 @@ describe('application states', () => {
     window.localStorage.setItem('rwms:logistics:last-warehouse', warehouse.id);
     useUiStore.setState({ mode: 'PLAN_DAY', section: 'DRIVERS', selected: null });
     renderApp();
-    expect(await screen.findByRole('heading', { name: 'Водители — Региональный склад' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Водители Региональный склад' })).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Добавить' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Изменить' })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([input, init]) => requestUrl(input).endsWith(`/warehouses/${warehouse.id}/drivers`) && init?.method === 'POST')).toBe(false);

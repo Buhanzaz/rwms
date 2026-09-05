@@ -33,6 +33,7 @@ export function Sidebar({ workspace, plan, pendingActionCount = 0, onNavigate, o
 }) {
   const section = useUiStore((state) => state.section);
   const setSection = useUiStore((state) => state.setSection);
+  const setMapTool = useUiStore((state) => state.setMapTool);
   return (
     <aside className="sidebar" aria-label="Разделы логистики">
       <button type="button" className="sidebar__brand" aria-label="Blockbox — Логистика: открыть склад" onClick={() => {
@@ -48,7 +49,7 @@ export function Sidebar({ workspace, plan, pendingActionCount = 0, onNavigate, o
           const count = item.id === 'PLAN_DAY' && pendingActionCount > 0
             ? pendingActionCount
             : item.count?.(workspace, plan);
-          return <button className="nav-item" aria-label={item.label} aria-current={section === item.id ? 'page' : undefined} key={item.id} onClick={() => { setSection(item.id); onNavigate?.(); }} title={item.label}>
+          return <button className="nav-item" aria-label={item.label} aria-current={section === item.id ? 'page' : undefined} key={item.id} onClick={() => { setSection(item.id); if (item.id === 'REQUESTS') setMapTool('ADD_DELIVERY'); onNavigate?.(); }} title={item.label}>
             {item.icon}<span className="nav-item__label">{item.label}</span>{count !== undefined ? <span className="nav-item__count">{count}</span> : null}
           </button>;
         })}

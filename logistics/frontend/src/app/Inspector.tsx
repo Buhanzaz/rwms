@@ -130,7 +130,7 @@ function WarehouseSection({ props }: { props: InspectorProps }) {
     candidate.id === (props.workspace.planning_root_warehouse_id ?? warehouse.id)
   ));
   return <>
-    <h2 className="section-title">{warehouseDisplayName(warehouse, mainWarehouse)}</h2><p className="section-subtitle">{warehouseLocation(warehouse)}</p>
+    <header className="inspector-section-heading"><h2 className="section-title">{warehouseDisplayName(warehouse, mainWarehouse)}</h2><p className="section-subtitle">{warehouseLocation(warehouse)}</p></header>
     <div className="detail-grid">
       <div className="detail-item"><small>Часовой пояс</small><strong>{warehouse.timezone}</strong></div>
       <div className="detail-item"><small>Рабочий день</small><strong>{warehouse.working_day_start}–{warehouse.working_day_end}</strong></div>
@@ -184,10 +184,10 @@ function CatalogSection({ props, kind }: { props: InspectorProps; kind: 'driver'
     warehouse.id === (props.workspace.planning_root_warehouse_id ?? props.workspace.warehouse.id)
   ));
   return <>
-    <h2 className="section-title">{kind === 'driver' ? `Водители — ${warehouseShortName(props.workspace.warehouse)}` : `Автотранспорт — ${warehouseShortName(props.workspace.warehouse)}`}</h2>
+    <header className="inspector-section-heading"><h2 className="section-title">{kind === 'driver' ? `Водители ${warehouseShortName(props.workspace.warehouse)}` : `Автотранспорт ${warehouseShortName(props.workspace.warehouse)}`}</h2><p className="section-subtitle">{warehouseLocation(props.workspace.warehouse)}</p></header>
     {kind === 'vehicle' ? <><Button variant="primary" onClick={() => props.onCreate(kind)}><Plus size={14} />Транспортное средство</Button><div className="divider" /></> : null}
-    {groups.map((group) => <section key={group.warehouse.id} aria-label={`${group.role}: ${group.warehouse.name}`}>
-      <h3 className="section-title">{kind === 'driver' ? `Водители, прикреплённые к ${warehouseAttachedName(group.warehouse, mainWarehouse)}` : group.role}</h3>
+    {groups.map((group) => <section className="resource-group" key={group.warehouse.id} aria-label={`${group.role}: ${group.warehouse.name}`}>
+      {group.warehouse.id !== props.workspace.warehouse.id ? <h3 className="section-title">{group.role}</h3> : null}
       <div className="entity-list">{group.values.map((value) => {
         const driver = kind === 'driver' ? value as Driver : null;
         const vehicle = kind === 'vehicle' ? value as Vehicle : null;
@@ -243,15 +243,15 @@ function ShiftsSection({ props }: { props: InspectorProps }) {
   const visibleShifts = props.workspace.shifts.filter((shift) => shiftState(shift) === shiftVisibility);
   const groups = groupedResources(props.workspace, visibleShifts);
   return <>
-    <h2 className="section-title">Смены — {warehouseShortName(props.workspace.warehouse)}</h2>
+    <header className="inspector-section-heading"><h2 className="section-title">Смены {warehouseShortName(props.workspace.warehouse)}</h2><p className="section-subtitle">{warehouseLocation(props.workspace.warehouse)}</p></header>
     <Button variant="primary" disabled={!localDrivers.length || !localVehicles.length} onClick={() => props.onCreate('shift')}><CalendarPlus size={14} />Добавить смену</Button><div className="divider" />
     <div className="segmented shift-visibility-filter" aria-label="Фильтр смен">
       {([['ACTIVE', 'Активные'], ['COMPLETED', 'Завершённые'], ['ARCHIVED', 'Архив']] as const).map(([value, label]) => (
         <button type="button" key={value} aria-pressed={shiftVisibility === value} onClick={() => setShiftVisibility(value)}>{label}</button>
       ))}
     </div>
-    {groups.map((group) => <section key={group.warehouse.id} aria-label={`${group.role}: смены ${group.warehouse.name}`}>
-      <h3 className="section-title">{group.role}</h3>
+    {groups.map((group) => <section className="resource-group" key={group.warehouse.id} aria-label={`${group.role}: смены ${group.warehouse.name}`}>
+      {group.warehouse.id !== props.workspace.warehouse.id ? <h3 className="section-title">{group.role}</h3> : null}
       <div className="entity-list">{group.values.map((shift) => {
         const driver = props.workspace.drivers.find((item) => item.id === shift.driver_id);
         const overnight = shift.end_time < shift.start_time;
@@ -268,9 +268,14 @@ function ShiftsSection({ props }: { props: InspectorProps }) {
 }
 
 function DeliveriesSection({ props }: { props: InspectorProps }) {
+  const mapTool = useUiStore((state) => state.mapTool);
   return <>
-    <h2 className="section-title">Доставки и вывозы</h2>
-    <div className="toolbar-row"><Button variant="primary" onClick={() => props.onSetMapTool('ADD_DELIVERY')}><MapPinPlus size={14} />Доставка</Button><Button onClick={() => props.onSetMapTool('ADD_PICKUP')}><MapPinPlus size={14} />Вывоз</Button></div>
+    <header className="inspector-section-heading"><h2 className="section-title">Доставки и вывозы</h2><p className="section-subtitle">{warehouseShortName(props.workspace.warehouse)} · условия и подготовка заявок</p></header>
+    <div className="request-tool-picker" aria-label="Создать заявку на карте">
+      <Button type="button" variant={mapTool === 'ADD_DELIVERY' ? 'primary' : 'secondary'} aria-pressed={mapTool === 'ADD_DELIVERY'} disabled={props.busy} onClick={() => props.onSetMapTool('ADD_DELIVERY')}><MapPinPlus size={14} aria-hidden="true" />Доставка</Button>
+      <Button type="button" variant={mapTool === 'ADD_PICKUP' ? 'primary' : 'secondary'} aria-pressed={mapTool === 'ADD_PICKUP'} disabled={props.busy} onClick={() => props.onSetMapTool('ADD_PICKUP')}><MapPinPlus size={14} aria-hidden="true" />Вывоз</Button>
+    </div>
+    <p className="field__hint" role="status">{mapTool === 'SELECT' ? 'Выберите действие, затем укажите адрес на карте.' : `Укажите на карте адрес ${mapTool === 'ADD_DELIVERY' ? 'доставки' : 'вывоза'}.`}</p>
     <div className="divider" />
     <PlanningDayRequests
       workspace={props.workspace}
@@ -330,7 +335,7 @@ export function Inspector(props: InspectorProps) {
     case 'SHIFTS': content = <ShiftsSection props={props} />; break;
     case 'REQUESTS': content = <DeliveriesSection props={props} />; break;
     case 'PLAN_DAY': content = <>
-      <div className="entity-card__row"><h2 className="section-title">План на {formatDate(props.planningDate)}</h2><span className="toolbar-row">{props.plan?.manually_changed && props.plan.status !== 'CONFIRMED' ? <Button size="sm" onClick={props.onResetManualChanges} disabled={props.busy}>Отменить изменения</Button> : null}{props.plan && props.plan.status !== 'CONFIRMED' ? <Button size="sm" variant="primary" onClick={props.onConfirmPlan} disabled={props.busy}>Утвердить</Button> : null}</span></div>
+      <header className="inspector-section-heading entity-card__row"><h2 className="section-title">План на {formatDate(props.planningDate)}</h2><span className="toolbar-row">{props.plan?.manually_changed && props.plan.status !== 'CONFIRMED' ? <Button size="sm" onClick={props.onResetManualChanges} disabled={props.busy}>Отменить изменения</Button> : null}{props.plan && props.plan.status !== 'CONFIRMED' ? <Button size="sm" variant="primary" onClick={props.onConfirmPlan} disabled={props.busy}>Утвердить</Button> : null}</span></header>
       {mode === 'PLAN_DAY' ? <>
         <OperationsPanel
           workspace={props.workspace}
@@ -350,7 +355,7 @@ export function Inspector(props: InspectorProps) {
       {mode === 'SIMULATION' && props.simulation ? <><SimulationDrivers props={props} /><div className="divider" /></> : null}
       {props.plan ? <><Metrics metrics={props.plan.metrics} /><div className="divider" /><PlanPanel plan={props.plan} requests={props.workspace.requests} timeZone={props.workspace.warehouse.timezone} readOnly={props.plan.status === 'CONFIRMED'} selectedRequestId={selectedRequestId} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onSelectRequest={(id) => props.onSelect('request', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} onCreateTransfer={props.onCreateTransfer} onAssignContractor={props.onAssignContractor} onRescheduleUnassigned={props.onRescheduleUnassigned} /></> : <EmptyState title="План дня не составлен" description="Заполните условия доставок и вывозов — план пересчитается автоматически." />}
     </>; break;
-    case 'UNASSIGNED': content = props.plan?.unassigned.length ? <PlanPanel plan={props.plan} requests={props.workspace.requests} timeZone={props.workspace.warehouse.timezone} showUnassignedOnly readOnly={props.plan.status === 'CONFIRMED'} selectedRequestId={selectedRequestId} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onSelectRequest={(id) => props.onSelect('request', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} onCreateTransfer={props.onCreateTransfer} onAssignContractor={props.onAssignContractor} onRescheduleUnassigned={props.onRescheduleUnassigned} /> : <EmptyState title="Нераспределённых заданий нет" description={props.plan ? 'Все задачи выбранного дня распределены.' : 'После расчёта плана здесь появятся задачи без назначенного маршрута.'} />; break;
+    case 'UNASSIGNED': content = <><header className="inspector-section-heading"><h2 className="section-title">Нераспределённые</h2><p className="section-subtitle">{formatDate(props.planningDate)}</p></header>{props.plan?.unassigned.length ? <PlanPanel plan={props.plan} requests={props.workspace.requests} timeZone={props.workspace.warehouse.timezone} showUnassignedOnly readOnly={props.plan.status === 'CONFIRMED'} selectedRequestId={selectedRequestId} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onSelectRequest={(id) => props.onSelect('request', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} onCreateTransfer={props.onCreateTransfer} onAssignContractor={props.onAssignContractor} onRescheduleUnassigned={props.onRescheduleUnassigned} /> : <EmptyState title="Нераспределённых заданий нет" description={props.plan ? 'Все задачи выбранного дня распределены.' : 'После расчёта плана здесь появятся задачи без назначенного маршрута.'} />}</>; break;
   }
   return <aside id="logistics-inspector" className="inspector" aria-label="Панель логистики">
     {props.onClose ? <div className="inspector__chrome"><span>Логистика</span><Button size="sm" variant="ghost" aria-label="Скрыть панель логистики" onClick={props.onClose}><X size={16} aria-hidden="true" /></Button></div> : null}

@@ -117,13 +117,37 @@ function inspectorProps(plan: RoutePlan, simulation: SimulationDerivedState): Co
 }
 
 afterEach(() => {
-  useUiStore.setState({ mode: 'PLAN_DAY', section: 'WAREHOUSE', shiftVisibility: 'ACTIVE' });
+  useUiStore.setState({ mode: 'PLAN_DAY', section: 'WAREHOUSE', shiftVisibility: 'ACTIVE', mapTool: 'SELECT' });
   window.localStorage.removeItem('rwms:logistics:presentation:v1');
   vi.useRealTimers();
   vi.clearAllMocks();
 });
 
 describe('application shell', () => {
+  it('starts delivery placement from the sidebar and shows exactly the selected map action', async () => {
+    const user = userEvent.setup();
+    useUiStore.setState({ section: 'WAREHOUSE', mapTool: 'SELECT' });
+    const props = { ...inspectorProps(planFixture(), {} as SimulationDerivedState), onSetMapTool: useUiStore.getState().setMapTool };
+    render(<><Sidebar workspace={props.workspace} plan={props.plan} /><Inspector {...props} /></>);
+    await user.click(screen.getByRole('button', { name: 'Доставки' }));
+    const delivery = screen.getByRole('button', { name: 'Доставка' });
+    const pickup = screen.getByRole('button', { name: 'Вывоз' });
+    expect(delivery).toHaveAttribute('aria-pressed', 'true');
+    expect(delivery).toHaveClass('button--primary');
+    expect(pickup).toHaveAttribute('aria-pressed', 'false');
+    await user.click(pickup);
+    expect(pickup).toHaveAttribute('aria-pressed', 'true');
+    expect(pickup).toHaveClass('button--primary');
+    expect(delivery).toHaveClass('button--secondary');
+    expect(screen.getByText('Укажите на карте адрес вывоза.')).toBeVisible();
+    await user.click(delivery);
+    expect(useUiStore.getState().mapTool).toBe('ADD_DELIVERY');
+    expect(pickup).toHaveAttribute('aria-pressed', 'false');
+    act(() => useUiStore.getState().setMapTool('SELECT'));
+    expect(delivery).toHaveAttribute('aria-pressed', 'false');
+    expect(pickup).toHaveAttribute('aria-pressed', 'false');
+  });
+
   it('waits for the warehouse-local date before loading or creating a plan', async () => {
     vi.setSystemTime('2026-08-31T20:30:00Z');
     const warehouse = warehouseFixture({ timezone: 'Asia/Novosibirsk' });

@@ -1,9 +1,10 @@
-import { Banknote, CalendarCheck2, ChevronLeft, ChevronRight, Clock3, Scissors, ShieldCheck, Truck, UserRoundCheck } from 'lucide-react';
+import { Banknote, CalendarCheck2, ChevronLeft, ChevronRight, Clock3, Phone, Scissors, ShieldCheck, Truck, UserRound, UserRoundCheck } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import type { RequestPlanningDetailsInput } from '../../api/client';
 import { Badge, Button, CheckboxField, EmptyState, Field, SelectField } from '../../components/ui';
 import { requestPlanningMissingFields } from '../../domain/planning-readiness';
 import { isRequestVisibleOnDate } from '../../domain/request-dates';
+import { requestStatusLabels } from '../../domain/request-presentation';
 import type { LogisticsRequest, WarehouseWorkspace, UUID } from '../../domain/types';
 import { formatDate, formatDeliveryPrice } from '../../utils/format';
 import { formatIsoDate, parseIsoDate } from '../../components/date-value';
@@ -97,15 +98,15 @@ function RequestPlanningCard({ request, planningDate, busy, onSave, onSplit, onS
   };
 
   return (
-    <article className="planning-request-card" data-testid={`planning-request-${request.id}`} onClick={() => onSelect(request.id)}>
+    <article className="planning-request-card" data-testid={`planning-request-${request.id}`}>
       <header className="planning-request-card__head">
-        <span>
+        <button type="button" className="planning-request-card__open" aria-label={`Открыть заявку ${deliveryReference(request.name)} на карте`} onClick={() => onSelect(request.id)}>
           <span className="planning-request-card__title">
             <Badge tone={request.type === 'DELIVERY' ? 'accent' : 'warning'}>{request.type === 'DELIVERY' ? customerDeliveryPurposeLabel(customerDeliveryPurposeFromRequest(request)) : 'Вывоз'}</Badge>
             <strong>· {deliveryReference(request.name)}</strong>
           </span>
           <small>{request.address_label || 'Адрес не подписан'}</small>
-        </span>
+        </button>
         <span>
           {mandatory ? <Badge tone="danger">Обязательно</Badge> : null}
           <Badge tone={missing.length ? 'danger' : 'success'}>{missing.length ? 'Нужно заполнить' : 'Готово'}</Badge>
@@ -114,10 +115,16 @@ function RequestPlanningCard({ request, planningDate, busy, onSave, onSplit, onS
       <div className="planning-request-card__facts">
         <span><Truck size={13} /> <strong>{request.quantity}</strong> БК</span>
         <span><CalendarCheck2 size={13} /> {formatDate(planningDate)}</span>
-        <span><ShieldCheck size={13} /> {request.status}</span>
+        <span><ShieldCheck size={13} aria-hidden="true" /> {requestStatusLabels[request.status]}</span>
         <span>Тип клиента: <strong>{customerLegalTypeLabel(customerLegalTypeFromRequest(request))}</strong></span>
-        <span><Banknote size={13} /> Стоимость: <strong>{formatDeliveryPrice(request.delivery_price_rubles)}</strong></span>
+        <span><Banknote size={13} aria-hidden="true" /> {request.type === 'DELIVERY' ? 'Стоимость доставки' : 'Стоимость вывоза'}: <strong>{formatDeliveryPrice(request.delivery_price_rubles)}</strong></span>
       </div>
+      <dl className="planning-request-card__contact">
+        <div><dt><UserRound size={13} aria-hidden="true" />Контакт</dt><dd>{request.contact_name || 'Не указан'}</dd></div>
+        <div><dt><Phone size={13} aria-hidden="true" />Телефон</dt><dd>{request.contact_phone ? <a href={`tel:${request.contact_phone.replace(/[^+\d]/gu, '')}`}>{request.contact_phone}</a> : 'Не указан'}</dd></div>
+        {!flexibleDay ? <div><dt><Clock3 size={13} aria-hidden="true" />Согласованное время</dt><dd>{option?.window_start && option.window_end ? `${option.window_start.slice(0, 5)}–${option.window_end.slice(0, 5)}${option.is_hard ? ' · строго по времени' : ''}` : 'Не согласовано'}</dd></div> : null}
+      </dl>
+      {request.notes ? <p className="planning-request-card__notes">{request.notes}</p> : null}
       {request.assignment_type === 'CONTRACTOR_HANDOFF' ? <p className="planning-request-card__assignment"><UserRoundCheck size={13} aria-hidden="true" />Передано наёмному водителю: <strong>{request.assigned_contractor_name}</strong></p> : null}
       {missing.length ? <p className="planning-request-card__missing">{missing.join(' · ')}</p> : null}
       <form className="planning-request-form" onSubmit={submit} onClick={(event) => event.stopPropagation()}>
