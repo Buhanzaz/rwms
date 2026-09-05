@@ -49,8 +49,10 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -135,7 +137,7 @@ fun CustomerApp(viewModel: CustomerAppViewModel = hiltViewModel()) {
                 onRegister = viewModel::register,
                 onLogout = viewModel::logout,
                 onSaveProfile = viewModel::saveProfile,
-                onAvatarSelected = viewModel::uploadProfileAvatar,
+                onAvatarCropped = viewModel::uploadProfileAvatar,
                 onWarehouse = viewModel::selectWarehouse,
                 onEnsureActiveInquiry = viewModel::ensureActiveInquiry,
                 onFilters = viewModel::applyFilters,
@@ -195,7 +197,7 @@ fun CustomerAppContent(
     onRegister: (String, String, String, String, String) -> Unit = { _, _, _, _, _ -> },
     onLogout: () -> Unit = {},
     onSaveProfile: (dev.buhanzaz.rwms.client.data.CustomerProfile) -> Unit = {},
-    onAvatarSelected: (android.net.Uri) -> Unit = {},
+    onAvatarCropped: (ByteArray) -> Unit = {},
     onWarehouse: (dev.buhanzaz.rwms.client.data.CustomerWarehouse, Boolean) -> Unit = { _, _ -> },
     onEnsureActiveInquiry: () -> Unit = {},
     onFilters: (dev.buhanzaz.rwms.client.data.CabinFilters) -> Unit = {},
@@ -255,7 +257,7 @@ fun CustomerAppContent(
                     state = workflow,
                     onLogout = onLogout,
                     onSaveProfile = onSaveProfile,
-                    onAvatarSelected = onAvatarSelected,
+                    onAvatarCropped = onAvatarCropped,
                     onWarehouse = onWarehouse,
                     onEnsureActiveInquiry = onEnsureActiveInquiry,
                     onFilters = onFilters,
@@ -303,7 +305,7 @@ private fun SignedInNavigation(
     state: CustomerWorkflowState,
     onLogout: () -> Unit,
     onSaveProfile: (dev.buhanzaz.rwms.client.data.CustomerProfile) -> Unit,
-    onAvatarSelected: (android.net.Uri) -> Unit,
+    onAvatarCropped: (ByteArray) -> Unit,
     onWarehouse: (dev.buhanzaz.rwms.client.data.CustomerWarehouse, Boolean) -> Unit,
     onEnsureActiveInquiry: () -> Unit,
     onFilters: (dev.buhanzaz.rwms.client.data.CabinFilters) -> Unit,
@@ -345,6 +347,7 @@ private fun SignedInNavigation(
     val coroutineScope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val current = backStack.lastOrNull()
+    var editingAvatar by remember { mutableStateOf(false) }
 
     fun topLevel(route: NavKey) {
         backStack.clear()
@@ -382,7 +385,7 @@ private fun SignedInNavigation(
     }
     ModalNavigationDrawer(
         drawerState = drawerState,
-        gesturesEnabled = !current.isDeliveryFlowRoute(),
+        gesturesEnabled = !current.isDeliveryFlowRoute() && !editingAvatar,
         drawerContent = {
             ModalDrawerSheet(
                 modifier = Modifier.fillMaxHeight(),
@@ -615,7 +618,8 @@ private fun SignedInNavigation(
                             existing = state.profile,
                             busy = state.busy,
                             onSave = onSaveProfile,
-                            onAvatarSelected = onAvatarSelected,
+                            onAvatarCropped = onAvatarCropped,
+                            onAvatarEditingChanged = { editingAvatar = it },
                             onBack = {
                                 if (backStack.size > 1) backStack.removeLastOrNull() else topLevel(CatalogRoute)
                             },
@@ -631,7 +635,7 @@ private fun SignedInNavigation(
                     }
                 },
             )
-            if (state.selectedCabinIds.isNotEmpty() &&
+            if (!editingAvatar && state.selectedCabinIds.isNotEmpty() &&
                 (current is CatalogRoute || current is BookingsRoute || current is ProfileRoute)
             ) {
                 CustomerCartButton(

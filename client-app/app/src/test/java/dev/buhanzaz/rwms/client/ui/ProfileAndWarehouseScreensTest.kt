@@ -1,6 +1,9 @@
 package dev.buhanzaz.rwms.client.ui
 
 import android.app.Application
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -68,7 +71,28 @@ class ProfileAndWarehouseScreensTest {
 
         composeRule.onNodeWithTag("profile-avatar-preview").assertExists()
         composeRule.onNodeWithTag("profile-avatar-picker").assertIsEnabled()
+        val avatar = composeRule.onNodeWithTag("profile-avatar-preview").fetchSemanticsNode().boundsInRoot
+        val camera = composeRule.onNodeWithTag("profile-avatar-picker").fetchSemanticsNode().boundsInRoot
+        assertThat(avatar.overlaps(camera)).isTrue()
+        composeRule.onNodeWithText("Загрузить аватар").assertDoesNotExist()
         composeRule.onNodeWithText("Чтобы загрузить аватар, сначала выберите склад.").assertDoesNotExist()
+    }
+
+    @Test
+    fun `profile version update after avatar binding preserves unsaved contact edits`() {
+        var profile by mutableStateOf(existingProfile())
+        var saved: CustomerProfile? = null
+        composeRule.setContent {
+            CustomerTheme { ProfileFormScreen(existing = profile, busy = false, onSave = { saved = it }) }
+        }
+        composeRule.onNodeWithTag("profile-first-name").performTextReplacement("Пётр")
+        composeRule.runOnIdle { profile = profile.copy(version = 8) }
+        composeRule.onNodeWithTag("profile-screen").performScrollToNode(hasTestTag("profile-save"))
+        composeRule.onNodeWithTag("profile-save").performClick()
+        composeRule.runOnIdle {
+            assertThat(saved?.firstName).isEqualTo("Пётр")
+            assertThat(saved?.version).isEqualTo(8L)
+        }
     }
 
     @Test

@@ -320,8 +320,10 @@ from its own session/cart and owns every capacity decision. Slot search also
 requires explicit private-site trailer access and possible failed-trip charge attestations collected
 in a modal before the current client sends the request; Valhalla's public-road route profile is
 frozen with the offer. Existing profiles update only mutable contact/display fields. Avatar upload
-uses Android Photo Picker, a logistics-created `LOGISTICS_CUSTOMER_PROFILE/PROFILE_AVATAR` owner
-scope and one media-service-validated `READY` generation; no storage permission or media bytes enter
+uses Android Photo Picker and local pan/zoom cropping before any upload command. It exports a
+1024×1024 JPEG without source EXIF/GPS, then uses a logistics-created
+`LOGISTICS_CUSTOMER_PROFILE/PROFILE_AVATAR` owner scope and one media-service-validated `READY`
+generation; no storage permission or media bytes enter
 logistics.
 My Orders admits reception only after the exact grouped shipment member is
 completed. Full-screen vector signatures are sent to logistics; CameraX

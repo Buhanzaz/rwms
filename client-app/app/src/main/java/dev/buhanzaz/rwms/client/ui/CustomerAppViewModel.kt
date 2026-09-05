@@ -1,6 +1,5 @@
 package dev.buhanzaz.rwms.client.ui
 
-import android.net.Uri
 import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -344,11 +343,11 @@ class CustomerAppViewModel @Inject constructor(
     }
 
     /**
-     * Uploads and binds an avatar through an existing profile media scope. Catalog selection is
+     * Uploads and binds a locally cropped JPEG through an existing profile media scope. Catalog selection is
      * optional: the immutable avatar scope or an authorized warehouse supplies the required owner
      * warehouse when the customer opens the profile directly.
      */
-    fun uploadProfileAvatar(uri: Uri) = launchMutation {
+    fun uploadProfileAvatar(jpegBytes: ByteArray) = launchMutation {
         val current = mutableWorkflow.value
         val profile = current.profile
             ?: throw CustomerApiException(409, "Сначала сохраните профиль")
@@ -358,7 +357,7 @@ class CustomerAppViewModel @Inject constructor(
         val warehouseId = current.copy(warehouses = warehouses).avatarUploadWarehouseId()
             ?: throw CustomerApiException(409, "Для загрузки аватара пока нет доступного склада")
         val updated = withContext(Dispatchers.IO) {
-            repository.uploadProfileAvatar(profile, warehouseId, uri)
+            repository.uploadProfileAvatar(profile, warehouseId, jpegBytes)
         }
         mutableWorkflow.value = mutableWorkflow.value.copy(profile = updated, warehouses = warehouses)
     }

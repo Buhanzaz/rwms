@@ -8,27 +8,33 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -57,22 +63,39 @@ fun ProfileFormScreen(
     onSave: (CustomerProfile) -> Unit,
     errorMessage: String? = null,
     registrationDraft: CustomerRegistrationProfileDraft? = null,
-    onAvatarSelected: (Uri) -> Unit = {},
+    onAvatarCropped: (ByteArray) -> Unit = {},
     onBack: (() -> Unit)? = null,
+    onAvatarEditingChanged: (Boolean) -> Unit = {},
 ) {
     val type = existing?.entityType ?: CustomerEntityType.INDIVIDUAL
-    var firstName by remember(existing) { mutableStateOf(existing?.firstName.orEmpty()) }
-    var lastName by remember(existing) { mutableStateOf(existing?.lastName.orEmpty()) }
-    var company by remember(existing) { mutableStateOf(existing?.companyName.orEmpty()) }
-    var phone by remember(existing, registrationDraft) {
+    var firstName by rememberSaveable(existing?.id, existing?.firstName) { mutableStateOf(existing?.firstName.orEmpty()) }
+    var lastName by rememberSaveable(existing?.id, existing?.lastName) { mutableStateOf(existing?.lastName.orEmpty()) }
+    var company by rememberSaveable(existing?.id, existing?.companyName) { mutableStateOf(existing?.companyName.orEmpty()) }
+    var phone by rememberSaveable(existing?.id, existing?.phone, registrationDraft?.phone) {
         mutableStateOf(existing?.phone ?: registrationDraft?.phone.orEmpty())
     }
-    var email by remember(existing, registrationDraft) {
+    var email by rememberSaveable(existing?.id, existing?.email, registrationDraft?.email) {
         mutableStateOf(existing?.email ?: registrationDraft?.email.orEmpty())
     }
-    var info by remember(existing) { mutableStateOf(existing?.additionalInfo.orEmpty()) }
+    var info by rememberSaveable(existing?.id, existing?.additionalInfo) { mutableStateOf(existing?.additionalInfo.orEmpty()) }
+    var pendingAvatar by rememberSaveable(existing?.id) { mutableStateOf<Uri?>(null) }
     val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        uri?.let(onAvatarSelected)
+        if (uri != null) pendingAvatar = uri
+    }
+    DisposableEffect(pendingAvatar != null) {
+        onAvatarEditingChanged(pendingAvatar != null)
+        onDispose { onAvatarEditingChanged(false) }
+    }
+    pendingAvatar?.let { uri ->
+        CustomerAvatarCropScreen(
+            uri = uri,
+            onCancel = { pendingAvatar = null },
+            onConfirm = { jpeg ->
+                pendingAvatar = null
+                onAvatarCropped(jpeg)
+            },
+        )
+        return
     }
     val draft = CustomerProfile(
         id = existing?.id,
@@ -99,8 +122,10 @@ fun ProfileFormScreen(
         },
     ) { padding ->
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 20.dp).testTag("profile-screen"),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()
+                .padding(horizontal = 20.dp).testTag("profile-screen"),
+            contentPadding = PaddingValues(top = 16.dp, bottom = 100.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             if (existing != null) {
                 item {
@@ -122,8 +147,8 @@ fun ProfileFormScreen(
                     } else {
                         "Юридическое лицо"
                     },
-                    color = CustomerStoreNavy,
-                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.testTag("profile-entity-type"),
                 )
@@ -158,6 +183,7 @@ fun ProfileFormScreen(
                     )
                 }
             }
+            item { Text("Контакты", style = MaterialTheme.typography.titleMedium) }
             item {
                 CustomerTextField(
                     phone,
@@ -192,8 +218,8 @@ fun ProfileFormScreen(
                 item {
                     Text(
                         text = message,
-                        color = Color(0xFF8E1C1C),
-                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.testTag("profile-error"),
                     )
                 }
@@ -205,7 +231,6 @@ fun ProfileFormScreen(
                     modifier = Modifier.fillMaxWidth().testTag("profile-save"),
                     enabled = !busy && valid && (existing == null || draft != existing),
                 ) { Text(if (existing == null) "Продолжить" else "Сохранить") }
-                Spacer(Modifier.height(100.dp))
             }
         }
     }
@@ -221,38 +246,51 @@ private fun ProfileAvatar(
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Surface(
-            modifier = Modifier.size(112.dp).testTag("profile-avatar-preview"),
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.primaryContainer,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text(
-                    profile.avatarInitials(),
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
-                profile.avatar?.thumbnailUrl?.takeIf(String::isNotBlank)?.let { path ->
-                    AsyncImage(
-                        model = customerProfileMediaUrl(path),
-                        contentDescription = "Фото профиля",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
+        Box(Modifier.size(128.dp), contentAlignment = Alignment.Center) {
+            Surface(
+                modifier = Modifier.size(120.dp).figmaButtonShadow(CircleShape).testTag("profile-avatar-preview"),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primaryContainer,
+                border = BorderStroke(2.dp, Color.White),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        profile.avatarInitials(),
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
                     )
+                    profile.avatar?.thumbnailUrl?.takeIf(String::isNotBlank)?.let { path ->
+                        AsyncImage(
+                            model = customerProfileMediaUrl(path),
+                            contentDescription = "Фото профиля",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
+            }
+            Surface(
+                onClick = onPick,
+                enabled = !busy,
+                modifier = Modifier.align(Alignment.BottomEnd).size(48.dp).testTag("profile-avatar-picker"),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                border = BorderStroke(2.dp, Color.White),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(Icons.Default.PhotoCamera, contentDescription = "Изменить фото профиля", modifier = Modifier.size(22.dp))
                 }
             }
         }
-        OutlinedButton(
-            onClick = onPick,
-            enabled = !busy,
-            modifier = Modifier.testTag("profile-avatar-picker"),
-        ) {
-            Text(if (profile.avatar == null) "Загрузить аватар" else "Изменить аватар")
-        }
+        Text(
+            if (profile.entityType == CustomerEntityType.LEGAL) profile.companyName.orEmpty()
+            else listOfNotNull(profile.firstName, profile.lastName).joinToString(" "),
+            style = MaterialTheme.typography.headlineSmall,
+        )
     }
 }
 

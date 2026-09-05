@@ -1015,8 +1015,13 @@ Evidence:
 3. The customer creates one individual/legal profile. Its kind and auth/client
    binding remain immutable, while contact/display fields are editable under
    the logistics profile version fence and synchronize the existing rental-client
-   projection in one transaction. Avatar upload becomes available only after a
-   warehouse is selected: logistics fixes that first warehouse as an immutable
+   projection in one transaction. The profile's camera action opens Android Photo Picker and a
+   local circular crop editor, retaining the common app background. Pan/zoom selects the square;
+   only Done exports a 1024×1024 JPEG without source EXIF/GPS and starts the server upload.
+   Android decodes the source with its encoded orientation and a 2048px maximum edge. The bounded
+   JPEG bytes/checksum define a stable upload identity; cancellation sends no media command.
+   Upload can precede catalog selection by using the avatar's existing warehouse, the current
+   catalog warehouse, or the first authorized warehouse. Logistics fixes that first warehouse as an immutable
    media authorization scope, establishes a deterministic subject-bound
    `LOGISTICS_CUSTOMER_PROFILE/PROFILE_AVATAR` proof, and binds only one exact
    current `READY` generation after private media validation. Media-service owns

@@ -122,11 +122,16 @@ separate from delivery and fees; these catalog/cart reads do not freeze booked c
 
 An existing individual/legal kind is immutable, while its name/company and contact fields are
 editable under the logistics profile version fence. The circular profile affordance renders
-initials or the current authenticated avatar. Android's system Photo Picker needs no storage
-permission. The profile can prepare the exact subject-bound
+initials or the current authenticated avatar, with a camera button on the circle. Android's system
+Photo Picker opens a local circular crop editor on the shared app background. Pan/pinch and a zoom
+slider select a square; Android decodes source orientation with a 2048px edge limit. Done exports a
+1024×1024 sRGB JPEG without source EXIF/GPS, and only then starts the upload. Cancel sends no media
+command; a profile version/avatar update preserves unsaved contact edits. No storage permission is
+needed. The profile can prepare the exact subject-bound
 `LOGISTICS_CUSTOMER_PROFILE/PROFILE_AVATAR` scope before catalog selection by using the existing
 avatar warehouse, the current catalog warehouse, or the first authorized warehouse; the server
-still validates that immutable scope. The app uploads and finalizes one image, waits for its current
+still validates that immutable scope. The app validates/copies the bounded JPEG before preparation,
+uses its exact bytes/checksum for the stable upload identity, uploads and finalizes it, waits for its current
 `READY` generation and binds it back to the profile. Media-service remains the byte owner.
 
 The cart presents each selected cabin as a card with its own rental-term control, additional

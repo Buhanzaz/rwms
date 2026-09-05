@@ -1,14 +1,10 @@
 package dev.buhanzaz.rwms.client.data
 
 import android.content.Context
-import android.net.Uri
-import android.provider.OpenableColumns
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import java.io.File
-import java.io.FileOutputStream
-import java.io.IOException
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -18,6 +14,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import retrofit2.HttpException
 
 /** Cohesive client-side adapter for the server-owned customer booking workflow. */
@@ -62,14 +59,20 @@ class CustomerRepository @Inject constructor(
     }
 
     /**
-     * Uploads one system-selected image into the exact subject-bound profile owner and binds its
-     * READY generation under the profile version returned by logistics-service.
+     * Uploads a locally cropped JPEG into the exact subject-bound profile owner and binds its
+     * READY generation under the profile version returned by logistics-service. Copies the bounded
+     * bytes before suspending so the upload body and its idempotency checksum cannot diverge.
      */
     suspend fun uploadProfileAvatar(
         profile: CustomerProfile,
         warehouseId: String,
-        contentUri: Uri,
+        jpegBytes: ByteArray,
     ): CustomerProfile {
+        if (jpegBytes.isEmpty()) throw CustomerApiException(422, "Изображение пустое")
+        if (jpegBytes.size > MAX_PROFILE_AVATAR_BYTES) {
+            throw CustomerApiException(422, "Аватар превышает 8 МБ")
+        }
+        val source = jpegBytes.copyOf()
         val expectedVersion = profile.version
             ?: throw CustomerApiException(409, "Версия профиля неизвестна. Обновите экран")
         val profileId = profile.id
@@ -87,20 +90,15 @@ class CustomerRepository @Inject constructor(
         ) {
             throw CustomerApiException(503, "Сервис вернул неверную область загрузки аватара")
         }
-        val source = copyProfileAvatarToCache(contentUri)
-        return try {
-            val ready = uploadReadyProfileAvatar(scope, source)
-            call {
-                api.setProfileAvatar(
-                    SetCustomerProfileAvatarRequest(
-                        expectedVersion = scope.profileVersion,
-                        mediaId = ready.id,
-                        generation = ready.generation,
-                    ),
-                )
-            }
-        } finally {
-            source.file.delete()
+        val ready = uploadReadyProfileAvatar(scope, source)
+        return call {
+            api.setProfileAvatar(
+                SetCustomerProfileAvatarRequest(
+                    expectedVersion = scope.profileVersion,
+                    mediaId = ready.id,
+                    generation = ready.generation,
+                ),
+            )
         }
     }
 
@@ -511,9 +509,11 @@ class CustomerRepository @Inject constructor(
 
     private suspend fun uploadReadyProfileAvatar(
         scope: CustomerProfileAvatarUploadScope,
-        source: CustomerAvatarSource,
+        source: ByteArray,
     ): CustomerMediaAsset {
-        val checksum = source.file.sha256()
+        val checksum = MessageDigest.getInstance("SHA-256")
+            .digest(source)
+            .joinToString("") { byte -> "%02x".format(byte) }
         val logicalKey = UUID.nameUUIDFromBytes(
             "${scope.ownerId}:profile-avatar:$checksum".toByteArray(),
         ).toString()
@@ -527,9 +527,9 @@ class CustomerRepository @Inject constructor(
                     warehouseId = scope.warehouseId,
                     context = scope.context,
                     folderId = folderId,
-                    fileName = source.fileName.take(512),
-                    contentType = source.contentType,
-                    contentLength = source.file.length(),
+                    fileName = "avatar.jpg",
+                    contentType = "image/jpeg",
+                    contentLength = source.size.toLong(),
                     checksumSha256 = checksum,
                     sortOrder = 0,
                 ),
@@ -538,7 +538,7 @@ class CustomerRepository @Inject constructor(
         val path = session.contentUploadUrl
             ?: throw CustomerApiException(503, "Медиа-сервис не выдал путь загрузки")
         val uploaded = call {
-            api.uploadMediaContent(path, logicalKey, source.file.asRequestBody(source.contentType.toMediaType()))
+            api.uploadMediaContent(path, logicalKey, source.toRequestBody("image/jpeg".toMediaType()))
         }
         var asset = call {
             api.finalizeMediaUpload(
@@ -568,64 +568,6 @@ class CustomerRepository @Inject constructor(
             }
         }
         throw CustomerApiException(503, "Аватар ещё обрабатывается. Повторите позже")
-    }
-
-    private fun copyProfileAvatarToCache(contentUri: Uri): CustomerAvatarSource = try {
-        copyProfileAvatarToCacheUnsafe(contentUri)
-    } catch (failure: CustomerApiException) {
-        throw failure
-    } catch (_: SecurityException) {
-        throw CustomerApiException(403, "Нет доступа к выбранному изображению")
-    } catch (_: IOException) {
-        throw CustomerApiException(null, "Не удалось прочитать выбранное изображение")
-    } catch (_: Throwable) {
-        throw CustomerApiException(null, "Не удалось подготовить выбранное изображение")
-    }
-
-    private fun copyProfileAvatarToCacheUnsafe(contentUri: Uri): CustomerAvatarSource {
-        val contentType = context.contentResolver.getType(contentUri)
-            ?.lowercase()
-            ?.let { if (it == "image/jpg") "image/jpeg" else it }
-            ?.takeIf(PROFILE_AVATAR_CONTENT_TYPES::contains)
-            ?: throw CustomerApiException(415, "Выберите изображение JPEG, PNG или WebP")
-        val displayName = context.contentResolver.query(
-            contentUri,
-            arrayOf(OpenableColumns.DISPLAY_NAME),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            if (cursor.moveToFirst()) cursor.getString(0) else null
-        }?.substringAfterLast('/')
-            ?.substringAfterLast('\\')
-            ?.takeIf(String::isNotBlank)
-            ?: "avatar.${contentType.substringAfter('/').replace("jpeg", "jpg")}"
-        val suffix = ".${displayName.substringAfterLast('.', "jpg").take(10)}"
-        val target = File.createTempFile("profile-avatar-", suffix, context.cacheDir)
-        try {
-            val input = context.contentResolver.openInputStream(contentUri)
-                ?: throw CustomerApiException(404, "Выбранное изображение недоступно")
-            input.use { source ->
-                FileOutputStream(target).use { output ->
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                    var copied = 0L
-                    while (true) {
-                        val read = source.read(buffer)
-                        if (read < 0) break
-                        copied += read
-                        if (copied > MAX_CUSTOMER_EVIDENCE_BYTES) {
-                            throw CustomerApiException(422, "Изображение превышает 200 МБ")
-                        }
-                        output.write(buffer, 0, read)
-                    }
-                }
-            }
-            if (target.length() == 0L) throw CustomerApiException(422, "Выбранное изображение пустое")
-            return CustomerAvatarSource(target, displayName, contentType)
-        } catch (failure: Throwable) {
-            target.delete()
-            throw failure
-        }
     }
 
     private suspend fun <T> call(block: suspend () -> T): T = try {
@@ -710,13 +652,6 @@ data class CustomerEvidenceFile(
     val contentType: String,
 )
 
-/** App-private normalized source copied from a temporary system picker grant. */
-private data class CustomerAvatarSource(
-    val file: File,
-    val fileName: String,
-    val contentType: String,
-)
-
 private fun File.sha256(): String = inputStream().buffered().use { input ->
     val digest = MessageDigest.getInstance("SHA-256")
     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
@@ -737,4 +672,4 @@ private const val PROFILE_AVATAR_OWNER_TYPE = "LOGISTICS_CUSTOMER_PROFILE"
 private const val PROFILE_AVATAR_CONTEXT = "PROFILE_AVATAR"
 private const val PROFILE_AVATAR_READY_POLL_ATTEMPTS = 45
 private const val PROFILE_AVATAR_READY_POLL_DELAY_MILLIS = 1_000L
-private val PROFILE_AVATAR_CONTENT_TYPES = setOf("image/jpeg", "image/png", "image/webp")
+private const val MAX_PROFILE_AVATAR_BYTES = 8 * 1024 * 1024
