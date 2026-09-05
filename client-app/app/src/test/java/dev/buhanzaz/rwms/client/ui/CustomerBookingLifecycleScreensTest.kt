@@ -411,6 +411,8 @@ class CustomerBookingLifecycleScreensTest {
             unitId = "cabin-a",
             version = 3,
             accountingNo = "БК-1",
+            pricingVersion = 3,
+            monthlyPriceRubles = 12_000,
             type = "Блок-контейнер",
             finish = "Светлый дуб",
             dimensions = "6 × 2,4 × 2,5 м",
@@ -447,6 +449,7 @@ class CustomerBookingLifecycleScreensTest {
         }
 
         composeRule.onNodeWithTag("cart-cabin-cabin-a").assertExists()
+        composeRule.onNodeWithText("12 000 ₽/мес.").assertExists()
         composeRule.onNodeWithTag("cart-cabin-photo-placeholder").assertExists()
         composeRule.onNodeWithText("Выбрано: 1").assertExists()
         composeRule.onNodeWithText("№ БК-1").assertExists()

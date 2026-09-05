@@ -44,6 +44,11 @@ cabins return 404 and unavailable facts return 503, not invented zero prices. Th
 not acquire holds, freeze rental terms or collect payment. A concurrent catalog removal can
 leave only an undisplayed UUID override, never recreate a catalog row.
 
+The customer `CustomerCabin` projection requires `pricingVersion` and the same exact string
+`monthlyPriceRubles` in catalog, selection and cart reads. Resolution follows customer ownership
+checks and uses current asset classification, not display names. These are informational monthly
+prices, separate from delivery; missing dependencies are errors and booked snapshots are unchanged.
+
 [`auth-service.yaml`](../../contracts/openapi/auth-service.yaml) defines the
 anonymous GET `/api/auth/csrf` bootstrap and CSRF-protected POST
 `/api/customer/v1/registrations`. Through the gateway they are delegated under

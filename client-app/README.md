@@ -91,6 +91,11 @@ number followed by the type at the same title scale; they omit provisional avail
 delivery copy. Swipe/full-screen photos never navigate to a passport. Available warehouse
 furniture can be assigned per cabin as `+ Additional`.
 
+Catalog and cart cabin cards show the current logistics-owned monthly rental price, keyed by
+the cabin's asset type/category. Exact whole-ruble strings are decoded without rounding, including
+an explicit zero default. Missing or malformed prices are errors, not free rent. Monthly rent is
+separate from delivery and fees; these catalog/cart reads do not freeze booked commercial terms.
+
 An existing individual/legal kind is immutable, while its name/company and contact fields are
 editable under the logistics profile version fence. The circular profile affordance renders
 initials or the current authenticated avatar. Android's system Photo Picker needs no storage

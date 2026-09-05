@@ -101,6 +101,7 @@ class CustomerBackendContractDecodingTest {
         val page = json.decodeFromString<CabinPage>(
             """{
               "content":[{"unitId":"00000000-0000-0000-0000-000000000001","version":4,
+                "pricingVersion":3,"monthlyPriceRubles":"8000",
                 "accountingNo":"BK-1","type":"БК","finish":"ПВХ","dimensions":"6x2.4",
                 "category":"standard","linoleum":true,"characteristics":["Пластиковое окно"],
                 "facts":{"color":"white"},"photos":[{"photoId":"00000000-0000-0000-0000-000000000002",
@@ -159,7 +160,7 @@ class CustomerBackendContractDecodingTest {
     fun `nullable canonical response fields decode without fabricating values`() {
         val selection = json.decodeFromString<CabinSelectionResponse>(
             """{"version":5,"expiresAt":null,"cabins":[{"unitId":"cabin-a","version":1,
-              "accountingNo":"BK-2","type":null}]}""",
+              "accountingNo":"BK-2","pricingVersion":0,"monthlyPriceRubles":"0","type":null}]}""",
         )
         val booking = json.decodeFromString<CustomerBooking>(
             """{"bookingId":null,"orderId":null,"status":"PENDING","errorCode":null,

@@ -8,6 +8,8 @@ import dev.buhanzaz.rwms.logistics.customer.domain.CustomerRentalSession;
 import dev.buhanzaz.rwms.logistics.customer.repository.CustomerRentalSessionRepository;
 import dev.buhanzaz.rwms.logistics.customer.security.CustomerIdentity;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.pricing.api.CabinRentalPricesResponse;
+import dev.buhanzaz.rwms.logistics.pricing.service.RentalPricingService;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
@@ -33,6 +35,15 @@ class CustomerCabinCatalogServiceTest {
     CustomerRentalSessionRepository sessions = mock(CustomerRentalSessionRepository.class);
     LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
     CustomerDeliveryEstimateService deliveryEstimate = mock(CustomerDeliveryEstimateService.class);
+    RentalPricingService pricing = mock(RentalPricingService.class);
+    when(pricing.prices(WAREHOUSE, List.of(CABIN)))
+        .thenReturn(
+            new CabinRentalPricesResponse(
+                WAREHOUSE,
+                0,
+                List.of(
+                    new CabinRentalPricesResponse.Price(
+                        CABIN, 4, UUID.randomUUID(), UUID.randomUUID(), 0))));
     CustomerRentalSession session = mock(CustomerRentalSession.class);
     when(session.getWarehouseId()).thenReturn(WAREHOUSE);
     when(sessions.findByInquiryIdAndCustomerSubjectId(INQUIRY, SUBJECT))
@@ -77,7 +88,7 @@ class CustomerCabinCatalogServiceTest {
     when(deliveryEstimate.estimatedDates(WAREHOUSE))
         .thenReturn(List.of(java.time.LocalDate.of(2026, 8, 28)));
     CustomerCabinCatalogService service =
-        new CustomerCabinCatalogService(sessions, dependencies, deliveryEstimate);
+        new CustomerCabinCatalogService(sessions, dependencies, deliveryEstimate, pricing);
 
     var result =
         service.page(

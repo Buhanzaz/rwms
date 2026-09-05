@@ -55,6 +55,11 @@ warehouse-authorized cabin set in request order against one tariff revision. A m
 fails the entire read. Dependency failure is explicit 503, never a zero-price fallback. These
 informational prices do not reserve cabins or freeze commercial terms.
 
+Customer catalog, selection and cart cabin responses include mandatory `pricingVersion` and
+`monthlyPriceRubles` from the same tariff resolver, after customer ownership checks. The latter is
+an exact whole-ruble string, independent of delivery price; unavailable classifications fail the
+read explicitly. Existing booked-order snapshots are not repriced by these informational reads.
+
 The authoritative HTTP and event contracts are
 [`contracts/openapi/logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml) and
 [`contracts/events/logistics-events.yaml`](../../contracts/events/logistics-events.yaml). Start

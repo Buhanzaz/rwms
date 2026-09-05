@@ -10,6 +10,8 @@ import dev.buhanzaz.rwms.logistics.customer.security.CustomerIdentity;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
+import dev.buhanzaz.rwms.logistics.pricing.api.CabinRentalPricesResponse;
+import dev.buhanzaz.rwms.logistics.pricing.service.RentalPricingService;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -36,6 +38,7 @@ public class CustomerCabinCatalogService {
   private final CustomerRentalSessionRepository sessions;
   private final LogisticsDependencyGateway dependencies;
   private final CustomerDeliveryEstimateService deliveryEstimate;
+  private final RentalPricingService pricing;
 
   /** Returns one page of currently bookable cabin cards with protected photo URLs. */
   public CustomerCabinPage page(
@@ -69,11 +72,22 @@ public class CustomerCabinCatalogService {
               page,
               size);
       validate(result, session.getWarehouseId(), page, size);
+      var prices = prices(session.getWarehouseId(), result.content());
       Map<UUID, List<LogisticsDependencyGateway.CabinMediaPhoto>> photos =
-          media(session.getWarehouseId(), result.content().stream().map(LogisticsDependencyGateway.AvailableCabin::id).toList());
+          media(
+              session.getWarehouseId(),
+              result.content().stream()
+                  .map(LogisticsDependencyGateway.AvailableCabin::id)
+                  .toList());
       return new CustomerCabinPage(
           result.content().stream()
-              .map(cabin -> map(inquiryId, cabin, photos.getOrDefault(cabin.id(), List.of())))
+              .map(
+                  cabin ->
+                      map(
+                          inquiryId,
+                          cabin,
+                          photos.getOrDefault(cabin.id(), List.of()),
+                          prices.get(cabin.id())))
               .toList(),
           result.page(),
           result.size(),
@@ -98,9 +112,18 @@ public class CustomerCabinCatalogService {
           "Сервис имущества вернул бытовку другого склада");
     }
     Map<UUID, List<LogisticsDependencyGateway.CabinMediaPhoto>> photos =
-        media(session.getWarehouseId(), cabins.stream().map(LogisticsDependencyGateway.AvailableCabin::id).toList());
+        media(
+            session.getWarehouseId(),
+            cabins.stream().map(LogisticsDependencyGateway.AvailableCabin::id).toList());
+    var prices = prices(session.getWarehouseId(), cabins);
     return cabins.stream()
-        .map(cabin -> map(inquiryId, cabin, photos.getOrDefault(cabin.id(), List.of())))
+        .map(
+            cabin ->
+                map(
+                    inquiryId,
+                    cabin,
+                    photos.getOrDefault(cabin.id(), List.of()),
+                    prices.get(cabin.id())))
         .toList();
   }
 
@@ -162,10 +185,28 @@ public class CustomerCabinCatalogService {
         .orElseThrow(() -> notFound("Корзина не найдена"));
   }
 
+  private Map<UUID, CurrentPrice> prices(
+      UUID warehouseId, List<LogisticsDependencyGateway.AvailableCabin> cabins) {
+    if (cabins.isEmpty()) return Map.of();
+    CabinRentalPricesResponse quote =
+        pricing.prices(
+            warehouseId,
+            cabins.stream().map(LogisticsDependencyGateway.AvailableCabin::id).toList());
+    return quote.cabins().stream()
+        .collect(
+            Collectors.toMap(
+                CabinRentalPricesResponse.Price::rentalItemId,
+                price -> new CurrentPrice(quote.pricingVersion(), price.monthlyPriceRubles())));
+  }
+
+  /** One monthly tariff from the same authoritative price-table snapshot as the response batch. */
+  private record CurrentPrice(long version, long monthlyPriceRubles) {}
+
   private static CustomerCabinResponse map(
       UUID inquiryId,
       LogisticsDependencyGateway.AvailableCabin cabin,
-      List<LogisticsDependencyGateway.CabinMediaPhoto> photos) {
+      List<LogisticsDependencyGateway.CabinMediaPhoto> photos,
+      CurrentPrice price) {
     String base =
         "/api/logistics/customer/v1/inquiries/"
             + inquiryId
@@ -176,6 +217,8 @@ public class CustomerCabinCatalogService {
         cabin.id(),
         cabin.version(),
         cabin.number(),
+        price.version(),
+        price.monthlyPriceRubles(),
         cabin.rentalType(),
         cabin.finishing(),
         cabin.dimensions(),

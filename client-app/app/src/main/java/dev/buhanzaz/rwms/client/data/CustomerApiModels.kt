@@ -140,6 +140,9 @@ data class CustomerCabin(
     val unitId: String,
     val version: Long,
     val accountingNo: String,
+    val pricingVersion: Long,
+    @Serializable(with = RentalMonthlyPriceSerializer::class)
+    val monthlyPriceRubles: Long,
     val type: String? = null,
     val finish: String? = null,
     val dimensions: String? = null,
@@ -148,7 +151,11 @@ data class CustomerCabin(
     val characteristics: List<String> = emptyList(),
     val facts: Map<String, kotlinx.serialization.json.JsonElement> = emptyMap(),
     val photos: List<CabinPhoto> = emptyList(),
-)
+) {
+    init {
+        require(pricingVersion >= 0 && monthlyPriceRubles >= 0) { "Invalid rental price" }
+    }
+}
 
 /** Paged free-cabin result returned by the customer API. */
 @Serializable

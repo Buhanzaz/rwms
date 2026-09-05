@@ -4343,11 +4343,15 @@ components:
       type: object
       additionalProperties: false
       required:
-        [unitId, version, accountingNo, type, finish, dimensions, category, linoleum, characteristics, facts, photos]
+        [unitId, version, accountingNo, pricingVersion, monthlyPriceRubles, type, finish, dimensions, category, linoleum, characteristics, facts, photos]
       properties:
         unitId: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         accountingNo: { type: string }
+        pricingVersion: { type: integer, format: int64, minimum: 0 }
+        monthlyPriceRubles:
+          $ref: "#/components/schemas/RentalMonthlyPriceRubles"
+          description: Current informational monthly rent for this cabin's asset-owned type/category. Independent of delivery cost; catalog/cart reads do not freeze booking terms.
         type: { type: [string, "null"] }
         finish: { type: [string, "null"] }
         dimensions: { type: [string, "null"] }

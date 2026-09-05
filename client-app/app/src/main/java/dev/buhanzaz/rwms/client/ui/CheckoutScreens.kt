@@ -239,6 +239,11 @@ private fun CartCabinCard(
                     }
                 }
                 CartCabinFacts(cabin)
+                Text(
+                    CustomerMoneyFormatter.monthlyRentalPrice(cabin.monthlyPriceRubles),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.testTag("cart-rental-price-${cabin.unitId}"),
+                )
                 if (additionalLines.isNotEmpty()) {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {

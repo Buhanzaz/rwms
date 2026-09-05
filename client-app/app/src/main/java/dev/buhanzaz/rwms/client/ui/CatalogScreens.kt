@@ -462,6 +462,11 @@ private fun CabinCardBody(
             cabin.characteristics.forEach { CabinFact(Icons.Default.CheckCircle, it) }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Text(
+            CustomerMoneyFormatter.monthlyRentalPrice(cabin.monthlyPriceRubles),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.testTag("cabin-rental-price-${cabin.unitId}"),
+        )
         if (selected) {
             OutlinedButton(
                 onClick = onFurniture,

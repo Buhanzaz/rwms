@@ -172,6 +172,8 @@ class CatalogScreensTest {
                                 unitId = "cabin-1",
                                 version = 1,
                                 accountingNo = "БК-1",
+                                pricingVersion = 3,
+                                monthlyPriceRubles = 8_000,
                                 characteristics = listOf("Пластиковое окно", "Усиленная дверь"),
                             ),
                         ),
@@ -228,6 +230,7 @@ class CatalogScreensTest {
         assertThat(numberBounds.height).isWithin(1f).of(typeBounds.height)
         composeRule.onNodeWithText("№ БК-1").assertExists()
         composeRule.onNodeWithText("Офисная бытовка").assertExists()
+        composeRule.onNodeWithText("8 000 ₽/мес.").assertExists()
         composeRule.onNodeWithText("Отделка: Графит").assertExists()
         composeRule.onNodeWithText("+ Дополнительно").assertExists()
         composeRule.onNodeWithText("Мебель по выбору").assertDoesNotExist()
@@ -322,6 +325,8 @@ class CatalogScreensTest {
         unitId = "cabin-1",
         version = 1,
         accountingNo = "БК-1",
+        pricingVersion = 3,
+        monthlyPriceRubles = 8_000,
         type = "Офисная бытовка",
         finish = "Графит",
         dimensions = "6,0 × 2,4 × 2,6 м",

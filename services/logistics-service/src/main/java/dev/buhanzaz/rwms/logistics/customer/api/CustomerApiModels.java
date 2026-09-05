@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.customer.api;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotKind;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerEntityType;
 import jakarta.validation.Valid;
@@ -113,11 +114,13 @@ public final class CustomerApiModels {
   public record CustomerCabinPhoto(
       UUID photoId, long generation, String thumbnailUrl, String url) {}
 
-  /** Facts shown on one free-cabin card; no dossier/passport navigation path is exposed. */
+  /** Free/held cabin facts and current informational monthly rent, separate from delivery price. */
   public record CustomerCabinResponse(
       UUID unitId,
       long version,
       String accountingNo,
+      long pricingVersion,
+      @JsonFormat(shape = JsonFormat.Shape.STRING) long monthlyPriceRubles,
       String type,
       String finish,
       String dimensions,

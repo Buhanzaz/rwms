@@ -7,6 +7,13 @@ import org.junit.Test
 /** Verifies locale-aware display of server-supplied whole-ruble amounts. */
 class CustomerMoneyFormatterTest {
     @Test
+    fun `monthly rent preserves exact long amounts and explicit zero`() {
+        assertThat(CustomerMoneyFormatter.monthlyRentalPrice(Long.MAX_VALUE))
+            .isEqualTo("9 223 372 036 854 775 807 ₽/мес.")
+        assertThat(CustomerMoneyFormatter.monthlyRentalPrice(0)).isEqualTo("0 ₽/мес.")
+    }
+
+    @Test
     fun `russian whole rubles use grouped integer display`() {
         assertThat(
             CustomerMoneyFormatter.wholeRubles(28_500, Locale.forLanguageTag("ru-RU")),
