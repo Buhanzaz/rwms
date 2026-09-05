@@ -338,6 +338,7 @@ export function Inspector(props: InspectorProps) {
       <header className="inspector-section-heading entity-card__row"><h2 className="section-title">План на {formatDate(props.planningDate)}</h2><span className="toolbar-row">{props.plan?.manually_changed && props.plan.status !== 'CONFIRMED' ? <Button size="sm" onClick={props.onResetManualChanges} disabled={props.busy}>Отменить изменения</Button> : null}{props.plan && props.plan.status !== 'CONFIRMED' ? <Button size="sm" variant="primary" onClick={props.onConfirmPlan} disabled={props.busy}>Утвердить</Button> : null}</span></header>
       {mode === 'PLAN_DAY' ? <>
         <OperationsPanel
+          key={`${props.workspace.planning_root_warehouse_id ?? props.workspace.warehouse.id}:${props.planningDate}`}
           workspace={props.workspace}
           plan={props.plan}
           planningDate={props.planningDate}

@@ -1,11 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Activity,
+  CarFront,
   CalendarCheck2,
   ClipboardCheck,
+  Clock3,
   Plus,
   RefreshCw,
   TriangleAlert,
+  UserRoundX,
+  Wrench,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -17,11 +21,12 @@ import {
   type LogisticsEventInput,
   type LogisticsNotice,
   type PlanningDayMode,
+  type PlanningDayOperations,
   type RecoveryProposal,
 } from '../../api/client';
 import type { RoutePlan, UUID, WarehouseWorkspace } from '../../domain/types';
 import { Badge, Button, EmptyState, ErrorPanel, Modal, SelectField, Spinner } from '../../components/ui';
-import { formatDate } from '../../utils/format';
+import { formatDate, formatTime } from '../../utils/format';
 import { actionErrorFeedback } from '../../app/action-error';
 import { useUiStore } from '../../stores/ui-store';
 import { customerLegalTypeFromRequest, customerLegalTypeLabel } from '../../utils/customer-presentation';
@@ -34,11 +39,15 @@ import {
   baseTaskCandidateGroups,
   customerPhoneLabel,
   DAY_MODE_LABELS,
+  eventTypeLabel,
+  noticeStatusLabel,
+  noticeStatusTone,
   proposalAgreementLabel,
   proposalApplicationLabel,
   proposalCanApply,
   proposalCustomerAgreementRecorded,
   proposalStatusLabel,
+  type DispatcherEventType,
 } from './operations-presentation';
 
 interface OperationsPanelProps {
@@ -135,6 +144,55 @@ function OperationsLinkage({
       ) : null}
     </div>
   );
+}
+
+/** Displays recorded facts and server recommendations without inferring that an incident is resolved. */
+function DayEvents({ operations, workspace, plan, onSelectRequest }: {
+  operations: PlanningDayOperations;
+  workspace: WarehouseWorkspace;
+  plan: RoutePlan | null;
+  onSelectRequest: (requestId: UUID) => void;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const events = [...operations.events].sort((left, right) => Date.parse(right.occurred_at) - Date.parse(left.occurred_at));
+  const timeZone = workspace.warehouses.find((warehouse) => warehouse.id === operations.warehouse_id)?.timezone
+    ?? workspace.warehouse.timezone;
+  return <section className="operations-section" aria-labelledby="operations-events-title">
+    <div className="operations-section-title"><Activity size={17} aria-hidden="true" /><div><h3 id="operations-events-title">События дня</h3><p>Время, причина и последствия за выбранный день.</p></div><Badge>{events.length}</Badge></div>
+    {(showAll ? events : events.slice(0, 5)).map((event) => {
+      const notices = operations.notices.filter((notice) => notice.event_id === event.id);
+      const vehicle = workspace.vehicles.find((candidate) => candidate.id === event.facts.vehicle_id);
+      const trailer = workspace.trailers?.find((candidate) => candidate.id === event.facts.trailer_id);
+      const shift = workspace.shifts.find((candidate) => candidate.id === event.facts.driver_shift_id);
+      const driver = workspace.drivers.find((candidate) => candidate.id === shift?.driver_id);
+      const requestId = event.request_id ?? notices.find((notice) => notice.request_id)?.request_id;
+      const request = workspace.requests.find((candidate) => candidate.id === requestId);
+      const pending = operations.actions.some((action) => action.event_id === event.id && actionIsPending(action))
+        || notices.some((notice) => notice.requires_action && notice.status === 'REQUIRES_ACTION');
+      const reason = typeof event.facts.reason === 'string' ? event.facts.reason.trim() : '';
+      return <article className="operations-event-card" key={event.id} data-testid={`operations-event-${event.id}`}>
+        <header><h4>{eventTypeLabel(event.event_type)}</h4><time dateTime={event.occurred_at} title={timeZone}>{formatTime(event.occurred_at, timeZone)}</time></header>
+        {pending ? <Badge tone="warning">Требует внимания</Badge> : null}
+        {vehicle ? <strong>{vehicle.name} · {vehicle.registration_number || 'без номера'}</strong> : typeof event.facts.vehicle_id === 'string' ? <p>Машины нет в текущем справочнике</p> : null}
+        {trailer ? <strong>{trailer.name} · {trailer.registration_number || 'без номера'}</strong> : typeof event.facts.trailer_id === 'string' ? <p>Прицепа нет в текущем справочнике</p> : null}
+        {driver ? <strong>{driver.name}</strong> : null}
+        {typeof event.facts.delay_minutes === 'number' ? <p>Задержка: {event.facts.delay_minutes} мин</p> : null}
+        {reason ? <p>{reason}</p> : null}
+        <OperationsLinkage workspace={workspace} plan={plan} requestId={event.request_id} taskId={event.task_id} cycleId={event.cycle_id} />
+        {notices.length ? <details className="operations-event-consequences" open={pending}>
+          <summary>Последствия и рекомендации ({notices.length})</summary>
+          {notices.map((notice) => <div key={notice.id}>
+            <Badge tone={noticeStatusTone(notice.status)}>{noticeStatusLabel(notice.status)}</Badge>
+            <p>{notice.message_ru}</p>
+            {notice.recommended_action_ru ? <p className="operations-event-recommendation">{notice.recommended_action_ru}</p> : null}
+          </div>)}
+        </details> : null}
+        {request ? <Button size="sm" variant="ghost" onClick={() => onSelectRequest(request.id)}>Открыть {request.name}</Button> : null}
+      </article>;
+    })}
+    {events.length > 5 ? <Button size="sm" aria-expanded={showAll} onClick={() => setShowAll(!showAll)}>{showAll ? 'Свернуть события' : `Показать все события (${events.length})`}</Button> : null}
+    {!events.length ? <p className="operations-empty">Событий пока нет. Поломку, задержку или отмену можно зафиксировать выше.</p> : null}
+  </section>;
 }
 
 /** Collects explicit relation fields from proposal presentation data without interpreting business state. */
@@ -383,7 +441,7 @@ function ProposalCard({
 export function OperationsPanel({ workspace, plan, planningDate, busy, onSelectRequest }: OperationsPanelProps) {
   const queryClient = useQueryClient();
   const toast = useUiStore((state) => state.toast);
-  const [eventDialogOpen, setEventDialogOpen] = useState(false);
+  const [eventDialogType, setEventDialogType] = useState<DispatcherEventType | null>(null);
   const [proposalToApply, setProposalToApply] = useState<RecoveryProposal | null>(null);
   const intentKeysRef = useRef(new Map<string, { signature: string; key: UUID }>());
   const surfacedOperationsRef = useRef<{ context: string; signatures: Map<string, string> } | null>(null);
@@ -540,15 +598,20 @@ export function OperationsPanel({ workspace, plan, planningDate, busy, onSelectR
         intentKey(scope, input),
       ));
       intentKeysRef.current.delete(scope);
-      await refresh('workspace');
-      setEventDialogOpen(false);
-      const requiresAction = result.notices.some((notice) => notice.requires_action) || result.actions.length > 0;
+      setEventDialogType(null);
+      const appliedCount = result.proposals.filter((proposal) => proposal.status === 'APPLIED').length;
+      const failed = result.proposals.some((proposal) => proposal.status === 'FAILED');
+      await refresh(appliedCount ? 'plan' : 'workspace');
+      const requiresAction = failed
+        || result.notices.some((notice) => notice.requires_action && notice.status === 'REQUIRES_ACTION')
+        || result.actions.some(actionIsPending);
       toast({
-        tone: requiresAction ? 'warning' : 'info',
-        title: requiresAction ? 'Событие зафиксировано — требуется действие' : 'Событие зафиксировано',
-        detail: requiresAction
-          ? `Системных комментариев: ${result.notices.length}; действий: ${result.actions.length}.`
-          : 'Влияние рассчитано. Текущий план не изменён автоматически.',
+        tone: requiresAction ? 'warning' : appliedCount ? 'success' : 'info',
+        title: requiresAction ? 'Событие зафиксировано — требуется действие' : appliedCount ? 'Замена применена, план обновлён' : 'Событие зафиксировано',
+        detail: [
+          appliedCount ? `Применено изменений маршрута: ${appliedCount}.` : 'Последствия и варианты показаны в плане дня.',
+          failed ? 'Применение не удалось. Проверьте предложение.' : requiresAction ? 'Проверьте очередь действий.' : '',
+        ].filter(Boolean).join(' '),
       });
     } catch {
       // Dialog stays open and the exact command can be retried safely.
@@ -614,12 +677,12 @@ export function OperationsPanel({ workspace, plan, planningDate, busy, onSelectR
     return <ErrorPanel title="Операции дня недоступны" error={operationsQuery.error} onRetry={() => void operationsQuery.refetch()} />;
   }
   if (!operations) {
-    return <EmptyState title="Операционная проекция не загружена" description="Обновите данные выбранного склада и дня." action={<Button onClick={() => void refetchOperations()}>Обновить</Button>} />;
+    return <EmptyState title="События дня не загружены" description="Обновите данные выбранного склада и дня." action={<Button onClick={() => void refetchOperations()}>Обновить</Button>} />;
   }
   return (
     <section className="operations-panel" aria-label="Динамические операции дня">
       <header className="operations-heading">
-        <div><small>Операционный контур</small><h2>Операции на {formatDate(planningDate)}</h2></div>
+        <div><h3>События и помощь</h3></div>
         <Button size="sm" variant="ghost" disabled={operationBusy} onClick={() => void operationsQuery.refetch()} aria-label="Обновить операции дня"><RefreshCw size={14} /></Button>
       </header>
 
@@ -633,9 +696,17 @@ export function OperationsPanel({ workspace, plan, planningDate, busy, onSelectR
       </section>
 
       <div className="operations-primary-action">
-        <div><Activity size={18} /><span><strong>Изменилось выполнение дня?</strong><small>Запишите подтверждённый факт — влияние и варианты рассчитает сервис.</small></span></div>
-        <Button variant="primary" disabled={operationBusy} onClick={() => setEventDialogOpen(true)}><Plus size={14} />Зафиксировать событие</Button>
+        <div><Activity size={18} aria-hidden="true" /><span><strong>Что произошло?</strong><small>Укажите время и причину. Здесь появятся последствия, варианты замены и действия для согласования.</small></span></div>
+        <div className="operations-incident-tools" aria-label="Быстрое событие">
+          <Button disabled={operationBusy} onClick={() => setEventDialogType('VEHICLE_BREAKDOWN')}><CarFront size={16} aria-hidden="true" />Поломка машины</Button>
+          <Button disabled={operationBusy} onClick={() => setEventDialogType('TRAILER_BREAKDOWN')}><Wrench size={16} aria-hidden="true" />Поломка прицепа</Button>
+          <Button disabled={operationBusy} onClick={() => setEventDialogType('VEHICLE_DELAY')}><Clock3 size={16} aria-hidden="true" />Задержка</Button>
+          <Button disabled={operationBusy} onClick={() => setEventDialogType('DRIVER_UNAVAILABLE')}><UserRoundX size={16} aria-hidden="true" />Водитель недоступен</Button>
+        </div>
+        <Button variant="ghost" disabled={operationBusy} onClick={() => setEventDialogType('VEHICLE_BREAKDOWN')}><Plus size={14} aria-hidden="true" />Зафиксировать событие</Button>
       </div>
+
+      {operations.truncated_collections?.length ? <p className="operations-inline-warning" role="status">История за день показана частично. Показано действий: {pendingActions.length} из {operations.pending_action_count} незавершённых.</p> : null}
 
       <section className="operations-section" aria-labelledby="operations-queue-title">
         <div className="operations-section-title"><TriangleAlert size={17} /><div><h3 id="operations-queue-title">Очередь действий</h3><p>Только позиции, где действительно требуется решение логиста.</p></div><Badge tone={pendingActions.length ? 'warning' : 'neutral'}>{operations.pending_action_count}</Badge></div>
@@ -651,18 +722,20 @@ export function OperationsPanel({ workspace, plan, planningDate, busy, onSelectR
             onSelectRequest={onSelectRequest}
             onDecide={decide}
           />
-        )) : <EmptyState title="Действий не требуется" description="Новые события появятся в уведомлениях и журнале дня." />}
+        )) : <p className="operations-empty">{operations.pending_action_count ? 'Есть незавершённые действия вне загруженного окна истории.' : 'Действий не требуется'}</p>}
       </section>
 
       <section className="operations-section" aria-labelledby="operations-proposals-title">
-        <div className="operations-section-title"><ClipboardCheck size={17} /><div><h3 id="operations-proposals-title">Предложения</h3><p>Расчёт, согласование клиента и применение показаны как разные стадии.</p></div><Badge>{operations.proposals.length}</Badge></div>
+        <div className="operations-section-title"><ClipboardCheck size={17} /><div><h3 id="operations-proposals-title">Предложения</h3><p>Проверьте замену или перенос, согласуйте изменения и примените подходящий вариант.</p></div><Badge>{operations.proposals.length}</Badge></div>
         {operations.proposals.length ? [...operations.proposals].reverse().map((proposal) => (
           <ProposalCard key={proposal.id} proposal={proposal} decisions={operations.decisions} workspace={workspace} plan={plan} busy={operationBusy} onSelectRequest={onSelectRequest} onConfirmApply={setProposalToApply} />
-        )) : <EmptyState title="Предложений нет" description="Сервис создаст предложение только после события или реального конфликта." />}
+        )) : <p className="operations-empty">Предложений нет</p>}
       </section>
 
-      {eventDialogOpen ? (
-        <OperationsEventDialog workspace={workspace} plan={plan} planningDate={planningDate} busy={operationBusy} onClose={() => setEventDialogOpen(false)} onSubmit={createEvent} />
+      <DayEvents key={`events:${context}`} operations={operations} workspace={workspace} plan={plan} onSelectRequest={onSelectRequest} />
+
+      {eventDialogType ? (
+        <OperationsEventDialog key={`dialog:${context}`} initialEventType={eventDialogType} workspace={workspace} plan={plan} planningDate={planningDate} busy={operationBusy} onClose={() => { if (!operationBusy) setEventDialogType(null); }} onSubmit={createEvent} />
       ) : null}
       {proposalToApply ? (
         <Modal

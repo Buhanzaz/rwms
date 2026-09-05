@@ -982,7 +982,13 @@ make test-valhalla-truck
 время интерпретируется в IANA timezone корневого склада группы, но не в часовом
 поясе браузера и не в глобальном `Europe/Moscow`.
 Существующие RWMS BaseTask остаются read-only низкоприоритетными кандидатами
-после возврата на базу. См. [`dynamic_operations.py`](backend/app/api/dynamic_operations.py),
+после возврата на базу. В плане дня есть быстрые кнопки поломки машины/прицепа,
+задержки и недоступности водителя. Список событий показывает местное время склада,
+ресурс, записанную причину и рекомендации сервиса; более ранние события раскрываются
+по запросу. Смена корневого склада или даты закрывает незавершённую форму события.
+Ответ автозамены со статусом `APPLIED` обновляет план и показывает применённое
+изменение; ошибка и ожидающее применения предложение остаются явными.
+См. [`dynamic_operations.py`](backend/app/api/dynamic_operations.py),
 [`operations.py`](backend/app/models/operations.py),
 [`dynamic_impacts.py`](backend/app/services/dynamic_impacts.py) и
 [`dynamic_recovery.py`](backend/app/services/dynamic_recovery.py).

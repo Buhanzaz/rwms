@@ -1268,6 +1268,14 @@ fence, and a recommendation never changes a customer promise by itself. Base
 tasks are read-only, low-priority candidates evaluated for the calculated
 warehouse-return time.
 
+The day-plan incident UI displays recorded warehouse-local event time, resource
+identity, reason and server recommendations. Fast incident buttons still require
+explicit confirmation. An automatic-recovery `APPLIED` receipt invalidates the
+affected plan queries; pending or failed proposals never produce a successful
+replacement message. Changing the root warehouse or day discards only the
+unfinished incident form, not a previously submitted server fact. See the
+[`operations panel`](../../logistics/frontend/src/features/operations/OperationsPanel.tsx).
+
 Changing the policy advances the planning generation and queues a complete
 capacity publication for every group member. `DELIVERIES_ONLY` excludes pickups
 from subsequent optimization; `PICKUPS_ONLY` excludes deliveries and makes

@@ -14,6 +14,7 @@ import {
 } from '../src/api/client';
 import type * as ApiClientModule from '../src/api/client';
 import { OperationsPanel } from '../src/features/operations/OperationsPanel';
+import { Inspector } from '../src/app/Inspector';
 import { useUiStore } from '../src/stores/ui-store';
 import { planFixture, requestFixture, warehouseFixture, workspaceFixture } from './fixtures';
 
@@ -224,7 +225,7 @@ function representativeGroupWorkspace() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  useUiStore.setState({ notifications: [] });
+  useUiStore.setState({ notifications: [], mode: 'PLAN_DAY', section: 'WAREHOUSE' });
   apiMocks.createLogisticsEvent.mockResolvedValue({ event: eventFixture(), notices: [], actions: [], proposals: [] });
   apiMocks.decideLogisticsAction.mockResolvedValue(decisionFixture());
 });
@@ -245,7 +246,7 @@ describe('day mode and conflict projection', () => {
     const user = userEvent.setup();
     renderPanel();
 
-    expect(await screen.findByRole('heading', { name: /Операции на 30 августа 2026/u })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'События и помощь' })).toBeVisible();
     expect(screen.queryByText('Склад СПб')).not.toBeInTheDocument();
     expect(screen.queryByText(/Ограничивает направления для оптимизатора/u)).not.toBeInTheDocument();
     expect(screen.queryByText(/Версия режима:/u)).not.toBeInTheDocument();
@@ -331,7 +332,7 @@ describe('day mode and conflict projection', () => {
       }),
     });
 
-    await screen.findByRole('heading', { name: /Операции на 30 августа 2026/u });
+    await screen.findByRole('heading', { name: 'События и помощь' });
     expect(screen.queryByText('Выбранный представитель')).not.toBeInTheDocument();
     expect(apiMocks.getPlanningDayOperations).toHaveBeenCalledWith('warehouse-root', DAY);
     expect(queryClient.getQueryData(['planning-day-operations', 'warehouse-root', DAY])).toEqual(initial);
@@ -385,7 +386,7 @@ describe('dispatcher decision queue', () => {
     }));
     renderPanel();
 
-    await screen.findByRole('heading', { name: /Операции на 30 августа 2026/u });
+    await screen.findByRole('heading', { name: 'События и помощь' });
     expect(screen.queryByRole('region', { name: 'Системный журнал' })).not.toBeInTheDocument();
     await waitFor(() => expect(useUiStore.getState().notifications).toHaveLength(3));
     const initialNotice = useUiStore.getState().notifications.find((item) => (
@@ -586,7 +587,7 @@ describe('dispatcher decision queue', () => {
     }));
     renderPanel();
 
-    await screen.findByRole('heading', { name: /Операции на 30 августа 2026/u });
+    await screen.findByRole('heading', { name: 'События и помощь' });
     await waitFor(() => expect(useUiStore.getState().notifications[0]?.detail).toContain(`Статус: ${label}.`));
   });
 
@@ -721,6 +722,87 @@ describe('dispatcher decision queue', () => {
 });
 
 describe('operational event capture', () => {
+  it('closes an unfinished incident when the inspector switches to another day', async () => {
+    const user = userEvent.setup();
+    useUiStore.setState({ section: 'PLAN_DAY' });
+    apiMocks.getPlanningDayOperations.mockImplementation((warehouseId: string, day: string) => Promise.resolve(operationsFixture({ warehouse_id: warehouseId, day })));
+    const props: ComponentProps<typeof Inspector> = {
+      workspace: workspaceFixture(), plan: null, simulation: null, validation: null, busy: false,
+      onCreate: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), onGenerateWorkload: vi.fn(),
+      onDeleteGeneratedWorkload: vi.fn(), onSetMapTool: vi.fn(), onSelect: vi.fn(),
+      onMoveTask: vi.fn(), onToggleCycleLock: vi.fn(), onCreateTransfer: vi.fn(),
+      onAssignContractor: vi.fn(), onRescheduleUnassigned: vi.fn(), onDispatchContractor: () => Promise.resolve(),
+      onConfirmPlan: vi.fn(), onResetManualChanges: vi.fn(), onSimulationOverride: vi.fn(),
+      planningDate: DAY, onPlanningDateChange: vi.fn(), onSaveRequestPlanning: () => Promise.resolve(),
+      onSplitRequest: () => Promise.resolve(), loadingMoreRequests: false, onLoadMoreRequests: () => Promise.resolve(),
+      inspectorWidth: 420, onInspectorWidthChange: vi.fn(),
+    };
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(<QueryClientProvider client={queryClient}><Inspector {...props} /></QueryClientProvider>);
+    await user.click(await screen.findByRole('button', { name: 'Поломка машины' }));
+    await user.type(screen.getByLabelText('Причина'), 'Черновик поломки');
+    view.rerender(<QueryClientProvider client={queryClient}><Inspector {...props} planningDate="2026-08-31" /></QueryClientProvider>);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Задержка' }));
+    expect(screen.getByLabelText('Причина')).toHaveValue('');
+    expect(screen.getByLabelText('Событие')).toHaveValue('VEHICLE_DELAY');
+    expect(apiMocks.createLogisticsEvent).not.toHaveBeenCalled();
+  });
+
+  it('shows recorded event facts in warehouse time and keeps older events available', async () => {
+    const user = userEvent.setup();
+    const warehouse = warehouseFixture({ timezone: 'Asia/Novosibirsk' });
+    const event = eventFixture({ event_type: 'VEHICLE_BREAKDOWN', facts: { vehicle_id: 'vehicle-1', reason: 'Повреждён двигатель', command_hash: 'transport-hash-private' } });
+    apiMocks.getPlanningDayOperations.mockResolvedValue(operationsFixture({
+      events: [event, ...Array.from({ length: 6 }, (_, index) => eventFixture({ id: `older-${index}`, occurred_at: `2026-08-30T0${index}:00:00Z`, facts: {} }))],
+      notices: [noticeFixture({ message_ru: 'Рейсу нужна другая машина.', recommended_action_ru: 'Проверьте предложенную замену.' })],
+      truncated_collections: ['ACTIONS'],
+      pending_action_count: 3,
+    }));
+    const { props } = renderPanel({ workspace: workspaceFixture({ warehouse, warehouses: [warehouse] }) });
+    const card = within(await screen.findByTestId('operations-event-event-1'));
+    expect(card.getByText('15:00')).toBeVisible();
+    expect(card.getByText('Повреждён двигатель')).toBeVisible();
+    expect(card.getByText('Рейсу нужна другая машина.')).toBeVisible();
+    expect(card.getByText('Проверьте предложенную замену.')).toBeVisible();
+    expect(card.getByText('Требует внимания')).toBeVisible();
+    expect(screen.queryByText('transport-hash-private')).not.toBeInTheDocument();
+    expect(screen.queryByText('vehicle-1')).not.toBeInTheDocument();
+    expect(screen.getByText(/Показано действий: 0 из 3/)).toBeVisible();
+    expect(screen.queryByText('Действий не требуется')).not.toBeInTheDocument();
+    expect(screen.getAllByTestId(/^operations-event-/)).toHaveLength(5);
+    await user.click(card.getByRole('button', { name: /Открыть/ }));
+    expect(props.onSelectRequest).toHaveBeenCalledWith('request-1');
+    await user.click(screen.getByRole('button', { name: 'Показать все события (7)' }));
+    expect(screen.getAllByTestId(/^operations-event-/)).toHaveLength(7);
+    await user.click(screen.getByRole('button', { name: 'Свернуть события' }));
+    expect(screen.getAllByTestId(/^operations-event-/)).toHaveLength(5);
+  });
+
+  it.each(['APPLIED', 'FAILED', 'READY_TO_APPLY'] as const)('reports the actual automatic recovery result %s and refreshes the plan only after application', async (status) => {
+    const user = userEvent.setup();
+    const proposal = proposalFixture({ status, result_plan_id: status === 'APPLIED' ? 'recovered-plan' : null });
+    apiMocks.getPlanningDayOperations.mockResolvedValueOnce(operationsFixture()).mockResolvedValue(operationsFixture({ events: [eventFixture()], proposals: [proposal] }));
+    apiMocks.createLogisticsEvent.mockResolvedValue({ event: eventFixture(), notices: [], actions: [], proposals: [proposal] });
+    const { queryClient } = renderPanel({ plan: planFixture({ date: DAY }) });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    await user.click(await screen.findByRole('button', { name: 'Поломка машины' }));
+    await user.selectOptions(screen.getByLabelText('Машина'), 'vehicle-1');
+    fireEvent.change(screen.getByLabelText('Время события (Europe/Moscow)'), { target: { value: '12:30' } });
+    await user.type(screen.getByLabelText('Причина'), 'Поломка до выезда');
+    expect(apiMocks.createLogisticsEvent).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Зафиксировать и оценить влияние' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(apiMocks.applyRecoveryProposal).not.toHaveBeenCalled();
+    const planRefreshed = invalidate.mock.calls.some(([filters]) => JSON.stringify(filters?.queryKey) === '["plan"]');
+    expect(planRefreshed).toBe(status === 'APPLIED');
+    expect(useUiStore.getState().notifications.at(-1)).toMatchObject({
+      tone: status === 'APPLIED' ? 'success' : status === 'FAILED' ? 'warning' : 'info',
+      title: status === 'APPLIED' ? 'Замена применена, план обновлён' : status === 'FAILED' ? 'Событие зафиксировано — требуется действие' : 'Событие зафиксировано',
+    });
+    expect(useUiStore.getState().notifications.at(-1)?.detail).not.toContain('не изменён автоматически');
+  });
+
   it.each([
     ['VEHICLE_BREAKDOWN', 'Поломка машины', async (user: ReturnType<typeof userEvent.setup>) => user.selectOptions(screen.getByLabelText('Машина'), 'vehicle-1'), { vehicle_id: 'vehicle-1' }, 'PICKUP'],
     ['TRAILER_BREAKDOWN', 'Поломка прицепа', async (user: ReturnType<typeof userEvent.setup>) => user.selectOptions(screen.getByLabelText('Прицеп'), 'trailer-1'), { trailer_id: 'trailer-1', recovery_mode: 'AUTO' }, 'PICKUP'],
@@ -755,9 +837,12 @@ describe('operational event capture', () => {
       }),
     });
 
-    await user.click(await screen.findByRole('button', { name: 'Зафиксировать событие' }));
-    await user.selectOptions(screen.getByLabelText('Событие'), eventType);
+    const shortcuts: Partial<Record<LogisticsEventInput['event_type'], string>> = { VEHICLE_BREAKDOWN: 'Поломка машины', TRAILER_BREAKDOWN: 'Поломка прицепа', VEHICLE_DELAY: 'Задержка', DRIVER_UNAVAILABLE: 'Водитель недоступен' };
+    const shortcut = shortcuts[eventType];
+    await user.click(await screen.findByRole('button', { name: shortcut ?? 'Зафиксировать событие' }));
+    if (!shortcut) await user.selectOptions(screen.getByLabelText('Событие'), eventType);
     expect(screen.getByLabelText('Событие')).toHaveDisplayValue(label);
+    expect(screen.getByRole('button', { name: 'Зафиксировать и оценить влияние' })).toBeDisabled();
     await fillSpecific(user);
     fireEvent.change(screen.getByLabelText('Время события (Europe/Moscow)'), { target: { value: '14:20' } });
     await user.type(screen.getByLabelText('Причина'), 'Подтверждено диспетчером');

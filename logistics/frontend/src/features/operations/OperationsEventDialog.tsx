@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import type { LogisticsEventInput } from '../../api/client';
 import type { RoutePlan, UUID, WarehouseWorkspace } from '../../domain/types';
 import { Button, Field, Modal, SelectField } from '../../components/ui';
-import { localDateTimeToIso } from '../../utils/format';
+import { formatDate, localDateTimeToIso } from '../../utils/format';
 import {
   DISPATCHER_EVENT_LABELS,
   type DispatcherEventType,
@@ -15,6 +15,7 @@ interface OperationsEventDialogProps {
   plan: RoutePlan | null;
   planningDate: string;
   busy: boolean;
+  initialEventType?: DispatcherEventType;
   onClose: () => void;
   onSubmit: (input: LogisticsEventInput) => Promise<void>;
 }
@@ -30,10 +31,11 @@ export function OperationsEventDialog({
   plan,
   planningDate,
   busy,
+  initialEventType = 'VEHICLE_BREAKDOWN',
   onClose,
   onSubmit,
 }: OperationsEventDialogProps) {
-  const [eventType, setEventType] = useState<DispatcherEventType>('VEHICLE_BREAKDOWN');
+  const [eventType, setEventType] = useState<DispatcherEventType>(initialEventType);
   const [vehicleId, setVehicleId] = useState<UUID>('');
   const [trailerId, setTrailerId] = useState<UUID>('');
   const [recoveryMode, setRecoveryMode] = useState<'AUTO' | 'MANUAL'>('AUTO');
@@ -108,8 +110,8 @@ export function OperationsEventDialog({
 
   return (
     <Modal
-      title="Зафиксировать событие"
-      description={`Контекст: ${workspace.warehouse.name}; дата из шапки: ${planningDate}. Время укажите в часовом поясе корневого склада (${operationsTimeZone}).`}
+      title={DISPATCHER_EVENT_LABELS[eventType]}
+      description={`${workspace.warehouse.name} · ${formatDate(planningDate)} Укажите местное время события (${operationsTimeZone}).`}
       onClose={onClose}
       footer={(
         <>
@@ -120,7 +122,7 @@ export function OperationsEventDialog({
         </>
       )}
     >
-      <div className="form-grid operations-event-form">
+      <fieldset className="form-grid operations-event-form" aria-label="Обстоятельства события" disabled={busy}>
         <Field
           label={`Время события (${operationsTimeZone})`}
           type="time"
@@ -197,7 +199,7 @@ export function OperationsEventDialog({
             <option value="">Выберите заявку выбранного дня</option>
             {requests.map((request) => (
               <option value={request.id} key={request.id}>
-                {request.name} · {warehouseNames.get(request.warehouse_id) ?? request.warehouse_id} · {request.address_label}
+                {request.name} · {warehouseNames.get(request.warehouse_id) ?? 'склад не указан'} · {request.address_label}
               </option>
             ))}
           </SelectField>
@@ -235,10 +237,10 @@ export function OperationsEventDialog({
         />
         <p className="field__hint form-grid__full">
           {currentPlan
-            ? `Событие будет защищено версией плана ${currentPlan.version}.`
-            : 'Для выбранного склада и дня активного плана нет; событие будет записано без выдуманного плана.'}
+            ? 'После сохранения появятся последствия для маршрутов и варианты дальнейших действий.'
+            : 'На этот день ещё нет плана. Событие сохранится в истории дня.'}
         </p>
-      </div>
+      </fieldset>
     </Modal>
   );
 }

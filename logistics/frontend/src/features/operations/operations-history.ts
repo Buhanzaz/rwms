@@ -15,7 +15,7 @@ import {
   noticeStatusLabel,
 } from './operations-presentation';
 
-/** One user-facing record shared by transient notifications and the settings journal. */
+/** One user-facing record shared by transient notifications and the day journal. */
 export interface OperationalHistoryEntry {
   key: string;
   signature: string;

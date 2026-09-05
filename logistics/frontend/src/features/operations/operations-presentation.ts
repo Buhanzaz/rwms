@@ -238,5 +238,7 @@ export function proposalStatusLabel(status: string): string {
 }
 
 export function eventTypeLabel(value: string): string {
+  if (value === 'PLANNING_MODE_CHANGED') return 'Изменён режим дня';
+  if (value === 'MANUAL_PLAN_CHANGE') return 'План изменён вручную';
   return DISPATCHER_EVENT_LABELS[value as DispatcherEventType] ?? 'Операционное событие';
 }

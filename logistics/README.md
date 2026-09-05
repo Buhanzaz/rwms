@@ -963,6 +963,12 @@ The dispatcher enters an event time explicitly: its date comes from the opened
 day and it is interpreted in the planning-root warehouse IANA timezone, never
 in the browser timezone or a global Moscow default.
 Existing RWMS base tasks are read-only, low-priority return-to-base candidates.
+Day plan provides direct incident buttons for a truck/trailer breakdown, delay,
+or unavailable driver. The event list shows actual warehouse-local time,
+affected resources, recorded reason and server recommendations, with older
+events available on demand. Switching the root warehouse or date closes an
+unfinished incident form. An `APPLIED` automatic-recovery receipt refreshes the
+plan and reports the applied change; failed or pending proposals remain explicit.
 See [`dynamic_operations.py`](backend/app/api/dynamic_operations.py),
 [`operations.py`](backend/app/models/operations.py),
 [`dynamic_impacts.py`](backend/app/services/dynamic_impacts.py), and
