@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.rentalmanager.ui.screens
 
+import android.os.SystemClock
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -33,14 +35,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import dev.buhanzaz.rwms.rentalmanager.network.OrderDto
+import dev.buhanzaz.rwms.rentalmanager.network.OrderPaymentReceiptLineDto
 import dev.buhanzaz.rwms.rentalmanager.network.OrderUnitDto
 import dev.buhanzaz.rwms.rentalmanager.network.RentalClientDto
+import dev.buhanzaz.rwms.rentalmanager.ui.ObservedOrderPayment
 import dev.buhanzaz.rwms.rentalmanager.ui.RentalManagerNotice
 import dev.buhanzaz.rwms.rentalmanager.ui.RentalManagerUiState
+import dev.buhanzaz.rwms.rentalmanager.ui.paymentRemainingMillis
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlinx.coroutines.delay
 
 @Composable
 fun OrdersScreen(
@@ -211,6 +220,7 @@ fun OrderDetailScreen(
     onUpdate: (String?, String?) -> Unit,
     onSave: () -> Unit,
     onCancel: () -> Unit,
+    onConfirmPayment: () -> Unit = {},
     assistantBusy: Boolean,
     onOpenAssistant: () -> Unit,
     onDismissNotice: () -> Unit,
@@ -285,6 +295,14 @@ fun OrderDetailScreen(
                 )
             }
             OrderUnitsSection(order)
+            state.selectedOrderPayment?.let { observed ->
+                OrderPaymentCard(
+                    observed = observed,
+                    commandRunning = state.commandRunning,
+                    onConfirm = onConfirmPayment,
+                    onRefresh = onRetry,
+                )
+            }
             validationMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             OutlinedTextField(
                 value = phone,
@@ -385,6 +403,133 @@ fun OrderDetailScreen(
         )
     }
 }
+
+@Composable
+private fun OrderPaymentCard(
+    observed: ObservedOrderPayment,
+    commandRunning: Boolean,
+    onConfirm: () -> Unit,
+    onRefresh: () -> Unit,
+) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var elapsedRealtimeMillis by rememberSaveable(observed.payment.orderId, observed.payment.orderVersion) {
+        mutableStateOf(SystemClock.elapsedRealtime())
+    }
+    val remainingMillis = paymentRemainingMillis(
+        observed.payment,
+        observed.observedElapsedRealtimeMillis,
+        elapsedRealtimeMillis,
+    )
+    if (observed.payment.state == "PENDING" || observed.payment.state == "EXPIRING") {
+        LaunchedEffect(observed.payment, observed.observedElapsedRealtimeMillis) {
+            lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                var refreshAt = SystemClock.elapsedRealtime() + PAYMENT_REFRESH_INTERVAL_MILLIS
+                while (true) {
+                    val now = SystemClock.elapsedRealtime()
+                    val remaining = paymentRemainingMillis(
+                        observed.payment,
+                        observed.observedElapsedRealtimeMillis,
+                        now,
+                    )
+                    elapsedRealtimeMillis = now
+                    if (now >= refreshAt) {
+                        onRefresh()
+                        refreshAt = now + PAYMENT_REFRESH_INTERVAL_MILLIS
+                    }
+                    delay(
+                        if (remaining != null && remaining > 0L) minOf(1_000L, remaining) else 1_000L,
+                    )
+                }
+            }
+        }
+    }
+    SectionTitle("Оплата")
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            val receipt = observed.payment.receipt
+            if (receipt == null || observed.payment.state == null) {
+                Text("Счёт ещё не выставлен", fontWeight = FontWeight.Medium)
+                Text(
+                    "Отсутствие счёта не означает, что заказ оплачен.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                return@Column
+            }
+            Text("Счёт №${receipt.orderNumber}", fontWeight = FontWeight.SemiBold)
+            receipt.lines.forEach { line ->
+                Text(formatReceiptLine(line))
+            }
+            Text("Итого: ${formatReceiptRubles(receipt.totalRubles) ?: "сумма уточняется"}")
+            if (!receipt.deliveryIncluded) {
+                Text(
+                    "Доставка не включена в счёт: это не бесплатная доставка.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            when (observed.payment.state) {
+                "CONFIRMED" -> Text(
+                    confirmedPaymentLabel(observed.payment.source),
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                "PENDING" -> Text("Ожидается подтверждение оплаты.")
+                "EXPIRING", "EXPIRED" -> Text("Срок оплаты истёк. Обновите заказ.", color = MaterialTheme.colorScheme.error)
+                "CANCELLED" -> Text("Оплата отменена.", color = MaterialTheme.colorScheme.error)
+                else -> Text("Статус оплаты уточняется.")
+            }
+            if (remainingMillis != null && observed.payment.state == "PENDING") {
+                Text("Осталось: ${formatPaymentCountdown(remainingMillis)}")
+            }
+            if (observed.payment.state == "PENDING" && observed.payment.canConfirm && remainingMillis != null && remainingMillis > 0L) {
+                Button(
+                    onClick = onConfirm,
+                    enabled = !commandRunning,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (commandRunning) "Подтверждаем…" else "Подтвердить оплату")
+                }
+            } else if (observed.payment.state == "PENDING") {
+                OutlinedButton(
+                    onClick = onRefresh,
+                    enabled = !commandRunning,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Обновить статус оплаты")
+                }
+            }
+        }
+    }
+}
+
+private fun formatReceiptLine(
+    line: OrderPaymentReceiptLineDto,
+): String {
+    val unitPrice = formatReceiptRubles(line.unitPriceRubles) ?: "сумма уточняется"
+    val amount = formatReceiptRubles(line.amountRubles) ?: "сумма уточняется"
+    return if (line.rentalMonths != null) {
+        "${line.label}: ${line.quantity} × $unitPrice/мес. × ${line.rentalMonths} мес. = $amount"
+    } else {
+        "${line.label}: ${line.quantity} × $unitPrice = $amount"
+    }
+}
+
+private fun confirmedPaymentLabel(source: String?): String = when (source) {
+    "MANAGER_CONFIRMATION" -> "Оплата подтверждена менеджером."
+    "CUSTOMER_TEST" -> "Тестовая оплата подтверждена клиентом."
+    "PRESENTATION_TEST" -> "Тестовая оплата подтверждена по предложению."
+    else -> "Подтверждение оплаты сохранено."
+}
+
+private fun formatPaymentCountdown(remainingMillis: Long): String {
+    val seconds = remainingMillis.coerceAtLeast(0L) / 1_000L
+    return "%d:%02d".format(seconds / 60L, seconds % 60L)
+}
+
+private const val PAYMENT_REFRESH_INTERVAL_MILLIS = 15_000L
 
 private data class DraftSaveState(
     val contactReady: Boolean,

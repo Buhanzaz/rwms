@@ -100,6 +100,18 @@ class RentalManagerChatScreensTest {
     }
 
     @Test
+    fun `receipt formatter preserves 80 digit whole rubles without floating point`() {
+        assertThat(
+            formatReceiptRubles(
+                "99999999999999999999999999999999999999999999999999999999999999999999999999999999",
+            ),
+        ).contains("999")
+        assertThat(formatReceiptRubles("-1")).isNull()
+        assertThat(formatReceiptRubles("+1")).isNull()
+        assertThat(formatReceiptRubles("01")).isNull()
+    }
+
+    @Test
     fun `conversation filter separates active dialogs from history`() {
         compose.setContent {
             RentalManagerTheme {

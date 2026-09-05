@@ -957,6 +957,28 @@ entries return 404. This is durable inbox delivery, not an external push-provide
 Evidence: [`payment owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderPaymentService.java),
 [`contract`](../../contracts/openapi/logistics-service.yaml).
 
+The panel, public presentation and CustomerApp display the immutable bill's actual line factors and
+arbitrary-precision total, never a reconstructed current catalog/cart price. Manager acknowledgement
+and test-payment provenance stay distinct. Client countdowns use the server clock plus monotonic
+elapsed time; polling reconciles pending/expiring orders without replaying checkout or silently
+consenting to a new version. CustomerApp retains only unresolved idempotency identities, not money
+or payment evidence, across process recreation. Its durable inbox is acknowledged explicitly.
+Android WorkManager performs connected deadline/catch-up reads and bounded retries; OS permission,
+scheduling restrictions and an encrypted remembered session govern background notification delivery,
+not the server release deadline. Notification navigation is explicit and immutable, and logout
+fences late results and removes notifications. Evidence: [CustomerApp](../../client-app/README.md),
+[panel payment projection](../../panel/src/features/orders/domain/order-payment.ts).
+
+The cabin passport reserve register composes asset-service's repeatable-read snapshot of live
+selection holds and the current order reservation with logistics-owned visibility and payment
+metadata. The public warehouse-scoped read checks warehouse access before private I/O, never holds
+a logistics transaction across HTTP, and does not acquire, renew or release a reservation. Customer
+and manager occupancy remain visible, but private client/manager names and order links require the
+existing inquiry-owner or order-visibility proof. Private hold scopes and actor IDs are not exposed.
+Missing services or malformed snapshots are explicit errors, never an empty/free result.
+Evidence: [asset snapshot](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/RentalItemReserveReadService.java),
+[reserve read](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/RentalItemReservesReadService.java).
+
 Public return, shipment and transfer list reads preserve their array payload but
 are bounded to `page/size` with a maximum of 100 documents. Pagination metadata
 is carried in fixed response headers, and all lines for one document page are

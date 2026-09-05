@@ -39,6 +39,14 @@ streaming и operator-reviewed outbox recovery. Изменяющие коман�
 Внутренние вызывающие стороны используют service credentials, а не проброшенный пользовательский
 token. Security chain требует точные identity сервиса и single-purpose scope для каждого namespace.
 
+`GET /api/internal/asset/v1/logistics/rental-items/{rentalItemId}/reserves?warehouseId=…`
+передаёт logistics согласованный repeatable-read снимок текущих резервов и `serverTime` базы данных.
+Возвращаются только действующие ACTIVE удержания выбора и фактический ACTIVE резерв заказа;
+чтение не завершает, не продлевает, не конвертирует и не освобождает их. Склад обязан совпадать
+с физическим складом бытовки. Требуются точная identity logistics-service и scope `asset.logistics`.
+Области удержания и provenance инициатора — внутренние данные для проверки видимости в logistics,
+а не поля публичного клиента.
+
 Для импортированной исторической отгрузки аренды maintenance может вызвать только fenced action
 `CLOSE_FOR_HISTORICAL_SHIPMENT` под существующим lease `MAINTENANCE_REPAIR`. Политика asset
 допускает его только из `REPAIR`, `CAPITAL_REPAIR` или `WAITING_REPAIR_CHECK` и переводит бытовку в

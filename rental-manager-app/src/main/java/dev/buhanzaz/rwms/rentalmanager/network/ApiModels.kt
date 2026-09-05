@@ -168,6 +168,49 @@ data class UpdateOrderRequest(
     val comment: String? = null,
 )
 
+/** Canonical server-owned payment-window projection; null evidence never means payment succeeded. */
+data class OrderPaymentDto(
+    val orderId: String,
+    val orderVersion: Long,
+    val orderStatus: String,
+    val state: String?,
+    val startedAt: String?,
+    val expiresAt: String?,
+    val resolvedAt: String?,
+    val source: String?,
+    val serverTime: String,
+    val canConfirm: Boolean,
+    val receipt: OrderPaymentReceiptDto?,
+)
+
+/** Immutable non-fiscal initial bill with whole-RUB strings that may exceed Long. */
+data class OrderPaymentReceiptDto(
+    val schemaVersion: Int,
+    val orderId: String,
+    val orderNumber: String,
+    val issuedAt: String,
+    val currency: String,
+    val deliveryIncluded: Boolean,
+    val lines: List<OrderPaymentReceiptLineDto>,
+    val totalRubles: String,
+)
+
+/** Immutable rental factors or the one agreed delivery charge; never current catalog prices. */
+data class OrderPaymentReceiptLineDto(
+    val kind: String,
+    val rentalItemId: String?,
+    val equipmentId: String?,
+    val label: String,
+    val quantity: String,
+    val rentalMonths: Long?,
+    val unitPriceRubles: String,
+    val amountRubles: String,
+    val pricingVersion: Long?,
+)
+
+/** Explicit manager acknowledgement fenced to the displayed order version. */
+data class ConfirmOrderPaymentRequest(val expectedVersion: Long)
+
 data class ProblemDetailsDto(
     val status: Int? = null,
     val code: String? = null,

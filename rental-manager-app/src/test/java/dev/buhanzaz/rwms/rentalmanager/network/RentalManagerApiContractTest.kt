@@ -172,6 +172,30 @@ class RentalManagerApiContractTest {
         assertThat(request.body.size).isEqualTo(0L)
     }
 
+    @Test
+    fun `payment receipt and manager confirmation use exact fenced endpoints`() = runTest {
+        server.enqueue(jsonResponse(ORDER_PAYMENT_JSON))
+        server.enqueue(jsonResponse(ORDER_PAYMENT_JSON.replace("\"state\":\"PENDING\"", "\"state\":\"CONFIRMED\"")))
+
+        val payment = api.orderPayment(ORDER_ID)
+        val confirmed = api.confirmOrderPayment(
+            orderId = ORDER_ID,
+            idempotencyKey = COMMAND_ID,
+            request = ConfirmOrderPaymentRequest(expectedVersion = payment.orderVersion),
+        )
+
+        assertThat(payment.receipt?.totalRubles).isEqualTo("18446744073709551616")
+        assertThat(confirmed.state).isEqualTo("CONFIRMED")
+        val read = server.takeRequest()
+        assertThat(read.method).isEqualTo("GET")
+        assertThat(read.path).isEqualTo("/api/logistics/v1/orders/$ORDER_ID/payment")
+        val confirm = server.takeRequest()
+        assertThat(confirm.method).isEqualTo("POST")
+        assertThat(confirm.path).isEqualTo("/api/logistics/v1/orders/$ORDER_ID/payment/confirm")
+        assertThat(confirm.getHeader("Idempotency-Key")).isEqualTo(COMMAND_ID)
+        assertThat(confirm.body.readUtf8()).isEqualTo("{\"expectedVersion\":4}")
+    }
+
     private fun jsonResponse(body: String): MockResponse = MockResponse()
         .setResponseCode(200)
         .addHeader("Content-Type", "application/json")
@@ -238,6 +262,41 @@ private val CLIENT_JSON = """
       "additionalContacts":[],
       "createdAt":"2026-09-01T10:00:00Z",
       "updatedAt":"2026-09-02T10:00:00Z"
+    }
+""".trimIndent()
+
+private val ORDER_PAYMENT_JSON = """
+    {
+      "orderId":"$ORDER_ID",
+      "orderVersion":4,
+      "orderStatus":"SAVED",
+      "state":"PENDING",
+      "startedAt":"2026-09-05T10:00:00Z",
+      "expiresAt":"2026-09-05T10:05:00Z",
+      "resolvedAt":null,
+      "source":null,
+      "serverTime":"2026-09-05T10:01:00Z",
+      "canConfirm":true,
+      "receipt":{
+        "schemaVersion":1,
+        "orderId":"$ORDER_ID",
+        "orderNumber":"A-100",
+        "issuedAt":"2026-09-05T10:00:00Z",
+        "currency":"RUB",
+        "deliveryIncluded":false,
+        "lines":[{
+          "kind":"CABIN",
+          "rentalItemId":"$RENTAL_ITEM_ID",
+          "equipmentId":null,
+          "label":"Бытовка БК-101",
+          "quantity":"1",
+          "rentalMonths":2,
+          "unitPriceRubles":"9223372036854775808",
+          "amountRubles":"18446744073709551616",
+          "pricingVersion":4
+        }],
+        "totalRubles":"18446744073709551616"
+      }
     }
 """.trimIndent()
 

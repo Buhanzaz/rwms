@@ -27,6 +27,36 @@ class LogisticsContractFoundationTest {
   private final ObjectMapper objectMapper = new ObjectMapper();
 
   @Test
+  void cabinReserveRegisterIsReadOnlyAndDoesNotExposePrivateProvenance() throws Exception {
+    Map<String, Object> document = openApi();
+    var path =
+        child(child(document, "paths"), "/api/logistics/v1/rental-items/{rentalItemId}/reserves");
+    assertThat(path)
+        .containsKeys("get", "parameters")
+        .doesNotContainKeys("post", "put", "patch", "delete");
+    var operation = child(path, "get");
+    assertThat(child(operation, "responses")).containsKeys("200", "403", "404", "502", "503");
+    var schemas = child(child(document, "components"), "schemas");
+    var entry = child(schemas, "RentalItemReserve");
+    assertThat(child(entry, "properties"))
+        .containsOnlyKeys(
+            "reservationId",
+            "kind",
+            "source",
+            "createdAt",
+            "expiresAt",
+            "clientDisplayName",
+            "managerDisplayName",
+            "orderId",
+            "orderNumber",
+            "orderStatus",
+            "paymentState",
+            "canOpenOrder");
+    assertThat((List<?>) entry.get("required")).hasSize(12);
+    assertThat(entry.get("additionalProperties")).isEqualTo(false);
+  }
+
+  @Test
   void publicDraftCreationAndReadEndpointsAreAlreadyCanonicalized() throws Exception {
     Map<String, Object> document = openApi();
     Map<String, Object> paths = child(document, "paths");
@@ -761,6 +791,7 @@ class LogisticsContractFoundationTest {
             "arriveTransferLine",
             "cancelTransfer",
             "createCabinFurnitureTask",
+            "readRentalItemReserves",
             "createEquipmentMovementTask",
             "getEquipmentMovementTask",
             "cancelEquipmentMovementTask",

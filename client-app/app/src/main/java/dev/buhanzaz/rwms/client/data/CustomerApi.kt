@@ -102,6 +102,22 @@ interface CustomerApi {
     @GET("api/logistics/customer/v1/bookings")
     suspend fun bookings(): List<CustomerBooking>
 
+    @GET("api/logistics/customer/v1/bookings/{bookingId}/payment")
+    suspend fun payment(@Path("bookingId") bookingId: String): CustomerOrderPayment
+
+    @POST("api/logistics/customer/v1/bookings/{bookingId}/payment/confirm-test")
+    suspend fun confirmTestPayment(
+        @Path("bookingId") bookingId: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @Body request: ConfirmCustomerPaymentRequest,
+    ): CustomerOrderPayment
+
+    @GET("api/logistics/customer/v1/notifications")
+    suspend fun notifications(): List<CustomerNotification>
+
+    @POST("api/logistics/customer/v1/notifications/{notificationId}/read")
+    suspend fun readNotification(@Path("notificationId") notificationId: String): CustomerNotification
+
     @POST("api/logistics/customer/v1/bookings/{bookingId}/change-quotes")
     suspend fun createBookingChangeQuote(
         @Path("bookingId") bookingId: String,

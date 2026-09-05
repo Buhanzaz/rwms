@@ -504,6 +504,13 @@ fun BookingsScreen(
     onCallChangeSupport: (String) -> Unit = {},
     pendingChangeBookingIds: Set<String> = emptySet(),
     onResumeChange: (String) -> Unit = {},
+    payments: Map<String, CustomerObservedPayment> = emptyMap(),
+    paymentErrors: Map<String, String> = emptyMap(),
+    notifications: List<dev.buhanzaz.rwms.client.data.CustomerNotification> = emptyList(),
+    updatesError: String? = null,
+    onConfirmInitialPayment: (String) -> Unit = {},
+    onReadNotification: (String) -> Unit = {},
+    onRefreshUpdates: () -> Unit = {},
 ) {
     val visible = CustomerBookingPolicy.visible(latest, bookings)
     var acceptanceTarget by androidx.compose.runtime.remember {
@@ -534,6 +541,24 @@ fun BookingsScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onRefreshUpdates, enabled = !busy) { Text("Обновить заказы") }
+                    updatesError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    CustomerNotificationPermission()
+                }
+            }
+            items(notifications, key = { "notification-${it.id}" }) { notification ->
+                OutlinedCard(Modifier.fillMaxWidth().testTag("customer-notification-${notification.id}")) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Уведомление", style = MaterialTheme.typography.titleSmall)
+                        Text(notification.message)
+                        OutlinedButton(onClick = { onReadNotification(notification.id) }, enabled = !busy) {
+                            Text("Прочитано")
+                        }
+                    }
+                }
+            }
             if (visible.isEmpty()) item { Text("Оформленных заказов пока нет") }
             items(visible, key = { it.bookingId ?: it.inquiryId }) { booking ->
                 OutlinedCard(Modifier.fillMaxWidth().widthIn(max = 760.dp)) {
@@ -546,6 +571,15 @@ fun BookingsScreen(
                             "Статус: ${CustomerBookingLifecyclePolicy.statusLabel(booking.status)}",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        val payment = payments[booking.bookingId]
+                        if (payment != null) {
+                            CustomerInitialPaymentReceipt(payment, busy || paymentErrors[booking.bookingId] != null) {
+                                booking.bookingId?.let(onConfirmInitialPayment)
+                            }
+                        } else if (booking.orderId != null) {
+                            Text("Счёт загружается. Оплата пока недоступна.")
+                        }
+                        paymentErrors[booking.bookingId]?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                         booking.deliveryAddress?.let { address ->
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Icon(Icons.Default.LocationOn, contentDescription = null)

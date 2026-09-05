@@ -32,6 +32,7 @@ const ordersApi = vi.hoisted(() => ({
   getOrder: vi.fn(),
   listOrders: vi.fn(),
 }))
+const paymentApi = vi.hoisted(() => ({ getOrderPayment: vi.fn() }))
 const cabinFurnitureApi = vi.hoisted(() => ({
   createCabinFurnitureTask: vi.fn(),
 }))
@@ -89,6 +90,7 @@ vi.mock("@/features/orders/api/orders-api", () => ({
   getOrder: ordersApi.getOrder,
   listOrders: ordersApi.listOrders,
 }))
+vi.mock("@/features/orders/api/order-payments-api", () => paymentApi)
 vi.mock("@/features/logistics/cabin-furniture-tasks-api", () => ({
   createCabinFurnitureTask: cabinFurnitureApi.createCabinFurnitureTask,
 }))
@@ -167,6 +169,7 @@ vi.mock("@/features/logistics/logistics-driver-picker", () => ({
 }))
 
 import { LogisticsOrderTasksPage } from "@/features/logistics/logistics-order-tasks-page"
+import { orderPaymentFixture } from "@/features/orders/domain/order-payment.fixtures"
 
 const WAREHOUSE_ID = "11111111-1111-4111-8111-111111111111"
 const SHIPMENT_ID = "22222222-2222-4222-8222-222222222222"
@@ -448,6 +451,17 @@ beforeEach(() => {
     },
   ]
   const document = shipment()
+  paymentApi.getOrderPayment.mockResolvedValue(
+    orderPaymentFixture({
+      orderId: ORDER_ID,
+      orderVersion: 7,
+      state: null,
+      receipt: null,
+      startedAt: null,
+      expiresAt: null,
+      canConfirm: false,
+    })
+  )
   shipmentApi.listShipments.mockResolvedValue([document])
   returnApi.listReturns.mockResolvedValue([])
   ordersApi.listOrders.mockResolvedValue({
@@ -532,6 +546,157 @@ afterEach(() => {
 })
 
 describe("LogisticsOrderTasksPage", () => {
+  it("labels unpaid orders and blocks cabin selection and shipment creation", async () => {
+    const user = userEvent.setup()
+    useSavedOrderTask()
+    paymentApi.getOrderPayment.mockResolvedValue(
+      orderPaymentFixture({ orderId: ORDER_ID, orderVersion: 7 })
+    )
+    renderPage()
+    expect(
+      (await screen.findAllByText("Ожидает оплаты")).length
+    ).toBeGreaterThan(0)
+    await user.click(
+      screen.getAllByRole("button", { name: "Показать бытовки" })[0]
+    )
+    for (const checkbox of screen.getAllByRole("checkbox", {
+      name: "Выбрать бытовку БЫТ-001",
+    })) {
+      expect((checkbox as HTMLButtonElement).disabled).toBe(true)
+    }
+    expect(
+      screen.queryByRole("button", { name: "Создать отгрузку" })
+    ).toBeNull()
+    expect(
+      screen
+        .getAllByRole("link", { name: "Чек и оплата" })[0]
+        .getAttribute("href")
+    ).toBe(`/orders/${ORDER_ID}`)
+    expect(orderShipmentApi.createOrderShipment).not.toHaveBeenCalled()
+  })
+
+  it("admits cabins only after a refreshed server payment confirmation", async () => {
+    const user = userEvent.setup()
+    useSavedOrderTask()
+    paymentApi.getOrderPayment.mockResolvedValue(
+      orderPaymentFixture({ orderId: ORDER_ID, orderVersion: 7 })
+    )
+    const { queryClient } = renderPage()
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Показать бытовки" }))[0]
+    )
+    expect(
+      (
+        screen.getAllByRole("checkbox", {
+          name: "Выбрать бытовку БЫТ-001",
+        })[0] as HTMLButtonElement
+      ).disabled
+    ).toBe(true)
+    paymentApi.getOrderPayment.mockResolvedValue(
+      orderPaymentFixture({
+        orderId: ORDER_ID,
+        orderVersion: 7,
+        state: "CONFIRMED",
+        canConfirm: false,
+        source: "MANAGER_CONFIRMATION",
+        resolvedAt: "2026-09-05T12:01:00Z",
+      })
+    )
+    await act(async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["orders", "order-tasks-detail", ORDER_ID],
+      })
+    })
+    await waitFor(() =>
+      expect(
+        (
+          screen.getAllByRole("checkbox", {
+            name: "Выбрать бытовку БЫТ-001",
+          })[0] as HTMLButtonElement
+        ).disabled
+      ).toBe(false)
+    )
+    expect(orderShipmentApi.createOrderShipment).not.toHaveBeenCalled()
+  })
+
+  it("shows release in progress and removes an expired virtual task", async () => {
+    useSavedOrderTask()
+    paymentApi.getOrderPayment.mockResolvedValue(
+      orderPaymentFixture({
+        orderId: ORDER_ID,
+        orderVersion: 7,
+        state: "EXPIRING",
+        canConfirm: false,
+      })
+    )
+    const { queryClient } = renderPage()
+    expect(
+      (await screen.findAllByText("Освобождаем неоплаченную бронь")).length
+    ).toBeGreaterThan(0)
+    paymentApi.getOrderPayment.mockResolvedValue(
+      orderPaymentFixture({
+        orderId: ORDER_ID,
+        orderVersion: 7,
+        state: "EXPIRED",
+        orderStatus: "CANCELLED",
+        canConfirm: false,
+      })
+    )
+    await act(async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["orders", "order-tasks-detail", ORDER_ID],
+      })
+    })
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Показать бытовки" })
+      ).toBeNull()
+    )
+  })
+
+  it("shows payment read failures without treating missing data as legacy admission", async () => {
+    const user = userEvent.setup()
+    useSavedOrderTask()
+    paymentApi.getOrderPayment.mockRejectedValue(
+      new Error("Оплата временно недоступна")
+    )
+    renderPage()
+    expect(await screen.findByText("Оплата временно недоступна")).toBeTruthy()
+    expect(
+      screen.queryByRole("button", { name: "Показать бытовки" })
+    ).toBeNull()
+    paymentApi.getOrderPayment.mockResolvedValue(
+      orderPaymentFixture({ orderId: ORDER_ID, orderVersion: 7 })
+    )
+    await user.click(
+      screen.getByRole("button", { name: "Повторить загрузку оплаты заказов" })
+    )
+    expect(
+      (await screen.findAllByText("Ожидает оплаты")).length
+    ).toBeGreaterThan(0)
+    expect(orderShipmentApi.createOrderShipment).not.toHaveBeenCalled()
+  })
+
+  it("does not combine stale order contents with a different payment version", async () => {
+    useSavedOrderTask()
+    paymentApi.getOrderPayment.mockResolvedValue(
+      orderPaymentFixture({
+        orderId: ORDER_ID,
+        orderVersion: 8,
+        state: "CONFIRMED",
+      })
+    )
+    renderPage()
+    expect(
+      await screen.findByText(
+        "Данные заказа и оплаты обновляются. Повторите загрузку заданий."
+      )
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole("button", { name: "Показать бытовки" })
+    ).toBeNull()
+  })
+
   it("expands a task and shows selectable cabin composition", async () => {
     const user = userEvent.setup()
     useSavedOrderTask()

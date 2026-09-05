@@ -1,5 +1,7 @@
 package dev.buhanzaz.rwms.rentalmanager.ui.screens
 
+import android.os.SystemClock
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -15,6 +17,9 @@ import dev.buhanzaz.rwms.rentalmanager.data.RentalManagerSession
 import dev.buhanzaz.rwms.rentalmanager.network.CurrentUserDto
 import dev.buhanzaz.rwms.rentalmanager.network.DesiredDeliveryWindowDto
 import dev.buhanzaz.rwms.rentalmanager.network.OrderDto
+import dev.buhanzaz.rwms.rentalmanager.network.OrderPaymentDto
+import dev.buhanzaz.rwms.rentalmanager.network.OrderPaymentReceiptDto
+import dev.buhanzaz.rwms.rentalmanager.network.OrderPaymentReceiptLineDto
 import dev.buhanzaz.rwms.rentalmanager.network.OrderDesiredEquipmentDto
 import dev.buhanzaz.rwms.rentalmanager.network.OrderRentalItemDto
 import dev.buhanzaz.rwms.rentalmanager.network.OrderRentalTermDto
@@ -24,6 +29,7 @@ import dev.buhanzaz.rwms.rentalmanager.network.RentalClientDto
 import dev.buhanzaz.rwms.rentalmanager.network.WarehouseAccessDto
 import dev.buhanzaz.rwms.rentalmanager.network.WarehouseDto
 import dev.buhanzaz.rwms.rentalmanager.ui.RentalManagerPhase
+import dev.buhanzaz.rwms.rentalmanager.ui.ObservedOrderPayment
 import dev.buhanzaz.rwms.rentalmanager.ui.RentalManagerUiState
 import dev.buhanzaz.rwms.rentalmanager.ui.theme.RentalManagerTheme
 import org.junit.Rule
@@ -37,6 +43,77 @@ import org.robolectric.annotation.Config
 class RentalManagerScreensTest {
     @get:Rule
     val compose = createComposeRule()
+
+    @Test
+    fun `payment shows receipt factors and only explicit confirmation before deadline`() {
+        var confirmations = 0
+        val state = mutableStateOf(readyState().copy(
+            selectedOrder = order(canEdit = true).copy(status = "SAVED"),
+            selectedOrderPayment = observedPayment(),
+        ))
+        compose.setContent {
+            RentalManagerTheme {
+                OrderDetailScreen(
+                    state = state.value,
+                    onRetry = {},
+                    onUpdate = { _, _ -> },
+                    onSave = {},
+                    onCancel = {},
+                    onConfirmPayment = { confirmations += 1 },
+                    assistantBusy = false,
+                    onOpenAssistant = {},
+                    onDismissNotice = {},
+                )
+            }
+        }
+        compose.onNodeWithText("Бытовка: 1 × 100 ₽/мес. × 2 мес. = 200 ₽")
+            .performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Итого: 200 ₽").assertExists()
+        compose.onNodeWithText("Подтвердить оплату").performScrollTo().assertIsEnabled().performClick()
+        compose.runOnIdle {
+            assertThat(confirmations).isEqualTo(1)
+            val payment = requireNotNull(state.value.selectedOrderPayment)
+            state.value = state.value.copy(selectedOrderPayment = payment.copy(
+                payment = payment.payment.copy(serverTime = "2026-09-05T10:05:00Z", canConfirm = false),
+                observedElapsedRealtimeMillis = SystemClock.elapsedRealtime(),
+            ))
+        }
+        compose.onNodeWithText("Подтвердить оплату").assertDoesNotExist()
+        compose.onNodeWithText("Обновить статус оплаты").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun `confirmed payment preserves customer and public test provenance`() {
+        val observed = observedPayment()
+        val state = mutableStateOf(readyState().copy(
+            selectedOrder = order(canEdit = false).copy(status = "SAVED"),
+            selectedOrderPayment = observed.copy(payment = observed.payment.copy(
+                state = "CONFIRMED", source = "CUSTOMER_TEST", canConfirm = false,
+                resolvedAt = "2026-09-05T10:01:00Z",
+            )),
+        ))
+        compose.setContent {
+            RentalManagerTheme {
+                OrderDetailScreen(
+                    state = state.value, onRetry = {}, onUpdate = { _, _ -> },
+                    onSave = {}, onCancel = {}, assistantBusy = false,
+                    onOpenAssistant = {}, onDismissNotice = {},
+                )
+            }
+        }
+        compose.onNodeWithText("Тестовая оплата подтверждена клиентом.")
+            .performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Оплата подтверждена менеджером.").assertDoesNotExist()
+        compose.onNodeWithText("Подтвердить оплату").assertDoesNotExist()
+        compose.runOnIdle {
+            val payment = requireNotNull(state.value.selectedOrderPayment)
+            state.value = state.value.copy(selectedOrderPayment = payment.copy(
+                payment = payment.payment.copy(source = "PRESENTATION_TEST"),
+            ))
+        }
+        compose.onNodeWithText("Тестовая оплата подтверждена по предложению.")
+            .performScrollTo().assertIsDisplayed()
+    }
 
     @Test
     fun `client list shows normalized legal type and mobile action without foreign systems`() {
@@ -419,6 +496,25 @@ private fun client(): RentalClientDto = RentalClientDto(
     responsibleManagerId = USER_ID,
     responsibleManagerDisplayName = "Менеджер",
     updatedAt = "2026-09-02T10:00:00Z",
+)
+
+private fun observedPayment(): ObservedOrderPayment = ObservedOrderPayment(
+    payment = OrderPaymentDto(
+        orderId = ORDER_ID, orderVersion = 4, orderStatus = "SAVED", state = "PENDING",
+        startedAt = "2026-09-05T10:00:00Z", expiresAt = "2026-09-05T10:05:00Z",
+        resolvedAt = null, source = null, serverTime = "2026-09-05T10:01:00Z", canConfirm = true,
+        receipt = OrderPaymentReceiptDto(
+            schemaVersion = 1, orderId = ORDER_ID, orderNumber = "A-100",
+            issuedAt = "2026-09-05T10:00:00Z", currency = "RUB", deliveryIncluded = false,
+            lines = listOf(OrderPaymentReceiptLineDto(
+                kind = "CABIN", rentalItemId = RENTAL_ITEM_ID, equipmentId = null,
+                label = "Бытовка", quantity = "1", rentalMonths = 2,
+                unitPriceRubles = "100", amountRubles = "200", pricingVersion = 1,
+            )),
+            totalRubles = "200",
+        ),
+    ),
+    observedElapsedRealtimeMillis = SystemClock.elapsedRealtime(),
 )
 
 private fun order(canEdit: Boolean): OrderDto = OrderDto(

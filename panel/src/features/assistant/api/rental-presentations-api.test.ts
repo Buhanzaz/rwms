@@ -3,13 +3,16 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   actOnRentalBookingAlert,
   confirmPublicPresentation,
+  confirmPublicPresentationTestPayment,
   getPublicPresentation,
+  getPublicPresentationPayment,
   getClientPresentation,
   getRentalBookingAlerts,
   getRentalSettings,
   publishClientPresentation,
   updateRentalSettings,
 } from "@/features/assistant/api/rental-presentations-api"
+import { orderPaymentFixture } from "@/features/orders/domain/order-payment.fixtures"
 
 const INQUIRY_ID = "11111111-1111-4111-8111-111111111111"
 const WAREHOUSE_ID = "22222222-2222-4222-8222-222222222222"
@@ -21,6 +24,94 @@ afterEach(() => {
 })
 
 describe("rental presentation API", () => {
+  it("reads and confirms only the exact public booking payment without Bearer or client money", async () => {
+    const payment = orderPaymentFixture()
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () => Response.json(payment))
+    vi.stubGlobal("fetch", fetchMock)
+    const scope = {
+      token: "opaque/token",
+      bookingId: INQUIRY_ID,
+      orderId: payment.orderId,
+    }
+    await expect(getPublicPresentationPayment(scope)).resolves.toEqual(payment)
+    await expect(
+      confirmPublicPresentationTestPayment({
+        ...scope,
+        expectedVersion: 4,
+        idempotencyKey: IDEMPOTENCY_KEY,
+      })
+    ).resolves.toEqual(payment)
+    const [readUrl, readInit] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(readUrl).pathname).toBe(
+      "/api/logistics/public/v1/client-presentations/opaque%2Ftoken/bookings/" +
+        INQUIRY_ID +
+        "/payment"
+    )
+    expect(new Headers(readInit.headers).get("Authorization")).toBeNull()
+    const [confirmUrl, confirmInit] = fetchMock.mock.calls[1] as [
+      string,
+      RequestInit,
+    ]
+    expect(confirmUrl).toBe(readUrl + "/confirm-test")
+    expect(new Headers(confirmInit.headers).get("Authorization")).toBeNull()
+    expect(new Headers(confirmInit.headers).get("Idempotency-Key")).toBe(
+      IDEMPOTENCY_KEY
+    )
+    expect(confirmInit.method).toBe("POST")
+    expect(JSON.parse(String(confirmInit.body))).toEqual({ expectedVersion: 4 })
+  })
+
+  it("keeps public payment expiry conflicts and checks order identity", async () => {
+    const payment = orderPaymentFixture()
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json(
+          {
+            code: "ORDER_PAYMENT_NOT_PENDING",
+            detail: "Время оплаты истекло",
+          },
+          { status: 409 }
+        )
+      )
+    )
+    await expect(
+      confirmPublicPresentationTestPayment({
+        token: "token",
+        bookingId: INQUIRY_ID,
+        orderId: payment.orderId,
+        expectedVersion: 4,
+        idempotencyKey: IDEMPOTENCY_KEY,
+      })
+    ).rejects.toMatchObject({ status: 409, code: "ORDER_PAYMENT_NOT_PENDING" })
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(payment)))
+    await expect(
+      getPublicPresentationPayment({
+        token: "token",
+        bookingId: INQUIRY_ID,
+        orderId: WAREHOUSE_ID,
+      })
+    ).rejects.toMatchObject({ code: "INVALID_API_RESPONSE" })
+  })
+
+  it("requires a nullable server booking identity for reload instead of accepting a missing field", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () => Response.json({ groups: [] }))
+    vi.stubGlobal("fetch", fetchMock)
+    await expect(getPublicPresentation("token")).rejects.toMatchObject({
+      code: "INVALID_API_RESPONSE",
+    })
+    fetchMock.mockImplementation(async () =>
+      Response.json({ groups: [], bookingId: INQUIRY_ID })
+    )
+    await expect(getPublicPresentation("token")).resolves.toMatchObject({
+      bookingId: INQUIRY_ID,
+    })
+  })
+
   it("validates snapshot prices on both public and authenticated presentation reads", async () => {
     const fetchMock = vi.fn().mockImplementation(async () =>
       Response.json({
@@ -247,6 +338,7 @@ describe("rental presentation API", () => {
             viewUntil: "2026-07-28T09:00:00Z",
             viewOnly: false,
             requestableDeliveryDates,
+            bookingId: null,
             bookedOrderId: null,
             groups: [],
           }),

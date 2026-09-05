@@ -8,6 +8,7 @@ import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 import type { AdditionalContact } from "@/features/clients/domain/clients"
 import type { DesiredDeliveryWindow } from "@/features/orders/domain/orders"
 import { assertPresentationRentalPrice } from "@/features/assistant/api/rental-pricing-api"
+import { parseOrderPayment } from "@/features/orders/domain/order-payment"
 
 export type PresentationPhoto = {
   mediaId: string
@@ -93,6 +94,8 @@ export type PublicClientPresentation = {
   desiredDeliveryWindows: DesiredDeliveryWindow[]
   equipmentAvailability: PresentationEquipmentAvailability[]
   groups: PresentationGroup[]
+  /** Server-owned identity restores this exact revision's booking after a page reload. */
+  bookingId: string | null
   bookedOrderId: string | null
 }
 
@@ -397,11 +400,22 @@ async function publicBookingJson(
 }
 
 export async function getPublicPresentation(token: string) {
-  return parsePresentationPrices(
+  const value = parsePresentationPrices(
     await publicJson<PublicClientPresentation>(
       publicPresentationEndpoint(token)
     )
   )
+  if (
+    value.bookingId !== null &&
+    (typeof value.bookingId !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        value.bookingId
+      ))
+  )
+    throw invalidApiResponseError(
+      "Сервис не вернул корректный идентификатор бронирования."
+    )
+  return value
 }
 
 export function confirmPublicPresentation(params: {
@@ -442,5 +456,47 @@ export function getPublicPresentationBooking(params: {
       params.token,
       `/bookings/${encodeURIComponent(params.bookingId)}`
     )
+  )
+}
+
+export async function getPublicPresentationPayment(params: {
+  token: string
+  bookingId: string
+  orderId: string
+}) {
+  return parseOrderPayment(
+    await publicJson<unknown>(
+      publicPresentationEndpoint(
+        params.token,
+        "/bookings/" + encodeURIComponent(params.bookingId) + "/payment"
+      )
+    ),
+    params.orderId
+  )
+}
+
+/** Explicit simulation; no card information or provider credentials are accepted by this route. */
+export async function confirmPublicPresentationTestPayment(params: {
+  token: string
+  bookingId: string
+  orderId: string
+  expectedVersion: number
+  idempotencyKey: string
+}) {
+  return parseOrderPayment(
+    await publicJson<unknown>(
+      publicPresentationEndpoint(
+        params.token,
+        "/bookings/" +
+          encodeURIComponent(params.bookingId) +
+          "/payment/confirm-test"
+      ),
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": params.idempotencyKey },
+        body: JSON.stringify({ expectedVersion: params.expectedVersion }),
+      }
+    ),
+    params.orderId
   )
 }

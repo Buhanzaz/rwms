@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -20,6 +20,10 @@ const ordersApi = vi.hoisted(() => ({
 const warehouseApi = vi.hoisted(() => ({
   listWarehouseSupportLinks: vi.fn(),
 }))
+const paymentApi = vi.hoisted(() => ({
+  getOrderPayment: vi.fn(),
+  confirmOrderPayment: vi.fn(),
+}))
 const ordersRuntime = vi.hoisted(() => ({
   capabilities: {
     manualBooking: true,
@@ -35,6 +39,10 @@ vi.mock("@/features/orders/api/orders-api", () => ({
   ...ordersApi,
 }))
 vi.mock("@/api/warehouse-api", () => warehouseApi)
+vi.mock("@/features/orders/api/order-payments-api", () => ({
+  ORDER_PAYMENT_QUERY_KEY: ["orders", "payment"],
+  ...paymentApi,
+}))
 vi.mock("@/hooks/use-warehouse", () => ({
   useWarehouse: () => ({
     warehouses: [
@@ -83,6 +91,8 @@ vi.mock("sonner", () => ({
 
 import { OrderDetailPage } from "@/features/orders/pages/order-detail-page"
 import type { OrderDetail } from "@/features/orders/domain/orders"
+import { orderPaymentFixture } from "@/features/orders/domain/order-payment.fixtures"
+import { ApiError } from "@/lib/api-client"
 
 const ORDER_ID = "33333333-3333-4333-8333-333333333333"
 const CLIENT_ID = "44444444-4444-4444-8444-444444444444"
@@ -243,6 +253,17 @@ beforeEach(() => {
     directWarehouseReplacement: true,
   })
   ordersApi.listOrderHistory.mockResolvedValue([])
+  paymentApi.getOrderPayment.mockResolvedValue(
+    orderPaymentFixture({
+      orderVersion: 3,
+      state: null,
+      receipt: null,
+      startedAt: null,
+      expiresAt: null,
+      canConfirm: false,
+    })
+  )
+  paymentApi.confirmOrderPayment.mockReset()
   warehouseApi.listWarehouseSupportLinks.mockResolvedValue({
     servedWarehouseId: "22222222-2222-4222-8222-222222222222",
     warehouseVersion: 1,
@@ -263,6 +284,96 @@ afterEach(() => {
 })
 
 describe("OrderDetailPage cabin entry", () => {
+  it("uses the server payment fence and permission for manager confirmation, not the displayed order version", async () => {
+    paymentApi.getOrderPayment.mockResolvedValue(orderPaymentFixture())
+    paymentApi.confirmOrderPayment.mockResolvedValue(
+      orderPaymentFixture({
+        orderVersion: 5,
+        state: "CONFIRMED",
+        canConfirm: false,
+        source: "MANAGER_CONFIRMATION",
+      })
+    )
+    const user = userEvent.setup()
+    renderPage({
+      ...baseOrder,
+      status: "SAVED",
+      warehouseId: selectedUnit.unit.warehouseId,
+    })
+    expect(await screen.findByText("Чек заказа ORD-000042")).toBeTruthy()
+    expect(screen.getByText("Ожидает оплаты")).toBeTruthy()
+    expect(paymentApi.confirmOrderPayment).not.toHaveBeenCalled()
+    await user.click(screen.getByRole("button", { name: "Подтвердить оплату" }))
+    expect(
+      await screen.findByText("Оплата подтверждена менеджером")
+    ).toBeTruthy()
+    expect(paymentApi.confirmOrderPayment).toHaveBeenCalledWith({
+      accessToken: "orders-token",
+      orderId: ORDER_ID,
+      expectedVersion: 4,
+      idempotencyKey: expect.any(String),
+    })
+    expect(
+      screen.queryByRole("button", { name: "Подтвердить оплату" })
+    ).toBeNull()
+  })
+
+  it("does not expose confirmation or shipment navigation for an unpaid read-only order", async () => {
+    ordersRuntime.capabilities.logisticsTaskNavigation = true
+    paymentApi.getOrderPayment.mockResolvedValue(
+      orderPaymentFixture({ canConfirm: false })
+    )
+    renderPage({
+      ...baseOrder,
+      status: "SAVED",
+      warehouseId: selectedUnit.unit.warehouseId,
+    })
+    expect(await screen.findByText("Ожидает оплаты")).toBeTruthy()
+    expect(
+      screen.queryByRole("button", { name: "Подтвердить оплату" })
+    ).toBeNull()
+    expect(
+      screen.queryByRole("link", { name: "Перейти к заданиям" })
+    ).toBeNull()
+  })
+
+  it("keeps the same command identity after an uncertain response and never retries confirmation automatically", async () => {
+    paymentApi.getOrderPayment.mockResolvedValue(orderPaymentFixture())
+    paymentApi.confirmOrderPayment
+      .mockRejectedValueOnce(
+        new ApiError("Ответ не получен", 0, "NETWORK_ERROR")
+      )
+      .mockResolvedValue(
+        orderPaymentFixture({
+          orderVersion: 5,
+          state: "CONFIRMED",
+          canConfirm: false,
+          source: "MANAGER_CONFIRMATION",
+        })
+      )
+    const user = userEvent.setup()
+    renderPage({
+      ...baseOrder,
+      status: "SAVED",
+      warehouseId: selectedUnit.unit.warehouseId,
+    })
+    await user.click(
+      await screen.findByRole("button", { name: "Подтвердить оплату" })
+    )
+    await waitFor(() =>
+      expect(paymentApi.getOrderPayment.mock.calls.length).toBeGreaterThan(1)
+    )
+    expect(paymentApi.confirmOrderPayment).toHaveBeenCalledOnce()
+    await user.click(screen.getByRole("button", { name: "Подтвердить оплату" }))
+    expect(
+      await screen.findByText("Оплата подтверждена менеджером")
+    ).toBeTruthy()
+    const [first, second] = paymentApi.confirmOrderPayment.mock.calls.map(
+      ([command]) => command
+    )
+    expect(second.idempotencyKey).toBe(first.idempotencyKey)
+  })
+
   it("shows a waiver reason and exact fee only for the owner charge audit subject", async () => {
     const audit = {
       id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",

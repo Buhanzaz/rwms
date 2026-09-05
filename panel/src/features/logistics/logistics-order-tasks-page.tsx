@@ -84,6 +84,11 @@ import {
   listOrders,
   ORDERS_QUERY_KEY,
 } from "@/features/orders/api/orders-api"
+import { getOrderPayment } from "@/features/orders/api/order-payments-api"
+import {
+  paymentAllowsFulfillment,
+  type OrderPayment,
+} from "@/features/orders/domain/order-payment"
 import type { RepairTaskWorkerSnapshotDto } from "@/features/repair-tasks/model/repair-task"
 import { RENTAL_ITEM_STATUS_LABEL } from "@/features/rental-items/model/rental-item"
 import {
@@ -106,6 +111,8 @@ type RentalOrderTask = {
   /** A saved order without a shipment yet; it is the actionable order task. */
   virtual?: boolean
   order?: OrderDetail
+  /** Exact payment evidence for virtual tasks; an unavailable read never admits fulfillment. */
+  payment?: OrderPayment
 }
 
 type ShipmentConfirmationCommand = {
@@ -115,6 +122,8 @@ type ShipmentConfirmationCommand = {
 }
 
 const TASK_STATES = [
+  "WAITING_PAYMENT",
+  "PAYMENT_EXPIRING",
   "WAITING_SHIPMENT",
   "IN_PROGRESS_SHIPMENT",
   "SHIPPED",
@@ -125,6 +134,8 @@ const TASK_STATES = [
 type TaskState = (typeof TASK_STATES)[number]
 
 const TASK_STATE_LABELS: Record<TaskState, string> = {
+  WAITING_PAYMENT: "Ожидает оплаты",
+  PAYMENT_EXPIRING: "Освобождаем неоплаченную бронь",
   WAITING_SHIPMENT: "Ожидает отгрузки",
   IN_PROGRESS_SHIPMENT: "В процессе отгрузки",
   SHIPPED: "Отгружено",
@@ -319,6 +330,11 @@ function taskState(
   referenceLabels: LogisticsReferenceLabels | undefined,
   businessDate: string | null
 ): TaskState {
+  if (task.virtual && !paymentAllowsFulfillment(task.payment)) {
+    return task.payment?.state === "EXPIRING"
+      ? "PAYMENT_EXPIRING"
+      : "WAITING_PAYMENT"
+  }
   if (task.kind === "RETURN") {
     const document = task.document as ReturnDocument
     if (document.state === "DRAFT") {
@@ -348,9 +364,7 @@ function taskState(
       order &&
       document.lines.some((line) => {
         const term = unitTerm(order, line.assetId)
-        return term?.returnDate
-          ? isDue(term.returnDate, businessDate)
-          : false
+        return term?.returnDate ? isDue(term.returnDate, businessDate) : false
       })
     ) {
       return "REQUIRES_RETURN"
@@ -462,7 +476,9 @@ export function LogisticsOrderTasksPage() {
   const warehouseTimeZones = useMemo(
     () =>
       new Map(
-        warehouses.map((warehouse) => [warehouse.id, warehouse.timeZone] as const)
+        warehouses.map(
+          (warehouse) => [warehouse.id, warehouse.timeZone] as const
+        )
       ),
     [warehouses]
   )
@@ -513,7 +529,21 @@ export function LogisticsOrderTasksPage() {
   const savedOrderDetailsQueries = useQueries({
     queries: (savedOrdersQuery.data ?? []).map((summary) => ({
       queryKey: [...ORDERS_QUERY_KEY, "order-tasks-detail", summary.id],
-      queryFn: () => getOrder(accessToken!, summary.id),
+      queryFn: async () => {
+        const [order, payment] = await Promise.all([
+          getOrder(accessToken!, summary.id),
+          getOrderPayment(accessToken!, summary.id),
+        ])
+        if (
+          payment.orderId !== order.id ||
+          payment.orderVersion !== order.version
+        ) {
+          throw new Error(
+            "Данные заказа и оплаты обновляются. Повторите загрузку заданий."
+          )
+        }
+        return { order, payment }
+      },
       enabled: Boolean(accessToken),
       refetchInterval: 5_000,
     })),
@@ -536,6 +566,10 @@ export function LogisticsOrderTasksPage() {
             )}`
           : "Сервис логистики не вернул лимит бытовок в одном задании отгрузки."
       : null
+
+  const savedOrderReadError = savedOrderDetailsQueries.find(
+    (query) => query.isError
+  )?.error
 
   const tasks = useMemo<RentalOrderTask[]>(() => {
     const rentalReturns = (returnsQuery.data ?? [])
@@ -588,9 +622,15 @@ export function LogisticsOrderTasksPage() {
       )
     )
     const pendingOrders = savedOrderDetailsQueries.flatMap((query) => {
-      const document = query.data
-        ? pendingOrderShipment(query.data, assignedUnitIds)
-        : null
+      const source = query.isError ? undefined : query.data
+      const terminal =
+        source?.payment.orderStatus === "CANCELLED" ||
+        source?.payment.state === "EXPIRED" ||
+        source?.payment.state === "CANCELLED"
+      const document =
+        source && !terminal
+          ? pendingOrderShipment(source.order, assignedUnitIds)
+          : null
       return document
         ? [
             {
@@ -598,7 +638,8 @@ export function LogisticsOrderTasksPage() {
               kind: "SHIPMENT" as const,
               document,
               virtual: true,
-              order: query.data,
+              order: source!.order,
+              payment: source!.payment,
             },
           ]
         : []
@@ -677,11 +718,7 @@ export function LogisticsOrderTasksPage() {
   const rows = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ru")
     return tasks.filter((task) => {
-      const state = taskState(
-        task,
-        referenceLabels,
-        businessDateForTask(task)
-      )
+      const state = taskState(task, referenceLabels, businessDateForTask(task))
       if (filters.states.length > 0 && !filters.states.includes(state)) {
         return false
       }
@@ -798,6 +835,11 @@ export function LogisticsOrderTasksPage() {
         task.order ??
         orderFromLabels(referenceLabels, task.document.rentalOrderId)
       if (!order) throw new Error("Не удалось загрузить версию заказа")
+      if (!paymentAllowsFulfillment(task.payment)) {
+        throw new Error(
+          "Сначала подтвердите оплату заказа. Отгрузка пока недоступна."
+        )
+      }
       const unitIds = task.document.lines
         .filter((line) => selectedLineIds.includes(line.id))
         .map((line) => line.assetId)
@@ -1140,7 +1182,8 @@ export function LogisticsOrderTasksPage() {
   const canSubmitSelectedTask =
     selectedTask !== null &&
     (selectedTask.kind === "SHIPMENT"
-      ? selectedTask.virtual === true
+      ? selectedTask.virtual === true &&
+        paymentAllowsFulfillment(selectedTask.payment)
       : selectedTask.document.state === "DRAFT")
 
   return (
@@ -1210,15 +1253,31 @@ export function LogisticsOrderTasksPage() {
       {!selectedWarehouseId ? (
         <FieldError>Выберите склад для просмотра заданий.</FieldError>
       ) : null}
-      {shipmentsQuery.error || returnsQuery.error || savedOrdersQuery.error ? (
+      {shipmentsQuery.error ||
+      returnsQuery.error ||
+      savedOrdersQuery.error ||
+      savedOrderReadError ? (
         <FieldError>
           {errorMessage(
             shipmentsQuery.error ??
               returnsQuery.error ??
-              savedOrdersQuery.error,
+              savedOrdersQuery.error ??
+              savedOrderReadError,
             "Не удалось загрузить задания"
           )}
         </FieldError>
+      ) : null}
+      {savedOrderReadError ? (
+        <Button
+          variant="outline"
+          onClick={() => {
+            for (const query of savedOrderDetailsQueries) {
+              if (query.isError) void query.refetch()
+            }
+          }}
+        >
+          Повторить загрузку оплаты заказов
+        </Button>
       ) : null}
       {shipmentTaskSettingsMessage && !shipmentTaskSettingsQuery.isLoading ? (
         <FieldError>{shipmentTaskSettingsMessage}</FieldError>
@@ -1334,11 +1393,7 @@ export function LogisticsOrderTasksPage() {
                 label: "Статус",
                 className: "w-52",
                 getSortValue: (task) =>
-                  taskState(
-                    task,
-                    referenceLabels,
-                    businessDateForTask(task)
-                  ),
+                  taskState(task, referenceLabels, businessDateForTask(task)),
                 render: (task) => {
                   const state = taskState(
                     task,
@@ -1532,7 +1587,11 @@ export function LogisticsOrderTasksPage() {
         </div>
       </div>
 
-      {scheduleTarget && accessToken ? (
+      {scheduleTarget &&
+      accessToken &&
+      (scheduleTarget.kind === "RETURN" ||
+        (selectedTask?.id === scheduleTarget.id &&
+          paymentAllowsFulfillment(selectedTask.payment))) ? (
         <TaskScheduleDialog
           accessToken={accessToken}
           task={scheduleTarget}
@@ -1633,6 +1692,11 @@ function TaskActions({
       <Button type="button" size="sm" variant="outline" onClick={onToggle}>
         {expanded ? "Скрыть бытовки" : "Показать бытовки"}
       </Button>
+      {task.virtual && !paymentAllowsFulfillment(task.payment) && task.order ? (
+        <Button asChild size="sm" variant="outline">
+          <Link to={"/orders/" + task.order.id}>Чек и оплата</Link>
+        </Button>
+      ) : null}
       {canEdit && shipment?.state === "DRAFT" && !task.virtual ? (
         furnitureTaskCreationNeeded ? (
           <Button
@@ -1735,7 +1799,9 @@ function SelectedCabinsActions({
           pending ||
           !hasAccessToken ||
           (task.kind === "SHIPMENT" &&
-            (shipmentTaskCap === null || selectedLineCount > shipmentTaskCap))
+            (shipmentTaskCap === null ||
+              selectedLineCount > shipmentTaskCap ||
+              !paymentAllowsFulfillment(task.payment)))
         }
         onClick={onSchedule}
       >
@@ -1817,6 +1883,7 @@ function RentalOrderTaskLines({
         const disabled =
           !canEdit ||
           (task.kind === "SHIPMENT" && !task.virtual) ||
+          (task.virtual && !paymentAllowsFulfillment(task.payment)) ||
           shipmentLimitUnavailable ||
           shipmentLimitReached ||
           ["CANCELLED", "ARRIVED", "DEPARTED"].includes(line.state) ||

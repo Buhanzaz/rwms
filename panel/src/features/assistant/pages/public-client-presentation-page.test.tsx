@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -31,6 +32,8 @@ const api = vi.hoisted(() => ({
   get: vi.fn(),
   confirm: vi.fn(),
   booking: vi.fn(),
+  payment: vi.fn(),
+  pay: vi.fn(),
 }))
 
 vi.mock("@/features/assistant/api/rental-presentations-api", async () => {
@@ -42,6 +45,8 @@ vi.mock("@/features/assistant/api/rental-presentations-api", async () => {
     getPublicPresentation: api.get,
     confirmPublicPresentation: api.confirm,
     getPublicPresentationBooking: api.booking,
+    getPublicPresentationPayment: api.payment,
+    confirmPublicPresentationTestPayment: api.pay,
   }
 })
 
@@ -54,6 +59,7 @@ import {
   presentationDraftIssues,
 } from "@/features/assistant/pages/public-client-presentation-draft"
 import { PublicClientPresentationPage } from "@/features/assistant/pages/public-client-presentation-page"
+import { orderPaymentFixture } from "@/features/orders/domain/order-payment.fixtures"
 
 const REQUESTABLE_DELIVERY_DATES = [
   "2026-08-25",
@@ -162,6 +168,7 @@ function presentation(
         cabins: [cabin("cabin-1", "БЫТ-1", 1), cabin("cabin-2", "БЫТ-2")],
       },
     ],
+    bookingId: null,
     bookedOrderId: null,
     ...overrides,
   }
@@ -262,6 +269,18 @@ beforeEach(() => {
   api.get.mockImplementation(async () => api.presentation)
   api.confirm.mockResolvedValue(completedBooking)
   api.booking.mockResolvedValue(completedBooking)
+  api.payment.mockResolvedValue(
+    orderPaymentFixture({ orderId: completedBooking.orderId! })
+  )
+  api.pay.mockResolvedValue(
+    orderPaymentFixture({
+      orderId: completedBooking.orderId!,
+      orderVersion: 5,
+      state: "CONFIRMED",
+      canConfirm: false,
+      source: "PRESENTATION_TEST",
+    })
+  )
 })
 
 afterEach(() => {
@@ -270,6 +289,150 @@ afterEach(() => {
 })
 
 describe("public client presentation", () => {
+  it("restores a booked presentation's bill from server identity and pays only after an explicit click", async () => {
+    api.presentation = presentation({
+      state: "BOOKED",
+      viewOnly: true,
+      bookingId: completedBooking.bookingId,
+      bookedOrderId: completedBooking.orderId,
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    expect(await screen.findByText("Чек заказа ORD-000042")).toBeTruthy()
+    expect(api.booking).toHaveBeenCalledWith({
+      token: "example-token",
+      bookingId: completedBooking.bookingId,
+    })
+    expect(api.payment).toHaveBeenCalledWith({
+      token: "example-token",
+      bookingId: completedBooking.bookingId,
+      orderId: completedBooking.orderId,
+    })
+    expect(screen.getByText("Ожидает оплаты")).toBeTruthy()
+    expect(screen.getByRole("timer").textContent).toMatch(/^0[45]:[0-5][0-9]$/)
+    expect(api.pay).not.toHaveBeenCalled()
+    expect(screen.queryByText("Оплачено — тестовый режим")).toBeNull()
+    await user.click(screen.getByRole("button", { name: "Оплатить (тест)" }))
+    expect(await screen.findByText("Оплачено — тестовый режим")).toBeTruthy()
+    expect(api.pay).toHaveBeenCalledWith({
+      token: "example-token",
+      bookingId: completedBooking.bookingId,
+      orderId: completedBooking.orderId,
+      expectedVersion: 4,
+      idempotencyKey: expect.any(String),
+    })
+    expect(api.confirm).not.toHaveBeenCalled()
+  })
+
+  it("polls the server-restored pending booking before reading a bill", async () => {
+    api.presentation = presentation({
+      state: "BOOKING_PENDING",
+      viewOnly: true,
+      bookingId: completedBooking.bookingId,
+      bookedOrderId: null,
+    })
+    api.booking
+      .mockResolvedValueOnce({
+        ...completedBooking,
+        state: "PENDING",
+        orderId: null,
+      })
+      .mockResolvedValue(completedBooking)
+    renderPage()
+    expect(await screen.findByText("Создаём бронирование…")).toBeTruthy()
+    expect(api.payment).not.toHaveBeenCalled()
+    expect(
+      await screen.findByText("Чек заказа ORD-000042", {}, { timeout: 4_000 })
+    ).toBeTruthy()
+    expect(api.booking.mock.calls.length).toBeGreaterThan(1)
+    expect(api.confirm).not.toHaveBeenCalled()
+  })
+
+  it("does not call a pending confirmation paid and reconciles expiry without resubmitting", async () => {
+    api.presentation = presentation({
+      state: "BOOKED",
+      viewOnly: true,
+      bookingId: completedBooking.bookingId,
+      bookedOrderId: completedBooking.orderId,
+    })
+    let rejectPayment: ((error: Error) => void) | undefined
+    api.pay.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectPayment = reject
+        })
+    )
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(
+      await screen.findByRole("button", { name: "Оплатить (тест)" })
+    )
+    expect(
+      screen.getByRole("button", { name: "Подтверждаем…" })
+    ).toHaveProperty("disabled", true)
+    expect(screen.queryByText("Оплачено — тестовый режим")).toBeNull()
+    api.payment.mockResolvedValue(
+      orderPaymentFixture({
+        state: "EXPIRED",
+        canConfirm: false,
+        orderStatus: "CANCELLED",
+        serverTime: "2026-09-05T12:05:01Z",
+      })
+    )
+    await act(async () =>
+      rejectPayment!(
+        new ApiError("Время оплаты истекло", 409, "ORDER_PAYMENT_NOT_PENDING")
+      )
+    )
+    expect(
+      await screen.findByText("Бронь отменена: время оплаты истекло")
+    ).toBeTruthy()
+    expect(api.pay).toHaveBeenCalledOnce()
+    expect(screen.queryByRole("button", { name: "Оплатить (тест)" })).toBeNull()
+    expect(screen.queryByText("Оплачено — тестовый режим")).toBeNull()
+  })
+
+  it("keeps a missing initial bill distinct from a successful or free payment", async () => {
+    api.presentation = presentation({
+      state: "BOOKED",
+      viewOnly: true,
+      bookingId: completedBooking.bookingId,
+      bookedOrderId: completedBooking.orderId,
+    })
+    api.payment.mockResolvedValue(
+      orderPaymentFixture({
+        orderStatus: "DRAFT",
+        state: null,
+        receipt: null,
+        startedAt: null,
+        expiresAt: null,
+        canConfirm: false,
+      })
+    )
+    renderPage()
+    expect(await screen.findByText("Чек ещё не сформирован")).toBeTruthy()
+    expect(screen.getByText(/Срок оплаты ещё не начался/)).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Оплатить (тест)" })).toBeNull()
+    expect(screen.queryByText("0 ₽")).toBeNull()
+  })
+
+  it("does not offer another initial payment for a replacement presentation", async () => {
+    api.presentation = presentation({
+      mode: "REPLACEMENT",
+      state: "BOOKED",
+      viewOnly: true,
+      bookingId: completedBooking.bookingId,
+      bookedOrderId: completedBooking.orderId,
+      requiredSelectionCount: 1,
+    })
+    renderPage()
+    expect(await screen.findByText("Выбор отправлен менеджеру")).toBeTruthy()
+    expect(api.payment).not.toHaveBeenCalled()
+    expect(api.pay).not.toHaveBeenCalled()
+    expect(screen.queryByText("Чек и оплата")).toBeNull()
+  })
+
   it("shows the frozen price and keeps historical unknowns distinct from a zero tariff", async () => {
     api.presentation = presentation({
       groups: [

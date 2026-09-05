@@ -259,10 +259,11 @@ private fun ManagerNavigation(
                         LaunchedEffect(route.orderId) { viewModel.openOrder(route.orderId) }
                         OrderDetailScreen(
                             state = state,
-                            onRetry = { viewModel.openOrder(route.orderId) },
+                            onRetry = viewModel::refreshCurrentOrder,
                             onUpdate = viewModel::updateOrder,
                             onSave = viewModel::saveOrder,
                             onCancel = viewModel::cancelOrder,
+                            onConfirmPayment = viewModel::confirmOrderPayment,
                             assistantBusy = chatState.creatingConversation ||
                                 chatState.archivingConversation ||
                                 chatState.sending ||

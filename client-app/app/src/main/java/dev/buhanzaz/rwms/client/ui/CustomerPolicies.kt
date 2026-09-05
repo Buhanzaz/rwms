@@ -296,7 +296,7 @@ internal object CustomerBookingLifecyclePolicy {
 /** Decides when a terminal customer inquiry must be replaced without discarding its booking. */
 internal object CustomerInquiryRecoveryPolicy {
     /** The customer session exposes `BOOKED` once that cart can no longer serve catalogue calls. */
-    fun requiresFreshInquiry(sessionState: String): Boolean = sessionState == "BOOKED"
+    fun requiresFreshInquiry(sessionState: String): Boolean = sessionState in setOf("BOOKED", "CANCELLED")
 
     /** Handles an older or temporarily inconsistent session whose underlying inquiry is archived. */
     fun isArchivedInquiry(failure: CustomerApiException): Boolean =

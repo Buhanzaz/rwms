@@ -66,13 +66,31 @@ A separate bounded, non-authoritative DataStore ledger retains only stable UUIDs
 cabin-acceptance and problem-report request fingerprints. It survives process recreation, never
 evicts an unresolved key, and removes a key only after the server returns or the booking list
 reconciles the authoritative result; it stores neither command payloads nor server-owned results.
-When the restored server session is `BOOKED`, or a cart-scoped read returns the
+When the restored server session is `BOOKED` or `CANCELLED`, or a cart-scoped read returns the
 stable `INQUIRY_ARCHIVED` problem code, CustomerApp keeps the completed booking
 and selected warehouse but atomically rotates the pointer to a new durable
 create key before opening the next cart. A booking from the earlier inquiry
 does not fence mutations in that new cart.
 
 ## Customer flow
+
+After checkout, My Orders shows the immutable server bill as a supermarket-style non-fiscal
+receipt: cabin rental, furniture quantity × unit/month price × that cabin's months, accepted
+delivery once, and an exact whole-RUB total. A delivery not included in the bill is explicitly
+unpriced, not free. No total uses floating point or an int64 accumulator. The displayed five-minute
+payment countdown uses server time and monotonic elapsed time; only server confirmation changes
+payment status. Test payment is explicit and does not charge real money. A lost response reuses
+the durable booking/version command key and reconciles only the exact order and immutable bill.
+Old bookings without an issued bill are not displayed as paid.
+
+Foreground lifecycle polling reloads bookings, pending payment and the durable unread inbox.
+Only an explicit `Read` action acknowledges a message on the server. Android notifications use
+an immutable explicit app intent with no order payload or credentials; a bounded local delivery-ID
+cache prevents repeated alerts without becoming domain state. WorkManager schedules a connected
+check after the server deadline and periodic 15-minute catch-up, with at most eight attempts per
+execution. Android can delay background work; the server releases reservations independently.
+Notifications require OS permission, and background access after process death requires the user's
+encrypted remembered session. Logout cancels work, removes notifications and fences late responses.
 
 Jetpack Compose Material 3 and Navigation 3 provide mutually exclusive
 signed-out and signed-in graphs. Every newly registered customer completes an

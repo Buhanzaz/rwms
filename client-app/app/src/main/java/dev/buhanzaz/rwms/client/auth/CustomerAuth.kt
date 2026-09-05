@@ -148,6 +148,10 @@ class CustomerAuthRepository @Inject constructor(
     private val mutableState = MutableStateFlow<CustomerAuthState>(CustomerAuthState.Loading)
     @Volatile private var cachedSession: StoredCustomerSession? = null
     @Volatile private var persistSessionAcrossRestarts = false
+    @Volatile private var notificationSessionMarker: String? = null
+
+    /** Non-secret process-local fence; background results cannot cross logout or account changes. */
+    fun notificationSession(): String? = notificationSessionMarker.takeIf { mutableState.value == CustomerAuthState.SignedIn }
 
     /** Current session state consumed by the app-level conditional graph. */
     val state: StateFlow<CustomerAuthState> = mutableState.asStateFlow()
@@ -156,6 +160,7 @@ class CustomerAuthRepository @Inject constructor(
         scope.launch {
             val restored = sessionStore.read()
             cachedSession = restored
+            notificationSessionMarker = restored?.let { java.util.UUID.randomUUID().toString() }
             persistSessionAcrossRestarts = restored != null
             mutableState.value = if (restored != null) {
                 CustomerAuthState.SignedIn
@@ -230,6 +235,7 @@ class CustomerAuthRepository @Inject constructor(
                 val token = withContext(Dispatchers.IO) { nativePkceLogin(username.trim(), password) }
                 persistSessionAcrossRestarts = rememberMe
                 persist(token.toStoredSession())
+                notificationSessionMarker = java.util.UUID.randomUUID().toString()
                 mutableState.value = CustomerAuthState.SignedIn
             } catch (cancelled: CancellationException) {
                 mutableState.value = CustomerAuthState.SignedOut()
@@ -418,10 +424,12 @@ class CustomerAuthRepository @Inject constructor(
         } else {
             sessionStore.clear()
         }
+        if (cachedSession == null) notificationSessionMarker = java.util.UUID.randomUUID().toString()
         cachedSession = session
     }
 
     private suspend fun clear(message: String?) {
+        notificationSessionMarker = null
         cachedSession = null
         persistSessionAcrossRestarts = false
         sessionStore.clear()

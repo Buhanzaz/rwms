@@ -9,6 +9,14 @@ transfers, driver work and logistics orchestration. It owns document/workflow st
 equipment, repair or warehouse aggregates. Effects on those owners use narrow private APIs and
 durable logistics recovery work.
 
+`GET /api/logistics/v1/rental-items/{rentalItemId}/reserves?warehouseId=…` is a read-only
+register for callers with existing rental read access to the cabin's actual warehouse. It combines
+asset-owned live selection holds and active order reservations with logistics payment deadlines.
+Names and order navigation require existing inquiry ownership or visible-order rights; administrator
+status alone does not reveal standalone inquiries or customer carts. Hidden metadata never hides
+occupancy. Dependency failures are explicit, responses use `Cache-Control: no-store`, and reads
+never create, renew, convert or release reserves.
+
 Unfinished shipment, return and transfer trips expire after their planned calendar day in
 the owning warehouse timezone. V97 persists intent before task-board cancellation; the
 bounded driver relay retries ambiguous responses and never cancels DONE/FINALIZING work.

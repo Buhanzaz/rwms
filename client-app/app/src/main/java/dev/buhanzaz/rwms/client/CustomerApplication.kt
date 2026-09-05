@@ -19,9 +19,14 @@ class CustomerApplication : Application(), SingletonImageLoader.Factory {
     @Named("customer")
     lateinit var customerHttpClient: OkHttpClient
 
+    /** Server inbox delivery is available even when the booking screen is not open. */
+    @Inject
+    lateinit var notifications: dev.buhanzaz.rwms.client.notifications.CustomerNotifications
+
     override fun onCreate() {
         super.onCreate()
         MapKitFactory.setApiKey(BuildConfig.MAPKIT_API_KEY)
+        notifications.start()
     }
 
     /** Builds the process image loader on the same authenticated, refresh-capable HTTP boundary. */

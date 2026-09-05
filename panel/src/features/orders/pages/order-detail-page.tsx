@@ -48,6 +48,7 @@ import { OrderCommandIdentityRegistry } from "@/features/orders/api/order-comman
 import { AddCabinsDialog } from "@/features/orders/components/add-cabins-dialog"
 import { OrderDeliveryDialog } from "@/features/orders/components/order-delivery-dialog"
 import { OrderBookingChangeQuotesCard } from "@/features/orders/components/order-booking-change-quotes-card"
+import { ManagerOrderPaymentCard } from "@/features/orders/components/manager-order-payment-card"
 import { OrderRentalTermExtensionDialog } from "@/features/orders/components/order-rental-term-extension-dialog"
 import { OrderUnitReplacementDialog } from "@/features/orders/components/order-unit-replacement-dialog"
 import { isOrderDeliveryComplete } from "@/features/orders/domain/order-delivery-readiness"
@@ -374,9 +375,7 @@ export function OrderDetailPage() {
       commandIdentity.current.confirm(fingerprint)
       applyProjection(projection)
       toast.success(
-        capabilities.logisticsTaskNavigation
-          ? "Заказ сохранён. Откройте «Задания», чтобы создать отгрузку; сохранение само не создаёт рейс."
-          : "Заказ сохранён. Отгрузка появится после планирования в логистике."
+        "Заказ сохранён, чек сформирован. Оплату нужно подтвердить в течение 5 минут; до этого отгрузка недоступна."
       )
     },
     onError: (error) => {
@@ -550,13 +549,6 @@ export function OrderDetailPage() {
               {saveMutation.isPending ? "Сохраняем…" : "Сохранить заказ"}
             </Button>
           ) : null}
-          {canEdit &&
-          order.status === "SAVED" &&
-          capabilities.logisticsTaskNavigation ? (
-            <Button asChild>
-              <Link to="/logistics/order-tasks">Перейти к заданиям</Link>
-            </Button>
-          ) : null}
           {canEdit && (!isDraft || contactComplete) ? (
             <Button
               type="button"
@@ -663,6 +655,8 @@ export function OrderDetailPage() {
           </CardContent>
         </Card>
       ) : null}
+
+      {!isDraft ? <ManagerOrderPaymentCard order={order} /> : null}
 
       <Card size="sm">
         <CardHeader>

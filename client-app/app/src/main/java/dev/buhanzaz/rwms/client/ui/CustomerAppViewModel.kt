@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.client.ui
 
 import android.net.Uri
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -21,6 +22,8 @@ import dev.buhanzaz.rwms.client.data.CustomerCart
 import dev.buhanzaz.rwms.client.data.CustomerEntityType
 import dev.buhanzaz.rwms.client.data.CustomerEvidenceFile
 import dev.buhanzaz.rwms.client.data.CustomerProfile
+import dev.buhanzaz.rwms.client.data.CustomerNotification
+import dev.buhanzaz.rwms.client.notifications.CustomerNotifications
 import dev.buhanzaz.rwms.client.data.CustomerSignatureStroke
 import dev.buhanzaz.rwms.client.data.CustomerRepository
 import dev.buhanzaz.rwms.client.data.CustomerWarehouse
@@ -85,6 +88,10 @@ data class CustomerWorkflowState(
     val heldSlot: HeldDeliverySlot? = null,
     val booking: CustomerBooking? = null,
     val bookings: List<CustomerBooking> = emptyList(),
+    val payments: Map<String, CustomerObservedPayment> = emptyMap(),
+    val paymentErrors: Map<String, String> = emptyMap(),
+    val notifications: List<CustomerNotification> = emptyList(),
+    val updatesError: String? = null,
     val bookingRescheduleId: String? = null,
     val bookingRescheduleVersion: Long? = null,
     val bookingRescheduleSourceSlotId: String? = null,
@@ -251,6 +258,7 @@ class CustomerAppViewModel @Inject constructor(
     private val authRepository: CustomerAuthRepository,
     private val repository: CustomerRepository,
     private val workflowStore: CustomerWorkflowStore,
+    private val notifications: CustomerNotifications,
 ) : ViewModel() {
     private val mutableWorkflow = MutableStateFlow(CustomerWorkflowState())
     private val mutableState = MutableStateFlow<CustomerAppState>(CustomerAppState.Loading)
@@ -682,6 +690,95 @@ class CustomerAppViewModel @Inject constructor(
             selectedSlotId = if (rejected) null else current.selectedSlotId,
             heldSlot = if (rejected) null else current.heldSlot,
         )
+        refreshCustomerUpdatesOwned()
+    }
+
+    /** Foreground lifecycle polling reconciles payment/expiry without replaying checkout. */
+    fun refreshCustomerUpdates() {
+        if (mutableWorkflow.value.bootstrapping || mutableWorkflow.value.profile == null) return
+        launchMutation(showBusy = false) { refreshCustomerUpdatesOwned() }
+    }
+
+    private suspend fun refreshCustomerUpdatesOwned() {
+        val marker = authRepository.notificationSession() ?: return
+        try {
+            val refreshed = repository.bookings()
+            if (authRepository.notificationSession() != marker) return
+            reconcileBookings(refreshed)
+            val current = mutableWorkflow.value
+            val payments = current.payments.toMutableMap()
+            val errors = current.paymentErrors.toMutableMap()
+            CustomerBookingPolicy.visible(current.booking, refreshed).forEach { booking ->
+                val bookingId = booking.bookingId ?: return@forEach
+                if (booking.orderId == null) return@forEach
+                val previous = payments[bookingId]?.payment
+                val terminalUnchanged = previous?.state in setOf("EXPIRED", "CANCELLED") ||
+                    (previous?.state == "CONFIRMED" && booking.status != "CANCELLED")
+                if (terminalUnchanged && bookingId !in errors) return@forEach
+                try {
+                    val started = SystemClock.elapsedRealtime()
+                    val payment = repository.payment(booking)
+                    val observed = CustomerObservedPayment(payment, started)
+                    payments[bookingId] = observed
+                    errors.remove(bookingId)
+                    if (payment.state in setOf("PENDING", "EXPIRING")) {
+                        notifications.schedule(payment.orderId, observed.remainingMillis(SystemClock.elapsedRealtime()))
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    errors[bookingId] = (failure as? CustomerApiException)?.message ?: "Не удалось загрузить счёт"
+                }
+            }
+            if (authRepository.notificationSession() != marker) return
+            mutableWorkflow.value = mutableWorkflow.value.copy(payments = payments, paymentErrors = errors)
+            val inbox = notifications.fetchAndPublish()
+            if (authRepository.notificationSession() == marker) {
+                mutableWorkflow.value = mutableWorkflow.value.copy(notifications = inbox, updatesError = null)
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            if (authRepository.notificationSession() == marker) {
+                mutableWorkflow.value = mutableWorkflow.value.copy(
+                    updatesError = (failure as? CustomerApiException)?.message ?: "Не удалось обновить заказы и уведомления",
+                )
+            }
+        }
+    }
+
+    /** Explicit test payment uses the frozen displayed receipt/version and then reloads server facts. */
+    fun confirmInitialPayment(bookingId: String) = launchMutation {
+        val current = mutableWorkflow.value
+        val booking = CustomerBookingPolicy.visible(current.booking, current.bookings)
+            .firstOrNull { it.bookingId == bookingId }
+            ?: throw CustomerApiException(409, "Обновите список заказов")
+        val observed = current.payments[bookingId] ?: throw CustomerApiException(409, "Сначала загрузите счёт")
+        if (current.paymentErrors[bookingId] != null || observed.remainingMillis(SystemClock.elapsedRealtime()) <= 0) {
+            throw CustomerApiException(409, "Срок оплаты истёк или счёт недоступен. Обновите заказ")
+        }
+        try {
+            val started = SystemClock.elapsedRealtime()
+            val payment = repository.confirmTestPayment(booking, observed.payment)
+            mutableWorkflow.value = mutableWorkflow.value.copy(
+                payments = mutableWorkflow.value.payments + (bookingId to CustomerObservedPayment(payment, started)),
+            )
+        } finally {
+            // A lost response or conflict is followed by a read, never automatic consent to a new bill.
+            mutableWorkflow.value = mutableWorkflow.value.copy(
+                paymentErrors = mutableWorkflow.value.paymentErrors + (bookingId to "Проверяем результат оплаты…"),
+            )
+            refreshCustomerUpdatesOwned()
+        }
+    }
+
+    /** Read state is changed only by the user's explicit inbox action. */
+    fun readNotification(id: String) = launchMutation {
+        val result = repository.readNotification(id)
+        if (result.id != id || result.readAt == null) throw CustomerApiException(503, "Уведомление не подтверждено")
+        notifications.acknowledged(id)
+        mutableWorkflow.value = mutableWorkflow.value.copy(notifications = mutableWorkflow.value.notifications.filterNot { it.id == id })
+        refreshCustomerUpdatesOwned()
     }
 
     /** Requests server terms before allowing cancellation or consent to a test charge. */
@@ -930,6 +1027,7 @@ class CustomerAppViewModel @Inject constructor(
             showBookingChangeQuote(quote)
             presentRecoveredBookingChange(quote)
         }
+        refreshCustomerUpdatesOwned()
     }
 
     private fun launchMutation(showBusy: Boolean = true, block: suspend () -> Unit) {

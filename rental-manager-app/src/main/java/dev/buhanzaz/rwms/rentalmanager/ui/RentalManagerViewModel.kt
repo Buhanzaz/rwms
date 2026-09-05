@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.rentalmanager.ui
 
+import android.os.SystemClock
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.createSavedStateHandle
@@ -12,10 +13,13 @@ import dev.buhanzaz.rwms.rentalmanager.data.RentalManagerSession
 import dev.buhanzaz.rwms.rentalmanager.network.CreateOrderRequest
 import dev.buhanzaz.rwms.rentalmanager.network.CreateRentalClientRequest
 import dev.buhanzaz.rwms.rentalmanager.network.OrderDto
+import dev.buhanzaz.rwms.rentalmanager.network.OrderPaymentDto
 import dev.buhanzaz.rwms.rentalmanager.network.RentalClientDto
 import dev.buhanzaz.rwms.rentalmanager.network.RentalManagerBackend
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.time.Duration
+import java.time.OffsetDateTime
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -44,6 +48,12 @@ data class RentalManagerNotice(
     val isError: Boolean,
 )
 
+/** Server evidence plus a process-local monotonic timer anchor, never persisted as payment state. */
+data class ObservedOrderPayment(
+    val payment: OrderPaymentDto,
+    val observedElapsedRealtimeMillis: Long,
+)
+
 data class RentalManagerUiState(
     val phase: RentalManagerPhase = RentalManagerPhase.LOADING,
     val authMessage: String? = null,
@@ -66,6 +76,7 @@ data class RentalManagerUiState(
     val selectedClientLoading: Boolean = false,
     val selectedOrderId: String? = null,
     val selectedOrder: OrderDto? = null,
+    val selectedOrderPayment: ObservedOrderPayment? = null,
     val selectedOrderLoading: Boolean = false,
     val commandRunning: Boolean = false,
     val notice: RentalManagerNotice? = null,
@@ -344,12 +355,25 @@ class RentalManagerViewModel(
             it.copy(
                 selectedOrderId = orderId,
                 selectedOrder = null,
+                selectedOrderPayment = null,
                 selectedOrderLoading = true,
                 notice = null,
             )
         }
         orderDetailJob = viewModelScope.launch {
             loadOrderDetail(orderId, requireSelected = true)
+            loadOrderPayment(orderId)
+        }
+    }
+
+    /** Reloads the selected order and its list entry after a payment transition or deadline. */
+    fun refreshCurrentOrder() {
+        val orderId = mutableState.value.selectedOrderId ?: return
+        if (orderDetailJob?.isActive == true) return
+        orderDetailJob = viewModelScope.launch {
+            loadOrderDetail(orderId, requireSelected = true)
+            loadOrderPayment(orderId)
+            searchOrders(mutableState.value.orderSearch)
         }
     }
 
@@ -448,8 +472,34 @@ class RentalManagerViewModel(
         runCommand(SAVE_ORDER_COMMAND, fingerprint, conflictOrderId = current.id) { key ->
             val saved = repository.saveOrder(current, key)
             mutableState.update { it.copy(selectedOrder = saved) }
+            loadOrderPayment(saved.id)
             searchOrders(mutableState.value.orderSearch)
-            "Заказ сохранён. Отгрузка появится после планирования в логистике."
+            "Заказ сохранён. Счёт выставлен; подтвердите оплату до истечения срока."
+        }
+    }
+
+    fun confirmOrderPayment() {
+        val payment = mutableState.value.selectedOrderPayment?.payment ?: return
+        if (!payment.canConfirm) {
+            mutableState.update {
+                it.copy(notice = RentalManagerNotice("Подтверждение оплаты сейчас недоступно.", true))
+            }
+            return
+        }
+        val fingerprint = "${payment.orderId}\u001f${payment.orderVersion}"
+        runCommand(PAYMENT_CONFIRM_COMMAND, fingerprint, conflictOrderId = payment.orderId) { key ->
+            val confirmed = repository.confirmOrderPayment(payment, key)
+            mutableState.update {
+                it.copy(
+                    selectedOrderPayment = ObservedOrderPayment(
+                        payment = confirmed,
+                        observedElapsedRealtimeMillis = SystemClock.elapsedRealtime(),
+                    ),
+                )
+            }
+            loadOrderDetail(confirmed.orderId, requireSelected = true)
+            searchOrders(mutableState.value.orderSearch)
+            "Подтверждение оплаты сохранено. Отгрузку можно планировать по статусу заказа."
         }
     }
 
@@ -549,6 +599,33 @@ class RentalManagerViewModel(
             }
     }
 
+    private suspend fun loadOrderPayment(orderId: String) {
+        runCatching { repository.orderPayment(orderId) }
+            .onSuccess { payment ->
+                if (mutableState.value.selectedOrderId == orderId) {
+                    mutableState.update {
+                        it.copy(
+                            selectedOrderPayment = ObservedOrderPayment(
+                                payment = payment,
+                                observedElapsedRealtimeMillis = SystemClock.elapsedRealtime(),
+                            ),
+                        )
+                    }
+                }
+            }
+            .onFailure { failure ->
+                if (failure is CancellationException) throw failure
+                if (mutableState.value.selectedOrderId == orderId) {
+                    mutableState.update {
+                        it.copy(
+                            selectedOrderPayment = null,
+                            notice = RentalManagerNotice(handleFailure(failure), true),
+                        )
+                    }
+                }
+            }
+    }
+
     private fun runCommand(
         commandName: String,
         fingerprint: String,
@@ -578,8 +655,9 @@ class RentalManagerViewModel(
                 }
                 .onFailure { failure ->
                     if (failure is CancellationException) throw failure
-                    if (failure is HttpException && failure.code() == 409 && conflictOrderId != null) {
+                    if (conflictOrderId != null) {
                         loadOrderDetail(conflictOrderId, requireSelected = true)
+                        loadOrderPayment(conflictOrderId)
                     }
                     mutableState.update {
                         it.copy(
@@ -623,6 +701,7 @@ class RentalManagerViewModel(
         private const val UPDATE_ORDER_COMMAND = "updateOrder"
         private const val CANCEL_ORDER_COMMAND = "cancelOrder"
         private const val SAVE_ORDER_COMMAND = "saveOrder"
+        private const val PAYMENT_CONFIRM_COMMAND = "confirmOrderPayment"
 
         fun factory(backend: RentalManagerBackend) = viewModelFactory {
             initializer {
@@ -642,6 +721,19 @@ internal fun commandFingerprintDigest(value: String): String = MessageDigest.get
 
 internal fun actorScopedCommandFingerprint(actorId: String, value: String): String =
     "$actorId\u001f$value"
+
+internal fun paymentRemainingMillis(
+    payment: OrderPaymentDto,
+    observedElapsedRealtimeMillis: Long,
+    nowElapsedRealtimeMillis: Long,
+): Long? {
+    val serverTime = runCatching { OffsetDateTime.parse(payment.serverTime) }.getOrNull() ?: return null
+    val expiresAt = payment.expiresAt?.let { runCatching { OffsetDateTime.parse(it) }.getOrNull() }
+        ?: return null
+    val initialRemaining = Duration.between(serverTime, expiresAt).toMillis().coerceAtLeast(0L)
+    val elapsed = (nowElapsedRealtimeMillis - observedElapsedRealtimeMillis).coerceAtLeast(0L)
+    return (initialRemaining - elapsed).coerceAtLeast(0L)
+}
 
 internal suspend fun handleRentalManagerFailure(
     failure: Throwable,

@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.rentalmanager.ui
 
 import com.google.common.truth.Truth.assertThat
+import dev.buhanzaz.rwms.rentalmanager.network.OrderPaymentDto
 import kotlinx.coroutines.test.runTest
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
@@ -59,5 +60,25 @@ class RentalManagerBoundaryTest {
 
         assertThat(message).isEqualTo("Проверьте подключение.")
         assertThat(invalidations).isEmpty()
+    }
+
+    @Test
+    fun `payment countdown uses server time plus monotonic elapsed time`() {
+        val payment = OrderPaymentDto(
+            orderId = "00000000-0000-0000-0000-000000000301",
+            orderVersion = 4,
+            orderStatus = "SAVED",
+            state = "PENDING",
+            startedAt = "2026-09-05T10:00:00Z",
+            expiresAt = "2026-09-05T10:05:00Z",
+            resolvedAt = null,
+            source = null,
+            serverTime = "2026-09-05T10:01:00Z",
+            canConfirm = true,
+            receipt = null,
+        )
+
+        assertThat(paymentRemainingMillis(payment, 20_000L, 20_000L)).isEqualTo(240_000L)
+        assertThat(paymentRemainingMillis(payment, 20_000L, 260_000L)).isEqualTo(0L)
     }
 }

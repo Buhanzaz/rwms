@@ -82,6 +82,16 @@ interface RentalManagerApi {
         @Header("Idempotency-Key") idempotencyKey: String,
     ): OrderDto
 
+    @GET("api/logistics/v1/orders/{orderId}/payment")
+    suspend fun orderPayment(@Path("orderId") orderId: String): OrderPaymentDto
+
+    @POST("api/logistics/v1/orders/{orderId}/payment/confirm")
+    suspend fun confirmOrderPayment(
+        @Path("orderId") orderId: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @Body request: ConfirmOrderPaymentRequest,
+    ): OrderPaymentDto
+
     @GET("api/logistics/v1/rental-inquiries/{inquiryId}/client-presentation")
     suspend fun clientPresentation(
         @Path("inquiryId") inquiryId: String,

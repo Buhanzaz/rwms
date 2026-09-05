@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
@@ -24,6 +25,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.integration.RentalItemReserveSnapshot;
 import dev.buhanzaz.rwms.logistics.order.service.RentalOrderMutationRecoveryService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsExternalAttemptClaimService;
 import dev.buhanzaz.rwms.logistics.service.ShipmentProcessor;
@@ -107,6 +109,74 @@ class OrderApiIntegrationTest {
   dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository paymentAdmissionOrders;
 
   @MockitoBean LogisticsDependencyGateway dependencies;
+
+  @Test
+  void reserveRegisterRequiresAuthenticatedWarehouseAccessAndReturnsAnUncacheableSnapshot()
+      throws Exception {
+    String path = "/api/logistics/v1/rental-items/" + UNIT_1 + "/reserves";
+    var now = OffsetDateTime.now(ZoneOffset.UTC);
+    when(dependencies.readRentalItemReserves(UNIT_1, WAREHOUSE_1))
+        .thenReturn(new RentalItemReserveSnapshot(UNIT_1, WAREHOUSE_1, now, List.of(), null));
+    mvc.perform(get(path).param("warehouseId", WAREHOUSE_1.toString()))
+        .andExpect(status().isUnauthorized());
+    mvc.perform(get(path).with(manager(MANAGER_1, "manager"))).andExpect(status().isBadRequest());
+    mvc.perform(
+            get(path)
+                .with(managerWithoutWarehouse(MANAGER_1, "manager"))
+                .param("warehouseId", WAREHOUSE_1.toString()))
+        .andExpect(status().isForbidden());
+    verify(dependencies, never()).readRentalItemReserves(any(), any());
+
+    mvc.perform(
+            get(path)
+                .with(manager(MANAGER_1, "manager"))
+                .param("warehouseId", WAREHOUSE_1.toString()))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Cache-Control", "no-store"))
+        .andExpect(jsonPath("$.rentalItemId").value(UNIT_1.toString()))
+        .andExpect(jsonPath("$.warehouseId").value(WAREHOUSE_1.toString()))
+        .andExpect(jsonPath("$.serverTime").isString())
+        .andExpect(jsonPath("$.reserves").isEmpty());
+  }
+
+  @Test
+  void reserveRegisterSurfacesMissingAssetsAndDependencyFailuresAsProblems() throws Exception {
+    String path = "/api/logistics/v1/rental-items/" + UNIT_1 + "/reserves";
+    when(dependencies.readRentalItemReserves(UNIT_1, WAREHOUSE_1))
+        .thenThrow(
+            new LogisticsDependencyException(
+                LogisticsDependencyException.FailureKind.PERMANENT_REJECTION,
+                "ASSET_NOT_FOUND",
+                "private",
+                null));
+    mvc.perform(
+            get(path)
+                .with(manager(MANAGER_1, "manager"))
+                .param("warehouseId", WAREHOUSE_1.toString()))
+        .andExpect(status().isNotFound())
+        .andExpect(jsonPath("$.code").value("RENTAL_ITEM_NOT_FOUND"));
+    doReturn(
+            new RentalItemReserveSnapshot(
+                UNIT_1, WAREHOUSE_2, OffsetDateTime.now(), List.of(), null))
+        .when(dependencies)
+        .readRentalItemReserves(UNIT_1, WAREHOUSE_1);
+    mvc.perform(
+            get(path)
+                .with(manager(MANAGER_1, "manager"))
+                .param("warehouseId", WAREHOUSE_1.toString()))
+        .andExpect(status().isBadGateway())
+        .andExpect(jsonPath("$.code").value("RENTAL_ITEM_RESERVES_INVALID_RESPONSE"));
+    when(dependencies.readRentalItemReserves(UNIT_1, WAREHOUSE_1))
+        .thenThrow(
+            new LogisticsDependencyException(
+                LogisticsDependencyException.FailureKind.TRANSIENT, "private"));
+    mvc.perform(
+            get(path)
+                .with(manager(MANAGER_1, "manager"))
+                .param("warehouseId", WAREHOUSE_1.toString()))
+        .andExpect(status().isServiceUnavailable())
+        .andExpect(jsonPath("$.code").value("RENTAL_ITEM_RESERVES_UNAVAILABLE"));
+  }
 
   private final Map<UUID, LinkedHashMap<UUID, LogisticsDependencyGateway.OrderUnitReservation>>
       reservations = new ConcurrentHashMap<>();

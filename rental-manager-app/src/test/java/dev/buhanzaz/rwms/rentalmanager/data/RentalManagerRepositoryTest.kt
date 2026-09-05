@@ -6,6 +6,9 @@ import dev.buhanzaz.rwms.rentalmanager.network.CreateRentalClientRequest
 import dev.buhanzaz.rwms.rentalmanager.network.CurrentUserDto
 import dev.buhanzaz.rwms.rentalmanager.network.OrderDto
 import dev.buhanzaz.rwms.rentalmanager.network.OrderPageDto
+import dev.buhanzaz.rwms.rentalmanager.network.OrderPaymentDto
+import dev.buhanzaz.rwms.rentalmanager.network.OrderPaymentReceiptDto
+import dev.buhanzaz.rwms.rentalmanager.network.OrderPaymentReceiptLineDto
 import dev.buhanzaz.rwms.rentalmanager.network.RentalClientDto
 import dev.buhanzaz.rwms.rentalmanager.network.RentalClientPageDto
 import dev.buhanzaz.rwms.rentalmanager.network.RentalManagerApi
@@ -73,6 +76,43 @@ class RentalManagerRepositoryTest {
         assertThat(failure).isInstanceOf(RentalManagerAccessException::class.java)
     }
 
+    @Test
+    fun `malformed receipt total is rejected before it can become payable`() = runTest {
+        val api = FakeRentalManagerApi(
+            user = managerUser(emptyList()),
+            warehouseItems = emptyList(),
+            payment = payment(totalRubles = "01"),
+        )
+
+        val failure = runCatching {
+            repository(api, mutableListOf()).orderPayment(PAYMENT_ORDER_ID)
+        }.exceptionOrNull()
+
+        assertThat(failure).isInstanceOf(IllegalArgumentException::class.java)
+        assertThat(failure).hasMessageThat().contains("Receipt total")
+    }
+
+    @Test
+    fun `receipt for another order is rejected before display or confirmation`() = runTest {
+        val validPayment = payment(totalRubles = "200")
+        val api = FakeRentalManagerApi(
+            user = managerUser(emptyList()),
+            warehouseItems = emptyList(),
+            payment = validPayment.copy(
+                receipt = requireNotNull(validPayment.receipt).copy(
+                    orderId = "00000000-0000-0000-0000-000000000302",
+                ),
+            ),
+        )
+
+        val failure = runCatching {
+            repository(api, mutableListOf()).orderPayment(PAYMENT_ORDER_ID)
+        }.exceptionOrNull()
+
+        assertThat(failure).isInstanceOf(IllegalArgumentException::class.java)
+        assertThat(failure).hasMessageThat().contains("Receipt belongs to another order")
+    }
+
     private fun repository(
         api: FakeRentalManagerApi,
         invalidations: MutableList<String>,
@@ -81,11 +121,33 @@ class RentalManagerRepositoryTest {
         invalidateSession = { invalidations += it },
         problemMessage = { "Ошибка запроса" },
     )
+
+    @Test
+    fun `valid frozen bill remains exact but wrong factors total and extended deadline fail closed`() = runTest {
+        val valid = payment("200")
+        val receipt = requireNotNull(valid.receipt)
+        val invalid = listOf(
+            valid.copy(receipt = receipt.copy(totalRubles = "201")),
+            valid.copy(receipt = receipt.copy(lines = listOf(receipt.lines.single().copy(quantity = "2")))),
+            valid.copy(receipt = receipt.copy(deliveryIncluded = true)),
+            valid.copy(expiresAt = "2026-09-05T10:06:00Z"),
+            valid.copy(state = "CONFIRMED", canConfirm = false, source = null),
+        )
+        assertThat(repository(FakeRentalManagerApi(managerUser(emptyList()), emptyList(), valid), mutableListOf())
+            .orderPayment(PAYMENT_ORDER_ID)).isEqualTo(valid)
+        invalid.forEach { candidate ->
+            assertThat(runCatching {
+                repository(FakeRentalManagerApi(managerUser(emptyList()), emptyList(), candidate), mutableListOf())
+                    .orderPayment(PAYMENT_ORDER_ID)
+            }.isFailure).isTrue()
+        }
+    }
 }
 
 private class FakeRentalManagerApi(
     private val user: CurrentUserDto,
     private val warehouseItems: List<WarehouseDto>,
+    private val payment: OrderPaymentDto? = null,
 ) : RentalManagerApi {
     var warehouseCalls = 0
 
@@ -147,6 +209,15 @@ private class FakeRentalManagerApi(
         idempotencyKey: String,
     ): OrderDto = unsupported()
 
+    override suspend fun orderPayment(orderId: String): OrderPaymentDto =
+        requireNotNull(payment)
+
+    override suspend fun confirmOrderPayment(
+        orderId: String,
+        idempotencyKey: String,
+        request: dev.buhanzaz.rwms.rentalmanager.network.ConfirmOrderPaymentRequest,
+    ): OrderPaymentDto = unsupported()
+
     override suspend fun clientPresentation(inquiryId: String):
         retrofit2.Response<dev.buhanzaz.rwms.rentalmanager.network.RentalPresentationDto> = unsupported()
 
@@ -193,3 +264,39 @@ private const val WAREHOUSE_EDIT = "00000000-0000-0000-0000-000000000101"
 private const val WAREHOUSE_VIEW = "00000000-0000-0000-0000-000000000102"
 private const val WAREHOUSE_MANAGE = "00000000-0000-0000-0000-000000000103"
 private const val WAREHOUSE_INACTIVE = "00000000-0000-0000-0000-000000000104"
+private const val PAYMENT_ORDER_ID = "00000000-0000-0000-0000-000000000301"
+
+private fun payment(totalRubles: String): OrderPaymentDto = OrderPaymentDto(
+    orderId = PAYMENT_ORDER_ID,
+    orderVersion = 4,
+    orderStatus = "SAVED",
+    state = "PENDING",
+    startedAt = "2026-09-05T10:00:00Z",
+    expiresAt = "2026-09-05T10:05:00Z",
+    resolvedAt = null,
+    source = null,
+    serverTime = "2026-09-05T10:01:00Z",
+    canConfirm = true,
+    receipt = OrderPaymentReceiptDto(
+        schemaVersion = 1,
+        orderId = PAYMENT_ORDER_ID,
+        orderNumber = "A-100",
+        issuedAt = "2026-09-05T10:00:00Z",
+        currency = "RUB",
+        deliveryIncluded = false,
+        lines = listOf(
+            OrderPaymentReceiptLineDto(
+                kind = "CABIN",
+                rentalItemId = "00000000-0000-0000-0000-000000000601",
+                equipmentId = null,
+                label = "Бытовка БК-101",
+                quantity = "1",
+                rentalMonths = 2,
+                unitPriceRubles = "100",
+                amountRubles = "200",
+                pricingVersion = 4,
+            ),
+        ),
+        totalRubles = totalRubles,
+    ),
+)

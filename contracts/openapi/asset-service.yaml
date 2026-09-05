@@ -1137,6 +1137,27 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/logistics/rental-items/{rentalItemId}/reserves:
+    parameters:
+      - { name: rentalItemId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: warehouseId, in: query, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: readLogisticsRentalItemReserves
+      description: >-
+        Requires SERVICE logistics-service with exactly asset.logistics. Returns a repeatable-read
+        snapshot of ACTIVE selection holds whose expiry is later than database serverTime and the
+        ACTIVE order reservation, if any. The requested warehouse must be the cabin's actual warehouse.
+        This read never renews, expires, converts or releases a reserve. Provenance is private input
+        for logistics authorization and must not be passed through to public clients.
+      responses:
+        '200':
+          description: Current asset-owned occupancy; an empty list is authoritative only after this read succeeds.
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/RentalItemReserveSnapshot' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/internal/asset/v1/logistics/rental-items/{id}/snapshot:
     parameters: [ { $ref: '#/components/parameters/RentalItemId' } ]
     get:
@@ -2749,6 +2770,41 @@ components:
         equipmentName: { type: string }
         quantity: { type: integer, format: int64, minimum: 0 }
         locationKind: { $ref: '#/components/schemas/BalanceLocationKind' }
+    RentalItemReserveSnapshot:
+      type: object
+      additionalProperties: false
+      required: [rentalItemId, warehouseId, serverTime, holds, orderReservation]
+      properties:
+        rentalItemId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        serverTime: { type: string, format: date-time }
+        holds: { type: array, items: { $ref: '#/components/schemas/RentalItemSelectionHold' } }
+        orderReservation:
+          oneOf: [ { $ref: '#/components/schemas/RentalItemOrderReservation' }, { type: 'null' } ]
+    RentalItemSelectionHold:
+      type: object
+      additionalProperties: false
+      required: [holdId, version, holdScopeId, actorSubjectId, actorRole, createdAt, expiresAt]
+      properties:
+        holdId: { type: string, format: uuid }
+        version: { $ref: '#/components/schemas/ExpectedVersion' }
+        holdScopeId: { type: string, format: uuid }
+        actorSubjectId: { type: string, format: uuid }
+        actorRole: { $ref: '#/components/schemas/OrderActorRole' }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+    RentalItemOrderReservation:
+      type: object
+      additionalProperties: false
+      required: [reservationId, version, orderId, actorSubjectId, actorRole, createdAt, draftExpiresAt]
+      properties:
+        reservationId: { type: string, format: uuid }
+        version: { $ref: '#/components/schemas/ExpectedVersion' }
+        orderId: { type: string, format: uuid }
+        actorSubjectId: { type: string, format: uuid }
+        actorRole: { $ref: '#/components/schemas/OrderActorRole' }
+        createdAt: { type: string, format: date-time }
+        draftExpiresAt: { type: [string, 'null'], format: date-time }
     OrderActorRole:
       type: string
       enum: [SYSTEM_ADMIN, WMS_ADMIN, WAREHOUSE_MANAGER, RENTAL_MANAGER, CUSTOMER, VIEWER]

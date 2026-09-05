@@ -94,6 +94,96 @@ class HttpLogisticsDependencyGatewayTest {
   }
 
   @Test
+  void rentalItemReserveReadUsesExactPrivateAssetScopeAndWarehouseFence() {
+    UUID cabin = UUID.randomUUID();
+    UUID warehouse = UUID.randomUUID();
+    UUID hold = UUID.randomUUID();
+    UUID scope = UUID.randomUUID();
+    UUID actor = UUID.randomUUID();
+    server
+        .expect(
+            requestTo(
+                "http://asset.test/api/internal/asset/v1/logistics/rental-items/"
+                    + cabin
+                    + "/reserves?warehouseId="
+                    + warehouse))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header("Authorization", "Bearer test-asset.logistics"))
+        .andRespond(
+            withSuccess(
+                """
+                {"rentalItemId":"%s","warehouseId":"%s","serverTime":"2026-09-05T10:00:00Z",
+                 "holds":[{"holdId":"%s","version":3,"holdScopeId":"%s","actorSubjectId":"%s",
+                 "actorRole":"CUSTOMER","createdAt":"2026-09-05T09:59:00Z","expiresAt":"2026-09-05T10:30:00Z"}],
+                 "orderReservation":null}
+                """
+                    .formatted(cabin, warehouse, hold, scope, actor),
+                MediaType.APPLICATION_JSON));
+
+    var result = gateway.readRentalItemReserves(cabin, warehouse);
+
+    assertThat(result.rentalItemId()).isEqualTo(cabin);
+    assertThat(result.warehouseId()).isEqualTo(warehouse);
+    assertThat(result.holds())
+        .singleElement()
+        .satisfies(
+            value -> {
+              assertThat(value.holdId()).isEqualTo(hold);
+              assertThat(value.version()).isEqualTo(3L);
+              assertThat(value.actorRole()).isEqualTo("CUSTOMER");
+            });
+    assertThat(result.orderReservation()).isNull();
+    server.verify();
+  }
+
+  @Test
+  void rentalItemReserveReadRejectsAnOmittedNullableOccupancyField() {
+    UUID cabin = UUID.randomUUID();
+    UUID warehouse = UUID.randomUUID();
+    server
+        .expect(
+            requestTo(
+                "http://asset.test/api/internal/asset/v1/logistics/rental-items/"
+                    + cabin
+                    + "/reserves?warehouseId="
+                    + warehouse))
+        .andRespond(
+            withSuccess(
+                """
+                {"rentalItemId":"%s","warehouseId":"%s","serverTime":"2026-09-05T10:00:00Z","holds":[]}
+                """
+                    .formatted(cabin, warehouse),
+                MediaType.APPLICATION_JSON));
+    assertThatThrownBy(() -> gateway.readRentalItemReserves(cabin, warehouse))
+        .isInstanceOf(LogisticsDependencyException.class);
+    server.verify();
+  }
+
+  @Test
+  void rentalItemReserveReadDistinguishesActualNotFoundFromAnUnavailableDependency() {
+    UUID cabin = UUID.randomUUID();
+    UUID warehouse = UUID.randomUUID();
+    String uri =
+        "http://asset.test/api/internal/asset/v1/logistics/rental-items/"
+            + cabin
+            + "/reserves?warehouseId="
+            + warehouse;
+    server.expect(requestTo(uri)).andRespond(withStatus(HttpStatus.NOT_FOUND));
+    assertThatThrownBy(() -> gateway.readRentalItemReserves(cabin, warehouse))
+        .isInstanceOfSatisfying(
+            LogisticsDependencyException.class,
+            error -> assertThat(error.dependencyCode()).isEqualTo("ASSET_NOT_FOUND"));
+    server.verify();
+    server.reset();
+    server.expect(requestTo(uri)).andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
+    assertThatThrownBy(() -> gateway.readRentalItemReserves(cabin, warehouse))
+        .isInstanceOfSatisfying(
+            LogisticsDependencyException.class,
+            error -> assertThat(error.dependencyCode()).isNotEqualTo("ASSET_NOT_FOUND"));
+    server.verify();
+  }
+
+  @Test
   void furniturePricingCatalogUsesExactPrivateCredentialsAndRetainsInactiveItems() {
     UUID id = UUID.randomUUID();
     server

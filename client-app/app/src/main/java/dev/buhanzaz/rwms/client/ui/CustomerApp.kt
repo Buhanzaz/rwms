@@ -46,6 +46,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
@@ -99,6 +100,16 @@ fun CustomerApp(viewModel: CustomerAppViewModel = hiltViewModel()) {
     val appearanceStore = remember(context.applicationContext) { CustomerAppearanceStore(context) }
     val appearanceMode by appearanceStore.mode.collectAsStateWithLifecycle(CustomerAppearanceMode.LIGHT)
     val appearanceScope = rememberCoroutineScope()
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    val signedIn = state is CustomerAppState.Ready
+    LaunchedEffect(viewModel, lifecycle, signedIn) {
+        if (signedIn) lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            while (true) {
+                viewModel.refreshCustomerUpdates()
+                kotlinx.coroutines.delay(5_000)
+            }
+        }
+    }
     CustomerTheme(appearanceMode = appearanceMode) {
         CustomerStoreLaunchGate {
             CustomerAppContent(
@@ -125,6 +136,9 @@ fun CustomerApp(viewModel: CustomerAppViewModel = hiltViewModel()) {
                 onSelectSlot = viewModel::selectSlot,
                 onHoldSlot = viewModel::holdSelectedSlot,
                 onCheckout = viewModel::checkout,
+                onConfirmInitialPayment = viewModel::confirmInitialPayment,
+                onReadNotification = viewModel::readNotification,
+                onRefreshUpdates = viewModel::refreshCustomerUpdates,
                 onCancelBooking = viewModel::cancelBooking,
                 onOpenBookingReschedule = viewModel::openBookingReschedule,
                 onSelectBookingRescheduleSlot = viewModel::selectBookingRescheduleSlot,
@@ -182,6 +196,9 @@ fun CustomerAppContent(
     onSelectSlot: (String) -> Unit = {},
     onHoldSlot: () -> Unit = {},
     onCheckout: () -> Unit = {},
+    onConfirmInitialPayment: (String) -> Unit = {},
+    onReadNotification: (String) -> Unit = {},
+    onRefreshUpdates: () -> Unit = {},
     onCancelBooking: (String) -> Unit = {},
     onOpenBookingReschedule: (String) -> Unit = {},
     onSelectBookingRescheduleSlot: (String) -> Unit = {},
@@ -247,6 +264,9 @@ fun CustomerAppContent(
                     onSelectSlot = onSelectSlot,
                     onHoldSlot = onHoldSlot,
                     onCheckout = onCheckout,
+                    onConfirmInitialPayment = onConfirmInitialPayment,
+                    onReadNotification = onReadNotification,
+                    onRefreshUpdates = onRefreshUpdates,
                     onCancelBooking = onCancelBooking,
                     onOpenBookingReschedule = onOpenBookingReschedule,
                     onSelectBookingRescheduleSlot = onSelectBookingRescheduleSlot,
@@ -292,6 +312,9 @@ private fun SignedInNavigation(
     onSelectSlot: (String) -> Unit,
     onHoldSlot: () -> Unit,
     onCheckout: () -> Unit,
+    onConfirmInitialPayment: (String) -> Unit,
+    onReadNotification: (String) -> Unit,
+    onRefreshUpdates: () -> Unit,
     onCancelBooking: (String) -> Unit,
     onOpenBookingReschedule: (String) -> Unit,
     onSelectBookingRescheduleSlot: (String) -> Unit,
@@ -497,6 +520,13 @@ private fun SignedInNavigation(
                         entry<BookingsRoute> {
                             BookingsScreen(
                                 bookings = state.bookings,
+                                payments = state.payments,
+                                paymentErrors = state.paymentErrors,
+                                notifications = state.notifications,
+                                updatesError = state.updatesError,
+                                onConfirmInitialPayment = onConfirmInitialPayment,
+                                onReadNotification = onReadNotification,
+                                onRefreshUpdates = onRefreshUpdates,
                                 latest = state.booking,
                                 busy = state.busy,
                                 onMenu = { coroutineScope.launch { drawerState.open() } },

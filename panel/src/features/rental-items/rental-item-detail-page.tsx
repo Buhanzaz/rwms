@@ -88,10 +88,8 @@ import {
 import { createCabinPhotoPresentation } from "@/features/rental-items/cabin-photo-presentations-api"
 import { HistoricalRentalMovementDialog } from "@/features/rental-items/historical-rental-movement-dialog"
 import type { HistoricalRentalMovementKind } from "@/features/rental-items/historical-rental-movement-api"
-import {
-  CharacteristicTags,
-  EmptyDossierRegister,
-} from "@/features/rental-items/rental-item-detail-support"
+import { CharacteristicTags } from "@/features/rental-items/rental-item-detail-support"
+import { RentalItemReservesCard } from "@/features/rental-items/rental-item-reserves-card"
 import { rentalLifecycleLabel } from "@/features/rental-items/rental-item-lifecycle"
 import { RentalItemPassportDialog } from "@/features/rental-items/rental-item-passport-dialog"
 import { MoveContentsToRentalItemDialog } from "@/features/rental-items/move-contents-to-rental-item-dialog"
@@ -1402,61 +1400,15 @@ export function RentalItemDetailPage() {
           <DossierActivityRegister {...activityRegisterProps} />
         </TabsContent>
         <TabsContent value="reserves">
-          {activeOrderReservation ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>Активный резерв заказа</CardTitle>
-                <CardDescription>
-                  Резерв подтверждён asset-service и блокирует бытовку для
-                  других заказов.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-4 text-sm">
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <div>
-                    <p className="text-muted-foreground">Клиент</p>
-                    <p className="font-medium">{effectiveTenant ?? "—"}</p>
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground">Статус</p>
-                    <p className="font-medium">Активен</p>
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground">Создан</p>
-                    <p className="font-medium">
-                      {formatDateTime(activeOrderReservation.reservedAt)}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" variant="outline" asChild>
-                    <Link
-                      to={`/orders/${activeOrderReservation.orderId}`}
-                      state={workspaceEntryNavigationOptions.state}
-                    >
-                      Открыть заказ
-                    </Link>
-                  </Button>
-                  {rentalOrderShipment ? (
-                    <Button size="sm" variant="outline" asChild>
-                      <Link
-                        to="/logistics/shipments"
-                        state={workspaceEntryNavigationOptions.state}
-                      >
-                        Открыть отгрузки
-                      </Link>
-                    </Button>
-                  ) : null}
-                </div>
-              </CardContent>
-            </Card>
-          ) : (
-            <EmptyDossierRegister
-              title="Резервы"
-              description="Для этой бытовки нет подтверждённых резервов."
-              columns={["Клиент", "Статус", "Создан", "Истекает"]}
-            />
-          )}
+          <RentalItemReservesCard
+            rentalItemId={rentalItem.id}
+            warehouseId={rentalItem.warehouseId}
+            timeZone={
+              selectedWarehouse?.id === rentalItem.warehouseId
+                ? selectedWarehouse.timeZone
+                : undefined
+            }
+          />
         </TabsContent>
         <TabsContent value="shipments">
           <CabinLogisticsRegister cabinId={rentalItem.id} kind="SHIPMENT" />

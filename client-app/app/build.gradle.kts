@@ -217,6 +217,7 @@ dependencies {
     implementation(libs.navigation3.runtime)
     implementation(libs.navigation3.ui)
     implementation(libs.datastore)
+    implementation(libs.androidx.work)
     implementation(libs.hilt.android)
     implementation(libs.androidx.hilt.viewmodel.compose)
     implementation(libs.retrofit)

@@ -918,6 +918,10 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
     return assetOrderPresentation.readAvailableCabinFacets(warehouseId, holdScopeId);
   }
 
+  public RentalItemReserveSnapshot readRentalItemReserves(UUID rentalItemId, UUID warehouseId) {
+    return assetOrderPresentation.readRentalItemReserves(rentalItemId, warehouseId);
+  }
+
   public CabinPricingCatalog readCabinPricingCatalog() {
     return assetOrderPresentation.readCabinPricingCatalog();
   }

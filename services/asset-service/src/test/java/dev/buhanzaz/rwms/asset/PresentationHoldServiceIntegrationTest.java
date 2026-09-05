@@ -45,6 +45,7 @@ import dev.buhanzaz.rwms.asset.service.AssetNotFoundException;
 import dev.buhanzaz.rwms.asset.service.OrderUnitReservationConflictException;
 import dev.buhanzaz.rwms.asset.service.PresentationHoldService;
 import dev.buhanzaz.rwms.asset.service.RentalAvailabilityInvalidationPublisher;
+import dev.buhanzaz.rwms.asset.service.RentalItemReserveReadService;
 import jakarta.validation.Validator;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
@@ -87,6 +88,7 @@ class PresentationHoldServiceIntegrationTest {
   }
 
   @Autowired PresentationHoldService presentationHolds;
+  @Autowired RentalItemReserveReadService reserveReads;
   @Autowired AssetService assets;
   @MockitoSpyBean AssetInvalidationHub invalidations;
   @Autowired PresentationUnitHoldRepository holdRepository;
@@ -109,6 +111,100 @@ class PresentationHoldServiceIntegrationTest {
   @AfterAll
   static void stopDatabase() {
     POSTGRES.stop();
+  }
+
+  @Test
+  void reserveReadUsesLiveAssetFactsWithoutRenewingOrExpiringHolds() {
+    UUID actor = UUID.randomUUID();
+    UUID warehouse = UUID.randomUUID();
+    UUID scope = UUID.randomUUID();
+    var cabin = freeRental(actor, warehouse, "RESERVE-READ");
+    var expiry = OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(30);
+    var held =
+        presentationHolds.replace(
+            UUID.randomUUID(),
+            scope,
+            new ReplacePresentationHoldsRequest(
+                warehouse, List.of(cabin.id()), expiry, actor, "CUSTOMER", null));
+    UUID holdId = held.response().holds().getFirst().holdId();
+    var before = holdRepository.findById(holdId).orElseThrow();
+
+    var snapshot = reserveReads.read(cabin.id(), warehouse);
+
+    assertThat(snapshot.rentalItemId()).isEqualTo(cabin.id());
+    assertThat(snapshot.warehouseId()).isEqualTo(warehouse);
+    assertThat(snapshot.orderReservation()).isNull();
+    assertThat(snapshot.holds())
+        .singleElement()
+        .satisfies(
+            hold -> {
+              assertThat(hold.holdId()).isEqualTo(holdId);
+              assertThat(hold.holdScopeId()).isEqualTo(scope);
+              assertThat(hold.actorSubjectId()).isEqualTo(actor);
+              assertThat(hold.actorRole()).isEqualTo("CUSTOMER");
+              assertThat(hold.expiresAt()).isEqualTo(before.getExpiresAt());
+              assertThat(hold.version()).isEqualTo(before.getVersion());
+            });
+    assertThat(holdRepository.findById(holdId).orElseThrow().getVersion())
+        .isEqualTo(before.getVersion());
+    assertThatThrownBy(() -> reserveReads.read(cabin.id(), UUID.randomUUID()))
+        .isInstanceOf(AssetNotFoundException.class);
+    assertThatThrownBy(() -> reserveReads.read(UUID.randomUUID(), warehouse))
+        .isInstanceOf(AssetNotFoundException.class);
+
+    jdbc.update(
+        "update presentation_unit_hold set expires_at=clock_timestamp()-interval '1 second' where"
+            + " id=?",
+        holdId);
+    assertThat(reserveReads.read(cabin.id(), warehouse).holds()).isEmpty();
+    var expiredButUnchanged = holdRepository.findById(holdId).orElseThrow();
+    assertThat(expiredButUnchanged.getState()).isEqualTo(PresentationUnitHoldState.ACTIVE);
+    assertThat(expiredButUnchanged.getVersion()).isEqualTo(before.getVersion());
+  }
+
+  @Test
+  void reserveReadReplacesConvertedHoldWithTheActualActiveOrderReservation() {
+    UUID actor = UUID.randomUUID();
+    UUID warehouse = UUID.randomUUID();
+    UUID scope = UUID.randomUUID();
+    UUID order = UUID.randomUUID();
+    var cabin = freeRental(actor, warehouse, "CONVERTED-RESERVE-READ");
+    presentationHolds.replace(
+        UUID.randomUUID(),
+        scope,
+        replaceRequest(
+            warehouse,
+            List.of(cabin.id()),
+            OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(30),
+            actor));
+    assertThat(reserveReads.read(cabin.id(), warehouse).holds()).hasSize(1);
+    presentationHolds.convert(
+        UUID.randomUUID(),
+        scope,
+        new ConvertPresentationHoldsRequest(
+            order,
+            warehouse,
+            List.of(cabin.id()),
+            UUID.randomUUID(),
+            "Клиент",
+            actor,
+            "RENTAL_MANAGER"));
+
+    var snapshot = reserveReads.read(cabin.id(), warehouse);
+
+    assertThat(snapshot.holds()).isEmpty();
+    assertThat(snapshot.orderReservation())
+        .satisfies(
+            reservation -> {
+              assertThat(reservation.orderId()).isEqualTo(order);
+              assertThat(reservation.actorSubjectId()).isEqualTo(actor);
+              assertThat(reservation.actorRole()).isEqualTo("RENTAL_MANAGER");
+            });
+    var active =
+        orderReservations
+            .findByRentalItemIdAndState(cabin.id(), OrderUnitReservationState.ACTIVE)
+            .orElseThrow();
+    assertThat(snapshot.orderReservation().version()).isEqualTo(active.getVersion());
   }
 
   @Test

@@ -37,6 +37,11 @@ interface LogisticsOrderPresentationDependencyPort {
 
   List<OrderUnitReservation> readOrderUnits(UUID orderId);
 
+  /** Reads current cabin occupancy without mutating asset-owned reservations or their deadlines. */
+  default RentalItemReserveSnapshot readRentalItemReserves(UUID rentalItemId, UUID warehouseId) {
+    throw unavailable("Rental item reserves are not configured");
+  }
+
   OrderUnitReservation reserveOrderUnit(
       UUID idempotencyKey,
       UUID orderId,

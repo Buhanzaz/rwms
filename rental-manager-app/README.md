@@ -14,6 +14,9 @@ Russian version: [README.ru.md](README.ru.md).
 - Warehouse directory for the single RWMS installation with a visible empty-assignment state.
 - Real logistics-service client search, pagination, detail, and idempotent creation.
 - Real order search, pagination, detail, draft creation, and version-fenced editable fields.
+- Saved orders show only the server-issued non-fiscal payment receipt, a monotonic server-time
+  countdown, and the server-authorized manager acknowledgement; missing receipt evidence is never
+  shown as paid and Android never represents a provider charge.
 - Existing assistant-service conversation history, existing-client conversation creation,
   archiving, text turns and the single authoritative pending clarification flow. SSE events are
   validated and bounded; a turn POST is never replayed after a transport failure.

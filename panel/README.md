@@ -512,6 +512,27 @@ contexts and screens are usable.
   date-only wishes from that list. This does not promise or reserve logistics
   capacity; the manager order detail shows the returned values read-only and
   never overwrites them.
+- Initial order payment is a separate server-owned boundary. The first successful
+  `SAVE` freezes the non-fiscal bill and starts a five-minute payment window.
+  Order detail and a completed NORMAL public presentation render that same bill:
+  cabin/furniture quantity × whole-ruble monthly unit price × rental months,
+  one-time delivery when included, and the exact decimal-string total. Excluded
+  delivery is not shown as free. A public presentation recovers its booking from
+  the server's current-revision `bookingId` after reload. Only an explicit test
+  payment or manager acknowledgement confirms payment; neither performs a real
+  provider charge. Commands carry the payment order version and a stable
+  idempotency key. Conflicts and lost responses trigger reads, never automatic
+  confirmation with a new version. The countdown uses server time and a monotonic
+  local anchor; the server remains authoritative for expiry and release.
+  Unpaid saved orders stay labelled in logistics but cannot be selected for a
+  new shipment. Missing payment reads block admission; explicit null historical
+  payment evidence preserves the owning service's existing admission behavior.
+- The cabin passport's Reserves tab reads live selection holds from both customer
+  and manager flows plus the actual order reservation through the authenticated
+  logistics gateway. It refreshes every five seconds and on focus/reconnect,
+  shows only returned client/manager metadata, and links orders only when
+  `canOpenOrder` permits it. A deadline or failed read never implies free stock;
+  occupancy disappears only from a refreshed server response.
 - A REPLACEMENT presentation requires the server's exact selection count and
   preserves client click order. It has no furniture editor: desired quantities
   remain reserved and transfer to the corresponding replacement in the current

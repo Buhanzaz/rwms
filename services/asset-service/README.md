@@ -39,6 +39,13 @@ Private boundaries are deliberately limited to:
 Private callers use service credentials, not a forwarded user token. The security chain requires
 the exact service identity and single-purpose scope for each of those namespaces.
 
+`GET /api/internal/asset/v1/logistics/rental-items/{rentalItemId}/reserves?warehouseId=…`
+provides logistics with a repeatable-read current occupancy snapshot and database `serverTime`.
+Only live ACTIVE selection holds and the actual ACTIVE order reservation are returned; reads never
+expire, renew, convert or release them. The warehouse must match the cabin's physical warehouse.
+The exact logistics-service identity and `asset.logistics` scope are required. Hold scopes and actor
+provenance remain private inputs for logistics visibility checks, not public client fields.
+
 For an imported historical rental shipment, maintenance may invoke only the fenced
 `CLOSE_FOR_HISTORICAL_SHIPMENT` action under its existing `MAINTENANCE_REPAIR` lease. The asset
 policy accepts it only from `REPAIR`, `CAPITAL_REPAIR` or `WAITING_REPAIR_CHECK` and releases the

@@ -405,6 +405,35 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
         "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/logistics/v1/rental-items/{rentalItemId}/reserves:
+    parameters:
+      - { name: rentalItemId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: warehouseId, in: query, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: readRentalItemReserves
+      description: >-
+        Read-only current occupancy for an authorized USER with read access to the cabin's actual
+        warehouse. Asset-service owns selection-hold liveness and active order reservations; logistics
+        enriches them with permitted metadata. All current reserves remain visible with source and
+        expiry even when private fields are null. Inquiry owners may read their inquiry metadata;
+        otherwise only existing visible-order rights reveal client/manager names and order navigation.
+        Administrator status alone grants no new access to standalone inquiries or customer carts.
+        Pending/expiring order expiry is the logistics payment deadline; committed reservations remain
+        present until asset actually releases them. Reads never mutate or renew any reserve.
+      responses:
+        "200":
+          description: Authoritative current occupancy enriched without expanding visibility rights.
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content: { application/json: { schema: { $ref: "#/components/schemas/RentalItemReserves" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502":
+          description: Asset returned an invalid reserve snapshot; never represented as an empty list.
+          content: { application/problem+json: { schema: { $ref: "#/components/schemas/ApiProblem" } } }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/rental-items/{rentalItemId}/furniture-tasks:
     parameters:
       - { name: rentalItemId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -4450,6 +4479,32 @@ components:
       required: true
       schema: { type: string, minLength: 1, maxLength: 64 }
   schemas:
+    RentalItemReserves:
+      type: object
+      additionalProperties: false
+      required: [rentalItemId, warehouseId, serverTime, reserves]
+      properties:
+        rentalItemId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        serverTime: { type: string, format: date-time }
+        reserves: { type: array, items: { $ref: "#/components/schemas/RentalItemReserve" } }
+    RentalItemReserve:
+      type: object
+      additionalProperties: false
+      required: [reservationId, kind, source, createdAt, expiresAt, clientDisplayName, managerDisplayName, orderId, orderNumber, orderStatus, paymentState, canOpenOrder]
+      properties:
+        reservationId: { type: string, format: uuid }
+        kind: { type: string, enum: [SELECTION_HOLD, ORDER_RESERVATION] }
+        source: { type: string, enum: [CUSTOMER, MANAGER] }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: [string, "null"], format: date-time }
+        clientDisplayName: { type: [string, "null"] }
+        managerDisplayName: { type: [string, "null"] }
+        orderId: { type: [string, "null"], format: uuid }
+        orderNumber: { type: [string, "null"] }
+        orderStatus: { type: [string, "null"], enum: [DRAFT, SAVED, FULFILLED, CLOSED, CANCELLED, null] }
+        paymentState: { type: [string, "null"], enum: [PENDING, CONFIRMED, EXPIRING, EXPIRED, CANCELLED, null] }
+        canOpenOrder: { type: boolean }
     CustomerEntityType:
       type: string
       enum: [INDIVIDUAL, LEGAL]

@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react"
-import { useMutation, useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Add01Icon,
   ArrowRight01Icon,
@@ -65,8 +65,10 @@ import {
 import { Separator } from "@/components/ui/separator"
 import {
   confirmPublicPresentation,
+  confirmPublicPresentationTestPayment,
   getPublicPresentation,
   getPublicPresentationBooking,
+  getPublicPresentationPayment,
   type PresentationBooking,
   type PresentationCabin,
   type PresentationEquipmentAvailability,
@@ -84,12 +86,18 @@ import {
   type AdditionalContact,
 } from "@/features/clients/domain/clients"
 import { OrderCommandIdentityRegistry } from "@/features/orders/api/order-command-identity"
+import { OrderPaymentCard } from "@/features/orders/components/order-payment-card"
+import {
+  observeOrderPayment,
+  paymentRefetchInterval,
+} from "@/features/orders/domain/order-payment"
 import type { DesiredDeliveryWindow } from "@/features/orders/domain/orders"
 import { ApiError } from "@/lib/api-client"
 import { cn } from "@/lib/utils"
 
 export function PublicClientPresentationPage() {
   const { token = "" } = useParams()
+  const queryClient = useQueryClient()
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [furnitureDraft, setFurnitureDraft] = useState<FurnitureDraft>({})
   const [furnitureCabinId, setFurnitureCabinId] = useState<string | null>(null)
@@ -107,8 +115,14 @@ export function PublicClientPresentationPage() {
   >([])
   const [selectionMessage, setSelectionMessage] = useState<string | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
-  const [booking, setBooking] = useState<PresentationBooking | null>(null)
+  const [bookingResponse, setBookingResponse] = useState<{
+    token: string
+    value: PresentationBooking
+  } | null>(null)
+  const booking =
+    bookingResponse?.token === token ? bookingResponse.value : null
   const bookingCommand = useRef(new OrderCommandIdentityRegistry())
+  const paymentCommand = useRef(new OrderCommandIdentityRegistry())
   const presentationQuery = useQuery({
     queryKey: ["public-client-presentation", token],
     queryFn: () => getPublicPresentation(token),
@@ -120,19 +134,75 @@ export function PublicClientPresentationPage() {
     refetchOnWindowFocus: "always",
     refetchOnReconnect: "always",
   })
+  const bookingId = presentationQuery.data?.bookingId ?? booking?.bookingId
+  const currentBooking = booking?.bookingId === bookingId ? booking : null
+  const bookingQueryKey = ["public-presentation-booking", token, bookingId]
   const bookingQuery = useQuery({
-    queryKey: ["public-presentation-booking", token, booking?.bookingId],
+    queryKey: bookingQueryKey,
     queryFn: () =>
       getPublicPresentationBooking({
         token,
-        bookingId: booking!.bookingId,
+        bookingId: bookingId!,
       }),
-    enabled: booking?.state === "PENDING",
+    enabled: Boolean(
+      bookingId && (!currentBooking || currentBooking.state === "PENDING")
+    ),
+    retry: false,
     refetchInterval: (query) =>
       query.state.data?.state === "PENDING" ? 1_500 : false,
+    refetchOnWindowFocus: "always",
+    refetchOnReconnect: "always",
   })
-  const effectiveBooking = bookingQuery.data ?? booking
+  const effectiveBooking = bookingQuery.data ?? currentBooking
   const presentation = presentationQuery.data
+  const paymentQueryKey = ["public-presentation-payment", token, bookingId]
+  const paymentQuery = useQuery({
+    queryKey: paymentQueryKey,
+    queryFn: async () =>
+      observeOrderPayment(
+        await getPublicPresentationPayment({
+          token,
+          bookingId: bookingId!,
+          orderId: effectiveBooking!.orderId!,
+        })
+      ),
+    enabled: Boolean(
+      presentation?.mode === "NORMAL" &&
+      effectiveBooking?.state === "COMPLETED" &&
+      effectiveBooking.orderId
+    ),
+    retry: false,
+    refetchInterval: (query) =>
+      paymentRefetchInterval(query.state.data?.payment),
+    refetchOnWindowFocus: "always",
+    refetchOnReconnect: "always",
+  })
+  const paymentMutation = useMutation({
+    mutationFn: async () => {
+      const payment = paymentQuery.data?.payment
+      if (!bookingId || !payment || paymentQuery.isError) {
+        throw new Error("Сначала обновите чек и состояние оплаты.")
+      }
+      const fingerprint = token + ":" + bookingId + ":" + payment.orderVersion
+      const updated = await confirmPublicPresentationTestPayment({
+        token,
+        bookingId,
+        orderId: payment.orderId,
+        expectedVersion: payment.orderVersion,
+        idempotencyKey: paymentCommand.current.keyFor(fingerprint),
+      })
+      paymentCommand.current.confirm(fingerprint)
+      return observeOrderPayment(updated)
+    },
+    onSuccess: (observation) => {
+      queryClient.setQueryData(paymentQueryKey, observation)
+    },
+    onError: (error) => {
+      void paymentQuery.refetch()
+      if (error instanceof ApiError && error.status === 410)
+        void presentationQuery.refetch()
+    },
+  })
   const requestableDeliveryDates = useMemo(
     () =>
       Array.from(new Set(presentation?.requestableDeliveryDates ?? [])).sort(
@@ -248,7 +318,11 @@ export function PublicClientPresentationPage() {
     },
     onSuccess: ({ fingerprint, value }) => {
       bookingCommand.current.confirm(fingerprint)
-      setBooking(value)
+      setBookingResponse({ token, value })
+      queryClient.setQueryData(
+        ["public-presentation-booking", token, value.bookingId],
+        value
+      )
       setConfirmOpen(false)
       if (value.state === "REJECTED") void presentationQuery.refetch()
     },
@@ -282,6 +356,7 @@ export function PublicClientPresentationPage() {
 
   const viewOnly = presentation.viewOnly === true
   const completed = effectiveBooking?.state === "COMPLETED"
+  const paymentStep = normalPresentation && completed
   const rejected = effectiveBooking?.state === "REJECTED"
   const furnitureCabin = presentation.groups
     .flatMap((group) => group.cabins)
@@ -472,7 +547,7 @@ export function PublicClientPresentationPage() {
               </p>
             </div>
           </div>
-          <div className="flex min-w-0 basis-full items-center justify-end gap-2 sm:basis-auto sm:flex-none">
+          <div className="flex min-w-0 basis-full items-center justify-end gap-2 sm:flex-none sm:basis-auto">
             {presentation.mode === "REPLACEMENT" ||
             normalStep === "selection" ? (
               <Select
@@ -517,23 +592,29 @@ export function PublicClientPresentationPage() {
               >
                 {presentation.mode === "REPLACEMENT"
                   ? "Выберите бытовки на замену"
-                  : normalDetailsStep
-                    ? "Оформление заявки"
-                    : "Бытовки в аренду"}
+                  : paymentStep
+                    ? "Чек и оплата"
+                    : normalDetailsStep
+                      ? "Оформление заявки"
+                      : "Бытовки в аренду"}
               </h1>
               <p className="mt-2 text-sm text-muted-foreground sm:text-base">
                 {presentation.mode === "REPLACEMENT"
                   ? `Нужно выбрать ровно ${requiredSelectionCount ?? 0}. Порядок выбора соответствует порядку заменяемых бытовок.`
-                  : normalDetailsStep
-                    ? "Укажите удобную дату, срок аренды и адрес доставки."
-                    : "Каждая бытовка — отдельный экземпляр. Выберите подходящие варианты и комплектацию."}
+                  : paymentStep
+                    ? "Проверьте первоначальный счёт и подтвердите оплату в отведённое время."
+                    : normalDetailsStep
+                      ? "Укажите удобную дату, срок аренды и адрес доставки."
+                      : "Каждая бытовка — отдельный экземпляр. Выберите подходящие варианты и комплектацию."}
               </p>
             </div>
             <Badge variant={viewOnly ? "outline" : "secondary"}>
               <HugeiconsIcon icon={Calendar03Icon} />
-              {viewOnly
-                ? "Только просмотр"
-                : `Удержание до ${formatPublicDate(presentation.expiresAt)}`}
+              {paymentStep
+                ? "Выбор подтверждён"
+                : viewOnly
+                  ? "Только просмотр"
+                  : `Удержание до ${formatPublicDate(presentation.expiresAt)}`}
             </Badge>
           </div>
 
@@ -554,6 +635,11 @@ export function PublicClientPresentationPage() {
                   variant={normalStep === "details" ? "secondary" : "outline"}
                 >
                   2. Дата, срок и доставка
+                </Badge>
+              </li>
+              <li>
+                <Badge variant={paymentStep ? "secondary" : "outline"}>
+                  3. Чек и оплата
                 </Badge>
               </li>
             </ol>
@@ -593,6 +679,20 @@ export function PublicClientPresentationPage() {
               <AlertDescription>{selectionMessage}</AlertDescription>
             </Alert>
           ) : null}
+          {bookingQuery.isError ? (
+            <Alert variant="destructive">
+              <AlertTitle>Не удалось обновить бронирование</AlertTitle>
+              <AlertDescription>
+                {bookingQuery.error.message}
+                <Button
+                  variant="outline"
+                  onClick={() => void bookingQuery.refetch()}
+                >
+                  Повторить загрузку бронирования
+                </Button>
+              </AlertDescription>
+            </Alert>
+          ) : null}
           {draftIssues.length > 0 ? (
             <Alert variant="destructive">
               <AlertTitle>Доступность мебели изменилась</AlertTitle>
@@ -608,7 +708,29 @@ export function PublicClientPresentationPage() {
           ) : null}
         </section>
 
-        {normalDetailsStep ? (
+        {paymentStep ? (
+          <div className="mx-auto max-w-2xl">
+            <OrderPaymentCard
+              mode="TEST"
+              observation={paymentQuery.data}
+              loading={paymentQuery.isPending}
+              refreshing={paymentQuery.isFetching}
+              unavailable={paymentQuery.isError || bookingQuery.isError}
+              pending={paymentMutation.isPending}
+              error={
+                paymentQuery.error?.message ??
+                (paymentQuery.data?.payment.state === "CONFIRMED"
+                  ? null
+                  : paymentMutation.error?.message)
+              }
+              onConfirm={() => paymentMutation.mutate()}
+              onRefresh={() => {
+                paymentMutation.reset()
+                void paymentQuery.refetch()
+              }}
+            />
+          </div>
+        ) : normalDetailsStep ? (
           <section
             aria-label="Дата, срок и доставка"
             className="flex flex-col gap-6"
@@ -920,7 +1042,14 @@ export function PublicClientPresentationPage() {
             {completed ? (
               <span className="inline-flex items-center gap-2 text-sm font-medium">
                 <HugeiconsIcon icon={CheckmarkCircle02Icon} />
-                Выбор отправлен менеджеру
+                {paymentStep
+                  ? paymentQuery.data?.payment.state === "CONFIRMED"
+                    ? "Оплата подтверждена"
+                    : paymentQuery.data?.payment.state === "EXPIRED" ||
+                        paymentQuery.data?.payment.state === "CANCELLED"
+                      ? "Бронирование отменено"
+                      : "Выбор принят. Проверьте чек и оплату."
+                  : "Выбор отправлен менеджеру"}
               </span>
             ) : rejected ? (
               <span className="text-sm text-destructive">

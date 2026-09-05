@@ -212,6 +212,39 @@ class CustomerRepository @Inject constructor(
     /** Lists real customer bookings independently of any logistics simulator scenario. */
     suspend fun bookings(): List<CustomerBooking> = call { api.bookings() }
 
+    /** Reads only the bill belonging to the selected server booking/order. */
+    suspend fun payment(booking: CustomerBooking): CustomerOrderPayment = call {
+        api.payment(requireNotNull(booking.bookingId)).validated(requireNotNull(booking.orderId))
+    }
+
+    /** Reuses a durable key after an unknown response; never silently pays a newer version. */
+    suspend fun confirmTestPayment(
+        booking: CustomerBooking,
+        payment: CustomerOrderPayment,
+    ): CustomerOrderPayment {
+        val bookingId = requireNotNull(booking.bookingId)
+        val orderId = requireNotNull(booking.orderId)
+        payment.validated(orderId)
+        if (!payment.canConfirm) throw CustomerApiException(409, "Оплата недоступна. Обновите счёт")
+        return durableIdempotent(
+            operation = "initial-payment:$bookingId:${payment.orderVersion}",
+            reconcile = {
+                api.payment(bookingId).validated(orderId).takeIf {
+                    it.state == "CONFIRMED" && it.receipt == payment.receipt
+                }
+            },
+        ) { key ->
+            api.confirmTestPayment(bookingId, key, ConfirmCustomerPaymentRequest(payment.orderVersion))
+                .validated(orderId)
+        }
+    }
+
+    /** Fetches unread messages from the server; an empty list is never a transport fallback. */
+    suspend fun notifications(): List<CustomerNotification> = call { api.notifications() }
+
+    /** Idempotently acknowledges exactly the selected owned inbox message. */
+    suspend fun readNotification(id: String): CustomerNotification = call { api.readNotification(id) }
+
     /** Creates an exact owner quote without changing the booking or confirming any payment. */
     suspend fun createBookingChangeQuote(
         booking: CustomerBooking,

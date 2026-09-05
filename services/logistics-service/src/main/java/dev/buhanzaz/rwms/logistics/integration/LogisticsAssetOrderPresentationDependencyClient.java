@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.UriComponentsBuilder;
 
 /**
@@ -84,6 +85,34 @@ final class LogisticsAssetOrderPresentationDependencyClient {
         .stream()
         .map(LogisticsAssetOrderPresentationDependencyClient::orderReservation)
         .toList();
+  }
+
+  RentalItemReserveSnapshot readRentalItemReserves(UUID rentalItemId, UUID warehouseId) {
+    String uri =
+        UriComponentsBuilder.fromUriString(assetBase + "/rental-items/{rentalItemId}/reserves")
+            .queryParam("warehouseId", warehouseId)
+            .buildAndExpand(rentalItemId)
+            .encode()
+            .toUriString();
+    try {
+      return transport.get(
+          uri,
+          RentalItemReserveSnapshot.class,
+          ASSET_CLIENT,
+          ASSET_SCOPE,
+          "Asset-service returned an empty reserve snapshot",
+          DEFAULT);
+    } catch (LogisticsDependencyException exception) {
+      if (exception.getCause() instanceof RestClientResponseException response
+          && response.getStatusCode().value() == 404) {
+        throw new LogisticsDependencyException(
+            LogisticsDependencyException.FailureKind.PERMANENT_REJECTION,
+            "ASSET_NOT_FOUND",
+            "Rental item was not found in warehouse",
+            exception);
+      }
+      throw exception;
+    }
   }
 
   OrderUnitReservation reserveOrderUnit(
