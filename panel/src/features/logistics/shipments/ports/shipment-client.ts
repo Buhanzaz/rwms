@@ -40,7 +40,8 @@ export interface ShipmentClient {
   list(
     accessToken: string,
     warehouseId: string,
-    scheduledDate?: string
+    scheduledDate?: string,
+    assetId?: string
   ): Promise<ShipmentDocument[]>
   get(accessToken: string, documentId: string): Promise<ShipmentDocument>
   getFurnitureReadiness(

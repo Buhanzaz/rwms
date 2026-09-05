@@ -13,8 +13,9 @@ export const returnClient = new HttpReturnClient()
 export const listReturns = (
   accessToken: string,
   warehouseId: string,
-  scheduledDate?: string
-) => returnClient.list(accessToken, warehouseId, scheduledDate)
+  scheduledDate?: string,
+  assetId?: string
+) => returnClient.list(accessToken, warehouseId, scheduledDate, assetId)
 
 export const getReturn = (accessToken: string, documentId: string) =>
   returnClient.get(accessToken, documentId)

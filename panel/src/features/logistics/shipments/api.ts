@@ -16,8 +16,9 @@ export const shipmentClient = new HttpShipmentClient()
 export const listShipments = (
   accessToken: string,
   warehouseId: string,
-  scheduledDate?: string
-) => shipmentClient.list(accessToken, warehouseId, scheduledDate)
+  scheduledDate?: string,
+  assetId?: string
+) => shipmentClient.list(accessToken, warehouseId, scheduledDate, assetId)
 
 export const getShipment = (accessToken: string, documentId: string) =>
   shipmentClient.get(accessToken, documentId)

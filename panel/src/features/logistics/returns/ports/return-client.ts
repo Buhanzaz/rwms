@@ -40,7 +40,8 @@ export interface ReturnClient {
   list(
     accessToken: string,
     warehouseId: string,
-    scheduledDate?: string
+    scheduledDate?: string,
+    assetId?: string
   ): Promise<ReturnDocument[]>
   get(accessToken: string, documentId: string): Promise<ReturnDocument>
   create(input: ReturnCreateCommand): Promise<ReturnDocument>

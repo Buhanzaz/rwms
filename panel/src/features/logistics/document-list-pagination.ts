@@ -24,7 +24,7 @@ function booleanHeader(response: Response, name: string) {
   throw invalidApiResponseError(new Error(`${name} is missing or invalid`))
 }
 
-/** Loads one complete exact-day document result without silently dropping later pages. */
+/** Loads a complete exact-day or cabin-filtered document result without dropping later pages. */
 export async function listAllLogisticsDocumentPages<T>(
   accessToken: string,
   endpoint: string,

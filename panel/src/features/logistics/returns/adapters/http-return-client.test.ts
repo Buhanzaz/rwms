@@ -64,6 +64,49 @@ function json(value: unknown, status = 200) {
 afterEach(() => vi.unstubAllGlobals())
 
 describe("HttpReturnClient", () => {
+  it("loads every cabin-history page with the same asset filter and no current-day filter", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      ...document,
+      id: `22222222-2222-4222-8222-${String(index).padStart(12, "0")}`,
+    }))
+    const responses = [json(firstPage), json([document])]
+    responses.forEach((response, page) => {
+      response.headers.set("X-RWMS-Page", String(page))
+      response.headers.set("X-RWMS-Total-Elements", "101")
+      response.headers.set("X-RWMS-Total-Pages", "2")
+      response.headers.set("X-RWMS-Has-Next", String(page === 0))
+    })
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(responses[0])
+      .mockResolvedValueOnce(responses[1])
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      new HttpReturnClient().list("token", WAREHOUSE_ID, undefined, ASSET_ID)
+    ).resolves.toHaveLength(101)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    fetchMock.mock.calls.forEach(([input], page) => {
+      const url = new URL(input)
+      expect(url.searchParams.get("warehouseId")).toBe(WAREHOUSE_ID)
+      expect(url.searchParams.get("assetId")).toBe(ASSET_ID)
+      expect(url.searchParams.get("page")).toBe(String(page))
+      expect(url.searchParams.has("scheduledDate")).toBe(false)
+    })
+  })
+
+  it("rejects a server response that ignored the cabin-history filter", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json([document])))
+    await expect(
+      new HttpReturnClient().list(
+        "token",
+        WAREHOUSE_ID,
+        undefined,
+        EQUIPMENT_ID
+      )
+    ).rejects.toThrow("Сервис логистики вернул некорректный ответ.")
+  })
+
   it("lists and gets canonical returns through the same-origin gateway", async () => {
     const fetchMock = vi
       .fn()

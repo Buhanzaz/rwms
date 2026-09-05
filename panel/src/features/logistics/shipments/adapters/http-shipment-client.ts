@@ -275,14 +275,29 @@ export class HttpShipmentClient implements ShipmentClient {
   async list(
     accessToken: string,
     warehouseId: string,
-    scheduledDate?: string
+    scheduledDate?: string,
+    assetId?: string
   ) {
     const search = new URLSearchParams({ warehouseId })
     if (scheduledDate) search.set("scheduledDate", scheduledDate)
+    if (assetId) search.set("assetId", assetId)
     const endpoint = shipmentsEndpoint(`?${search.toString()}`)
-    if (scheduledDate) {
-      return listAllLogisticsDocumentPages(accessToken, endpoint, (response) =>
-        list(response).map(parseShipmentDocument)
+    if (scheduledDate || assetId) {
+      return listAllLogisticsDocumentPages(
+        accessToken,
+        endpoint,
+        (response) => {
+          const documents = list(response).map(parseShipmentDocument)
+          if (
+            assetId &&
+            documents.some(
+              (document) =>
+                !document.lines.some((line) => line.assetId === assetId)
+            )
+          )
+            invalidResponse()
+          return documents
+        }
       )
     }
     const response = await bearerRequest<unknown>(accessToken, endpoint)
