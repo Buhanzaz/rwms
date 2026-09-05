@@ -910,6 +910,16 @@ historical unknowns remain distinct from explicit zero.
 Evidence: [`V103`](../../services/logistics-service/src/main/resources/db/migration/V103__order_quoted_cabin_prices.sql),
 [`selection owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderReservationService.java).
 
+V104 retains an immutable initial non-fiscal bill under the order command lock. Each cabin uses
+its quote; furniture uses one statement-consistent revision and per-cabin quantity/months.
+Amounts and totals are arbitrary-precision whole-RUB strings. Accepted customer delivery appears
+once through the booking → presentation → session-selected-slot lineage, even before session
+order attachment; a manager link without a delivery quote explicitly excludes delivery. Missing
+required prices fail closed and replay/read never recomputes an issued receipt. This storage
+addition does not itself activate payment timers.
+Evidence: [`receipt owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderPaymentReceiptStore.java),
+[`V104`](../../services/logistics-service/src/main/resources/db/migration/V104__immutable_order_payment_receipts.sql).
+
 Public return, shipment and transfer list reads preserve their array payload but
 are bounded to `page/size` with a maximum of 100 documents. Pagination metadata
 is carried in fixed response headers, and all lines for one document page are

@@ -49,6 +49,7 @@ class RentalPricingStoreIntegrationTest {
 
   @Autowired RentalPricingStore store;
   @Autowired JdbcTemplate jdbc;
+  @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
 
   @BeforeEach
   void resetPrices() {
@@ -59,6 +60,39 @@ class RentalPricingStoreIntegrationTest {
                 "update rental_pricing_settings set version=0,"
                     + " updated_by_subject_id=null, updated_at=current_timestamp"))
         .isEqualTo(1);
+  }
+
+  @Test
+  void receiptReadUsesOneDetachedSnapshotWithoutNestingAnOrderTransaction() {
+    assertThat(store.readEquipmentForReceipt().version()).isZero();
+    assertThat(store.readEquipmentForReceipt().equipmentRates()).isEmpty();
+    UUID furniture = UUID.randomUUID();
+    var outer = new org.springframework.transaction.support.TransactionTemplate(transactions);
+    outer.setIsolationLevel(
+        org.springframework.transaction.TransactionDefinition.ISOLATION_READ_COMMITTED);
+    outer.executeWithoutResult(
+        status -> {
+          jdbc.update("update rental_pricing_settings set version=41");
+          jdbc.update(
+              "insert into rental_pricing_equipment_rate values (?::uuid, ?, ?)",
+              SINGLETON,
+              furniture,
+              Long.MAX_VALUE);
+          var snapshot = store.readEquipmentForReceipt();
+          assertThat(snapshot.version()).isEqualTo(41);
+          assertThat(snapshot.equipmentRates())
+              .containsExactlyEntriesOf(java.util.Map.of(furniture, Long.MAX_VALUE));
+          jdbc.update("update rental_pricing_equipment_rate set monthly_price_rubles=1");
+          assertThat(snapshot.equipmentRates())
+              .containsExactlyEntriesOf(java.util.Map.of(furniture, Long.MAX_VALUE));
+          assertThatThrownBy(() -> snapshot.equipmentRates().clear())
+              .isInstanceOf(UnsupportedOperationException.class);
+          assertThat(jdbc.queryForObject("select version from rental_pricing_settings", Long.class))
+              .isEqualTo(41);
+          status.setRollbackOnly();
+        });
+    assertThat(store.read().version()).isZero();
+    assertThat(store.read().equipmentRates()).isEmpty();
   }
 
   @Test
@@ -172,6 +206,9 @@ class RentalPricingStoreIntegrationTest {
               });
       assertThatThrownBy(() -> store.update(0, TYPE, CATEGORY, 8000, ACTOR))
           .isInstanceOf(OrderProblemException.class);
+      assertThatThrownBy(store::readEquipmentForReceipt)
+          .isInstanceOfSatisfying(OrderProblemException.class,
+              error -> assertThat(error.code()).isEqualTo("RENTAL_PRICING_UNAVAILABLE"));
       assertThat(jdbc.queryForObject("select count(*) from rental_pricing_settings", Long.class))
           .isZero();
     } finally {

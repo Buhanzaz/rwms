@@ -104,6 +104,8 @@ class LogisticsFlywayMigrationIntegrationTest {
     after.remove("pricing_version");
     after.remove("monthly_price_rubles");
     assertThat(after).isEqualTo(before);
+    assertThat(jdbc.queryForObject("select count(*) from rental_order_payment_receipt", Long.class))
+        .isZero();
     assertThatThrownBy(
             () -> jdbc.update("update rental_order_unit_term set monthly_price_rubles=0"))
         .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);

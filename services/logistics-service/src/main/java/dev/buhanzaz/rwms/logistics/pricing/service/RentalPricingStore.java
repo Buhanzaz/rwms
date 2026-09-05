@@ -33,6 +33,30 @@ public class RentalPricingStore {
             .orElseThrow(RentalPricingStore::missingSettings));
   }
 
+  /**
+   * Reads furniture prices and their shared revision in one SQL statement, including inside an
+   * order's read-committed transaction. No nested connection or global tariff lock is required.
+   */
+  @Transactional(readOnly = true)
+  public EquipmentRentalPriceSnapshot readEquipmentForReceipt() {
+    var rows = settings.readEquipmentReceiptRates(RentalPricingSettings.SINGLETON_ID);
+    if (rows.isEmpty()) throw missingSettings();
+    Long version = rows.getFirst().getPricingVersion();
+    if (version == null || version < 0) throw missingSettings();
+    var rates = new java.util.LinkedHashMap<UUID, Long>();
+    for (var row : rows) {
+      if (!version.equals(row.getPricingVersion())) throw missingSettings();
+      if (row.getEquipmentId() == null) {
+        if (rows.size() != 1 || row.getMonthlyPriceRubles() != null) throw missingSettings();
+      } else if (row.getMonthlyPriceRubles() == null
+          || row.getMonthlyPriceRubles() <= 0
+          || rates.putIfAbsent(row.getEquipmentId(), row.getMonthlyPriceRubles()) != null) {
+        throw missingSettings();
+      }
+    }
+    return new EquipmentRentalPriceSnapshot(version, rates);
+  }
+
   @Transactional
   public RentalPricingSnapshot update(
       long expectedVersion,

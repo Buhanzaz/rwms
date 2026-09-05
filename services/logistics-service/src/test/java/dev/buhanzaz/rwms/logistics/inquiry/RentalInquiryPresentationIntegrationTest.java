@@ -134,6 +134,11 @@ class RentalInquiryPresentationIntegrationTest {
   @Autowired RentalSettingsService settings;
   @Autowired ManualBookingDraftService manualBookingDrafts;
   @Autowired RentalOrderService rentalOrders;
+  @Autowired dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository orderRepository;
+
+  @Autowired
+  dev.buhanzaz.rwms.logistics.order.service.RentalOrderPaymentReceiptStore paymentReceipts;
+
   @Autowired JdbcTemplate jdbc;
   @Autowired ObjectMapper json;
   @Autowired MockMvc mockMvc;
@@ -195,6 +200,7 @@ class RentalInquiryPresentationIntegrationTest {
     releasedCabinsByOrder.clear();
     presentationHolds.clear();
     jdbc.update("delete from rental_pricing_rate");
+    jdbc.update("delete from rental_pricing_equipment_rate");
     jdbc.update("update rental_pricing_settings set version=0");
     reset(dependencies, deliveryDatePolicy);
     when(dependencies.readCabinPricingReferences(eq(WAREHOUSE), anyList()))
@@ -3453,6 +3459,84 @@ class RentalInquiryPresentationIntegrationTest {
         .containsEntry("pricing_version", null)
         .containsEntry("monthly_price_rubles", null);
     assertThatThrownBy(() -> jdbc.update("update client_presentation_item set pricing_version=1"))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+  }
+
+  @Test
+  void issuedReceiptPersistsExactCabinAndMonthlyFurniturePricesAndNeverReprices() {
+    UUID furniture = UUID.randomUUID();
+    jdbc.update(
+        "insert into rental_pricing_rate values ('00000000-0000-0000-0000-000000000001', ?, ?, ?)",
+        PRICE_TYPE,
+        PRICE_CATEGORY,
+        Long.MAX_VALUE);
+    jdbc.update("update rental_pricing_settings set version=4");
+    ClientPresentationResponse sent = publish(createInquiry().id(), List.of(CABIN_1));
+    var booked = bookings.confirm(token(sent), UUID.randomUUID(), confirmation(CABIN_1, 2L));
+    assertThat(booked.state()).isEqualTo("COMPLETED");
+    jdbc.update(
+        "insert into rental_pricing_equipment_rate values ('00000000-0000-0000-0000-000000000001', ?, 500)",
+        furniture);
+    jdbc.update("update rental_pricing_settings set version=5");
+    jdbc.update(
+        """
+        insert into rental_order_equipment_requirement(
+          id,version,order_id,rental_item_id,equipment_id,equipment_name,quantity,created_at,updated_at)
+        values (?,0,?,?,?,'Стул',3,clock_timestamp(),clock_timestamp())
+        """,
+        UUID.randomUUID(),
+        booked.orderId(),
+        CABIN_1,
+        furniture);
+    var tx = new TransactionTemplate(transactionManager);
+    var receipt =
+        tx.execute(
+            status ->
+                paymentReceipts.capture(
+                    orderRepository.findForUpdate(booked.orderId()).orElseThrow(),
+                    orderReservations.get(booked.orderId())));
+    assertThat(receipt).isNotNull();
+    assertThat(receipt.totalRubles())
+        .isEqualTo(
+            java.math.BigInteger.valueOf(Long.MAX_VALUE)
+                .multiply(java.math.BigInteger.TWO)
+                .add(java.math.BigInteger.valueOf(3000))
+                .toString());
+    assertThat(receipt.lines().getFirst().pricingVersion()).isEqualTo(4);
+    assertThat(receipt.lines().getLast().pricingVersion()).isEqualTo(5);
+    assertThat(receipt.lines().getLast().amountRubles()).isEqualTo("3000");
+    var persisted =
+        jdbc.queryForMap(
+            "select * from rental_order_payment_receipt where order_id=?", booked.orderId());
+    jdbc.update("update rental_pricing_equipment_rate set monthly_price_rubles=999");
+    jdbc.update("update rental_pricing_rate set monthly_price_rubles=1");
+    jdbc.update(
+        "update rental_order_equipment_requirement set equipment_name='Новое имя',quantity=9");
+    assertThat(paymentReceipts.find(booked.orderId())).contains(receipt);
+    var replay =
+        tx.execute(
+            status ->
+                paymentReceipts.capture(
+                    orderRepository.findForUpdate(booked.orderId()).orElseThrow(), List.of()));
+    assertThat(replay).isEqualTo(receipt);
+    assertThat(
+            jdbc.queryForMap(
+                "select * from rental_order_payment_receipt where order_id=?", booked.orderId()))
+        .isEqualTo(persisted);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+        insert into rental_order_payment_receipt(id,order_id,issued_at,receipt_json)
+        select ?,order_id,issued_at,receipt_json from rental_order_payment_receipt
+        """,
+                    UUID.randomUUID()))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThatThrownBy(
+            () -> jdbc.update("update rental_order_payment_receipt set receipt_json='{}'"))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThatThrownBy(
+            () -> jdbc.update("update rental_order_payment_receipt set receipt_json='not-json'"))
         .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
   }
 

@@ -173,6 +173,28 @@ class CustomerBookingChangeIntegrationTest {
   }
 
   @Test
+  void receiptDeliveryQuoteFollowsExactSelectedSlotBeforeSessionOrderAttachment() {
+    jdbc.update(
+        """
+        update customer_rental_session set state='ACTIVE',order_id=null,booking_id=null,presentation_token=null
+        where inquiry_id=?
+        """,
+        inquiry);
+    var quote = slots.findCheckoutQuoteByOrderId(order).orElseThrow();
+    assertThat(quote.getId()).isEqualTo(oldSlot);
+    assertThat(quote.getDeliveryPriceRubles()).isEqualTo(10_000L);
+    assertThat(slots.findCheckoutQuoteByOrderId(UUID.randomUUID())).isEmpty();
+    var anotherOffer = offer(quote.getDeliveryDate().plusDays(1));
+    assertThat(slots.findCheckoutQuoteByOrderId(order).orElseThrow().getId()).isEqualTo(oldSlot);
+    jdbc.update(
+        "update customer_rental_session set delivery_slot_id=? where inquiry_id=?",
+        anotherOffer.getId(),
+        inquiry);
+    assertThat(slots.findCheckoutQuoteByOrderId(order).orElseThrow().getId())
+        .isEqualTo(anotherOffer.getId());
+  }
+
+  @Test
   void exactCustomerQuoteIsStringMoneyReplayableAndDoesNotAcceptMissingFields() throws Exception {
     UUID key = UUID.randomUUID();
     String path = customerPath() + "/change-quotes";

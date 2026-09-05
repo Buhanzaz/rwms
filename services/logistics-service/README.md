@@ -82,6 +82,16 @@ Replays, later presentation additions, duration changes and same-order cabin rep
 the original term price. Existing terms and bookings from historical unpriced offers remain unknown;
 the migration neither backfills a zero nor reprices an existing order.
 
+V104 adds one immutable, non-fiscal initial order bill. Cabin lines use their saved offer;
+furniture lines use quantity × whole-RUB unit/month price × that cabin's rental months. The furniture
+revision and prices are read in one SQL statement, including under the caller's order write lock,
+without a second connection or a tariff lock. Line amounts and totals are exact decimal strings
+and may exceed `long`. The accepted CustomerApp delivery quote is included once, even before its
+session has attached the order ID. Unquoted manager-link delivery remains explicitly excluded.
+Missing cabin prices or a missing customer delivery quote fail closed. Reads and capture replays
+return the original receipt without consulting changed tariffs/composition. Existing orders have
+no fabricated historical bill. This storage step does not yet start a payment window.
+
 V100 adds nullable order-owned payment reservation evidence: a non-renewable five-minute window,
 explicit `CUSTOMER_TEST`/`MANAGER_CONFIRMATION` provenance, and separate pending, confirmed,
 releasing, expired and cancelled outcomes. The domain rejects confirmation at the deadline and

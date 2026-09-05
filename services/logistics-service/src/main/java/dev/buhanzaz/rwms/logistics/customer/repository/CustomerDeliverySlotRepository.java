@@ -78,6 +78,22 @@ public interface CustomerDeliverySlotRepository
   Optional<CustomerDeliverySlot> findByOrderIdAndState(
       UUID orderId, CustomerDeliverySlotState state);
 
+  /**
+   * Reads the accepted checkout quote before the customer recovery has attached its order ID.
+   * The presentation booking already owns that order; only the exact session-selected slot counts.
+   * This read takes no session/slot lock while the caller holds the order lock.
+   */
+  @Query(
+      """
+      select distinct slot from CustomerDeliverySlot slot
+      join CustomerRentalSession session on session.deliverySlotId = slot.id
+          and session.inquiryId = slot.inquiryId
+      join ClientPresentation presentation on presentation.inquiryId = session.inquiryId
+      join PresentationBooking booking on booking.presentationId = presentation.id
+      where booking.orderId = :orderId
+      """)
+  Optional<CustomerDeliverySlot> findCheckoutQuoteByOrderId(@Param("orderId") UUID orderId);
+
   List<CustomerDeliverySlot> findAllByOrderIdInAndState(
       Collection<UUID> orderIds, CustomerDeliverySlotState state);
 }
