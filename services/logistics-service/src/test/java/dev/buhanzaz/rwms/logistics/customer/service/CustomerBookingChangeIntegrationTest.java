@@ -71,6 +71,7 @@ class CustomerBookingChangeIntegrationTest {
   @Autowired JdbcTemplate jdbc;
   @Autowired ObjectMapper json;
   @Autowired RentalOrderPaymentService initialPayments;
+  @Autowired CustomerRentalSessionStore checkoutSessions;
   @Autowired LogisticsTransactionLock paymentCommandLock;
   @Autowired CustomerBookingChangeService service;
   @Autowired CustomerBookingChangeChargeStore store;
@@ -204,6 +205,40 @@ class CustomerBookingChangeIntegrationTest {
         inquiry);
     assertThat(slots.findCheckoutQuoteByOrderId(order).orElseThrow().getId())
         .isEqualTo(anotherOffer.getId());
+  }
+
+  @Test
+  void unattachedCheckoutCanReadItsOwnedPaymentAndWaitWithoutConsumingFailureAttempts() {
+    seedPendingInitialBill();
+    UUID key = UUID.randomUUID();
+    jdbc.update(
+        "update customer_rental_session set state='CHECKOUT_PENDING',order_id=null,pending_command_key=?,"
+            + " pending_command_sha256=?,checkout_command_key=?,checkout_command_sha256=?,recovery_next_attempt_at=? where inquiry_id=?",
+        key,
+        "a".repeat(64),
+        key,
+        "a".repeat(64),
+        NOW.atOffset(ZoneOffset.UTC),
+        inquiry);
+    jdbc.update("update customer_delivery_slot set state='CHECKOUT_PENDING' where id=?", oldSlot);
+    var identity = new CustomerIdentity(subject, "Customer");
+    assertThat(initialPayments.getCustomer(identity, booking).orderId()).isEqualTo(order);
+    var claim = checkoutSessions.claimPendingBooking(subject, inquiry).orElseThrow();
+    var waiting =
+        checkoutSessions.awaitPayment(subject, inquiry, booking, order, claim.leaseToken());
+    assertThat(waiting.getOrderId()).isEqualTo(order);
+    assertThat(waiting.getState()).isEqualTo(CustomerSessionState.CHECKOUT_PENDING);
+    assertThat(waiting.getRecoveryAttemptCount()).isZero();
+    assertThat(waiting.getRecoveryLeaseToken()).isNull();
+    assertThat(waiting.getRecoveryQuarantinedAt()).isNull();
+    assertThat(slots.findById(oldSlot).orElseThrow().getState())
+        .isEqualTo(CustomerDeliverySlotState.CHECKOUT_PENDING);
+    assertThat(
+            initialPayments
+                .confirmCustomer(
+                    identity, booking, UUID.randomUUID(), new ConfirmOrderPaymentRequest(0L))
+                .state())
+        .isEqualTo(RentalOrderPaymentState.CONFIRMED);
   }
 
   @Test

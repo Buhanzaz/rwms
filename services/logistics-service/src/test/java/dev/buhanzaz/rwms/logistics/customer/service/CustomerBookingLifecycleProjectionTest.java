@@ -14,6 +14,7 @@ import dev.buhanzaz.rwms.logistics.customer.security.CustomerIdentity;
 import dev.buhanzaz.rwms.logistics.inquiry.service.ClientPresentationService;
 import dev.buhanzaz.rwms.logistics.inquiry.service.PresentationBookingService;
 import dev.buhanzaz.rwms.logistics.service.CabinFurnitureTaskService;
+import dev.buhanzaz.rwms.logistics.order.service.RentalOrderPaymentService;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -50,7 +51,8 @@ class CustomerBookingLifecycleProjectionTest {
             mock(CustomerAuthorizer.class),
             mock(ClientPresentationService.class),
             mock(PresentationBookingService.class),
-            mock(CabinFurnitureTaskService.class));
+            mock(CabinFurnitureTaskService.class),
+            mock(RentalOrderPaymentService.class));
 
     assertThat(service.bookings(identity)).containsExactly(cancelledResponse, rescheduledResponse);
     verify(bookings).response(eq(identity), eq(cancelled), eq("CANCELLED"), eq(null));

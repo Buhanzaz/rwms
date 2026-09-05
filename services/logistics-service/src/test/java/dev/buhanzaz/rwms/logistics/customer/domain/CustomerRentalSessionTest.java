@@ -138,6 +138,40 @@ class CustomerRentalSessionTest {
   }
 
   @Test
+  void normalPaymentWaitingDoesNotConsumeRetriesAndRetainsTheExactOrder() {
+    CustomerRentalSession session =
+        CustomerRentalSession.create(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID());
+    UUID command = UUID.randomUUID();
+    UUID booking = UUID.randomUUID();
+    UUID order = UUID.randomUUID();
+    OffsetDateTime start = OffsetDateTime.parse("2026-09-05T17:00:00Z");
+    session.beginCheckout(0, command, HASH);
+    session.recordPendingBooking(command, HASH, booking, null, "token", start);
+    for (int attempt = 0; attempt < 12; attempt++) {
+      OffsetDateTime due = session.getRecoveryNextAttemptAt();
+      UUID lease = UUID.randomUUID();
+      assertThat(session.claimCheckoutRecovery(lease, due, due.plusMinutes(1))).isTrue();
+      session.awaitPayment(booking, order, lease, due, due.plusSeconds(2));
+    }
+    assertThat(session.getOrderId()).isEqualTo(order);
+    assertThat(session.getState()).isEqualTo(CustomerSessionState.CHECKOUT_PENDING);
+    assertThat(session.getRecoveryAttemptCount()).isZero();
+    assertThat(session.getRecoveryQuarantinedAt()).isNull();
+    assertThat(session.getRecoveryLeaseToken()).isNull();
+    OffsetDateTime due = session.getRecoveryNextAttemptAt();
+    UUID lease = UUID.randomUUID();
+    assertThat(session.claimCheckoutRecovery(lease, due, due.plusMinutes(1))).isTrue();
+    assertThatThrownBy(
+            () -> session.awaitPayment(booking, UUID.randomUUID(), lease, due, due.plusSeconds(2)))
+        .hasMessageContaining("does not match");
+    assertThatThrownBy(
+            () -> session.awaitPayment(booking, order, UUID.randomUUID(), due, due.plusSeconds(2)))
+        .hasMessageContaining("lease");
+    session.completeBooking(booking, order, lease, due);
+    assertThat(session.getState()).isEqualTo(CustomerSessionState.BOOKED);
+  }
+
+  @Test
   void checkoutCompletionRequiresCurrentLeaseAndClearsRecoveryMetadata() {
     CustomerRentalSession session =
         CustomerRentalSession.create(

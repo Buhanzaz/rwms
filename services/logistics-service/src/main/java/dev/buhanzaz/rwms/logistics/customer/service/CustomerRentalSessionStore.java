@@ -200,14 +200,21 @@ public class CustomerRentalSessionStore {
     return sessions.saveAndFlush(session);
   }
 
-  /** Marks a customer cart booked once the existing booking saga completes. */
+  /** Waits for the order-owned payment outcome without treating normal waiting as a failure. */
+  @Transactional
+  public CustomerRentalSession awaitPayment(
+      UUID subjectId, UUID inquiryId, UUID bookingId, UUID orderId, UUID recoveryLeaseToken) {
+    CustomerRentalSession session = locked(subjectId, inquiryId);
+    OffsetDateTime timestamp = now();
+    session.awaitPayment(
+        bookingId, orderId, recoveryLeaseToken, timestamp, timestamp.plusSeconds(2));
+    return sessions.saveAndFlush(session);
+  }
+
+  /** Marks a customer cart booked once booking and payment admission have completed. */
   @Transactional
   public CustomerRentalSession completeBooking(
-      UUID subjectId,
-      UUID inquiryId,
-      UUID bookingId,
-      UUID orderId,
-      UUID recoveryLeaseToken) {
+      UUID subjectId, UUID inquiryId, UUID bookingId, UUID orderId, UUID recoveryLeaseToken) {
     CustomerRentalSession session = locked(subjectId, inquiryId);
     session.completeBooking(bookingId, orderId, recoveryLeaseToken, now());
     return sessions.saveAndFlush(session);

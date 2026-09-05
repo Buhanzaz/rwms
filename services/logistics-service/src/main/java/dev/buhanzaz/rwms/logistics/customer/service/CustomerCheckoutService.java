@@ -24,6 +24,9 @@ import dev.buhanzaz.rwms.logistics.inquiry.service.ClientPresentationService;
 import dev.buhanzaz.rwms.logistics.inquiry.service.PresentationBookingService;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.DesiredDeliveryWindowInput;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
+import dev.buhanzaz.rwms.logistics.order.service.RentalOrderPaymentService;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentState;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import dev.buhanzaz.rwms.logistics.service.CabinFurnitureTaskService;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -46,7 +49,7 @@ import org.springframework.stereotype.Service;
 
 /**
  * Customer checkout saga facade. It reuses the existing presentation hold conversion and booking
- * receipt, then confirms the route slot only after the resulting order is durably saved.
+ * receipt, then confirms the route slot and prepares furniture only after order payment admission.
  */
 @Service
 @RequiredArgsConstructor
@@ -64,6 +67,7 @@ public class CustomerCheckoutService {
   private final ClientPresentationService presentations;
   private final PresentationBookingService bookings;
   private final CabinFurnitureTaskService furnitureTasks;
+  private final RentalOrderPaymentService payments;
 
   /** Submits or idempotently resumes one customer checkout. */
   public CustomerBookingResponse checkout(
@@ -198,10 +202,12 @@ public class CustomerCheckoutService {
         .orElseGet(
             () -> {
               CustomerRentalSession current =
-                  sessions.required(
-                      identity.subjectId(), session.getInquiryId());
+                  sessions.required(identity.subjectId(), session.getInquiryId());
               return customerBookings.response(
-                  identity, current, "PENDING", current.getRecoveryLastErrorCode());
+                  identity,
+                  current,
+                  CustomerBookingService.status(current),
+                  current.getRecoveryLastErrorCode());
             });
   }
 
@@ -246,13 +252,6 @@ public class CustomerCheckoutService {
 
   private CustomerBookingResponse reconcile(
       CustomerIdentity identity, CustomerRentalSession session, UUID recoveryLeaseToken) {
-    slots.bindCheckoutBooking(
-        identity,
-        session.getInquiryId(),
-        session.getDeliverySlotId(),
-        session.getCheckoutCommandKey(),
-        session.getBookingId(),
-        session.getOrderId());
     PresentationBookingResponse status =
         bookings.status(session.getPresentationToken(), session.getBookingId());
     if ("COMPLETED".equals(status.state())) {
@@ -262,6 +261,32 @@ public class CustomerCheckoutService {
             "CUSTOMER_BOOKING_INVALID",
             "Бронирование завершено без заказа");
       }
+      var payment = payments.getCustomer(identity, status.bookingId());
+      if (!status.orderId().equals(payment.orderId())) {
+        throw new OrderProblemException(
+            HttpStatus.SERVICE_UNAVAILABLE,
+            "CUSTOMER_BOOKING_INVALID",
+            "Оплата относится к другому заказу");
+      }
+      if (!RentalOrderPaymentState.allowsFulfillment(payment.state())
+          || payment.orderStatus() == RentalOrderStatus.DRAFT
+          || payment.orderStatus() == RentalOrderStatus.CANCELLED) {
+        CustomerRentalSession waiting =
+            sessions.awaitPayment(
+                identity.subjectId(),
+                session.getInquiryId(),
+                status.bookingId(),
+                status.orderId(),
+                recoveryLeaseToken);
+        return customerBookings.response(identity, waiting, "PENDING", null);
+      }
+      slots.bindCheckoutBooking(
+          identity,
+          session.getInquiryId(),
+          session.getDeliverySlotId(),
+          session.getCheckoutCommandKey(),
+          status.bookingId(),
+          status.orderId());
       CustomerDeliverySlot confirmedSlot =
           slots.confirm(
               identity,

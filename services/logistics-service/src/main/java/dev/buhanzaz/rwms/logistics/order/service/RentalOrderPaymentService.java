@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.logistics.order.service;
 
 import dev.buhanzaz.rwms.logistics.customer.security.CustomerAuthorizer;
+import dev.buhanzaz.rwms.logistics.customer.domain.CustomerRentalSession;
 import dev.buhanzaz.rwms.logistics.customer.security.CustomerIdentity;
 import dev.buhanzaz.rwms.logistics.customer.service.CustomerRentalSessionStore;
 import dev.buhanzaz.rwms.logistics.inquiry.domain.PresentationBookingState;
@@ -90,10 +91,9 @@ public class RentalOrderPaymentService {
   public OrderPaymentResponse confirmCustomer(
       CustomerIdentity identity, UUID bookingId, UUID key, ConfirmOrderPaymentRequest request) {
     var session = customerSessions.requiredBooking(identity.subjectId(), bookingId);
-    if (session.getOrderId() == null) throw bookingNotReady();
     return confirm(
         customerAccess.orderActor(identity, session.getWarehouseId()),
-        session.getOrderId(),
+        customerOrderId(session),
         bookingId,
         key,
         request,
@@ -177,10 +177,19 @@ public class RentalOrderPaymentService {
 
   private RentalOrder customerOrder(CustomerIdentity identity, UUID bookingId) {
     var session = customerSessions.requiredBooking(identity.subjectId(), bookingId);
-    if (session.getOrderId() == null) throw bookingNotReady();
-    RentalOrder order = orders.requiredOrder(session.getOrderId());
+    RentalOrder order = orders.requiredOrder(customerOrderId(session));
     requireRead(customerAccess.orderActor(identity, session.getWarehouseId()), order);
     return order;
+  }
+
+  private UUID customerOrderId(CustomerRentalSession session) {
+    if (session.getOrderId() != null) return session.getOrderId();
+    // A crash may leave the owned receipt attached before its completed order identity is joined.
+    return bookings
+        .findById(session.getBookingId())
+        .filter(booking -> booking.getState() == PresentationBookingState.COMPLETED)
+        .map(booking -> booking.getOrderId())
+        .orElseThrow(RentalOrderPaymentService::bookingNotReady);
   }
 
   private UUID presentationOrderId(String token, UUID bookingId) {

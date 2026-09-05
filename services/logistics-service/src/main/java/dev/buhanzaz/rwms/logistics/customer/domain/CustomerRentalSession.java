@@ -281,7 +281,28 @@ public class CustomerRentalSession {
     updatedAt = requiredNow;
   }
 
-  /** Marks a successfully saved booking as the terminal cart outcome. */
+  /** Releases a checkout lease while awaiting payment; healthy waiting does not consume retries. */
+  public void awaitPayment(
+      UUID bookingId,
+      UUID orderId,
+      UUID leaseToken,
+      OffsetDateTime timestamp,
+      OffsetDateTime nextCheckAt) {
+    requireCheckoutRecoveryLease(leaseToken, timestamp);
+    if (!Objects.equals(this.bookingId, bookingId)
+        || orderId == null
+        || (this.orderId != null && !this.orderId.equals(orderId))
+        || nextCheckAt == null
+        || !nextCheckAt.isAfter(timestamp)) {
+      throw new IllegalArgumentException("Payment wait does not match pending checkout");
+    }
+    this.orderId = orderId;
+    clearRecovery();
+    recoveryNextAttemptAt = nextCheckAt;
+    updatedAt = timestamp;
+  }
+
+  /** Marks a successfully saved and payment-admitted booking as the terminal cart outcome. */
   public void completeBooking(
       UUID bookingId, UUID orderId, UUID recoveryLeaseToken, OffsetDateTime timestamp) {
     requireCheckoutRecoveryLease(recoveryLeaseToken, timestamp);

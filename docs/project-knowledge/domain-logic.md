@@ -937,6 +937,10 @@ public test payment are separate server-derived sources; none claims a provider 
 version, database deadline and open expiry/cancellation/replacement checks precede the atomic
 confirmation/audit/idempotency commit. Order state is loaded after the command lock so concurrent
 replay sees the committed result. Reads never issue a bill or activate/extend a timer.
+Customer checkout keeps its slot pending and creates no furniture work until payment admission.
+Normal waiting releases the checkout lease without spending failure retries; incomplete order-ID
+attachment is recovered through the customer's existing booking. A released order cannot rebind
+the slot through checkout reconciliation, and terminal session state remains terminal on reload.
 Evidence: [`payment owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderPaymentService.java),
 [`contract`](../../contracts/openapi/logistics-service.yaml).
 

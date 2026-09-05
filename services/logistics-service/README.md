@@ -277,7 +277,12 @@ capacity-counted shipment/transfer create, replan, manual calendar move and lost
 recovery. A driver reservation therefore cannot commit inside the final fingerprint/hold window;
 concurrent writers have one deterministic transaction order. Checkout replaces `HELD` with durable `CHECKOUT_PENDING` capacity using the stable command
 key before any remote presentation/booking call, then atomically binds the durable booking receipt.
-A terminal result confirms or releases that capacity. Checkout creates the ordinary saved rental order,
+A terminal result confirms or releases that capacity. New payment-aware checkout keeps capacity
+`CHECKOUT_PENDING` until order payment is `CONFIRMED`; no furniture work or slot confirmation starts
+while payment is pending or being released. Healthy payment waiting releases its recovery lease and
+reschedules a check without consuming failure attempts. Payment reads resolve the owned booking even
+if an interrupted checkout has not yet attached its completed order ID. Historical null-payment
+orders retain their previous admission. Checkout creates the ordinary saved rental order,
 carries each cabin's own initial rental duration into it and creates deterministic per-cabin
 furniture tasks. A transport retry with the same intent reuses the original
 domain idempotency key and reconciles a lost response through
