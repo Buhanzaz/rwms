@@ -4,6 +4,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { ArrowDown01Icon, ArrowUp01Icon } from "@hugeicons/core-free-icons"
 
 import { Badge } from "@/components/ui/badge"
+import { repairSubtaskStatusVariant } from "./repair-task-status-labels"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -196,7 +197,7 @@ export function RepairSubtasksEditor({
           <CardHeader>
             <CardTitle className="flex flex-wrap items-center gap-2">
               <span>Подзадание {index + 1}</span>
-              <Badge variant="outline">
+              <Badge variant={repairSubtaskStatusVariant[subtask.status]}>
                 {repairSubtaskStatusLabel(subtask.status)}
               </Badge>
               <Badge

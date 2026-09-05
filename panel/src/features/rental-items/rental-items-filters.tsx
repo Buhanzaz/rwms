@@ -27,12 +27,12 @@ const statusOptionClassName: Record<string, string> = {
   "Ожидает осмотра":
     "bg-[var(--status-after-rent-bg)] text-[var(--status-after-rent-fg)]",
   "Ожидает подтверждения сметы":
-    "bg-[var(--status-after-rent-bg)] text-[var(--status-after-rent-fg)]",
+    "bg-[var(--status-waiting-estimate-confirmation-bg)] text-foreground",
   Бронь: "bg-[var(--status-booked-bg)] text-[var(--status-booked-fg)]",
   "В ремонте": "bg-[var(--status-repair-bg)] text-[var(--status-repair-fg)]",
   Списана:
     "bg-[var(--status-written-off-bg)] text-[var(--status-written-off-fg)]",
-  Утеряна: "bg-destructive/15 text-destructive",
+  Утеряна: "bg-[var(--status-lost-bg)] text-foreground",
   Капремонт:
     "bg-[var(--status-capital-repair-bg)] text-[var(--status-capital-repair-fg)]",
   "Продажа Б/У": "bg-[var(--status-sale-bg)] text-[var(--status-sale-fg)]",
@@ -40,7 +40,7 @@ const statusOptionClassName: Record<string, string> = {
   Склад: "bg-[var(--status-warehouse-bg)] text-[var(--status-warehouse-fg)]",
   "Собственные нужды":
     "bg-[var(--status-own-needs-bg)] text-[var(--status-own-needs-fg)]",
-  "В перемещении": "bg-secondary text-secondary-foreground",
+  "В перемещении": "bg-[var(--status-in-transfer-bg)] text-foreground",
 }
 
 function FilterButton({

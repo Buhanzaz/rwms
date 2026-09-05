@@ -301,7 +301,7 @@ export function RepairEstimateCompletedWorkspace({
               authorName={authorDisplayName}
               authorLabel="Автор"
               showComment={false}
-              status={<Badge variant="secondary">Завершена</Badge>}
+              status={<Badge variant="success">Завершена</Badge>}
             />
             <ForceCapitalRepairField
               id="completed-estimate-force-capital-repair"

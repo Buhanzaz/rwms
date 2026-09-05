@@ -25,6 +25,22 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  --color-status-success: color-mix(
+    in srgb,
+    var(--signal-success) 24%,
+    var(--card)
+  );
+  --color-status-warning: color-mix(
+    in srgb,
+    var(--signal-warning) 24%,
+    var(--card)
+  );
+  --color-status-progress: color-mix(
+    in srgb,
+    var(--signal-progress) 24%,
+    var(--card)
+  );
+  --color-status-info: color-mix(in srgb, var(--signal-info) 24%, var(--card));
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -111,6 +127,10 @@
   --cart-surface-foreground: var(--background);
   --history-past: color-mix(in oklch, var(--chart-5) 72%, var(--background));
   --history-past-foreground: var(--foreground);
+  --signal-success: #16a34a;
+  --signal-warning: #eab308;
+  --signal-progress: #f97316;
+  --signal-info: #0d9488;
   --cabin-status-rented: #0891b2;
   --cabin-status-booked: #8b5cf6;
   --cabin-status-repair: #f97316;
@@ -139,6 +159,21 @@
     var(--card)
   );
   --status-after-rent-fg: var(--foreground);
+  --status-waiting-estimate-confirmation-bg: color-mix(
+    in srgb,
+    var(--cabin-status-waiting-estimate-confirmation) 24%,
+    var(--card)
+  );
+  --status-lost-bg: color-mix(
+    in srgb,
+    var(--cabin-status-lost) 24%,
+    var(--card)
+  );
+  --status-in-transfer-bg: color-mix(
+    in srgb,
+    var(--cabin-status-in-transfer) 24%,
+    var(--card)
+  );
   --status-booked-bg: color-mix(
     in srgb,
     var(--cabin-status-booked) 24%,

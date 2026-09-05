@@ -8,6 +8,7 @@ import {
 import { Add01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { useNavigate } from "react-router-dom"
+import { logisticsStatusVariant as statusVariant } from "../logistics-status-variant"
 
 import { getEquipmentItems } from "@/api/equipment-api"
 import type { WarehouseInfo } from "@/api/warehouse-api"
@@ -224,14 +225,6 @@ function errorMessage(cause: unknown, fallback: string) {
 
 function isConflict(cause: unknown): cause is ApiError {
   return cause instanceof ApiError && cause.status === 409
-}
-
-function statusVariant(state: TransferDocumentState) {
-  if (state === "CONFLICT" || state === "RECONCILIATION_REQUIRED") {
-    return "destructive" as const
-  }
-  if (state === "COMPLETED") return "secondary" as const
-  return "outline" as const
 }
 
 function warehouseLabel(warehouse: WarehouseInfo | undefined) {

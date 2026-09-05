@@ -3,6 +3,14 @@ import type {
   RepairTaskSubtaskStatus,
 } from "@/features/repair-tasks/model/repair-task"
 
+export const repairSubtaskStatusVariant = {
+  WAITING: "warning",
+  IN_PROGRESS: "progress",
+  PAUSED: "warning",
+  DONE: "success",
+  CANCELLED: "muted",
+} as const satisfies Record<RepairTaskSubtaskStatus, string>
+
 export function repairTaskStatusLabel(status: RepairTaskStatus) {
   if (status === "QUEUED") {
     return "В очереди"

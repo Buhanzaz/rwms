@@ -136,9 +136,10 @@ function statusLabel(status: PublicContractorRouteEntry["status"]) {
 }
 
 function statusTone(status: PublicContractorRouteEntry["status"]) {
-  if (status === "DONE") return "secondary" as const
-  if (status === "IN_PROGRESS") return "default" as const
-  return "outline" as const
+  if (status === "CANCELLED") return "muted" as const
+  if (status === "DONE") return "success" as const
+  if (status === "IN_PROGRESS") return "info" as const
+  return "warning" as const
 }
 
 function mediaKey(media: PublicContractorMedia) {
@@ -459,7 +460,15 @@ function ContractorTaskCard({
               </p>
             ) : null}
           </div>
-          <Badge variant={task.status === "DONE" ? "secondary" : "outline"}>
+          <Badge
+            variant={
+              task.status === "DONE"
+                ? "success"
+                : task.status === "CANCELLED"
+                  ? "muted"
+                  : "warning"
+            }
+          >
             {task.status === "DONE"
               ? "Завершено"
               : task.status === "CANCELLED"

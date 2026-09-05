@@ -454,8 +454,8 @@ export function RepairEstimatesPage() {
                           <Badge
                             variant={
                               estimate.status === "COMPLETED"
-                                ? "secondary"
-                                : "outline"
+                                ? "success"
+                                : "muted"
                             }
                           >
                             {estimateStatusLabel(estimate.status)}
@@ -625,7 +625,7 @@ function EstimateMobileCard({
         <span className="text-muted-foreground">Статус</span>
         <span>
           <Badge
-            variant={estimate.status === "COMPLETED" ? "secondary" : "outline"}
+            variant={estimate.status === "COMPLETED" ? "success" : "muted"}
           >
             {estimateStatusLabel(estimate.status)}
           </Badge>

@@ -11,6 +11,7 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Link, useNavigate, useParams } from "react-router-dom"
 import { toast } from "sonner"
+import { OrderStatusBadge } from "../components/order-status-badge"
 
 import {
   AlertDialog,
@@ -494,9 +495,7 @@ export function OrderDetailPage() {
           </Link>
         </Button>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          <Badge variant={order.status === "DRAFT" ? "secondary" : "outline"}>
-            {ORDER_STATUS_LABELS[order.status]}
-          </Badge>
+          <OrderStatusBadge status={order.status} />
           <span className="text-sm text-muted-foreground">
             Изменён {formatOrderDateTime(order.updatedAt)}
           </span>

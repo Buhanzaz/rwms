@@ -41,6 +41,7 @@ import {
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
 import { ApiError } from "@/lib/api-client"
+import { logisticsStatusVariant } from "@/features/logistics/logistics-status-variant"
 
 type CabinLogisticsDocument = ShipmentDocument | ReturnDocument
 
@@ -221,7 +222,9 @@ export function CabinLogisticsRegister({
               <CardHeader>
                 <CardTitle className="flex flex-wrap items-center gap-2">
                   {date}
-                  <Badge variant="outline">{status}</Badge>
+                  <Badge variant={logisticsStatusVariant(document.state)}>
+                    {status}
+                  </Badge>
                 </CardTitle>
                 <CardDescription>
                   {party} · {warehouse?.name}

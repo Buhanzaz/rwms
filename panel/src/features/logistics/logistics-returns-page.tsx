@@ -6,6 +6,7 @@ import {
   type QueryClient,
 } from "@tanstack/react-query"
 import { Link, useNavigate } from "react-router-dom"
+import { logisticsStatusVariant as statusVariant } from "./logistics-status-variant"
 
 import { OperationsListGrid } from "@/components/operations-list-grid"
 import {
@@ -137,16 +138,6 @@ function textFilterOptions(values: Iterable<string | null | undefined>) {
   ]
     .sort((left, right) => left.localeCompare(right, "ru"))
     .map((value) => ({ value, label: value }))
-}
-
-function statusVariant(state: ReturnDocumentState) {
-  if (state === "CONFLICT" || state === "RECONCILIATION_REQUIRED") {
-    return "destructive" as const
-  }
-  if (state === "ACCEPTED" || state === "ESTIMATE_REQUESTED") {
-    return "secondary" as const
-  }
-  return "outline" as const
 }
 
 function errorMessage(cause: unknown, fallback: string) {

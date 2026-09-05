@@ -14,7 +14,7 @@ const acceptanceStatusClassName: Record<RepairTaskAcceptanceStatus, string> = {
   NOT_READY: "bg-muted text-muted-foreground",
   PENDING:
     "bg-[var(--acceptance-pending-bg)] text-[var(--acceptance-pending-fg)]",
-  IN_REWORK: "bg-muted text-muted-foreground",
+  IN_REWORK: "bg-status-progress text-foreground",
   ACCEPTED:
     "bg-[var(--acceptance-accepted-bg)] text-[var(--acceptance-accepted-fg)]",
   WRITTEN_OFF:

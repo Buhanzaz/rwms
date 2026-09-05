@@ -17,7 +17,10 @@ import {
   REPAIR_TASKS_QUERY_KEY,
 } from "@/features/repair-tasks/api/repair-tasks-api"
 import type { RepairTaskDto } from "@/features/repair-tasks/model/repair-task"
-import { repairSubtaskStatusLabel } from "@/features/repair-tasks/repair-task-status-labels"
+import {
+  repairSubtaskStatusLabel,
+  repairSubtaskStatusVariant,
+} from "@/features/repair-tasks/repair-task-status-labels"
 import { RepairTaskStatusBadge } from "@/features/repair-tasks/repair-task-status-badge"
 import { formatDossierActorDisplay } from "./actor/actor-display"
 import { useDossierActorDisplays } from "./actor/use-dossier-actor-displays"
@@ -54,7 +57,9 @@ function EstimateDetails({ estimate }: { estimate: MaintenanceEstimate }) {
     >
       <div className="flex flex-wrap items-center gap-2">
         <h4 className="font-medium">Смета · редакция {revision.revision}</h4>
-        <Badge variant="outline">
+        <Badge
+          variant={estimate.lifecycle === "COMPLETED" ? "success" : "muted"}
+        >
           {estimate.lifecycle === "COMPLETED" ? "Завершена" : "Черновик"}
         </Badge>
       </div>
@@ -200,7 +205,7 @@ function RepairDetails({ task }: { task: RepairTaskDto }) {
                 <CardTitle className="flex flex-wrap items-center gap-2">
                   {index + 1}.{" "}
                   {stage.taskTitle || stage.queueName || "Этап ремонта"}
-                  <Badge variant="outline">
+                  <Badge variant={repairSubtaskStatusVariant[stage.status]}>
                     {repairSubtaskStatusLabel(stage.status)}
                   </Badge>
                 </CardTitle>

@@ -363,8 +363,8 @@ function taskState(
 
 function stateVariant(state: TaskState) {
   if (state === "REQUIRES_RETURN") return "destructive" as const
-  if (state === "SHIPPED" || state === "RETURNED") return "secondary" as const
-  return "outline" as const
+  if (state === "SHIPPED" || state === "RETURNED") return "success" as const
+  return "warning" as const
 }
 
 function taskDate(task: RentalOrderTask) {
@@ -1677,7 +1677,7 @@ function TaskActions({
         </Button>
       ) : null}
       {shipment?.state === "SHIPPED" ? (
-        <Badge variant="secondary">Отгружено</Badge>
+        <Badge variant="success">Отгружено</Badge>
       ) : null}
     </div>
   )

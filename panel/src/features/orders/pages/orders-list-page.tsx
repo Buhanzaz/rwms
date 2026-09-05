@@ -26,7 +26,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
+import { OrderStatusBadge } from "../components/order-status-badge"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { listOrders, ORDERS_QUERY_KEY } from "@/features/orders/api/orders-api"
@@ -131,14 +131,6 @@ function formatOrderWarehouse(
   const warehouse = warehouses.find((candidate) => candidate.id === warehouseId)
   if (warehouse) return formatWarehouseShortName(warehouse)
   return warehouseId ? "Недоступный склад" : "Не выбран"
-}
-
-function OrderStatusBadge({ status }: { status: OrderSummary["status"] }) {
-  return (
-    <Badge variant={status === "DRAFT" ? "secondary" : "outline"}>
-      {ORDER_STATUS_LABELS[status]}
-    </Badge>
-  )
 }
 
 function OrderMobileDetail({

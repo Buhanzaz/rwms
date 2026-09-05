@@ -29,7 +29,7 @@ export type InventoryFindingStatusMode = "ACTIVE" | "COMPLETION"
 
 type InventoryFindingPrimaryStatus = {
   label: string
-  variant: "default" | "secondary" | "outline" | "destructive"
+  variant: "success" | "warning" | "progress" | "muted" | "destructive"
 }
 
 function inventoryFindingPrimaryStatus(
@@ -44,18 +44,18 @@ function inventoryFindingPrimaryStatus(
       return { label: "Не найдено", variant: "destructive" }
     }
     if (finding.lines.length > 0) {
-      return { label: "Направлено в ремонт", variant: "secondary" }
+      return { label: "Направлено в ремонт", variant: "progress" }
     }
-    return { label: "Проверено", variant: "default" }
+    return { label: "Проверено", variant: "success" }
   }
 
   if (finding.inspectionStatus === "NOT_INSPECTED") {
-    return { label: "Не проверено", variant: "outline" }
+    return { label: "Не проверено", variant: "muted" }
   }
   if (finding.reconciliationStatus !== "MATCHED") {
-    return { label: "Ожидает сверки", variant: "secondary" }
+    return { label: "Ожидает сверки", variant: "warning" }
   }
-  return { label: "Проверено", variant: "default" }
+  return { label: "Проверено", variant: "success" }
 }
 
 export function InventoryFindingStatusBadge({

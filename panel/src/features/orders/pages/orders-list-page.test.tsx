@@ -321,8 +321,12 @@ describe("OrdersListPage", () => {
     expect(warehouse?.className).toContain("sm:w-40")
     expect(status?.textContent).toContain("Статус")
     expect(clientType?.textContent).toContain("Тип клиента")
-    expect(createdFrom?.contains(screen.getByLabelText("Создан с"))).toBe(true)
-    expect(createdTo?.contains(screen.getByLabelText("Создан по"))).toBe(true)
+    expect(
+      createdFrom?.contains(screen.getByRole("button", { name: /^Создан с:/ }))
+    ).toBe(true)
+    expect(
+      createdTo?.contains(screen.getByRole("button", { name: /^Создан по:/ }))
+    ).toBe(true)
 
     const filters = screen.getByRole("button", {
       name: "Скрыть фильтры бронирований",
