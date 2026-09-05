@@ -19,6 +19,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   private final LogisticsWarehouseDependencyClient warehouse;
   private final LogisticsAssetOperationsDependencyClient assetOperations;
   private final LogisticsAssetOrderPresentationDependencyClient assetOrderPresentation;
+  private final LogisticsAssetPricingDependencyClient assetPricing;
   private final LogisticsMaintenanceDependencyClient maintenance;
   private final LogisticsMediaDependencyClient media;
   private final LogisticsTaskBoardDependencyClient taskBoard;
@@ -40,6 +41,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
     assetOperations = new LogisticsAssetOperationsDependencyClient(transport, assetBase);
     assetOrderPresentation =
         new LogisticsAssetOrderPresentationDependencyClient(transport, assetBase);
+    assetPricing = new LogisticsAssetPricingDependencyClient(transport, assetBase);
     maintenance =
         new LogisticsMaintenanceDependencyClient(
             transport,
@@ -923,16 +925,16 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   }
 
   public CabinPricingCatalog readCabinPricingCatalog() {
-    return assetOrderPresentation.readCabinPricingCatalog();
+    return assetPricing.readCabinPricingCatalog();
   }
 
   public EquipmentPricingCatalog readEquipmentPricingCatalog() {
-    return assetOrderPresentation.readEquipmentPricingCatalog();
+    return assetPricing.readEquipmentPricingCatalog();
   }
 
   public CabinPricingReferences readCabinPricingReferences(
       UUID warehouseId, List<UUID> rentalItemIds) {
-    return assetOrderPresentation.readCabinPricingReferences(warehouseId, rentalItemIds);
+    return assetPricing.readCabinPricingReferences(warehouseId, rentalItemIds);
   }
 
   public CabinCatalogPage readCabinCatalog(UUID warehouseId, String query, int page, int size) {
