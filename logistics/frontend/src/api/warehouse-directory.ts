@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { ApiError, requireSimulatorAccessToken } from './client';
 
 const warehouseKindSchema = z.object({
-  id: z.uuid(),
+  // Canonical warehouse IDs include UUIDs without RFC version/variant bits.
+  id: z.guid(),
   representative: z.boolean(),
   production: z.boolean(),
   mainWarehouse: z.boolean(),

@@ -8,6 +8,17 @@ const record = { id, representative: false, production: true, mainWarehouse: tru
 afterEach(() => { vi.unstubAllGlobals(); setSimulatorAccessTokenProvider(() => Promise.resolve('test-token')); });
 
 describe('canonical warehouse kind directory', () => {
+  it('accepts the canonical SPB and MSK identifiers together with representative warehouses', async () => {
+    const warehouses = [
+      { ...record, id: '00000000-0000-0000-0000-000000000001' },
+      { ...record, id: '00000000-0000-0000-0000-000000000002', production: false },
+      { ...record, representative: true, production: false, mainWarehouse: false },
+    ];
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(warehouses))));
+
+    expect([...(await loadWarehouseKinds()).values()]).toEqual(warehouses);
+  });
+
   it('uses the public same-origin warehouse endpoint and a renewed bearer token', async () => {
     setSimulatorAccessTokenProvider(() => Promise.resolve('fresh-token'));
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify([record])));
@@ -26,6 +37,8 @@ describe('canonical warehouse kind directory', () => {
   });
 
   it.each([
+    [{ ...record, id: 'spb' }],
+    [{ ...record, id: '00000000-0000-0000-0000-00000000000z' }],
     [{ id, representative: false }],
     [record, record],
     [{ ...record, production: 'false' }],
