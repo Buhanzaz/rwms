@@ -362,10 +362,19 @@ export function useServiceOwnerMedia({
         const medium = loadedUrl(loaded, "MEDIUM")
         if (!medium) return []
         const large = loadedUrl(loaded, "LARGE")
+        const fullscreenVariant = nearestVariant(asset, "LARGE")
+        const fullscreenError = fullscreenVariant
+          ? variantErrors[
+              `${asset.id}|${assetSignature(asset)}|${fullscreenVariant.kind}`
+            ]
+          : null
         return [
           {
             id: asset.id,
             url: medium,
+            ...(fullscreenError
+              ? { fullscreenError: mutationError(fullscreenError) }
+              : {}),
             variants: {
               medium: { url: medium },
               ...(large ? { large: { url: large } } : {}),
@@ -374,7 +383,7 @@ export function useServiceOwnerMedia({
           },
         ]
       }),
-    [currentLoaded, readyImages]
+    [currentLoaded, readyImages, variantErrors]
   )
   const videos = useMemo<ServiceOwnerVideo[]>(
     () =>

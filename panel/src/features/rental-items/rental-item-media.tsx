@@ -781,6 +781,7 @@ export function RentalItemPhotosRegister({
   assets,
   loading,
   error,
+  onRetry,
   canEdit,
   onAdd,
   onOpenFolder,
@@ -791,6 +792,7 @@ export function RentalItemPhotosRegister({
   assets: readonly MediaAsset[]
   loading: boolean
   error: unknown
+  onRetry?: () => void
   canEdit: boolean
   onAdd: () => void
   onOpenFolder: (folderId: string) => Promise<unknown>
@@ -980,10 +982,18 @@ export function RentalItemPhotosRegister({
         ) : null}
       </div>
       {error ? (
-        <p role="alert" className="text-sm text-destructive">
-          Сервис фото недоступен. Доступные данные бытовки продолжают
-          отображаться.
-        </p>
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-3 text-sm text-destructive"
+        >
+          Не удалось загрузить часть фотографий. Остальные данные бытовки
+          доступны.
+          {onRetry ? (
+            <Button variant="outline" onClick={onRetry}>
+              Повторить загрузку фото
+            </Button>
+          ) : null}
+        </div>
       ) : null}
       {loading ? (
         <div

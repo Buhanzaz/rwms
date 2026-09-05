@@ -79,6 +79,8 @@ export function FullscreenPhotoViewer({
   title,
   loading = false,
   emptyLabel = "Нет фотографий",
+  error,
+  onRetry,
   onActiveIndexChange,
   onSwipeUp,
   onOpenChange,
@@ -89,6 +91,8 @@ export function FullscreenPhotoViewer({
   title: string
   loading?: boolean
   emptyLabel?: string
+  error?: unknown
+  onRetry?: () => void
   onActiveIndexChange?: (index: number) => void
   onSwipeUp?: () => void
   onOpenChange: (open: boolean) => void
@@ -347,7 +351,9 @@ export function FullscreenPhotoViewer({
           onWheel={handleWheel}
         >
           {loading ? (
-            <p className="text-sm text-primary-foreground/70">Загрузка фотографий...</p>
+            <p className="text-sm text-primary-foreground/70">
+              Загрузка фотографий...
+            </p>
           ) : activePhoto ? (
             <img
               src={activePhoto.src}
@@ -370,6 +376,20 @@ export function FullscreenPhotoViewer({
             </p>
           )}
         </div>
+
+        {error && !loading ? (
+          <div
+            role="alert"
+            className="absolute inset-x-4 bottom-24 flex flex-wrap items-center justify-center gap-3 rounded-lg bg-primary p-3 text-sm text-primary-foreground"
+          >
+            Не удалось загрузить часть фотографий.
+            {onRetry ? (
+              <Button variant="secondary" onClick={onRetry}>
+                Повторить загрузку фото
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center p-4 [padding-bottom:max(1rem,env(safe-area-inset-bottom))]">
           <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-1 rounded-full bg-primary/60 p-2 backdrop-blur">
@@ -402,7 +422,10 @@ export function FullscreenPhotoViewer({
             >
               <HugeiconsIcon icon={ArrowRight01Icon} aria-hidden="true" />
             </Button>
-            <span className="mx-1 h-6 w-px bg-primary-foreground/20" aria-hidden="true" />
+            <span
+              className="mx-1 h-6 w-px bg-primary-foreground/20"
+              aria-hidden="true"
+            />
             <Button
               type="button"
               size="icon"

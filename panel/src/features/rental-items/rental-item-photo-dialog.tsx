@@ -53,6 +53,8 @@ function RentalItemPhotoDialogContent({
       activeIndex={visibleActiveIndex}
       title={`Фото — ${item.number}`}
       loading={media.isLoading}
+      error={media.error}
+      onRetry={media.retry}
       emptyLabel={
         media.error
           ? "Сервис фото недоступен"

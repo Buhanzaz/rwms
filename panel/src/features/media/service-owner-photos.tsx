@@ -28,10 +28,7 @@ import { serviceOwnerMediaQueryKey } from "@/features/media/use-service-owner-me
 import { runMediaUploadQueue } from "@/features/media/media-upload-queue"
 import { ApiError } from "@/lib/api-client"
 import { cn } from "@/lib/utils"
-import {
-  isRetryableOwnerProofError,
-  retryOwnerProofOperation,
-} from "@/features/media/owner-proof-retry"
+import { retryOwnerProofOperation } from "@/features/media/owner-proof-retry"
 
 const statusLabel = {
   UPLOADING: "Загрузка",
@@ -597,15 +594,13 @@ function OwnedServiceOwnerPhotos({
       visiblePhotos.length + visibleVideos.length === 0 ? (
         <div className="flex min-h-56 flex-1 flex-col items-center justify-center gap-3 rounded-lg border bg-muted px-4 text-center text-sm text-muted-foreground">
           <span>{unavailableMessage(media.previewError)}</span>
-          {isRetryableOwnerProofError(media.previewError) ? (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => media.retryPreviews()}
-            >
-              Повторить
-            </Button>
-          ) : null}
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => media.retryPreviews()}
+          >
+            Повторить
+          </Button>
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col gap-3">

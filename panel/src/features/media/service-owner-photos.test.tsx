@@ -78,6 +78,26 @@ afterEach(() => {
 })
 
 describe("ServiceOwnerPhotos", () => {
+  it("allows an explicit retry after a failed image download, not only owner-proof failures", () => {
+    const retryPreviews = vi.fn()
+    mediaState.value = mediaValue({
+      assets: [{ id: "failed-photo", kind: "IMAGE", status: "READY" }],
+      previewUnavailable: true,
+      previewError: new Error("Network request failed"),
+      retryPreviews,
+    })
+    render(
+      <ServiceOwnerPhotos
+        accessToken="token"
+        owner={owner}
+        readOnly
+        title="Фото ремонта"
+      />
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Повторить" }))
+    expect(retryPreviews).toHaveBeenCalledOnce()
+  })
+
   it("maps the work gallery presentation to compact always-visible carousel controls", () => {
     const photoId = "33333333-3333-4333-8333-333333333333"
     mediaState.value = mediaValue({

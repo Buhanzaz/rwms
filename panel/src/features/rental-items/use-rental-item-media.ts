@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 
-import type { PhotoCarouselPhoto } from "@/components/media/photo-carousel"
+import type {
+  PhotoCarouselPhoto,
+  PhotoRequestOptions,
+} from "@/components/media/photo-carousel"
 import {
   cabinMediaOwner,
   createHttpMediaClient,
@@ -254,8 +257,8 @@ export function useRentalItemMedia({
     Record<string, LoadedAssetVariants>
   >({})
   const [failedVariantLoads, setFailedVariantLoads] = useState<
-    ReadonlySet<string>
-  >(() => new Set())
+    ReadonlyMap<string, unknown>
+  >(() => new Map())
   const query = useQuery({
     queryKey,
     queryFn: () => loadRentalItemMediaArchive(accessToken!, owner),
@@ -342,7 +345,11 @@ export function useRentalItemMedia({
   }, [assetSignatures])
 
   const ensureVariant = useCallback(
-    async (asset: MediaAsset, requested: DerivedMediaVariantKind) => {
+    async (
+      asset: MediaAsset,
+      requested: DerivedMediaVariantKind,
+      retry = false
+    ) => {
       if (!accessToken) return
       await Promise.resolve()
       const variant = nearestVariant(asset, requested)
@@ -365,9 +372,16 @@ export function useRentalItemMedia({
         }
         return
       }
-      if (failedVariantLoads.has(key)) return
+      if (!retry && failedVariantLoads.has(key)) return
       const pending = inFlight.current.get(key)
       if (pending) return pending
+      if (retry) {
+        setFailedVariantLoads((failures) => {
+          const remaining = new Map(failures)
+          remaining.delete(key)
+          return remaining
+        })
+      }
 
       const request = retryOwnerProofOperation(() =>
         mediaClient.createVariantObjectUrl(accessToken, owner, variant)
@@ -402,11 +416,14 @@ export function useRentalItemMedia({
             }
           })
         })
-        .catch(() => {
-          if (mounted.current) {
+        .catch((error: unknown) => {
+          if (
+            mounted.current &&
+            validAssetSignatures.current.get(asset.id) === signature
+          ) {
             setFailedVariantLoads((currentFailures) => {
-              const nextFailures = new Set(currentFailures)
-              nextFailures.add(key)
+              const nextFailures = new Map(currentFailures)
+              nextFailures.set(key, error)
               return nextFailures
             })
           }
@@ -444,6 +461,12 @@ export function useRentalItemMedia({
       const small = resolvedLoadedUrl(loaded, "SMALL")
       const medium = resolvedLoadedUrl(loaded, "MEDIUM")
       const large = resolvedLoadedUrl(loaded, "LARGE")
+      const fullscreenVariant = nearestVariant(asset, "LARGE")
+      const fullscreenError = fullscreenVariant
+        ? failedVariantLoads.get(
+            `${asset.id}|${assetSignature(asset)}|${fullscreenVariant.kind}`
+          )
+        : null
       const url = medium ?? small ?? large
       if (!url) return []
       const activity = photoActivity(asset.id, dossierActivities)
@@ -453,6 +476,9 @@ export function useRentalItemMedia({
           folderId: asset.folderId,
           fileName: asset.fileName,
           url,
+          ...(fullscreenError
+            ? { fullscreenError: errorMessage(fullscreenError) }
+            : {}),
           variants: {
             ...(small ? { small: { url: small } } : {}),
             ...(medium ? { medium: { url: medium } } : {}),
@@ -473,7 +499,13 @@ export function useRentalItemMedia({
       ]
     })
     return servicePhotos
-  }, [activeLoadedVariants, actorDisplays, dossierActivities, readyImages])
+  }, [
+    activeLoadedVariants,
+    actorDisplays,
+    dossierActivities,
+    failedVariantLoads,
+    readyImages,
+  ])
 
   const photos = useMemo(() => {
     const currentPhotos =
@@ -570,12 +602,30 @@ export function useRentalItemMedia({
     [ensureVariant, readyImages]
   )
   const requestFullscreen = useCallback(
-    (photo: PhotoCarouselPhoto) => {
+    (photo: PhotoCarouselPhoto, options?: PhotoRequestOptions) => {
       const asset = readyImages.find((candidate) => candidate.id === photo.id)
-      return asset ? ensureVariant(asset, "LARGE") : Promise.resolve()
+      return asset
+        ? ensureVariant(asset, "LARGE", options?.retry)
+        : Promise.resolve()
     },
     [ensureVariant, readyImages]
   )
+
+  function retry() {
+    void query.refetch()
+    void coverQuery.refetch()
+    for (const asset of readyImages) {
+      for (const variant of asset.variants) {
+        if (
+          failedVariantLoads.has(
+            `${asset.id}|${assetSignature(asset)}|${variant.kind}`
+          )
+        ) {
+          void ensureVariant(asset, variant.kind, true)
+        }
+      }
+    }
+  }
 
   const uploadMutation = useMutation({
     mutationFn: async (jobs: readonly RentalItemMediaUploadJob[]) => {
@@ -621,7 +671,13 @@ export function useRentalItemMedia({
   return {
     assets: query.data?.items ?? [],
     logicalPhotoCount,
-    error: query.error ?? coverQuery.error,
+    error:
+      query.error ??
+      coverQuery.error ??
+      [...failedVariantLoads].find(([key]) => {
+        const [assetId, signature] = key.split("|")
+        return assetSignatures.get(assetId) === signature
+      })?.[1],
     isLoading:
       query.isLoading || coverQuery.isLoading || !initialVariantsLoaded,
     isUploading: uploadMutation.isPending,
@@ -630,6 +686,7 @@ export function useRentalItemMedia({
     photoFolders,
     requestFolderPreview,
     requestFullscreen,
+    retry,
     upload: (files: File[]) => {
       const imageFiles = files.filter((file) => file.type.startsWith("image/"))
       if (imageFiles.length !== files.length || imageFiles.length === 0) {

@@ -231,7 +231,11 @@ contexts and screens are usable.
   its photo archive still lists every historical folder. If that authoritative
   active-folder projection fails while archive media loaded successfully, the
   detail reports the photo service unavailable instead of mixing folders as a
-  fallback. Warehouse cards, booking cards and the passport carousel count and
+  fallback. Failed image-byte requests remain visible as errors even when metadata
+  loaded successfully. Passport, archive and fullscreen views offer an explicit
+  retry; a failed fullscreen request never becomes a permanent loading spinner.
+  Automatic owner-proof retries remain bounded and successful photos are retained.
+  Warehouse cards, booking cards and the passport carousel count and
   show only the active latest batch, with its explicit cover first and stable
   association order. Their fullscreen shortcut is constrained to that same
   batch; it never reintroduces older archive folders. The client also applies

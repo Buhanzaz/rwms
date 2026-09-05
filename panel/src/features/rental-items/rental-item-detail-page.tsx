@@ -899,6 +899,17 @@ export function RentalItemDetailPage() {
         <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
         Назад
       </Button>
+      {media.error ? (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-3 text-sm text-destructive"
+        >
+          Не удалось загрузить часть фотографий.
+          <Button variant="outline" onClick={media.retry}>
+            Повторить загрузку фото
+          </Button>
+        </div>
+      ) : null}
       <section className="shrink-0 overflow-hidden rounded-lg border bg-card">
         <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(22rem,26rem)] xl:grid-cols-[minmax(0,1fr)_minmax(26rem,30rem)]">
           <PhotoCarousel
@@ -1305,6 +1316,7 @@ export function RentalItemDetailPage() {
             assets={media.assets}
             loading={media.isLoading || photoDossierQuery.isLoading}
             error={media.error}
+            onRetry={media.retry}
             canEdit={canEditRentalItem}
             onAdd={() => setPhotoUploadOpen(true)}
             onOpenFolder={media.requestFolderPreview}

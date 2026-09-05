@@ -48,7 +48,10 @@ export type PhotoCarouselPhoto = {
     original?: { url: string }
   }
   createdAt?: string
+  fullscreenError?: string
 }
+
+export type PhotoRequestOptions = { retry?: boolean }
 
 type PhotoSource = string | PhotoCarouselPhoto
 
@@ -68,7 +71,10 @@ type PhotoCarouselProps = {
   placeholder?: ReactNode
   emptyLabel?: string
   onCenterClick?: () => void
-  onRequestFullscreen?: (photo: PhotoCarouselPhoto) => void | Promise<void>
+  onRequestFullscreen?: (
+    photo: PhotoCarouselPhoto,
+    options?: PhotoRequestOptions
+  ) => void | Promise<void>
   activeIndex?: number
   onActiveIndexChange?: (index: number) => void
   onSwipeUp?: () => void
@@ -282,7 +288,8 @@ export function PhotoCarousel({
   useEffect(() => {
     if (imageVariant !== "fullscreen") return
     const activePhoto = safePhotos[safeActiveIndex]
-    if (activePhoto) void onRequestFullscreen?.(activePhoto)
+    if (activePhoto && !activePhoto.fullscreenError)
+      void onRequestFullscreen?.(activePhoto)
   }, [imageVariant, onRequestFullscreen, safeActiveIndex, safePhotos])
 
   const changeIndex = useCallback(
@@ -375,9 +382,10 @@ export function PhotoCarousel({
               onRequestFullscreen !== undefined &&
               !hasRequestedFullscreenUrl(photo, fullscreenQuality)
             const image = fullscreenPending ? (
-              <div className="flex h-full w-full items-center justify-center text-sm text-primary-foreground/70">
-                Загрузка полноэкранной фотографии...
-              </div>
+              <FullscreenPhotoPlaceholder
+                photo={photo}
+                onRetry={() => onRequestFullscreen?.(photo, { retry: true })}
+              />
             ) : (
               <img
                 src={
@@ -397,7 +405,8 @@ export function PhotoCarousel({
               />
             )
             const interactive =
-              !disableFullscreenViewer || onCenterClick !== undefined
+              !fullscreenPending &&
+              (!disableFullscreenViewer || onCenterClick !== undefined)
 
             return (
               <CarouselItem
@@ -502,9 +511,41 @@ type PhotoFullscreenViewerProps = {
   title: string
   quality: "preview" | "original"
   showToolbar: boolean
-  onRequestPhoto?: (photo: PhotoCarouselPhoto) => void | Promise<void>
+  onRequestPhoto?: (
+    photo: PhotoCarouselPhoto,
+    options?: PhotoRequestOptions
+  ) => void | Promise<void>
   onActiveIndexChange: (index: number) => void
   onOpenChange: (open: boolean) => void
+}
+
+function FullscreenPhotoPlaceholder({
+  photo,
+  onRetry,
+}: {
+  photo: PhotoCarouselPhoto
+  onRetry: () => void | Promise<void>
+}) {
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center text-sm">
+      {photo.fullscreenError ? (
+        <>
+          <p role="alert">
+            Не удалось загрузить фотографию. {photo.fullscreenError}
+          </p>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => void onRetry()}
+          >
+            Повторить загрузку фото
+          </Button>
+        </>
+      ) : (
+        <p>Загрузка полноэкранной фотографии...</p>
+      )}
+    </div>
+  )
 }
 
 function PhotoFullscreenViewer({
@@ -537,7 +578,8 @@ function PhotoFullscreenViewer({
   useEffect(() => {
     if (!open) return
     const activePhoto = photos[safeIndex]
-    if (activePhoto) void onRequestPhoto?.(activePhoto)
+    if (activePhoto && !activePhoto.fullscreenError)
+      void onRequestPhoto?.(activePhoto)
   }, [onRequestPhoto, open, photos, safeIndex])
 
   const goPrev = useCallback(() => {
@@ -620,9 +662,10 @@ function PhotoFullscreenViewer({
               >
                 {onRequestPhoto &&
                 !hasRequestedFullscreenUrl(photo, quality) ? (
-                  <div className="text-sm text-primary-foreground/70">
-                    Загрузка полноэкранной фотографии...
-                  </div>
+                  <FullscreenPhotoPlaceholder
+                    photo={photo}
+                    onRetry={() => onRequestPhoto(photo, { retry: true })}
+                  />
                 ) : (
                   <button
                     type="button"

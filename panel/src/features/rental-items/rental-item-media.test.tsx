@@ -158,8 +158,21 @@ function Harness({
       <span data-testid="service-small">{service?.variants?.small?.url}</span>
       <span data-testid="service-medium">{service?.variants?.medium?.url}</span>
       <span data-testid="service-large">{service?.variants?.large?.url}</span>
+      <span data-testid="fullscreen-error">{service?.fullscreenError}</span>
       <span data-testid="service-actor">{service?.actorLabel}</span>
       <span data-testid="service-source">{service?.sourceLabel}</span>
+      <button type="button" onClick={rentalItemMedia.retry}>
+        Повторить загрузку
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          service &&
+          void rentalItemMedia.requestFullscreen(service, { retry: true })
+        }
+      >
+        Повторить полный экран
+      </button>
       <button
         type="button"
         onClick={() => void rentalItemMedia.requestFolderPreview(FOLDER_ID)}
@@ -445,6 +458,91 @@ beforeEach(() => {
 })
 
 describe("rental item media", () => {
+  function downloadableAsset() {
+    return {
+      id: ASSET_ID,
+      folderId: FOLDER_ID,
+      fileName: "service.jpg",
+      contentType: "image/jpeg",
+      kind: "IMAGE",
+      status: "READY",
+      version: 1,
+      generation: 1,
+      rotationDegrees: 0,
+      sortOrder: 0,
+      sizeBytes: 3,
+      createdAt: "2026-07-19T10:00:00Z",
+      variants: ["SMALL", "LARGE"].map((kind) => ({
+        kind,
+        contentType: "image/webp",
+        contentPath: `/api/media/${kind}.webp`,
+        width: 360,
+        height: 240,
+      })),
+    }
+  }
+
+  it("surfaces failed image bytes and retries them without losing the cabin metadata", async () => {
+    const user = userEvent.setup()
+    media.listOwnerMedia.mockResolvedValue({
+      items: [downloadableAsset()],
+      next: null,
+    })
+    media.createVariantObjectUrl
+      .mockRejectedValueOnce(new Error("Image download failed"))
+      .mockResolvedValue({ url: "blob:recovered", dispose: vi.fn() })
+    renderHarness()
+
+    await waitFor(() =>
+      expect(screen.getByTestId("media-error").textContent).toBe("true")
+    )
+    expect(screen.getByTestId("media-loading").textContent).toBe("false")
+    expect(screen.getByTestId("logical-photo-count").textContent).toBe("1")
+    expect(media.createVariantObjectUrl).toHaveBeenCalledTimes(1)
+    await user.click(screen.getByRole("button", { name: "Повторить загрузку" }))
+    await waitFor(() =>
+      expect(screen.getByTestId("service-small").textContent).toBe(
+        "blob:recovered"
+      )
+    )
+    expect(screen.getByTestId("media-error").textContent).toBe("false")
+    expect(media.createVariantObjectUrl).toHaveBeenCalledTimes(2)
+  })
+
+  it("keeps a fullscreen failure explicit and only retries it on demand", async () => {
+    const user = userEvent.setup()
+    media.listOwnerMedia.mockResolvedValue({
+      items: [downloadableAsset()],
+      next: null,
+    })
+    media.createVariantObjectUrl
+      .mockResolvedValueOnce({ url: "blob:small", dispose: vi.fn() })
+      .mockRejectedValueOnce(new Error("Large download failed"))
+      .mockResolvedValue({ url: "blob:large", dispose: vi.fn() })
+    renderHarness()
+
+    await waitFor(() =>
+      expect(screen.getByTestId("photo-count").textContent).toBe("1")
+    )
+    await user.click(screen.getByRole("button", { name: "Полный экран" }))
+    await waitFor(() =>
+      expect(screen.getByTestId("fullscreen-error").textContent).toBe(
+        "Large download failed"
+      )
+    )
+    await user.click(screen.getByRole("button", { name: "Полный экран" }))
+    expect(media.createVariantObjectUrl).toHaveBeenCalledTimes(2)
+    await user.click(
+      screen.getByRole("button", { name: "Повторить полный экран" })
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId("service-large").textContent).toBe("blob:large")
+    )
+    expect(screen.getByTestId("fullscreen-error").textContent).toBe("")
+    expect(screen.getByTestId("media-error").textContent).toBe("false")
+    expect(media.createVariantObjectUrl).toHaveBeenCalledTimes(3)
+  })
+
   it("does not mix archive folders when the active-folder projection fails", async () => {
     media.listOwnerMedia.mockResolvedValue({
       items: [
@@ -1072,7 +1170,7 @@ describe("rental item media", () => {
     )
 
     expect(screen.getByRole("alert").textContent).toContain(
-      "Сервис фото недоступен"
+      "Не удалось загрузить часть фотографий"
     )
     expect(screen.queryByText("Invalid cabin cover request")).toBeNull()
     expect(screen.queryByText("Фотографии не найдены")).toBeNull()

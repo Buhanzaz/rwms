@@ -124,6 +124,35 @@ function measurePhoto(element: HTMLElement) {
 }
 
 describe("PhotoCarousel", () => {
+  it("shows a fullscreen load failure instead of an endless spinner and exposes an explicit retry", async () => {
+    const onRequestFullscreen = vi.fn()
+    const photo = {
+      id: "failed-photo",
+      url: "/small.jpg",
+      fullscreenError: "Временная ошибка сервиса",
+    }
+    render(
+      <PhotoCarousel
+        photos={[photo]}
+        onRequestFullscreen={onRequestFullscreen}
+      />
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Открыть фото 1" }))
+    await screen.findByRole("dialog")
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Не удалось загрузить фотографию"
+    )
+    expect(
+      screen.queryByText("Загрузка полноэкранной фотографии...")
+    ).toBeNull()
+    onRequestFullscreen.mockClear()
+    fireEvent.click(
+      screen.getByRole("button", { name: "Повторить загрузку фото" })
+    )
+    expect(onRequestFullscreen).toHaveBeenCalledOnce()
+    expect(onRequestFullscreen).toHaveBeenCalledWith(photo, { retry: true })
+  })
+
   it("progressively reveals only the nearest edge and clears it on leave", () => {
     render(
       <PhotoCarousel photos={photos} controlsVisibility="mobile-visible" />
