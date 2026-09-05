@@ -213,6 +213,15 @@ contexts and screens are usable.
   are limited by the warehouse directory and see that limitation explicitly.
   Read failures never masquerade as an empty history. See the
   [logistics register](src/features/rental-items/dossier/cabin-logistics-register.tsx).
+- Expanded movement cards lazily load saved equipment evidence and the owner journal in pages of
+  50 events. They show the actual acceptance/estimate-submission actor, never treating an automatic
+  completion's creator attribution as the person who accepted the cabin. The `Приёмка и проверки`
+  tab separates return acceptance from inventory checks. Quantities come from immutable snapshots;
+  current catalog names are optional enrichment. Missing evidence, a recorded empty composition,
+  pre-preparation contents and submitted completeness confirmation remain distinct. A changed
+  document version requires a whole-history refresh; paging failures keep earlier events visible
+  with an explicit retry. User/document/warehouse-scoped caches are hidden on logout. See the
+  [history details](src/features/rental-items/dossier/logistics-history-details.tsx).
 - When queuing a repair returns the exact Problem Details code
   `BOOKED_UNIT_REPLACEMENT_REQUIRED`, the repair editor keeps the persisted draft
   task ID and version, closes the completion dialog, and shows
