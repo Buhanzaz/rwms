@@ -42,6 +42,7 @@ import { useWarehouse } from "@/hooks/use-warehouse"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
 import { ApiError } from "@/lib/api-client"
 import { logisticsStatusVariant } from "@/features/logistics/logistics-status-variant"
+import { LogisticsHistoryDetails } from "./logistics-history-details"
 
 type CabinLogisticsDocument = ShipmentDocument | ReturnDocument
 
@@ -267,6 +268,15 @@ export function CabinLogisticsRegister({
                       <dd>{formatInstant(document.createdAt)}</dd>
                     </div>
                   </dl>
+                  <LogisticsHistoryDetails
+                    cabinId={cabinId}
+                    documentVersion={document.version}
+                    reference={{
+                      documentId: document.id,
+                      warehouseId: document.warehouseId,
+                      documentType: document.documentType,
+                    }}
+                  />
                   <p className="text-xs break-all text-muted-foreground">
                     Документ {document.id} · Обновлён{" "}
                     {formatInstant(document.updatedAt)}

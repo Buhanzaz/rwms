@@ -1007,7 +1007,7 @@ describe("rental item command access", () => {
     for (const tab of [
       "Обзор",
       "Фото",
-      "Осмотры",
+      "Приёмка и проверки",
       "Сметы",
       "Ремонт",
       "Резервы",
@@ -1022,6 +1022,25 @@ describe("rental item command access", () => {
 
   it("loads return history even when the cabin is free and has no current rental facts", async () => {
     renderDetail(`/warehouse/${RENTAL_ITEM_ID}?tab=returns`)
+    await screen.findByText("Документов пока нет.")
+    expect(returnApi.listReturns).toHaveBeenCalledWith(
+      "asset-token",
+      WAREHOUSE_ID,
+      undefined,
+      RENTAL_ITEM_ID
+    )
+  })
+
+  it("separates return acceptance from inventory checks without disguising inventory as receipt", async () => {
+    renderDetail(`/warehouse/${RENTAL_ITEM_ID}?tab=inspections`)
+    expect(
+      await screen.findByRole("heading", {
+        name: "Приёмка бытовки после возврата",
+      })
+    ).toBeTruthy()
+    expect(
+      screen.getByRole("heading", { name: "Инвентаризационные проверки" })
+    ).toBeTruthy()
     await screen.findByText("Документов пока нет.")
     expect(returnApi.listReturns).toHaveBeenCalledWith(
       "asset-token",

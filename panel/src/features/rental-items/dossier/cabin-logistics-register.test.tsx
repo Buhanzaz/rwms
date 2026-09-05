@@ -15,12 +15,16 @@ const state = vi.hoisted(() => ({
   listShipments: vi.fn(),
   listReturns: vi.fn(),
   selectWarehouse: vi.fn(),
+  details: vi.fn(() => null),
 }))
 vi.mock("@/features/auth/use-auth", () => ({
   useAuth: () => ({ accessToken: state.token, currentUser: state.user }),
 }))
 vi.mock("@/hooks/use-warehouse", () => ({
   useWarehouse: () => ({ setSelectedWarehouseId: state.selectWarehouse }),
+}))
+vi.mock("./logistics-history-details", () => ({
+  LogisticsHistoryDetails: state.details,
 }))
 vi.mock("@/api/warehouse-api", () => ({
   listWarehouses: state.listWarehouses,
@@ -42,6 +46,7 @@ const warehouses = [
 function document(kind: "SHIPMENT" | "RETURN", warehouseId = "warehouse-1") {
   return {
     id: `document-${warehouseId}`,
+    version: 8,
     documentType: kind,
     warehouseId,
     state: kind === "SHIPMENT" ? "SHIPPED" : "ACCEPTED",
@@ -125,7 +130,12 @@ describe("CabinLogisticsRegister", () => {
       expect(state.listWarehouses).not.toHaveBeenCalled()
       const user = userEvent.setup()
       const triggers = screen.getAllByRole("button", { name: /Подробнее:/ })
+      expect(state.details).not.toHaveBeenCalled()
       await user.click(triggers[0])
+      expect(state.details).toHaveBeenCalledWith(
+        expect.objectContaining({ cabinId: "cabin", documentVersion: 8 }),
+        undefined
+      )
       expect(screen.getByText("Иван Петров")).toBeTruthy()
       expect(
         screen.getByText(kind === "SHIPMENT" ? "Выехала" : "Прибыла")

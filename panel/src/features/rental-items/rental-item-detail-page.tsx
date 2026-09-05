@@ -131,7 +131,7 @@ type DetailTab = (typeof TAB_IDS)[number]
 const TAB_LABELS: Record<DetailTab, string> = {
   overview: "Обзор",
   photos: "Фото",
-  inspections: "Осмотры",
+  inspections: "Приёмка и проверки",
   estimates: "Сметы",
   repair: "Ремонт",
   reserves: "Резервы",
@@ -1283,11 +1283,12 @@ export function RentalItemDetailPage() {
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle>Осмотр и ремонт</CardTitle>
+              <CardTitle>Приёмка, проверки и ремонт</CardTitle>
             </CardHeader>
             <CardContent className="text-sm text-muted-foreground">
-              Подтверждённые события осмотров, смет и ремонтов доступны в
-              соответствующих вкладках и в общей истории dossier-service.
+              Приёмка после возврата показывает действия сотрудника и
+              подтверждение комплектации. Инвентаризационные проверки, сметы и
+              ремонты сохраняются отдельно в соответствующих вкладках.
             </CardContent>
           </Card>
           <Card className="lg:col-span-2">
@@ -1373,7 +1374,26 @@ export function RentalItemDetailPage() {
           />
         </TabsContent>
         <TabsContent value="inspections">
-          <DossierActivityRegister {...activityRegisterProps} />
+          <div className="flex flex-col gap-6">
+            <section
+              aria-label="Приёмка бытовки"
+              className="flex flex-col gap-3"
+            >
+              <h2 className="font-semibold">Приёмка бытовки после возврата</h2>
+              <p className="text-sm text-muted-foreground">
+                Раскройте возврат, чтобы увидеть, кто подтвердил приёмку или
+                передал осмотр на смету, и какая комплектация сохранена.
+              </p>
+              <CabinLogisticsRegister cabinId={rentalItem.id} kind="RETURN" />
+            </section>
+            <section
+              aria-label="Инвентаризационные проверки"
+              className="flex flex-col gap-3"
+            >
+              <h2 className="font-semibold">Инвентаризационные проверки</h2>
+              <DossierActivityRegister {...activityRegisterProps} />
+            </section>
+          </div>
         </TabsContent>
         <TabsContent value="estimates">
           <DossierActivityRegister {...activityRegisterProps} />
