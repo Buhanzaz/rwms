@@ -723,6 +723,7 @@ describe('dispatcher decision queue', () => {
 describe('operational event capture', () => {
   it.each([
     ['VEHICLE_BREAKDOWN', 'Поломка машины', async (user: ReturnType<typeof userEvent.setup>) => user.selectOptions(screen.getByLabelText('Машина'), 'vehicle-1'), { vehicle_id: 'vehicle-1' }, 'PICKUP'],
+    ['TRAILER_BREAKDOWN', 'Поломка прицепа', async (user: ReturnType<typeof userEvent.setup>) => user.selectOptions(screen.getByLabelText('Прицеп'), 'trailer-1'), { trailer_id: 'trailer-1', recovery_mode: 'AUTO' }, 'PICKUP'],
     ['VEHICLE_DELAY', 'Задержка машины', async (user: ReturnType<typeof userEvent.setup>) => {
       await user.selectOptions(screen.getByLabelText('Машина'), 'vehicle-1');
       await user.clear(screen.getByLabelText('Задержка, минут'));
@@ -741,6 +742,16 @@ describe('operational event capture', () => {
       workspace: workspaceFixture({
         planning_date: DAY,
         requests: [requestFixture({ name: 'Заявка №42', type: requestType, scheduled_date: DAY })],
+        trailers: [{
+          id: 'trailer-1', warehouse_id: 'warehouse-1', name: 'Прицеп',
+          registration_number: 'ПР-1', active: true, version: 1, notes: '',
+          tare_weight_kg: null, max_gross_weight_kg: null, length_mm: null, width_mm: null,
+          height_mm: null, platform_length_mm: null, platform_width_mm: null,
+          platform_height_from_ground_mm: null, max_platform_payload_kg: null,
+          payload_capacity_kg: null, axle_count: null, max_axle_load_kg: null,
+          max_cargo_length_mm: null, max_cargo_width_mm: null,
+          max_cargo_height_mm: null, max_cargo_weight_kg: null,
+        }],
       }),
     });
 
@@ -776,6 +787,22 @@ describe('operational event capture', () => {
     const eventSelect = screen.getByLabelText('Событие');
     expect(eventSelect.querySelector('option[value="MANUAL_PLAN_CHANGE"]')).toBeNull();
     expect(eventSelect.querySelector('option[value="PLANNING_MODE_CHANGED"]')).toBeNull();
+  });
+
+  it('lets the dispatcher request manual recovery without automatic application', async () => {
+    apiMocks.getPlanningDayOperations.mockResolvedValue(operationsFixture());
+    const user = userEvent.setup();
+    renderPanel({ plan: planFixture({ date: DAY }) });
+    await user.click(await screen.findByRole('button', { name: 'Зафиксировать событие' }));
+    expect(screen.getByLabelText('Восстановление маршрутов')).toHaveValue('AUTO');
+    await user.selectOptions(screen.getByLabelText('Восстановление маршрутов'), 'MANUAL');
+    await user.selectOptions(screen.getByLabelText('Машина'), 'vehicle-1');
+    fireEvent.change(screen.getByLabelText('Время события (Europe/Moscow)'), { target: { value: '12:30' } });
+    await user.type(screen.getByLabelText('Причина'), 'Проверить замену вручную');
+    await user.click(screen.getByRole('button', { name: 'Зафиксировать и оценить влияние' }));
+    await waitFor(() => expect(apiMocks.createLogisticsEvent).toHaveBeenCalledOnce());
+    expect(apiMocks.createLogisticsEvent.mock.calls[0]?.[2]).toMatchObject({ recovery_mode: 'MANUAL' });
+    expect(apiMocks.applyRecoveryProposal).not.toHaveBeenCalled();
   });
 
   it('submits a group-member cancellation against the root day and keeps its service warehouse visible', async () => {

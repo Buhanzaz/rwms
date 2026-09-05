@@ -35,6 +35,8 @@ export function OperationsEventDialog({
 }: OperationsEventDialogProps) {
   const [eventType, setEventType] = useState<DispatcherEventType>('VEHICLE_BREAKDOWN');
   const [vehicleId, setVehicleId] = useState<UUID>('');
+  const [trailerId, setTrailerId] = useState<UUID>('');
+  const [recoveryMode, setRecoveryMode] = useState<'AUTO' | 'MANUAL'>('AUTO');
   const [driverShiftId, setDriverShiftId] = useState<UUID>('');
   const [requestId, setRequestId] = useState<UUID>('');
   const [taskId, setTaskId] = useState<UUID>('');
@@ -71,10 +73,13 @@ export function OperationsEventDialog({
     [...workspace.warehouses, workspace.warehouse].map((warehouse) => [warehouse.id, warehouse.name]),
   ), [workspace.warehouse, workspace.warehouses]);
   const needsVehicle = eventType === 'VEHICLE_BREAKDOWN' || eventType === 'VEHICLE_DELAY';
+  const resourceLoss = eventType === 'VEHICLE_BREAKDOWN'
+    || eventType === 'TRAILER_BREAKDOWN';
   const delay = Number(delayMinutes);
   const valid = /^([01]\d|2[0-3]):[0-5]\d$/u.test(occurredTime)
     && reason.trim().length > 0
     && (!needsVehicle || Boolean(vehicleId))
+    && (eventType !== 'TRAILER_BREAKDOWN' || Boolean(trailerId))
     && (eventType !== 'DRIVER_UNAVAILABLE' || Boolean(driverShiftId))
     && (!cancellation || Boolean(requestId))
     && (eventType !== 'TASK_BLOCKED' || Boolean(taskId))
@@ -89,9 +94,11 @@ export function OperationsEventDialog({
       effective_at: occurredAt,
       reason: reason.trim(),
       facts: {},
+      recovery_mode: resourceLoss ? recoveryMode : 'MANUAL',
       plan_id: currentPlan?.id ?? null,
       expected_plan_version: currentPlan?.version ?? null,
       ...(needsVehicle ? { vehicle_id: vehicleId } : {}),
+      ...(eventType === 'TRAILER_BREAKDOWN' ? { trailer_id: trailerId } : {}),
       ...(eventType === 'VEHICLE_DELAY' ? { delay_minutes: delay } : {}),
       ...(eventType === 'DRIVER_UNAVAILABLE' ? { driver_shift_id: driverShiftId } : {}),
       ...(cancellation ? { request_id: requestId } : {}),
@@ -158,6 +165,31 @@ export function OperationsEventDialog({
               );
             })}
           </SelectField>
+        ) : null}
+
+        {eventType === 'TRAILER_BREAKDOWN' ? (
+          <SelectField label="Прицеп" value={trailerId} onChange={(event) => setTrailerId(event.target.value)}>
+            <option value="">Выберите прицеп</option>
+            {(workspace.trailers ?? []).map((trailer) => (
+              <option value={trailer.id} key={trailer.id}>
+                {trailer.name} · {trailer.registration_number}{trailer.active ? '' : ' · неактивен'}
+              </option>
+            ))}
+          </SelectField>
+        ) : null}
+
+        {resourceLoss ? (
+          <>
+            <SelectField label="Восстановление маршрутов" value={recoveryMode} onChange={(event) => setRecoveryMode(event.target.value as 'AUTO' | 'MANUAL')}>
+              <option value="AUTO">Автоматически — применить безопасную замену</option>
+              <option value="MANUAL">Вручную — сначала проверить предложение</option>
+            </SelectField>
+            <p className="field__hint form-grid__full">
+              Доставки сохраняют приоритет. Проверяются свободные смены, габариты и дорожные ограничения.
+              Груз в пути требует подтверждения фактического положения и передачи.
+              Если замены нет, откройте затронутую заявку, чтобы согласовать перенос или наёмного водителя.
+            </p>
+          </>
         ) : null}
 
         {cancellation ? (

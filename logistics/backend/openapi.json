@@ -1591,6 +1591,15 @@
             "title": "Reason",
             "type": "string"
           },
+          "recovery_mode": {
+            "default": "MANUAL",
+            "enum": [
+              "MANUAL",
+              "AUTO"
+            ],
+            "title": "Recovery Mode",
+            "type": "string"
+          },
           "request_id": {
             "anyOf": [
               {
@@ -1626,6 +1635,18 @@
               }
             ],
             "title": "Task Id"
+          },
+          "trailer_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trailer Id"
           },
           "vehicle_id": {
             "anyOf": [
@@ -1810,6 +1831,7 @@
         "description": "Facts that can invalidate or constrain the current operational plan.",
         "enum": [
           "VEHICLE_BREAKDOWN",
+          "TRAILER_BREAKDOWN",
           "VEHICLE_DELAY",
           "DRIVER_UNAVAILABLE",
           "DELIVERY_CANCELLED",

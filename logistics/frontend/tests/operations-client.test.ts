@@ -74,6 +74,7 @@ describe('dynamic logistics transport', () => {
 
     await api.createLogisticsEvent('warehouse-1', '2026-09-01', {
       event_type: 'VEHICLE_DELAY',
+      recovery_mode: 'MANUAL',
       plan_id: 'plan-current',
       expected_plan_version: 8,
       vehicle_id: 'vehicle-1',

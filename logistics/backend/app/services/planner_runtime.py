@@ -913,7 +913,7 @@ class RuntimePlannerFacade:
         }
         requested_locked_ids.discard(None)
         locked = tuple(
-            self._core_cycle(cycle, snapshot)
+            replace(self._core_cycle(cycle, snapshot), locked=True)
             for cycle in source.cycles
             if cycle.locked or cycle.id in requested_locked_ids
         )
@@ -939,6 +939,24 @@ class RuntimePlannerFacade:
             snapshot = replace(
                 snapshot,
                 input_data=replace(snapshot.input_data, shifts=shifted_resources),
+            )
+        if command.payload.get("effective_at") is not None:
+            earliest_start = max(
+                self._payload_datetime(command.payload, "effective_at"), utc_now()
+            )
+            snapshot = replace(
+                snapshot,
+                input_data=replace(
+                    snapshot.input_data,
+                    shifts=tuple(
+                        replace(
+                            shift,
+                            available_from=earliest_start,
+                            active=shift.active and earliest_start < shift.end_at,
+                        )
+                        for shift in snapshot.input_data.shifts
+                    ),
+                ),
             )
         return await self._execute_generation(
             session,
@@ -1268,6 +1286,7 @@ class RuntimePlannerFacade:
                     LogisticsEvent.event_type.in_(
                         (
                             LogisticsEventType.VEHICLE_BREAKDOWN,
+                            LogisticsEventType.TRAILER_BREAKDOWN,
                             LogisticsEventType.DRIVER_UNAVAILABLE,
                             LogisticsEventType.TASK_BLOCKED,
                         )
@@ -1286,6 +1305,12 @@ class RuntimePlannerFacade:
             for event in day_resource_events
             if event.event_type == LogisticsEventType.DRIVER_UNAVAILABLE
             and (value := event.facts.get("driver_shift_id")) is not None
+        }
+        unavailable_trailer_ids = {
+            str(value)
+            for event in day_resource_events
+            if event.event_type == LogisticsEventType.TRAILER_BREAKDOWN
+            and (value := event.facts.get("trailer_id")) is not None
         }
         blocked_task_ids = {
             event.task_id
@@ -1653,7 +1678,11 @@ class RuntimePlannerFacade:
                     ),
                 )
         vehicles = tuple(
-            sorted(vehicles_by_id.values(), key=lambda item: item.id)
+            replace(vehicle, default_trailer=None)
+            if vehicle.default_trailer is not None
+            and str(vehicle.default_trailer.trailer_id) in unavailable_trailer_ids
+            else vehicle
+            for vehicle in sorted(vehicles_by_id.values(), key=lambda item: item.id)
         )
         shifts = tuple(
             sorted(
@@ -2862,6 +2891,15 @@ class RuntimePlannerFacade:
         )
         session.add(plan)
         await session.flush()
+        historical_locks = dict(
+            (str(cycle_id), locked)
+            for cycle_id, locked in await session.execute(
+                select(DbRouteCycle.id, DbRouteCycle.locked).where(
+                    DbRouteCycle.route_plan_id == supersedes_plan_id,
+                    DbRouteCycle.id.in_([UUID(value) for value in locked_source_cycle_ids]),
+                )
+            )
+        ) if stage_recovery and locked_source_cycle_ids else {}
         for core_cycle in result.cycles:
             db_cycle = DbRouteCycle(
                 route_plan_id=plan.id,
@@ -2875,7 +2913,7 @@ class RuntimePlannerFacade:
                 empty_distance_meters=core_cycle.empty_distance_meters,
                 detour_seconds=core_cycle.detour_seconds,
                 score=core_cycle.score,
-                locked=core_cycle.locked,
+                locked=historical_locks.get(core_cycle.id, core_cycle.locked),
                 manually_changed=core_cycle.manually_changed,
                 metrics=self._cycle_metrics(core_cycle, snapshot),
             )

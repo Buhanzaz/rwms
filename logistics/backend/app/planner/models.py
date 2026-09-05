@@ -315,10 +315,14 @@ class DriverShift:
     route_depot: Warehouse | None = None
     allowed_service_warehouse_ids: frozenset[str] | None = None
     resource_option_id: str | None = None
+    # Recovery only restricts new departures; the original duty interval and locked history stay.
+    available_from: datetime | None = None
 
     def __post_init__(self) -> None:
         require_aware(self.start_at, "start_at")
         require_aware(self.end_at, "end_at")
+        if self.available_from is not None:
+            require_aware(self.available_from, "available_from")
         if self.start_at >= self.end_at:
             raise ValueError("shift start must be before shift end")
         if self.break_minutes < 0:

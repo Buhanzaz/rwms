@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import date
-from uuid import UUID
+from datetime import date, datetime, timedelta
+from uuid import UUID, uuid5
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db import utc_now
+from app.errors import ApiError
 from app.integrations.rwms import RwmsPlanningClient
-from app.models import PlanningDayMode
+from app.models import LogisticsEvent, PlanningDayMode, RecoveryProposalStatus
 from app.schemas.operations import (
     LogisticsEventCreate,
     LogisticsEventResult,
@@ -87,10 +89,18 @@ class DynamicLogisticsService:
         *,
         actor: str,
         idempotency_key: str,
+        actor_subject_id: UUID | None = None,
     ) -> LogisticsEventResult:
-        """Delegate immutable event intake and deterministic impact analysis."""
+        """Persist the incident before optionally applying one fenced recovery attempt.
 
-        return await self._impacts.register_event(
+        AUTO reuses the manual saga, including owner receipts and exact road checks.
+        Replaying the event resumes an interrupted attempt, never a failed one; the
+        latter remains visible for an explicit dispatcher retry after fixing resources.
+        """
+
+        if payload.recovery_mode == "AUTO" and actor_subject_id is None:
+            raise ApiError(403, "RECOVERY_ACTOR_REQUIRED", "Verified recovery actor is required")
+        result = await self._impacts.register_event(
             session,
             warehouse_id,
             planning_date,
@@ -98,6 +108,39 @@ class DynamicLogisticsService:
             actor=actor,
             idempotency_key=idempotency_key,
         )
+        if payload.recovery_mode != "AUTO":
+            return result
+        assert actor_subject_id is not None
+        event_id = result.event.id
+        # Resource loss must survive a solver outage or a lost HTTP response.
+        await session.commit()
+        for proposal in result.proposals:
+            if proposal.status != RecoveryProposalStatus.READY_TO_APPLY:
+                continue
+            active_apply = proposal.changes.get("active_apply")
+            expected_version = proposal.version
+            if isinstance(active_apply, dict) and isinstance(
+                proposal.changes.get("prepared_recovery"), dict
+            ):
+                expected_version = int(active_apply["expected_version"])
+            elif isinstance(active_apply, dict):
+                # Repeated HTTP requests must not steal a live solve. A stale,
+                # fenced claim may be resumed after a bounded five-minute lease.
+                started_at = datetime.fromisoformat(str(active_apply["started_at"]))
+                if utc_now() - started_at < timedelta(minutes=5):
+                    continue
+            await self._recovery.apply_proposal(
+                session,
+                proposal.id,
+                expected_version=expected_version,
+                actor=actor,
+                actor_subject_id=actor_subject_id,
+                idempotency_key=str(uuid5(event_id, "automatic-resource-recovery")),
+            )
+            await session.commit()
+        event = await session.get(LogisticsEvent, event_id)
+        assert event is not None
+        return await self._projection.event_result(session, event)
 
     async def decide_action(
         self,

@@ -284,6 +284,22 @@ route engine or an alternate order owner. See
 [`app/api/dynamic_operations.py`](app/api/dynamic_operations.py) and
 [`app/services/dynamic_recovery.py`](app/services/dynamic_recovery.py).
 
+Truck and trailer breakdowns support `recovery_mode: AUTO | MANUAL` (API default
+`MANUAL`; the incident dialog explicitly selects `AUTO`). `TRAILER_BREAKDOWN`
+requires `trailer_id` and disables the trailer, not the healthy tractor. Impact
+uses the trailer identity saved in routed segments rather than a later catalog
+attachment. Capacity publication is invalidated for the planning group.
+AUTO commits the incident before running the same version-fenced recovery saga
+as manual application. Event replay never duplicates a completed or failed attempt.
+Replacement departures cannot precede either the incident or apply time; original
+shift hours and locked route history are retained. Exact truck/load/road checks
+and delivery priority remain mandatory. Insufficient replacement capacity leaves
+the source active with an actionable failure and the precise unassigned task IDs;
+it never silently drops a delivery or changes a customer's date. Contractor handoff
+and rescheduling remain explicit request workflows. Started cargo and affected
+manually locked cycles require dispatcher control; no automatic custody transfer,
+customer cancellation, or fee is fabricated.
+
 Applying a cancellation for an already published RWMS delivery never uses the ordinary direct
 replacement command. The planner stages the newer local revision, sends an exact version-fenced
 withdrawal to the logistics owner, waits for the owner/task-board saga receipt, and activates the

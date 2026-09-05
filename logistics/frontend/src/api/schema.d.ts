@@ -4,6 +4,178 @@
  */
 
 export interface paths {
+    "/api/admin/trailers/{trailer_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Admin Delete Trailer
+         * @description Delete an eligible trailer only when no vehicle selects it as default.
+         */
+        delete: operations["admin_delete_trailer_api_admin_trailers__trailer_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Admin Update Trailer
+         * @description Update a trailer owned by an eligible canonical warehouse.
+         */
+        patch: operations["admin_update_trailer_api_admin_trailers__trailer_id__patch"];
+        trace?: never;
+    };
+    "/api/admin/trailers/{trailer_id}/relocate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Relocate Trailer
+         * @description Permanently relocate a trailer to a canonical production/main warehouse.
+         */
+        post: operations["admin_relocate_trailer_api_admin_trailers__trailer_id__relocate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/vehicles/{vehicle_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Admin Delete Vehicle
+         * @description Delete an eligible vehicle only when no driver shift retains it.
+         */
+        delete: operations["admin_delete_vehicle_api_admin_vehicles__vehicle_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Admin Update Vehicle
+         * @description Update a vehicle owned by an eligible canonical warehouse.
+         */
+        patch: operations["admin_update_vehicle_api_admin_vehicles__vehicle_id__patch"];
+        trace?: never;
+    };
+    "/api/admin/vehicles/{vehicle_id}/configuration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Admin Update Vehicle Configuration
+         * @description Atomically replace a vehicle and its axle profiles through the admin client.
+         */
+        put: operations["admin_update_vehicle_configuration_api_admin_vehicles__vehicle_id__configuration_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/vehicles/{vehicle_id}/relocate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Relocate Vehicle
+         * @description Permanently relocate a vehicle to a canonical production/main warehouse.
+         */
+        post: operations["admin_relocate_vehicle_api_admin_vehicles__vehicle_id__relocate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/warehouses/{warehouse_id}/trailers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin List Trailers
+         * @description List trailers for one canonical production/main warehouse UUID.
+         */
+        get: operations["admin_list_trailers_api_admin_warehouses__warehouse_id__trailers_get"];
+        put?: never;
+        /**
+         * Admin Create Trailer
+         * @description Create a trailer under a canonical warehouse UUID.
+         */
+        post: operations["admin_create_trailer_api_admin_warehouses__warehouse_id__trailers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/warehouses/{warehouse_id}/vehicle-configurations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Create Vehicle Configuration
+         * @description Create a complete vehicle under a canonical warehouse UUID.
+         */
+        post: operations["admin_create_vehicle_configuration_api_admin_warehouses__warehouse_id__vehicle_configurations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/warehouses/{warehouse_id}/vehicles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin List Vehicles
+         * @description List vehicles for one canonical production/main warehouse UUID.
+         */
+        get: operations["admin_list_vehicles_api_admin_warehouses__warehouse_id__vehicles_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/drivers/{driver_id}": {
         parameters: {
             query?: never;
@@ -856,7 +1028,7 @@ export interface paths {
         post?: never;
         /**
          * Delete Trailer
-         * @description Delete a trailer while vehicle defaults are cleared by the database.
+         * @description Delete a trailer only when no vehicle selects it as default.
          */
         delete: operations["delete_trailer_api_trailers__trailer_id__delete"];
         options?: never;
@@ -880,7 +1052,7 @@ export interface paths {
         post?: never;
         /**
          * Delete Vehicle
-         * @description Delete a vehicle not retained by plan history.
+         * @description Delete a vehicle only when no driver shift retains it.
          */
         delete: operations["delete_vehicle_api_vehicles__vehicle_id__delete"];
         options?: never;
@@ -1051,7 +1223,7 @@ export interface paths {
         put?: never;
         /**
          * Generate Workload
-         * @description Replace deterministic load for one warehouse and rebuild missing draft plans.
+         * @description Replace random test load for one warehouse and rebuild missing draft plans.
          */
         post: operations["generate_workload_api_warehouses__warehouse_id__generate_workload_post"];
         delete?: never;
@@ -1433,6 +1605,164 @@ export interface components {
             uri: string;
         };
         /**
+         * AdminCatalogRelocationRequest
+         * @description Optimistically fenced permanent relocation to a canonical warehouse.
+         */
+        AdminCatalogRelocationRequest: {
+            /** Expected Version */
+            expected_version: number;
+            /**
+             * Target Warehouse Id
+             * Format: uuid
+             * @description Canonical warehouse-service UUID of the new owning object.
+             */
+            target_warehouse_id: string;
+        };
+        /**
+         * AdminTrailerRead
+         * @description Administrative trailer view keyed by the canonical warehouse UUID.
+         */
+        AdminTrailerRead: {
+            /** Active */
+            active: boolean;
+            /** Axle Count */
+            axle_count: number | null;
+            /** Height Mm */
+            height_mm: number | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Length Mm */
+            length_mm: number | null;
+            /** Max Axle Load Kg */
+            max_axle_load_kg: number | null;
+            /** Max Cargo Height Mm */
+            max_cargo_height_mm: number | null;
+            /** Max Cargo Length Mm */
+            max_cargo_length_mm: number | null;
+            /** Max Cargo Weight Kg */
+            max_cargo_weight_kg: number | null;
+            /** Max Cargo Width Mm */
+            max_cargo_width_mm: number | null;
+            /** Max Gross Weight Kg */
+            max_gross_weight_kg: number | null;
+            /** Max Platform Payload Kg */
+            max_platform_payload_kg: number | null;
+            name: components["schemas"]["NonBlank"];
+            /** Notes */
+            notes: string;
+            /** Payload Capacity Kg */
+            payload_capacity_kg: number | null;
+            /** Platform Height From Ground Mm */
+            platform_height_from_ground_mm: number | null;
+            /** Platform Length Mm */
+            platform_length_mm: number | null;
+            /** Platform Width Mm */
+            platform_width_mm: number | null;
+            registration_number: components["schemas"]["NonBlank"];
+            /** Tare Weight Kg */
+            tare_weight_kg: number | null;
+            /** Version */
+            version: number;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             * @description Canonical warehouse-service UUID, never the planner-local row UUID.
+             */
+            warehouse_id: string;
+            /** Width Mm */
+            width_mm: number | null;
+        };
+        /**
+         * AdminVehicleRead
+         * @description Administrative vehicle view keyed by the canonical warehouse UUID.
+         */
+        AdminVehicleRead: {
+            /** Active */
+            active: boolean;
+            /** Average Speed City */
+            average_speed_city: number;
+            /** Average Speed Region */
+            average_speed_region: number;
+            /** Axle Count */
+            axle_count: number | null;
+            /** Can Use Trailer */
+            can_use_trailer: boolean | null;
+            /** Capacity */
+            capacity: number;
+            /** Combined Length With Trailer Mm */
+            combined_length_with_trailer_mm: number | null;
+            /** Coupling Length Mm */
+            coupling_length_mm: number | null;
+            /** Default Trailer Id */
+            default_trailer_id: string | null;
+            /** Height Mm */
+            height_mm: number | null;
+            /** Height Safety Margin Mm */
+            height_safety_margin_mm: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Is Hgv */
+            is_hgv: boolean | null;
+            /** Length Mm */
+            length_mm: number | null;
+            /** Load Profiles */
+            load_profiles: components["schemas"]["VehicleLoadProfileCreate"][];
+            /** Manufacturer */
+            manufacturer: string | null;
+            /** Max Axle Load Kg */
+            max_axle_load_kg: number | null;
+            /** Max Cargo Height Mm */
+            max_cargo_height_mm: number | null;
+            /** Max Cargo Length Mm */
+            max_cargo_length_mm: number | null;
+            /** Max Cargo Weight Kg */
+            max_cargo_weight_kg: number | null;
+            /** Max Cargo Width Mm */
+            max_cargo_width_mm: number | null;
+            /** Max Gross Weight Kg */
+            max_gross_weight_kg: number | null;
+            /** Max Platform Payload Kg */
+            max_platform_payload_kg: number | null;
+            /** Model */
+            model: string | null;
+            name: components["schemas"]["NonBlank"];
+            /** Notes */
+            notes: string;
+            /** Payload Capacity Kg */
+            payload_capacity_kg: number | null;
+            /** Platform Height From Ground Mm */
+            platform_height_from_ground_mm: number | null;
+            /** Platform Length Mm */
+            platform_length_mm: number | null;
+            /** Platform Width Mm */
+            platform_width_mm: number | null;
+            registration_number: components["schemas"]["NonBlank"];
+            /** Tare Weight Kg */
+            tare_weight_kg: number | null;
+            /** Vehicle Type */
+            vehicle_type: string | null;
+            /** Version */
+            version: number;
+            /**
+             * Warehouse Id
+             * Format: uuid
+             * @description Canonical warehouse-service UUID, never the planner-local row UUID.
+             */
+            warehouse_id: string;
+            /** Weight Safety Margin Kg */
+            weight_safety_margin_kg: number;
+            /** Width Mm */
+            width_mm: number | null;
+            /** Width Safety Margin Mm */
+            width_safety_margin_mm: number;
+        };
+        /**
          * AvailableDriverRead
          * @description Canonical RWMS worker eligible for one warehouse planning audience.
          */
@@ -1556,6 +1886,12 @@ export interface components {
              */
             planning_date: string;
         };
+        /**
+         * CustomerDeliveryPurpose
+         * @description Commercial purpose kept separate from the physical delivery direction.
+         * @enum {string}
+         */
+        CustomerDeliveryPurpose: "RENTAL_DELIVERY" | "SALE_DELIVERY" | "CUSTOMER_RELOCATION";
         /**
          * CustomerSlotRead
          * @description One standard customer slot with feasibility and structured explanations.
@@ -1804,12 +2140,20 @@ export interface components {
             plan_id?: string | null;
             /** Reason */
             reason: string;
+            /**
+             * Recovery Mode
+             * @default MANUAL
+             * @enum {string}
+             */
+            recovery_mode: "MANUAL" | "AUTO";
             /** Request Id */
             request_id?: string | null;
             /** Source Event */
             source_event?: string | null;
             /** Task Id */
             task_id?: string | null;
+            /** Trailer Id */
+            trailer_id?: string | null;
             /** Vehicle Id */
             vehicle_id?: string | null;
         };
@@ -1880,7 +2224,7 @@ export interface components {
          * @description Facts that can invalidate or constrain the current operational plan.
          * @enum {string}
          */
-        LogisticsEventType: "VEHICLE_BREAKDOWN" | "VEHICLE_DELAY" | "DRIVER_UNAVAILABLE" | "DELIVERY_CANCELLED" | "PICKUP_CANCELLED" | "ORDER_CANCELLED" | "TASK_BLOCKED" | "MANUAL_PLAN_CHANGE" | "PLANNING_MODE_CHANGED";
+        LogisticsEventType: "VEHICLE_BREAKDOWN" | "TRAILER_BREAKDOWN" | "VEHICLE_DELAY" | "DRIVER_UNAVAILABLE" | "DELIVERY_CANCELLED" | "PICKUP_CANCELLED" | "ORDER_CANCELLED" | "TASK_BLOCKED" | "MANUAL_PLAN_CHANGE" | "PLANNING_MODE_CHANGED";
         /**
          * LogisticsHumanActionRead
          * @description One unresolved or historical dispatcher action with contact details.
@@ -2184,6 +2528,7 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            customer_delivery_purpose: components["schemas"]["CustomerDeliveryPurpose"] | null;
             /** Date Options */
             date_options?: components["schemas"]["RequestDateOptionRead"][];
             /** Delivery Price Rubles */
@@ -5284,6 +5629,379 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    admin_delete_trailer_api_admin_trailers__trailer_id__delete: {
+        parameters: {
+            query: {
+                expected_version: number;
+            };
+            header?: never;
+            path: {
+                trailer_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_update_trailer_api_admin_trailers__trailer_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trailer_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrailerUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTrailerRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_relocate_trailer_api_admin_trailers__trailer_id__relocate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trailer_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminCatalogRelocationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTrailerRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_delete_vehicle_api_admin_vehicles__vehicle_id__delete: {
+        parameters: {
+            query: {
+                expected_version: number;
+            };
+            header?: never;
+            path: {
+                vehicle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_update_vehicle_api_admin_vehicles__vehicle_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vehicle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VehicleUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminVehicleRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_update_vehicle_configuration_api_admin_vehicles__vehicle_id__configuration_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vehicle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VehicleConfigurationUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminVehicleRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_relocate_vehicle_api_admin_vehicles__vehicle_id__relocate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vehicle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminCatalogRelocationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminVehicleRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_list_trailers_api_admin_warehouses__warehouse_id__trailers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTrailerRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_create_trailer_api_admin_warehouses__warehouse_id__trailers_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrailerCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTrailerRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_create_vehicle_configuration_api_admin_warehouses__warehouse_id__vehicle_configurations_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VehicleConfigurationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminVehicleRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_list_vehicles_api_admin_warehouses__warehouse_id__vehicles_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminVehicleRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     delete_driver_api_drivers__driver_id__delete: {
         parameters: {
             query: {

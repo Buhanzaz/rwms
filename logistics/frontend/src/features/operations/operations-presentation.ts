@@ -19,6 +19,7 @@ export type DispatcherEventType = Exclude<
 
 export const DISPATCHER_EVENT_LABELS: Readonly<Record<DispatcherEventType, string>> = {
   VEHICLE_BREAKDOWN: 'Поломка машины',
+  TRAILER_BREAKDOWN: 'Поломка прицепа',
   VEHICLE_DELAY: 'Задержка машины',
   DRIVER_UNAVAILABLE: 'Водитель недоступен',
   DELIVERY_CANCELLED: 'Доставка отменена',

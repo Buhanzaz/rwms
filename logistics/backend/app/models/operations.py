@@ -41,6 +41,7 @@ class LogisticsEventType(StrEnum):
     """Facts that can invalidate or constrain the current operational plan."""
 
     VEHICLE_BREAKDOWN = "VEHICLE_BREAKDOWN"
+    TRAILER_BREAKDOWN = "TRAILER_BREAKDOWN"
     VEHICLE_DELAY = "VEHICLE_DELAY"
     DRIVER_UNAVAILABLE = "DRIVER_UNAVAILABLE"
     DELIVERY_CANCELLED = "DELIVERY_CANCELLED"

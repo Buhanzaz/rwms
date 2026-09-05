@@ -331,7 +331,7 @@ class HeuristicPlanner:
         for depot_key in sorted(depots_by_key, key=repr):
             depot = depots_by_key[depot_key]
             departure_at = min(
-                shift.start_at
+                max(shift.start_at, shift.available_from or shift.start_at)
                 for shift in active_shifts
                 if depot_key_by_option_id[_shift_option_id(shift)] == depot_key
             )
@@ -1349,7 +1349,7 @@ class HeuristicPlanner:
                     for cycle in rebuilt_cycles
                     if cycle.driver_shift_id == shift.id
                 ),
-                default=shift.start_at,
+                default=max(shift.start_at, shift.available_from or shift.start_at),
             )
         return tuple(rebuilt_cycles), final_available, evaluated
 
@@ -1515,7 +1515,7 @@ class HeuristicPlanner:
         if any(task.quantity == 2 for task in pickups) and len(pickups) > 1:
             return None
 
-        cursor = max(start_at, shift.start_at)
+        cursor = max(start_at, shift.start_at, shift.available_from or shift.start_at)
         load_seconds = (
             (warehouse.loading_minutes or settings.default_load_minutes) * 60 if deliveries else 0
         )
@@ -2697,7 +2697,8 @@ def _initial_shift_state(
     for shift in _unique_physical_shifts(shift_options):
         own = [cycle for cycle in locked if cycle.driver_shift_id == shift.id]
         option_starts = tuple(
-            option.start_at for option in shift_options if option.id == shift.id
+            max(option.start_at, option.available_from or option.start_at)
+            for option in shift_options if option.id == shift.id
         )
         available[shift.id] = max(
             (
@@ -2716,6 +2717,7 @@ def _initial_shift_state(
             default=min(option_starts),
         )
         sequence[shift.id] = max((cycle.sequence for cycle in own), default=0) + 1
+        available[shift.id] = max(available[shift.id], min(option_starts))
     return available, sequence
 
 

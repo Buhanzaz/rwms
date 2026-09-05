@@ -354,6 +354,9 @@ function ProposalCard({
       </div>
       <div className="operations-affected">
         <small>Затронутые позиции</small>
+        {proposal.proposal_type === 'PARTIAL_REPLAN_RESOURCE_LOSS' && proposal.status !== 'APPLIED' ? (
+          <p className="field__hint">Если свободной машины нет, откройте заявку ниже: согласуйте перенос с клиентом или передачу наёмному водителю. Поломка не влечёт неустойку клиента.</p>
+        ) : null}
         {requests.length ? requests.map(({ id, request }) => (
           <Button size="sm" variant="ghost" key={id} onClick={() => onSelectRequest(id)}>
             {request?.name ?? 'Заявка вне загруженной страницы'} · {customerLegalTypeLabel(customerLegalTypeFromRequest(request))}

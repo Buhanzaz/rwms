@@ -214,7 +214,7 @@ class ExactTruckCycleRouter:
         ordered_stops = tuple(sorted(cycle.stops, key=lambda item: item.sequence))
         profiles = self._cycle_profiles(cycle, tasks=tasks, vehicle=vehicle)
 
-        start = max(cycle.planned_start, shift.start_at)
+        start = max(cycle.planned_start, shift.start_at, shift.available_from or shift.start_at)
         first = replace(
             ordered_stops[0],
             planned_arrival=start,

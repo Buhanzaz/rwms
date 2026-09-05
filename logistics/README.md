@@ -936,7 +936,9 @@ silently alter a customer commitment.
 
 Breakdowns, delays, unavailable drivers, cancellations, blocked tasks, and
 mode changes use one sequence: fact, impact analysis, recommendation,
-dispatcher decision, and explicit partial replan. Delay contacts use only
+dispatcher decision, and partial replan. Truck/trailer incidents offer automatic
+application of a safe replacement or manual review; missing capacity and cargo
+already in transit require explicit dispatcher action. Delay contacts use only
 acceptance, rejection, or unreachable outcomes and fence the shared proposal.
 The dispatcher enters an event time explicitly: its date comes from the opened
 day and it is interpreted in the planning-root warehouse IANA timezone, never

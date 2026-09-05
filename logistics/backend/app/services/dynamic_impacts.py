@@ -29,6 +29,7 @@ from app.models import (
     RecoveryProposalStatus,
     RequestDateOption,
     RoutePlan,
+    Trailer,
     Vehicle,
     Warehouse,
 )
@@ -39,6 +40,8 @@ from app.schemas.operations import (
 )
 from app.services import catalog
 from app.services import plans as plan_service
+from app.services.capacity_generation import advance_warehouse_capacity_generation
+from app.services.capacity_publication_state import mark_capacity_publication_pending
 from app.services.dynamic_projection import DynamicOperationsProjection
 from app.services.dynamic_support import (
     OWNER_TERMINAL_TASK_STATES as _OWNER_TERMINAL_TASK_STATES,
@@ -200,6 +203,8 @@ class LogisticsImpactAnalyzer:
             "expected_plan_version": payload.expected_plan_version,
             "reason": payload.reason,
             "vehicle_id": str(payload.vehicle_id) if payload.vehicle_id else None,
+            "trailer_id": str(payload.trailer_id) if payload.trailer_id else None,
+            "recovery_mode": payload.recovery_mode,
             "driver_shift_id": (str(payload.driver_shift_id) if payload.driver_shift_id else None),
             "effective_at": ((payload.effective_at or payload.occurred_at).isoformat()),
             "delay_minutes": payload.delay_minutes,
@@ -231,6 +236,7 @@ class LogisticsImpactAnalyzer:
             )
         elif payload.event_type in {
             LogisticsEventType.VEHICLE_BREAKDOWN,
+            LogisticsEventType.TRAILER_BREAKDOWN,
             LogisticsEventType.DRIVER_UNAVAILABLE,
         }:
             await self._analyze_resource_loss(
@@ -466,11 +472,15 @@ class LogisticsImpactAnalyzer:
             reason_codes=[reason_code, "RECOVERY_FAIL_CLOSED"],
             facts={"active_task_ids": [str(item) for item in sorted(task_ids, key=str)]},
             message_ru=(
-                "Маршрут уже выполняется. Безопасно отделить выполненную и текущую часть "
+                "Рейс закреплён вручную за неисправным ресурсом. Автозамена остановлена."
+                if reason_code == "FAILED_RESOURCE_CYCLE_LOCKED"
+                else "Маршрут уже выполняется. Безопасно отделить выполненную и текущую часть "
                 "от остатка автоматически нельзя."
             ),
             recommended_action_ru=(
-                "Зафиксируйте фактическое положение груза и исполнителя, "
+                "Снимите закрепление рейса и повторите восстановление после проверки груза."
+                if reason_code == "FAILED_RESOURCE_CYCLE_LOCKED"
+                else "Зафиксируйте фактическое положение груза и исполнителя, "
                 "затем измените остаток вручную."
             ),
             requires_action=True,
@@ -753,7 +763,9 @@ class LogisticsImpactAnalyzer:
         """Disable the failed resource and stage a minimum-change partial replan."""
 
         if payload.event_type == LogisticsEventType.VEHICLE_BREAKDOWN:
-            vehicle = await session.scalar(select(Vehicle).where(Vehicle.id == payload.vehicle_id))
+            vehicle = await session.scalar(
+                select(Vehicle).where(Vehicle.id == payload.vehicle_id).with_for_update()
+            )
             vehicle_is_in_plan = plan is not None and any(
                 cycle.driver_shift.vehicle_id == payload.vehicle_id for cycle in plan.cycles
             )
@@ -763,6 +775,21 @@ class LogisticsImpactAnalyzer:
                 raise not_found("vehicle", payload.vehicle_id)
             vehicle.active = False
             vehicle.version += 1
+            resource_home_id = vehicle.warehouse_id
+        elif payload.event_type == LogisticsEventType.TRAILER_BREAKDOWN:
+            trailer = await session.scalar(
+                select(Trailer).where(Trailer.id == payload.trailer_id).with_for_update()
+            )
+            trailer_is_in_plan = plan is not None and any(
+                self._cycle_uses_trailer(cycle, payload.trailer_id) for cycle in plan.cycles
+            )
+            if trailer is None or (
+                trailer.warehouse_id not in planning_member_ids and not trailer_is_in_plan
+            ):
+                raise not_found("trailer", payload.trailer_id)
+            trailer.active = False
+            trailer.version += 1
+            resource_home_id = trailer.warehouse_id
         else:
             from app.models import DriverShift
 
@@ -776,6 +803,10 @@ class LogisticsImpactAnalyzer:
                 shift.warehouse_id not in planning_member_ids and not shift_is_in_plan
             ):
                 raise not_found("driver_shift", payload.driver_shift_id)
+            resource_home_id = shift.warehouse_id
+        for member_id in sorted(planning_member_ids | {resource_home_id}, key=str):
+            generation = await advance_warehouse_capacity_generation(session, member_id)
+            await mark_capacity_publication_pending(session, member_id, generation)
         if plan is None:
             await self._create_generic_notice(
                 session, event, "Ресурс недоступен; активного плана нет."
@@ -791,6 +822,10 @@ class LogisticsImpactAnalyzer:
             or (
                 payload.driver_shift_id is not None
                 and cycle.driver_shift_id == payload.driver_shift_id
+            )
+            or (
+                payload.trailer_id is not None
+                and self._cycle_uses_trailer(cycle, payload.trailer_id)
             )
         ]
         if not affected_cycles:
@@ -837,6 +872,19 @@ class LogisticsImpactAnalyzer:
                 plan,
                 task_ids=unsafe_task_ids,
                 reason_code="IN_PROGRESS_SUFFIX_REPLAN_UNSUPPORTED",
+            )
+            return
+        locked_task_ids = [
+            stop.task_id
+            for cycle in affected_cycles
+            if cycle.locked
+            for stop in cycle.stops
+            if stop.task_id is not None and stop.task_id in affected_tasks
+        ]
+        if locked_task_ids:
+            await self._create_suffix_fail_closed_work(
+                session, event, plan, task_ids=locked_task_ids,
+                reason_code="FAILED_RESOURCE_CYCLE_LOCKED",
             )
             return
         locked_cycle_ids = [
@@ -893,12 +941,32 @@ class LogisticsImpactAnalyzer:
                     "locked_cycle_ids": locked_cycle_ids,
                     "recovery_task_ids": sorted(str(task_id) for task_id in affected_tasks),
                     "resource_event": payload.event_type.value,
+                    "effective_at": event.facts["effective_at"],
                 },
                 metrics={
                     "affected": len(affected_tasks),
                     "completed_locked": completed_count,
                 },
             )
+        )
+
+    @staticmethod
+    def _cycle_uses_trailer(cycle: Any, trailer_id: UUID | None) -> bool:
+        """Use the saved routed configuration, conservatively handling missing proofs."""
+
+        if trailer_id is None:
+            return False
+        snapshots = [segment.routing_profile_snapshot for segment in cycle.segments]
+        if any(
+            snapshot is not None and snapshot.get("trailerId") == str(trailer_id)
+            for snapshot in snapshots
+        ):
+            return True
+        incomplete = not snapshots or any(
+            snapshot is None or "trailerId" not in snapshot for snapshot in snapshots
+        )
+        return incomplete and (
+            cycle.driver_shift.vehicle.default_trailer_id == trailer_id
         )
 
     async def _analyze_cancellation(

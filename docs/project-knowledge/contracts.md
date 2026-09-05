@@ -394,6 +394,14 @@ boundary for profile management and its own server-side dispatch command to bind
 an active profile to eligible work on the date selected in the header.
 
 The generated standalone contract at [`logistics/backend/openapi.json`](../../logistics/backend/openapi.json)
+also owns planning-day incident intake. Truck/trailer incidents accept explicit
+`recovery_mode` (`AUTO` or backward-compatible default `MANUAL`); trailer failures
+require `trailer_id`. AUTO uses the authenticated subject and the existing
+proposal-apply saga, not a client-coordinated sequence. A retry returns durable
+event/proposal state; a resource-capacity failure never implies a successful plan
+or a customer-approved date change.
+
+That generated standalone contract
 owns `POST /api/warehouses/{warehouseId}/contractor-dispatches`. `AUTO` accepts no
 request IDs and selects eligible unassigned work for that exact warehouse/date;
 `MANUAL` requires a unique explicit request set and revalidates the same facts.

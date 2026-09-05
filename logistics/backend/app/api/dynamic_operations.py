@@ -130,6 +130,7 @@ async def post_logistics_event(
         planning_date,
         payload,
         actor=principal.audit_actor,
+        actor_subject_id=principal.subject_id,
         idempotency_key=idempotency_key,
     )
 

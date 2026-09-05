@@ -49,6 +49,8 @@ class LogisticsEventCreate(ApiModel):
     request_id: UUID | None = None
     task_id: UUID | None = None
     vehicle_id: UUID | None = None
+    trailer_id: UUID | None = None
+    recovery_mode: Literal["MANUAL", "AUTO"] = "MANUAL"
     driver_shift_id: UUID | None = None
     occurred_at: AwareDatetime
     effective_at: AwareDatetime | None = None
@@ -67,6 +69,8 @@ class LogisticsEventCreate(ApiModel):
             "expected_plan_version",
             "reason",
             "vehicle_id",
+            "trailer_id",
+            "recovery_mode",
             "driver_shift_id",
             "effective_at",
             "delay_minutes",
@@ -102,6 +106,19 @@ class LogisticsEventCreate(ApiModel):
             raise ValueError("vehicle_id is required for a vehicle incident")
         if self.event_type == LogisticsEventType.VEHICLE_DELAY and self.delay_minutes is None:
             raise ValueError("delay_minutes is required for VEHICLE_DELAY")
+        if self.event_type == LogisticsEventType.TRAILER_BREAKDOWN and self.trailer_id is None:
+            raise ValueError("trailer_id is required for TRAILER_BREAKDOWN")
+        if self.event_type == LogisticsEventType.TRAILER_BREAKDOWN and (
+            self.vehicle_id is not None or self.driver_shift_id is not None
+        ):
+            raise ValueError("a trailer incident targets only trailer_id")
+        if self.trailer_id is not None and self.event_type != LogisticsEventType.TRAILER_BREAKDOWN:
+            raise ValueError("trailer_id is only supported for TRAILER_BREAKDOWN")
+        if self.recovery_mode == "AUTO" and self.event_type not in {
+            LogisticsEventType.VEHICLE_BREAKDOWN,
+            LogisticsEventType.TRAILER_BREAKDOWN,
+        }:
+            raise ValueError("AUTO recovery is only supported for vehicle or trailer breakdown")
         if (
             self.event_type == LogisticsEventType.DRIVER_UNAVAILABLE
             and self.driver_shift_id is None

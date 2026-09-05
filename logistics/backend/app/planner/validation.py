@@ -406,6 +406,11 @@ def validate_route_plan(
             cycle.driver_id != shift.driver_id
             or cycle.vehicle_id != shift.vehicle_id
             or cycle.planned_start < shift.start_at
+            or (
+                not cycle.locked
+                and shift.available_from is not None
+                and cycle.planned_start < shift.available_from
+            )
         ):
             errors.append(
                 ValidationIssue(

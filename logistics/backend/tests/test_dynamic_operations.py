@@ -79,6 +79,16 @@ PLANNING_DATE = date(2026, 9, 3)
 ZONE = ZoneInfo("Europe/Moscow")
 
 
+@pytest.fixture(autouse=True)
+def recovery_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep incident recovery reproducible without allowing plans to start in the past."""
+
+    monkeypatch.setattr(
+        "app.services.planner_runtime.utc_now",
+        lambda: datetime.combine(PLANNING_DATE, time(7), tzinfo=ZONE),
+    )
+
+
 def _warehouse_principal(*warehouses: Warehouse) -> CurrentUserPrincipal:
     """Build a non-admin dispatcher with exact signed grants for selected warehouses."""
 
@@ -2028,6 +2038,21 @@ async def test_confirmed_recovery_replays_owner_commit_and_activates_prepared_re
         db_session,
         owner_state="SCHEDULED",
     )
+    spare = await make_vehicle(db_session, plan.warehouse)
+    worker_id = uuid4()
+    spare_driver = await catalog.create_driver(
+        db_session, plan.warehouse_id,
+        DriverCreate(rwms_assignment_mode="ASSIGNED_DRIVER", external_worker_id=worker_id),
+        RwmsDriverIdentity(
+            workerId=worker_id, displayName="Spare driver", employmentType="STAFF", phone=None,
+            operationalWarehouseId=plan.warehouse.external_warehouse_id,
+            availableFrom=None, availableUntil=None, availabilityKind="HOME",
+        ),
+    )
+    await make_shift(
+        db_session, plan.warehouse, spare_driver, spare,
+        date_from=PLANNING_DATE, date_to=PLANNING_DATE,
+    )
     vehicle_id = plan.cycles[0].driver_shift.vehicle_id
     event_result = await service.register_event(
         db_session,
@@ -2194,12 +2219,13 @@ async def test_recovery_persists_unaffected_locked_task_identity_without_duplica
             payload={
                 "locked_cycle_ids": [str(locked_cycle.id)],
                 "recovery_task_ids": [str(item) for item in affected_task_ids],
+                "effective_at": (locked_cycle.planned_start + timedelta(minutes=5)).isoformat(),
             },
             reason="Проверка частичного восстановления",
             changed_by="dispatcher",
         ),
     )
-    assert recovery.plan_id is not None
+    assert recovery.plan_id is not None, recovery.error_message
     successor = await plans.get_plan(db_session, recovery.plan_id)
     persisted_locked = next(
         cycle
@@ -2207,6 +2233,7 @@ async def test_recovery_persists_unaffected_locked_task_identity_without_duplica
         if cycle.driver_shift_id == locked_cycle.driver_shift_id
         and cycle.sequence == locked_cycle.sequence
     )
+    assert persisted_locked.locked == locked_cycle.locked
     assert [
         (
             stop.sequence,
@@ -2228,6 +2255,10 @@ async def test_recovery_persists_unaffected_locked_task_identity_without_duplica
     ] + [item.task_id for item in successor.unassigned_tasks]
     assert all_successor_task_ids.count(first.tasks[0].id) == 1
     assert all_successor_task_ids.count(second.tasks[0].id) == 1
+    assert all(
+        cycle.planned_start >= locked_cycle.planned_start + timedelta(minutes=5)
+        for cycle in successor.cycles if cycle.id != persisted_locked.id
+    )
 
 
 @pytest.mark.asyncio

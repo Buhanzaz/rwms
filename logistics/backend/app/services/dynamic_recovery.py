@@ -874,6 +874,11 @@ class RecoveryProposalWorkflow:
                 await self._restore_local_reschedule(session, proposal)
             proposal.status = RecoveryProposalStatus.FAILED
             proposal.failure_code = exc.code
+            if exc.code == "RECOVERY_RESOURCE_CAPACITY_INSUFFICIENT":
+                proposal.changes = {
+                    **proposal.changes,
+                    "unassigned_task_ids": exc.extra["unassigned_task_ids"],
+                }
             proposal.version += 1
             self._record_apply_attempt(
                 proposal,
@@ -904,14 +909,21 @@ class RecoveryProposalWorkflow:
                     notice_type="RECOVERY_APPLY_FAILED",
                     severity="ERROR",
                     reason_codes=[exc.code],
-                    facts={"proposal_id": str(proposal.id)},
+                    facts={
+                        "proposal_id": str(proposal.id),
+                        "unassigned_task_ids": proposal.changes.get("unassigned_task_ids", []),
+                    },
                     message_ru=(
                         "Договорённость с клиентом обновлена, но новый план ещё не опубликован."
                         if isinstance(proposal.changes.get("owner_reschedule_receipt"), dict)
                         else "Изменение пока не применено; исходный план сохранён."
                     ),
                     recommended_action_ru=(
-                        "Проверьте актуальность предложения и повторите применение."
+                        "Нет безопасной замены для части рейсов: откройте затронутые заявки, "
+                        "согласуйте перенос с клиентом либо выберите наёмного водителя. "
+                        "При поломке неустойка клиента не применяется."
+                        if exc.code == "RECOVERY_RESOURCE_CAPACITY_INSUFFICIENT"
+                        else "Проверьте актуальность предложения и повторите применение."
                     ),
                     requires_action=True,
                     status=LogisticsNoticeStatus.REQUIRES_ACTION,
@@ -1806,6 +1818,21 @@ class RecoveryProposalWorkflow:
             operation_token,
         )
         result_plan = await plan_service.get_plan(session, run.plan_id, for_update=True)
+        if proposal.proposal_type == "PARTIAL_REPLAN_RESOURCE_LOSS":
+            restored_ids = {
+                str(stop.task_id)
+                for cycle in result_plan.cycles
+                for stop in cycle.stops
+                if stop.task_id is not None
+            }
+            missing_ids = sorted(set(proposal.affected_task_ids) - restored_ids)
+            if missing_ids:
+                raise ApiError(
+                    422,
+                    "RECOVERY_RESOURCE_CAPACITY_INSUFFICIENT",
+                    "Для части рейсов нет безопасной замены. Согласуйте перенос или наёмника.",
+                    extra={"unassigned_task_ids": missing_ids},
+                )
         prepared: dict[str, object] = {
             "source_plan_id": str(source.id),
             "source_plan_version": source_version,

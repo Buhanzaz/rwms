@@ -33,6 +33,7 @@ TERMINAL_TASK_STATUSES = (TaskStatus.COMPLETED, TaskStatus.CANCELLED)
 PLAN_CHANGING_EVENT_TYPES = frozenset(
     {
         LogisticsEventType.VEHICLE_BREAKDOWN,
+        LogisticsEventType.TRAILER_BREAKDOWN,
         LogisticsEventType.VEHICLE_DELAY,
         LogisticsEventType.DRIVER_UNAVAILABLE,
         LogisticsEventType.DELIVERY_CANCELLED,
@@ -82,7 +83,15 @@ def proposal_read(proposal: RecoveryProposal) -> RecoveryProposalRead:
 def event_command_hash(payload: LogisticsEventCreate) -> str:
     """Build a stable replay fingerprint without retaining authorization material."""
 
-    return sha256(payload.model_dump_json(exclude_none=False).encode()).hexdigest()
+    unchanged_defaults = set()
+    if payload.recovery_mode == "MANUAL":
+        unchanged_defaults.add("recovery_mode")
+    if payload.trailer_id is None:
+        unchanged_defaults.add("trailer_id")
+    # Preserve replay of incidents recorded before the optional recovery controls existed.
+    return sha256(
+        payload.model_dump_json(exclude_none=False, exclude=unchanged_defaults).encode()
+    ).hexdigest()
 
 
 def decision_command_hash(payload: LogisticsHumanDecisionCreate) -> str:

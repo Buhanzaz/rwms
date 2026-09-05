@@ -1738,6 +1738,22 @@ Evidence:
 and
 [`rwms_sync.py`](../../logistics/backend/app/integrations/rwms_sync.py).
 
+### Breakdown recovery
+
+The planner records truck/trailer incidents in the root warehouse's local day and
+disables the exact resource. Trailer impact follows saved routed-segment identity;
+it does not disable a healthy tractor or reuse a failed trailer after a catalog edit.
+The incident dialog offers AUTO or MANUAL. AUTO commits the event before invoking
+the existing version-fenced proposal/owner-replacement saga with the authenticated
+subject and a stable event-derived key. Failures retain the source and expose
+missing task IDs; they never count an unassigned task as successfully recovered.
+New departures respect both incident and apply time, while immutable unaffected
+cycles preserve their original timing and manual-lock flags. Delivery priority,
+real warehouse origins, equipment and exact truck-road validation remain in force.
+Already executing cargo or an affected manually locked cycle requires dispatcher
+control. Customer date changes and contractor handoffs stay explicit request
+workflows; this resource incident does not collect a customer cancellation fee.
+
 ### Representative warehouse resource selection
 
 1. Warehouse-service returns every active directed support link that is valid at the served

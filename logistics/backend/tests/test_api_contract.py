@@ -27,6 +27,18 @@ from app.services.catalog import split_quantities
 from app.services.planner_runtime import request_is_available_on_date
 
 
+def test_breakdown_contract_exposes_explicit_recovery_mode_and_trailer_identity() -> None:
+    """The checked-in generated consumer boundary keeps manual mode backward compatible."""
+
+    schemas = openapi_document()["components"]["schemas"]
+    incident = schemas["LogisticsEventCreate"]
+    assert incident["properties"]["recovery_mode"]["default"] == "MANUAL"
+    assert incident["properties"]["recovery_mode"]["enum"] == ["MANUAL", "AUTO"]
+    assert "recovery_mode" not in incident["required"]
+    assert "trailer_id" in incident["properties"]
+    assert "TRAILER_BREAKDOWN" in schemas["LogisticsEventType"]["enum"]
+
+
 def test_openapi_exposes_only_warehouse_rooted_product_operations() -> None:
     """Generated OpenAPI contains the active workspace flow and no removed operations."""
 
