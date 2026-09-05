@@ -844,6 +844,16 @@ Evidence: [`services/inventory-service/`](../../services/inventory-service/),
 driver work and their orchestration. It persists its workflow/reconciliation
 state and calls other owners through versioned, idempotent boundaries.
 
+Global cabin monthly prices belong to logistics, not asset passport metadata. V98 seeds a
+separate versioned singleton with positive whole-ruble overrides for asset-owned type/category
+UUID pairs; every omitted pair means zero. No catalog names or cross-database foreign keys are
+stored. The local store reads one consistent revision without writing and locks the singleton
+before checking an edit's expected version; different tariff rows share that fence. Explicit
+zero removes one override, unchanged values preserve audit/version, and missing storage fails
+closed. Existing hold, fee and booking state is unaffected by this persistence addition. Evidence:
+[`RentalPricingStore`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/pricing/service/RentalPricingStore.java),
+[`V98`](../../services/logistics-service/src/main/resources/db/migration/V98__global_rental_pricing.sql).
+
 Public return, shipment and transfer list reads preserve their array payload but
 are bounded to `page/size` with a maximum of 100 documents. Pagination metadata
 is carried in fixed response headers, and all lines for one document page are

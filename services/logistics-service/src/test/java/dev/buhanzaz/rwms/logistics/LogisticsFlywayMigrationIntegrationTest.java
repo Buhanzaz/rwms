@@ -85,6 +85,25 @@ class LogisticsFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void globalRentalPricingUpgradeStartsAtZeroWithoutChangingExistingRentalSettings() {
+    configuration(MIGRATIONS).target("97").load().migrate();
+    jdbc.update(
+        "update rental_settings set version=9, manual_booking_hold_minutes=75,"
+            + " late_change_fee_mode='FIXED', late_change_fee_value=1234");
+    Map<String, Object> previous = jdbc.queryForMap("select * from rental_settings");
+    Flyway upgraded = flyway(MIGRATIONS);
+    upgraded.migrate();
+    upgraded.validate();
+    assertThat(jdbc.queryForMap("select * from rental_settings")).isEqualTo(previous);
+    assertThat(jdbc.queryForMap("select * from rental_pricing_settings"))
+        .containsEntry("id", UUID.fromString("00000000-0000-0000-0000-000000000001"))
+        .containsEntry("version", 0L)
+        .containsEntry("updated_by_subject_id", null);
+    assertThat(jdbc.queryForObject("select count(*) from rental_pricing_rate", Long.class)).isZero();
+    assertJpaValidationStarts();
+  }
+
+  @Test
   void rentalLateChangeSettingsUpgradePreservesHoldsAndValidatesJpa() {
     configuration(MIGRATIONS).target("93").load().migrate();
     jdbc.update(

@@ -36,6 +36,15 @@ an immutable versioned read-only snapshot without inserting missing settings or
 assessing/collecting a fee. The support number is configured, never inferred from
 customer contact data.
 
+Global cabin rental prices have a separate logistics-owned singleton, seeded by V98.
+`RentalPricingStore` stores positive whole-ruble monthly overrides keyed by the asset-owned
+`rentalTypeId/categoryId` pair; an omitted pair means exactly zero. There are no cross-database
+foreign keys or copied catalog names. Reads return one repeatable-read revision without writes;
+updates lock the singleton and check `expectedVersion`, including edits to different pairs.
+An unchanged value preserves the revision and audit metadata; setting zero removes only that
+pair's override. Missing storage is an explicit unavailable error, never a fabricated free tariff.
+This persistence boundary does not change existing hold durations, late-change fees or bookings.
+
 The authoritative HTTP and event contracts are
 [`contracts/openapi/logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml) and
 [`contracts/events/logistics-events.yaml`](../../contracts/events/logistics-events.yaml). Start
