@@ -64,6 +64,7 @@ import {
   type DossierActorDisplay,
 } from "@/features/rental-items/dossier/actor/actor-display"
 import { useDossierActorDisplays } from "@/features/rental-items/dossier/actor/use-dossier-actor-displays"
+import { MaintenanceHistoryDetails } from "@/features/rental-items/dossier/maintenance-history-details"
 import {
   DOSSIER_ACTIVITY_CODES,
   DOSSIER_SOURCE_TYPES,
@@ -756,6 +757,7 @@ function TimelineGroupDetails({
 }) {
   const link = timelineGroupLink(group)
   const mediaCount = groupMedia(group).length
+  const latest = group.activities.at(-1)
   return (
     <div className="flex min-w-0 flex-col gap-4 px-3 pt-1 pb-4">
       <Separator />
@@ -784,6 +786,14 @@ function TimelineGroupDetails({
           </dd>
         </div>
       </dl>
+      {latest && (group.category === "ESTIMATE" || group.category === "REPAIR") ? (
+        <MaintenanceHistoryDetails
+          kind={group.category}
+          sourceId={latest.sourceRef.aggregateId}
+          cabinId={latest.cabinId}
+          warehouseId={latest.warehouseId}
+        />
+      ) : null}
       <div className="flex flex-col gap-2">
         <h4 className="text-sm font-medium">Ход операции</h4>
         <ol className="flex flex-col gap-3">

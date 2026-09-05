@@ -179,6 +179,12 @@ contexts and screens are usable.
   metadata. `Открыть фото задания` resolves only that opaque task-evidence
   reference through the public `TASK_BOARD_ENTRY` media owner proof and the
   caller's bearer session. See the [activity register](src/features/rental-items/dossier/dossier-activity-register.tsx).
+- Expanding an estimate or repair additionally reads its owner details on demand,
+  fenced by cabin, warehouse and signed-in user. Estimates show the current
+  revision, party, author, lines and revision reasons; repairs show stages,
+  comments, assignment snapshots, rework ancestry and the acceptance decision
+  actor. Current owner state is separate from historical event timestamps;
+  unavailable details leave the recorded timeline visible with an explicit retry.
 - The passport's shipment and return tabs read cabin-filtered, fully paged
   logistics documents independently of the current rental status. Completed and
   cancelled documents remain visible across authorized warehouses, with party,
