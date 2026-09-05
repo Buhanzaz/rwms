@@ -28,6 +28,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   getRentalPricingSettings,
+  cabinRentalPricesKey,
   rentalPricingSettingsKey,
   updateRentalPrice,
   validMonthlyRentalPrice,
@@ -52,7 +53,7 @@ export function RentalPricesSettings({ accessToken }: { accessToken: string }) {
         exact: true,
       })
       queryClient.setQueryData(rentalPricingSettingsKey, settings)
-      await queryClient.invalidateQueries({ queryKey: ["cabin-rental-prices"] })
+      await queryClient.invalidateQueries({ queryKey: cabinRentalPricesKey })
       toast.success("Цена аренды сохранена.")
     },
     onError: (error) => toast.error(error.message),

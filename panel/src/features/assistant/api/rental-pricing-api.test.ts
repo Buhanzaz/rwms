@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
+  getCabinRentalPrices,
+  formatMonthlyRentalPrice,
+  type CabinRentalPrices,
   getRentalPricingSettings,
   updateRentalPrice,
   validMonthlyRentalPrice,
@@ -213,5 +216,107 @@ describe("rental pricing API", () => {
       "Не получен токен доступа"
     )
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+function cabinPrices(): CabinRentalPrices {
+  return {
+    warehouseId: id(8),
+    pricingVersion: 3,
+    cabins: [
+      {
+        rentalItemId: id(9),
+        rentalItemVersion: 2,
+        rentalTypeId: id(1),
+        categoryId: id(3),
+        monthlyPriceRubles: "0",
+      },
+      {
+        rentalItemId: id(10),
+        rentalItemVersion: 8,
+        rentalTypeId: id(1),
+        categoryId: id(4),
+        monthlyPriceRubles: "9223372036854775807",
+      },
+    ],
+  }
+}
+
+describe("cabin price lookup", () => {
+  it("requests only the specified warehouse and cabin IDs and preserves exact amounts", async () => {
+    fetchMock.mockResolvedValue(Response.json(cabinPrices()))
+    const signal = new AbortController().signal
+    await expect(
+      getCabinRentalPrices("token", id(8), [id(9), id(10)], signal)
+    ).resolves.toEqual(cabinPrices())
+    const [input, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(input).origin).toBe(window.location.origin)
+    expect(new URL(input).pathname).toBe(
+      "/api/logistics/v1/cabins/rental-prices"
+    )
+    expect(init.method).toBe("POST")
+    expect(init.signal).toBe(signal)
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer token")
+    expect(JSON.parse(init.body as string)).toEqual({
+      warehouseId: id(8),
+      rentalItemIds: [id(9), id(10)],
+    })
+    expect(
+      formatMonthlyRentalPrice("9223372036854775807").replace(/\s/g, "")
+    ).toBe("9223372036854775807₽/мес.")
+    expect(formatMonthlyRentalPrice("0")).toBe("0 ₽/мес.")
+  })
+  it.each([
+    (data: CabinRentalPrices) => ({ ...data, warehouseId: id(11) }),
+    (data: CabinRentalPrices) => ({ ...data, pricingVersion: -1 }),
+    (data: CabinRentalPrices) => ({ ...data, cabins: [data.cabins[0]] }),
+    (data: CabinRentalPrices) => ({
+      ...data,
+      cabins: [data.cabins[0], data.cabins[0]],
+    }),
+    (data: CabinRentalPrices) => ({
+      ...data,
+      cabins: [data.cabins[0], { ...data.cabins[1], rentalItemId: id(11) }],
+    }),
+    (data: CabinRentalPrices) => ({
+      ...data,
+      cabins: data.cabins.map((row) => ({ ...row, categoryId: null })),
+    }),
+    (data: CabinRentalPrices) => ({
+      ...data,
+      cabins: data.cabins.map((row) => ({ ...row, rentalItemVersion: -1 })),
+    }),
+    (data: CabinRentalPrices) => ({
+      ...data,
+      cabins: data.cabins.map((row) => ({ ...row, monthlyPriceRubles: 0 })),
+    }),
+    (data: CabinRentalPrices) => ({
+      ...data,
+      cabins: data.cabins.map((row) => ({
+        ...row,
+        monthlyPriceRubles: "9223372036854775808",
+      })),
+    }),
+  ])("rejects mismatched, incomplete or malformed prices", async (change) => {
+    fetchMock.mockResolvedValue(Response.json(change(cabinPrices())))
+    await expect(
+      getCabinRentalPrices("token", id(8), [id(9), id(10)])
+    ).rejects.toMatchObject({ code: "INVALID_API_RESPONSE" })
+  })
+  it.each([
+    [],
+    [id(9), id(9)],
+    Array.from({ length: 101 }, (_, index) => id(index + 100)),
+  ])("rejects an invalid batch before transport", async (...ids) => {
+    await expect(getCabinRentalPrices("token", id(8), ids)).rejects.toThrow()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+  it("does not fabricate free rent when the price owner is unavailable", async () => {
+    fetchMock.mockResolvedValue(
+      Response.json({ code: "RENTAL_PRICING_UNAVAILABLE" }, { status: 503 })
+    )
+    await expect(
+      getCabinRentalPrices("token", id(8), [id(9)])
+    ).rejects.toMatchObject({ status: 503 })
   })
 })

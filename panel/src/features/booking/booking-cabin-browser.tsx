@@ -5,7 +5,7 @@ import {
   type ReactNode,
   type UIEvent,
 } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useQueries, useQuery } from "@tanstack/react-query"
 import { Grid2X2 } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 
@@ -15,6 +15,8 @@ import {
   PageToolbarContent,
 } from "@/components/page-toolbar"
 import { Button } from "@/components/ui/button"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import type { CabinCoverProjection } from "@/features/media/media-service"
@@ -45,6 +47,11 @@ import {
   RENTAL_ITEM_COVERS_QUERY_KEY,
 } from "@/features/rental-items/use-rental-item-covers"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
+import {
+  cabinRentalPricesKey,
+  formatMonthlyRentalPrice,
+  getCabinRentalPrices,
+} from "@/features/assistant/api/rental-pricing-api"
 
 const BOOKING_QUERY_CACHE_TIME_MS = 2 * 60 * 60 * 1_000
 const COVER_BATCH_SIZE = 200
@@ -89,10 +96,10 @@ function buildFilterOptions(items: RentalItemDto[]) {
   }))
 }
 
-function splitIds(ids: readonly string[]) {
+function splitIds(ids: readonly string[], batchSize = COVER_BATCH_SIZE) {
   const batches: string[][] = []
-  for (let index = 0; index < ids.length; index += COVER_BATCH_SIZE) {
-    batches.push(ids.slice(index, index + COVER_BATCH_SIZE))
+  for (let index = 0; index < ids.length; index += batchSize) {
+    batches.push(ids.slice(index, index + batchSize))
   }
   return batches
 }
@@ -176,6 +183,32 @@ export function BookingCabinBrowser({
   )
 
   const itemIds = useMemo(() => items.map((item) => item.id), [items])
+  const priceBatches = splitIds(itemIds, 100)
+  const priceQueries = useQueries({
+    queries: priceBatches.map((batch) => ({
+      queryKey: [...cabinRentalPricesKey, subjectId, warehouseId, batch],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        getCabinRentalPrices(accessToken, warehouseId, batch, signal),
+      enabled: Boolean(accessToken.trim()),
+      retry: false,
+      staleTime: 30_000,
+      refetchInterval: 30_000,
+      refetchOnWindowFocus: "always" as const,
+    })),
+  })
+  const pricesById = new Map(
+    priceQueries
+      .flatMap((query) =>
+        query.isError || !accessToken.trim() ? [] : (query.data?.cabins ?? [])
+      )
+      .map((price) => [price.rentalItemId, price])
+  )
+  const failedPriceIds = new Set(
+    priceQueries.flatMap((query, index) =>
+      query.isError ? priceBatches[index] : []
+    )
+  )
+  const priceError = priceQueries.find((query) => query.isError)?.error
   const coverQuery = useQuery({
     queryKey: [
       ...RENTAL_ITEM_COVERS_QUERY_KEY,
@@ -279,6 +312,24 @@ export function BookingCabinBrowser({
           filters={effectiveFilters}
           onFiltersChange={setFilters}
         />
+        {priceError && (
+          <Alert variant="destructive">
+            <AlertTitle>Не удалось загрузить часть цен аренды</AlertTitle>
+            <AlertDescription>
+              {priceError.message}
+              <Button
+                variant="outline"
+                disabled={priceQueries.some((query) => query.isFetching)}
+                onClick={() => {
+                  for (const query of priceQueries)
+                    if (query.isError) void query.refetch()
+                }}
+              >
+                Повторить загрузку цен
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
       </div>
 
       {filteredItems.length === 0 ? (
@@ -301,41 +352,55 @@ export function BookingCabinBrowser({
             const checked = selectedIds.has(item.id)
             const staged = stagedIds.has(item.id)
             const checkboxId = `booking-cabin-${item.id}`
+            const price = pricesById.get(item.id)
             return (
-              <div className="absolute top-2 right-2 z-10 flex items-center gap-1">
-                {staged ? (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    className="h-8 bg-background/95 shadow-sm backdrop-blur-sm"
-                    aria-label={`Убрать добавленную бытовку ${item.number}`}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      onRemoveStaged?.(item)
-                    }}
-                  >
-                    Добавлена
-                  </Button>
-                ) : null}
-                <label
-                  htmlFor={checkboxId}
-                  className="flex cursor-pointer items-center rounded-md border bg-background/95 p-2 shadow-sm backdrop-blur-sm"
-                  onClick={(event) => event.stopPropagation()}
+              <>
+                <Badge
+                  variant="secondary"
+                  className="absolute bottom-2 left-2 max-w-[calc(100%-1rem)] whitespace-normal"
+                  aria-label={`Цена аренды бытовки ${item.number}`}
                 >
-                  <Checkbox
-                    id={checkboxId}
-                    checked={checked}
-                    disabled={staged}
-                    aria-label={
-                      staged
-                        ? `Бытовка ${item.number} добавлена`
-                        : `${checked ? "Снять выбор" : "Выбрать"} бытовки ${item.number}`
-                    }
-                    onCheckedChange={() => onToggle(item)}
-                  />
-                </label>
-              </div>
+                  {price
+                    ? formatMonthlyRentalPrice(price.monthlyPriceRubles)
+                    : failedPriceIds.has(item.id) || !accessToken.trim()
+                      ? "Цена недоступна"
+                      : "Загружаем цену…"}
+                </Badge>
+                <div className="absolute top-2 right-2 z-10 flex items-center gap-1">
+                  {staged ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      className="h-8 bg-background/95 shadow-sm backdrop-blur-sm"
+                      aria-label={`Убрать добавленную бытовку ${item.number}`}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onRemoveStaged?.(item)
+                      }}
+                    >
+                      Добавлена
+                    </Button>
+                  ) : null}
+                  <label
+                    htmlFor={checkboxId}
+                    className="flex cursor-pointer items-center rounded-md border bg-background/95 p-2 shadow-sm backdrop-blur-sm"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <Checkbox
+                      id={checkboxId}
+                      checked={checked}
+                      disabled={staged}
+                      aria-label={
+                        staged
+                          ? `Бытовка ${item.number} добавлена`
+                          : `${checked ? "Снять выбор" : "Выбрать"} бытовки ${item.number}`
+                      }
+                      onCheckedChange={() => onToggle(item)}
+                    />
+                  </label>
+                </div>
+              </>
             )
           }}
         />

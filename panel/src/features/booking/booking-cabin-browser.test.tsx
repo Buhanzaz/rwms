@@ -3,11 +3,21 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
 import { MemoryRouter } from "react-router-dom"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const coverApi = vi.hoisted(() => ({
   load: vi.fn().mockResolvedValue({ items: [] }),
 }))
+const priceApi = vi.hoisted(() => ({ getCabinRentalPrices: vi.fn() }))
+vi.mock(
+  "@/features/assistant/api/rental-pricing-api",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/features/assistant/api/rental-pricing-api")
+    >()),
+    ...priceApi,
+  })
+)
 
 vi.mock("@/features/rental-items/use-rental-item-covers", () => ({
   RENTAL_ITEM_COVERS_QUERY_KEY: ["rental-item-media-covers"],
@@ -63,7 +73,7 @@ vi.mock("@/features/rental-items/rental-items-grid-view", () => ({
           : undefined
       }
     >
-      {items.map((item) => (
+      {items.slice(0, 5).map((item) => (
         <div key={item.id}>{renderPhotoOverlay(item)}</div>
       ))}
     </div>
@@ -103,7 +113,7 @@ const item: RentalItemDto = {
   tags: [],
 }
 
-function renderBrowser(onToggle = vi.fn(), compact = false) {
+function renderBrowser(onToggle = vi.fn(), compact = false, items = [item]) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -114,7 +124,7 @@ function renderBrowser(onToggle = vi.fn(), compact = false) {
           accessToken="access-token"
           subjectId="manager-1"
           warehouseId={item.warehouseId}
-          items={[item]}
+          items={items}
           selectedIds={new Set()}
           search=""
           onSearchChange={vi.fn()}
@@ -126,12 +136,87 @@ function renderBrowser(onToggle = vi.fn(), compact = false) {
   )
 }
 
+beforeEach(() => {
+  priceApi.getCabinRentalPrices.mockImplementation(
+    async (_token, warehouseId, ids: string[]) => ({
+      warehouseId,
+      pricingVersion: 3,
+      cabins: ids.map((rentalItemId) => ({
+        rentalItemId,
+        rentalItemVersion: 1,
+        rentalTypeId: item.rentalTypeId,
+        categoryId: "77777777-7777-4777-8777-777777777777",
+        monthlyPriceRubles: "8000",
+      })),
+    })
+  )
+})
+
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
 })
 
 describe("BookingCabinBrowser", () => {
+  it("shows the logistics-owned monthly price on the selectable cabin card", async () => {
+    renderBrowser()
+    const price = await screen.findByLabelText("Цена аренды бытовки БЫТ-001")
+    await waitFor(() =>
+      expect(price.textContent?.replace(/\s/g, "")).toBe("8000₽/мес.")
+    )
+    expect(priceApi.getCabinRentalPrices).toHaveBeenCalledWith(
+      "access-token",
+      item.warehouseId,
+      [item.id],
+      expect.any(AbortSignal)
+    )
+  })
+  it("distinguishes an explicit zero tariff from a failed lookup and supports retry", async () => {
+    const user = userEvent.setup()
+    priceApi.getCabinRentalPrices.mockRejectedValueOnce(new Error("Нет связи"))
+    renderBrowser()
+    await screen.findByText("Цена недоступна")
+    expect(screen.queryByText("0 ₽/мес.")).toBeNull()
+    priceApi.getCabinRentalPrices.mockResolvedValueOnce({
+      warehouseId: item.warehouseId,
+      pricingVersion: 4,
+      cabins: [
+        {
+          rentalItemId: item.id,
+          rentalItemVersion: 4,
+          rentalTypeId: item.rentalTypeId,
+          categoryId: "77777777-7777-4777-8777-777777777777",
+          monthlyPriceRubles: "0",
+        },
+      ],
+    })
+    await user.click(
+      screen.getByRole("button", { name: "Повторить загрузку цен" })
+    )
+    await screen.findByText("0 ₽/мес.")
+    expect(screen.queryByText("Цена недоступна")).toBeNull()
+  })
+  it("loads catalog prices in bounded batches of at most 100", async () => {
+    const items = Array.from({ length: 201 }, (_, index) => ({
+      ...item,
+      id: `00000000-0000-0000-0000-${String(index + 1).padStart(12, "0")}`,
+      number: String(index + 1),
+    }))
+    renderBrowser(vi.fn(), false, items)
+    await waitFor(() =>
+      expect(priceApi.getCabinRentalPrices).toHaveBeenCalledTimes(3)
+    )
+    expect(
+      priceApi.getCabinRentalPrices.mock.calls.map((call) => call[2].length)
+    ).toEqual([100, 100, 1])
+    await waitFor(() =>
+      expect(
+        screen
+          .getByLabelText("Цена аренды бытовки 1")
+          .textContent?.replace(/\s/g, "")
+      ).toBe("8000₽/мес.")
+    )
+  })
   it("exposes only the seven booking filters and the grid presentation", () => {
     renderBrowser()
 

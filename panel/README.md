@@ -98,6 +98,11 @@ renames keep the UUID-bound price; deletions disappear on refresh (also on focus
 and every 30 seconds while the page is visible). Refresh preserves unsaved rows;
 a concurrently changed price requires explicit acceptance before editing again.
 Dependency failures are shown, never replaced by zero-price data.
+Manual booking catalog/selection cards read current informational monthly prices
+by cabin UUID from `/api/logistics/v1/cabins/rental-prices`, in independent batches
+of at most 100 scoped to the user and warehouse. A failed batch can be retried
+without hiding successful prices or changing the selection; a confirmed zero
+tariff is distinct from unavailable data. These reads do not freeze booking terms.
 
 The router exposes the operational panel for warehouse/equipment, rentals and
 orders, inventory, maintenance/acceptance, logistics, task board, assistant,

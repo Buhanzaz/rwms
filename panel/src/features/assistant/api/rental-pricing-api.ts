@@ -2,6 +2,20 @@ import { bearerRequest, invalidApiResponseError } from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 
 export const rentalPricingSettingsKey = ["rental-pricing-settings"] as const
+export const cabinRentalPricesKey = ["cabin-rental-prices"] as const
+
+export type CabinRentalPrice = {
+  rentalItemId: string
+  rentalItemVersion: number
+  rentalTypeId: string
+  categoryId: string
+  monthlyPriceRubles: string
+}
+export type CabinRentalPrices = {
+  warehouseId: string
+  pricingVersion: number
+  cabins: CabinRentalPrice[]
+}
 
 export type RentalPricingCategory = {
   categoryId: string
@@ -34,6 +48,11 @@ export function validMonthlyRentalPrice(value: string): boolean {
     /^(0|[1-9][0-9]{0,18})$/.test(value) &&
     BigInt(value) <= 9223372036854775807n
   )
+}
+
+export function formatMonthlyRentalPrice(value: string): string {
+  if (!validMonthlyRentalPrice(value)) invalid()
+  return `${new Intl.NumberFormat("ru-RU").format(BigInt(value))} ₽/мес.`
 }
 
 function invalid(): never {
@@ -160,4 +179,76 @@ export async function updateRentalPrice({
       }
     )
   )
+}
+
+/** Informational current prices, not a booking, payment or frozen commercial offer. */
+export async function getCabinRentalPrices(
+  accessToken: string,
+  warehouseId: string,
+  rentalItemIds: readonly string[],
+  signal?: AbortSignal
+): Promise<CabinRentalPrices> {
+  if (
+    rentalItemIds.length < 1 ||
+    rentalItemIds.length > 100 ||
+    new Set(rentalItemIds).size !== rentalItemIds.length
+  ) {
+    throw new Error("Запрос цен должен содержать от 1 до 100 разных бытовок.")
+  }
+  const body = record(
+    await bearerRequest<unknown>(
+      accessToken,
+      `${getGatewayRuntimeConfig().logisticsApiBaseUrl}/v1/cabins/rental-prices`,
+      {
+        method: "POST",
+        body: JSON.stringify({ warehouseId, rentalItemIds }),
+        signal,
+      }
+    )
+  )
+  if (
+    body.warehouseId !== warehouseId ||
+    typeof body.pricingVersion !== "number" ||
+    !Number.isSafeInteger(body.pricingVersion) ||
+    body.pricingVersion < 0
+  )
+    invalid()
+  const requested = new Set(rentalItemIds)
+  const seen = new Set<string>()
+  const cabins = list(body.cabins).map((value): CabinRentalPrice => {
+    const row = record(value)
+    for (const field of [
+      "rentalItemId",
+      "rentalTypeId",
+      "categoryId",
+    ] as const) {
+      if (
+        typeof row[field] !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          row[field]
+        )
+      )
+        invalid()
+    }
+    if (
+      typeof row.rentalItemVersion !== "number" ||
+      !Number.isSafeInteger(row.rentalItemVersion) ||
+      row.rentalItemVersion < 0 ||
+      typeof row.monthlyPriceRubles !== "string" ||
+      !validMonthlyRentalPrice(row.monthlyPriceRubles)
+    )
+      invalid()
+    const rentalItemId = row.rentalItemId as string
+    if (!requested.has(rentalItemId) || seen.has(rentalItemId)) invalid()
+    seen.add(rentalItemId)
+    return {
+      rentalItemId,
+      rentalItemVersion: row.rentalItemVersion,
+      rentalTypeId: row.rentalTypeId as string,
+      categoryId: row.categoryId as string,
+      monthlyPriceRubles: row.monthlyPriceRubles,
+    }
+  })
+  if (seen.size !== requested.size) invalid()
+  return { warehouseId, pricingVersion: body.pricingVersion, cabins }
 }
