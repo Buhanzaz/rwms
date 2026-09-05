@@ -50,6 +50,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.buhanzaz.rwms.rentalmanager.network.AssistantAvailableCabin
 import dev.buhanzaz.rwms.rentalmanager.network.AssistantCabinSearchGroup
 import dev.buhanzaz.rwms.rentalmanager.network.AssistantCabinSearchNotice
@@ -312,8 +314,10 @@ internal fun ChatConversationScreen(
     onAnswer: (String, String) -> Unit,
     onSelectionChange: (Set<String>) -> Unit = {},
     onPublishPresentation: () -> Unit = {},
+    onRefreshPrices: () -> Unit = {},
     onDismissNotice: () -> Unit,
 ) {
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { onRefreshPrices() }
     val detail = state.detail
     if (state.detailLoading && detail == null) {
         InlineProgress()
@@ -467,6 +471,10 @@ internal fun ChatConversationScreen(
                         updating = state.selectionUpdating,
                         publishing = state.presentationPublishing,
                         presentationLoading = state.presentationLoading,
+                        prices = state.rentalPrices,
+                        pricesLoading = state.rentalPricesLoading,
+                        pricesError = state.rentalPricesError,
+                        onRefreshPrices = onRefreshPrices,
                         publicationBlocked = state.presentation?.let(
                             ::presentationBlocksPublication,
                         ) ?: false,
@@ -529,6 +537,10 @@ private fun AssistantSelectionPanel(
     updating: Boolean,
     publishing: Boolean,
     presentationLoading: Boolean,
+    prices: Map<String, Long>,
+    pricesLoading: Boolean,
+    pricesError: String?,
+    onRefreshPrices: () -> Unit,
     publicationBlocked: Boolean,
     onSelectionChange: (Set<String>) -> Unit,
     onPublish: () -> Unit,
@@ -580,6 +592,12 @@ private fun AssistantSelectionPanel(
                     style = MaterialTheme.typography.labelLarge,
                 )
             }
+            if (pricesError != null) {
+                Text(pricesError, color = MaterialTheme.colorScheme.error)
+            }
+            OutlinedButton(onClick = onRefreshPrices, enabled = !pricesLoading) {
+                Text(if (pricesLoading) "Загружаем цены…" else "Обновить цены аренды")
+            }
             LazyColumn(
                 modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -593,6 +611,8 @@ private fun AssistantSelectionPanel(
                         cabins.forEach { cabin ->
                             SelectedCabinRow(
                                 cabin = cabin,
+                                monthlyPrice = prices[cabin.id],
+                                priceLoading = pricesLoading,
                                 enabled = !readOnly && !expired && !updating,
                                 onRemove = {
                                     onSelectionChange(selectedIds - cabin.id)
@@ -718,6 +738,8 @@ private fun presentationStateLabel(state: RentalPresentationState): String = whe
 @Composable
 private fun SelectedCabinRow(
     cabin: AssistantAvailableCabin,
+    monthlyPrice: Long?,
+    priceLoading: Boolean,
     enabled: Boolean,
     onRemove: () -> Unit,
 ) {
@@ -754,6 +776,12 @@ private fun SelectedCabinRow(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                Text(
+                    monthlyPrice?.let(::formatMonthlyRentalPrice)
+                        ?: if (priceLoading) "Загружаем цену…" else "Цена недоступна",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.testTag("rental-price-${cabin.id}"),
+                )
             }
         }
     }

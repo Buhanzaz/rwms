@@ -22,6 +22,11 @@ Russian version: [README.ru.md](README.ru.md).
   exact grouped selection through logistics-service and explicitly copy or share its public link.
   Selection and presentation retries keep stable actor-scoped idempotency keys and reread server
   state after an uncertain result or conflict.
+- Held cabin cards show current logistics-owned monthly prices, decoded as exact whole-RUB
+  strings. Prices reload for changed selections, when returning to the screen and on explicit
+  refresh. Missing/failed prices remain unavailable; actor, dialog, warehouse and request fences
+  prevent stale responses from replacing another selection or a newer price. These reads do not
+  change holds or book commercial terms.
 - An editable draft or saved order opens the one assistant conversation linked to that exact order.
   Reopening it reuses the server-owned conversation instead of creating a duplicate inquiry.
 - Order detail renders the authoritative selected cabins, requested equipment and rental terms from

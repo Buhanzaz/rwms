@@ -323,6 +323,7 @@ private fun ManagerNavigation(
                             onAnswer = chatViewModel::answerClarification,
                             onSelectionChange = chatViewModel::replaceSelection,
                             onPublishPresentation = chatViewModel::publishPresentation,
+                            onRefreshPrices = chatViewModel::refreshRentalPrices,
                             onDismissNotice = chatViewModel::dismissNotice,
                         )
                     }

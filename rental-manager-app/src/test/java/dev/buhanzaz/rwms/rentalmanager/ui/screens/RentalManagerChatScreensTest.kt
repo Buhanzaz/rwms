@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.rentalmanager.ui.screens
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.isToggleable
@@ -54,6 +55,49 @@ import org.robolectric.annotation.Config
 class RentalManagerChatScreensTest {
     @get:Rule
     val compose = createComposeRule()
+
+    @Test
+    fun `selected cabins show exact monthly rent and distinguish zero from loading and failure`() {
+        var refreshes = 0
+        val state = mutableStateOf(selectionChatState().copy(
+            rentalPrices = mapOf(RENTAL_ITEM_A to 0L, RENTAL_ITEM_B to 8_000L),
+        ))
+        compose.setContent {
+            RentalManagerTheme {
+                ChatConversationScreen(
+                    state = state.value,
+                    onRetry = {},
+                    onArchive = {},
+                    onSend = {},
+                    onAnswer = { _, _ -> },
+                    onRefreshPrices = { refreshes += 1 },
+                    onDismissNotice = {},
+                )
+            }
+        }
+        compose.onNodeWithTag(CHAT_CONVERSATION_CONTENT_TAG).performScrollToKey("current-selection")
+        compose.onNodeWithTag("rental-price-$RENTAL_ITEM_A").assertTextEquals("0 ₽/мес.")
+        compose.onNodeWithTag("rental-price-$RENTAL_ITEM_B").assertTextEquals("8 000 ₽/мес.")
+        compose.runOnIdle {
+            state.value = state.value.copy(rentalPrices = emptyMap(), rentalPricesLoading = true)
+        }
+        compose.onNodeWithTag("rental-price-$RENTAL_ITEM_A").assertTextEquals("Загружаем цену…")
+        compose.onNodeWithText("Загружаем цены…").assertIsNotEnabled()
+        compose.runOnIdle {
+            state.value = state.value.copy(rentalPricesLoading = false, rentalPricesError = "Сервис недоступен")
+        }
+        compose.onNodeWithTag("rental-price-$RENTAL_ITEM_A").assertTextEquals("Цена недоступна")
+        compose.onNodeWithText("Сервис недоступен").assertExists()
+        val before = refreshes
+        compose.onNodeWithText("Обновить цены аренды").performClick()
+        compose.runOnIdle { assertThat(refreshes).isEqualTo(before + 1) }
+    }
+
+    @Test
+    fun `monthly formatter preserves all long digits`() {
+        assertThat(formatMonthlyRentalPrice(Long.MAX_VALUE))
+            .isEqualTo("9 223 372 036 854 775 807 ₽/мес.")
+    }
 
     @Test
     fun `conversation filter separates active dialogs from history`() {

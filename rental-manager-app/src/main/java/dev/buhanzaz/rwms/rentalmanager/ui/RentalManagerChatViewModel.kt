@@ -10,6 +10,8 @@ import dev.buhanzaz.rwms.rentalmanager.auth.RentalManagerAuthState
 import dev.buhanzaz.rwms.rentalmanager.data.AssistantRepository
 import dev.buhanzaz.rwms.rentalmanager.data.RentalPresentationDataSource
 import dev.buhanzaz.rwms.rentalmanager.data.RentalPresentationRepository
+import dev.buhanzaz.rwms.rentalmanager.data.RentalPricingDataSource
+import dev.buhanzaz.rwms.rentalmanager.data.RentalPricingRepository
 import dev.buhanzaz.rwms.rentalmanager.network.AssistantCabinSearchGroup
 import dev.buhanzaz.rwms.rentalmanager.network.AssistantClarificationAnswered
 import dev.buhanzaz.rwms.rentalmanager.network.AssistantClarificationQuestion
@@ -42,6 +44,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
@@ -60,6 +64,9 @@ data class RentalManagerChatUiState(
     val presentation: RentalPresentationDto? = null,
     val presentationLoading: Boolean = false,
     val presentationPublishing: Boolean = false,
+    val rentalPrices: Map<String, Long> = emptyMap(),
+    val rentalPricesLoading: Boolean = false,
+    val rentalPricesError: String? = null,
     val liveUserContent: String? = null,
     val liveAssistantContent: String = "",
     val toolRunning: Boolean = false,
@@ -77,6 +84,7 @@ sealed interface RentalManagerChatNavigationEvent {
 class RentalManagerChatViewModel internal constructor(
     private val repository: AssistantRepository,
     private val presentations: RentalPresentationDataSource,
+    private val pricing: RentalPricingDataSource,
     private val authState: StateFlow<RentalManagerAuthState>,
     private val invalidateSession: suspend (String) -> Unit,
     private val savedStateHandle: SavedStateHandle,
@@ -87,12 +95,20 @@ class RentalManagerChatViewModel internal constructor(
     private var listJob: Job? = null
     private var detailJob: Job? = null
     private var presentationJob: Job? = null
+    private var pricingJob: Job? = null
+    private var pricingRequest = 0L
+    private var lastPricingSelection: CabinPriceSelection? = null
     private var commandJob: Job? = null
 
     val state = mutableState.asStateFlow()
     val events: SharedFlow<RentalManagerChatNavigationEvent> = mutableEvents.asSharedFlow()
 
     init {
+        viewModelScope.launch {
+            mutableState.map(::priceSelection).distinctUntilChanged().collect {
+                ensureRentalPrices()
+            }
+        }
         viewModelScope.launch {
             authState.collectLatest { current ->
                 if (current is RentalManagerAuthState.SignedOut ||
@@ -127,6 +143,51 @@ class RentalManagerChatViewModel internal constructor(
 
     fun dismissNotice() {
         mutableState.update { it.copy(notice = null) }
+    }
+
+    /** Reloads informational prices only, fencing late results by actor, dialog and selection. */
+    fun refreshRentalPrices() {
+        val request = ++pricingRequest
+        pricingJob?.cancel()
+        val selection = priceSelection(mutableState.value)
+        lastPricingSelection = selection
+        mutableState.update {
+            it.copy(
+                rentalPrices = emptyMap(),
+                rentalPricesLoading = selection != null,
+                rentalPricesError = null,
+            )
+        }
+        if (selection == null) return
+        pricingJob = viewModelScope.launch {
+            runCatching { pricing.prices(selection.warehouseId, selection.cabinIds) }
+                .onSuccess { prices ->
+                    if (pricingRequest == request && priceSelection(mutableState.value) == selection) {
+                        mutableState.update {
+                            it.copy(rentalPrices = prices, rentalPricesLoading = false)
+                        }
+                    }
+                }
+                .onFailure { failure ->
+                    if (failure is CancellationException) throw failure
+                    if (pricingRequest == request && priceSelection(mutableState.value) == selection) {
+                        val message = handleRentalManagerFailure(
+                            failure = failure,
+                            messageFor = { "Цены аренды недоступны. Повторите загрузку." },
+                            invalidate = invalidateSession,
+                        )
+                        if (pricingRequest == request && priceSelection(mutableState.value) == selection) {
+                            mutableState.update {
+                                it.copy(rentalPricesLoading = false, rentalPricesError = message)
+                            }
+                        }
+                    }
+                }
+        }
+    }
+
+    private fun ensureRentalPrices() {
+        if (priceSelection(mutableState.value) != lastPricingSelection) refreshRentalPrices()
     }
 
     fun refreshConversations() {
@@ -181,6 +242,9 @@ class RentalManagerChatViewModel internal constructor(
             return
         }
         detailJob?.cancel()
+        pricingRequest += 1
+        pricingJob?.cancel()
+        lastPricingSelection = null
         mutableState.update {
             it.copy(
                 selectedConversationId = canonicalConversationId,
@@ -193,6 +257,9 @@ class RentalManagerChatViewModel internal constructor(
                 presentation = null,
                 presentationLoading = false,
                 presentationPublishing = false,
+                rentalPrices = emptyMap(),
+                rentalPricesLoading = false,
+                rentalPricesError = null,
                 liveUserContent = null,
                 liveAssistantContent = "",
                 toolRunning = false,
@@ -775,6 +842,7 @@ class RentalManagerChatViewModel internal constructor(
                         it.copy(detail = detail, detailLoading = false, notice = null)
                     }
                     loadPresentation(detail.conversation.rentalInquiryId, conversationId)
+                    ensureRentalPrices()
                 }
             }
             .onFailure { failure ->
@@ -864,13 +932,17 @@ class RentalManagerChatViewModel internal constructor(
     }
 
     private fun cancelWork() {
+        pricingRequest += 1
+        lastPricingSelection = null
         listJob?.cancel()
         detailJob?.cancel()
         presentationJob?.cancel()
+        pricingJob?.cancel()
         commandJob?.cancel()
         listJob = null
         detailJob = null
         presentationJob = null
+        pricingJob = null
         commandJob = null
     }
 
@@ -888,6 +960,7 @@ class RentalManagerChatViewModel internal constructor(
                         problemMessage = backend::problemMessage,
                     ),
                     presentations = RentalPresentationRepository(backend),
+                    pricing = RentalPricingRepository(backend.pricingApi),
                     authState = backend.auth.state,
                     invalidateSession = backend.auth::invalidate,
                     savedStateHandle = createSavedStateHandle(),
@@ -895,6 +968,25 @@ class RentalManagerChatViewModel internal constructor(
             }
         }
     }
+}
+
+/** Non-persistent read identity; no tariff may leak into another actor, dialog or warehouse. */
+private data class CabinPriceSelection(
+    val actorId: String,
+    val conversationId: String,
+    val warehouseId: String,
+    val cabinIds: List<String>,
+)
+
+private fun priceSelection(state: RentalManagerChatUiState): CabinPriceSelection? {
+    val actorId = state.actorId ?: return null
+    val detail = state.detail ?: return null
+    val selection = detail.currentSelection ?: return null
+    val warehouseId = selection.warehouseId ?: return null
+    if (selection.rentalItemIds.isEmpty()) return null
+    return CabinPriceSelection(
+        actorId, detail.conversation.id, warehouseId, selection.rentalItemIds.sorted(),
+    )
 }
 
 private fun pendingClarification(

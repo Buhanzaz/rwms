@@ -68,7 +68,7 @@ class RentalManagerBackend(
     private val applicationContext = context.applicationContext
     private val apiBaseUrl = "${publicBaseUrl.trimEnd('/')}/"
     private val moshi by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
-        Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
+        Moshi.Builder().add(RentalMonthlyPriceAdapter()).addLast(KotlinJsonAdapterFactory()).build()
     }
 
     val auth = RentalManagerAuthRepository(
@@ -122,6 +122,15 @@ class RentalManagerBackend(
             .addConverterFactory(MoshiConverterFactory.create(moshi))
             .build()
             .create(AssistantApi::class.java)
+    }
+
+    val pricingApi: RentalPricingApi by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        Retrofit.Builder()
+            .baseUrl(apiBaseUrl)
+            .client(client)
+            .addConverterFactory(MoshiConverterFactory.create(moshi))
+            .build()
+            .create(RentalPricingApi::class.java)
     }
 
     fun problemMessage(exception: HttpException): String {

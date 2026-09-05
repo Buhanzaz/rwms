@@ -8,6 +8,7 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import dev.buhanzaz.rwms.rentalmanager.auth.RentalManagerAuthState
 import dev.buhanzaz.rwms.rentalmanager.data.AssistantRepository
 import dev.buhanzaz.rwms.rentalmanager.data.RentalPresentationDataSource
+import dev.buhanzaz.rwms.rentalmanager.data.RentalPricingDataSource
 import dev.buhanzaz.rwms.rentalmanager.network.AssistantApi
 import dev.buhanzaz.rwms.rentalmanager.network.AssistantAvailableCabin
 import dev.buhanzaz.rwms.rentalmanager.network.AssistantCabinFilterSuggestions
@@ -41,6 +42,9 @@ import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -527,9 +531,120 @@ class RentalManagerChatViewModelTest {
         assertThat(fixture.viewModel.state.value).isEqualTo(RentalManagerChatUiState())
     }
 
+    @Test
+    fun `selection prices load once and explicit refresh observes changed tariff`() = runTest {
+        val fixture = fixture()
+        fixture.api.detailResponse = detailWithSelection(listOf(RENTAL_ITEM_A), SEARCH_RESULT)
+        fixture.viewModel.activate(ACTOR_A)
+        fixture.viewModel.openConversation(CONVERSATION_ID)
+        advanceUntilIdle()
+        assertThat(fixture.pricing.calls).hasSize(1)
+        assertThat(fixture.viewModel.state.value.rentalPrices).containsEntry(RENTAL_ITEM_A, 0L)
+
+        fixture.pricing.amount = Long.MAX_VALUE
+        fixture.viewModel.refreshRentalPrices()
+        advanceUntilIdle()
+        assertThat(fixture.pricing.calls).hasSize(2)
+        assertThat(fixture.viewModel.state.value.rentalPrices)
+            .containsEntry(RENTAL_ITEM_A, Long.MAX_VALUE)
+        assertThat(fixture.viewModel.state.value.rentalPricesLoading).isFalse()
+        fixture.pricing.amount = 10_000
+        fixture.viewModel.openConversation(CONVERSATION_ID)
+        advanceUntilIdle()
+        assertThat(fixture.pricing.calls).hasSize(3)
+        assertThat(fixture.viewModel.state.value.rentalPrices).containsEntry(RENTAL_ITEM_A, 10_000L)
+    }
+
+    @Test
+    fun `failed prices preserve selection without displaying a fabricated zero`() = runTest {
+        val fixture = fixture()
+        fixture.api.detailResponse = detailWithSelection(listOf(RENTAL_ITEM_A), SEARCH_RESULT)
+        fixture.pricing.failure = IOException("offline")
+        fixture.viewModel.activate(ACTOR_A)
+        fixture.viewModel.openConversation(CONVERSATION_ID)
+        advanceUntilIdle()
+        assertThat(fixture.viewModel.state.value.rentalPrices).isEmpty()
+        assertThat(fixture.viewModel.state.value.rentalPricesError).contains("недоступны")
+        assertThat(fixture.viewModel.state.value.detail?.currentSelection?.rentalItemIds)
+            .containsExactly(RENTAL_ITEM_A)
+
+        fixture.pricing.failure = null
+        fixture.pricing.amount = 8_000
+        fixture.viewModel.refreshRentalPrices()
+        advanceUntilIdle()
+        assertThat(fixture.viewModel.state.value.rentalPrices).containsEntry(RENTAL_ITEM_A, 8_000L)
+        assertThat(fixture.viewModel.state.value.rentalPricesError).isNull()
+    }
+
+    @Test
+    fun `late noncancellable price result cannot enter another actor state`() = runTest {
+        val fixture = fixture()
+        val pending = CompletableDeferred<Map<String, Long>>()
+        fixture.pricing.pending = pending
+        fixture.api.detailResponse = detailWithSelection(listOf(RENTAL_ITEM_A), SEARCH_RESULT)
+        fixture.viewModel.activate(ACTOR_A)
+        fixture.viewModel.openConversation(CONVERSATION_ID)
+        runCurrent()
+        assertThat(fixture.viewModel.state.value.rentalPricesLoading).isTrue()
+
+        fixture.viewModel.activate(ACTOR_B)
+        runCurrent()
+        pending.complete(mapOf(RENTAL_ITEM_A to 8_000L))
+        advanceUntilIdle()
+        assertThat(fixture.viewModel.state.value.actorId).isEqualTo(ACTOR_B)
+        assertThat(fixture.viewModel.state.value.rentalPrices).isEmpty()
+        assertThat(fixture.viewModel.state.value.rentalPricesLoading).isFalse()
+    }
+
+    @Test
+    fun `warehouse change reloads prices and clearing selection clears price state`() = runTest {
+        val fixture = fixture()
+        fixture.api.detailResponse = detailWithSelection(listOf(RENTAL_ITEM_A), SEARCH_RESULT)
+        fixture.viewModel.activate(ACTOR_A)
+        fixture.viewModel.openConversation(CONVERSATION_ID)
+        advanceUntilIdle()
+        val otherWarehouse = "30000000-0000-4000-8000-000000000099"
+        fixture.api.detailResponse = fixture.api.detailResponse.copy(
+            currentSelection = fixture.api.detailResponse.currentSelection?.let { selection ->
+                selection.copy(
+                    warehouseId = otherWarehouse,
+                    items = selection.items.map { it.copy(warehouseId = otherWarehouse) },
+                )
+            },
+        )
+        fixture.viewModel.openConversation(CONVERSATION_ID)
+        advanceUntilIdle()
+        assertThat(fixture.pricing.calls.last().first).isEqualTo(otherWarehouse)
+
+        fixture.api.detailResponse = detail()
+        fixture.viewModel.openConversation(CONVERSATION_ID)
+        advanceUntilIdle()
+        assertThat(fixture.viewModel.state.value.rentalPrices).isEmpty()
+        assertThat(fixture.pricing.calls).hasSize(2)
+    }
+
+    @Test
+    fun `superseded price refresh cannot replace a newer price for the same selection`() = runTest {
+        val fixture = fixture()
+        val pending = CompletableDeferred<Map<String, Long>>()
+        fixture.pricing.pending = pending
+        fixture.api.detailResponse = detailWithSelection(listOf(RENTAL_ITEM_A), SEARCH_RESULT)
+        fixture.viewModel.activate(ACTOR_A)
+        fixture.viewModel.openConversation(CONVERSATION_ID)
+        runCurrent()
+        fixture.pricing.pending = null
+        fixture.pricing.amount = 12_000
+        fixture.viewModel.refreshRentalPrices()
+        runCurrent()
+        pending.complete(mapOf(RENTAL_ITEM_A to 8_000L))
+        advanceUntilIdle()
+        assertThat(fixture.viewModel.state.value.rentalPrices).containsEntry(RENTAL_ITEM_A, 12_000L)
+    }
+
     private fun fixture(): ChatFixture {
         val api = FakeAssistantApi()
         val presentations = FakeRentalPresentationDataSource()
+        val pricing = FakeRentalPricingDataSource()
         val authState = MutableStateFlow<RentalManagerAuthState>(RentalManagerAuthState.SignedIn)
         val invalidations = mutableListOf<String>()
         val repository = AssistantRepository(
@@ -540,11 +655,13 @@ class RentalManagerChatViewModelTest {
         return ChatFixture(
             api = api,
             presentations = presentations,
+            pricing = pricing,
             authState = authState,
             invalidations = invalidations,
             viewModel = RentalManagerChatViewModel(
                 repository = repository,
                 presentations = presentations,
+                pricing = pricing,
                 authState = authState,
                 invalidateSession = { invalidations += it },
                 savedStateHandle = SavedStateHandle(),
@@ -574,10 +691,25 @@ class RentalManagerChatViewModelTest {
 private data class ChatFixture(
     val api: FakeAssistantApi,
     val presentations: FakeRentalPresentationDataSource,
+    val pricing: FakeRentalPricingDataSource,
     val authState: MutableStateFlow<RentalManagerAuthState>,
     val invalidations: MutableList<String>,
     val viewModel: RentalManagerChatViewModel,
 )
+
+private class FakeRentalPricingDataSource : RentalPricingDataSource {
+    var amount = 0L
+    var failure: Throwable? = null
+    var pending: CompletableDeferred<Map<String, Long>>? = null
+    val calls = mutableListOf<Pair<String, List<String>>>()
+
+    override suspend fun prices(warehouseId: String, cabinIds: List<String>): Map<String, Long> {
+        calls += warehouseId to cabinIds
+        failure?.let { throw it }
+        pending?.let { return withContext(NonCancellable) { it.await() } }
+        return cabinIds.associateWith { amount }
+    }
+}
 
 private class FakeAssistantApi : AssistantApi {
     var conversationsResponse: List<AssistantConversation> = listOf(BASE_CONVERSATION)
