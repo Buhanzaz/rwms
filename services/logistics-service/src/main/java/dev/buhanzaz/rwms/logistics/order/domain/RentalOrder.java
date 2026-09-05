@@ -78,6 +78,9 @@ public class RentalOrder {
   @Column(name = "payment_confirmed_by_subject_id")
   private UUID paymentConfirmedBySubjectId;
 
+  @Column(name = "payment_confirmed_by_booking_id")
+  private UUID paymentConfirmedByBookingId;
+
   @ManyToOne(fetch = FetchType.LAZY, optional = false)
   @JoinColumn(name = "client_id", nullable = false)
   private OrderClient client;
@@ -353,6 +356,26 @@ public class RentalOrder {
       RentalOrderPaymentSource source, UUID actorSubjectId, OffsetDateTime timestamp) {
     Objects.requireNonNull(source, "source");
     Objects.requireNonNull(actorSubjectId, "actorSubjectId");
+    if (source == RentalOrderPaymentSource.PRESENTATION_TEST) {
+      throw new IllegalArgumentException("Presentation payment requires booking provenance");
+    }
+    confirmPayment(source, actorSubjectId, null, timestamp);
+  }
+
+  /** Records a token-authorized test confirmation without impersonating a logged-in subject. */
+  public void confirmPresentationPayment(UUID bookingId, OffsetDateTime timestamp) {
+    confirmPayment(
+        RentalOrderPaymentSource.PRESENTATION_TEST,
+        null,
+        Objects.requireNonNull(bookingId, "bookingId"),
+        timestamp);
+  }
+
+  private void confirmPayment(
+      RentalOrderPaymentSource source,
+      UUID actorSubjectId,
+      UUID bookingId,
+      OffsetDateTime timestamp) {
     Objects.requireNonNull(timestamp, "timestamp");
     if (status != RentalOrderStatus.SAVED
         || paymentState != RentalOrderPaymentState.PENDING
@@ -363,6 +386,7 @@ public class RentalOrder {
     paymentState = RentalOrderPaymentState.CONFIRMED;
     paymentSource = source;
     paymentConfirmedBySubjectId = actorSubjectId;
+    paymentConfirmedByBookingId = bookingId;
     paymentResolvedAt = timestamp;
     updatedAt = nextUpdatedAt();
   }

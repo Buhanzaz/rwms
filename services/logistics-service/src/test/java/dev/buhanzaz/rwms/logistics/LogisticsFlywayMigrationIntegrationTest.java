@@ -283,7 +283,8 @@ class LogisticsFlywayMigrationIntegrationTest {
         .containsEntry("payment_expires_at", null)
         .containsEntry("payment_resolved_at", null)
         .containsEntry("payment_source", null)
-        .containsEntry("payment_confirmed_by_subject_id", null);
+        .containsEntry("payment_confirmed_by_subject_id", null)
+        .containsEntry("payment_confirmed_by_booking_id", null);
     assertThat(toRegclass("idx_rental_order_pending_payment")).isNotNull();
     assertThatThrownBy(
             () ->
@@ -328,6 +329,27 @@ class LogisticsFlywayMigrationIntegrationTest {
             + " payment_source='MANAGER_CONFIRMATION', payment_confirmed_by_subject_id=? where id=?",
         subjectId,
         orderId);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update rental_order set payment_source='PRESENTATION_TEST' where id=?",
+                    orderId))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update rental_order set payment_source='PRESENTATION_TEST',"
+                        + " payment_confirmed_by_subject_id=null where id=?",
+                    orderId))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update rental_order set payment_source='PRESENTATION_TEST',"
+                        + " payment_confirmed_by_subject_id=null,payment_confirmed_by_booking_id=? where id=?",
+                    UUID.randomUUID(),
+                    orderId))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
     assertJpaValidationStarts();
   }
 

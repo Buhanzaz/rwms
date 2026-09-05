@@ -28,7 +28,9 @@ class RentalOrderPaymentReservationTest {
   }
 
   @ParameterizedTest
-  @EnumSource(RentalOrderPaymentSource.class)
+  @EnumSource(
+      value = RentalOrderPaymentSource.class,
+      names = {"CUSTOMER_TEST", "MANAGER_CONFIRMATION"})
   void explicitConfirmationWinsBeforeDeadlineAndCannotBeExpired(RentalOrderPaymentSource source) {
     RentalOrder order = saved();
     UUID actorId = UUID.randomUUID();
@@ -39,9 +41,39 @@ class RentalOrderPaymentReservationTest {
     assertThat(order.getPaymentResolvedAt()).isEqualTo(confirmedAt);
     assertThat(order.getPaymentSource()).isEqualTo(source);
     assertThat(order.getPaymentConfirmedBySubjectId()).isEqualTo(actorId);
+    assertThat(order.getPaymentConfirmedByBookingId()).isNull();
     assertThat(order.beginPaymentExpiry(START.plusMinutes(6))).isFalse();
     assertThat(order.isPaymentConfirmedOrNotRequired()).isTrue();
     assertThat(order.fulfill()).isTrue();
+  }
+
+  @Test
+  void presentationConfirmationRetainsBookingProvenanceWithoutInventingAUser() {
+    RentalOrder order = saved();
+    UUID bookingId = UUID.randomUUID();
+    order.startPaymentReservation(START);
+    assertThatThrownBy(
+            () ->
+                order.confirmPayment(RentalOrderPaymentSource.PRESENTATION_TEST, bookingId, START))
+        .hasMessage("Presentation payment requires booking provenance");
+    assertThat(order.getPaymentState()).isEqualTo(RentalOrderPaymentState.PENDING);
+    order.confirmPresentationPayment(bookingId, START.plusMinutes(1));
+    assertThat(order.getPaymentState()).isEqualTo(RentalOrderPaymentState.CONFIRMED);
+    assertThat(order.getPaymentSource()).isEqualTo(RentalOrderPaymentSource.PRESENTATION_TEST);
+    assertThat(order.getPaymentConfirmedBySubjectId()).isNull();
+    assertThat(order.getPaymentConfirmedByBookingId()).isEqualTo(bookingId);
+    assertThat(order.beginPaymentExpiry(START.plusMinutes(6))).isFalse();
+    assertThat(order.fulfill()).isTrue();
+  }
+
+  @Test
+  void publicConfirmationCannotBypassTheDeadline() {
+    RentalOrder order = saved();
+    order.startPaymentReservation(START);
+    assertThatThrownBy(
+            () -> order.confirmPresentationPayment(UUID.randomUUID(), START.plusMinutes(5)))
+        .hasMessage("Payment reservation cannot be confirmed");
+    assertThat(order.getPaymentConfirmedByBookingId()).isNull();
   }
 
   @Test

@@ -926,6 +926,11 @@ input and return `ORDER_PAYMENT_REQUIRED`; existing null-payment orders keep the
 Evidence: [`payment admission`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/domain/RentalOrderPaymentState.java),
 [`planning owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderPlanningIntegrationService.java).
 
+Public-link test confirmation uses `PRESENTATION_TEST` and the exact presentation booking ID,
+without impersonating a user. V105 enforces exclusive booking/subject payment provenance and
+retains the same strict five-minute deadline for all sources.
+Evidence: [`V105`](../../services/logistics-service/src/main/resources/db/migration/V105__presentation_payment_provenance.sql).
+
 Public return, shipment and transfer list reads preserve their array payload but
 are bounded to `page/size` with a maximum of 100 documents. Pagination metadata
 is carried in fixed response headers, and all lines for one document page are

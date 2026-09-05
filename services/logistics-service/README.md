@@ -104,6 +104,10 @@ fulfillment before confirmation; completed expiry requires validated release rec
 caller. Historical rows retain null evidence and their previous admission. This additive storage
 step does not itself start timers or collect money.
 
+V105 distinguishes public-link test confirmation as `PRESENTATION_TEST`, attributed to the exact
+presentation booking, never an invented user or manager. Database constraints enforce exclusive
+subject-versus-booking provenance; the same strict deadline applies to all confirmation sources.
+
 V101 extends the existing order mutation recovery with `EXPIRE_UNPAID_ORDER`. A database-time
 claim locks a due unpaid order, marks it `EXPIRING`, and persists `READ_UNITS` before any remote
 call. The validated snapshot, cabin release and empty furniture replacement are checkpointed
