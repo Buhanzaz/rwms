@@ -25,6 +25,7 @@ import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderEquipmentRequirement;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderUnitTerm;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderQuotedPrice;
 import dev.buhanzaz.rwms.logistics.order.repository.OrderClientRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderEquipmentRequirementRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
@@ -313,7 +314,8 @@ class ShipmentWorkflowSagaIntegrationTest {
     order.selectWarehouse(WAREHOUSE);
     order.saveForFulfillment();
     order = orders.saveAndFlush(order);
-    rentalTerms.saveAndFlush(RentalOrderUnitTerm.create(order, ASSET, 1));
+    rentalTerms.saveAndFlush(
+        RentalOrderUnitTerm.create(order, ASSET, 1, new RentalOrderQuotedPrice(null, null)));
     equipmentRequirements.saveAndFlush(
         RentalOrderEquipmentRequirement.create(order, ASSET, EQUIPMENT, "Стол", 2));
     LogisticsDependencyGateway.OrderUnitReservation reservation = reservation(order.getId());
@@ -495,7 +497,8 @@ class ShipmentWorkflowSagaIntegrationTest {
     order.selectWarehouse(WAREHOUSE);
     order.saveForFulfillment();
     order = orders.saveAndFlush(order);
-    rentalTerms.saveAndFlush(RentalOrderUnitTerm.create(order, ASSET, 1));
+    rentalTerms.saveAndFlush(
+        RentalOrderUnitTerm.create(order, ASSET, 1, new RentalOrderQuotedPrice(null, null)));
     LogisticsDependencyGateway.OrderUnitReservation sourceReservation =
         reservation(order.getId(), INVENTORY_SOURCE);
     CreateOrderRentalShipmentRequest request =
@@ -646,7 +649,8 @@ class ShipmentWorkflowSagaIntegrationTest {
     order.selectWarehouse(WAREHOUSE);
     order.saveForFulfillment();
     order = orders.saveAndFlush(order);
-    rentalTerms.saveAndFlush(RentalOrderUnitTerm.create(order, ASSET, 1));
+    rentalTerms.saveAndFlush(
+        RentalOrderUnitTerm.create(order, ASSET, 1, new RentalOrderQuotedPrice(null, null)));
     equipmentRequirements.saveAndFlush(
         RentalOrderEquipmentRequirement.create(order, ASSET, EQUIPMENT, "Стол", 2));
     LogisticsDependencyGateway.OrderUnitReservation activeReservation = reservation(order.getId());

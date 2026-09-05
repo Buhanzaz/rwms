@@ -12,6 +12,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import jakarta.persistence.Version;
+import jakarta.validation.constraints.PositiveOrZero;
 import java.sql.Types;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -32,6 +33,8 @@ import org.hibernate.proxy.HibernateProxy;
  * cabins into several shipments, while each cabin belongs to exactly one active shipment at a time.
  * The linked shipment identifier is a local immutable reference used to prevent a cabin from
  * silently appearing in two shipment documents.
+ * The quoted monthly price belongs to the originally selected presentation and survives duration
+ * changes and same-order replacements; a historical unknown price is never inferred from tariffs.
  */
 @Entity
 @Table(
@@ -64,6 +67,14 @@ public class RentalOrderUnitTerm {
 
   @Column(name = "rental_months", nullable = false)
   private long rentalMonths;
+
+  @PositiveOrZero
+  @Column(name = "pricing_version", updatable = false)
+  private Long pricingVersion;
+
+  @PositiveOrZero
+  @Column(name = "monthly_price_rubles", updatable = false)
+  private Long monthlyPriceRubles;
 
   /** The shipment that currently owns this cabin, if a shipment has been created. */
   @Column(name = "rental_shipment_id")
@@ -104,11 +115,14 @@ public class RentalOrderUnitTerm {
   private String inventoryFinalPlanSha256;
 
   public static RentalOrderUnitTerm create(
-      RentalOrder order, UUID rentalItemId, long rentalMonths) {
+      RentalOrder order, UUID rentalItemId, long rentalMonths, RentalOrderQuotedPrice quotedPrice) {
     RentalOrderUnitTerm term = new RentalOrderUnitTerm();
     term.order = Objects.requireNonNull(order, "order");
     term.rentalItemId = Objects.requireNonNull(rentalItemId, "rentalItemId");
     term.rentalMonths = requirePositiveMonths(rentalMonths);
+    RentalOrderQuotedPrice price = Objects.requireNonNull(quotedPrice, "quotedPrice");
+    term.pricingVersion = price.pricingVersion();
+    term.monthlyPriceRubles = price.monthlyPriceRubles();
     term.createdAt = now();
     term.updatedAt = term.createdAt;
     return term;

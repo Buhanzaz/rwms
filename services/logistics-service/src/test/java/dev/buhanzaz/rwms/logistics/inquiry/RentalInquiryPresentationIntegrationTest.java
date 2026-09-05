@@ -3444,8 +3444,50 @@ class RentalInquiryPresentationIntegrationTest {
         presentations.publicPresentation(token(sent)).groups().getFirst().cabins().getFirst();
     assertThat(cabin.monthlyPriceRubles()).isNull();
     assertThat(cabin.pricingVersion()).isNull();
+    var booked = bookings.confirm(token(sent), UUID.randomUUID(), confirmation(CABIN_1));
+    assertThat(booked.state()).isEqualTo("COMPLETED");
+    assertThat(
+            jdbc.queryForMap(
+                "select pricing_version, monthly_price_rubles from rental_order_unit_term where order_id=?",
+                booked.orderId()))
+        .containsEntry("pricing_version", null)
+        .containsEntry("monthly_price_rubles", null);
     assertThatThrownBy(() -> jdbc.update("update client_presentation_item set pricing_version=1"))
         .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+  }
+
+  @Test
+  void bookingCapturesSentPriceWithoutReadingTodaysTariffAndReplayCannotReprice() {
+    jdbc.update(
+        "insert into rental_pricing_rate values ('00000000-0000-0000-0000-000000000001', ?, ?, ?)",
+        PRICE_TYPE,
+        PRICE_CATEGORY,
+        Long.MAX_VALUE);
+    jdbc.update("update rental_pricing_settings set version=4");
+    ClientPresentationResponse sent = publish(createInquiry().id(), List.of(CABIN_1));
+    jdbc.update("update rental_pricing_rate set monthly_price_rubles=9500");
+    jdbc.update("update rental_pricing_settings set version=5");
+    clearInvocations(dependencies);
+    UUID key = UUID.randomUUID();
+    var booked = bookings.confirm(token(sent), key, confirmation(CABIN_1, 2L));
+    assertThat(booked.state()).isEqualTo("COMPLETED");
+    assertThat(
+            jdbc.queryForMap(
+                "select rental_months,pricing_version,monthly_price_rubles from rental_order_unit_term where order_id=?",
+                booked.orderId()))
+        .containsEntry("rental_months", 2L)
+        .containsEntry("pricing_version", 4L)
+        .containsEntry("monthly_price_rubles", Long.MAX_VALUE);
+    jdbc.update("update rental_pricing_rate set monthly_price_rubles=1");
+    assertThat(bookings.confirm(token(sent), key, confirmation(CABIN_1, 2L)).orderId())
+        .isEqualTo(booked.orderId());
+    assertThat(
+            jdbc.queryForObject(
+                "select monthly_price_rubles from rental_order_unit_term where order_id=?",
+                Long.class,
+                booked.orderId()))
+        .isEqualTo(Long.MAX_VALUE);
+    verify(dependencies, never()).readCabinPricingReferences(any(), anyList());
   }
 
   @Test

@@ -8,12 +8,14 @@ import dev.buhanzaz.rwms.logistics.inquiry.domain.ClientPresentationMode;
 import dev.buhanzaz.rwms.logistics.inquiry.domain.PresentationBooking;
 import dev.buhanzaz.rwms.logistics.inquiry.domain.RentalInquiry;
 import dev.buhanzaz.rwms.logistics.inquiry.eventing.RentalInquiryBookedOutboxStore;
+import dev.buhanzaz.rwms.logistics.inquiry.repository.ClientPresentationItemRepository;
 import dev.buhanzaz.rwms.logistics.inquiry.repository.ClientPresentationRepository;
 import dev.buhanzaz.rwms.logistics.inquiry.repository.PresentationBookingRepository;
 import dev.buhanzaz.rwms.logistics.inquiry.repository.RentalInquiryRepository;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AdditionalContactInput;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.DesiredDeliveryWindowInput;
 import dev.buhanzaz.rwms.logistics.order.domain.AdditionalContact;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderQuotedPrice;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -26,9 +28,11 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -52,6 +56,7 @@ public class PresentationBookingStore {
 
   private final PresentationBookingRepository bookings;
   private final ClientPresentationRepository presentations;
+  private final ClientPresentationItemRepository presentationItems;
   private final RentalInquiryRepository inquiries;
   private final ClientPresentationService presentationService;
   private final ClientDeliveryDatePolicy deliveryDatePolicy;
@@ -214,11 +219,29 @@ public class PresentationBookingStore {
         inquiries
             .findById(presentation.getInquiryId())
             .orElseThrow(() -> notFound("Диалог аренды не найден"));
+    List<PresentationCabinSelectionInput> selections = selected(booking.getSelectedItemIdsJson());
+    var selectedIds =
+        selections.stream()
+            .map(PresentationCabinSelectionInput::rentalItemId)
+            .collect(Collectors.toSet());
+    Map<UUID, RentalOrderQuotedPrice> quotedPrices =
+        presentationItems
+            .findAllByPresentationIdAndPresentationRevisionOrderBySortOrderAscIdAsc(
+                presentation.getId(), booking.getPresentationRevision())
+            .stream()
+            .filter(item -> selectedIds.contains(item.getRentalItemId()))
+            .collect(
+                Collectors.toUnmodifiableMap(
+                    item -> item.getRentalItemId(),
+                    item ->
+                        new RentalOrderQuotedPrice(
+                            item.getPricingVersion(), item.getMonthlyPriceRubles())));
     return new BookingContext(
         booking,
         presentation,
         inquiry,
-        selected(booking.getSelectedItemIdsJson()),
+        selections,
+        quotedPrices,
         desiredWindows(booking.getDesiredDeliveryWindowsJson()),
         booking.getRentalMonths(),
         booking.getDeliveryAddress(),
@@ -667,6 +690,7 @@ public class PresentationBookingStore {
       ClientPresentation presentation,
       RentalInquiry inquiry,
       List<PresentationCabinSelectionInput> selections,
+      Map<UUID, RentalOrderQuotedPrice> quotedPrices,
       List<DesiredDeliveryWindowInput> desiredDeliveryWindows,
       Long rentalMonths,
       String deliveryAddress,

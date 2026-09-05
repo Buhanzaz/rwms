@@ -76,6 +76,12 @@ items with two null price fields; historical photo metadata also decodes to null
 return those explicit unknowns instead of inventing historical zero prices. Delivery and other
 charges remain separate. A missing price dependency prevents publication with an explicit error.
 
+V103 carries each selected presentation cabin's exact price/revision into its new order term.
+The server derives this fact from the booked revision, not a client price or today's tariff.
+Replays, later presentation additions, duration changes and same-order cabin replacement preserve
+the original term price. Existing terms and bookings from historical unpriced offers remain unknown;
+the migration neither backfills a zero nor reprices an existing order.
+
 V100 adds nullable order-owned payment reservation evidence: a non-renewable five-minute window,
 explicit `CUSTOMER_TEST`/`MANAGER_CONFIRMATION` provenance, and separate pending, confirmed,
 releasing, expired and cancelled outcomes. The domain rejects confirmation at the deadline and

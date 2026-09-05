@@ -19,6 +19,7 @@ import dev.buhanzaz.rwms.logistics.order.domain.OrderCommandReceipt;
 import dev.buhanzaz.rwms.logistics.order.domain.AdditionalContact;
 import dev.buhanzaz.rwms.logistics.order.domain.DesiredDeliveryWindow;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderQuotedPrice;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentState;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderEquipmentRequirement;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
@@ -245,6 +246,7 @@ class RentalOrderReservationService {
       Map<UUID, Map<UUID, Long>> selectedRequirements,
       List<DesiredDeliveryWindow> desiredDeliveryWindows,
       Map<UUID, Long> rentalTermsBySelection,
+      Map<UUID, RentalOrderQuotedPrice> quotedPrices,
       Long legacyUniformRentalMonths,
       String deliveryAddress,
       BigDecimal latitude,
@@ -254,8 +256,12 @@ class RentalOrderReservationService {
     if (selectedRequirements == null
         || selectedRequirements.isEmpty()
         || rentalTermsBySelection == null
+        || quotedPrices == null
+        || !quotedPrices.keySet().equals(selectedRequirements.keySet())
+        || quotedPrices.values().stream().anyMatch(Objects::isNull)
         || !rentalTermsBySelection.keySet().equals(selectedRequirements.keySet())
-        || rentalTermsBySelection.values().stream().anyMatch(months -> months == null || months < 1 || months > 120)) {
+        || rentalTermsBySelection.values().stream()
+            .anyMatch(months -> months == null || months < 1 || months > 120)) {
       throw new IllegalArgumentException("Presentation selection is required");
     }
     List<DesiredDeliveryWindow> normalizedDesiredDeliveryWindows =
@@ -340,7 +346,9 @@ class RentalOrderReservationService {
       RentalOrderUnitTerm existingTerm = rentalTermsByUnit.get(selection.getKey());
       long rentalMonths = rentalTermsBySelection.get(selection.getKey());
       if (existingTerm == null) {
-        newRentalTerms.add(RentalOrderUnitTerm.create(order, selection.getKey(), rentalMonths));
+        newRentalTerms.add(
+            RentalOrderUnitTerm.create(
+                order, selection.getKey(), rentalMonths, quotedPrices.get(selection.getKey())));
       } else if (existingTerm.getRentalMonths() != rentalMonths) {
         throw RentalOrderProblems.conflict(
             "PRESENTATION_RENTAL_TERM_IMMUTABLE",

@@ -43,6 +43,7 @@ import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderUnitTerm;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderQuotedPrice;
 import dev.buhanzaz.rwms.logistics.order.repository.OrderClientRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderUnitTermRepository;
@@ -1315,7 +1316,10 @@ class InventoryOutcomeIntegrationTest {
     RentalOrder persisted = rentalOrders.saveAndFlush(order);
     rentalTerms.saveAllAndFlush(
         assetIds.stream()
-            .map(assetId -> RentalOrderUnitTerm.create(persisted, assetId, 1))
+            .map(
+                assetId ->
+                    RentalOrderUnitTerm.create(
+                        persisted, assetId, 1, new RentalOrderQuotedPrice(null, null)))
             .toList());
     return persisted;
   }

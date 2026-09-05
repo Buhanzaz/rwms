@@ -15,6 +15,7 @@ import dev.buhanzaz.rwms.logistics.order.domain.AdditionalContact;
 import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
 import dev.buhanzaz.rwms.logistics.order.domain.DesiredDeliveryWindow;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderQuotedPrice;
 import dev.buhanzaz.rwms.logistics.order.security.OrderActor;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle.AdmissionTicket;
@@ -205,6 +206,7 @@ public class RentalOrderService {
       Map<UUID, Map<UUID, Long>> selectedRequirements,
       List<DesiredDeliveryWindow> desiredDeliveryWindows,
       Map<UUID, Long> rentalTerms,
+      Map<UUID, RentalOrderQuotedPrice> quotedPrices,
       Long legacyUniformRentalMonths,
       String deliveryAddress,
       BigDecimal latitude,
@@ -220,6 +222,7 @@ public class RentalOrderService {
             selectedRequirements,
             desiredDeliveryWindows,
             rentalTerms,
+            quotedPrices,
             legacyUniformRentalMonths,
             deliveryAddress,
             latitude,

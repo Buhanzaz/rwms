@@ -903,6 +903,13 @@ price read prevents publication. Evidence:
 [`CabinPhotoPresentationService`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/photo/CabinPhotoPresentationService.java),
 [`V99`](../../services/logistics-service/src/main/resources/db/migration/V99__presentation_rental_price_snapshots.sql).
 
+V103 copies that booked revision's price pair into each newly created order term inside the
+fenced selection command. It is not accepted as a public input or resolved from current tariffs.
+An existing term is never repriced by replay, another presentation, duration edits or replacement;
+historical unknowns remain distinct from explicit zero.
+Evidence: [`V103`](../../services/logistics-service/src/main/resources/db/migration/V103__order_quoted_cabin_prices.sql),
+[`selection owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderReservationService.java).
+
 Public return, shipment and transfer list reads preserve their array payload but
 are bounded to `page/size` with a maximum of 100 documents. Pagination metadata
 is carried in fixed response headers, and all lines for one document page are

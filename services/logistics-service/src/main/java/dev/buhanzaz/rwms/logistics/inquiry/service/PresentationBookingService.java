@@ -181,19 +181,20 @@ public class PresentationBookingService {
         try {
           RentalOrderService.MutationResult applied =
               rentalOrders.applyPresentationSelection(
-              actor,
-              orderId,
-              context.booking().getId(),
-              converted,
-              requirements,
-              normalDesiredDeliveryWindows(context),
-              normalRentalTerms(context),
-              context.rentalMonths(),
-              normalDeliveryAddress(context),
-              context.latitude(),
-              context.longitude(),
-              normalAdditionalContacts(context),
-              context.legacyDesiredDeliveryTimes());
+                  actor,
+                  orderId,
+                  context.booking().getId(),
+                  converted,
+                  requirements,
+                  normalDesiredDeliveryWindows(context),
+                  normalRentalTerms(context),
+                  context.quotedPrices(),
+                  context.rentalMonths(),
+                  normalDeliveryAddress(context),
+                  context.latitude(),
+                  context.longitude(),
+                  normalAdditionalContacts(context),
+                  context.legacyDesiredDeliveryTimes());
           if ("CUSTOMER".equals(actor.role())
               && applied.response().status() == RentalOrderStatus.DRAFT) {
             rentalOrders.save(
