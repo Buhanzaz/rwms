@@ -4,13 +4,19 @@ import dev.buhanzaz.rwms.logistics.pricing.domain.RentalPricingRate;
 import dev.buhanzaz.rwms.logistics.pricing.domain.RentalPricingSettings;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /** Detached revision of {@link RentalPricingSettings}; omitted catalog pairs have a zero tariff. */
 public record RentalPricingSnapshot(
-    long version, List<Rate> rates, UUID updatedBySubjectId, OffsetDateTime updatedAt) {
+    long version,
+    List<Rate> rates,
+    Map<UUID, Long> equipmentRates,
+    UUID updatedBySubjectId,
+    OffsetDateTime updatedAt) {
   public RentalPricingSnapshot {
     rates = List.copyOf(rates);
+    equipmentRates = Map.copyOf(equipmentRates);
   }
 
   /** Exact whole-ruble value of {@link RentalPricingRate}, independent of catalog display names. */

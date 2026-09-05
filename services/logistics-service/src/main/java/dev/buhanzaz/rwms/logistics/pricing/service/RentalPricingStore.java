@@ -60,6 +60,29 @@ public class RentalPricingStore {
     return mapper.toSnapshot(value);
   }
 
+  /** Furniture and cabin edits share the singleton version and lock, including unchanged writes. */
+  @Transactional
+  public RentalPricingSnapshot updateEquipment(
+      long expectedVersion, UUID equipmentId, long monthlyPriceRubles, UUID actorSubjectId) {
+    RentalPricingSettings value =
+        settings
+            .findForUpdate(RentalPricingSettings.SINGLETON_ID)
+            .orElseThrow(RentalPricingStore::missingSettings);
+    if (value.getVersion() != expectedVersion) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "RENTAL_PRICING_VERSION_CONFLICT",
+          "Цены аренды уже изменены другим пользователем");
+    }
+    value.setEquipmentMonthlyPrice(
+        equipmentId,
+        monthlyPriceRubles,
+        actorSubjectId,
+        OffsetDateTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.MICROS));
+    settings.flush();
+    return mapper.toSnapshot(value);
+  }
+
   private static OrderProblemException missingSettings() {
     return new OrderProblemException(
         HttpStatus.SERVICE_UNAVAILABLE,

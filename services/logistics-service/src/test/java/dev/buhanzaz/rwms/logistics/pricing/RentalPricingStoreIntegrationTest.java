@@ -52,6 +52,7 @@ class RentalPricingStoreIntegrationTest {
 
   @BeforeEach
   void resetPrices() {
+    jdbc.update("delete from rental_pricing_equipment_rate");
     jdbc.update("delete from rental_pricing_rate");
     assertThat(
             jdbc.update(
@@ -179,6 +180,51 @@ class RentalPricingStoreIntegrationTest {
               + " current_timestamp)",
           SINGLETON);
     }
+  }
+
+  @Test
+  void furnitureSharesCabinVersionPreservesExactAmountsAndClearsOnlyOneUnitTariff() {
+    UUID furniture = UUID.randomUUID();
+    UUID other = UUID.randomUUID();
+    assertThat(store.read().equipmentRates()).isEmpty();
+    assertThat(store.updateEquipment(0, furniture, 0, ACTOR).version()).isZero();
+    var first = store.updateEquipment(0, furniture, Long.MAX_VALUE, ACTOR);
+    assertThat(first.version()).isEqualTo(1);
+    assertThat(first.equipmentRates()).containsEntry(furniture, Long.MAX_VALUE);
+    assertThat(store.updateEquipment(1, furniture, Long.MAX_VALUE, UUID.randomUUID()))
+        .isEqualTo(first);
+    assertThatThrownBy(() -> first.equipmentRates().clear())
+        .isInstanceOf(UnsupportedOperationException.class);
+    assertThatThrownBy(() -> store.update(0, TYPE, CATEGORY, 8000, ACTOR))
+        .isInstanceOf(OrderProblemException.class);
+    store.update(1, TYPE, CATEGORY, 8000, ACTOR);
+    assertThatThrownBy(() -> store.updateEquipment(1, other, 500, ACTOR))
+        .isInstanceOf(OrderProblemException.class);
+    store.updateEquipment(2, other, 500, ACTOR);
+    var cleared = store.updateEquipment(3, furniture, 0, ACTOR);
+    assertThat(cleared.version()).isEqualTo(4);
+    assertThat(cleared.equipmentRates()).containsExactlyEntriesOf(java.util.Map.of(other, 500L));
+    assertThat(cleared.rates())
+        .containsExactly(new RentalPricingSnapshot.Rate(TYPE, CATEGORY, 8000));
+    assertThat(store.read()).isEqualTo(cleared);
+    assertThat(
+            jdbc.queryForObject("select count(*) from rental_pricing_equipment_rate", Long.class))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void invalidFurniturePriceRollsBackWithoutTouchingCabinPrices() {
+    var before = store.update(0, TYPE, CATEGORY, 8000, ACTOR);
+    assertThatThrownBy(() -> store.updateEquipment(1, UUID.randomUUID(), -1, ACTOR))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThat(store.read()).isEqualTo(before);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "insert into rental_pricing_equipment_rate values (?::uuid,?::uuid,0)",
+                    SINGLETON,
+                    UUID.randomUUID().toString()))
+        .isInstanceOf(DataIntegrityViolationException.class);
   }
 
   private String updateConcurrently(UUID categoryId, CountDownLatch ready, CountDownLatch start)

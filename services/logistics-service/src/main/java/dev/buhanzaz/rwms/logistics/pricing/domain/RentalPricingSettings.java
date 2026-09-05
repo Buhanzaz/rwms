@@ -6,14 +6,18 @@ import jakarta.persistence.ElementCollection;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
+import jakarta.persistence.MapKeyColumn;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 import java.time.OffsetDateTime;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -49,6 +53,15 @@ public class RentalPricingSettings {
   @Getter(AccessLevel.NONE)
   private Set<RentalPricingRate> rates = new LinkedHashSet<>();
 
+  @ElementCollection
+  @CollectionTable(
+      name = "rental_pricing_equipment_rate",
+      joinColumns = @JoinColumn(name = "settings_id"))
+  @MapKeyColumn(name = "equipment_id", nullable = false)
+  @Column(name = "monthly_price_rubles", nullable = false)
+  @Getter(AccessLevel.NONE)
+  private Map<@NotNull UUID, @NotNull @Positive Long> equipmentRates = new LinkedHashMap<>();
+
   @Column(name = "updated_by_subject_id")
   private UUID updatedBySubjectId;
 
@@ -66,6 +79,29 @@ public class RentalPricingSettings {
 
   public Set<RentalPricingRate> getRates() {
     return Collections.unmodifiableSet(rates);
+  }
+
+  public Map<UUID, Long> getEquipmentRates() {
+    return Collections.unmodifiableMap(equipmentRates);
+  }
+
+  /** Sets the monthly whole-RUB price of one furniture unit; zero removes only its override. */
+  public void setEquipmentMonthlyPrice(
+      UUID equipmentId, long monthlyPriceRubles, UUID actorSubjectId, OffsetDateTime now) {
+    Objects.requireNonNull(equipmentId, "equipmentId");
+    Objects.requireNonNull(actorSubjectId, "actorSubjectId");
+    Objects.requireNonNull(now, "now");
+    if (monthlyPriceRubles < 0) {
+      throw new IllegalArgumentException("Monthly price must be nonnegative whole rubles");
+    }
+    if (equipmentRates.getOrDefault(equipmentId, 0L) == monthlyPriceRubles) return;
+    if (monthlyPriceRubles == 0) {
+      equipmentRates.remove(equipmentId);
+    } else {
+      equipmentRates.put(equipmentId, monthlyPriceRubles);
+    }
+    updatedBySubjectId = actorSubjectId;
+    updatedAt = now;
   }
 
   /**

@@ -287,6 +287,53 @@ class LogisticsFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void furniturePricingUpgradePreservesCabinTariffsAndValidatesJpa() {
+    configuration(MIGRATIONS).target("101").load().migrate();
+    UUID settingsId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+    jdbc.update(
+        "update rental_pricing_settings set version=7,updated_by_subject_id=?", UUID.randomUUID());
+    jdbc.update(
+        "insert into rental_pricing_rate values (?,?,?,8000)",
+        settingsId,
+        UUID.randomUUID(),
+        UUID.randomUUID());
+    var before = jdbc.queryForMap("select * from rental_pricing_settings");
+    var ratesBefore = jdbc.queryForList("select * from rental_pricing_rate");
+    Flyway upgraded = flyway(MIGRATIONS);
+    upgraded.migrate();
+    upgraded.validate();
+    assertThat(jdbc.queryForMap("select * from rental_pricing_settings")).isEqualTo(before);
+    assertThat(jdbc.queryForList("select * from rental_pricing_rate")).isEqualTo(ratesBefore);
+    assertThat(
+            jdbc.queryForObject("select count(*) from rental_pricing_equipment_rate", Long.class))
+        .isZero();
+    UUID furniture = UUID.randomUUID();
+    jdbc.update(
+        "insert into rental_pricing_equipment_rate values (?,?,?)",
+        settingsId,
+        furniture,
+        Long.MAX_VALUE);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "insert into rental_pricing_equipment_rate values (?,?,1)",
+                    settingsId,
+                    furniture))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    for (long invalid : List.of(0L, -1L)) {
+      assertThatThrownBy(
+              () ->
+                  jdbc.update(
+                      "insert into rental_pricing_equipment_rate values (?,?,?)",
+                      settingsId,
+                      UUID.randomUUID(),
+                      invalid))
+          .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    }
+    assertJpaValidationStarts();
+  }
+
+  @Test
   void globalRentalPricingUpgradeStartsAtZeroWithoutChangingExistingRentalSettings() {
     configuration(MIGRATIONS).target("97").load().migrate();
     jdbc.update(

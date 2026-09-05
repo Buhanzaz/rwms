@@ -56,6 +56,7 @@ class CustomerCabinPricingServiceTest {
             new RentalPricingSnapshot(
                 5,
                 List.of(new RentalPricingSnapshot.Rate(TYPE, CATEGORY, Long.MAX_VALUE)),
+                java.util.Map.of(),
                 SUBJECT,
                 OffsetDateTime.now()));
     when(dependencies.readCabinPricingReferences(eq(WAREHOUSE), anyList()))
@@ -111,7 +112,9 @@ class CustomerCabinPricingServiceTest {
               assertThat(value.pricingVersion()).isEqualTo(5);
             });
     when(priceStore.read())
-        .thenReturn(new RentalPricingSnapshot(6, List.of(), SUBJECT, OffsetDateTime.now()));
+        .thenReturn(
+            new RentalPricingSnapshot(
+                6, List.of(), java.util.Map.of(), SUBJECT, OffsetDateTime.now()));
     assertThat(
             service
                 .heldCabins(identity, INQUIRY, List.of(cabin(CABIN)))

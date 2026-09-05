@@ -44,6 +44,9 @@ updates lock the singleton and check `expectedVersion`, including edits to diffe
 An unchanged value preserves the revision and audit metadata; setting zero removes only that
 pair's override. Missing storage is an explicit unavailable error, never a fabricated free tariff.
 This persistence boundary does not change existing hold durations, late-change fees or bookings.
+V102 adds whole-ruble furniture tariffs per one unit per month under the same singleton version.
+Equipment UUIDs remain asset-owned; missing overrides mean zero. A furniture edit cannot overwrite
+a concurrent cabin tariff edit, and reads detach both collections from one database snapshot.
 
 `GET /api/logistics/v1/settings/rental-prices` builds the complete live type/category table,
 including inactive and unused values. `PUT /settings/rental-prices/{rentalTypeId}/{categoryId}`

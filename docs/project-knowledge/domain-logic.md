@@ -882,6 +882,11 @@ zero removes one override, unchanged values preserve audit/version, and missing 
 closed. Existing hold, fee and booking state is unaffected by this persistence addition. Evidence:
 [`RentalPricingStore`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/pricing/service/RentalPricingStore.java),
 [`V98`](../../services/logistics-service/src/main/resources/db/migration/V98__global_rental_pricing.sql).
+V102 extends that same revision with monthly whole-RUB prices per one furniture unit, keyed only
+by asset equipment UUID. Missing overrides are zero and zero clears only one furniture price.
+Both price collections are detached from the same repeatable-read snapshot and all edits use
+the same version fence. No existing cabin price or booking is repriced by this migration.
+Evidence: [`V102`](../../services/logistics-service/src/main/resources/db/migration/V102__monthly_furniture_rental_pricing.sql).
 
 New client/photo presentations freeze the exact monthly whole-RUB price and tariff revision
 when the snapshot is created, after checking the pricing facts match its cabin version. Later

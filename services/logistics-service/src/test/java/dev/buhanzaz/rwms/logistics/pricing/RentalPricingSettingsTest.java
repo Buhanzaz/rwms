@@ -54,6 +54,32 @@ class RentalPricingSettingsTest {
   }
 
   @Test
+  void furnitureHasMonthlyUnitPricesWithNoOpAndInputGuards() {
+    var settings = RentalPricingSettings.defaults(NOW);
+    UUID furniture = UUID.randomUUID();
+    settings.setEquipmentMonthlyPrice(furniture, 0, ACTOR, NOW.plusMinutes(1));
+    assertThat(settings.getEquipmentRates()).isEmpty();
+    assertThat(settings.getUpdatedAt()).isEqualTo(NOW);
+    assertThat(settings.getUpdatedBySubjectId()).isNull();
+    settings.setEquipmentMonthlyPrice(furniture, Long.MAX_VALUE, ACTOR, NOW);
+    settings.setEquipmentMonthlyPrice(
+        furniture, Long.MAX_VALUE, UUID.randomUUID(), NOW.plusMinutes(1));
+    assertThat(settings.getUpdatedAt()).isEqualTo(NOW);
+    assertThat(settings.getUpdatedBySubjectId()).isEqualTo(ACTOR);
+    assertThatThrownBy(() -> settings.setEquipmentMonthlyPrice(furniture, -1, ACTOR, NOW))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> settings.setEquipmentMonthlyPrice(null, 100, ACTOR, NOW))
+        .isInstanceOf(NullPointerException.class);
+    assertThatThrownBy(() -> settings.setEquipmentMonthlyPrice(furniture, 100, null, NOW))
+        .isInstanceOf(NullPointerException.class);
+    assertThatThrownBy(() -> settings.getEquipmentRates().clear())
+        .isInstanceOf(UnsupportedOperationException.class);
+    assertThat(settings.getEquipmentRates()).containsEntry(furniture, Long.MAX_VALUE);
+    settings.setEquipmentMonthlyPrice(furniture, 0, ACTOR, NOW.plusMinutes(2));
+    assertThat(settings.getEquipmentRates()).isEmpty();
+  }
+
+  @Test
   void unchangedPricePreservesAuditMetadataAndValueEquality() {
     var settings = RentalPricingSettings.defaults(NOW);
     settings.setMonthlyPrice(TYPE, CATEGORY, 8000, ACTOR, NOW);
