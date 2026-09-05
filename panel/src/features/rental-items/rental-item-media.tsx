@@ -641,12 +641,16 @@ function FolderDetails({
   previewLoading,
   onBack,
   onRequestFullscreen,
+  columns,
+  gridControl,
 }: {
   item: RentalItemDto
   folder: RentalItemPhotoFolder
   previewLoading: boolean
   onBack: () => void
   onRequestFullscreen: (photo: PhotoCarouselPhoto) => void | Promise<void>
+  columns: number
+  gridControl: ReactNode
 }) {
   const [activeIndex, setActiveIndex] = useState(0)
   const visibleActiveIndex =
@@ -655,10 +659,13 @@ function FolderDetails({
 
   return (
     <div className="flex flex-col gap-4">
-      <Button type="button" variant="ghost" className="w-fit" onClick={onBack}>
-        <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
-        Назад к фотоархиву
-      </Button>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Button type="button" variant="ghost" onClick={onBack}>
+          <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
+          Назад к фотоархиву
+        </Button>
+        {gridControl}
+      </div>
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-start justify-between gap-3">
@@ -680,7 +687,7 @@ function FolderDetails({
               loading={previewLoading && folder.photos.length === 0}
               photoCount={folderPhotoCount(folder)}
               showPhotoCount
-              className="h-[55svh] min-h-80 rounded-lg border bg-muted"
+              className="h-60 rounded-lg border bg-muted sm:h-80"
               fit="contain"
               controlsVisibility="mobile-visible"
               activeIndex={visibleActiveIndex}
@@ -688,7 +695,14 @@ function FolderDetails({
               onRequestFullscreen={onRequestFullscreen}
             />
             {folder.photos.length > 1 ? (
-              <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-7">
+              <div
+                className="grid gap-2"
+                data-testid="photo-thumbnail-grid"
+                data-columns={columns}
+                style={{
+                  gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+                }}
+              >
                 {folder.photos.map((photo, index) => (
                   <button
                     key={photo.id}
@@ -696,7 +710,7 @@ function FolderDetails({
                     aria-label={`Показать ${photo.fileName}`}
                     aria-pressed={visibleActiveIndex === index}
                     className={cn(
-                      "aspect-square overflow-hidden rounded-md border bg-muted",
+                      "aspect-[4/3] overflow-hidden rounded-md border bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
                       visibleActiveIndex === index &&
                         "ring-2 ring-primary ring-offset-2"
                     )}
@@ -907,15 +921,57 @@ export function RentalItemPhotosRegister({
     void onOpenFolder(folder.id).finally(() => setPreviewLoading(false))
   }
 
+  const gridControl = gridSettingsAvailable ? (
+    <Button
+      type="button"
+      variant="outline"
+      onClick={() => setGridSettingsOpen(true)}
+    >
+      <HugeiconsIcon icon={Settings02Icon} data-icon="inline-start" />
+      до {effectiveGridFormat.columns}x{effectiveGridFormat.rows}
+    </Button>
+  ) : null
+  const gridSettings = gridSettingsAvailable ? (
+    <RentalItemsGridSettingsDialog
+      open={gridSettingsOpen}
+      value={effectiveGridFormat.columns}
+      maxSize={gridFormatMax}
+      defaultValue={getRentalItemsDefaultGridSize(viewport)}
+      onOpenChange={setGridSettingsOpen}
+      onValueChange={(value) =>
+        setSavedGridSize(normalizeRentalItemsGridSize(value, gridFormatMax))
+      }
+    />
+  ) : null
+  const loadError = error ? (
+    <div
+      role="alert"
+      className="flex flex-wrap items-center gap-3 text-sm text-destructive"
+    >
+      Не удалось загрузить часть фотографий. Остальные данные бытовки доступны.
+      {onRetry ? (
+        <Button variant="outline" onClick={onRetry}>
+          Повторить загрузку фото
+        </Button>
+      ) : null}
+    </div>
+  ) : null
+
   if (selectedFolder) {
     return (
-      <FolderDetails
-        item={item}
-        folder={selectedFolder}
-        previewLoading={previewLoading}
-        onBack={() => setSelectedFolderId(null)}
-        onRequestFullscreen={onRequestFullscreen}
-      />
+      <div className="flex flex-col gap-4">
+        {loadError}
+        <FolderDetails
+          item={item}
+          folder={selectedFolder}
+          previewLoading={previewLoading}
+          onBack={() => setSelectedFolderId(null)}
+          onRequestFullscreen={onRequestFullscreen}
+          columns={effectiveGridFormat.columns}
+          gridControl={gridControl}
+        />
+        {gridSettings}
+      </div>
     )
   }
 
@@ -970,31 +1026,9 @@ export function RentalItemPhotosRegister({
             <HugeiconsIcon icon={GridViewIcon} aria-hidden="true" />
           </ToggleGroupItem>
         </ToggleGroup>
-        {view === "gallery" && gridSettingsAvailable ? (
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setGridSettingsOpen(true)}
-          >
-            <HugeiconsIcon icon={Settings02Icon} data-icon="inline-start" />
-            до {effectiveGridFormat.columns}x{effectiveGridFormat.rows}
-          </Button>
-        ) : null}
+        {view === "gallery" ? gridControl : null}
       </div>
-      {error ? (
-        <div
-          role="alert"
-          className="flex flex-wrap items-center gap-3 text-sm text-destructive"
-        >
-          Не удалось загрузить часть фотографий. Остальные данные бытовки
-          доступны.
-          {onRetry ? (
-            <Button variant="outline" onClick={onRetry}>
-              Повторить загрузку фото
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
+      {loadError}
       {loading ? (
         <div
           className="grid gap-3"
@@ -1044,18 +1078,7 @@ export function RentalItemPhotosRegister({
           ) : null}
         </>
       )}
-      {gridSettingsAvailable ? (
-        <RentalItemsGridSettingsDialog
-          open={gridSettingsOpen}
-          value={effectiveGridFormat.columns}
-          maxSize={gridFormatMax}
-          defaultValue={getRentalItemsDefaultGridSize(viewport)}
-          onOpenChange={setGridSettingsOpen}
-          onValueChange={(value) =>
-            setSavedGridSize(normalizeRentalItemsGridSize(value, gridFormatMax))
-          }
-        />
-      ) : null}
+      {gridSettings}
       <span className="sr-only">
         {assets.length} файлов media-service в фотоархиве
       </span>

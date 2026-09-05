@@ -32,7 +32,10 @@ vi.mock("@/components/media/photo-carousel", () => ({
   ),
 }))
 
-import { useRentalItemMedia } from "@/features/rental-items/use-rental-item-media"
+import {
+  useRentalItemMedia,
+  type RentalItemPhotoFolder,
+} from "@/features/rental-items/use-rental-item-media"
 import { RentalItemPhotosRegister } from "@/features/rental-items/rental-item-media"
 
 const WAREHOUSE_ID = "11111111-1111-4111-8111-111111111111"
@@ -434,6 +437,8 @@ function CurrentInventoryFolderHarness() {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  vi.unstubAllGlobals()
+  window.localStorage.removeItem("rental-item-dossier:photo-grid-format:v1")
 })
 
 beforeEach(() => {
@@ -1061,9 +1066,10 @@ describe("rental item media", () => {
   })
 
   it("keeps the transferred searchable archive and folder back navigation", async () => {
+    vi.stubGlobal("innerWidth", 1440)
     const user = userEvent.setup()
     const onOpenFolder = vi.fn(async () => undefined)
-    const folders = [
+    const folders: RentalItemPhotoFolder[] = [
       {
         id: "folder-1",
         occurredAt: "2026-07-19T10:00:00Z",
@@ -1114,6 +1120,11 @@ describe("rental item media", () => {
         assets: [],
       },
     ]
+    folders[0].photos.push({
+      ...folders[0].photos[0],
+      id: "photo-1b",
+      fileName: "back.jpg",
+    })
 
     render(
       <RentalItemPhotosRegister
@@ -1147,11 +1158,31 @@ describe("rental item media", () => {
       screen.getByRole("button", { name: "Назад к фотоархиву" })
     ).toBeTruthy()
     expect(screen.getByText("front.jpg")).toBeTruthy()
-    expect(screen.getByTestId("folder-carousel").textContent).toBe("photo-1")
+    expect(screen.getByTestId("folder-carousel").textContent).toBe(
+      "photo-1,photo-1b"
+    )
     expect(screen.queryByRole("button", { name: "Повернуть" })).toBeNull()
+
+    expect(
+      screen.getByTestId("photo-thumbnail-grid").getAttribute("data-columns")
+    ).toBe("5")
+    for (const columns of [4, 3]) {
+      await user.click(
+        screen.getByRole("button", { name: `до ${columns + 1}x${columns + 1}` })
+      )
+      screen.getByRole("slider", { name: "Формат сетки" }).focus()
+      await user.keyboard("{ArrowLeft}")
+      await user.click(screen.getByRole("button", { name: "Готово" }))
+      expect(
+        screen.getByTestId("photo-thumbnail-grid").getAttribute("data-columns")
+      ).toBe(String(columns))
+    }
 
     await user.click(screen.getByRole("button", { name: "Назад к фотоархиву" }))
     expect(screen.getByTestId("photo-folder-grid")).toBeTruthy()
+    expect(
+      screen.getByTestId("photo-folder-grid").getAttribute("data-columns")
+    ).toBe("3")
   })
 
   it("keeps the photo archive available when media-service is unavailable", () => {
