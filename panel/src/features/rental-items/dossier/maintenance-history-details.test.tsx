@@ -272,6 +272,48 @@ describe("MaintenanceHistoryDetails", () => {
     ).toBe("/repairs?repairId=original-repair")
   })
 
+  it("preserves the recorded worker identity and evidence dates when the live board is unavailable", async () => {
+    const task = repair()
+    state.repair.mockResolvedValue({
+      ...task,
+      taskBoardAvailable: false,
+      subtasks: [
+        {
+          ...task.subtasks[0],
+          assignments: [],
+          workerGroup: null,
+          evidence: [
+            {
+              evidenceId: "evidence",
+              entryId: "entry",
+              workerId: "historical-worker-id",
+              workerDisplayName: null,
+              workerGroupId: null,
+              workerGroupName: null,
+              mediaId: "photo",
+              mediaGeneration: 1,
+              capturedAt: "2026-01-01T10:00:00Z",
+              recordedAt: "2026-01-02T10:00:00Z",
+              state: "READY",
+            },
+          ],
+        },
+      ],
+    })
+    show("REPAIR")
+    const evidence = await screen.findByRole("region", {
+      name: "Подтверждения выполнения этапа",
+    })
+    expect(
+      within(evidence).getByText("ID исполнителя: historical-worker-id")
+    ).toBeTruthy()
+    expect(
+      within(evidence).getByText("Имя исполнителя недоступно")
+    ).toBeTruthy()
+    expect(within(evidence).getByText(/Снято:.*Зафиксировано:/)).toBeTruthy()
+    expect(within(evidence).getByText("Подтверждение сохранено")).toBeTruthy()
+  })
+
   it("retains timeline events when owner read fails and provides an explicit retry", async () => {
     state.estimate.mockRejectedValue(new ApiError("Нет доступа к смете", 403))
     show("ESTIMATE", true)

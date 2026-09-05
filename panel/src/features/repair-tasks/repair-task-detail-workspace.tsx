@@ -13,6 +13,8 @@ import { RepairSubtasksEditor } from "@/features/repair-tasks/repair-subtasks-ed
 import { RepairTaskStatusBadge } from "@/features/repair-tasks/repair-task-status-badge"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
 import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
+import { useDossierActorDisplays } from "@/features/rental-items/dossier/actor/use-dossier-actor-displays"
+import { formatDossierActorDisplay } from "@/features/rental-items/dossier/actor/actor-display"
 
 export function RepairTaskDetailWorkspace({
   accessToken,
@@ -25,6 +27,16 @@ export function RepairTaskDetailWorkspace({
   readOnly?: boolean
   onEdit?: () => void
 }) {
+  const actors = useDossierActorDisplays(
+    task.actorType === "SERVICE" ? [] : [task.actorId]
+  )
+  const author = actors.get(task.actorId)
+  const authorName =
+    task.actorType === "SERVICE"
+      ? "Сервис"
+      : author
+        ? formatDossierActorDisplay(author)
+        : "Имя автора недоступно"
   const generalMediaReferences = task.maintenanceMediaReferences ?? []
   const estimateLink = task.sourceEstimateId ? (
     <Button variant="outline" size="sm" asChild>
@@ -79,7 +91,7 @@ export function RepairTaskDetailWorkspace({
             contextLabel="Источник"
             contextValue={task.sourceParty ?? ""}
             dispatchDate={task.dispatchDate}
-            authorName="Автор недоступен"
+            authorName={authorName}
             authorLabel="Автор"
             showComment={false}
             status={

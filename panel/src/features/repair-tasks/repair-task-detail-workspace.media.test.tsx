@@ -1,9 +1,32 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, render } from "@testing-library/react"
+import { cleanup, render, screen } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 const serviceOwnerPhotos = vi.hoisted(() => vi.fn())
+const actorRequests = vi.hoisted(() => vi.fn())
+vi.mock(
+  "@/features/rental-items/dossier/actor/use-dossier-actor-displays",
+  () => ({
+    useDossierActorDisplays: (ids: string[]) => {
+      actorRequests(ids)
+      return new Map([
+        [
+          "operator-1",
+          {
+            subjectId: "operator-1",
+            principalType: "USER",
+            globalRole: "WAREHOUSE_MANAGER",
+            username: "operator",
+            firstName: "Иван",
+            lastName: "Петров",
+            email: null,
+          },
+        ],
+      ])
+    },
+  })
+)
 
 vi.mock("@/features/media/service-owner-photos", () => ({
   ServiceOwnerPhotos: (props: unknown) => {
@@ -154,6 +177,22 @@ afterEach(() => {
 })
 
 describe("RepairTaskDetailWorkspace media", () => {
+  it("labels service-created repairs without looking up a service ID as a user", () => {
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={new QueryClient()}>
+          <RepairTaskDetailWorkspace
+            accessToken="token"
+            task={{ ...task, actorType: "SERVICE", subtasks: [] }}
+            readOnly
+          />
+        </QueryClientProvider>
+      </MemoryRouter>
+    )
+    expect(screen.getByText("Сервис")).toBeTruthy()
+    expect(actorRequests).toHaveBeenCalledWith([])
+  })
+
   it("keeps general, work-bound, and result media in separate exact galleries", () => {
     render(
       <MemoryRouter>
@@ -163,6 +202,8 @@ describe("RepairTaskDetailWorkspace media", () => {
       </MemoryRouter>
     )
 
+    expect(screen.getByText("Руководитель склада — Петров Иван")).toBeTruthy()
+    expect(actorRequests).toHaveBeenCalledWith(["operator-1"])
     expect(gallery("Общие медиа задания")).toMatchObject({
       owner: {
         ownerType: "TASK_BOARD_ENTRY",

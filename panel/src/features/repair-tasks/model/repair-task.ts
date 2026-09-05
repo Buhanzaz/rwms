@@ -100,6 +100,7 @@ export type RepairTaskDto = {
   rentalItemId: string
   cabinNumber: string
   actorId: string
+  actorType?: "USER" | "SERVICE"
   sourceParty?: string | null
   dispatchDate: string | null
   priority?: RepairPriority

@@ -135,7 +135,7 @@ const acceptanceLabels: Record<RepairTaskDto["acceptanceStatus"], string> = {
 
 function RepairDetails({ task }: { task: RepairTaskDto }) {
   const actors = useDossierActorDisplays([
-    task.actorId,
+    ...(task.actorType === "SERVICE" ? [] : [task.actorId]),
     ...(task.decisionActorId ? [task.decisionActorId] : []),
   ])
   const actor = (id: string) => {
@@ -165,7 +165,8 @@ function RepairDetails({ task }: { task: RepairTaskDto }) {
         <div>
           <dt className="text-muted-foreground">Источник / автор</dt>
           <dd>
-            {task.sourceParty || "Источник не указан"} · {actor(task.actorId)}
+            {task.sourceParty || "Источник не указан"} ·{" "}
+            {task.actorType === "SERVICE" ? "Сервис" : actor(task.actorId)}
           </dd>
         </div>
         <div>
@@ -255,6 +256,46 @@ function RepairDetails({ task }: { task: RepairTaskDto }) {
                     ))}
                   </ul>
                 )}
+                {stage.evidence?.length ? (
+                  <section
+                    aria-label="Подтверждения выполнения этапа"
+                    className="flex flex-col gap-2"
+                  >
+                    <h5 className="font-medium">Подтверждения выполнения</h5>
+                    <ul className="flex flex-col gap-2">
+                      {stage.evidence.map((evidence) => (
+                        <li
+                          key={evidence.evidenceId}
+                          className="flex flex-col gap-1"
+                        >
+                          <p>
+                            {evidence.workerDisplayName ||
+                              "Имя исполнителя недоступно"}
+                            {evidence.workerGroupName
+                              ? ` · ${evidence.workerGroupName}`
+                              : ""}
+                          </p>
+                          <p className="text-xs break-all text-muted-foreground">
+                            ID исполнителя: {evidence.workerId}
+                          </p>
+                          <p>
+                            Снято: {instant(evidence.capturedAt)} ·
+                            Зафиксировано: {instant(evidence.recordedAt)}
+                          </p>
+                          <Badge
+                            variant={
+                              evidence.state === "READY" ? "success" : "warning"
+                            }
+                          >
+                            {evidence.state === "READY"
+                              ? "Подтверждение сохранено"
+                              : "Требуется проверка фото"}
+                          </Badge>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                ) : null}
               </CardContent>
             </Card>
           </li>

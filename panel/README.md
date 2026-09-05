@@ -202,6 +202,9 @@ contexts and screens are usable.
   comments, assignment snapshots, rework ancestry and the acceptance decision
   actor. Current owner state is separate from historical event timestamps;
   unavailable details leave the recorded timeline visible with an explicit retry.
+  Recorded evidence keeps the worker ID and capture/record times even when the
+  live assignment or worker name is unavailable. Repair authors resolve through
+  auth; service identities are explicitly labelled instead of queried as users.
 - The passport's shipment and return tabs read cabin-filtered, fully paged
   logistics documents independently of the current rental status. Completed and
   cancelled documents remain visible across authorized warehouses, with party,

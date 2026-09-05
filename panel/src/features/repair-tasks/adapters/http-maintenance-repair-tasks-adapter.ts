@@ -383,6 +383,7 @@ async function toTask(
     rentalItemId: repair.rentalItemId,
     cabinNumber: boardCabinNumber ?? rentalItem?.number ?? "",
     actorId: repair.actor.actorId,
+    actorType: repair.actor.actorType,
     sourceParty:
       repair.sourceParty ??
       (repair.origin === "INVENTORY" ? "Инвентаризация" : null),

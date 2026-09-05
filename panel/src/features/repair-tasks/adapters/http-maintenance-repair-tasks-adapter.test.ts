@@ -514,6 +514,7 @@ describe("maintenance repair tasks adapter", () => {
       id: repairId,
       sourceParty: "Арендатор",
       actorId: "user-1",
+      actorType: "USER",
       readyAt: "2026-07-18T10:05:00Z",
       taskBoardAvailable: true,
     })
