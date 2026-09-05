@@ -304,8 +304,9 @@ preference is enabled, then reloads the authoritative cart rather than storing a
 has no cabin-dossier or internal-service route. Its focused delivery UI is a
 four-destination Navigation 3 flow: a full-screen Yandex map, grouped
 server dates, exact server slots, and held-slot rental confirmation. The map
-uses the permitted raster `MapType.MAP`, enables zoom and current-location controls, and exposes no
-satellite/hybrid, route, traffic, weather or layer toggle. Yandex MapKit Full is a client-only
+uses the permitted vector `MapType.VECTOR_MAP` with the application palette and explicit light/dark
+appearance, enables zoom and current-location controls, and keeps provider attribution above the
+address panel. It exposes no satellite/hybrid, route, traffic, weather or layer toggle. Yandex MapKit Full is a client-only
 rendering, suggestion, one-shot location and geocoding dependency: its API key comes from a
 protected build file outside the repository, while an address edit, suggestion, map tap, speech
 result or current-location result invalidates the previous address-to-point confirmation before

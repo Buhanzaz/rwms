@@ -1,9 +1,9 @@
 package dev.buhanzaz.rwms.client.ui
 
 import com.google.common.truth.Truth.assertThat
+import dev.buhanzaz.rwms.client.data.CustomerRouteProfile
 import dev.buhanzaz.rwms.client.data.DeliverySlot
 import dev.buhanzaz.rwms.client.data.DeliverySlotKind
-import dev.buhanzaz.rwms.client.data.CustomerRouteProfile
 import dev.buhanzaz.rwms.client.data.HeldDeliverySlot
 import org.junit.Test
 
@@ -107,19 +107,13 @@ class DeliverySlotPolicyTest {
     }
 
     @Test
-    fun `tariff source distinguishes ordinary isochrone from special price zone`() {
-        val special = slot(id = "special", date = "2026-09-01", start = "09:00:00")
-        val ordinary = special.copy(
-            slotId = "ordinary",
-            priceZoneId = null,
-            priceIsochroneMinutes = 120,
-        )
-
-        assertThat(DeliverySlotPolicy.deliveryTariffSource(listOf(special)))
-            .isEqualTo("Особая зона доставки")
-        assertThat(DeliverySlotPolicy.deliveryTariffSource(listOf(ordinary)))
-            .isEqualTo("Изохрона 2 ч")
-        assertThat(DeliverySlotPolicy.deliveryTariffSource(listOf(special, ordinary))).isNull()
+    fun `flexible arrival is last without changing the server offers`() {
+        val flexible = slot("day", "2026-09-01", "08:00:00").copy(kind = DeliverySlotKind.DURING_DAY)
+        val fixed = slot("fixed", "2026-09-01", "12:00:00")
+        val nextDay = slot("next", "2026-09-02", "09:00:00")
+        val grouped = DeliverySlotPolicy.byDate(listOf(nextDay, flexible, fixed))
+        assertThat(grouped.first().slots).containsExactly(fixed, flexible).inOrder()
+        assertThat(grouped.last().slots).containsExactly(nextDay)
     }
 
     private fun slot(id: String, date: String, start: String): DeliverySlot = DeliverySlot(

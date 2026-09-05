@@ -11,10 +11,12 @@ import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
 import android.view.MotionEvent
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -33,20 +35,24 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.core.content.ContextCompat
 import com.yandex.mapkit.Animation
 import com.yandex.mapkit.GeoObject
 import com.yandex.mapkit.MapKitFactory
 import com.yandex.mapkit.geometry.BoundingBox
 import com.yandex.mapkit.geometry.Geometry
 import com.yandex.mapkit.geometry.Point
+import com.yandex.mapkit.logo.HorizontalAlignment
+import com.yandex.mapkit.logo.VerticalAlignment
 import com.yandex.mapkit.map.CameraPosition
 import com.yandex.mapkit.map.IconStyle
 import com.yandex.mapkit.map.InputListener
@@ -368,7 +374,7 @@ internal fun preferredCurrentLocationProviders(enabledProviders: Collection<Stri
     ).filter(enabled::contains)
 }
 
-/** Full-screen Yandex raster-map picker with zoom and an explicit current-location control. */
+/** Full-screen Yandex map picker with zoom and an explicit current-location control. */
 @Composable
 internal fun DeliveryMapPointPicker(
     latitude: Double?,
@@ -382,7 +388,10 @@ internal fun DeliveryMapPointPicker(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val darkTheme = isSystemInDarkTheme()
+    val darkTheme = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    val density = LocalDensity.current
+    val imeBottom = WindowInsets.ime.getBottom(density)
+    val logoBottom = with(density) { bottomControlsClearance.roundToPx() } + imeBottom
     val latestOnPoint by rememberUpdatedState(onPoint)
     val latestOnCurrentLocation by rememberUpdatedState(onCurrentLocation)
     val initialTarget = deliveryMapInitialTarget(latitude, longitude, depotLatitude, depotLongitude)
@@ -414,13 +423,12 @@ internal fun DeliveryMapPointPicker(
                 }
             },
             update = {
-                mapHandle.render(
-                    deliveryMapRenderState(latitude, longitude, darkTheme),
-                )
+                mapHandle.render(deliveryMapRenderState(latitude, longitude, darkTheme))
+                mapHandle.positionAttribution(with(density) { 20.dp.roundToPx() }, logoBottom.coerceAtLeast(1))
             },
             modifier = Modifier.fillMaxSize(),
         )
-        Box(
+        if (imeBottom == 0) Box(
             modifier = Modifier
                 .fillMaxSize()
                 .safeDrawingPadding()
@@ -431,11 +439,12 @@ internal fun DeliveryMapPointPicker(
                 verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
             ) {
                 Surface(
+                    modifier = Modifier.figmaButtonShadow(MAP_CONTROL_SHAPE),
                     shape = MAP_CONTROL_SHAPE,
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
-                    shadowElevation = 5.dp,
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 ) {
-                    IconButton(onClick = { mapHandle.changeZoom(1f) }, modifier = Modifier.size(54.dp)) {
+                    IconButton(onClick = { mapHandle.changeZoom(1f) }, modifier = Modifier.size(48.dp)) {
                         Icon(
                             Icons.Default.Add,
                             contentDescription = "Приблизить карту",
@@ -444,11 +453,12 @@ internal fun DeliveryMapPointPicker(
                     }
                 }
                 Surface(
+                    modifier = Modifier.figmaButtonShadow(MAP_CONTROL_SHAPE),
                     shape = MAP_CONTROL_SHAPE,
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
-                    shadowElevation = 5.dp,
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 ) {
-                    IconButton(onClick = { mapHandle.changeZoom(-1f) }, modifier = Modifier.size(54.dp)) {
+                    IconButton(onClick = { mapHandle.changeZoom(-1f) }, modifier = Modifier.size(48.dp)) {
                         Icon(
                             Icons.Default.Remove,
                             contentDescription = "Отдалить карту",
@@ -460,14 +470,15 @@ internal fun DeliveryMapPointPicker(
             Surface(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(bottom = bottomControlsClearance),
+                    .padding(bottom = bottomControlsClearance)
+                    .figmaButtonShadow(MAP_CONTROL_SHAPE),
                 shape = MAP_CONTROL_SHAPE,
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
-                shadowElevation = 5.dp,
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             ) {
                 IconButton(
                     onClick = { latestOnCurrentLocation() },
-                    modifier = Modifier.size(54.dp),
+                    modifier = Modifier.size(48.dp),
                 ) {
                     Icon(
                         Icons.Default.NearMe,
@@ -522,6 +533,7 @@ private class YandexDeliveryMapHandle(
         .setZIndex(10f)
     private val lifecycleObserver = YandexMapLifecycleObserver(mapView)
     private var renderedPoint: Pair<Double, Double>? = null
+    private var renderedNightMode: Boolean? = null
     private var marker: PlacemarkMapObject? = null
     private val inputListener = object : InputListener {
         override fun onMapTap(map: Map, point: Point) {
@@ -537,10 +549,23 @@ private class YandexDeliveryMapHandle(
 
     init {
         map.addInputListener(WeakReference(inputListener))
-        map.mapType = MapType.MAP
+        map.mapType = MapType.VECTOR_MAP
         map.set2DMode(true)
-        map.isNightModeEnabled = initialNightMode
+        renderAppearance(initialNightMode)
+        map.logo.setAlignment(com.yandex.mapkit.logo.Alignment(HorizontalAlignment.LEFT, VerticalAlignment.BOTTOM))
         map.move(CameraPosition(Point(initialLatitude, initialLongitude), initialZoom, 0f, 0f))
+    }
+
+    /** Keeps provider attribution above the measured address panel, including the keyboard inset. */
+    fun positionAttribution(horizontalPadding: Int, bottomPadding: Int) {
+        map.logo.setPadding(com.yandex.mapkit.logo.Padding(horizontalPadding, bottomPadding))
+    }
+
+    private fun renderAppearance(nightMode: Boolean) {
+        if (renderedNightMode == nightMode) return
+        map.isNightModeEnabled = nightMode
+        map.setMapStyle(deliveryMapStyle(nightMode))
+        renderedNightMode = nightMode
     }
 
     /** Attaches the balanced MapKit/MapView lifecycle pair to the current host. */
@@ -556,7 +581,7 @@ private class YandexDeliveryMapHandle(
 
     /** Applies dark-map state and keeps one persistent marker for the confirmed/candidate point. */
     fun render(state: DeliveryMapRenderState) {
-        map.isNightModeEnabled = state.nightModeEnabled
+        renderAppearance(state.nightModeEnabled)
         val point = state.selectedPoint
         if (point == renderedPoint) return
         if (point == null) {
@@ -717,36 +742,67 @@ private fun GeoObject.toDeliveryLocation(
     return GeocodedDeliveryLocation(address, point.latitude, point.longitude)
 }
 
-/** Builds a bitmap-backed pin because native MapKit cannot reliably rasterize Android vectors. */
+/** Builds the blue BLOCK BOX cube pin at display density for MapKit's native bitmap renderer. */
 private fun deliveryMarkerImage(context: Context): ImageProvider {
     val density = context.resources.displayMetrics.density
-    val width = (44f * density).roundToInt().coerceAtLeast(44)
-    val height = (54f * density).roundToInt().coerceAtLeast(54)
-    val centerX = width / 2f
-    val headRadius = width * 0.39f
-    val headCenterY = headRadius + 2f * density
+    val width = (44f * density).roundToInt().coerceAtLeast(1)
+    val height = (56f * density).roundToInt().coerceAtLeast(1)
     val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-    val canvas = Canvas(bitmap)
-    val pinPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFE4473A.toInt() }
-    val tail = Path().apply {
-        moveTo(centerX - headRadius * 0.68f, headCenterY + headRadius * 0.58f)
-        lineTo(centerX, height - density)
-        lineTo(centerX + headRadius * 0.68f, headCenterY + headRadius * 0.58f)
+    val canvas = Canvas(bitmap).apply { scale(density, density) }
+    val pin = Path().apply {
+        moveTo(22f, 54f)
+        cubicTo(16f, 44f, 3f, 34f, 3f, 22f)
+        cubicTo(3f, -3f, 41f, -3f, 41f, 22f)
+        cubicTo(41f, 34f, 28f, 44f, 22f, 54f)
         close()
     }
-    canvas.drawPath(tail, pinPaint)
-    canvas.drawCircle(centerX, headCenterY, headRadius, pinPaint)
-    canvas.drawCircle(
-        centerX,
-        headCenterY,
-        headRadius * 0.38f,
-        Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.WHITE },
-    )
-    return ImageProvider.fromBitmap(
-        bitmap,
-        true,
-        "rwms-customer-delivery-pin-${context.resources.displayMetrics.densityDpi}",
-    )
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        shader = android.graphics.LinearGradient(
+            3f, 3f, 41f, 48f,
+            0xFF549AC5.toInt(), 0xFF204B79.toInt(), android.graphics.Shader.TileMode.CLAMP,
+        )
+    }
+    canvas.drawPath(pin, paint)
+    paint.shader = null
+    paint.color = android.graphics.Color.WHITE
+    paint.style = Paint.Style.STROKE
+    paint.strokeWidth = 2f
+    paint.strokeJoin = Paint.Join.ROUND
+    canvas.drawPath(pin, paint)
+    val cube = Path().apply {
+        moveTo(22f, 11f)
+        lineTo(32f, 17f)
+        lineTo(32f, 29f)
+        lineTo(22f, 35f)
+        lineTo(12f, 29f)
+        lineTo(12f, 17f)
+        close()
+        moveTo(12f, 17f)
+        lineTo(22f, 23f)
+        lineTo(32f, 17f)
+        moveTo(22f, 23f)
+        lineTo(22f, 35f)
+    }
+    canvas.drawPath(cube, paint)
+    return ImageProvider.fromBitmap(bitmap, true, "block-box-delivery-pin-${context.resources.displayMetrics.densityDpi}")
+}
+
+/** MapKit styling changes presentation only; roads, addresses and provider labels remain native. */
+private fun deliveryMapStyle(nightMode: Boolean): String {
+    val land = if (nightMode) "#1C3247" else "#EDF5FB"
+    val water = if (nightMode) "#173F60" else "#AED8EF"
+    val building = if (nightMode) "#2E506C" else "#D9E7F1"
+    val road = if (nightMode) "#42627B" else "#FFFFFF"
+    val text = if (nightMode) "#DFEFFA" else "#31506B"
+    return """[
+        {"elements":"geometry","stylers":{"hue":"#549AC5","saturation":-0.25}},
+        {"tags":{"any":["landscape"]},"elements":"geometry.fill","stylers":{"color":"$land"}},
+        {"tags":{"any":["water"]},"elements":"geometry.fill","stylers":{"color":"$water"}},
+        {"tags":{"any":["building"]},"elements":"geometry.fill","stylers":{"color":"$building"}},
+        {"tags":{"any":["road"]},"elements":"geometry.fill","stylers":{"color":"$road"}},
+        {"elements":"label.text.fill","stylers":{"color":"$text"}},
+        {"elements":"label.text.outline","stylers":{"color":"$land"}}
+    ]""".trimIndent()
 }
 
 private const val DEPOT_ZOOM = 10f
@@ -759,4 +815,4 @@ private const val CURRENT_LOCATION_TIMEOUT_MILLIS = 15_000L
 private const val SUGGEST_LATITUDE_RADIUS = 2.5
 private const val SUGGEST_LONGITUDE_RADIUS = 4.0
 private fun smoothMapAnimation(): Animation = Animation(Animation.Type.SMOOTH, 0.25f)
-private val MAP_CONTROL_SHAPE = androidx.compose.foundation.shape.RoundedCornerShape(18.dp)
+private val MAP_CONTROL_SHAPE = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)

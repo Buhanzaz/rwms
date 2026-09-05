@@ -1063,8 +1063,10 @@ Evidence:
    default, so the button cannot remain disabled for a value shown as valid.
    Checkout applies that default to missing entries in an unfinished cart created
    before this invariant, without changing the held slot/version fence.
-6. CustomerApp opens a focused full-screen Yandex `MapType.MAP` map on the
-   selected depot. Pan/pinch plus explicit zoom remain native MapKit actions;
+6. CustomerApp opens a focused full-screen Yandex `MapType.VECTOR_MAP` map on the
+   selected depot, with the application palette and chosen light/dark appearance.
+   Provider attribution stays above the address panel and keyboard.
+   Pan/pinch plus explicit zoom remain native MapKit actions;
    satellite/hybrid, route, traffic, weather and layer toggles are absent. The
    fixed bottom search panel stays above the IME. A retained Yandex suggest
    session supplies live address choices; selecting one or submitting typed
@@ -1081,13 +1083,16 @@ Evidence:
    confirmed address/coordinate pair is mandatory for slot search; geocoding is
    never treated as capacity. Pressing continue first opens the private-site
    access/failed-trip responsibility modal. For two or more selected cabins the
-   same step requires a one/two dropdown for how many cabins the site can accept
+   same step requires a one/two choice for how many cabins the site can accept
    per visit: one means sequential solo-truck trips, while two permits but does
    not guarantee a trailer route. The exact search and hold carry this value and
    revalidate both responsibility facts. Its Navigation 3 sequence is
    map/address, server dates, exact slots, then rental duration and checkout.
    The date view only groups the exact offers returned by the current search
-   and creates no local calendar availability. Logistics reads the customer
+   and creates no local calendar availability. On each date, fixed-time offers precede
+   the flexible during-day offer, including when rescheduling. The date screen shows
+   the server delivery price without exposing tariff-zone or isochrone metadata.
+   Logistics reads the customer
    profile and cabin count from its own identity/session/cart, then obtains a
    private directed Valhalla truck matrix from the selected warehouse's depot
    coordinates. The process-local matrix cache is keyed by the explicit graph

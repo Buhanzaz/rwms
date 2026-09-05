@@ -138,13 +138,15 @@ slot. Delivery is a focused four-step Navigation
 fixed-window or full-day slots, then per-cabin term review and checkout. Every slot carries the
 required `kind`: `FIXED_WINDOW` displays its exact interval, while `DURING_DAY` displays
 `В течение дня. Точное время подтвердит логист` in the date preview, slot choice and confirmation
-without hiding its non-null server bounds.
+without hiding its non-null server bounds. Flexible arrival is listed last within each date, including
+rescheduling offers; fixed windows retain their time ordering.
 
-The map starts with Yandex's third-party raster `MapType.MAP` at the
-logistics-owned depot, keeps pan/pinch inside MapKit and shows plus, minus and a
+The map uses the stylable `MapType.VECTOR_MAP` in flat 2D mode at the logistics-owned depot, keeps pan/pinch inside MapKit and shows plus, minus and a
 bottom-right current-location arrow. A tapped, suggested or device point is rendered immediately
-with a bitmap-backed pin, and MapKit night mode follows Android's dark appearance together with
-theme-safe controls. Tapping the arrow is the only action that requests Android approximate/precise
+with a blue bitmap-backed cube pin. Its blue palette and night mode follow the app's explicit
+light/dark appearance. The shared header and glass controls use the same palette; map controls hide
+while the keyboard is open. The required Yandex attribution stays above the measured address panel
+at the bottom left, using the SDK's logo alignment and padding API. Tapping the arrow is the only action that requests Android approximate/precise
 location permission; cancellable one-shot Android location requests race only enabled GPS,
 network and passive providers, recenter the marker and reverse-geocode the same address/point
 binding. Denial, disabled providers, timeout and a missing result are shown explicitly. There is no
@@ -164,7 +166,7 @@ private-site attestations and slots.
 Pressing continue with a confirmed address/point and non-empty server cart first opens a modal for
 site receiving capacity, private-site truck access and failed-trip responsibility. One selected
 cabin fixes capacity to `1` and a truck without a trailer; two or more selected cabins expose a
-`1`/`2` dropdown where `2` means a truck with a trailer. Capacity changes invalidate prior offers,
+pair of equal-width `1`/`2` options where `2` means a truck with a trailer. Capacity changes invalidate prior offers,
 holds and attestations. Both checkboxes are required before the slot request is sent, and the same
 capacity is fenced again on hold. Navigation advances to dates only after a newer server search
 generation succeeds; failures cannot open an empty date destination. While
@@ -175,10 +177,9 @@ incomplete offer. Changing either answer preserves returned offers and the selec
 an existing hold. Logistics,
 not the APK, checks
 public-road feasibility for its frozen height, width, length, weight and axle
-profile and returns that profile with offers. The date step displays the server price and its
-mutually exclusive source: ordinary 60/120/180/240-minute isochrone tier through
-`priceIsochroneMinutes`, or a special-price polygon through nullable UUID `priceZoneId`. A missing
-or contradictory tariff is shown as `Не рассчитана` and is never replaced by local zero. Known
+profile and returns that profile with offers. The date step displays the server price after the
+heading and explanatory text. Isochrone tiers and special-price polygons remain transport metadata;
+they are not shown to customers. A missing or contradictory tariff is shown as `Не рассчитана` and is never replaced by local zero. Known
 whole-ruble prices are locale-grouped from the server integer without floating-point or local price
 calculation. Forbidden and
 no-trailer polygons remain server routing constraints; the APK does not use a price source as route

@@ -14,6 +14,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,40 +24,37 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.LocalShipping
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.RadioButton
@@ -66,11 +64,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -78,8 +76,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -107,6 +108,7 @@ fun DeliveryMapScreen(
     onFailedTripAcknowledgement: (Boolean) -> Unit,
     onSearchSlots: () -> Unit,
     onSlotsReady: () -> Unit,
+    onProfile: (() -> Unit)? = null,
 ) {
     val selectedWarehouse = requireNotNull(state.selectedWarehouse) {
         "Delivery requires a selected warehouse"
@@ -122,6 +124,9 @@ fun DeliveryMapScreen(
     var locationDialogMessage by rememberSaveable(selectedWarehouse.id) { mutableStateOf<String?>(null) }
     var awaitingSlotGeneration by rememberSaveable(selectedWarehouse.id) { mutableStateOf<Long?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
+    val density = LocalDensity.current
+    var addressPanelHeight by remember { mutableIntStateOf(0) }
+    val addressClearance = with(density) { addressPanelHeight.toDp() } + 8.dp
     val geocoder = remember(selectedWarehouse.id) { YandexDeliveryGeocoder() }
     val suggestSession = remember(selectedWarehouse.id) { YandexDeliverySuggestSession() }
     val currentLocationProvider = remember(selectedWarehouse.id, context) {
@@ -320,27 +325,16 @@ fun DeliveryMapScreen(
                     requestCurrentLocation()
                 }
             },
-            bottomControlsClearance = MAP_SEARCH_CLEARANCE +
-                if (suggestions.isEmpty()) 0.dp else ADDRESS_SUGGESTIONS_MAP_CLEARANCE,
+            bottomControlsClearance = addressClearance,
             modifier = Modifier.fillMaxSize(),
         )
 
-        Box(Modifier.fillMaxSize().safeDrawingPadding().padding(12.dp)) {
-            Surface(
-                modifier = Modifier.align(Alignment.TopStart),
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
-                shadowElevation = 5.dp,
-            ) {
-                IconButton(onClick = onBack, modifier = Modifier.size(54.dp)) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Назад в корзину",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                    )
-                }
-            }
-        }
+        CustomerTopBar(
+            title = "Адрес доставки",
+            onBack = onBack,
+            onProfile = onProfile,
+            avatarUrl = state.profile?.avatar?.thumbnailUrl,
+        )
 
         DeliveryAddressPanel(
             address = state.address,
@@ -381,7 +375,8 @@ fun DeliveryMapScreen(
                 keyboardController?.hide()
                 showResponsibilityDialog = true
             },
-            modifier = Modifier.align(Alignment.BottomCenter).imePadding(),
+            modifier = Modifier.align(Alignment.BottomCenter).imePadding()
+                .onSizeChanged { addressPanelHeight = it.height },
         )
         if (state.busy && awaitingSlotGeneration != null) {
             DeliverySlotCalculationOverlay()
@@ -431,24 +426,28 @@ internal fun DeliverySlotCalculationOverlay() {
     ) {
         Surface(
             modifier = Modifier.fillMaxSize().testTag("delivery-slot-calculation-overlay"),
-            color = Color.Black.copy(alpha = 0.56f),
+            color = CustomerStoreNavy.copy(alpha = 0.38f),
         ) {
-            Column(
-                modifier = Modifier.fillMaxSize().padding(32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(56.dp).testTag("delivery-slot-calculation-progress"),
-                    color = Color.White,
-                )
-                Spacer(Modifier.height(18.dp))
-                Text(
-                    "Идёт расчёт свободных слотов",
-                    color = Color.White,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
+            Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth().widthIn(max = 420.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(28.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(20.dp),
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(40.dp).testTag("delivery-slot-calculation-progress"),
+                            color = MaterialTheme.colorScheme.primary,
+                            strokeWidth = 3.dp,
+                        )
+                        Text("Идёт расчёт свободных слотов", style = MaterialTheme.typography.titleMedium)
+                    }
+                }
             }
         }
     }
@@ -461,11 +460,19 @@ fun DeliveryDatesScreen(
     state: CustomerWorkflowState,
     onBack: () -> Unit,
     onDate: (String) -> Unit,
+    onProfile: (() -> Unit)? = null,
 ) {
     val dates = remember(state.slots) { DeliverySlotPolicy.byDate(state.slots) }
     var expandedDate by rememberSaveable { mutableStateOf<String?>(null) }
     Scaffold(
-        topBar = { DeliveryStepTopBar(step = 2, title = "Дата доставки", onBack = onBack) },
+        topBar = {
+            CustomerTopBar(
+                "Дата доставки",
+                onBack = onBack,
+                onProfile = onProfile,
+                avatarUrl = state.profile?.avatar?.thumbnailUrl,
+            )
+        },
     ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().testTag("delivery-dates-screen"),
@@ -478,28 +485,31 @@ fun DeliveryDatesScreen(
                     Modifier.fillMaxWidth().widthIn(max = 760.dp).padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    val deliveryPrice = DeliverySlotPolicy.deliveryPriceRubles(state.slots)
-                    val tariffSource = DeliverySlotPolicy.deliveryTariffSource(state.slots)
-                    Text(
-                        text = deliveryPrice?.let { price ->
-                            "Стоимость доставки: ${CustomerMoneyFormatter.wholeRubles(price)}" +
-                                tariffSource?.let { source -> " · $source" }.orEmpty()
-                        }
-                            ?: CustomerMoneyFormatter.wholeRubles(null),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (deliveryPrice == null) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
-                        modifier = Modifier.testTag("delivery-price"),
-                    )
                     Text("Выберите удобный день", style = MaterialTheme.typography.headlineSmall)
                     Text(
                         "Учли маршрут до вашего адреса и занятость машин.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("delivery-date-explanation"),
                     )
+                    val deliveryPrice = DeliverySlotPolicy.deliveryPriceRubles(state.slots)
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.LocalShipping, contentDescription = null, modifier = Modifier.size(22.dp))
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                text = deliveryPrice?.let { "Стоимость доставки: ${CustomerMoneyFormatter.wholeRubles(it)}" }
+                                    ?: CustomerMoneyFormatter.wholeRubles(null),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = if (deliveryPrice == null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.testTag("delivery-price"),
+                            )
+                        }
+                    }
                 }
             }
             items(dates, key = DeliveryDateAvailability::date) { availability ->
@@ -546,6 +556,7 @@ fun DeliverySlotsScreen(
     onSelectSlot: (String) -> Unit,
     onHoldSlot: () -> Unit,
     onHeld: () -> Unit,
+    onProfile: (() -> Unit)? = null,
 ) {
     val slots = remember(state.slots, date) {
         DeliverySlotPolicy.byDate(state.slots).firstOrNull { it.date == date }?.slots.orEmpty()
@@ -561,7 +572,14 @@ fun DeliverySlotsScreen(
     }
 
     Scaffold(
-        topBar = { DeliveryStepTopBar(step = 3, title = formatDeliveryDate(date), onBack = onBack) },
+        topBar = {
+            CustomerTopBar(
+                "Время доставки",
+                onBack = onBack,
+                onProfile = onProfile,
+                avatarUrl = state.profile?.avatar?.thumbnailUrl,
+            )
+        },
     ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().testTag("delivery-slots-screen"),
@@ -574,6 +592,7 @@ fun DeliverySlotsScreen(
                     Modifier.fillMaxWidth().widthIn(max = 760.dp).padding(horizontal = 16.dp, vertical = 12.dp),
                 ) {
                     Text("Выберите время", style = MaterialTheme.typography.headlineSmall)
+                    Text(formatDeliveryDate(date), style = MaterialTheme.typography.titleMedium)
                     Text(
                         state.address,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -582,6 +601,7 @@ fun DeliverySlotsScreen(
             }
             items(slots, key = DeliverySlot::slotId) { slot ->
                 OutlinedCard(
+                    shape = RoundedCornerShape(16.dp),
                     onClick = { onSelectSlot(slot.slotId) },
                     enabled = !state.busy,
                     border = BorderStroke(
@@ -591,7 +611,7 @@ fun DeliverySlotsScreen(
                     ),
                     colors = CardDefaults.outlinedCardColors(
                         containerColor = if (selected?.slotId == slot.slotId) {
-                            MaterialTheme.colorScheme.surfaceContainerHigh
+                            MaterialTheme.colorScheme.primaryContainer
                         } else {
                             MaterialTheme.colorScheme.surface
                         },
@@ -607,6 +627,7 @@ fun DeliverySlotsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         RadioButton(selected = selected?.slotId == slot.slotId, onClick = null)
+                        Spacer(Modifier.width(8.dp))
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(
                                 deliverySlotTimeLabel(slot),
@@ -663,10 +684,18 @@ fun DeliveryConfirmationScreen(
     state: CustomerWorkflowState,
     onBack: () -> Unit,
     onCheckout: () -> Unit,
+    onProfile: (() -> Unit)? = null,
 ) {
     val held = state.heldSlot?.slot
     Scaffold(
-        topBar = { DeliveryStepTopBar(step = 4, title = "Подтверждение", onBack = onBack) },
+        topBar = {
+            CustomerTopBar(
+                "Подтверждение",
+                onBack = onBack,
+                onProfile = onProfile,
+                avatarUrl = state.profile?.avatar?.thumbnailUrl,
+            )
+        },
     ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().testTag("delivery-confirmation-screen"),
@@ -677,7 +706,10 @@ fun DeliveryConfirmationScreen(
             if (held == null) {
                 item {
                     Card(
-                        Modifier.fillMaxWidth().widthIn(max = 760.dp).padding(16.dp),
+                        modifier = Modifier.fillMaxWidth().widthIn(max = 760.dp).padding(16.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     ) {
                         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             Text(
@@ -694,8 +726,20 @@ fun DeliveryConfirmationScreen(
                 }
             } else {
                 item {
-                    Card(
+                    Column(
                         Modifier.fillMaxWidth().widthIn(max = 760.dp).padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text("Проверьте заказ", style = MaterialTheme.typography.headlineSmall)
+                        Text("Адрес, время доставки и срок аренды.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth().widthIn(max = 760.dp).padding(horizontal = 16.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     ) {
                         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -731,19 +775,25 @@ fun DeliveryConfirmationScreen(
                 }
                 item {
                     OutlinedCard(
-                        Modifier.fillMaxWidth().widthIn(max = 760.dp).padding(horizontal = 16.dp),
+                        modifier = Modifier.fillMaxWidth().widthIn(max = 760.dp).padding(horizontal = 16.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     ) {
                         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Text("Срок аренды по бытовкам", style = MaterialTheme.typography.titleMedium)
-                            val cartCabins = state.cart?.cabins.orEmpty()
+                            val cartCabins = state.cart?.cabins.orEmpty().ifEmpty {
+                                state.cabins.filter { it.unitId in state.selectedCabinIds }
+                            }
                             if (cartCabins.isNotEmpty()) {
                                 cartCabins.forEach { cabin ->
                                     Text("№ ${cabin.accountingNo} — ${state.rentalTerms[cabin.unitId] ?: 1L} мес.")
                                 }
                             } else {
-                                state.selectedCabinIds.sorted().forEach { cabinId ->
-                                    Text("Бытовка $cabinId — ${state.rentalTerms[cabinId] ?: 1L} мес.")
-                                }
+                                state.selectedCabinIds.groupBy { state.rentalTerms[it] ?: 1L }
+                                    .toSortedMap().forEach { (months, cabinIds) ->
+                                        Text("${cabinIds.size} шт. · $months мес.")
+                                    }
                             }
                         }
                     }
@@ -786,13 +836,14 @@ private fun DeliveryAddressPanel(
     modifier: Modifier = Modifier,
 ) {
     Surface(
-        modifier = modifier.fillMaxWidth().widthIn(max = 760.dp),
-        shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
+        modifier = modifier.fillMaxWidth().widthIn(max = 760.dp).navigationBarsPadding().padding(16.dp)
+            .figmaButtonShadow(RoundedCornerShape(16.dp)),
+        shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surface,
-        shadowElevation = 10.dp,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(
-            Modifier.navigationBarsPadding().padding(start = 14.dp, top = 8.dp, end = 14.dp, bottom = 10.dp),
+            Modifier.padding(12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -838,7 +889,6 @@ private fun DeliveryAddressPanel(
                     onValueChange = onAddress,
                     modifier = Modifier
                         .weight(1f)
-                        .figmaButtonShadow()
                         .testTag("delivery-address-field"),
                     placeholder = { Text("Поиск адреса") },
                     leadingIcon = {
@@ -847,7 +897,7 @@ private fun DeliveryAddressPanel(
                         }
                     },
                     singleLine = true,
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(12.dp),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = { onSearch(address) }),
                     colors = TextFieldDefaults.colors(
@@ -859,16 +909,11 @@ private fun DeliveryAddressPanel(
                         disabledIndicatorColor = Color.Transparent,
                     ),
                 )
-                FilledIconButton(
+                Button(
                     onClick = onContinue,
                     enabled = continueEnabled,
                     modifier = Modifier.size(56.dp).testTag("delivery-map-continue"),
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = DELIVERY_ACTION_COLOR,
-                        contentColor = Color.White,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    ),
+                    contentPadding = PaddingValues(0.dp),
                 ) {
                     Icon(Icons.Default.ChevronRight, contentDescription = "Продолжить к выбору даты")
                 }
@@ -908,107 +953,111 @@ internal fun DeliveryResponsibilityDialog(
 ) {
     require(selectedCabinCount > 0)
     require(siteCabinCapacity in 1..2)
-    var capacityMenuExpanded by remember { mutableStateOf(false) }
     val vehicleCopy = if (siteCabinCapacity == 2) {
         "Машина с прицепом проедет к адресу и сможет работать на объекте"
     } else {
         "Машина без прицепа проедет к адресу и сможет работать на объекте"
     }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Условия доставки") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    "Сколько бытовок объект может принять за один заезд?",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                if (selectedCabinCount == 1) {
-                    Text(
-                        "1 бытовка — машина без прицепа",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.testTag("site-cabin-capacity-fixed"),
-                    )
-                } else {
-                    Box {
-                        OutlinedButton(
-                            onClick = { capacityMenuExpanded = true },
-                            enabled = !busy,
-                            modifier = Modifier.fillMaxWidth().testTag("site-cabin-capacity-selector"),
-                        ) {
+    Dialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth().widthIn(max = 560.dp).padding(20.dp).heightIn(max = 700.dp),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Условия доставки", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                    IconButton(onClick = onDismiss, enabled = !busy) {
+                        Icon(Icons.Default.Close, contentDescription = "Закрыть условия доставки")
+                    }
+                }
+                Column(
+                    modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Text("Сколько бытовок объект может принять за один заезд?", style = MaterialTheme.typography.bodyLarge)
+                    if (selectedCabinCount == 1) {
+                        Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
                             Text(
-                                if (siteCabinCapacity == 2) {
-                                    "2 бытовки — машина с прицепом"
-                                } else {
-                                    "1 бытовка — машина без прицепа"
-                                },
-                                modifier = Modifier.weight(1f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
+                                "1 бытовка — машина без прицепа",
+                                modifier = Modifier.fillMaxWidth().padding(14.dp).testTag("site-cabin-capacity-fixed"),
+                                style = MaterialTheme.typography.bodyMedium,
                             )
-                            Icon(Icons.Default.ArrowDropDown, contentDescription = "Выбрать вместимость объекта")
                         }
-                        DropdownMenu(
-                            expanded = capacityMenuExpanded,
-                            onDismissRequest = { capacityMenuExpanded = false },
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().testTag("site-cabin-capacity-selector"),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            listOf(
-                                1 to "1 бытовка — машина без прицепа",
-                                2 to "2 бытовки — машина с прицепом",
-                            ).forEach { (capacity, label) ->
-                                DropdownMenuItem(
-                                    text = { Text(label) },
-                                    onClick = {
-                                        capacityMenuExpanded = false
-                                        onSiteCabinCapacity(capacity)
-                                    },
-                                    modifier = Modifier.testTag("site-cabin-capacity-$capacity"),
-                                )
+                            (1..2).forEach { capacity ->
+                                val selected = capacity == siteCabinCapacity
+                                Surface(
+                                    onClick = { onSiteCabinCapacity(capacity) },
+                                    enabled = !busy,
+                                    modifier = Modifier.weight(1f).testTag("site-cabin-capacity-$capacity"),
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                                    border = BorderStroke(
+                                        if (selected) 2.dp else 1.dp,
+                                        if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                    ),
+                                ) {
+                                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Text(if (capacity == 1) "1 бытовка" else "2 бытовки", style = MaterialTheme.typography.titleMedium)
+                                        Text(if (capacity == 1) "Без прицепа" else "С прицепом", style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
                             }
                         }
                     }
-                }
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(
+                    DeliveryConsentRow(
                         checked = privateSiteAccessConfirmed,
-                        onCheckedChange = onPrivateSiteAccess,
                         enabled = !busy,
-                        modifier = Modifier.testTag("private-site-access-confirmation"),
+                        text = vehicleCopy,
+                        tag = "private-site-access-confirmation",
+                        onChecked = onPrivateSiteAccess,
                     )
-                    Text(
-                        vehicleCopy,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(
+                    DeliveryConsentRow(
                         checked = failedTripChargeAcknowledged,
-                        onCheckedChange = onFailedTripAcknowledgement,
                         enabled = !busy,
-                        modifier = Modifier.testTag("failed-trip-charge-acknowledgement"),
-                    )
-                    Text(
-                        "Подтверждаю ответственность за ложные сведения о проезде; " +
-                            "тариф определяется договором",
-                        style = MaterialTheme.typography.bodySmall,
+                        text = "Подтверждаю ответственность за ложные сведения о проезде; тариф определяется договором",
+                        tag = "failed-trip-charge-acknowledgement",
+                        onChecked = onFailedTripAcknowledgement,
                     )
                 }
+                Button(
+                    onClick = onConfirm,
+                    enabled = privateSiteAccessConfirmed && failedTripChargeAcknowledged && !busy,
+                    modifier = Modifier.fillMaxWidth().testTag("confirm-delivery-responsibility"),
+                ) {
+                    Text("Выбрать дату доставки")
+                }
             }
-        },
-        confirmButton = {
-            Button(
-                onClick = onConfirm,
-                enabled = privateSiteAccessConfirmed && failedTripChargeAcknowledged && !busy,
-                modifier = Modifier.testTag("confirm-delivery-responsibility"),
-            ) {
-                Text("Рассчитать слоты")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !busy) { Text("Отмена") }
-        },
-    )
+        }
+    }
+}
+
+@Composable
+private fun DeliveryConsentRow(
+    checked: Boolean,
+    enabled: Boolean,
+    text: String,
+    tag: String,
+    onChecked: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .toggleable(value = checked, enabled = enabled, role = Role.Checkbox, onValueChange = onChecked)
+            .testTag(tag),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Checkbox(checked = checked, onCheckedChange = null, enabled = enabled)
+        Text(text, modifier = Modifier.padding(start = 10.dp, top = 2.dp), style = MaterialTheme.typography.bodyMedium)
+    }
 }
 
 /** Explains that the required Yandex-owned recognizer is absent instead of using another provider. */
@@ -1041,6 +1090,9 @@ private fun DeliveryDateCard(
     onSelect: () -> Unit,
 ) {
     OutlinedCard(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = Modifier
             .fillMaxWidth()
             .widthIn(max = 760.dp)
@@ -1048,7 +1100,7 @@ private fun DeliveryDateCard(
     ) {
         Column {
             Row(
-                Modifier.fillMaxWidth().padding(start = 16.dp, top = 10.dp, bottom = 10.dp),
+                Modifier.fillMaxWidth().padding(start = 16.dp, top = 14.dp, bottom = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(Icons.Default.CalendarMonth, contentDescription = null)
@@ -1077,11 +1129,6 @@ private fun DeliveryDateCard(
                             Text(deliverySlotTimeLabel(slot))
                         }
                     }
-                    Text(
-                        "Нажмите «Выбрать дату», чтобы перейти к слотам",
-                        modifier = Modifier.padding(start = 18.dp, end = 18.dp, bottom = 12.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
                 }
             }
             Button(
@@ -1093,24 +1140,6 @@ private fun DeliveryDateCard(
             ) { Text("Выбрать дату") }
         }
     }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun DeliveryStepTopBar(step: Int, title: String, onBack: () -> Unit) {
-    TopAppBar(
-        title = {
-            Column {
-                Text("Шаг $step из 4", style = MaterialTheme.typography.labelMedium)
-                Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        },
-        navigationIcon = {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
-            }
-        },
-    )
 }
 
 @Composable
@@ -1159,9 +1188,6 @@ internal fun hasDeliveryLocationPermission(context: Context): Boolean = DELIVERY
 /** Keeps the Android permission prompt behind the explicit current-location arrow action. */
 internal fun shouldRequestDeliveryLocationPermission(permissionGranted: Boolean): Boolean = !permissionGranted
 
-private val DELIVERY_ACTION_COLOR = Color(0xFFFF8A34)
-private val MAP_SEARCH_CLEARANCE = 142.dp
-private val ADDRESS_SUGGESTIONS_MAP_CLEARANCE = 240.dp
 private const val ADDRESS_SUGGEST_DEBOUNCE_MILLIS = 250L
 private const val CURRENT_LOCATION_GEOCODE_ZOOM = 16f
 private val DELIVERY_LOCATION_PERMISSIONS = arrayOf(

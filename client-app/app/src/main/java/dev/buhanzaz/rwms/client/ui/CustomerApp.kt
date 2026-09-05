@@ -522,6 +522,7 @@ private fun SignedInNavigation(
                     entry<DeliveryMapRoute> {
                         DeliveryMapScreen(
                             state = state,
+                            onProfile = ::openProfile,
                             onBack = { backStack.removeLastOrNull() },
                             onAddress = onAddress,
                             onPoint = onPoint,
@@ -540,6 +541,7 @@ private fun SignedInNavigation(
                     entry<DeliveryDatesRoute> {
                         DeliveryDatesScreen(
                             state = state,
+                            onProfile = ::openProfile,
                             onBack = { backStack.removeLastOrNull() },
                             onDate = { date ->
                                 val route = DeliverySlotsRoute(date)
@@ -550,6 +552,7 @@ private fun SignedInNavigation(
                     entry<DeliverySlotsRoute> { route ->
                         DeliverySlotsScreen(
                             state = state,
+                            onProfile = ::openProfile,
                             date = route.date,
                             onBack = { backStack.removeLastOrNull() },
                             onSelectSlot = onSelectSlot,
@@ -564,6 +567,7 @@ private fun SignedInNavigation(
                     entry<DeliveryConfirmationRoute> {
                         DeliveryConfirmationScreen(
                             state = state,
+                            onProfile = ::openProfile,
                             onBack = { backStack.removeLastOrNull() },
                             onCheckout = onCheckout,
                         )

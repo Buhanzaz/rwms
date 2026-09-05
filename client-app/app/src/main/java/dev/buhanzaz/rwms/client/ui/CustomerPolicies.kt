@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.client.ui
 import dev.buhanzaz.rwms.client.data.CustomerApiException
 import dev.buhanzaz.rwms.client.data.CustomerBooking
 import dev.buhanzaz.rwms.client.data.DeliverySlot
+import dev.buhanzaz.rwms.client.data.DeliverySlotKind
 import dev.buhanzaz.rwms.client.data.EquipmentSelection
 import java.text.NumberFormat
 import java.util.Locale
@@ -80,7 +81,7 @@ object DeliverySlotPolicy {
         return requestedSlotId
     }
 
-    /** Groups server offers into ordered dates without creating local availability. */
+    /** Groups exact server offers by date and time, placing flexible arrival last on each date. */
     fun byDate(slots: List<DeliverySlot>): List<DeliveryDateAvailability> = slots
         .groupBy(DeliverySlot::date)
         .toSortedMap()
@@ -88,7 +89,8 @@ object DeliverySlotPolicy {
             DeliveryDateAvailability(
                 date = date,
                 slots = dateSlots.sortedWith(
-                    compareBy<DeliverySlot>(DeliverySlot::start)
+                    compareBy<DeliverySlot> { it.kind == DeliverySlotKind.DURING_DAY }
+                        .thenBy(DeliverySlot::start)
                         .thenBy(DeliverySlot::end)
                         .thenBy(DeliverySlot::slotId),
                 ),
@@ -103,19 +105,6 @@ object DeliverySlotPolicy {
     fun deliveryPriceRubles(slots: List<DeliverySlot>): Int? {
         val values = slots.map(DeliverySlot::deliveryPriceRubles).distinct()
         return values.singleOrNull()?.takeIf { it >= 0 }
-    }
-
-    /** Describes the one server-owned tariff source without treating it as route feasibility. */
-    fun deliveryTariffSource(slots: List<DeliverySlot>): String? {
-        val sources = slots.map { slot ->
-            when {
-                slot.priceZoneId != null && slot.priceIsochroneMinutes == null -> "Особая зона доставки"
-                slot.priceZoneId == null && slot.priceIsochroneMinutes != null ->
-                    "Изохрона ${slot.priceIsochroneMinutes / 60} ч"
-                else -> null
-            }
-        }.distinct()
-        return sources.singleOrNull()
     }
 }
 

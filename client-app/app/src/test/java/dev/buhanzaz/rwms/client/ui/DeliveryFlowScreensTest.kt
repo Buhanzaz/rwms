@@ -1,25 +1,25 @@
 package dev.buhanzaz.rwms.client.ui
 
 import android.app.Application
-import androidx.compose.ui.test.hasTestTag
-import androidx.compose.ui.test.hasText
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import com.google.common.truth.Truth.assertThat
+import dev.buhanzaz.rwms.client.data.CustomerRouteProfile
 import dev.buhanzaz.rwms.client.data.DeliverySlot
 import dev.buhanzaz.rwms.client.data.DeliverySlotKind
 import dev.buhanzaz.rwms.client.data.HeldDeliverySlot
-import dev.buhanzaz.rwms.client.data.CustomerRouteProfile
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import org.junit.Rule
@@ -60,8 +60,12 @@ class DeliveryFlowScreensTest {
         composeRule.onNodeWithTag("delivery-date-2026-09-01").assertExists()
         composeRule.onNodeWithTag("delivery-date-2026-09-02").assertExists()
         composeRule.onNodeWithTag("delivery-date-2026-09-03").assertDoesNotExist()
-        composeRule.onNodeWithText("Стоимость доставки: 12 500 ₽ · Особая зона доставки").assertExists()
+        composeRule.onNodeWithText("Стоимость доставки: 12 500 ₽").assertExists()
+        composeRule.onNodeWithText("Особая зона доставки", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithText("Изохрона", substring = true).assertDoesNotExist()
+        val explanationBounds = composeRule.onNodeWithTag("delivery-date-explanation").fetchSemanticsNode().boundsInRoot
         val priceBounds = composeRule.onNodeWithTag("delivery-price").fetchSemanticsNode().boundsInRoot
+        assertThat(priceBounds.top).isAtLeast(explanationBounds.bottom)
         val firstDateBounds = composeRule.onNodeWithTag("delivery-date-2026-09-01")
             .fetchSemanticsNode().boundsInRoot
         assertThat(priceBounds.bottom).isAtMost(firstDateBounds.top)
@@ -136,6 +140,36 @@ class DeliveryFlowScreensTest {
     }
 
     @Test
+    fun `flexible arrival is last in both date preview and slot selection`() {
+        val workflow = CustomerWorkflowState(
+            bootstrapping = false,
+            slots = listOf(
+                slot("flexible", "2026-09-01", "08:00:00", DeliverySlotKind.DURING_DAY),
+                slot("fixed", "2026-09-01", "12:00:00"),
+            ),
+            slotSearchCompleted = true,
+        )
+        var showSlots by mutableStateOf(false)
+        composeRule.setContent {
+            CustomerTheme {
+                if (showSlots) {
+                    DeliverySlotsScreen(workflow, "2026-09-01", {}, {}, {}, {})
+                } else {
+                    DeliveryDatesScreen(workflow, {}, { showSlots = true })
+                }
+            }
+        }
+        composeRule.onNodeWithTag("delivery-date-expand-2026-09-01").performClick()
+        val fixed = composeRule.onNodeWithText("12:00–18:00").fetchSemanticsNode().boundsInRoot
+        val flexible = composeRule.onNodeWithText("В течение дня. Точное время подтвердит логист").fetchSemanticsNode().boundsInRoot
+        assertThat(flexible.top).isAtLeast(fixed.bottom)
+        composeRule.onNodeWithTag("delivery-date-2026-09-01").performScrollTo().performClick()
+        val fixedCard = composeRule.onNodeWithTag("delivery-slot-fixed").fetchSemanticsNode().boundsInRoot
+        val flexibleCard = composeRule.onNodeWithTag("delivery-slot-flexible").fetchSemanticsNode().boundsInRoot
+        assertThat(flexibleCard.top).isAtLeast(fixedCard.bottom)
+    }
+
+    @Test
     fun `responsibility modal requires both attestations before slot calculation`() {
         val searchRequests = AtomicInteger()
         composeRule.setContent {
@@ -192,7 +226,6 @@ class DeliveryFlowScreensTest {
             }
         }
 
-        composeRule.onNodeWithTag("site-cabin-capacity-selector").performClick()
         composeRule.onNodeWithTag("site-cabin-capacity-2").performClick()
         composeRule.onNodeWithText("Машина с прицепом проедет к адресу и сможет работать на объекте")
             .assertExists()
@@ -270,8 +303,8 @@ class DeliveryFlowScreensTest {
         composeRule.onNodeWithText("12 500 ₽").assertExists()
         composeRule.onNodeWithText("В течение дня. Точное время подтвердит логист").assertExists()
         composeRule.onNodeWithTag("delivery-confirmation-screen")
-            .performScrollToNode(hasText("Бытовка cabin-1 — 3 мес."))
-        composeRule.onNodeWithText("Бытовка cabin-1 — 3 мес.").assertExists()
+            .performScrollToNode(hasText("2 шт. · 3 мес."))
+        composeRule.onNodeWithText("2 шт. · 3 мес.").assertExists()
         composeRule.onNodeWithText("2").assertExists()
         composeRule.onNodeWithTag("delivery-confirmation-screen")
             .performScrollToNode(hasTestTag("checkout-button"))
@@ -300,9 +333,9 @@ class DeliveryFlowScreensTest {
         }
 
         composeRule.onNodeWithTag("delivery-confirmation-screen")
-            .performScrollToNode(hasText("Бытовка cabin-1 — 1 мес."))
+            .performScrollToNode(hasText("1 шт. · 1 мес."))
         composeRule.onNodeWithText("09:00–18:00").assertExists()
-        composeRule.onNodeWithText("Бытовка cabin-1 — 1 мес.").assertExists()
+        composeRule.onNodeWithText("1 шт. · 1 мес.").assertExists()
         composeRule.onNodeWithTag("checkout-button").assertIsEnabled()
     }
 

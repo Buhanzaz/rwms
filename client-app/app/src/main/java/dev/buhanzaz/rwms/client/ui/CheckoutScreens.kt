@@ -736,7 +736,7 @@ private fun BookingRescheduleDialog(
                     modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(slots, key = DeliverySlot::slotId) { slot ->
+                    items(DeliverySlotPolicy.byDate(slots).flatMap { it.slots }, key = DeliverySlot::slotId) { slot ->
                         OutlinedCard(
                             onClick = { onSelect(slot.slotId) },
                             enabled = !busy,
