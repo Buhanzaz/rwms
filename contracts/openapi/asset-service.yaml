@@ -496,6 +496,41 @@ paths:
               schema: { $ref: '#/components/schemas/CabinSettings' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/asset/v1/cabin-settings/status-colors:
+    get:
+      operationId: getCabinStatusColors
+      description: >-
+        Global presentation palette for every canonical cabin status, shared by all warehouses.
+        Requires USER principal and rwms.read. Colors never change lifecycle semantics.
+      responses:
+        '200':
+          description: Complete versioned global cabin palette.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CabinStatusColors' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    put:
+      operationId: replaceCabinStatusColors
+      description: >-
+        Replaces the entire global palette with expectedVersion fencing. Requires USER principal,
+        rwms.write and SYSTEM_ADMIN or WMS_ADMIN. No warehouse-specific overrides exist.
+        Missing or unknown statuses and invalid hex colors are rejected. Concurrent changes return 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReplaceCabinStatusColorsRequest' }
+      responses:
+        '200':
+          description: Persisted global palette and its current version.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CabinStatusColors' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/asset/v1/cabin-settings/items:
     post:
       operationId: createCabinSettingsItem
@@ -2539,6 +2574,28 @@ components:
         categories: { type: array, items: { $ref: '#/components/schemas/CabinCatalogItem' } }
         characteristics: { type: array, items: { $ref: '#/components/schemas/CabinCatalogItem' } }
         typeDimensions: { type: array, items: { $ref: '#/components/schemas/CabinTypeDimension' } }
+    CabinStatusColorMap:
+      type: object
+      description: 'Exactly one #RRGGBB color for each value of RentalItemStatus; clients choose accessible theme-aware contrast.'
+      minProperties: 16
+      maxProperties: 16
+      propertyNames: { $ref: '#/components/schemas/RentalItemStatus' }
+      additionalProperties: { type: string, pattern: '^#[0-9a-fA-F]{6}$' }
+    CabinStatusColors:
+      type: object
+      additionalProperties: false
+      required: [version, colors, updatedAt]
+      properties:
+        version: { type: integer, format: int64, minimum: 0 }
+        colors: { $ref: '#/components/schemas/CabinStatusColorMap' }
+        updatedAt: { type: string, format: date-time }
+    ReplaceCabinStatusColorsRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, colors]
+      properties:
+        expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+        colors: { $ref: '#/components/schemas/CabinStatusColorMap' }
     CreateCabinCatalogItemRequest:
       type: object
       additionalProperties: false

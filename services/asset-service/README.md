@@ -67,6 +67,15 @@ logistics-owned public photo snapshot. It returns identity/version/warehouse fen
 dimensions, finishing, category, ordered characteristic names and nullable linoleum; status,
 rental type, passport JSON, comments, tags and equipment are excluded.
 
+## Global cabin status colors
+
+`GET/PUT /api/asset/v1/cabin-settings/status-colors` owns one presentation palette
+for all warehouses, seeded by Flyway V48. Reads require an interactive USER with
+`rwms.read`; replacement requires `rwms.write` and SYSTEM_ADMIN or WMS_ADMIN.
+Every canonical status must have one hex color. Complete replacement is fenced
+by `expectedVersion` and JPA optimistic locking; stale/concurrent changes return
+409. Colors do not change lifecycle transitions, availability or event facts.
+
 ## Mandatory-photo cabin creation
 
 `POST /api/asset/v1/rental-item-creation-intents` is the interactive cabin-creation command when

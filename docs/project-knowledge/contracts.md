@@ -927,6 +927,17 @@ because that lease can already be owned by the exact maintenance successor.
 The maintenance and logistics commands remain responsible for releasing an
 unrelated predecessor lease with its recorded owner and fencing token.
 
+### Global Cabin Status Palette
+
+`GET/PUT /api/asset/v1/cabin-settings/status-colors` in the
+[`asset contract`](../../contracts/openapi/asset-service.yaml) is one global
+presentation-only palette, not a per-warehouse setting or a lifecycle command.
+The complete canonical status map uses hex colors, a version and an update time.
+Interactive USER reads require `rwms.read`; replacement requires `rwms.write`
+plus SYSTEM_ADMIN/WMS_ADMIN and `expectedVersion`. Flyway V48 seeds the singleton;
+JPA optimistic locking prevents concurrent overwrites. There is no domain event
+or changed cabin state for a palette update.
+
 ### Inventory-Created Assets
 
 The private source-asset operation in
