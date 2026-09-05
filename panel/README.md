@@ -222,6 +222,8 @@ contexts and screens are usable.
   document version requires a whole-history refresh; paging failures keep earlier events visible
   with an explicit retry. User/document/warehouse-scoped caches are hidden on logout. See the
   [history details](src/features/rental-items/dossier/logistics-history-details.tsx).
+  Shipment cards distinguish pre-preparation composition from the immutable asset response captured
+  at confirmation. Older shipments without that evidence explicitly show it as unrecorded.
 - When queuing a repair returns the exact Problem Details code
   `BOOKED_UNIT_REPLACEMENT_REQUIRED`, the repair editor keeps the persisted draft
   task ID and version, closes the completion dialog, and shows

@@ -6161,7 +6161,7 @@ components:
     LogisticsHistoryLine:
       type: object
       additionalProperties: false
-      required: [lineId, assetId, contentsBeforeOperation, contentsAfterRegistration, returnAcceptance, inventoryShipmentFurniture]
+      required: [lineId, assetId, contentsBeforeOperation, contentsAfterOperation, returnAcceptance, inventoryShipmentFurniture]
       properties:
         lineId: { type: string, format: uuid }
         assetId: { type: string, format: uuid }
@@ -6170,8 +6170,13 @@ components:
           oneOf:
             - { $ref: "#/components/schemas/LogisticsHistoryContents" }
             - { type: "null" }
-        contentsAfterRegistration:
-          description: Ledger contents after return registration, not physical inspection results.
+        contentsAfterOperation:
+          description: >-
+            Immutable ledger contents returned by asset-service after return registration or
+            shipment confirmation. Unlike the pre-preparation snapshot, a shipment snapshot includes
+            its confirmed equipment changes. Null when no such response was captured, including
+            older shipments; never backfilled from current cabin contents. Not an independent
+            physical inspection or proof that remaining saga steps succeeded.
           oneOf:
             - { $ref: "#/components/schemas/LogisticsHistoryContents" }
             - { type: "null" }

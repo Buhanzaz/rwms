@@ -225,8 +225,7 @@ class ReturnCompletionSagaIntegrationTest {
     assertThat(savedLine.assetId()).isEqualTo(ASSET);
     assertThat(savedLine.contentsBeforeOperation().get("contents").get(0).get("quantity").asLong())
         .isEqualTo(2);
-    assertThat(
-            savedLine.contentsAfterRegistration().get("contents").get(0).get("quantity").asLong())
+    assertThat(savedLine.contentsAfterOperation().get("contents").get(0).get("quantity").asLong())
         .isEqualTo(2);
     assertThat(savedLine.returnAcceptance().get("equipmentConfirmed").asBoolean()).isTrue();
     assertThat(

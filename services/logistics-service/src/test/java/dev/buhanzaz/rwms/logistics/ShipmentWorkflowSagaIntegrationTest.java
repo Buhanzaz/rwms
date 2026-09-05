@@ -30,6 +30,7 @@ import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderEquipmentRequirem
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderUnitTermRepository;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
+import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentHistoryService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsExternalAttemptClaimService;
 import dev.buhanzaz.rwms.logistics.service.ShipmentFurnitureTaskService;
@@ -79,6 +80,7 @@ class ShipmentWorkflowSagaIntegrationTest {
   static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
   @Autowired LogisticsDocumentService documents;
+  @Autowired LogisticsDocumentHistoryService history;
   @Autowired LogisticsExternalAttemptClaimService claims;
   @Autowired ShipmentProcessor processor;
   @Autowired JdbcTemplate jdbc;
@@ -150,6 +152,17 @@ class ShipmentWorkflowSagaIntegrationTest {
         .contains("SHIPMENT_ASSET_SNAPSHOT:CONFIRMED", "SHIPMENT_ASSET_LEASE_ACQUIRE:CONFIRMED");
     assertThat(documents.get(documentId, LogisticsDocumentType.SHIPMENT).state())
         .isEqualTo(LogisticsDocumentState.AWAITING_CONFIRMATION);
+    var preparingEvidence =
+        history.read(documentId, LogisticsDocumentType.SHIPMENT, -1, 50).lines().getFirst();
+    assertThat(preparingEvidence.contentsAfterOperation()).isNull();
+    assertThat(
+            preparingEvidence
+                .contentsBeforeOperation()
+                .get("contents")
+                .get(0)
+                .get("quantity")
+                .asLong())
+        .isEqualTo(2);
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from logistics_task_reference where document_id=?",
@@ -181,7 +194,13 @@ class ShipmentWorkflowSagaIntegrationTest {
             eq(documentId),
             eq(lineId),
             eq(null)))
-        .thenReturn(snapshot(8, "RENTED"));
+        .thenReturn(
+            new LogisticsDependencyGateway.RentalItemSnapshot(
+                ASSET,
+                8,
+                WAREHOUSE,
+                "RENTED",
+                List.of(new LogisticsDependencyGateway.EquipmentContent(EQUIPMENT, 4))));
     when(dependencies.releaseOperationLease(
             any(),
             eq(leaseId),
@@ -198,6 +217,27 @@ class ShipmentWorkflowSagaIntegrationTest {
 
     assertThat(documents.get(documentId, LogisticsDocumentType.SHIPMENT).state())
         .isEqualTo(LogisticsDocumentState.SHIPPED);
+    when(dependencies.readRentalItemSnapshot(ASSET)).thenReturn(snapshot(100, "AFTER_RENT"));
+    LogisticsExternalAttemptTestClaims.drainShipment(claims, processor);
+    var confirmedEvidence =
+        history.read(documentId, LogisticsDocumentType.SHIPMENT, -1, 50).lines().getFirst();
+    assertThat(
+            confirmedEvidence
+                .contentsBeforeOperation()
+                .get("contents")
+                .get(0)
+                .get("quantity")
+                .asLong())
+        .isEqualTo(2);
+    assertThat(
+            confirmedEvidence
+                .contentsAfterOperation()
+                .get("contents")
+                .get(0)
+                .get("quantity")
+                .asLong())
+        .isEqualTo(4);
+    verify(dependencies, times(1)).readRentalItemSnapshot(ASSET);
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from logistics_equipment_hold_reference where"

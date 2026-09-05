@@ -20,7 +20,7 @@ export type LogisticsHistoryLine = {
   lineId: string
   assetId: string
   contentsBeforeOperation: { contents: HistoryEquipment[] } | null
-  contentsAfterRegistration: { contents: HistoryEquipment[] } | null
+  contentsAfterOperation: { contents: HistoryEquipment[] } | null
   returnAcceptance: {
     equipmentConfirmed: true
     additionalEquipment: HistoryEquipment[]
@@ -102,7 +102,7 @@ function line(value: unknown): LogisticsHistoryLine {
     lineId: uuid(row.lineId),
     assetId: uuid(row.assetId),
     contentsBeforeOperation: contents(row.contentsBeforeOperation),
-    contentsAfterRegistration: contents(row.contentsAfterRegistration),
+    contentsAfterOperation: contents(row.contentsAfterOperation),
     returnAcceptance:
       acceptance === null
         ? null

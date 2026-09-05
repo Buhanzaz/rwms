@@ -992,7 +992,10 @@ pages (`afterVersion=-1`, `size=50`, maximum 100, nullable `nextAfterVersion`). 
 `rwms.read` remain mandatory. Each page is a repeatable-read snapshot; a changed `documentVersion`
 requires restarting pagination. Null evidence is distinct from a captured empty composition.
 `contentsBeforeOperation` predates preparation/intake and is not a final shipment manifest;
-`contentsAfterRegistration` is return ledger evidence, not physical inspection. `returnAcceptance`
+`contentsAfterOperation` is the saved asset response after return registration or shipment
+confirmation, not an independent physical inspection or proof of remaining saga completion.
+Shipment confirmation captures it in the same transaction as the fenced effect receipt; old
+shipments without that snapshot remain null, never backfilled from current cabin contents. `returnAcceptance`
 records submitted completeness confirmation and extras, not saga success. Journal attribution is
 not necessarily physical execution: automatic completion can retain the document creator, while
 acceptance-started/estimate-started carries the actual submitting subject. Baselines have no

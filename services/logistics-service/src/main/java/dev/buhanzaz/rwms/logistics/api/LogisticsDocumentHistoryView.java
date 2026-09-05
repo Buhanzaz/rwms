@@ -25,15 +25,16 @@ public record LogisticsDocumentHistoryView(
 
   /**
    * Saved equipment-only evidence. Before-operation contents precede preparation/intake;
-   * after-registration contents are ledger evidence, not a physical inspection. Return acceptance
-   * records the operator's submitted confirmation and extras, not completion of the saga.
+   * after-operation contents are the return-registration or shipment-confirmation ledger evidence,
+   * not an independent physical inspection. Return acceptance records the operator's submitted
+   * confirmation and extras, not completion of the saga.
    */
   @JsonInclude(JsonInclude.Include.ALWAYS)
   public record Line(
       UUID lineId,
       UUID assetId,
       JsonNode contentsBeforeOperation,
-      JsonNode contentsAfterRegistration,
+      JsonNode contentsAfterOperation,
       JsonNode returnAcceptance,
       JsonNode inventoryShipmentFurniture) {}
 

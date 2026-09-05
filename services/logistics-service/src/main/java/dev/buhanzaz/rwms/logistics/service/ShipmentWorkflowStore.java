@@ -295,7 +295,7 @@ class ShipmentWorkflowStore {
     if (allHoldsCommitted(document, line)) createShipmentConfirmAttempt(document, line, completedAt);
   }
 
-  /** Records the shipment effect only if the supplied lease is still exact and current. */
+  /** Records the fenced shipment effect and its immutable confirmed equipment composition. */
   @Transactional
   public void confirmShipmentEffect(
       LogisticsExternalAttemptClaimService.Claim claim,
@@ -310,6 +310,7 @@ class ShipmentWorkflowStore {
     requireShippedSnapshot(document, line, guard, snapshot);
 
     OffsetDateTime completedAt = now();
+    line.captureFactualContents(contentsSnapshot(snapshot.contents()));
     attempt.confirm(snapshotDigest("SHIPMENT_ASSET_CONFIRM_RESPONSE", snapshot), completedAt);
     guard.recordObservedAssetVersion(snapshot.version());
     createLeaseReleaseAttempt(document, line, guard, completedAt);

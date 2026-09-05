@@ -66,7 +66,10 @@ document warehouse's VIEW grant and `rwms.read`, make no downstream calls and ne
 `nextAfterVersion` is the continuation cursor. Each repeatable-read page includes `documentVersion`;
 clients restart if that version changes between pages. Missing equipment evidence is null, not an
 empty composition. Pre-operation contents precede shipment preparation or return intake;
-after-registration contents describe the ledger, not a physical inspection. Return acceptance
+`contentsAfterOperation` is the saved asset response after return registration or shipment
+confirmation, not an independent physical inspection. Shipment confirmation captures that composition
+atomically with the fenced effect receipt. Old shipments without a captured response remain null;
+reads never backfill from current cabin contents. Return acceptance
 contains the submitted completeness confirmation and extras, not proof of saga completion.
 Journal actor attribution can retain the original creator during automatic completion: the
 acceptance-started/estimate-started event identifies the actual submitting operator. A baseline

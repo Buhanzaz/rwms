@@ -69,7 +69,7 @@ function history(): LogisticsDocumentHistory {
         contentsBeforeOperation: {
           contents: [{ equipmentId: "chair", quantity: 2 }],
         },
-        contentsAfterRegistration: {
+        contentsAfterOperation: {
           contents: [{ equipmentId: "chair", quantity: 2 }],
         },
         returnAcceptance: {
@@ -172,6 +172,13 @@ describe("logistics history details", () => {
       screen.getByText(/не окончательная отгрузочная накладная/)
     ).toBeTruthy()
     expect(screen.queryByText("Подтверждение комплектации")).toBeNull()
+    const confirmed = within(
+      screen.getByRole("region", { name: "Состав при подтверждении отгрузки" })
+    )
+    expect(confirmed.getByText("2 шт.")).toBeTruthy()
+    expect(
+      confirmed.getByText(/Последующие изменения бытовки его не меняют/)
+    ).toBeTruthy()
   })
   it("loads later events only on request and detects a document-version change before combining pages", async () => {
     const first = history()

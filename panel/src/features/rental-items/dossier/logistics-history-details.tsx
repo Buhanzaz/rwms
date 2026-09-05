@@ -164,7 +164,7 @@ export function LogisticsHistoryDetails({
     line &&
     [
       ...(line.contentsBeforeOperation?.contents ?? []),
-      ...(line.contentsAfterRegistration?.contents ?? []),
+      ...(line.contentsAfterOperation?.contents ?? []),
       ...(line.returnAcceptance?.additionalEquipment ?? []),
       ...(line.inventoryShipmentFurniture ?? []),
     ].length
@@ -283,14 +283,20 @@ export function LogisticsHistoryDetails({
                   : "Это исходная комплектация, не окончательная отгрузочная накладная."
               }
             />
-            {reference.documentType === "RETURN" ? (
-              <EquipmentEvidence
-                title="Состав после регистрации возврата"
-                rows={line.contentsAfterRegistration?.contents ?? null}
-                names={names}
-                description="Учётный состав после поступления. Не заменяет физический осмотр."
-              />
-            ) : null}
+            <EquipmentEvidence
+              title={
+                reference.documentType === "RETURN"
+                  ? "Состав после регистрации возврата"
+                  : "Состав при подтверждении отгрузки"
+              }
+              rows={line.contentsAfterOperation?.contents ?? null}
+              names={names}
+              description={
+                reference.documentType === "RETURN"
+                  ? "Учётный состав после поступления. Не заменяет физический осмотр."
+                  : "Сохранённый ответ сервиса имущества при подтверждении отгрузки. Последующие изменения бытовки его не меняют."
+              }
+            />
             {line.inventoryShipmentFurniture !== null ? (
               <EquipmentEvidence
                 title="Состав исторической отгрузки"

@@ -22,7 +22,7 @@ function page(): LogisticsDocumentHistory {
         lineId: id(3),
         assetId: id(4),
         contentsBeforeOperation: null,
-        contentsAfterRegistration: { contents: [] },
+        contentsAfterOperation: { contents: [] },
         returnAcceptance: {
           equipmentConfirmed: true,
           additionalEquipment: [{ equipmentId: id(8), quantity: 2 }],

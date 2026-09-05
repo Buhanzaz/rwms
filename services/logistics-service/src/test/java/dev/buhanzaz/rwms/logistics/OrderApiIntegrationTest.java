@@ -339,7 +339,7 @@ class OrderApiIntegrationTest {
           .andExpect(jsonPath("$.events[0].occurredAt").isEmpty())
           .andExpect(jsonPath("$.nextAfterVersion").value(0))
           .andExpect(jsonPath("$.lines[0].contentsBeforeOperation.contents[0].quantity").value(2))
-          .andExpect(jsonPath("$.lines[0].contentsAfterRegistration.contents.length()").value(0));
+          .andExpect(jsonPath("$.lines[0].contentsAfterOperation.contents.length()").value(0));
       mvc.perform(get(path).param("size", "1").param("afterVersion", "0").with(admin()))
           .andExpect(status().isOk())
           .andExpect(jsonPath("$.events[0].aggregateVersion").value(2))
@@ -367,11 +367,11 @@ class OrderApiIntegrationTest {
               "lineId",
               "assetId",
               "contentsBeforeOperation",
-              "contentsAfterRegistration",
+              "contentsAfterOperation",
               "returnAcceptance",
               "inventoryShipmentFurniture");
       assertThat(line.get("contentsBeforeOperation").isNull()).isTrue();
-      assertThat(line.get("contentsAfterRegistration").isNull()).isTrue();
+      assertThat(line.get("contentsAfterOperation").isNull()).isTrue();
       assertThat(line.get("returnAcceptance").isNull()).isTrue();
       assertThat(line.get("inventoryShipmentFurniture").isNull()).isTrue();
     }

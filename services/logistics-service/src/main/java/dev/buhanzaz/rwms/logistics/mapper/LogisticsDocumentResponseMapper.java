@@ -24,7 +24,7 @@ public interface LogisticsDocumentResponseMapper {
 
   @Mapping(target = "lineId", source = "id")
   @Mapping(target = "contentsBeforeOperation", source = "expectedContentsSnapshot")
-  @Mapping(target = "contentsAfterRegistration", source = "factualContentsSnapshot")
+  @Mapping(target = "contentsAfterOperation", source = "factualContentsSnapshot")
   @Mapping(target = "returnAcceptance", source = "returnAdditionalContentsSnapshot")
   LogisticsDocumentHistoryView.Line toHistoryLine(LogisticsDocumentLine line);
 
