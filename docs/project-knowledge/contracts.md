@@ -986,6 +986,19 @@ The public shipment and return lists accept optional `assetId` alongside the req
 or cancelled documents or depending on the cabin's current rental state. This does not broaden
 warehouse VIEW access. The array body and `X-RWMS-*` page headers are unchanged.
 
+The matching public `GET /returns/{documentId}/history` and
+`GET /shipments/{documentId}/history` read logistics-owned equipment snapshots and bounded journal
+pages (`afterVersion=-1`, `size=50`, maximum 100, nullable `nextAfterVersion`). Warehouse VIEW and
+`rwms.read` remain mandatory. Each page is a repeatable-read snapshot; a changed `documentVersion`
+requires restarting pagination. Null evidence is distinct from a captured empty composition.
+`contentsBeforeOperation` predates preparation/intake and is not a final shipment manifest;
+`contentsAfterRegistration` is return ledger evidence, not physical inspection. `returnAcceptance`
+records submitted completeness confirmation and extras, not saga success. Journal attribution is
+not necessarily physical execution: automatic completion can retain the document creator, while
+acceptance-started/estimate-started carries the actual submitting subject. Baselines have no
+occurrence time. Reads expose no workflow payload, passport snapshot or downstream data and make
+no calls to other owners.
+
 [`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml)
 defines `POST /returns/{documentId}/start-estimates`. Its request contains
 only immutable inspection-photo references for every return line: it does not

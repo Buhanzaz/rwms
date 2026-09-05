@@ -59,6 +59,19 @@ For cabin passports, returns and shipments also accept optional `assetId`: the o
 matches document lines before pagination, across dates and states, including cancelled documents.
 The document warehouse's VIEW authorization is unchanged; the filter does not grant cross-warehouse access.
 
+`GET /returns/{documentId}/history` and `/shipments/{documentId}/history` expose the owning
+journal and saved equipment-only line snapshots below the same API prefix. Reads require the
+document warehouse's VIEW grant and `rwms.read`, make no downstream calls and never mutate data.
+`afterVersion=-1` starts the ascending journal, `size` defaults to 50 (maximum 100), and nullable
+`nextAfterVersion` is the continuation cursor. Each repeatable-read page includes `documentVersion`;
+clients restart if that version changes between pages. Missing equipment evidence is null, not an
+empty composition. Pre-operation contents precede shipment preparation or return intake;
+after-registration contents describe the ledger, not a physical inspection. Return acceptance
+contains the submitted completeness confirmation and extras, not proof of saga completion.
+Journal actor attribution can retain the original creator during automatic completion: the
+acceptance-started/estimate-started event identifies the actual submitting operator. A baseline
+has no occurrence time and must not be presented as a new physical action.
+
 The rental client, inquiry, presentation and order subset also accepts only the dedicated
 `rwms-rental-manager-web` or `rwms-rental-manager-android` credential with `RENTAL_MANAGER`,
 `rentalAccess=true` and exactly `rental.manage` as its application scope. Cabin

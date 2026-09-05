@@ -1,27 +1,28 @@
 package dev.buhanzaz.rwms.logistics.api;
 
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.AcceptReturnRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ArriveTransferLineRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CabinFurnitureTaskResult;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateCabinFurnitureTaskRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateReturnRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateShipmentRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateTransferRequest;
-import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CabinFurnitureTaskResult;
-import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateCabinFurnitureTaskRequest;
-import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.AcceptReturnRequest;
-import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ArriveTransferLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentView;
-import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.StartReturnEstimatesRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReconcileRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnPickupRequest;
-import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentPlanRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentFurnitureReadinessView;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentFurnitureTaskResult;
-import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferFurnitureReadinessView;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentPlanRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.StartReturnEstimatesRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferArrivalPreflightView;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferFurnitureReadinessView;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferPlanView;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.UpdateTransferPlanRequest;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
 import dev.buhanzaz.rwms.logistics.service.CabinFurnitureTaskService;
+import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentHistoryService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentPage;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsWarehouseLifecycle;
@@ -65,6 +66,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class LogisticsController {
   private final LogisticsDocumentService service;
+  private final LogisticsDocumentHistoryService history;
   private final ShipmentFurnitureTaskService shipmentFurnitureTasks;
   private final TransferFurnitureTaskService transferFurnitureTasks;
   private final CabinFurnitureTaskService cabinFurnitureTasks;
@@ -97,6 +99,26 @@ public class LogisticsController {
   public LogisticsDocumentView getReturn(
       @AuthenticationPrincipal Jwt jwt, @PathVariable UUID documentId) {
     return read(jwt, documentId, LogisticsDocumentType.RETURN);
+  }
+
+  @GetMapping("/returns/{documentId}/history")
+  public LogisticsDocumentHistoryView getReturnHistory(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID documentId,
+      @RequestParam(defaultValue = "-1") @Min(-1) long afterVersion,
+      @RequestParam(defaultValue = "50") @Min(1) @Max(100) int size) {
+    read(jwt, documentId, LogisticsDocumentType.RETURN);
+    return history.read(documentId, LogisticsDocumentType.RETURN, afterVersion, size);
+  }
+
+  @GetMapping("/shipments/{documentId}/history")
+  public LogisticsDocumentHistoryView getShipmentHistory(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID documentId,
+      @RequestParam(defaultValue = "-1") @Min(-1) long afterVersion,
+      @RequestParam(defaultValue = "50") @Min(1) @Max(100) int size) {
+    read(jwt, documentId, LogisticsDocumentType.SHIPMENT);
+    return history.read(documentId, LogisticsDocumentType.SHIPMENT, afterVersion, size);
   }
 
   @PostMapping("/returns")

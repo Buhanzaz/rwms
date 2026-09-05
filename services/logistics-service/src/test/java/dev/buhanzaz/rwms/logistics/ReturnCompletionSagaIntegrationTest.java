@@ -30,6 +30,7 @@ import dev.buhanzaz.rwms.logistics.order.repository.OrderClientRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
+import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentHistoryService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsExternalAttemptClaimService;
 import dev.buhanzaz.rwms.logistics.service.ReturnCompletionProcessor;
@@ -79,6 +80,7 @@ class ReturnCompletionSagaIntegrationTest {
   static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
   @Autowired LogisticsDocumentService documents;
+  @Autowired LogisticsDocumentHistoryService history;
   @Autowired LogisticsExternalAttemptClaimService claims;
   @Autowired ReturnRegistrationProcessor registration;
   @Autowired ReturnCompletionProcessor completion;
@@ -120,6 +122,7 @@ class ReturnCompletionSagaIntegrationTest {
     UUID mediaId = UUID.randomUUID();
     UUID additionalEquipmentId = UUID.randomUUID();
     UUID acceptanceKey = UUID.randomUUID();
+    UUID acceptor = UUID.randomUUID();
     AcceptReturnRequest request =
         new AcceptReturnRequest(
             List.of(
@@ -180,7 +183,7 @@ class ReturnCompletionSagaIntegrationTest {
 
     LogisticsDocumentService.CreateResult started =
         documents.acceptUndamagedReturn(
-            SUBJECT,
+            acceptor,
             acceptanceKey,
             CORRELATION,
             registered.documentId(),
@@ -188,7 +191,7 @@ class ReturnCompletionSagaIntegrationTest {
             request);
     LogisticsDocumentService.CreateResult replayed =
         documents.acceptUndamagedReturn(
-            SUBJECT,
+            acceptor,
             acceptanceKey,
             CORRELATION,
             registered.documentId(),
@@ -203,6 +206,40 @@ class ReturnCompletionSagaIntegrationTest {
 
     assertThat(documents.get(registered.documentId(), LogisticsDocumentType.RETURN).state())
         .isEqualTo(LogisticsDocumentState.ACCEPTED);
+    var savedHistory = history.read(registered.documentId(), LogisticsDocumentType.RETURN, -1, 100);
+    assertThat(savedHistory.events())
+        .filteredOn(event -> event.eventType().equals("logistics.return.acceptance-started.v1"))
+        .singleElement()
+        .satisfies(
+            event -> {
+              assertThat(event.recordedActor().subjectId()).isEqualTo(acceptor.toString());
+              assertThat(event.resultCode()).isEqualTo("EQUIPMENT_COMPLETENESS_CONFIRMED");
+            });
+    assertThat(savedHistory.events())
+        .filteredOn(event -> event.eventType().equals("logistics.return.accepted.v1"))
+        .singleElement()
+        .satisfies(
+            event -> assertThat(event.recordedActor().subjectId()).isEqualTo(SUBJECT.toString()));
+    var savedLine = savedHistory.lines().getFirst();
+    assertThat(savedLine.lineId()).isEqualTo(registered.lineId());
+    assertThat(savedLine.assetId()).isEqualTo(ASSET);
+    assertThat(savedLine.contentsBeforeOperation().get("contents").get(0).get("quantity").asLong())
+        .isEqualTo(2);
+    assertThat(
+            savedLine.contentsAfterRegistration().get("contents").get(0).get("quantity").asLong())
+        .isEqualTo(2);
+    assertThat(savedLine.returnAcceptance().get("equipmentConfirmed").asBoolean()).isTrue();
+    assertThat(
+            savedLine
+                .returnAcceptance()
+                .get("additionalEquipment")
+                .get(0)
+                .get("equipmentId")
+                .asText())
+        .isEqualTo(additionalEquipmentId.toString());
+    assertThat(
+            savedLine.returnAcceptance().get("additionalEquipment").get(0).get("quantity").asLong())
+        .isEqualTo(3);
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from logistics_media_reference where readiness='READY'",

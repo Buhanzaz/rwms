@@ -62,6 +62,29 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/logistics/v1/returns/{documentId}/history:
+    parameters:
+      - $ref: "#/components/parameters/DocumentId"
+    get:
+      operationId: getReturnHistory
+      description: >-
+        Read-only owner journal and immutable equipment evidence. Requires rwms.read and VIEW at
+        the document warehouse, including historical documents. Events are ascending by aggregate
+        version; follow nextAfterVersion until null. If documentVersion changes between pages,
+        restart the read to avoid combining different snapshots. No downstream calls are made.
+      parameters:
+        - $ref: "#/components/parameters/HistoryAfterVersion"
+        - $ref: "#/components/parameters/PageSizeQuery"
+      responses:
+        "200":
+          description: Bounded journal page with saved line evidence.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogisticsDocumentHistory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/logistics/v1/returns/{documentId}/register:
     parameters:
       - $ref: "#/components/parameters/DocumentId"
@@ -221,6 +244,28 @@ paths:
       operationId: getShipment
       responses:
         "200": { $ref: "#/components/responses/Document" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/logistics/v1/shipments/{documentId}/history:
+    parameters:
+      - $ref: "#/components/parameters/DocumentId"
+    get:
+      operationId: getShipmentHistory
+      description: >-
+        Same bounded owner-journal semantics as getReturnHistory. Requires rwms.read and VIEW at
+        the document warehouse. Pre-preparation contents are not a final shipped manifest.
+        Follow nextAfterVersion until null; restart if documentVersion changes between pages.
+      parameters:
+        - $ref: "#/components/parameters/HistoryAfterVersion"
+        - $ref: "#/components/parameters/PageSizeQuery"
+      responses:
+        "200":
+          description: Bounded journal page with saved line evidence.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogisticsDocumentHistory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -3934,6 +3979,12 @@ components:
       scheme: bearer
       bearerFormat: JWT
   parameters:
+    HistoryAfterVersion:
+      name: afterVersion
+      in: query
+      required: false
+      description: Exclusive aggregate-version cursor; -1 starts with the earliest recorded fact.
+      schema: { type: integer, format: int64, minimum: -1, default: -1 }
     DocumentId:
       name: documentId
       in: path
@@ -6089,6 +6140,105 @@ components:
           items: { $ref: "#/components/schemas/LogisticsLine" }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    LogisticsDocumentHistory:
+      type: object
+      additionalProperties: false
+      required: [documentId, warehouseId, documentType, documentVersion, lines, events, nextAfterVersion]
+      properties:
+        documentId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        documentType: { type: string, enum: [RETURN, SHIPMENT] }
+        documentVersion: { type: integer, format: int64, minimum: 0 }
+        lines:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/LogisticsHistoryLine" }
+        events:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/LogisticsHistoryEvent" }
+        nextAfterVersion: { type: [integer, "null"], format: int64, minimum: 0 }
+    LogisticsHistoryLine:
+      type: object
+      additionalProperties: false
+      required: [lineId, assetId, contentsBeforeOperation, contentsAfterRegistration, returnAcceptance, inventoryShipmentFurniture]
+      properties:
+        lineId: { type: string, format: uuid }
+        assetId: { type: string, format: uuid }
+        contentsBeforeOperation:
+          description: Saved before return intake or shipment preparation, not a final shipped manifest.
+          oneOf:
+            - { $ref: "#/components/schemas/LogisticsHistoryContents" }
+            - { type: "null" }
+        contentsAfterRegistration:
+          description: Ledger contents after return registration, not physical inspection results.
+          oneOf:
+            - { $ref: "#/components/schemas/LogisticsHistoryContents" }
+            - { type: "null" }
+        returnAcceptance:
+          description: Submitted undamaged-acceptance confirmation and extras; does not assert saga completion.
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [equipmentConfirmed, additionalEquipment]
+              properties:
+                equipmentConfirmed: { type: boolean, const: true }
+                additionalEquipment:
+                  type: array
+                  items: { $ref: "#/components/schemas/ReturnAdditionalEquipmentRequest" }
+            - { type: "null" }
+        inventoryShipmentFurniture:
+          description: Reviewed historical inventory shipment composition, when captured.
+          oneOf:
+            - type: array
+              maxItems: 100
+              items: { $ref: "#/components/schemas/InventoryShipmentFurniture" }
+            - { type: "null" }
+    LogisticsHistoryContents:
+      type: object
+      additionalProperties: false
+      required: [contents]
+      description: Null means not recorded; an empty contents array means a recorded empty composition.
+      properties:
+        contents:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [equipmentId, quantity]
+            properties:
+              equipmentId: { type: string, format: uuid }
+              quantity: { type: integer, format: int64, minimum: 0 }
+    LogisticsHistoryEvent:
+      type: object
+      additionalProperties: false
+      required: [eventId, aggregateVersion, eventType, occurredAt, recordedAt, baseline, recordedActor, state, resultCode]
+      properties:
+        eventId: { type: string, format: uuid }
+        aggregateVersion: { type: integer, format: int64, minimum: 0 }
+        eventType: { type: string }
+        occurredAt: { type: [string, "null"], format: date-time }
+        recordedAt: { type: string, format: date-time }
+        baseline:
+          type: boolean
+          description: Baseline facts have no occurredAt and do not prove a new physical operation.
+        recordedActor:
+          description: >-
+            Journal attribution, not necessarily the physical executor. Background completion may
+            retain the document creator. logistics.return.acceptance-started.v1 and
+            logistics.return.estimate-started.v1 identify the actual command actor; clients must not
+            present the actor of logistics.return.accepted.v1 as the acceptance operator.
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [subjectId, principalType]
+              properties:
+                subjectId: { type: string, format: uuid }
+                principalType: { type: string }
+                profileRevision: { type: [string, "null"] }
+            - { type: "null" }
+        state: { $ref: "#/components/schemas/LogisticsDocumentState" }
+        resultCode: { type: [string, "null"] }
     CustomerDeliveryPurpose:
       type: string
       enum: [RENTAL_DELIVERY, SALE_DELIVERY, CUSTOMER_RELOCATION]

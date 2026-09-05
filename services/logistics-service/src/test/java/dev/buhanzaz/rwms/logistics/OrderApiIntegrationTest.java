@@ -37,9 +37,9 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
@@ -278,6 +278,135 @@ class OrderApiIntegrationTest {
         request.param("size", invalid.getValue());
       }
       mvc.perform(request).andExpect(status().isBadRequest());
+    }
+  }
+
+  @Test
+  void documentHistoryKeepsSavedEvidenceAndPagesOnlyItsOwnOrderedJournal() throws Exception {
+    for (LogisticsDocumentType type :
+        List.of(LogisticsDocumentType.RETURN, LogisticsDocumentType.SHIPMENT)) {
+      List<UUID> ids = seedPagedDocuments(type, 2, LocalDate.of(2026, 9, 5));
+      UUID documentId = ids.getFirst();
+      String path =
+          "/api/logistics/v1/" + type.name().toLowerCase() + "s/" + documentId + "/history";
+      jdbc.update("update logistics_document set version=3 where id=?", documentId);
+      jdbc.update(
+          """
+          update logistics_document_line set expected_contents_snapshot=?::jsonb,
+            factual_contents_snapshot='{"contents":[]}'::jsonb,
+            return_additional_contents_snapshot=?::jsonb
+          where document_id=?
+          """,
+          "{\"contents\":[{\"equipmentId\":\"" + EQUIPMENT + "\",\"quantity\":2}]}",
+          type == LogisticsDocumentType.RETURN
+              ? "{\"equipmentConfirmed\":true,\"additionalEquipment\":[]}"
+              : null,
+          documentId);
+      jdbc.update(
+          """
+          insert into event_stream_head(aggregate_type,aggregate_id,current_version,last_event_id,updated_at)
+          values (?,?,3,?,now())
+          """,
+          type.name(),
+          documentId.toString(),
+          UUID.randomUUID());
+      for (long version : List.of(0L, 2L, 3L)) {
+        jdbc.update(
+            """
+            insert into domain_event(event_id,aggregate_type,aggregate_id,aggregate_version,event_type,
+              event_version,occurred_at,recorded_at,correlation_id,actor_ref,payload,payload_sha256,baseline)
+            select ?,?,?,?, ?,1,?,now(),?,?::jsonb,payload,
+              encode(sha256(convert_to(payload::text,'UTF8')),'hex'),?
+            from (select '{"state":"DRAFT","resultCode":null}'::jsonb payload) fixture
+            """,
+            UUID.randomUUID(),
+            type.name(),
+            documentId.toString(),
+            version,
+            "logistics." + type.name().toLowerCase() + ".created.v1",
+            version == 0 ? null : OffsetDateTime.parse("2026-09-05T09:00:00Z"),
+            UUID.randomUUID(),
+            "{\"subjectId\":\"" + MANAGER_2 + "\",\"principalType\":\"USER\"}",
+            version == 0);
+      }
+      mvc.perform(get(path).param("size", "1").with(readOnlyViewer(MANAGER_1, "viewer")))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.documentId").value(documentId.toString()))
+          .andExpect(jsonPath("$.documentVersion").value(3))
+          .andExpect(jsonPath("$.events.length()").value(1))
+          .andExpect(jsonPath("$.events[0].aggregateVersion").value(0))
+          .andExpect(jsonPath("$.events[0].baseline").value(true))
+          .andExpect(jsonPath("$.events[0].occurredAt").isEmpty())
+          .andExpect(jsonPath("$.nextAfterVersion").value(0))
+          .andExpect(jsonPath("$.lines[0].contentsBeforeOperation.contents[0].quantity").value(2))
+          .andExpect(jsonPath("$.lines[0].contentsAfterRegistration.contents.length()").value(0));
+      mvc.perform(get(path).param("size", "1").param("afterVersion", "0").with(admin()))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.events[0].aggregateVersion").value(2))
+          .andExpect(jsonPath("$.events[0].recordedActor.subjectId").value(MANAGER_2.toString()))
+          .andExpect(jsonPath("$.nextAfterVersion").value(2));
+      mvc.perform(get(path).param("size", "1").param("afterVersion", "2").with(admin()))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.events[0].aggregateVersion").value(3))
+          .andExpect(jsonPath("$.nextAfterVersion").isEmpty());
+      MvcResult empty =
+          mvc.perform(
+                  get("/api/logistics/v1/"
+                          + type.name().toLowerCase()
+                          + "s/"
+                          + ids.get(1)
+                          + "/history")
+                      .with(admin()))
+              .andExpect(status().isOk())
+              .andExpect(jsonPath("$.events.length()").value(0))
+              .andReturn();
+      JsonNode line =
+          objectMapper.readTree(empty.getResponse().getContentAsString()).get("lines").get(0);
+      assertThat(line.propertyNames())
+          .containsExactlyInAnyOrder(
+              "lineId",
+              "assetId",
+              "contentsBeforeOperation",
+              "contentsAfterRegistration",
+              "returnAcceptance",
+              "inventoryShipmentFurniture");
+      assertThat(line.get("contentsBeforeOperation").isNull()).isTrue();
+      assertThat(line.get("contentsAfterRegistration").isNull()).isTrue();
+      assertThat(line.get("returnAcceptance").isNull()).isTrue();
+      assertThat(line.get("inventoryShipmentFurniture").isNull()).isTrue();
+    }
+    verify(dependencies, never()).readRentalItemSnapshot(any());
+  }
+
+  @Test
+  void documentHistoryRequiresWarehouseReadAccessAndValidCursor() throws Exception {
+    for (LogisticsDocumentType type :
+        List.of(LogisticsDocumentType.RETURN, LogisticsDocumentType.SHIPMENT)) {
+      UUID id = seedPagedDocuments(type, 1, LocalDate.of(2026, 9, 5)).getFirst();
+      String path = "/api/logistics/v1/" + type.name().toLowerCase() + "s/" + id + "/history";
+      mvc.perform(get(path)).andExpect(status().isUnauthorized());
+      mvc.perform(get(path).param("size", "0").with(admin())).andExpect(status().isBadRequest());
+      mvc.perform(get(path).param("size", "101").with(admin())).andExpect(status().isBadRequest());
+      mvc.perform(get(path).param("afterVersion", "-2").with(admin()))
+          .andExpect(status().isBadRequest());
+      mvc.perform(
+              get(path)
+                  .with(
+                      applicationUser(
+                          MANAGER_1,
+                          "VIEWER",
+                          "viewer",
+                          null,
+                          "rwms.write",
+                          true,
+                          List.of(Map.of("warehouseId", WAREHOUSE_1.toString(), "level", "EDIT")))))
+          .andExpect(status().isForbidden());
+      jdbc.update("update logistics_document set warehouse_id=? where id=?", WAREHOUSE_2, id);
+      mvc.perform(get(path).with(readOnlyViewer(MANAGER_1, "viewer")))
+          .andExpect(status().isForbidden());
+      String wrongType = type == LogisticsDocumentType.RETURN ? "shipments" : "returns";
+      mvc.perform(get("/api/logistics/v1/" + wrongType + "/" + id + "/history").with(admin()))
+          .andExpect(status().isNotFound());
     }
   }
 
@@ -837,7 +966,8 @@ class OrderApiIntegrationTest {
     long failedVersion = json(failed).get("version").longValue();
     assertThat(
             jdbc.queryForObject(
-                "select count(*) from logistics_reconciliation where document_id=? and state='OPEN'",
+                "select count(*) from logistics_reconciliation where document_id=? and"
+                    + " state='OPEN'",
                 Long.class,
                 documentId))
         .isOne();
@@ -853,7 +983,8 @@ class OrderApiIntegrationTest {
 
     assertThat(
             jdbc.queryForObject(
-                "select count(*) from logistics_reconciliation where document_id=? and state='RESOLVED'",
+                "select count(*) from logistics_reconciliation where document_id=? and"
+                    + " state='RESOLVED'",
                 Long.class,
                 documentId))
         .isOne();
@@ -983,13 +1114,15 @@ class OrderApiIntegrationTest {
     assertThat(operationIds.getAllValues().get(1)).isEqualTo(operationIds.getAllValues().get(0));
     assertThat(
             jdbc.queryForObject(
-                "select count(*) from logistics_guard where document_id=? and guard_state='RELEASED'",
+                "select count(*) from logistics_guard where document_id=? and"
+                    + " guard_state='RELEASED'",
                 Long.class,
                 documentId))
         .isOne();
     assertThat(
             jdbc.queryForObject(
-                "select count(*) from logistics_reconciliation where document_id=? and state='RESOLVED'",
+                "select count(*) from logistics_reconciliation where document_id=? and"
+                    + " state='RESOLVED'",
                 Long.class,
                 documentId))
         .isOne();
@@ -1552,7 +1685,8 @@ class OrderApiIntegrationTest {
     seedClientSelectedRentalTerms(orderId, Map.of(UNIT_1, 2L, UNIT_2, 3L));
     assertThat(
             jdbc.queryForObject(
-                "select rental_months from rental_order_unit_term where order_id=? and rental_item_id=?",
+                "select rental_months from rental_order_unit_term where order_id=? and"
+                    + " rental_item_id=?",
                 Long.class,
                 orderId,
                 UNIT_1))
