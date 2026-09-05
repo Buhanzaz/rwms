@@ -822,6 +822,405 @@ class OrdinaryQueueAvailabilityIntegrationTest extends PostgresIntegrationTestSu
     assertThat(statistics.getEntityLoadCount()).isLessThan(910);
   }
 
+  @Test
+  void linkedQueuesKeepTheNextCabinStageWithItsPrimaryGroupWithoutStartingItsTimer() {
+    WorkerClassDto workerClass = registry.createClass(workerClass("linked-workers"));
+    WorkQueueDto exterior = queue("Внешние работы", QueueType.REPAIR, 6, 0, workerClass.id());
+    WorkQueueDto interior = queue("Внутренние работы", QueueType.REPAIR, 6, 0, workerClass.id());
+    link(exterior, interior);
+    WorkerDto worker = worker(workerClass.id(), "Первый рабочий");
+    WorkerGroupDto group = group(workerClass.id(), worker.id(), "Первая бригада");
+    WorkerDto otherWorker = worker(workerClass.id(), "Второй рабочий");
+    WorkerGroupDto otherGroup = group(workerClass.id(), otherWorker.id(), "Вторая бригада");
+    workforce.setCurrentGroup(
+        WAREHOUSE_ID, worker.id(), new SetCurrentGroupRequest(worker.version(), group.id()));
+    workforce.setCurrentGroup(
+        WAREHOUSE_ID,
+        otherWorker.id(),
+        new SetCurrentGroupRequest(otherWorker.version(), otherGroup.id()));
+    TaskBoardSnapshot route = parallelRoute("Бытовка 101", exterior, interior);
+    BoardEntryDto first = entry(column(route, exterior.id()).entries(), "Бытовка 101");
+    BoardEntryDto second = entry(column(route, interior.id()).entries(), "Бытовка 101");
+    BoardEntryDto unrelated =
+        entry(
+            create(exterior.definitionId(), "Бытовка 102", LocalDate.of(2026, 8, 21), 3),
+            "Бытовка 102");
+    BoardEntryDto taken =
+        board.take(
+            WAREHOUSE_ID,
+            first.id(),
+            new TakeEntryRequest(first.version(), group.id(), null),
+            null);
+    board.complete(WAREHOUSE_ID, first.id(), new VersionCommand(taken.version()), null);
+    BoardEntryDto continuation = board.entry(WAREHOUSE_ID, second.id());
+    assertThat(continuation.status()).isEqualTo(EntryStatus.WAITING);
+    assertThat(continuation.activeStartedAt()).isNull();
+    assertThat(continuation.assignments()).isEmpty();
+    assertThat(workerFeedEntryIds(worker.id()))
+        .contains(second.id())
+        .doesNotContain(unrelated.id());
+    assertThat(workerFeedEntryIds(otherWorker.id()))
+        .contains(unrelated.id())
+        .doesNotContain(second.id());
+    assertThatThrownBy(
+            () ->
+                board.take(
+                    WAREHOUSE_ID,
+                    second.id(),
+                    new TakeEntryRequest(continuation.version(), otherGroup.id(), null),
+                    null))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("Первая бригада");
+    BoardEntryDto currentUnrelated = board.entry(WAREHOUSE_ID, unrelated.id());
+    assertThatThrownBy(
+            () ->
+                board.take(
+                    WAREHOUSE_ID,
+                    unrelated.id(),
+                    new TakeEntryRequest(currentUnrelated.version(), group.id(), null),
+                    null))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("связанной очереди");
+    BoardEntryDto continued =
+        board.take(
+            WAREHOUSE_ID,
+            second.id(),
+            new TakeEntryRequest(continuation.version(), group.id(), null),
+            null);
+    assertThat(continued.status()).isEqualTo(EntryStatus.IN_PROGRESS);
+    assertThat(continued.assignments())
+        .allSatisfy(assignment -> assertThat(assignment.workerGroupId()).isEqualTo(group.id()));
+    assertThat(
+            jdbc.queryForObject(
+                "select bool_and(primary_participation) from task_assignment where"
+                    + " queue_entry_id=?",
+                Boolean.class,
+                first.id()))
+        .isTrue();
+  }
+
+  @Test
+  void queueLinksAreSymmetricFencedAndVisibleOnBothPhysicalColumns() {
+    WorkerClassDto workerClass = registry.createClass(workerClass("linked-catalog"));
+    WorkQueueDto first = queue("Парная первая", QueueType.REPAIR, 6, 0, workerClass.id());
+    WorkQueueDto second = queue("Парная вторая", QueueType.REPAIR, 6, 0, workerClass.id());
+    QueueDefinitionDto beforeFirst =
+        registry.dto(registry.requireQueueDefinition(first.definitionId()));
+    QueueDefinitionDto beforeSecond =
+        registry.dto(registry.requireQueueDefinition(second.definitionId()));
+    assertThatThrownBy(
+            () ->
+                registry.linkQueueDefinitions(
+                    first.definitionId(),
+                    new QueueLinkRequest(
+                        beforeFirst.version(), second.definitionId(), beforeSecond.version() + 1)))
+        .isInstanceOf(ConflictException.class);
+    assertThat(
+            registry
+                .dto(registry.requireQueueDefinition(first.definitionId()))
+                .linkedQueueDefinitionId())
+        .isNull();
+    link(first, second);
+    assertThat(
+            registry
+                .dto(registry.requireQueueDefinition(first.definitionId()))
+                .linkedQueueDefinitionId())
+        .isEqualTo(second.definitionId());
+    assertThat(
+            registry
+                .dto(registry.requireQueueDefinition(second.definitionId()))
+                .linkedQueueDefinitionId())
+        .isEqualTo(first.definitionId());
+    TaskBoardSnapshot snapshot = board.snapshot(WAREHOUSE_ID);
+    assertThat(column(snapshot, first.id()).linkedQueueId()).isEqualTo(second.id());
+    assertThat(column(snapshot, second.id()).linkedQueueId()).isEqualTo(first.id());
+    assertThat(column(snapshot, first.id()).linkedQueueName()).isEqualTo(second.name());
+    QueueDefinitionDto currentFirst =
+        registry.dto(registry.requireQueueDefinition(first.definitionId()));
+    QueueDefinitionDto currentSecond =
+        registry.dto(registry.requireQueueDefinition(second.definitionId()));
+    assertThatThrownBy(
+            () -> registry.deleteQueueDefinition(currentFirst.id(), currentFirst.version()))
+        .hasMessageContaining("разорвите связь");
+    registry.linkQueueDefinitions(
+        currentFirst.id(),
+        new QueueLinkRequest(currentFirst.version(), null, currentSecond.version()));
+    assertThat(
+            registry
+                .dto(registry.requireQueueDefinition(first.definitionId()))
+                .linkedQueueDefinitionId())
+        .isNull();
+    assertThat(
+            registry
+                .dto(registry.requireQueueDefinition(second.definitionId()))
+                .linkedQueueDefinitionId())
+        .isNull();
+  }
+
+  @Test
+  void oneMemberTakesForTheWholeGroupAndAnotherCompletesForBoth() {
+    WorkerClassDto workerClass = registry.createClass(workerClass("whole-group-continuation"));
+    WorkQueueDto first = queue("Первый этап группы", QueueType.REPAIR, 6, 0, workerClass.id());
+    WorkQueueDto second = queue("Второй этап группы", QueueType.REPAIR, 6, 0, workerClass.id());
+    link(first, second);
+    WorkerDto firstWorker = worker(workerClass.id(), "Первый участник");
+    WorkerDto secondWorker = worker(workerClass.id(), "Второй участник");
+    WorkerGroupDto group =
+        workforce.createGroup(
+            WAREHOUSE_ID,
+            new WorkerGroupRequest(
+                0L,
+                workerClass.id(),
+                "Группа из двух",
+                null,
+                true,
+                List.of(
+                    new GroupMemberRequest(firstWorker.id(), true),
+                    new GroupMemberRequest(secondWorker.id(), true))));
+    workforce.setCurrentGroup(
+        WAREHOUSE_ID,
+        firstWorker.id(),
+        new SetCurrentGroupRequest(firstWorker.version(), group.id()));
+    workforce.setCurrentGroup(
+        WAREHOUSE_ID,
+        secondWorker.id(),
+        new SetCurrentGroupRequest(secondWorker.version(), group.id()));
+    TaskBoardSnapshot route = parallelRoute("Бытовка 107", first, second);
+    BoardEntryDto source = entry(column(route, first.id()).entries(), "Бытовка 107");
+    BoardEntryDto target = entry(column(route, second.id()).entries(), "Бытовка 107");
+    BoardEntryDto taken =
+        board.take(
+            WAREHOUSE_ID,
+            source.id(),
+            new TakeEntryRequest(source.version(), group.id(), firstWorker.id()),
+            firstWorker.id());
+    assertThat(taken.assignments())
+        .extracting(AssignmentDto::workerId)
+        .containsExactlyInAnyOrder(firstWorker.id(), secondWorker.id());
+    board.complete(
+        WAREHOUSE_ID, source.id(), new VersionCommand(taken.version()), secondWorker.id());
+    assertThat(board.entry(WAREHOUSE_ID, source.id()).assignments())
+        .allSatisfy(
+            assignment ->
+                assertThat(assignment.status())
+                    .isEqualTo(dev.buhanzaz.rwms.taskboard.domain.AssignmentStatus.DONE));
+    assertThat(workerFeedEntryIds(firstWorker.id())).contains(target.id());
+    assertThat(workerFeedEntryIds(secondWorker.id())).contains(target.id());
+    BoardEntryDto continuation = board.entry(WAREHOUSE_ID, target.id());
+    BoardEntryDto continued =
+        board.take(
+            WAREHOUSE_ID,
+            target.id(),
+            new TakeEntryRequest(continuation.version(), group.id(), secondWorker.id()),
+            secondWorker.id());
+    assertThat(continued.assignments())
+        .extracting(AssignmentDto::workerId)
+        .containsExactlyInAnyOrder(firstWorker.id(), secondWorker.id());
+    board.complete(
+        WAREHOUSE_ID, target.id(), new VersionCommand(continued.version()), firstWorker.id());
+  }
+
+  @Test
+  void unlinkingReleasesTheContinuationForAnotherQualifiedGroup() {
+    WorkerClassDto workerClass = registry.createClass(workerClass("unlink-work"));
+    WorkQueueDto first = queue("Начало работ", QueueType.REPAIR, 6, 0, workerClass.id());
+    WorkQueueDto second = queue("Продолжение работ", QueueType.REPAIR, 6, 0, workerClass.id());
+    link(first, second);
+    WorkerDto worker = worker(workerClass.id());
+    WorkerGroupDto group = group(workerClass.id(), worker.id());
+    WorkerDto otherWorker = worker(workerClass.id(), "Другой рабочий");
+    WorkerGroupDto otherGroup = group(workerClass.id(), otherWorker.id(), "Другая бригада");
+    TaskBoardSnapshot route = parallelRoute("Бытовка 103", first, second);
+    BoardEntryDto source = entry(column(route, first.id()).entries(), "Бытовка 103");
+    BoardEntryDto target = entry(column(route, second.id()).entries(), "Бытовка 103");
+    BoardEntryDto taken =
+        board.take(
+            WAREHOUSE_ID,
+            source.id(),
+            new TakeEntryRequest(source.version(), group.id(), null),
+            null);
+    board.complete(WAREHOUSE_ID, source.id(), new VersionCommand(taken.version()), null);
+    QueueDefinitionDto sourceDefinition =
+        registry.dto(registry.requireQueueDefinition(first.definitionId()));
+    QueueDefinitionDto targetDefinition =
+        registry.dto(registry.requireQueueDefinition(second.definitionId()));
+    registry.linkQueueDefinitions(
+        sourceDefinition.id(),
+        new QueueLinkRequest(sourceDefinition.version(), null, targetDefinition.version()));
+    BoardEntryDto current = board.entry(WAREHOUSE_ID, target.id());
+    assertThat(
+            board
+                .take(
+                    WAREHOUSE_ID,
+                    target.id(),
+                    new TakeEntryRequest(current.version(), otherGroup.id(), null),
+                    null)
+                .status())
+        .isEqualTo(EntryStatus.IN_PROGRESS);
+  }
+
+  @Test
+  void linksRejectSelfHoldingAndDifferentPrimaryClasses() {
+    WorkerClassDto firstClass = registry.createClass(workerClass("link-class-one"));
+    WorkerClassDto secondClass = registry.createClass(workerClass("link-class-two"));
+    WorkQueueDto first = queue("Первый класс", QueueType.REPAIR, 6, 0, firstClass.id());
+    WorkQueueDto second = queue("Второй класс", QueueType.REPAIR, 6, 0, secondClass.id());
+    WorkQueueDto holding = queue("Выдержка", QueueType.HOLDING, 6, 0, firstClass.id());
+    assertThatThrownBy(() -> link(first, first)).hasMessageContaining("с собой");
+    assertThatThrownBy(() -> link(first, second)).hasMessageContaining("общий основной класс");
+    assertThatThrownBy(() -> link(first, holding)).hasMessageContaining("без выдержки");
+  }
+
+  private void link(WorkQueueDto first, WorkQueueDto second) {
+    QueueDefinitionDto source = registry.dto(registry.requireQueueDefinition(first.definitionId()));
+    QueueDefinitionDto target =
+        registry.dto(registry.requireQueueDefinition(second.definitionId()));
+    registry.linkQueueDefinitions(
+        source.id(), new QueueLinkRequest(source.version(), target.id(), target.version()));
+  }
+
+  @Test
+  void aSecondaryGroupCannotBecomeTheContinuationOwnerAfterItsClassChanges() {
+    WorkerClassDto primaryClass = registry.createClass(workerClass("primary-continuation"));
+    WorkerClassDto helperClass = registry.createClass(workerClass("helper-continuation"));
+    WorkQueueDto first = queue("Основная работа", QueueType.REPAIR, 6, 0, primaryClass.id());
+    WorkQueueDto second = queue("Следующая работа", QueueType.REPAIR, 6, 0, primaryClass.id());
+    QueueDefinitionDto definition =
+        registry.dto(registry.requireQueueDefinition(first.definitionId()));
+    registry.updateQueueDefinition(
+        definition.id(),
+        new QueueDefinitionRequest(
+            definition.version(),
+            definition.name(),
+            definition.description(),
+            definition.type(),
+            definition.purpose(),
+            definition.sortOrder(),
+            true,
+            false,
+            false,
+            null,
+            null,
+            false,
+            0,
+            6,
+            List.of(
+                new QueueBindingRequest(
+                    primaryClass.id(), 0, false, ParticipationPolicy.PRIMARY, false),
+                new QueueBindingRequest(
+                    helperClass.id(), 1, false, ParticipationPolicy.OPTIONAL, false))));
+    link(first, second);
+    WorkerDto worker = worker(primaryClass.id(), "Основной рабочий");
+    WorkerGroupDto primary = group(primaryClass.id(), worker.id(), "Основная группа");
+    WorkerDto helper =
+        workforce.createWorker(
+            WAREHOUSE_ID,
+            new WorkerRequest(
+                0L,
+                "Помощник",
+                null,
+                null,
+                null,
+                true,
+                null,
+                null,
+                null,
+                List.of(
+                    new QualificationRequest(helperClass.id(), true, null),
+                    new QualificationRequest(primaryClass.id(), true, null))));
+    WorkerGroupDto secondary = group(helperClass.id(), helper.id(), "Помощники");
+    TaskBoardSnapshot route = parallelRoute("Бытовка 104", first, second);
+    BoardEntryDto source = entry(column(route, first.id()).entries(), "Бытовка 104");
+    BoardEntryDto target = entry(column(route, second.id()).entries(), "Бытовка 104");
+    BoardEntryDto taken =
+        board.take(
+            WAREHOUSE_ID,
+            source.id(),
+            new TakeEntryRequest(source.version(), primary.id(), null),
+            null);
+    BoardEntryDto joined =
+        board.take(
+            WAREHOUSE_ID,
+            source.id(),
+            new TakeEntryRequest(taken.version(), secondary.id(), helper.id()),
+            null);
+    board.complete(WAREHOUSE_ID, source.id(), new VersionCommand(joined.version()), null);
+    WorkerGroupDto currentSecondary =
+        workforce.listGroups(WAREHOUSE_ID).stream()
+            .filter(value -> value.id().equals(secondary.id()))
+            .findFirst()
+            .orElseThrow();
+    workforce.updateGroup(
+        WAREHOUSE_ID,
+        secondary.id(),
+        new WorkerGroupRequest(
+            currentSecondary.version(),
+            primaryClass.id(),
+            secondary.name(),
+            null,
+            true,
+            List.of(new GroupMemberRequest(helper.id(), true))));
+    BoardEntryDto continuation = board.entry(WAREHOUSE_ID, target.id());
+    assertThatThrownBy(
+            () ->
+                board.take(
+                    WAREHOUSE_ID,
+                    target.id(),
+                    new TakeEntryRequest(continuation.version(), secondary.id(), null),
+                    null))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("Основная группа");
+    assertThat(
+            jdbc.queryForObject(
+                "select primary_participation from task_assignment where queue_entry_id=? and"
+                    + " worker_id=?",
+                Boolean.class,
+                source.id(),
+                helper.id()))
+        .isFalse();
+  }
+
+  @Test
+  void aDisabledContinuationPlanDoesNotBlockTheGroupsOtherPublishedWork() {
+    WorkerClassDto workerClass = registry.createClass(workerClass("continuation-plan"));
+    WorkQueueDto first = queue("Начальный этап", QueueType.REPAIR, 6, 0, workerClass.id());
+    WorkQueueDto second = queue("Закрытый план", QueueType.REPAIR, 6, 0, workerClass.id());
+    link(first, second);
+    WorkerDto worker = worker(workerClass.id());
+    WorkerGroupDto group = group(workerClass.id(), worker.id());
+    workforce.setCurrentGroup(
+        WAREHOUSE_ID, worker.id(), new SetCurrentGroupRequest(worker.version(), group.id()));
+    TaskBoardSnapshot route = parallelRoute("Бытовка 105", first, second);
+    BoardEntryDto source = entry(column(route, first.id()).entries(), "Бытовка 105");
+    BoardEntryDto target = entry(column(route, second.id()).entries(), "Бытовка 105");
+    BoardEntryDto taken =
+        board.take(
+            WAREHOUSE_ID,
+            source.id(),
+            new TakeEntryRequest(source.version(), group.id(), null),
+            null);
+    board.complete(WAREHOUSE_ID, source.id(), new VersionCommand(taken.version()), null);
+    WorkQueueDto currentQueue = registry.dto(registry.requireQueue(second.id()));
+    workerPlans.update(
+        WAREHOUSE_ID, second.id(), new WorkerQueuePlanRequest(currentQueue.version(), false, 6));
+    BoardEntryDto unrelated =
+        entry(
+            create(first.definitionId(), "Бытовка 106", LocalDate.of(2026, 8, 21), 3),
+            "Бытовка 106");
+    assertThat(workerFeedEntryIds(worker.id()))
+        .contains(unrelated.id())
+        .doesNotContain(target.id());
+    assertThat(
+            board
+                .take(
+                    WAREHOUSE_ID,
+                    unrelated.id(),
+                    new TakeEntryRequest(unrelated.version(), group.id(), null),
+                    null)
+                .status())
+        .isEqualTo(EntryStatus.IN_PROGRESS);
+  }
+
   private WorkQueueDto queue(
       String name,
       QueueType type,

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Task Board Service API
-  version: 1.17.1
+  version: 1.18.0
   description: >-
     Canonical F2 inventory of the active task-board, workforce and queue
     registry HTTP API. All warehouse-scoped operations validate the warehouse
@@ -64,6 +64,39 @@ paths:
         - $ref: '#/components/parameters/ExpectedVersion'
       responses:
         '204': { $ref: '#/components/responses/NoContent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /queue-definitions/{id}/link:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    put:
+      operationId: linkQueueDefinitions
+      description: >-
+        Requires global management and rwms.write. Atomically links two GENERAL
+        working queues under both observed definition versions, or unlinks the
+        existing pair when linkedQueueDefinitionId is null. Queues cannot link
+        to themselves, HOLDING or LOGISTICS_DRIVER; both need a common PRIMARY
+        worker class. Each queue belongs to at most one symmetric pair.
+        One member takes ordinary work for all active current group members;
+        any assigned member completes it for the group. Assignments record their
+        primary TAKE role immutably; older unknown roles create no reservation.
+        A group that completes a stage keeps its consecutive waiting REAL
+        continuation in the linked queue. TAKE still starts the next timer.
+        Other groups cannot take that continuation; while it is in the active
+        WorkerApp plan, its group takes it before unrelated waiting work.
+        Unavailable groups, inactive definitions and nonconsecutive route steps
+        do not create a continuation reservation. Existing pairs must be
+        unlinked before choosing a different partner.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QueueLinkRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/QueueDefinitionListOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -3205,7 +3238,7 @@ components:
       items: { $ref: '#/components/schemas/WorkerClass' }
     QueueDefinition:
       type: object
-      required: [id, version, name, description, type, purpose, sortOrder, active, hidden, collapsed, holdingPeriodMinutes, notificationThreshold, notifyWhenThresholdReached, resultPhotoMinCount, availableTaskLimit, bindings]
+      required: [id, version, name, description, type, purpose, sortOrder, active, hidden, collapsed, holdingPeriodMinutes, notificationThreshold, notifyWhenThresholdReached, resultPhotoMinCount, availableTaskLimit, linkedQueueDefinitionId, bindings]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
@@ -3226,6 +3259,9 @@ components:
           minimum: 1
           maximum: 50
           description: Default WorkerApp waiting REAL plan copied only when a warehouse projection is first created.
+        linkedQueueDefinitionId:
+          oneOf: [{ type: string, format: uuid }, { type: 'null' }]
+          description: Other global definition in this symmetric continuation pair, or null.
         bindings:
           type: array
           items: { $ref: '#/components/schemas/QueueBinding' }
@@ -3262,6 +3298,18 @@ components:
         bindings:
           type: array
           items: { $ref: '#/components/schemas/QueueBindingRequest' }
+      additionalProperties: false
+    QueueLinkRequest:
+      type: object
+      required: [expectedVersion, linkedQueueDefinitionId, linkedQueueExpectedVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        linkedQueueDefinitionId:
+          oneOf: [{ type: string, format: uuid }, { type: 'null' }]
+          description: Selected partner, or null to unlink the current pair.
+        linkedQueueExpectedVersion:
+          oneOf: [{ type: integer, format: int64, minimum: 0 }, { type: 'null' }]
+          description: Observed selected or current partner version; required unless no partner exists.
       additionalProperties: false
     QueueDefinitionOrderRequest:
       type: object
@@ -3724,7 +3772,7 @@ components:
       additionalProperties: false
     BoardColumn:
       type: object
-      required: [queueId, queueVersion, queueName, queueType, queuePurpose, sortOrder, availableTaskLimit, workerFeedEnabled, entries]
+      required: [queueId, queueVersion, queueName, queueType, queuePurpose, sortOrder, availableTaskLimit, workerFeedEnabled, linkedQueueId, linkedQueueName, entries]
       properties:
         queueId: { type: string, format: uuid }
         queueVersion: { type: integer, format: int64, minimum: 0 }
@@ -3740,6 +3788,12 @@ components:
         workerFeedEnabled:
           type: boolean
           description: Whether this warehouse queue is currently published in WorkerApp.
+        linkedQueueId:
+          oneOf: [{ type: string, format: uuid }, { type: 'null' }]
+          description: Partner physical queue in the same warehouse, or null.
+        linkedQueueName:
+          oneOf: [{ type: string }, { type: 'null' }]
+          description: Display name of the partner physical queue.
         entries:
           type: array
           items: { $ref: '#/components/schemas/BoardEntry' }

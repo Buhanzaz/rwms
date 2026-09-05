@@ -55,6 +55,7 @@ class TaskBoardWorkerExecutionService {
   private final MaintenanceTaskExecutionPackageService executionPackages;
   private final WorkerQueuePlanPolicy workerQueuePlans;
   private final PlanningReplanHoldFence replanHolds;
+  private final LinkedQueueContinuationPolicy linkedQueues;
 
   TaskBoardWorkerExecutionService(
       BoardTaskRepository tasks,
@@ -75,7 +76,8 @@ class TaskBoardWorkerExecutionService {
       DriverTaskAudienceService driverAudiences,
       MaintenanceTaskExecutionPackageService executionPackages,
       WorkerQueuePlanPolicy workerQueuePlans,
-      PlanningReplanHoldFence replanHolds) {
+      PlanningReplanHoldFence replanHolds,
+      LinkedQueueContinuationPolicy linkedQueues) {
     this.tasks = tasks;
     this.entries = entries;
     this.bindings = bindings;
@@ -95,6 +97,7 @@ class TaskBoardWorkerExecutionService {
     this.executionPackages = executionPackages;
     this.workerQueuePlans = workerQueuePlans;
     this.replanHolds = replanHolds;
+    this.linkedQueues = linkedQueues;
   }
 
   CancelledTaskDto cancelTask(
@@ -375,6 +378,11 @@ class TaskBoardWorkerExecutionService {
     }
     if (!joiningSecondary) {
       ensureExecutableOrder(entry, selected == null ? null : selected.getId());
+      if (entry.getQueue().getPurpose() == QueuePurpose.GENERAL) {
+        linkedQueues
+            .load(warehouseId)
+            .requireTakeAllowed(entry.getId(), group == null ? null : group.getId());
+      }
     }
     WorkerGroup assignedGroup = group;
     var queueBindings =
@@ -405,7 +413,9 @@ class TaskBoardWorkerExecutionService {
       throw new ConflictException("Для этого класса присоединение не настроено");
     }
     List<Worker> assigned =
-        assignedGroup != null && selected == null
+        assignedGroup != null
+                && (selected == null
+                    || (!joiningSecondary && entry.getQueue().getPurpose() == QueuePurpose.GENERAL))
             ? members.findAllByWorkerGroupIdAndActiveTrue(assignedGroup.getId()).stream()
                 .map(WorkerGroupMember::getWorker)
                 .filter(Worker::isActive)
@@ -476,6 +486,7 @@ class TaskBoardWorkerExecutionService {
       var a = new TaskAssignment();
       a.setQueueEntry(entry);
       a.setWorkerGroup(assignedGroup);
+      a.recordParticipation(!joiningSecondary);
       a.setWorker(worker);
       a.setWorkerNameSnapshot(worker.getDisplayName());
       a.setGroupNameSnapshot(assignedGroup == null ? null : assignedGroup.getName());
@@ -720,6 +731,7 @@ class TaskBoardWorkerExecutionService {
       TaskAssignment bundledAssignment = new TaskAssignment();
       bundledAssignment.setQueueEntry(bundledEntry);
       bundledAssignment.setWorkerGroup(representative.getWorkerGroup());
+      bundledAssignment.recordParticipation(representative.getPrimaryParticipation());
       bundledAssignment.setWorker(representative.getWorker());
       bundledAssignment.setWorkerNameSnapshot(representative.getWorkerNameSnapshot());
       bundledAssignment.setGroupNameSnapshot(representative.getGroupNameSnapshot());

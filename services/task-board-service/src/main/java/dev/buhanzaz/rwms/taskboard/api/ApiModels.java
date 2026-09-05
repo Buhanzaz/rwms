@@ -163,7 +163,17 @@ public final class ApiModels {
       boolean notifyWhenThresholdReached,
       int resultPhotoMinCount,
       int availableTaskLimit,
+      @JsonInclude(JsonInclude.Include.ALWAYS) UUID linkedQueueDefinitionId,
       List<QueueBindingDto> bindings) {}
+
+  /**
+   * Links two observed global definitions, or unlinks the existing pair when the target is null.
+   * Both versions are required when either operation changes a partner definition.
+   */
+  public record QueueLinkRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      UUID linkedQueueDefinitionId,
+      @Min(0) Long linkedQueueExpectedVersion) {}
 
   public record QueueDefinitionOrderItem(
       @NotNull UUID definitionId, @NotNull @Min(0) Long expectedVersion) {}
@@ -1299,6 +1309,8 @@ public final class ApiModels {
       int sortOrder,
       int availableTaskLimit,
       boolean workerFeedEnabled,
+      @JsonInclude(JsonInclude.Include.ALWAYS) UUID linkedQueueId,
+      @JsonInclude(JsonInclude.Include.ALWAYS) String linkedQueueName,
       List<BoardEntryDto> entries) {}
 
   /**

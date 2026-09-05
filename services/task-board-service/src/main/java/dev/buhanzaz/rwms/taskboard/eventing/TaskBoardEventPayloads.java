@@ -186,9 +186,17 @@ public final class TaskBoardEventPayloads {
     }
   }
 
-  public record AssignmentFact(UUID assignmentId, long version, UUID workerGroupId, UUID workerId,
-      AssignmentStatus status, OffsetDateTime assignedAt, OffsetDateTime startedAt,
-      OffsetDateTime pausedAt, OffsetDateTime finishedAt) {}
+  public record AssignmentFact(
+      UUID assignmentId,
+      long version,
+      UUID workerGroupId,
+      UUID workerId,
+      AssignmentStatus status,
+      OffsetDateTime assignedAt,
+      OffsetDateTime startedAt,
+      OffsetDateTime pausedAt,
+      OffsetDateTime finishedAt,
+      Boolean primaryParticipation) {}
 
   public record TimeEventFact(UUID timeEventId, long version, UUID workerId, TimeEventType eventType,
       OffsetDateTime createdAt, UUID relatedEntryId) {}

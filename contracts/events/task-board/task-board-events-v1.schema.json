@@ -464,7 +464,11 @@
         "assignedAt": {"$ref": "#/$defs/nullableDateTime"},
         "startedAt": {"$ref": "#/$defs/nullableDateTime"},
         "pausedAt": {"$ref": "#/$defs/nullableDateTime"},
-        "finishedAt": {"$ref": "#/$defs/nullableDateTime"}
+        "finishedAt": {"$ref": "#/$defs/nullableDateTime"},
+        "primaryParticipation": {
+          "type": ["boolean", "null"],
+          "description": "Immutable TAKE (true) versus secondary JOIN (false) role. Null or absent on older evidence; never inferred from mutable group classes."
+        }
       }
     },
     "timeEventFact": {

@@ -258,6 +258,20 @@ fact. Managers may reorder only unpinned waiting real cards within one queue;
 entry and queue versions plus the observed target entry identity fence the
 command, while active, pinned and shadow entries keep their positions.
 
+Global working queues can form one symmetric continuation pair under both
+definition versions (`PUT /api/queue-definitions/{id}/link`). They share a
+primary worker class; holding and driver queues cannot be paired. Board columns
+expose the partner physical queue ID and name. One current member takes ordinary
+work for all active current members, and any assigned member completes it for
+the group. A completed primary assignment reserves the immediate waiting real
+continuation of that same task in its linked queue for the group. WorkerApp
+publishes that continuation ahead of unrelated waiting choices for its group
+while it is inside the active queue plan. The existing publication switch,
+plan limit, group availability and canonical route gates remain authoritative.
+TAKE starts the next timer; unlinking releases the reservation. Assignment
+`primaryParticipation` is immutable event evidence, independent of later group
+class edits. Historical unknown roles remain unknown and create no reservation.
+
 A route uses one mandatory phase sequence: SES, welding, exterior, interior,
 electrical, then plumbing. The first existing unfinished phase is `REAL` by
 default; absent or completed phases are skipped and all later work starts as

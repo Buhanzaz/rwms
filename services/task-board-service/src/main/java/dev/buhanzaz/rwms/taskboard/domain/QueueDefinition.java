@@ -87,6 +87,23 @@ public class QueueDefinition extends AbstractVersionedEntity {
   @Column(name = "available_task_limit", nullable = false)
   private int availableTaskLimit = 6;
 
+  @Column(name = "linked_queue_definition_id")
+  private UUID linkedQueueDefinitionId;
+
+  /** Returns the other definition in this queue's symmetric continuation pair. */
+  public UUID getLinkedQueueDefinitionId() {
+    return linkedQueueDefinitionId;
+  }
+
+  /** Changes one side of a pair; the registry fences and writes both definitions atomically. */
+  public void linkTo(UUID definitionId) {
+    if (getId().equals(definitionId)) {
+      throw new IllegalArgumentException("Очередь нельзя связать с собой");
+    }
+    linkedQueueDefinitionId = definitionId;
+    touch();
+  }
+
   @PrePersist
   @PreUpdate
   void normalize() {

@@ -4794,6 +4794,90 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
+  void linkingQueuesRequiresGlobalManagementAndBothVersions() throws Exception {
+    var workerClass = registry.createClass(workerClass("HTTP_QUEUE_LINK"));
+    var first =
+        QueueRegistryTestFixtures.create(
+            registry,
+            jdbc,
+            W1,
+            queue(
+                "HTTP_LINK_FIRST",
+                QueueType.REPAIR,
+                List.of(new QueueBindingRequest(workerClass.id(), false))));
+    var second =
+        QueueRegistryTestFixtures.create(
+            registry,
+            jdbc,
+            W1,
+            queue(
+                "HTTP_LINK_SECOND",
+                QueueType.REPAIR,
+                List.of(new QueueBindingRequest(workerClass.id(), false))));
+    var firstDefinition = registry.dto(registry.requireQueueDefinition(first.definitionId()));
+    var secondDefinition = registry.dto(registry.requireQueueDefinition(second.definitionId()));
+    String path = "/api/queue-definitions/{id}/link";
+    String body =
+        """
+        {"expectedVersion":%d,"linkedQueueDefinitionId":"%s","linkedQueueExpectedVersion":%d}
+        """
+            .formatted(
+                firstDefinition.version(), secondDefinition.id(), secondDefinition.version());
+    mockMvc
+        .perform(
+            put(path, firstDefinition.id()).contentType(MediaType.APPLICATION_JSON).content(body))
+        .andExpect(status().isUnauthorized());
+    mockMvc
+        .perform(
+            put(path, firstDefinition.id())
+                .with(
+                    jwt()
+                        .jwt(
+                            token ->
+                                token
+                                    .claim("principal_type", "USER")
+                                    .claim("global_role", "WAREHOUSE_MANAGER")
+                                    .claim("scope", "rwms.write")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isForbidden());
+    var admin =
+        jwt()
+            .jwt(
+                token ->
+                    token
+                        .claim("principal_type", "USER")
+                        .claim("global_role", "SYSTEM_ADMIN")
+                        .claim("scope", "rwms.write"));
+    mockMvc
+        .perform(
+            put(path, firstDefinition.id())
+                .with(admin)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+        .andExpect(status().isBadRequest());
+    mockMvc
+        .perform(
+            put(path, firstDefinition.id())
+                .with(admin)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isOk());
+    assertThat(
+            registry
+                .dto(registry.requireQueueDefinition(firstDefinition.id()))
+                .linkedQueueDefinitionId())
+        .isEqualTo(secondDefinition.id());
+    mockMvc
+        .perform(
+            put(path, firstDefinition.id())
+                .with(admin)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isConflict());
+  }
+
+  @Test
   void staleControllerMutationReturns409ProblemDetail() throws Exception {
     var workerClass = registry.createClass(workerClass("HTTP"));
     String body =

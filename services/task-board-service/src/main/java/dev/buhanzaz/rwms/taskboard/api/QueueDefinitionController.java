@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.taskboard.api;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueDefinitionDto;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueDefinitionOrderRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueDefinitionRequest;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueLinkRequest;
 
 import dev.buhanzaz.rwms.taskboard.security.WarehouseAccessAuthorizer;
 import dev.buhanzaz.rwms.taskboard.service.RegistryService;
@@ -66,6 +67,16 @@ public class QueueDefinitionController {
       @Valid @RequestBody QueueDefinitionRequest request) {
     requireWrite(jwt);
     return service.updateQueueDefinition(id, request);
+  }
+
+  /** Changes one continuation pair atomically under both definition versions. */
+  @PutMapping("/queue-definitions/{id}/link")
+  public List<QueueDefinitionDto> link(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID id,
+      @Valid @RequestBody QueueLinkRequest request) {
+    requireWrite(jwt);
+    return service.linkQueueDefinitions(id, request);
   }
 
   /** Reorders the complete global standard without moving entries between physical queues. */

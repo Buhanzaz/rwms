@@ -726,3 +726,25 @@ dependency-outage, and recovery coverage.
 - [Production safety validator](src/main/java/dev/buhanzaz/rwms/taskboard/config/TaskBoardProductionSafetyValidator.java)
 - [Event store](src/main/java/dev/buhanzaz/rwms/taskboard/eventing/TaskBoardEventStore.java)
 - [Runtime flow map](../../docs/project-knowledge/runtime-flows.md)
+
+## Linked queues and group continuation
+
+`PUT /api/queue-definitions/{id}/link` links or unlinks two global working
+queues atomically under both definition versions. A queue has at most one
+partner, and both need a common primary worker class. Holding and driver queues
+are excluded. The board returns the partner queue ID and name on both columns.
+
+For ordinary work, one current group member takes the task for every active
+current member; any assigned member may complete it for the whole group. After
+completion, the consecutive real stage of the same task in the linked queue is
+reserved for that group. Both members receive that continuation in WorkerApp;
+the next timer starts on TAKE. A published continuation takes precedence over
+unrelated waiting work for its group. Queue publication, plan limits and group
+availability still apply; an unpublished continuation does not block other
+published work. Unlinking releases the continuation. Route order is preserved.
+
+The continuation owner comes from persisted completion assignments with a
+recorded primary TAKE role. That immutable role is included in queue-entry
+events, so later group-class changes cannot change who took the stage. Older
+assignments with an unknown role keep their prior behavior; no historical role
+is guessed or backfilled. Flyway V50 adds the pair and assignment-role columns.

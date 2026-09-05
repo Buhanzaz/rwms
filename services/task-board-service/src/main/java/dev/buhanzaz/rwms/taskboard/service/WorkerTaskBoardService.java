@@ -75,6 +75,7 @@ public class WorkerTaskBoardService {
   private final WorkerFeedRevisionStore feedRevisions;
   private final WorkerActionReceiptStore actionReceipts;
   private final TaskBoardCompletionEvidenceService completionEvidence;
+  private final LinkedQueueContinuationPolicy linkedQueues;
 
   public WorkerTaskBoardService(
       TaskBoardService taskBoard,
@@ -92,7 +93,8 @@ public class WorkerTaskBoardService {
       WorkerPushOutbox pushOutbox,
       WorkerFeedRevisionStore feedRevisions,
       WorkerActionReceiptStore actionReceipts,
-      TaskBoardCompletionEvidenceService completionEvidence) {
+      TaskBoardCompletionEvidenceService completionEvidence,
+      LinkedQueueContinuationPolicy linkedQueues) {
     this.taskBoard = taskBoard;
     this.feedCounts = feedCounts;
     this.workforce = workforce;
@@ -109,6 +111,7 @@ public class WorkerTaskBoardService {
     this.feedRevisions = feedRevisions;
     this.actionReceipts = actionReceipts;
     this.completionEvidence = completionEvidence;
+    this.linkedQueues = linkedQueues;
   }
 
   /** Returns the WorkerApp-compatible access context. */
@@ -209,6 +212,8 @@ public class WorkerTaskBoardService {
               categories.put(queue.id(), category(surface, queue, access));
             });
     TaskBoardSnapshot snapshot = taskBoard.workerSnapshot(surface, warehouseId, workerId);
+    LinkedQueueContinuationPolicy.Continuations continuations =
+        surface == MobileTaskSurface.WORKER ? linkedQueues.load(warehouseId) : null;
     List<VisibleEntry> visible = new ArrayList<>();
     for (BoardColumnDto column : snapshot.columns()) {
       WorkerCategory workerCategory = categories.get(column.queueId());
@@ -229,6 +234,11 @@ public class WorkerTaskBoardService {
       for (BoardEntryDto entry : column.entries()) {
         if (queue == null) throw new IllegalStateException("Очередь ленты не найдена");
         if (!surfacePolicy.includesFeedEntry(surface, queue, entry)) continue;
+        if (continuations != null
+            && queue.purpose() == QueuePurpose.GENERAL
+            && entry.status() == dev.buhanzaz.rwms.taskboard.domain.EntryStatus.WAITING
+            && workerCategory.audienceModes().contains(AVAILABLE)
+            && !continuations.canTake(entry.id(), access.worker().currentGroupId())) continue;
         visible.add(new VisibleEntry(workerCategory, entry));
       }
     }

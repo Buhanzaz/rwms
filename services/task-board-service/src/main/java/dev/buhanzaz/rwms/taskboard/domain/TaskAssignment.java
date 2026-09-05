@@ -60,6 +60,25 @@ public class TaskAssignment extends AbstractVersionedEntity {
   @Column(name = "finished_at")
   private OffsetDateTime finishedAt;
 
+  @Column(name = "primary_participation")
+  private Boolean primaryParticipation;
+
+  /** Null denotes older evidence that did not distinguish TAKE from a secondary JOIN. */
+  public Boolean getPrimaryParticipation() {
+    return primaryParticipation;
+  }
+
+  /**
+   * Records the participation role when this assignment is created, independent of later class
+   * edits.
+   */
+  public void recordParticipation(Boolean primary) {
+    if (primaryParticipation != null && !primaryParticipation.equals(primary)) {
+      throw new IllegalStateException("Роль существующего назначения неизменяема");
+    }
+    primaryParticipation = primary;
+  }
+
   public QueueEntry getQueueEntry() {
     return queueEntry;
   }

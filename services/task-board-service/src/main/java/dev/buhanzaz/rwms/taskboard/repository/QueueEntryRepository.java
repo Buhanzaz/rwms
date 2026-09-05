@@ -4,7 +4,9 @@ import dev.buhanzaz.rwms.taskboard.domain.EntryStatus;
 import dev.buhanzaz.rwms.taskboard.domain.QueueEntry;
 import dev.buhanzaz.rwms.taskboard.domain.QueuePurpose;
 import dev.buhanzaz.rwms.taskboard.domain.TaskStatus;
+import dev.buhanzaz.rwms.taskboard.domain.WorkerGroup;
 import jakarta.persistence.LockModeType;
+import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -16,6 +18,53 @@ import org.springframework.data.repository.query.Param;
 
 /** Ordered and locking queries for mutable task route entries. */
 public interface QueueEntryRepository extends JpaRepository<QueueEntry, UUID> {
+  /**
+   * Finds waiting consecutive continuations from durable completion assignments. No reservation is
+   * invented from a client selection, a display name, or an unrelated repair of the same cabin.
+   */
+  @Query(
+      """
+      select distinct target as entry, workerGroup as workerGroup, source.doneAt as completedAt
+      from QueueEntry target
+      join target.task task
+      join target.queue targetQueue
+      join targetQueue.definition targetDefinition
+      join QueueEntry source on source.task = task and source.routeIndex + 1 = target.routeIndex
+      join source.queue sourceQueue
+      join sourceQueue.definition sourceDefinition
+      join TaskAssignment assignment on assignment.queueEntry = source
+      join assignment.workerGroup workerGroup
+      where task.warehouseId = :warehouseId
+        and task.status = 'ACTIVE'
+        and target.status = 'WAITING' and target.entryType = 'REAL'
+        and source.status = 'DONE' and assignment.status = 'DONE'
+        and assignment.primaryParticipation = true
+        and sourceDefinition.linkedQueueDefinitionId = targetDefinition.id
+        and targetDefinition.linkedQueueDefinitionId = sourceDefinition.id
+        and sourceDefinition.active = true and targetDefinition.active = true
+        and sourceQueue.active = true and targetQueue.active = true
+        and workerGroup.warehouseId = :warehouseId
+        and workerGroup.active = true and workerGroup.operationalStatus = 'AVAILABLE'
+        and workerGroup.workerClass.active = true
+        and exists (select binding.id from WorkQueueClassBinding binding
+                    where binding.queue = targetQueue and binding.workerClass = workerGroup.workerClass
+                      and binding.participationPolicy = 'PRIMARY')
+        and exists (select member.id from WorkerGroupMember member
+                    where member.workerGroup = workerGroup and member.active = true
+                      and member.worker.active = true)
+      order by source.doneAt, target.id
+      """)
+  List<LinkedContinuation> findLinkedContinuations(@Param("warehouseId") UUID warehouseId);
+
+  /** A continuation and its previous stage's primary group, derived from persisted facts. */
+  interface LinkedContinuation {
+    QueueEntry getEntry();
+
+    WorkerGroup getWorkerGroup();
+
+    OffsetDateTime getCompletedAt();
+  }
+
   List<QueueEntry> findAllByTaskIdOrderByRouteIndexAsc(UUID taskId);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)

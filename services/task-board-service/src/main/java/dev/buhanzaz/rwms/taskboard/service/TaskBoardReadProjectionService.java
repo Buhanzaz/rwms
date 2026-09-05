@@ -106,7 +106,10 @@ class TaskBoardReadProjectionService {
     }
     Map<UUID, TaskSourceReferenceDto> sources = sourceReferences(allEntries);
     Map<UUID, List<AssignmentDto>> assignmentsByEntry = assignmentDtos(allEntries);
-    for (var queue : queues.findAllActiveOrderedByWarehouseId(warehouseId)) {
+    List<WorkQueue> warehouseQueues = queues.findAllActiveOrderedByWarehouseId(warehouseId);
+    Map<UUID, WorkQueue> queuesByDefinition = new LinkedHashMap<>();
+    warehouseQueues.forEach(queue -> queuesByDefinition.put(queue.getDefinition().getId(), queue));
+    for (var queue : warehouseQueues) {
       if (queue.isHidden() || queue.getPurpose() == QueuePurpose.LOGISTICS_DRIVER) continue;
       if (applyWorkerPlan && !workerQueuePlans.isPublished(queue)) continue;
       List<QueueEntry> queueEntries =
@@ -127,6 +130,8 @@ class TaskBoardReadProjectionService {
                           sources.get(entry.getTask().getId()),
                           assignmentsByEntry.getOrDefault(entry.getId(), List.of())))
               .toList();
+      WorkQueue linkedQueue =
+          queuesByDefinition.get(queue.getDefinition().getLinkedQueueDefinitionId());
       columns.add(
           new BoardColumnDto(
               queue.getId(),
@@ -137,6 +142,8 @@ class TaskBoardReadProjectionService {
               queue.getSortOrder(),
               queue.getAvailableTaskLimit(),
               queue.isWorkerFeedEnabled(),
+              linkedQueue == null ? null : linkedQueue.getId(),
+              linkedQueue == null ? null : linkedQueue.getName(),
               cards));
     }
     return new TaskBoardSnapshot(warehouseId, columns);
@@ -266,6 +273,8 @@ class TaskBoardReadProjectionService {
             queue.getSortOrder(),
             queue.getAvailableTaskLimit(),
             queue.isWorkerFeedEnabled(),
+            null,
+            null,
             logisticsEntries.stream()
                 .map(
                     entry ->

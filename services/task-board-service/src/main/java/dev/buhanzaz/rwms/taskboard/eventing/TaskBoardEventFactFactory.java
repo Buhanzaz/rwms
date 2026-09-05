@@ -129,19 +129,25 @@ public class TaskBoardEventFactFactory {
 
   @Transactional(readOnly = true)
   public QueueEntryFact queueEntry(QueueEntry value, boolean deleted) {
-    var assignmentFacts = assignments.findAllByQueueEntryId(value.getId()).stream()
-        .sorted(Comparator.comparing(assignment -> assignment.getId().toString()))
-        .map(assignment -> new AssignmentFact(
-            assignment.getId(),
-            assignment.getVersion(),
-            assignment.getWorkerGroup() == null ? null : assignment.getWorkerGroup().getId(),
-            assignment.getWorker() == null ? null : assignment.getWorker().getId(),
-            assignment.getStatus(),
-            assignment.getAssignedAt(),
-            assignment.getStartedAt(),
-            assignment.getPausedAt(),
-            assignment.getFinishedAt()))
-        .toList();
+    var assignmentFacts =
+        assignments.findAllByQueueEntryId(value.getId()).stream()
+            .sorted(Comparator.comparing(assignment -> assignment.getId().toString()))
+            .map(
+                assignment ->
+                    new AssignmentFact(
+                        assignment.getId(),
+                        assignment.getVersion(),
+                        assignment.getWorkerGroup() == null
+                            ? null
+                            : assignment.getWorkerGroup().getId(),
+                        assignment.getWorker() == null ? null : assignment.getWorker().getId(),
+                        assignment.getStatus(),
+                        assignment.getAssignedAt(),
+                        assignment.getStartedAt(),
+                        assignment.getPausedAt(),
+                        assignment.getFinishedAt(),
+                        assignment.getPrimaryParticipation()))
+            .toList();
     var timeEventFacts = timeEvents.findAllByQueueEntryIdOrderByCreatedAtAsc(value.getId()).stream()
         .sorted(Comparator.comparing(event -> event.getId().toString()))
         .map(event -> new TimeEventFact(

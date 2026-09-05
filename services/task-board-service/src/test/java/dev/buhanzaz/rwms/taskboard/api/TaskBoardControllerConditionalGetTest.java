@@ -285,6 +285,8 @@ class TaskBoardControllerConditionalGetTest {
                 0,
                 6,
                 true,
+                null,
+                null,
                 List.of(entry))));
   }
 }

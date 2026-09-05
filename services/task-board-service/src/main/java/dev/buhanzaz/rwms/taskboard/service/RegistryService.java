@@ -16,6 +16,7 @@ import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardAggregateType;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventSourcing;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardProjectionWriter;
+import dev.buhanzaz.rwms.taskboard.eventing.WorkerFeedRevisionStore;
 import dev.buhanzaz.rwms.taskboard.mapper.QueueRegistryMapper;
 import dev.buhanzaz.rwms.taskboard.repository.*;
 import java.util.Comparator;
@@ -26,6 +27,8 @@ import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * Owns the queue registry boundary.
@@ -50,6 +53,8 @@ public class RegistryService {
   private final TaskBoardProjectionWriter projectionWriter;
   private final GlobalQueueProjectionService globalQueueProjections;
   private final QueueRegistryMapper mapper;
+  private final WorkerFeedRevisionStore feedRevisions;
+  private final WorkerInvalidationHub invalidations;
 
   public RegistryService(
       WorkerClassRepository classes,
@@ -64,7 +69,9 @@ public class RegistryService {
       TaskBoardEventSourcing eventSourcing,
       TaskBoardProjectionWriter projectionWriter,
       GlobalQueueProjectionService globalQueueProjections,
-      QueueRegistryMapper mapper) {
+      QueueRegistryMapper mapper,
+      WorkerFeedRevisionStore feedRevisions,
+      WorkerInvalidationHub invalidations) {
     this.classes = classes;
     this.definitions = definitions;
     this.definitionBindings = definitionBindings;
@@ -78,6 +85,8 @@ public class RegistryService {
     this.projectionWriter = projectionWriter;
     this.globalQueueProjections = globalQueueProjections;
     this.mapper = mapper;
+    this.feedRevisions = feedRevisions;
+    this.invalidations = invalidations;
   }
 
   @Transactional(readOnly = true)
@@ -172,6 +181,15 @@ public class RegistryService {
     lockGlobalQueueOrder();
     QueueDefinition definition = requireGeneralQueueDefinition(id);
     checkVersion(definition.getVersion(), request.version(), "Общая очередь");
+    if (definition.getLinkedQueueDefinitionId() != null) {
+      requireLinkCompatible(
+          request.type(),
+          request.bindings().stream()
+              .filter(binding -> binding.participationPolicy() == ParticipationPolicy.PRIMARY)
+              .map(QueueBindingRequest::workerClassId)
+              .collect(java.util.stream.Collectors.toSet()),
+          requireGeneralQueueDefinition(definition.getLinkedQueueDefinitionId()));
+    }
     String normalizedName = QueueDefinition.normalizeName(request.name());
     lockQueueDefinitionIdentity(normalizedName, request.type());
     definitions
@@ -196,6 +214,9 @@ public class RegistryService {
     lockGlobalQueueOrder();
     QueueDefinition definition = requireGeneralQueueDefinition(id);
     checkVersion(definition.getVersion(), expectedVersion, "Общая очередь");
+    if (definition.getLinkedQueueDefinitionId() != null) {
+      throw new ConflictException("Перед удалением разорвите связь очередей");
+    }
     if (references.existsByDefinitionId(id)) {
       throw new ConflictException("Общая очередь используется каталогом и не может быть удалена");
     }
@@ -207,6 +228,90 @@ public class RegistryService {
     projectionWriter.flush();
     normalizeGlobalOrder();
     globalQueueProjections.synchronizeAll();
+  }
+
+  /**
+   * Changes both sides of a global continuation pair under the shared catalog lock and both
+   * observed versions. Existing pairs must be unlinked before either queue can choose a new
+   * partner.
+   */
+  @Transactional
+  public List<QueueDefinitionDto> linkQueueDefinitions(UUID id, QueueLinkRequest request) {
+    lockGlobalQueueOrder();
+    QueueDefinition definition = requireGeneralQueueDefinition(id);
+    checkVersion(definition.getVersion(), request.expectedVersion(), "Общая очередь");
+    UUID targetId = request.linkedQueueDefinitionId();
+    UUID currentId = definition.getLinkedQueueDefinitionId();
+    if (id.equals(targetId)) throw new ConflictException("Очередь нельзя связать с собой");
+    if (currentId != null && targetId != null && !currentId.equals(targetId)) {
+      throw new ConflictException("Сначала разорвите существующую связь очередей");
+    }
+    UUID partnerId = targetId == null ? currentId : targetId;
+    if (partnerId == null) return listQueueDefinitions();
+    QueueDefinition partner = requireGeneralQueueDefinition(partnerId);
+    if (request.linkedQueueExpectedVersion() == null) {
+      throw new ConflictException("Обновите данные второй очереди перед изменением связи");
+    }
+    checkVersion(partner.getVersion(), request.linkedQueueExpectedVersion(), "Связанная очередь");
+    if (partner.getLinkedQueueDefinitionId() != null
+        && !id.equals(partner.getLinkedQueueDefinitionId())) {
+      throw new ConflictException("Выбранная очередь уже связана с другой очередью");
+    }
+    if (targetId != null) {
+      requireLinkCompatible(definition.getType(), primaryClassIds(definition), partner);
+    }
+    if (java.util.Objects.equals(currentId, targetId)) return listQueueDefinitions();
+    var warehouseIds = new java.util.LinkedHashSet<UUID>();
+    for (UUID definitionId : List.of(id, partnerId)) {
+      queues
+          .findAllByDefinitionIdOrderByWarehouseIdAscIdAsc(definitionId)
+          .forEach(queue -> warehouseIds.add(queue.getWarehouseId()));
+    }
+    // Pair edits and TAKE share the same warehouse mutation fence.
+    warehouseIds.stream()
+        .sorted()
+        .forEach(
+            warehouseId ->
+                jdbc.queryForObject(
+                    "select pg_advisory_xact_lock(hashtextextended(?, 0))",
+                    Object.class,
+                    "queue-position:warehouse:" + warehouseId));
+    definition.linkTo(targetId);
+    partner.linkTo(targetId == null ? null : id);
+    projectionWriter.saveAndFlush(definitions, definition);
+    projectionWriter.saveAndFlush(definitions, partner);
+    for (UUID warehouseId : warehouseIds) {
+      feedRevisions.advanceWarehouse(warehouseId);
+      long revision = feedRevisions.current(warehouseId);
+      TransactionSynchronizationManager.registerSynchronization(
+          new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+              invalidations.feedChanged(warehouseId, revision);
+            }
+          });
+    }
+    return listQueueDefinitions();
+  }
+
+  private Set<UUID> primaryClassIds(QueueDefinition definition) {
+    return definitionBindings
+        .findAllByDefinitionIdOrderByBindingOrderAscIdAsc(definition.getId())
+        .stream()
+        .filter(binding -> binding.getParticipationPolicy() == ParticipationPolicy.PRIMARY)
+        .map(binding -> binding.getWorkerClass().getId())
+        .collect(java.util.stream.Collectors.toSet());
+  }
+
+  private void requireLinkCompatible(
+      QueueType type, Set<UUID> primaryClasses, QueueDefinition partner) {
+    if (type == QueueType.HOLDING || partner.getType() == QueueType.HOLDING) {
+      throw new ConflictException("Связать можно только рабочие очереди, без выдержки");
+    }
+    if (primaryClassIds(partner).stream().noneMatch(primaryClasses::contains)) {
+      throw new ConflictException(
+          "У связанных очередей должен быть общий основной класс исполнителей");
+    }
   }
 
   /** Reorders the full GENERAL catalog while keeping canonical repair phases immutable in order. */
