@@ -120,7 +120,8 @@ class AssetOpenApiParityTest {
         "/api/internal/asset/v1/inventory/furniture-snapshots",
         "/api/internal/asset/v1/inventory/furniture-reconciliations/{inventoryId}",
         "/api/internal/asset/v1/inventory/outcomes/{inventoryId}/findings/{findingId}",
-        "/api/internal/asset/v1/inventory/source-assets");
+        "/api/internal/asset/v1/inventory/source-assets",
+        "/api/internal/asset/v1/logistics/equipment-pricing-catalog");
     assertThat(
             child(
                     child(

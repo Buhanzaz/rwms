@@ -57,6 +57,9 @@ dimension, category, characteristics и linoleum среди всех current sta
 точные UUID типа/категории и версию для 1–100 разных бытовок одного склада.
 Отсутствующая бытовка или другой склад отклоняют весь запрос с 404. Эти чтения
 не раскрывают паспорт, не меняют резервы и не владеют тарифами аренды логистики.
+`/equipment-pricing-catalog` возвращает актуальные UUID и названия FURNITURE, включая отключённые
+позиции и позиции без остатков, но исключая другие категории оборудования. Требуются точные
+credentials logistics-service; месячная цена одной единицы остаётся в ведении логистики.
 `/customer-cabin-catalog` — customer-booking read для одного обязательного
 `holdScopeId`. Он возвращает только бытовки `FREE` без active order reservation
 или operation lease, исключает live holds других scopes и сохраняет видимыми

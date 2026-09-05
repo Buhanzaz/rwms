@@ -1674,6 +1674,20 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/logistics/equipment-pricing-catalog:
+    get:
+      operationId: readEquipmentPricingCatalog
+      description: >-
+        Requires SERVICE logistics-service with exactly asset.logistics. Returns every existing
+        FURNITURE catalog identity, including inactive and out-of-stock positions, in name/id order.
+        Other equipment categories are excluded. Names are labels; deleted identities disappear.
+        Logistics owns the monthly price per one furniture unit. This read has no reservation effects.
+      responses:
+        '200':
+          description: Current global furniture catalog identities.
+          content: { application/json: { schema: { $ref: '#/components/schemas/EquipmentPricingCatalog' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/internal/asset/v1/logistics/cabin-pricing-catalog:
     get:
       operationId: readCabinPricingCatalog
@@ -3205,6 +3219,21 @@ components:
           description: >-
             Missing or null is replacement-safe REPLACE. APPEND is honored only when explicitly
             supplied by the caller.
+    EquipmentPricingCatalog:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, name, active]
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string, minLength: 1, maxLength: 255 }
+              active: { type: boolean }
     CabinPricingCatalog:
       type: object
       additionalProperties: false

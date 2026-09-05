@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.asset.mapper;
 
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.EquipmentResponse;
+import dev.buhanzaz.rwms.asset.api.EquipmentPricingCatalogResponse;
 import dev.buhanzaz.rwms.asset.domain.EquipmentCatalogItem;
 import org.mapstruct.InjectionStrategy;
 import org.mapstruct.Mapper;
@@ -17,4 +18,7 @@ import org.mapstruct.ReportingPolicy;
     unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface EquipmentCatalogItemMapper {
   EquipmentResponse toResponse(EquipmentCatalogItem equipmentCatalogItem);
+
+  /** Maps only the identity, label and activity required by the tariff owner. */
+  EquipmentPricingCatalogResponse.Value toPricingValue(EquipmentCatalogItem equipmentCatalogItem);
 }

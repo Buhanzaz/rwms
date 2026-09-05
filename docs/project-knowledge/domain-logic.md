@@ -868,6 +868,11 @@ or manager. This recovery boundary does not itself start new payment windows. Ev
 [`recovery`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderMutationRecoveryService.java),
 [`V101`](../../services/logistics-service/src/main/resources/db/migration/V101__durable_payment_reservation_expiry.sql).
 
+Asset's logistics-only `/equipment-pricing-catalog` exposes live furniture identities and labels,
+including inactive and out-of-stock positions; it excludes ELECTRICAL/OTHER and contains no prices.
+This supplies logistics with the catalog for the requested monthly tariff per one furniture unit.
+Evidence: [`catalog read`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/EquipmentPricingReferenceService.java).
+
 Global cabin monthly prices belong to logistics, not asset passport metadata. V98 seeds a
 separate versioned singleton with positive whole-ruble overrides for asset-owned type/category
 UUID pairs; every omitted pair means zero. No catalog names or cross-database foreign keys are

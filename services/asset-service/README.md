@@ -57,6 +57,9 @@ including inactive and unused values; deleted values disappear from the result.
 for one to 100 distinct cabins in one warehouse. Missing or foreign-warehouse
 cabins reject the complete request with 404. Neither read exposes passport data,
 changes reservations, or owns the logistics rental-price policy.
+`/equipment-pricing-catalog` returns current FURNITURE identities and labels, including inactive
+and out-of-stock items, but excludes other equipment categories. The exact logistics service
+credential is required; monthly prices per one unit remain owned by logistics.
 `/customer-cabin-catalog` is the customer-booking read for one required
 `holdScopeId`. It returns only `FREE` cabins that have no active order
 reservation or operation lease, excludes live holds of other scopes, and keeps

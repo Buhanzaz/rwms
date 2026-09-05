@@ -11,12 +11,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateCabinCatalogItemRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateRentalItemRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateCabinCatalogItemRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.CabinPricingCatalogResponse;
+import dev.buhanzaz.rwms.asset.api.EquipmentPricingCatalogResponse;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinAvailabilityRequest;
 import dev.buhanzaz.rwms.asset.domain.CabinCatalogKind;
+import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
 import dev.buhanzaz.rwms.asset.repository.RentalItemRepository;
 import dev.buhanzaz.rwms.asset.service.AssetService;
 import dev.buhanzaz.rwms.asset.service.CabinCompositionService;
@@ -195,8 +199,57 @@ class CabinPricingReferenceIntegrationTest {
   }
 
   @Test
+  void equipmentPricingIncludesOnlyFurnitureAndTracksLabelsWithoutNeedingStock() throws Exception {
+    String suffix = UUID.randomUUID().toString();
+    var furniture =
+        assets
+            .createEquipment(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                new CreateEquipmentRequest(
+                    "Тарифная кровать " + suffix, EquipmentCategory.FURNITURE, null, null))
+            .response();
+    var electrical =
+        assets
+            .createEquipment(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                new CreateEquipmentRequest(
+                    "Тарифная электрика " + suffix, EquipmentCategory.ELECTRICAL, null, null))
+            .response();
+    assets.updateEquipment(
+        furniture.id(),
+        new UpdateEquipmentRequest(
+            furniture.version(),
+            "Переименованная кровать " + suffix,
+            EquipmentCategory.FURNITURE,
+            false,
+            null,
+            null));
+
+    String body =
+        mvc.perform(get(BASE + "/equipment-pricing-catalog").with(logisticsJwt()))
+            .andExpect(status().isOk())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    var catalog = objectMapper.readValue(body, EquipmentPricingCatalogResponse.class);
+    assertThat(catalog.items())
+        .filteredOn(value -> value.id().equals(furniture.id()))
+        .containsExactly(
+            new EquipmentPricingCatalogResponse.Value(
+                furniture.id(), "Переименованная кровать " + suffix, false));
+    assertThat(catalog.items())
+        .extracting(EquipmentPricingCatalogResponse.Value::id)
+        .doesNotContain(electrical.id());
+    assertThat(objectMapper.readTree(body).get("items").get(0).propertyNames())
+        .containsExactlyInAnyOrder("id", "name", "active");
+  }
+
+  @Test
   void pricingFactsRequireTheExactLogisticsServiceCredential() throws Exception {
     mvc.perform(get(BASE + "/cabin-pricing-catalog")).andExpect(status().isUnauthorized());
+    mvc.perform(get(BASE + "/equipment-pricing-catalog")).andExpect(status().isUnauthorized());
     String body =
         objectMapper.writeValueAsString(
             new CabinAvailabilityRequest(UUID.randomUUID(), List.of(UUID.randomUUID())));
@@ -218,6 +271,8 @@ class CabinPricingReferenceIntegrationTest {
             serviceJwt("logistics-service", "rwms.read"),
             serviceJwt("logistics-service", "asset.logistics rwms.read"))) {
       mvc.perform(get(BASE + "/cabin-pricing-catalog").with(token))
+          .andExpect(status().isForbidden());
+      mvc.perform(get(BASE + "/equipment-pricing-catalog").with(token))
           .andExpect(status().isForbidden());
       mvc.perform(
               post(BASE + "/cabin-pricing-references")
