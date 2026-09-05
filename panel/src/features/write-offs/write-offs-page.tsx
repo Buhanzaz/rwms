@@ -12,6 +12,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { OperationsListGrid } from "@/components/operations-list-grid"
 import {
   PageToolbar,
+  PageToolbarActions,
   PageToolbarContent,
 } from "@/components/page-toolbar"
 import { Badge } from "@/components/ui/badge"
@@ -498,7 +499,9 @@ export function WriteOffsPage({
               </SelectGroup>
             </SelectContent>
           </Select>
-          {canInitiate ? (
+        </PageToolbarContent>
+        {canInitiate ? (
+          <PageToolbarActions className="justify-end">
             <Button
               type="button"
               className="w-full sm:w-auto"
@@ -509,8 +512,8 @@ export function WriteOffsPage({
                 ? "Списать бытовку"
                 : "Добавить утрату"}
             </Button>
-          ) : null}
-        </PageToolbarContent>
+          </PageToolbarActions>
+        ) : null}
       </PageToolbar>
 
       {!accessToken ? (

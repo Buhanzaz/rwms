@@ -163,6 +163,11 @@ describe("maintenance property disposition views", () => {
     )
     expect(gridRows).toHaveLength(1)
     expect(
+      screen
+        .getByRole("button", { name: "Списать бытовку" })
+        .closest('[data-slot="page-toolbar-actions"]')
+    ).not.toBeNull()
+    expect(
       screen.getAllByRole("link", { name: "БЫТ-101" })[0]?.getAttribute("href")
     ).toBe(`/warehouse/${CABIN_ID}`)
   })
@@ -244,6 +249,11 @@ describe("maintenance property disposition views", () => {
       })
     )
     const lossTab = screen.getByRole("tab", { name: "Утраты" })
+    expect(
+      screen
+        .getByRole("button", { name: "Добавить утрату" })
+        .closest('[data-slot="page-toolbar-actions"]')
+    ).not.toBeNull()
     expect(lossTab.getAttribute("data-state")).toBe("active")
     fireEvent.click(lossTab)
   })

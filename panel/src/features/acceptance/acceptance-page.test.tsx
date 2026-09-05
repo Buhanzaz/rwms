@@ -163,6 +163,9 @@ describe("AcceptancePage filters", () => {
     renderPage()
 
     await screen.findAllByText("БЫТ-001")
+    expect(
+      document.querySelector('[data-slot="operations-list-grid"]')?.className
+    ).toContain("bg-card")
     const search = screen.getByRole("searchbox", {
       name: "Поиск приёмок",
     })

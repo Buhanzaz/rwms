@@ -289,6 +289,9 @@ describe("RepairsPage mobile creation", () => {
       })
     ).toBeTruthy()
     expect(screen.getByText("Тяжёлый ремонт")).toBeTruthy()
+    expect(
+      document.querySelector('[data-slot="operations-list-grid"]')?.className
+    ).toContain("bg-card")
     expect(screen.getByText("Электрика")).toBeTruthy()
     expect(screen.getByText("Замена проводки")).toBeTruthy()
     expect(screen.queryByText("Дата")).toBeNull()
