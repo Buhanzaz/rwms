@@ -81,6 +81,14 @@ const photoPresentationApi = vi.hoisted(() => ({
 
 const shipmentApi = vi.hoisted(() => ({ listShipments: vi.fn() }))
 const returnApi = vi.hoisted(() => ({ listReturns: vi.fn() }))
+vi.mock("@/api/warehouse-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/warehouse-api")>()),
+  getWarehouse: async (_token: string, id: string) => ({
+    id,
+    name: "Москва",
+    lifecycleState: "ACTIVE",
+  }),
+}))
 
 vi.mock("@/features/auth/use-auth", () => ({
   useAuth: () => ({
@@ -1010,6 +1018,17 @@ describe("rental item command access", () => {
     ]) {
       expect(screen.getByRole("tab", { name: tab })).toBeTruthy()
     }
+  })
+
+  it("loads return history even when the cabin is free and has no current rental facts", async () => {
+    renderDetail(`/warehouse/${RENTAL_ITEM_ID}?tab=returns`)
+    await screen.findByText("Документов пока нет.")
+    expect(returnApi.listReturns).toHaveBeenCalledWith(
+      "asset-token",
+      WAREHOUSE_ID,
+      undefined,
+      RENTAL_ITEM_ID
+    )
   })
 
   it("allows a rented cabin without logistics facts to restore a past shipment", async () => {

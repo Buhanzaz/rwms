@@ -179,6 +179,14 @@ contexts and screens are usable.
   metadata. `Открыть фото задания` resolves only that opaque task-evidence
   reference through the public `TASK_BOARD_ENTRY` media owner proof and the
   caller's bearer session. See the [activity register](src/features/rental-items/dossier/dossier-activity-register.tsx).
+- The passport's shipment and return tabs read cabin-filtered, fully paged
+  logistics documents independently of the current rental status. Completed and
+  cancelled documents remain visible across authorized warehouses, with party,
+  driver, movement state and document timestamps. Explicit warehouse grants also
+  retain access to inactive-warehouse history; all-warehouse non-system roles
+  are limited by the warehouse directory and see that limitation explicitly.
+  Read failures never masquerade as an empty history. See the
+  [logistics register](src/features/rental-items/dossier/cabin-logistics-register.tsx).
 - When queuing a repair returns the exact Problem Details code
   `BOOKED_UNIT_REPLACEMENT_REQUIRED`, the repair editor keeps the persisted draft
   task ID and version, closes the completion dialog, and shows

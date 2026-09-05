@@ -65,6 +65,7 @@ import {
   rentalItemDossierQueryKey,
 } from "@/features/rental-items/dossier/api/rental-item-dossier-api"
 import { loadRentalItemPhotoActivities } from "@/features/rental-items/dossier/api/load-rental-item-photo-activities"
+import { CabinLogisticsRegister } from "@/features/rental-items/dossier/cabin-logistics-register"
 import {
   DossierActivityFiltersPanel,
   DossierActivityRegister,
@@ -180,7 +181,6 @@ const TAB_ACTIVITY_CODES: Partial<Record<DetailTab, DossierActivityCode[]>> = {
     "REPAIR_ACCEPTED",
     "REPAIR_WRITTEN_OFF",
   ],
-  shipments: ["CABIN_LOGISTICS_EFFECT_APPLIED"],
 }
 
 function isDetailTab(value: string | null): value is DetailTab {
@@ -623,13 +623,27 @@ export function RentalItemDetailPage() {
     rentalItem?.status === "RENTED"
   )
   const shipmentsQuery = useQuery({
-    queryKey: [...SHIPMENTS_QUERY_KEY, rentalItem?.warehouseId ?? "none"],
-    queryFn: () => listShipments(accessToken!, rentalItem!.warehouseId),
+    queryKey: [
+      ...SHIPMENTS_QUERY_KEY,
+      rentalItem?.warehouseId ?? "none",
+      "cabin",
+      currentRentalItemId,
+      userCacheKey,
+    ],
+    queryFn: () =>
+      listShipments(accessToken!, rentalItem!.warehouseId, undefined, rentalItem!.id),
     enabled: Boolean(accessToken && rentalItem && hasRentalLifecycle),
   })
   const returnsQuery = useQuery({
-    queryKey: [...RETURNS_QUERY_KEY, rentalItem?.warehouseId ?? "none"],
-    queryFn: () => listReturns(accessToken!, rentalItem!.warehouseId),
+    queryKey: [
+      ...RETURNS_QUERY_KEY,
+      rentalItem?.warehouseId ?? "none",
+      "cabin",
+      currentRentalItemId,
+      userCacheKey,
+    ],
+    queryFn: () =>
+      listReturns(accessToken!, rentalItem!.warehouseId, undefined, rentalItem!.id),
     enabled: Boolean(accessToken && rentalItem && hasRentalLifecycle),
   })
   const rentalOrderShipment =
@@ -1425,51 +1439,10 @@ export function RentalItemDetailPage() {
           )}
         </TabsContent>
         <TabsContent value="shipments">
-          <DossierActivityRegister {...activityRegisterProps} />
+          <CabinLogisticsRegister cabinId={rentalItem.id} kind="SHIPMENT" />
         </TabsContent>
         <TabsContent value="returns">
-          {rentalOrderReturn ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>Возврат из аренды</CardTitle>
-                <CardDescription>
-                  Документ возврата по текущей отгрузке этой бытовки.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="grid gap-4 text-sm sm:grid-cols-4">
-                <div>
-                  <p className="text-muted-foreground">Статус</p>
-                  <p className="font-medium">{rentalOrderReturn.state}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Дата задания</p>
-                  <p className="font-medium">
-                    {formatDateTime(rentalOrderReturn.scheduledDate)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Водитель</p>
-                  <p className="font-medium">
-                    {rentalOrderReturn.driverSnapshot ?? "Не назначен"}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Документ</p>
-                  <p className="font-mono text-xs">{rentalOrderReturn.id}</p>
-                </div>
-              </CardContent>
-            </Card>
-          ) : (
-            <EmptyDossierRegister
-              title="Возвраты"
-              description={
-                rentalTerm?.returnDate
-                  ? `Возврат ожидается до ${formatDateTime(rentalTerm.returnDate)}.`
-                  : "Для этой бытовки возврат из аренды ещё не создан."
-              }
-              columns={["Дата", "От кого", "Статус", ""]}
-            />
-          )}
+          <CabinLogisticsRegister cabinId={rentalItem.id} kind="RETURN" />
         </TabsContent>
         <TabsContent value="history">
           <div className="flex flex-col gap-4">
