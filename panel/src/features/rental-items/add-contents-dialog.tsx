@@ -1,3 +1,4 @@
+import { DateTimePicker } from "@/components/ui/date-time-picker"
 import {
   useMemo,
   useRef,
@@ -37,7 +38,6 @@ import {
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import { useAuth } from "@/features/auth/use-auth"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
@@ -353,12 +353,14 @@ function Content({
           <FieldLabel htmlFor="add-contents-reservation-deadline">
             Резерв до
           </FieldLabel>
-          <Input
+          <DateTimePicker
+            label="Резерв до"
+            hideLabel
+            allowClear
             id="add-contents-reservation-deadline"
-            type="datetime-local"
             value={reservationDeadline}
-            onChange={(event) => {
-              setReservationDeadline(event.target.value)
+            onValueChange={(nextValue) => {
+              setReservationDeadline(nextValue)
               setErrorText(null)
             }}
             aria-invalid={Boolean(errorText && !reservationDeadline)}

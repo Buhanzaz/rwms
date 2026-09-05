@@ -1,3 +1,4 @@
+import { SingleDayPicker } from "@/components/ui/single-day-picker"
 import { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 
@@ -197,18 +198,20 @@ export function InventoryCabinDispositionReviewCard({
                     <FieldLabel htmlFor={`return-date-${candidate.findingId}`}>
                       Дата возврата
                     </FieldLabel>
-                    <Input
+                    <SingleDayPicker
+                      label="Дата возврата"
+                      hideLabel
+                      allowClear
                       id={`return-date-${candidate.findingId}`}
-                      type="date"
                       max={defaultDate}
                       value={decision.date}
                       disabled={pending}
-                      onChange={(event) =>
+                      onValueChange={(nextValue) =>
                         setReturns((current) => ({
                           ...current,
                           [candidate.findingId]: {
                             ...decision,
-                            date: event.target.value,
+                            date: nextValue,
                           },
                         }))
                       }
@@ -305,18 +308,20 @@ export function InventoryCabinDispositionReviewCard({
                           >
                             Дата отгрузки
                           </FieldLabel>
-                          <Input
+                          <SingleDayPicker
+                            label="Дата отгрузки"
+                            hideLabel
+                            allowClear
                             id={`shipment-date-${candidate.findingId}`}
-                            type="date"
                             max={defaultDate}
                             value={decision.date}
                             disabled={pending}
-                            onChange={(event) =>
+                            onValueChange={(nextValue) =>
                               setShipments((current) => ({
                                 ...current,
                                 [candidate.findingId]: {
                                   ...decision,
-                                  date: event.target.value,
+                                  date: nextValue,
                                 },
                               }))
                             }

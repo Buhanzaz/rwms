@@ -1,11 +1,6 @@
+import { selectCalendarDate } from "@/test/calendar"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react"
+import { cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -166,6 +161,8 @@ function renderDialog(node: ReactNode) {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] })
+  vi.setSystemTime(new Date("2030-07-20T09:00:00Z"))
   equipmentApi.getEquipmentItems.mockResolvedValue([equipment()])
   rentalItemsApi.listAssetRentalItems.mockResolvedValue({
     content: [
@@ -191,6 +188,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
   vi.clearAllMocks()
 })
 
@@ -204,9 +202,7 @@ describe("rental-item equipment movement task dialogs", () => {
     )
 
     await user.click(await screen.findByLabelText("Выбрать Стол"))
-    fireEvent.change(screen.getByLabelText("Резерв до"), {
-      target: { value: deadline },
-    })
+    await selectCalendarDate("Резерв до", deadline)
     await user.click(
       screen.getByRole("button", { name: "Создать задание со склада" })
     )
@@ -253,9 +249,7 @@ describe("rental-item equipment movement task dialogs", () => {
     )
     await user.click(await screen.findByText("БЫТ-002"))
     await user.click(await screen.findByLabelText("Выбрать Стол"))
-    fireEvent.change(screen.getByLabelText("Резерв до"), {
-      target: { value: deadline },
-    })
+    await selectCalendarDate("Резерв до", deadline)
     await user.click(screen.getByRole("button", { name: "Создать задание" }))
 
     await waitFor(() =>
@@ -296,9 +290,7 @@ describe("rental-item equipment movement task dialogs", () => {
     )
 
     await user.click(await screen.findByLabelText("Выбрать Стол"))
-    fireEvent.change(screen.getByLabelText("Резерв до"), {
-      target: { value: deadline },
-    })
+    await selectCalendarDate("Резерв до", deadline)
     await user.click(screen.getByRole("button", { name: "Создать задание" }))
 
     await waitFor(() =>

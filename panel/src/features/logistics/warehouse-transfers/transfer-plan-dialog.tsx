@@ -1,3 +1,4 @@
+import { DateTimePicker } from "@/components/ui/date-time-picker"
 import { useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Add01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
@@ -677,12 +678,14 @@ export function TransferPlanDialog({
                   <FieldLabel htmlFor="transfer-plan-departure">
                     Отправление
                   </FieldLabel>
-                  <Input
+                  <DateTimePicker
+                    label="Отправление"
+                    hideLabel
+                    allowClear
                     id="transfer-plan-departure"
-                    type="datetime-local"
                     value={plannedDepartureAt}
-                    onChange={(event) => {
-                      setPlannedDepartureAt(event.target.value)
+                    onValueChange={(nextValue) => {
+                      setPlannedDepartureAt(nextValue)
                       setTripDriverId("")
                       changed()
                     }}
@@ -692,12 +695,14 @@ export function TransferPlanDialog({
                   <FieldLabel htmlFor="transfer-plan-arrival">
                     Прибытие
                   </FieldLabel>
-                  <Input
+                  <DateTimePicker
+                    label="Прибытие"
+                    hideLabel
+                    allowClear
                     id="transfer-plan-arrival"
-                    type="datetime-local"
                     value={plannedArrivalAt}
-                    onChange={(event) => {
-                      setPlannedArrivalAt(event.target.value)
+                    onValueChange={(nextValue) => {
+                      setPlannedArrivalAt(nextValue)
                       changed()
                     }}
                   />
@@ -844,12 +849,14 @@ export function TransferPlanDialog({
                   <FieldLabel htmlFor="driver-reposition-until">
                     Работает до
                   </FieldLabel>
-                  <Input
+                  <DateTimePicker
+                    label="Работает до"
+                    hideLabel
+                    allowClear
                     id="driver-reposition-until"
-                    type="datetime-local"
                     value={driverRepositionUntil}
-                    onChange={(event) => {
-                      setDriverRepositionUntil(event.target.value)
+                    onValueChange={(nextValue) => {
+                      setDriverRepositionUntil(nextValue)
                       changed()
                     }}
                   />

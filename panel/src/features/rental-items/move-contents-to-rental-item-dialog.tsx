@@ -1,3 +1,4 @@
+import { DateTimePicker } from "@/components/ui/date-time-picker"
 import { useMemo, useRef, useState, type RefObject } from "react"
 import { Exchange01Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -30,7 +31,6 @@ import {
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
 import { useAuth } from "@/features/auth/use-auth"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import {
@@ -364,12 +364,14 @@ function Content({
           <FieldLabel htmlFor="move-contents-reservation-deadline">
             Резерв до
           </FieldLabel>
-          <Input
+          <DateTimePicker
+            label="Резерв до"
+            hideLabel
+            allowClear
             id="move-contents-reservation-deadline"
-            type="datetime-local"
             value={reservationDeadline}
-            onChange={(event) => {
-              setReservationDeadline(event.target.value)
+            onValueChange={(nextValue) => {
+              setReservationDeadline(nextValue)
               setErrorText(null)
             }}
             aria-invalid={Boolean(errorText && !reservationDeadline)}

@@ -1,3 +1,4 @@
+import { selectCalendarDate } from "@/test/calendar"
 import type { ReactNode } from "react"
 import {
   act,
@@ -568,9 +569,7 @@ describe("DriverBoardPage", () => {
     renderPage()
 
     await screen.findByLabelText(/^Задания на .*1 августа/i)
-    fireEvent.change(screen.getByLabelText("Дата заданий"), {
-      target: { value: "2026-08-02" },
-    })
+    await selectCalendarDate("Дата заданий", "2026-08-02")
 
     expect(screen.queryByLabelText(/^Задания на .*1 августа/i)).toBeNull()
     expect(screen.getByLabelText(/^Задания на .*2 августа/i)).toBeTruthy()
@@ -599,11 +598,15 @@ describe("DriverBoardPage", () => {
     expect(screen.queryByLabelText(/^Задания на .*1 августа/i)).toBeNull()
     expect(screen.getByLabelText(/^Задания на .*2 августа/i)).toBeTruthy()
     const dateFilter = screen.getByLabelText("Дата заданий")
-    expect(dateFilter.getAttribute("min")).toBe("2026-08-02")
-
-    fireEvent.change(dateFilter, { target: { value: "2026-08-01" } })
-
-    expect((dateFilter as HTMLInputElement).value).toBe("")
+    await selectCalendarDate("Дата заданий", "2026-08-01")
+    expect(
+      (
+        screen.getByRole("button", {
+          name: /\b1 августа 2026/i,
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true)
+    expect(dateFilter.textContent).toContain("Выберите дату")
   })
 
   it("does not send a drag command to a past date", async () => {
@@ -900,10 +903,7 @@ describe("DriverBoardPage", () => {
       })
     })
 
-    const dateInput = screen.getByLabelText("Дата")
-    expect(dateInput.getAttribute("type")).toBe("date")
-    expect(dateInput.getAttribute("min")).toBe("2026-08-01")
-    fireEvent.change(dateInput, { target: { value: "2026-08-05" } })
+    await selectCalendarDate("Дата", "2026-08-05")
     await actor.click(screen.getByRole("button", { name: "Переместить" }))
 
     expect(apiMocks.moveDriverBoardTask).toHaveBeenCalledWith({

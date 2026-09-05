@@ -117,7 +117,7 @@ export function SingleDayPicker({
   return (
     <Field className={cn("min-w-0", className)}>
       {!hideLabel ? <FieldLabel htmlFor={id}>{label}</FieldLabel> : null}
-      {required || name ? (
+      {required || name || min || max ? (
         <input
           type="text"
           className="sr-only"
@@ -125,8 +125,18 @@ export function SingleDayPicker({
           aria-hidden="true"
           name={name}
           value={selected ? value : ""}
+          ref={(input) => {
+            input?.setCustomValidity(
+              selected && minimum && selected < minimum
+                ? `Выберите дату не раньше ${calendarDateLabel(minimum)}`
+                : selected && maximum && selected > maximum
+                  ? `Выберите дату не позже ${calendarDateLabel(maximum)}`
+                  : ""
+            )
+          }}
           required={required}
-          disabled={disabled || readOnly}
+          disabled={disabled}
+          readOnly={readOnly}
           onChange={() => undefined}
           onInvalid={(event) => {
             event.preventDefault()
@@ -170,10 +180,14 @@ export function SingleDayPicker({
             mode="single"
             locale={ru}
             autoFocus
-            disabled={[
-              ...(minimum ? [{ before: minimum }] : []),
-              ...(maximum ? [{ after: maximum }] : []),
-            ]}
+            disabled={
+              disabled || readOnly
+                ? true
+                : [
+                    ...(minimum ? [{ before: minimum }] : []),
+                    ...(maximum ? [{ after: maximum }] : []),
+                  ]
+            }
             labels={{
               labelNav: () => "Навигация по календарю",
               labelNext: () => "Следующий месяц",
@@ -192,7 +206,7 @@ export function SingleDayPicker({
             selected={selected}
             aria-label={`${label}: календарь`}
             onSelect={(date) => {
-              if (!date) return
+              if (!date || disabled || readOnly) return
               onValueChange?.(calendarDateValue(date))
               setOpen(false)
             }}

@@ -1,3 +1,4 @@
+import { selectCalendarDate } from "@/test/calendar"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -64,12 +65,12 @@ describe("inventory holiday settings", () => {
     const user = userEvent.setup()
     renderCard()
 
-    const holiday = await screen.findByLabelText("Праздничная дата")
+    await screen.findByLabelText("Праздничная дата")
     expect(screen.queryByRole("spinbutton")).toBeNull()
     expect(screen.queryByText(/бытовок.*день/i)).toBeNull()
     expect(screen.queryByRole("button", { name: "Пн" })).toBeNull()
 
-    await user.type(holiday, "2026-08-12")
+    await selectCalendarDate("Праздничная дата", "2026-08-12")
     await user.click(screen.getByRole("button", { name: "Добавить дату" }))
     await user.click(
       screen.getByRole("button", { name: "Сохранить праздники" })
@@ -93,8 +94,8 @@ describe("inventory holiday settings", () => {
     const user = userEvent.setup()
     renderCard()
 
-    const holiday = await screen.findByLabelText("Праздничная дата")
-    await user.type(holiday, "2026-08-10")
+    await screen.findByLabelText("Праздничная дата")
+    await selectCalendarDate("Праздничная дата", "2026-08-10")
     await user.click(screen.getByRole("button", { name: "Добавить дату" }))
 
     expect(screen.getByText("Эта праздничная дата уже добавлена.")).toBeTruthy()

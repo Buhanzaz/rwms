@@ -64,15 +64,19 @@ describe("WorkScheduleCard workday preview", () => {
       />
     )
 
-    const effectiveDate = screen.getByLabelText(
-      "Дата вступления графика"
-    ) as HTMLInputElement
-    expect(effectiveDate.min).toBe("2026-07-30")
-    expect(effectiveDate.value).toBe("2026-07-30")
-
-    await userEvent
-      .setup()
-      .click(screen.getByRole("button", { name: "Сохранить график" }))
+    const user = userEvent.setup()
+    const effectiveDate = screen.getByLabelText("Дата вступления графика")
+    expect(effectiveDate.textContent).toContain("30 июля 2026")
+    await user.click(effectiveDate)
+    expect(
+      (
+        screen.getByRole("button", {
+          name: /29 июля 2026/i,
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true)
+    await user.keyboard("{Escape}")
+    await user.click(screen.getByRole("button", { name: "Сохранить график" }))
 
     expect(onSave).toHaveBeenCalledWith(
       expect.objectContaining({ effectiveFrom: "2026-07-30" })

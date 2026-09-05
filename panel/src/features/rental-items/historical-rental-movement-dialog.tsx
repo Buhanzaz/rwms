@@ -1,3 +1,4 @@
+import { SingleDayPicker } from "@/components/ui/single-day-picker"
 import { useCallback, useRef, useState, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Loading03Icon } from "@hugeicons/core-free-icons"
@@ -20,7 +21,6 @@ import {
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
 import {
   CLIENTS_QUERY_KEY,
   createClient,
@@ -338,15 +338,17 @@ export function HistoricalRentalMovementDialog({
                 <FieldLabel htmlFor="historical-rental-occurred-on">
                   {movementDateLabel(kind)}
                 </FieldLabel>
-                <Input
+                <SingleDayPicker
+                  label={movementDateLabel(kind)}
+                  hideLabel
+                  allowClear
                   id="historical-rental-occurred-on"
-                  type="date"
                   value={occurredOn}
                   disabled={movementMutation.isPending}
                   required
-                  onChange={(event) => {
+                  onValueChange={(nextValue) => {
                     movementIdempotencyKey.current = null
-                    setOccurredOn(event.target.value)
+                    setOccurredOn(nextValue)
                     setErrorText(null)
                   }}
                 />

@@ -1,3 +1,4 @@
+import { SingleDayPicker } from "@/components/ui/single-day-picker"
 import { useState, type CSSProperties } from "react"
 import {
   closestCenter,
@@ -47,7 +48,6 @@ import {
   FieldLegend,
   FieldSet,
 } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
@@ -450,15 +450,17 @@ function SortablePlanEntry({
                 >
                   Закреплённая дата перемещения
                 </FieldLabel>
-                <Input
+                <SingleDayPicker
+                  label="Закреплённая дата перемещения"
+                  hideLabel
+                  allowClear
                   id={`inventory-plan-movement-date-${entry.findingId}`}
-                  type="date"
                   value={entry.movementScheduledDate ?? ""}
                   disabled={pending}
                   aria-invalid={!entry.movementScheduledDate}
-                  onChange={(event) =>
+                  onValueChange={(nextValue) =>
                     onChange({
-                      movementScheduledDate: event.target.value || null,
+                      movementScheduledDate: nextValue || null,
                     })
                   }
                 />
@@ -477,15 +479,17 @@ function SortablePlanEntry({
                 >
                   Закреплённая дата ремонта
                 </FieldLabel>
-                <Input
+                <SingleDayPicker
+                  label="Закреплённая дата ремонта"
+                  hideLabel
+                  allowClear
                   id={`inventory-plan-repair-date-${entry.findingId}`}
-                  type="date"
                   value={entry.repairScheduledDate ?? ""}
                   disabled={pending}
                   aria-invalid={!entry.repairScheduledDate}
-                  onChange={(event) =>
+                  onValueChange={(nextValue) =>
                     onChange({
-                      repairScheduledDate: event.target.value || null,
+                      repairScheduledDate: nextValue || null,
                     })
                   }
                 />

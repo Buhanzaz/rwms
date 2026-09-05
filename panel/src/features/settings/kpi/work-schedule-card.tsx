@@ -1,3 +1,4 @@
+import { SingleDayPicker } from "@/components/ui/single-day-picker"
 import { useState, type FormEvent } from "react"
 import {
   Add01Icon,
@@ -174,19 +175,20 @@ export function WorkScheduleCard({
                 <FieldLabel htmlFor="kpi-schedule-effective">
                   Дата вступления графика
                 </FieldLabel>
-                <Input
+                <SingleDayPicker
+                  label="Дата вступления графика"
+                  hideLabel
+                  allowClear
                   id="kpi-schedule-effective"
                   name="kpi-schedule-effective"
-                  autoComplete="off"
-                  type="date"
                   min={today}
                   value={draft.effectiveFrom}
                   disabled={disabled}
                   aria-invalid={validationError !== null}
-                  onChange={(event) => {
+                  onValueChange={(nextValue) => {
                     setDraft((current) => ({
                       ...current,
-                      effectiveFrom: event.target.value,
+                      effectiveFrom: nextValue,
                     }))
                     setValidationError(null)
                   }}
@@ -413,7 +415,9 @@ export function WorkScheduleCard({
               variant="destructive"
               size="icon"
               aria-label={
-                deleting ? "Удаление будущего графика…" : "Удалить будущий график"
+                deleting
+                  ? "Удаление будущего графика…"
+                  : "Удалить будущий график"
               }
               title="Удалить будущий график"
               disabled={disabled}

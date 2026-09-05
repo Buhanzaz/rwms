@@ -1,11 +1,6 @@
+import { selectCalendarDate } from "@/test/calendar"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react"
+import { cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -236,9 +231,7 @@ describe("HistoricalRentalMovementDialog", () => {
         name: "Выбрать существующего клиента",
       })
     )
-    fireEvent.change(screen.getByLabelText("Дата отгрузки"), {
-      target: { value: "2026-08-02" },
-    })
+    await selectCalendarDate("Дата отгрузки", "2026-08-02")
     await user.click(screen.getByRole("button", { name: "Создать отгрузку" }))
 
     await waitFor(() =>
@@ -303,9 +296,7 @@ describe("HistoricalRentalMovementDialog", () => {
     await user.click(
       screen.getByRole("button", { name: "Создать нового клиента" })
     )
-    fireEvent.change(screen.getByLabelText("Дата возврата"), {
-      target: { value: "2026-08-03" },
-    })
+    await selectCalendarDate("Дата возврата", "2026-08-03")
     await user.click(screen.getByRole("button", { name: "Создать возврат" }))
 
     await waitFor(() =>
@@ -359,9 +350,7 @@ describe("HistoricalRentalMovementDialog", () => {
         name: "Выбрать существующего клиента",
       })
     )
-    fireEvent.change(screen.getByLabelText("Дата отгрузки"), {
-      target: { value: "2026-07-31" },
-    })
+    await selectCalendarDate("Дата отгрузки", "2026-07-31")
     await user.click(screen.getByRole("button", { name: "Сохранить отгрузку" }))
 
     await waitFor(() =>

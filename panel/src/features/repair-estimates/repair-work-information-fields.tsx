@@ -1,3 +1,4 @@
+import { SingleDayPicker } from "@/components/ui/single-day-picker"
 import {
   Field,
   FieldContent,
@@ -122,14 +123,15 @@ export function RepairWorkInformationFields({
         >
           <FieldLabel htmlFor="repair-work-dispatch-date">Осмотр</FieldLabel>
           <FieldContent className="min-w-0">
-            <Input
+            <SingleDayPicker
+              label="Дата осмотра"
+              hideLabel
+              allowClear
               id="repair-work-dispatch-date"
-              aria-label="Дата осмотра"
-              type="date"
               disabled={disabled}
               value={dispatchDate ?? ""}
-              onChange={(event) =>
-                onDispatchDateChange(event.target.value || null)
+              onValueChange={(nextValue) =>
+                onDispatchDateChange(nextValue || null)
               }
             />
           </FieldContent>

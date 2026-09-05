@@ -1,5 +1,6 @@
+import { selectCalendarDate } from "@/test/calendar"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -324,9 +325,7 @@ describe("repair completion", () => {
     }) as HTMLButtonElement
     expect(completeButton.disabled).toBe(true)
 
-    fireEvent.change(screen.getByLabelText("Дата логистического задания"), {
-      target: { value: "2026-08-12" },
-    })
+    await selectCalendarDate("Дата логистического задания", "2026-08-12")
     expect(completeButton.disabled).toBe(false)
 
     await user.click(completeButton)
@@ -387,9 +386,8 @@ describe("repair completion", () => {
       ).getAttribute("data-state")
     ).toBe("on")
     expect(
-      (screen.getByLabelText("Дата логистического задания") as HTMLInputElement)
-        .value
-    ).toBe("2026-08-12")
+      screen.getByLabelText("Дата логистического задания").textContent
+    ).toContain("12 августа 2026")
 
     await user.click(screen.getByRole("button", { name: "Создать задание" }))
 

@@ -1,3 +1,4 @@
+import { selectCalendarDate } from "@/test/calendar"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import {
   cleanup,
@@ -626,12 +627,8 @@ describe("TransferPlanDialog", () => {
     const plannedArrivalAt = `${scheduledDate}T12:00`
     const repositionUntil = `${futureScheduledDate(4)}T18:00`
     renderDialog({ initialScheduledDate: scheduledDate })
-    fireEvent.change(screen.getByLabelText("Отправление"), {
-      target: { value: plannedDepartureAt },
-    })
-    fireEvent.change(screen.getByLabelText("Прибытие"), {
-      target: { value: plannedArrivalAt },
-    })
+    await selectCalendarDate("Отправление", plannedDepartureAt)
+    await selectCalendarDate("Прибытие", plannedArrivalAt)
     await waitFor(() =>
       expect(driverApi.listLogisticsDriverResources).toHaveBeenCalled()
     )
@@ -640,9 +637,7 @@ describe("TransferPlanDialog", () => {
       "Назначение водителя после прибытия",
       "Временно работает на складе назначения"
     )
-    fireEvent.change(screen.getByLabelText("Работает до"), {
-      target: { value: repositionUntil },
-    })
+    await selectCalendarDate("Работает до", repositionUntil)
     await addConfiguredGroup()
     await user.click(screen.getByRole("button", { name: "Подобрать бытовки" }))
     await user.click(screen.getByRole("button", { name: "Сохранить черновик" }))

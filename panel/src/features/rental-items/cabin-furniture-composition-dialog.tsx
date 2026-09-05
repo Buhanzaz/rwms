@@ -1,3 +1,4 @@
+import { SingleDayPicker } from "@/components/ui/single-day-picker"
 import { useMemo, useState, type FormEvent } from "react"
 import { Add01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -209,14 +210,15 @@ export function CabinFurnitureCompositionDialog({
             {schedule ? (
               <Field>
                 <FieldLabel>Дата задания</FieldLabel>
-                <Input
-                  aria-label="Дата задания на изменение наполнения"
-                  type="date"
+                <SingleDayPicker
+                  label="Дата задания на изменение наполнения"
+                  hideLabel
+                  allowClear
                   required
                   disabled={pending}
                   value={schedule.value}
-                  onChange={(event) => {
-                    schedule.onChange(event.target.value)
+                  onValueChange={(nextValue) => {
+                    schedule.onChange(nextValue)
                     setValidationError(null)
                   }}
                 />

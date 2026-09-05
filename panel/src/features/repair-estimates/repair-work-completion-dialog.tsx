@@ -1,3 +1,4 @@
+import { SingleDayPicker } from "@/components/ui/single-day-picker"
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 
@@ -14,7 +15,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   createRepairEstimateCatalogIndex,
@@ -440,15 +440,17 @@ function RepairWorkCompletionForm({
                   <FieldLabel htmlFor="repair-work-logistics-date">
                     Дата логистического задания
                   </FieldLabel>
-                  <Input
+                  <SingleDayPicker
+                    label="Дата логистического задания"
+                    hideLabel
+                    allowClear
                     id="repair-work-logistics-date"
-                    type="date"
                     value={logisticsScheduledDate}
                     disabled={pending}
                     required
                     aria-invalid={!logisticsScheduledDate}
-                    onChange={(event) =>
-                      setLogisticsScheduledDate(event.target.value)
+                    onValueChange={(nextValue) =>
+                      setLogisticsScheduledDate(nextValue)
                     }
                   />
                   <FieldDescription>

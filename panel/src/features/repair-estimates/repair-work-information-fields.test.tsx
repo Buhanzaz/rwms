@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from "vitest"
 vi.mock(
   "@/features/repair-estimates/repair-estimate-rental-item-picker",
   () => ({
-    RepairEstimateRentalItemPicker: () => <button type="button">Бытовка</button>,
+    RepairEstimateRentalItemPicker: () => (
+      <button type="button">Бытовка</button>
+    ),
   })
 )
 
@@ -37,7 +39,7 @@ describe("RepairWorkInformationFields", () => {
 
     expect(screen.getByRole("button", { name: "Бытовка" })).toBeTruthy()
     expect(screen.queryByLabelText("Источник")).toBeNull()
-    expect(screen.queryByLabelText("Дата осмотра")).toBeNull()
+    expect(screen.queryByRole("button", { name: /^Дата осмотра:/ })).toBeNull()
     expect(screen.queryByText("От кого")).toBeNull()
     expect(screen.queryByText(/Прибытие/)).toBeNull()
   })
@@ -46,7 +48,7 @@ describe("RepairWorkInformationFields", () => {
     render(<RepairWorkInformationFields {...props} />)
 
     expect(screen.getByLabelText("От кого")).toBeTruthy()
-    expect(screen.getByLabelText("Дата осмотра")).toBeTruthy()
+    expect(screen.getByRole("button", { name: /^Дата осмотра:/ })).toBeTruthy()
     expect(screen.queryByText(/Прибытие/)).toBeNull()
   })
 })

@@ -1,3 +1,4 @@
+import { SingleDayPicker } from "@/components/ui/single-day-picker"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { MinusSignIcon, PlusSignIcon } from "@hugeicons/core-free-icons"
@@ -74,9 +75,7 @@ function textValue(value: unknown) {
 
 function characteristicsValues(value: unknown) {
   if (Array.isArray(value)) {
-    return value
-      .map((item) => textValue(item))
-      .filter(Boolean)
+    return value.map((item) => textValue(item)).filter(Boolean)
   }
   const singleValue = textValue(value)
   return singleValue ? [singleValue] : []
@@ -149,14 +148,14 @@ function passportOptionsForInspection(
     rentalTypeId &&
     dimensionId &&
     !typeDimensions.some(
-      (link) =>
-        link.typeId === rentalTypeId && link.dimensionId === dimensionId
+      (link) => link.typeId === rentalTypeId && link.dimensionId === dimensionId
     )
   ) {
-    const nextSortOrder = typeDimensions.reduce(
-      (maximum, link) => Math.max(maximum, link.sortOrder),
-      -1
-    ) + 1
+    const nextSortOrder =
+      typeDimensions.reduce(
+        (maximum, link) => Math.max(maximum, link.sortOrder),
+        -1
+      ) + 1
     typeDimensions.push({
       typeId: rentalTypeId,
       dimensionId,
@@ -224,7 +223,10 @@ function passportObservationForSelection(
   const setValue = (key: string, source: string) => {
     if (source) value[key] = source
   }
-  setValue("rentalType", optionName(options.rentalTypes, selection.rentalTypeId))
+  setValue(
+    "rentalType",
+    optionName(options.rentalTypes, selection.rentalTypeId)
+  )
   setValue("dimensions", optionName(options.dimensions, selection.dimensionId))
   setValue("finishing", optionName(options.finishings, selection.finishingId))
   setValue("category", selection.category.trim())
@@ -269,9 +271,7 @@ function PassportObservationEditor({
   )
   const inspectionOptions = useMemo(
     () =>
-      options
-        ? passportOptionsForInspection(options, currentValues)
-        : null,
+      options ? passportOptionsForInspection(options, currentValues) : null,
     [currentValues, options]
   )
   const valuesKey = JSON.stringify(currentValues)
@@ -298,7 +298,9 @@ function PassportObservationEditor({
   function update(next: RentalItemCompositionFormValue) {
     if (!inspectionOptions) return
     setValue(next)
-    onChange(passportObservationForSelection(next, inspectionOptions, observation))
+    onChange(
+      passportObservationForSelection(next, inspectionOptions, observation)
+    )
   }
 
   if (!inspectionOptions) {
@@ -329,8 +331,8 @@ function PassportObservationEditor({
   return (
     <div className="flex flex-col gap-4">
       <p className="text-sm text-muted-foreground">
-        Выберите фактические значения из настроек бытовок. Результат
-        сохраняется в инвентаризации и не меняет карточку имущества напрямую.
+        Выберите фактические значения из настроек бытовок. Результат сохраняется
+        в инвентаризации и не меняет карточку имущества напрямую.
       </p>
       <RentalItemCompositionFields
         options={inspectionOptions}
@@ -436,9 +438,11 @@ export function InventoryInspectionDetails({
             <FieldLabel htmlFor="inventory-inspection-date" className="w-32">
               Дата
             </FieldLabel>
-            <Input
+            <SingleDayPicker
+              label="Дата"
+              hideLabel
+              allowClear
               id="inventory-inspection-date"
-              type="date"
               value={businessDate}
               readOnly
             />

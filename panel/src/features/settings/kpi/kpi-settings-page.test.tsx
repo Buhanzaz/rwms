@@ -1,3 +1,4 @@
+import { selectCalendarDate } from "@/test/calendar"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -145,9 +146,8 @@ describe("KpiSettingsPage", () => {
     const user = userEvent.setup()
     renderPage()
 
-    const date = await screen.findByLabelText("Дата вступления графика")
-    await user.clear(date)
-    await user.type(date, "2099-08-01")
+    await screen.findByLabelText("Дата вступления графика")
+    await selectCalendarDate("Дата вступления графика", "2026-08-01")
     await user.click(screen.getByRole("button", { name: "Сохранить график" }))
 
     await waitFor(() =>
@@ -155,7 +155,7 @@ describe("KpiSettingsPage", () => {
         "access-token",
         expect.objectContaining({
           expectedVersion: 3,
-          effectiveFrom: "2099-08-01",
+          effectiveFrom: "2026-08-01",
           shiftStart: "08:00",
           shiftEnd: "17:00",
           daysOff: [6, 7],

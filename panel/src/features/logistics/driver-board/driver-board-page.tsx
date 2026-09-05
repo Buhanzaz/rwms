@@ -1,3 +1,4 @@
+import { SingleDayPicker } from "@/components/ui/single-day-picker"
 import { useMemo, useState, type CSSProperties, type ReactNode } from "react"
 import { createPortal } from "react-dom"
 import {
@@ -69,7 +70,6 @@ import {
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Select,
@@ -1516,12 +1516,14 @@ function DatePickerDialog({
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="driver-board-new-date">Дата</FieldLabel>
-              <Input
+              <SingleDayPicker
+                label="Дата"
+                hideLabel
+                allowClear
                 id="driver-board-new-date"
-                type="date"
                 min={minimumDate}
                 value={date}
-                onChange={(event) => setDate(event.target.value)}
+                onValueChange={(nextValue) => setDate(nextValue)}
               />
             </Field>
           </FieldGroup>
@@ -2238,14 +2240,16 @@ export function DriverBoardPage() {
           >
             Дата заданий
           </label>
-          <Input
+          <SingleDayPicker
+            label="Дата заданий"
+            hideLabel
+            allowClear
             id="driver-board-date-filter"
-            type="date"
             className="w-auto"
             min={board.currentDate}
             value={effectiveSelectedScheduledDate}
-            onChange={(event) => {
-              const value = event.target.value
+            onValueChange={(nextValue) => {
+              const value = nextValue
               if (!value || value >= board.currentDate) {
                 setSelectedScheduledDate(value)
               }

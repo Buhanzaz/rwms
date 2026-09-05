@@ -1,3 +1,4 @@
+import { SingleDayPicker } from "@/components/ui/single-day-picker"
 import { useMemo, useState, type CSSProperties } from "react"
 import { createPortal } from "react-dom"
 import {
@@ -51,7 +52,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
-import { Input } from "@/components/ui/input"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
 import {
@@ -988,12 +988,14 @@ export function LogisticsBoardPage() {
           <label htmlFor="logistics-board-date" className="text-sm font-medium">
             Дата заданий
           </label>
-          <Input
+          <SingleDayPicker
+            label="Дата заданий"
+            hideLabel
+            allowClear
             id="logistics-board-date"
-            type="date"
             className="w-auto"
             value={selectedDate}
-            onChange={(event) => setSelectedDate(event.target.value)}
+            onValueChange={(nextValue) => setSelectedDate(nextValue)}
           />
           <Button
             type="button"

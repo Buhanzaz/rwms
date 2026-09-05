@@ -11,7 +11,7 @@ import {
   FieldLegend,
   FieldSet,
 } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
+import { SingleDayPicker } from "@/components/ui/single-day-picker"
 import {
   Popover,
   PopoverContent,
@@ -98,8 +98,8 @@ function MultiSelectFilter<T extends string>({
           type="button"
           size="default"
           variant="outline"
-          className={`h-9 w-full justify-start${
-            hasSelectedValues ? " rwms-button-light" : ""
+          className={`h-9 w-full justify-start ${
+            hasSelectedValues ? "rwms-button-light" : ""
           }`}
           aria-pressed={hasSelectedValues}
         >
@@ -176,24 +176,15 @@ function DateFilter({
   onChange: (value: string) => void
 }) {
   return (
-    <Field
-      orientation="horizontal"
-      className="h-9 w-full gap-2 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 dark:bg-input/30"
-    >
-      <FieldLabel
-        htmlFor={id}
-        className="!flex-none shrink-0 font-normal text-muted-foreground"
-      >
-        {label}
-      </FieldLabel>
-      <Input
-        id={id}
-        type="date"
-        value={value}
-        className="h-auto min-w-0 flex-1 border-0 bg-transparent p-0 text-sm shadow-none focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
-        onChange={(event) => onChange(event.target.value)}
-      />
-    </Field>
+    <SingleDayPicker
+      id={id}
+      label={label}
+      hideLabel
+      triggerLabel={label}
+      value={value}
+      allowClear
+      onValueChange={onChange}
+    />
   )
 }
 

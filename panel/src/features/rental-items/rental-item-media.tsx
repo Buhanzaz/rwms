@@ -1,3 +1,4 @@
+import { SingleDayPicker } from "@/components/ui/single-day-picker"
 import {
   useEffect,
   useId,
@@ -338,33 +339,27 @@ function DateFilterChip({
         <FieldGroup>
           <Field>
             <FieldLabel htmlFor={dateFromId}>Дата с</FieldLabel>
-            <InputGroup>
-              <InputGroupAddon>
-                <HugeiconsIcon icon={Calendar03Icon} aria-hidden="true" />
-              </InputGroupAddon>
-              <InputGroupInput
-                id={dateFromId}
-                type="date"
-                value={dateFrom}
-                max={dateTo || undefined}
-                onChange={(event) => onDateFromChange(event.target.value)}
-              />
-            </InputGroup>
+            <SingleDayPicker
+              label="Дата с"
+              hideLabel
+              allowClear
+              id={dateFromId}
+              value={dateFrom}
+              max={dateTo || undefined}
+              onValueChange={(nextValue) => onDateFromChange(nextValue)}
+            />
           </Field>
           <Field>
             <FieldLabel htmlFor={dateToId}>Дата по</FieldLabel>
-            <InputGroup>
-              <InputGroupAddon>
-                <HugeiconsIcon icon={Calendar03Icon} aria-hidden="true" />
-              </InputGroupAddon>
-              <InputGroupInput
-                id={dateToId}
-                type="date"
-                value={dateTo}
-                min={dateFrom || undefined}
-                onChange={(event) => onDateToChange(event.target.value)}
-              />
-            </InputGroup>
+            <SingleDayPicker
+              label="Дата по"
+              hideLabel
+              allowClear
+              id={dateToId}
+              value={dateTo}
+              min={dateFrom || undefined}
+              onValueChange={(nextValue) => onDateToChange(nextValue)}
+            />
           </Field>
           {activeCount ? (
             <Button

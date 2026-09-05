@@ -1,3 +1,4 @@
+import { SingleDayPicker } from "@/components/ui/single-day-picker"
 import { useState, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
@@ -31,7 +32,6 @@ import {
   FieldLegend,
   FieldSet,
 } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   getInventoryPlanningSettings,
@@ -193,15 +193,16 @@ function SettingsForm({
                 <FieldLabel htmlFor="inventory-holiday-date">
                   Праздничная дата
                 </FieldLabel>
-                <Input
+                <SingleDayPicker
+                  label="Праздничная дата"
+                  hideLabel
+                  allowClear
                   id="inventory-holiday-date"
                   name="inventory-holiday-date"
-                  autoComplete="off"
-                  type="date"
                   value={holidayDraft}
                   disabled={saving}
-                  onChange={(event) => {
-                    setHolidayDraft(event.target.value)
+                  onValueChange={(nextValue) => {
+                    setHolidayDraft(nextValue)
                     setValidationError(null)
                   }}
                 />

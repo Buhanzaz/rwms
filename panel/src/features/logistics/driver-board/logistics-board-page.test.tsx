@@ -1,8 +1,8 @@
+import { selectCalendarDate } from "@/test/calendar"
 import type { ReactNode } from "react"
 import {
   act,
   cleanup,
-  fireEvent,
   render,
   screen,
   waitFor,
@@ -381,9 +381,7 @@ describe("LogisticsBoardPage", () => {
       )
     ).toBeNull()
 
-    fireEvent.change(screen.getByLabelText("Дата заданий"), {
-      target: { value: "2026-08-02" },
-    })
+    await selectCalendarDate("Дата заданий", "2026-08-02")
     expect(screen.queryByLabelText(/^Логистика на .*1 августа/i)).toBeNull()
     expect(screen.getByLabelText(/^Логистика на .*2 августа/i)).toBeTruthy()
   })
