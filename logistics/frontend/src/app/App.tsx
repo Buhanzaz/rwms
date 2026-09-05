@@ -200,6 +200,8 @@ export function App() {
   const requestPageContextRef = useRef('');
   const requestPageGenerationRef = useRef(0);
   const surfacedPlanIdRef = useRef<UUID | null>(null);
+  const navigatedTerminalRunIdRef = useRef<UUID | null>(null);
+  const surfacedTerminalRunIdRef = useRef<UUID | null>(null);
   const surfacedNotificationIdsRef = useRef(new Set<UUID>());
   const representativeRequestBaselineRef = useRef<{
     contextKey: string;
@@ -239,6 +241,8 @@ export function App() {
     setValidation(null);
     setRoutesNeedRefresh(false);
     surfacedPlanIdRef.current = null;
+    navigatedTerminalRunIdRef.current = null;
+    surfacedTerminalRunIdRef.current = null;
     clearTrace();
     clearSimulationOverrides();
     setSimulationPlaying(false);
@@ -470,7 +474,7 @@ export function App() {
   }, [selectPlanningDate, setMapTool, setMode, setSection, setSelected, toast, workspace]);
   const planQuery = useQuery({
     queryKey: ['plan', planId, workspace?.warehouse.updated_at],
-    queryFn: () => api.getPlan(planId as UUID, workspace!),
+    queryFn: ({ signal }) => api.getPlan(planId as UUID, workspace!, signal),
     enabled: Boolean(planId && workspace),
   });
   const automaticPlanQuery = useQuery({
@@ -501,6 +505,12 @@ export function App() {
     retry: false,
   });
   const acceptingRequests = planningDayStatusQuery.data?.accepting_requests ?? false;
+  const runQuery = useQuery({
+    queryKey: ['optimization-run', runId],
+    queryFn: () => api.getOptimizationRun(runId as UUID, workspace!.warehouse.settings),
+    enabled: Boolean(runId && workspace),
+    refetchInterval: (query) => isTerminal(query.state.data?.status) ? false : 900,
+  });
   useEffect(() => {
     if (!planningDayStatusQuery.error) return;
     const feedback = actionErrorFeedback(planningDayStatusQuery.error);
@@ -550,7 +560,16 @@ export function App() {
     if (surfacedPlanIdRef.current === loadedPlan.id) return;
     surfacedPlanIdRef.current = loadedPlan.id;
     const cycleCount = loadedPlan.driver_routes.reduce((total, route) => total + route.cycles.length, 0);
-    if (cycleCount === 0 && loadedPlan.unassigned.length > 0) {
+    const searchTimedOut = loadedPlan.unassigned.some((item) => item.reason_codes.includes('OPTIMIZATION_TIME_LIMIT'))
+      || (runQuery.data?.plan_id === loadedPlan.id && runQuery.data.status === 'TIMED_OUT');
+    if (searchTimedOut) {
+      toast({
+        tone: 'warning',
+        replacementKey: 'automatic-plan-result',
+        title: 'Лимит времени достигнут',
+        detail: `${cycleCount > 0 ? `Сохранено рейсов: ${cycleCount}.` : 'Проверка маршрутов не завершена.'} Не распределено задач: ${loadedPlan.unassigned.length}. Повторите расчёт или увеличьте лимит планирования.`,
+      });
+    } else if (cycleCount === 0 && loadedPlan.unassigned.length > 0) {
       toast({
         tone: 'warning',
         replacementKey: 'automatic-plan-result',
@@ -565,7 +584,7 @@ export function App() {
         detail: loadedPlan.unassigned.length > 0 ? `Не распределено задач: ${loadedPlan.unassigned.length}.` : 'Все доступные задачи распределены.',
       });
     }
-  }, [planQuery.data, toast]);
+  }, [planQuery.data, runQuery.data, toast]);
   useEffect(() => {
     plan?.notification_logs?.forEach((log) => {
       if (surfacedNotificationIdsRef.current.has(log.id)) return;
@@ -579,22 +598,24 @@ export function App() {
     });
   }, [plan?.notification_logs, toast]);
 
-  const runQuery = useQuery({
-    queryKey: ['optimization-run', runId],
-    queryFn: () => api.getOptimizationRun(runId as UUID, workspace!.warehouse.settings),
-    enabled: Boolean(runId && workspace),
-    refetchInterval: (query) => isTerminal(query.state.data?.status) ? false : 900,
-  });
   useEffect(() => {
     const run = runQuery.data;
-    if (!run || !isTerminal(run.status)) return;
+    if (!run || !isTerminal(run.status) || surfacedTerminalRunIdRef.current === run.id) return;
     if (run.plan_id) {
-      setPlanId(run.plan_id);
-      setMode('PLAN_DAY');
-      setSection(run.status === 'FAILED' ? 'UNASSIGNED' : 'PLAN_DAY');
+      if (navigatedTerminalRunIdRef.current !== run.id) {
+        navigatedTerminalRunIdRef.current = run.id;
+        setPlanId(run.plan_id);
+        setMode('PLAN_DAY');
+        setSection(run.status === 'FAILED' ? 'UNASSIGNED' : 'PLAN_DAY');
+      }
       if (run.status !== 'COMPLETED') {
-        const detail = run.status === 'TIMED_OUT' ? 'Показан лучший найденный план.' : userFacingErrorDetail(run.error_message ? new Error(run.error_message) : null, 'Планировщик не смог построить допустимый план.');
-        toast({ tone: run.status === 'TIMED_OUT' ? 'warning' : 'error', title: run.status === 'TIMED_OUT' ? 'Лимит времени достигнут' : 'Оптимизация не завершена', ...(detail ? { detail } : {}) });
+        const loadedPlan = planQuery.data;
+        if (run.status === 'TIMED_OUT' && loadedPlan?.id !== run.plan_id) return;
+        const cycleCount = loadedPlan?.driver_routes.reduce((total, route) => total + route.cycles.length, 0) ?? 0;
+        const detail = run.status === 'TIMED_OUT'
+          ? `${cycleCount > 0 ? `Сохранено рейсов: ${cycleCount}.` : 'Проверка маршрутов не завершена; рейсы не сохранены.'} Повторите расчёт или увеличьте лимит планирования.`
+          : userFacingErrorDetail(run.error_message ? new Error(run.error_message) : null, 'Планировщик не смог построить допустимый план.');
+        toast({ tone: run.status === 'TIMED_OUT' ? 'warning' : 'error', replacementKey: 'automatic-plan-result', title: run.status === 'TIMED_OUT' ? 'Лимит времени достигнут' : 'Оптимизация не завершена', ...(detail ? { detail } : {}) });
       }
     } else if (run.status === 'FAILED') {
       toast({ tone: 'error', title: 'Оптимизация завершилась с ошибкой', detail: userFacingErrorDetail(run.error_message ? new Error(run.error_message) : null, 'План не создан. Проверьте условия доставок и смены водителей.') });
@@ -603,7 +624,8 @@ export function App() {
     } else if (run.status === 'TIMED_OUT') {
       toast({ tone: 'warning', title: 'Лимит времени достигнут', detail: 'Сервис планирования не успел сохранить допустимый план.' });
     }
-  }, [runQuery.data, setMode, setSection, toast]);
+    surfacedTerminalRunIdRef.current = run.id;
+  }, [planQuery.data, runQuery.data, setMode, setSection, toast]);
 
   useEffect(() => {
     if (!runId || isTerminal(runQuery.data?.status)) return;

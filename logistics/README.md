@@ -180,6 +180,12 @@ Selecting an unassigned list card highlights its marker and pans the map while
 preserving the current zoom. Backend/domain failures pass through one
 user-facing Russian error mapper; raw HTTP status text, exception bodies and
 planner constraint dumps remain diagnostic-only.
+If a returned plan references tasks absent from the visible request page, the
+client reads the current workspace for that plan date and the necessary following
+pages before displaying it. Cancellation propagates to those reads; a missing
+task or service failure remains an explicit error. A planning timeout reports
+the number of saved, verified trips and unfinished tasks instead of claiming no
+route exists.
 The right details pane has an accessible drag separator, is resizable up to half
 the viewport and reflows its forms and metrics as its width changes. The former
 per-leg truck diagnostic block is not part of the operator interface.

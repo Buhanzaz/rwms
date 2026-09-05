@@ -87,4 +87,10 @@ describe('user-facing logistics errors', () => {
     expect(feedback.title).toBe('Невозможно назначить');
     expect(feedback.detail).toContain('даты, временного окна, водителя и транспорта');
   });
+
+  it('explains an unfinished search without declaring the route impossible', () => {
+    expect(validationMessageRu('OPTIMIZATION_TIME_LIMIT')).toBe(
+      'Проверка маршрутов не завершена за отведённое время. Повторите расчёт или увеличьте лимит планирования.',
+    );
+  });
 });

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
@@ -43,7 +43,7 @@ function rawPlan(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function installRouter(options: { acceptingRequests?: boolean } = {}) {
+function installRouter(options: { acceptingRequests?: boolean; plan?: Record<string, unknown>; ensureStatus?: number; staleTasks?: boolean; runStatus?: string } = {}) {
   let accepting = options.acceptingRequests ?? true;
   let ensureCalls = 0;
   const warehouse = warehouseFixture();
@@ -64,12 +64,28 @@ function installRouter(options: { acceptingRequests?: boolean } = {}) {
     const method = init?.method ?? 'GET';
     if (url === '/api/warehouses') return response([warehouse]);
     if (url === '/api/warehouses/available') return response([]);
-    if (url === `/api/warehouses/warehouse-1/workspace?planning_date=${TEST_PLANNING_DATE}&request_limit=250`) return response(workspace);
+    if (url === `/api/warehouses/warehouse-1/workspace?planning_date=${TEST_PLANNING_DATE}&request_limit=250`) {
+      return response(options.staleTasks && ensureCalls === 0
+        ? { ...workspace, requests: workspace.requests.map((item) => ({ ...item, tasks: [] })) }
+        : workspace);
+    }
     if (url === `/api/warehouses/warehouse-1/plans/ensure?date=${TEST_PLANNING_DATE}` && method === 'POST') {
       ensureCalls += 1;
-      return response(rawPlan({ version: ensureCalls }));
+      return response(rawPlan({ version: ensureCalls, ...options.plan }), options.ensureStatus);
     }
-    if (url === '/api/plans/plan-1' && method === 'GET') return response(rawPlan({ version: ensureCalls || 1 }));
+    if (url === '/api/plans/plan-1' && method === 'GET') return response(rawPlan({ version: ensureCalls || 1, ...options.plan }));
+    if (url === '/api/warehouses/warehouse-1/generate-workload' && method === 'POST') return response({
+      start_date: TEST_PLANNING_DATE, end_date: TEST_PLANNING_DATE, created_requests: 1,
+      created_deliveries: 1, created_pickups: 0, replaced_requests: 0, deleted_plans: 0,
+      auto_plan_ids: ['plan-1'], auto_plan_run_ids: ['run-1'],
+    });
+    if (url === '/api/optimization-runs/run-1' && method === 'GET') return response({
+      id: 'run-1', warehouse_id: 'warehouse-1', plan_id: 'plan-1', status: options.runStatus ?? 'COMPLETED',
+      started_at: '2026-08-28T08:00:00Z', finished_at: '2026-08-28T08:00:05Z',
+      seed: 1, settings_snapshot: {}, initial_score: 0, final_score: 0, error_message: null,
+      stopped_by_limit: options.runStatus === 'TIMED_OUT', cancel_requested: false,
+    });
+    if (url === '/api/optimization-runs/run-1/stream') return new Response('', { headers: { 'Content-Type': 'text/event-stream' } });
     if (url === '/api/requests/request-1/planning-details' && method === 'POST') {
       const payload = JSON.parse(typeof init?.body === 'string' ? init.body : '{}') as { mandatory: boolean };
       workspace.requests[0] = { ...workspace.requests[0]!, mandatory: payload.mandatory };
@@ -90,7 +106,7 @@ function installRouter(options: { acceptingRequests?: boolean } = {}) {
 
 function renderApp() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+  return { ...render(<QueryClientProvider client={client}><App /></QueryClientProvider>), client };
 }
 
 beforeEach(() => {
@@ -98,6 +114,81 @@ beforeEach(() => {
 });
 
 describe('warehouse automatic planning', () => {
+  it('preserves the selected section and dismissed terminal warning when a terminal run plan is refreshed', async () => {
+    const user = userEvent.setup();
+    const plan = { version: 1, unassigned_tasks: [{ task_id: 'task-1', reason_codes: ['OPTIMIZATION_TIME_LIMIT'], descriptions_ru: [] }] };
+    const fetchMock = installRouter({ plan, runStatus: 'TIMED_OUT' });
+    const { client } = renderApp();
+    await user.click(await screen.findByRole('button', { name: 'Создать нагрузку' }));
+    await user.click(screen.getByRole('button', { name: 'Сгенерировать и заменить нагрузку' }));
+    await screen.findByText(/Проверка маршрутов не завершена; рейсы не сохранены/);
+    expect(useUiStore.getState().section).toBe('PLAN_DAY');
+
+    await user.click(screen.getByRole('button', { name: /^Доставки/ }));
+    const notification = useUiStore.getState().notifications.find((item) => item.title === 'Лимит времени достигнут')!;
+    act(() => useUiStore.getState().dismissToast(notification.id));
+    const notifications = useUiStore.getState().notifications;
+    const previousReads = fetchMock.mock.calls.filter(([url]) => url === '/api/plans/plan-1').length;
+    plan.version = 2;
+    await act(async () => { await client.invalidateQueries({ queryKey: ['plan'] }); });
+
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/plans/plan-1').length).toBeGreaterThan(previousReads);
+    expect(useUiStore.getState().section).toBe('REQUESTS');
+    expect(useUiStore.getState().notifications).toEqual(notifications);
+    expect(screen.queryByText('Лимит времени достигнут')).not.toBeInTheDocument();
+  });
+
+  it('shows an incomplete search after a timeout and recovers tasks created after the workspace read', async () => {
+    const fetchMock = installRouter({
+      staleTasks: true,
+      plan: { unassigned_tasks: [{ task_id: 'task-1', reason_codes: ['OPTIMIZATION_TIME_LIMIT'], descriptions_ru: [], recommendation_ru: null }] },
+    });
+    renderApp();
+
+    expect(await screen.findByText('Лимит времени достигнут')).toBeVisible();
+    expect(screen.getByText(/Проверка маршрутов не завершена\. Не распределено задач: 1/)).toBeVisible();
+    expect(screen.queryByText('Допустимые маршруты не найдены')).not.toBeInTheDocument();
+    expect(screen.queryByText('Автоплан не рассчитан')).not.toBeInTheDocument();
+    expect(screen.queryByText(/План готов:/)).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([url]) => requestUrl(url).includes('/plans/ensure?'))).toHaveLength(1);
+  });
+
+  it('preserves the error notification when automatic planning really fails', async () => {
+    installRouter({ ensureStatus: 503 });
+    renderApp();
+
+    expect(await screen.findByText('Автоплан не рассчитан')).toBeVisible();
+    expect(screen.queryByText('Лимит времени достигнут')).not.toBeInTheDocument();
+    expect(screen.queryByText(/План готов:/)).not.toBeInTheDocument();
+  });
+
+  it('reports saved trips in a partial result without announcing completed optimization', async () => {
+    installRouter({ plan: {
+      unassigned_tasks: [{ task_id: 'task-1', reason_codes: ['OPTIMIZATION_TIME_LIMIT'], descriptions_ru: [] }],
+      cycles: [{
+        id: 'cycle-1', driver_shift_id: 'shift-1', sequence: 1,
+        planned_start: `${TEST_PLANNING_DATE}T08:00:00Z`, planned_finish: `${TEST_PLANNING_DATE}T09:00:00Z`,
+        total_distance_meters: 10_000, total_travel_seconds: 3_600, total_service_seconds: 0,
+        empty_distance_meters: 0, detour_seconds: 0, score: 1, locked: false, manually_changed: false,
+        metrics: {}, stops: [], segments: [], explanations: [],
+      }],
+    } });
+    renderApp();
+
+    expect(await screen.findByText('Лимит времени достигнут')).toBeVisible();
+    expect(screen.getByText(/Сохранено рейсов: 1\. Не распределено задач: 1/)).toBeVisible();
+    expect(screen.queryByText(/План готов:/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Допустимые маршруты не найдены')).not.toBeInTheDocument();
+  });
+
+  it('keeps a proven resource shortage distinct from a timed out search', async () => {
+    installRouter({ plan: { unassigned_tasks: [{ task_id: 'task-1', reason_codes: ['NO_ACTIVE_DRIVER'], descriptions_ru: [] }] } });
+    renderApp();
+
+    expect(await screen.findByText('Допустимые маршруты не найдены')).toBeVisible();
+    expect(screen.queryByText('Лимит времени достигнут')).not.toBeInTheDocument();
+  });
+
   it('loads one common map and automatically requests the selected warehouse plan', async () => {
     const fetchMock = installRouter();
     renderApp();

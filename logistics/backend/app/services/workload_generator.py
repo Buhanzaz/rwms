@@ -45,6 +45,7 @@ _DELIVERY_WINDOWS = (
     (time(15), time(18)),
 )
 _PICKUP_WINDOW = (time(9), time(18))
+_GENERATED_CLIENT_TYPES = ("INDIVIDUAL", "SOLE_PROPRIETOR", "LEGAL_ENTITY")
 
 
 async def _routable_point_near_warehouse(
@@ -298,6 +299,7 @@ async def generate_warehouse_workload(
     )
     created_deliveries = 0
     created_pickups = 0
+    generated_request_index = 0
     daily_counts: list[WorkloadGenerationDailyCount] = []
 
     for primary_date in horizon:
@@ -329,6 +331,9 @@ async def generate_warehouse_workload(
                         latitude=point.lat,
                         longitude=point.lon,
                         quantity=rng.choice((1, 2)),
+                        client_type=_GENERATED_CLIENT_TYPES[
+                            generated_request_index % len(_GENERATED_CLIENT_TYPES)
+                        ],
                         cargo_length_mm=settings.default_cargo_length_mm,
                         cargo_width_mm=settings.default_cargo_width_mm,
                         cargo_height_mm=settings.default_cargo_height_mm,
@@ -358,6 +363,7 @@ async def generate_warehouse_workload(
                     sequence,
                 )
                 generated_request.scheduled_date = primary_date
+                generated_request_index += 1
                 if request_type == RequestType.DELIVERY:
                     created_deliveries += 1
                 else:

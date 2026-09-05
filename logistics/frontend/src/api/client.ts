@@ -715,6 +715,31 @@ function normalizeRoutePlanWithDiagnostics(raw: RawRoutePlan, workspace: Warehou
   };
 }
 
+/** Resolve plan task references from the current dated projection when the visible page is stale or incomplete. */
+async function loadRoutePlan(raw: RawRoutePlan, workspace: WarehouseWorkspace, signal?: AbortSignal): Promise<RoutePlan> {
+  const taskIds = new Set(raw.unassigned_tasks.map((item) => item.task_id));
+  const hasAllTasks = (value: WarehouseWorkspace) => {
+    const knownIds = new Set(value.requests.flatMap((item) => (item.tasks ?? []).map((task) => task.id)));
+    return [...taskIds].every((id) => knownIds.has(id));
+  };
+  if (hasAllTasks(workspace)) return normalizeRoutePlanWithDiagnostics(raw, workspace);
+
+  let current = await getWarehouseWorkspace(workspace.warehouse.id, { planningDate: raw.date }, signal);
+  const visitedCursors = new Set<UUID>();
+  while (!hasAllTasks(current) && current.request_next_cursor) {
+    const cursor = current.request_next_cursor;
+    if (visitedCursors.has(cursor)) throw new Error(`Workspace repeats request cursor for plan ${raw.id}`);
+    visitedCursors.add(cursor);
+    const page = await getWarehouseWorkspace(workspace.warehouse.id, {
+      planningDate: raw.date,
+      requestCursor: cursor,
+    }, signal);
+    current = { ...current, requests: [...current.requests, ...page.requests], request_next_cursor: page.request_next_cursor };
+  }
+  if (!hasAllTasks(current)) throw new Error(`Route plan ${raw.id} references missing tasks in the current workspace`);
+  return normalizeRoutePlanWithDiagnostics(raw, current);
+}
+
 function normalizeValidationWithDiagnostics(
   value: unknown,
   workspace: WarehouseWorkspace,
@@ -795,13 +820,13 @@ export const api = {
     method: 'PATCH',
     body: jsonBody({ ...input, expected_version: expectedVersion }),
   })),
-  getWarehouseWorkspace: (id: UUID, input: WarehouseWorkspacePageInput) => {
+  getWarehouseWorkspace: (id: UUID, input: WarehouseWorkspacePageInput, signal?: AbortSignal) => {
     const query = new URLSearchParams({
       planning_date: input.planningDate,
       request_limit: String(input.requestLimit ?? WORKSPACE_REQUEST_PAGE_LIMIT),
     });
     if (input.requestCursor) query.set('request_cursor', input.requestCursor);
-    return request<WarehouseWorkspace>(`/warehouses/${id}/workspace?${query.toString()}`);
+    return request<WarehouseWorkspace>(`/warehouses/${id}/workspace?${query.toString()}`, signal ? { signal } : {});
   },
   listPolicyZones: (warehouseId: UUID) =>
     request<WarehousePolicyZone[]>(`/warehouses/${warehouseId}/policy-zones`),
@@ -958,8 +983,8 @@ export const api = {
       await request<RawOptimizationRun>(`/optimization-runs/${id}/cancel`, { method: 'POST' }),
       fallbackSettings,
     ),
-  getPlan: async (id: UUID, workspace: WarehouseWorkspace) =>
-    normalizeRoutePlanWithDiagnostics(await request<RawRoutePlan>(`/plans/${id}`), workspace),
+  getPlan: async (id: UUID, workspace: WarehouseWorkspace, signal?: AbortSignal) =>
+    loadRoutePlan(await request<RawRoutePlan>(`/plans/${id}`, signal ? { signal } : {}), workspace, signal),
   ensureAutomaticPlan: async (
     warehouseId: UUID,
     date: string,
@@ -970,7 +995,7 @@ export const api = {
       `/warehouses/${warehouseId}/plans/ensure?date=${encodeURIComponent(date)}`,
       { method: 'POST', ...(signal ? { signal } : {}) },
     );
-    return raw ? normalizeRoutePlanWithDiagnostics(raw, workspace) : null;
+    return raw ? loadRoutePlan(raw, workspace, signal) : null;
   },
   validatePlan: async (id: UUID, expectedVersion: number, workspace: WarehouseWorkspace, currentPlan: RoutePlan) =>
     normalizeValidationWithDiagnostics(await request<unknown>(`/plans/${id}/validate`, {
@@ -1041,8 +1066,9 @@ export const api = {
 export async function getWarehouseWorkspace(
   warehouseId: UUID,
   input: WarehouseWorkspacePageInput,
+  signal?: AbortSignal,
 ): Promise<WarehouseWorkspace> {
-  return normalizeWorkspace(await api.getWarehouseWorkspace(warehouseId, input));
+  return normalizeWorkspace(await api.getWarehouseWorkspace(warehouseId, input, signal));
 }
 
 /** One decoded server-sent optimizer event. */

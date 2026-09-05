@@ -145,6 +145,13 @@ interrupted candidates are still discarded and only fully verified cycles are
 persisted. Candidate combinations are reused only across shifts that share the
 same physical depot and eligible task set; scheduling and exact loaded-truck
 checks remain per shift. See [`app/planner/heuristic.py`](app/planner/heuristic.py).
+An exact truck rejection advances to the remaining candidates on the same shift,
+including a standalone delivery after an infeasible mixed return. If the initial
+shortlist is entirely rejected, remaining equal-priority alternatives are still
+checked within the same deadline. A timeout retains a fully verified candidate
+even when comparison with another candidate or driver is interrupted. Remaining
+tasks use `OPTIMIZATION_TIME_LIMIT`, which does not claim that their routes are
+infeasible; partial candidate rejections cannot override that unfinished search.
 
 ## Offline native-solver comparison
 
@@ -255,8 +262,11 @@ multiple slices of that order use deterministic UUID order rather than claiming
 an unprovable unit-to-task association. Generated-only workload never receives
 fabricated external task identities or a remote command identity.
 
-Generated workload is simulator-owned test demand. Its optional RWMS capacity
-snapshot contains only anonymous capacity facts, never orders or assets. The
+Generated workload is simulator-owned test demand. Generated requests explicitly cycle through
+`INDIVIDUAL`, `SOLE_PROPRIETOR` and `LEGAL_ENTITY` for dispatcher presentation,
+without changing random point/cargo generation or inferring types for real requests.
+Its optional RWMS capacity snapshot contains only anonymous capacity facts,
+never customer identities, orders or assets. The
 local mutation commits together with a durable publication generation and
 reports the later projection as `NOT_REQUESTED`, `PENDING`, `PUBLISHED` or
 `FAILED`; a remote projection failure is a warning and does not turn the

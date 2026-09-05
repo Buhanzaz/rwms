@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 from itertools import pairwise
@@ -16,6 +17,7 @@ import pytest
 
 import app.planner.heuristic as heuristic_module
 from app.planner import (
+    CandidateRouteRejected,
     DriverShift,
     HeuristicPlanner,
     LogisticsRequest,
@@ -264,6 +266,35 @@ class SlowAfterFirstCandidateEvaluator(PassThroughCandidateEvaluator):
             vehicle=vehicle,
             shift=shift,
             settings=settings,
+        )
+
+
+class RejectSelectedCandidatesEvaluator(PassThroughCandidateEvaluator):
+    """Model exact road constraints absent from the geometric candidate matrix."""
+
+    def __init__(self, reject: Callable[[RouteCycle, int], bool]) -> None:
+        self.reject = reject
+        self.calls = 0
+
+    async def route_candidate(
+        self,
+        cycle: RouteCycle,
+        *,
+        tasks: tuple[PlanningTask, ...],
+        vehicle: Vehicle,
+        shift: DriverShift,
+        settings: PlanningSettings,
+    ) -> RouteCycle:
+        """Reject only the selected alternatives; all other cycles are feasible."""
+
+        self.calls += 1
+        if self.reject(cycle, self.calls):
+            raise CandidateRouteRejected(
+                UnassignedReasonCode.NO_SAFE_ROUTE,
+                "This loaded truck cannot take the proposed route",
+            )
+        return await super().route_candidate(
+            cycle, tasks=tasks, vehicle=vehicle, shift=shift, settings=settings,
         )
 
 
@@ -1765,6 +1796,7 @@ def test_slow_matrix_provider_is_cancelled_by_real_wall_clock_deadline() -> None
     assert result.cycles == ()
     assert provider.started_batches == 1
     assert provider.matrix_sizes == []
+    assert result.unassigned[0].reason_codes == (UnassignedReasonCode.OPTIMIZATION_TIME_LIMIT,)
 
 
 def test_routing_preparation_does_not_consume_optimization_budget() -> None:
@@ -1810,6 +1842,94 @@ def test_slow_exact_candidate_returns_last_fully_selected_projection() -> None:
     assert evaluator.calls == 2
     assert [cycle.task_ids for cycle in result.cycles] == [("first:part:1",)]
     assert [item.task.id for item in result.unassigned] == ["second:part:1"]
+    assert result.unassigned[0].reason_codes == (UnassignedReasonCode.OPTIMIZATION_TIME_LIMIT,)
+
+
+def test_exact_timeout_retains_completed_candidate_from_same_shift_bucket() -> None:
+    """A slower alternative cannot erase a route already verified in the same bucket."""
+
+    evaluator = SlowAfterFirstCandidateEvaluator()
+    result = asyncio.run(
+        HeuristicPlanner(RecordingMatrixProvider(), evaluator).generate_plan(
+            planning_input((
+                request("first", TaskType.DELIVERY, quantity=2),
+                request("second", TaskType.DELIVERY, quantity=2),
+            )),
+            PlanningSettings(seed=17, max_optimization_seconds=0.1),
+            NullProgressPublisher(),
+        )
+    )
+
+    assert result.timed_out
+    assert evaluator.calls == 2
+    assert len(result.cycles) == 1
+    assert result.metrics.assigned_tasks == 1
+    assert len(result.unassigned) == 1
+
+
+def test_exact_timeout_retains_completed_candidate_from_previous_shift() -> None:
+    """A blocked second driver's route cannot erase the first driver's safe result."""
+
+    evaluator = SlowAfterFirstCandidateEvaluator()
+    result = asyncio.run(
+        HeuristicPlanner(RecordingMatrixProvider(), evaluator).generate_plan(
+            three_shift_input((request("delivery", TaskType.DELIVERY),)),
+            PlanningSettings(seed=17, max_optimization_seconds=0.1),
+            NullProgressPublisher(),
+        )
+    )
+
+    assert result.timed_out
+    assert evaluator.calls == 2
+    assert [cycle.driver_shift_id for cycle in result.cycles] == ["shift-1"]
+    assert result.metrics.assigned_tasks == 1
+    assert result.unassigned == ()
+
+
+def test_exact_rejection_of_mixed_cycle_still_checks_single_delivery() -> None:
+    """An unsafe paired return must not strand a delivery whose solo route is safe."""
+
+    evaluator = RejectSelectedCandidatesEvaluator(
+        lambda cycle, _count: any(stop.stop_type is StopType.DELIVERY for stop in cycle.stops)
+        and any(stop.stop_type is StopType.PICKUP for stop in cycle.stops),
+    )
+    result = asyncio.run(
+        HeuristicPlanner(RecordingMatrixProvider(), evaluator).generate_plan(
+            planning_input((
+                request("delivery", TaskType.DELIVERY),
+                request("pickup", TaskType.PICKUP),
+            )),
+            PlanningSettings(seed=17),
+            NullProgressPublisher(),
+        )
+    )
+
+    assert not result.timed_out
+    assert result.unassigned == ()
+    assert result.metrics.assigned_tasks == 2
+    assert [cycle.task_ids for cycle in result.cycles] == [
+        ("delivery:part:1",), ("pickup:part:1",),
+    ]
+
+
+def test_exact_rejections_do_not_hide_safe_candidate_beyond_neighbor_limit() -> None:
+    """Keep searching equal-priority alternatives if the initial shortlist is unsafe."""
+
+    evaluator = RejectSelectedCandidatesEvaluator(lambda _cycle, count: count <= 8)
+    result = asyncio.run(
+        HeuristicPlanner(RecordingMatrixProvider(), evaluator).generate_plan(
+            planning_input(tuple(
+                request(f"delivery-{index}", TaskType.DELIVERY) for index in range(5)
+            )),
+            PlanningSettings(seed=17, max_candidate_neighbors=8),
+            NullProgressPublisher(),
+        )
+    )
+
+    assert not result.timed_out
+    assert evaluator.calls > 8
+    assert result.metrics.assigned_tasks == 5
+    assert result.unassigned == ()
 
 
 def test_overnight_shift_routes_across_midnight_and_month_boundary() -> None:

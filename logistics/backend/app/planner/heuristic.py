@@ -366,7 +366,7 @@ class HeuristicPlanner:
             # the operator receives the concrete missing-resource reason.
             loaded_task_ids = frozenset(task.id for task in tasks)
         deadline_unassigned = tuple(
-            _unassigned_task(task, (UnassignedReasonCode.UNKNOWN,))
+            _unassigned_task(task, (UnassignedReasonCode.OPTIMIZATION_TIME_LIMIT,))
             for task in tasks
             if task.id not in loaded_task_ids
             and task.id not in locked_task_ids
@@ -545,146 +545,168 @@ class HeuristicPlanner:
                     candidate_specs = tuple(
                         spec for spec in all_candidate_specs if not spec.deliveries
                     )
-                candidates, evaluated, exhausted = self._candidates_for_shift(
-                    shift=shift,
-                    start_at=available_at[shift.id],
-                    sequence=next_sequence[shift.id],
-                    candidate_specs=candidate_specs,
-                    warehouse=warehouse,
-                    vehicle=active_vehicles[shift.vehicle_id],
-                    matrix=option_matrix,
-                    matrix_index=option_matrix_index,
-                    settings=settings,
-                    existing_cycles=tuple(cycles),
-                    cycle_count=cycle_counts[shift.id],
-                    activated_shift_ids=activated_shift_ids,
-                    prefer_tight_fit=fleet_fully_activated,
-                    max_evaluations=evaluation_budget - evaluation_count,
-                    deadline=deadline,
-                )
-                evaluation_count += evaluated
-                if candidates:
-                    for candidate in candidates:
-                        await trace.emit(
-                            TracePhase.BUILDING_CYCLES,
-                            TraceEventType.CANDIDATE_EDGE_CONSIDERED,
-                            {
-                                "driver_shift_id": shift.id,
-                                "task_ids": sorted(candidate.task_ids),
-                                "score": round(candidate.cycle.score, 6),
-                                "resource_activation_penalty": round(
-                                    candidate.resource_activation_penalty,
-                                    6,
-                                ),
-                                "driver_workload_penalty": round(
-                                    candidate.driver_workload_penalty,
-                                    6,
-                                ),
-                                "shift_utilization_percent": round(
-                                    candidate.projected_shift_utilization_percent,
-                                    2,
-                                ),
-                                "resource_option_id": option_id,
-                            },
-                        )
-                    routed_candidates: list[_Candidate] = []
-                    for candidate in sorted(
-                        candidates,
-                        key=lambda item: item.selection_key,
-                    )[: settings.max_candidate_neighbors]:
-                        if self._candidate_route_evaluator is None:
-                            routed_candidates.append(candidate)
-                            continue
-                        remaining_seconds = deadline - monotonic()
-                        if remaining_seconds <= 0:
-                            wall_deadline_hit = True
-                            break
-                        try:
-                            async with timeout(remaining_seconds):
-                                routed_cycle = (
-                                    await self._candidate_route_evaluator.route_candidate(
-                                        candidate.cycle,
-                                        tasks=candidate.deliveries + candidate.pickups,
-                                        vehicle=active_vehicles[shift.vehicle_id],
-                                        shift=shift,
-                                        settings=settings,
-                                    )
-                                )
-                        except TimeoutError:
-                            wall_deadline_hit = True
-                            break
-                        except CandidateRouteRejected as exc:
-                            for task_id in candidate.task_ids:
-                                route_rejections.setdefault(task_id, set()).add(exc.reason_code)
+                # A geometric candidate is only a prefilter. If its exact truck
+                # route fails, try the remaining alternatives before abandoning
+                # this shift, keeping one shared evaluation and time budget.
+                exhausted = False
+                while candidate_specs:
+                    candidates, evaluated, exhausted = self._candidates_for_shift(
+                        shift=shift,
+                        start_at=available_at[shift.id],
+                        sequence=next_sequence[shift.id],
+                        candidate_specs=candidate_specs,
+                        warehouse=warehouse,
+                        vehicle=active_vehicles[shift.vehicle_id],
+                        matrix=option_matrix,
+                        matrix_index=option_matrix_index,
+                        settings=settings,
+                        existing_cycles=tuple(cycles),
+                        cycle_count=cycle_counts[shift.id],
+                        activated_shift_ids=activated_shift_ids,
+                        prefer_tight_fit=fleet_fully_activated,
+                        max_evaluations=evaluation_budget - evaluation_count,
+                        deadline=deadline,
+                    )
+                    evaluation_count += evaluated
+                    if evaluated == 0:
+                        break
+                    candidate_specs = candidate_specs[evaluated:]
+                    if candidates:
+                        for candidate in candidates:
                             await trace.emit(
                                 TracePhase.BUILDING_CYCLES,
-                                TraceEventType.CANDIDATE_CYCLE_REJECTED,
+                                TraceEventType.CANDIDATE_EDGE_CONSIDERED,
                                 {
                                     "driver_shift_id": shift.id,
                                     "task_ids": sorted(candidate.task_ids),
-                                    "reason_code": exc.reason_code.value,
-                                    "missing_fields": list(exc.missing_fields),
+                                    "score": round(candidate.cycle.score, 6),
+                                    "resource_activation_penalty": round(
+                                        candidate.resource_activation_penalty,
+                                        6,
+                                    ),
+                                    "driver_workload_penalty": round(
+                                        candidate.driver_workload_penalty,
+                                        6,
+                                    ),
+                                    "shift_utilization_percent": round(
+                                        candidate.projected_shift_utilization_percent,
+                                        2,
+                                    ),
+                                    "resource_option_id": option_id,
                                 },
                             )
-                            continue
-                        workload_penalty = incremental_shift_workload_cost(
-                            tuple(cycle for cycle in cycles if cycle.driver_shift_id == shift.id),
-                            routed_cycle,
-                            shift,
-                            settings,
-                        )
-                        projected_utilization = shift_utilization_percent(
-                            (
-                                *(cycle for cycle in cycles if cycle.driver_shift_id == shift.id),
-                                routed_cycle,
-                            ),
-                            shift,
-                        )
-                        routed_candidates.append(
-                            replace(
-                                candidate,
-                                cycle=routed_cycle,
-                                selection_key=(
-                                    *candidate.selection_key[:-7],
-                                    routed_cycle.score
-                                    + candidate.resource_activation_penalty
-                                    + workload_penalty,
-                                    routed_cycle.planned_finish,
-                                    *candidate.selection_key[-5:],
+                        routed_candidates: list[_Candidate] = []
+                        for candidate_index, candidate in enumerate(sorted(
+                            candidates,
+                            key=lambda item: item.selection_key,
+                        )):
+                            if (
+                                candidate_index >= settings.max_candidate_neighbors
+                                and routed_candidates
+                            ):
+                                break
+                            if self._candidate_route_evaluator is None:
+                                routed_candidates.append(candidate)
+                                continue
+                            remaining_seconds = deadline - monotonic()
+                            if remaining_seconds <= 0:
+                                wall_deadline_hit = True
+                                break
+                            try:
+                                async with timeout(remaining_seconds):
+                                    routed_cycle = (
+                                        await self._candidate_route_evaluator.route_candidate(
+                                            candidate.cycle,
+                                            tasks=candidate.deliveries + candidate.pickups,
+                                            vehicle=active_vehicles[shift.vehicle_id],
+                                            shift=shift,
+                                            settings=settings,
+                                        )
+                                    )
+                            except TimeoutError:
+                                wall_deadline_hit = True
+                                break
+                            except CandidateRouteRejected as exc:
+                                for task_id in candidate.task_ids:
+                                    route_rejections.setdefault(task_id, set()).add(exc.reason_code)
+                                await trace.emit(
+                                    TracePhase.BUILDING_CYCLES,
+                                    TraceEventType.CANDIDATE_CYCLE_REJECTED,
+                                    {
+                                        "driver_shift_id": shift.id,
+                                        "task_ids": sorted(candidate.task_ids),
+                                        "reason_code": exc.reason_code.value,
+                                        "missing_fields": list(exc.missing_fields),
+                                    },
+                                )
+                                continue
+                            workload_penalty = incremental_shift_workload_cost(
+                                tuple(
+                                    cycle for cycle in cycles if cycle.driver_shift_id == shift.id
                                 ),
-                                driver_workload_penalty=workload_penalty,
-                                projected_shift_utilization_percent=projected_utilization,
+                                routed_cycle,
+                                shift,
+                                settings,
                             )
+                            projected_utilization = shift_utilization_percent(
+                                (
+                                    *(
+                                        cycle
+                                        for cycle in cycles
+                                        if cycle.driver_shift_id == shift.id
+                                    ),
+                                    routed_cycle,
+                                ),
+                                shift,
+                            )
+                            routed_candidates.append(
+                                replace(
+                                    candidate,
+                                    cycle=routed_cycle,
+                                    selection_key=(
+                                        *candidate.selection_key[:-7],
+                                        routed_cycle.score
+                                        + candidate.resource_activation_penalty
+                                        + workload_penalty,
+                                        routed_cycle.planned_finish,
+                                        *candidate.selection_key[-5:],
+                                    ),
+                                    driver_workload_penalty=workload_penalty,
+                                    projected_shift_utilization_percent=projected_utilization,
+                                )
+                            )
+                            if _deadline_reached(deadline):
+                                wall_deadline_hit = True
+                                break
+                        if not routed_candidates:
+                            if wall_deadline_hit or exhausted:
+                                break
+                            continue
+                        best = min(
+                            routed_candidates,
+                            key=lambda candidate: candidate.selection_key,
                         )
-                        if _deadline_reached(deadline):
-                            wall_deadline_hit = True
-                            break
-                    if wall_deadline_hit:
+                        best_per_shift.append(best)
+                        await trace.emit(
+                            TracePhase.BUILDING_CYCLES,
+                            TraceEventType.CANDIDATE_CYCLE_CREATED,
+                            {
+                                "driver_shift_id": shift.id,
+                                "resource_option_id": option_id,
+                                "task_ids": sorted(best.task_ids),
+                                "score": round(best.cycle.score, 6),
+                            },
+                        )
                         break
-                    if not routed_candidates:
-                        continue
-                    best = min(
-                        routed_candidates,
-                        key=lambda candidate: candidate.selection_key,
-                    )
-                    best_per_shift.append(best)
-                    await trace.emit(
-                        TracePhase.BUILDING_CYCLES,
-                        TraceEventType.CANDIDATE_CYCLE_CREATED,
-                        {
-                            "driver_shift_id": shift.id,
-                            "resource_option_id": option_id,
-                            "task_ids": sorted(best.task_ids),
-                            "score": round(best.cycle.score, 6),
-                        },
-                    )
-                else:
-                    await trace.emit(
-                        TracePhase.BUILDING_CYCLES,
-                        TraceEventType.CANDIDATE_CYCLE_REJECTED,
-                        {"driver_shift_id": shift.id},
-                    )
-                if _deadline_reached(deadline):
+                    else:
+                        await trace.emit(
+                            TracePhase.BUILDING_CYCLES,
+                            TraceEventType.CANDIDATE_CYCLE_REJECTED,
+                            {"driver_shift_id": shift.id},
+                        )
+                    if exhausted or evaluation_count >= evaluation_budget:
+                        break
+                if wall_deadline_hit or _deadline_reached(deadline):
                     wall_deadline_hit = True
                     break
                 if exhausted or evaluation_count >= evaluation_budget:
@@ -692,7 +714,8 @@ class HeuristicPlanner:
                     break
             if wall_deadline_hit:
                 timed_out = True
-                break
+            # Only the interrupted candidate is incomplete. Fully verified choices
+            # from this or an earlier shift remain eligible for the final assignment.
             if not best_per_shift:
                 if timed_out:
                     break
@@ -895,14 +918,14 @@ class HeuristicPlanner:
         for task in sorted(remaining.values(), key=_task_priority_key):
             reasons: tuple[UnassignedReasonCode, ...]
             nearest: datetime | None
-            if task.id in route_rejections:
-                reasons = tuple(sorted(route_rejections[task.id], key=lambda item: item.value))
-                nearest = None
-            elif missing_resource_reason:
+            if missing_resource_reason:
                 reasons = missing_resource_reason
                 nearest = None
             elif timed_out:
-                reasons = (UnassignedReasonCode.UNKNOWN,)
+                reasons = (UnassignedReasonCode.OPTIMIZATION_TIME_LIMIT,)
+                nearest = None
+            elif task.id in route_rejections:
+                reasons = tuple(sorted(route_rejections[task.id], key=lambda item: item.value))
                 nearest = None
             else:
                 reasons, nearest = self._diagnose_task(
@@ -2861,9 +2884,14 @@ def _unassigned_task(
         UnassignedReasonCode.ROUTING_PROFILE_INCOMPLETE: (
             "Для машины, прицепа или груза не заполнены обязательные параметры маршрутизации."
         ),
+        UnassignedReasonCode.OPTIMIZATION_TIME_LIMIT: (
+            "Проверка маршрутов не завершена за отведённое время."
+        ),
         UnassignedReasonCode.UNKNOWN: "Не удалось построить допустимый рейс.",
     }
     recommendations: list[str] = []
+    if UnassignedReasonCode.OPTIMIZATION_TIME_LIMIT in reasons:
+        recommendations.append("Повторите расчёт или увеличьте лимит планирования.")
     if UnassignedReasonCode.TIME_WINDOW_CONFLICT in reasons:
         recommendations.append("Расширьте временное окно или добавьте более раннюю смену.")
     if any(

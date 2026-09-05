@@ -1672,6 +1672,10 @@ owns all later-trip and return-leg feasibility.
 The browser fences accumulated workspace pages and cancels an older ensure
 request when its date or group changes, so a late response cannot mix task
 references from different exact-date generations.
+When a returned plan references a task absent from the visible page, its client
+loads the authoritative dated workspace and necessary remaining pages before
+normalization. Cancellation covers those reads and unresolved references remain
+errors instead of fabricated tasks.
 It persists only presentation state: the exact warehouse, a warehouse-scoped
 planning date and map viewport, selected application/menu sections, the shift
 visibility filter, and map tools/layers. Operational aggregates are never
@@ -1689,6 +1693,11 @@ optimization use consecutive monotonic deadlines, each bounded by the
 configured optimization duration. A completed matrix therefore cannot exhaust
 the first exact candidate's search interval. A partially evaluated candidate
 is discarded; on timeout only already fully validated best-known cycles survive.
+That includes a candidate validated before a later alternative or shift exhausts
+the deadline. Exact rejection of the initial shortlist continues through remaining
+equal-priority candidates and later buckets on the same shift, so an infeasible
+mixed return cannot hide a feasible standalone delivery. Unfinished tasks expose
+`OPTIMIZATION_TIME_LIMIT`; an interrupted search never proves route infeasibility.
 
 Approving a valid warehouse plan creates one idempotent local test-message log
 per assigned source request. It aggregates split visits and records the plan
@@ -1715,6 +1724,9 @@ use hard windows round-robin `09:00-12:00`, `12:00-15:00` and `15:00-18:00`;
 pickups use the warehouse workday and remain optional return-leg work. A request
 stores its mandatory delivery/pickup choice; preparation details stay with the
 request rather than the plan.
+Generated requests cycle explicitly through the three supported client legal
+types without changing the random point/cargo sequence. Real request types and
+authoritative prices are never inferred from these synthetic examples.
 
 For RWMS demand, `orderVersion` remains the later assignment fence and a
 separate source revision covers the complete exported planning snapshot. A

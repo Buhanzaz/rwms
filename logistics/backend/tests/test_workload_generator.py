@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import ApiError
 from app.models import RoutePlan, UnassignedTask
-from app.models.domain import PlanStatus
+from app.models.domain import PlanStatus, RequestType
 from app.routing import MockRoutingProvider
 from app.schemas.domain import WorkloadGenerationResult, WorkloadGeneratorInput
 from app.services import catalog
@@ -65,6 +65,24 @@ async def test_configurable_generator_creates_three_day_random_load(
     assert [item.deliveries + item.pickups for item in result.daily_counts] == [6, 6, 6]
     assert len(requests) == 18
     assert all(request.source_system == GENERATOR_SOURCE_SYSTEM for request in requests)
+    generated_client_types = {"INDIVIDUAL", "SOLE_PROPRIETOR", "LEGAL_ENTITY"}
+    generated_requests = [
+        request
+        for request in requests
+        if request.source_system == GENERATOR_SOURCE_SYSTEM
+    ]
+    assert all(request.client_type in generated_client_types for request in generated_requests)
+    assert {request.client_type for request in generated_requests} == generated_client_types
+    assert all(
+        request.client_type in generated_client_types
+        for request in generated_requests
+        if request.type == RequestType.DELIVERY
+    )
+    assert all(
+        request.client_type in generated_client_types
+        for request in generated_requests
+        if request.type == RequestType.PICKUP
+    )
     assert all(request.external_id is not None for request in requests)
     assert all(request.scheduled_date is not None for request in requests)
     assert all(request.name.startswith("№") for request in requests)
@@ -84,6 +102,7 @@ async def test_rerun_replaces_generated_rows_but_preserves_business_facts(
 
     warehouse = await make_warehouse(db_session)
     manual = await make_request(db_session, warehouse, planning_date=date(2026, 8, 29))
+    manual.client_type = "LEGAL_ENTITY"
     await _generate(db_session, warehouse.id, days=1)
     first = sorted(
         [
@@ -121,6 +140,8 @@ async def test_rerun_replaces_generated_rows_but_preserves_business_facts(
     assert repeated.replaced_requests == 6
     assert {item[0] for item in second}.isdisjoint({item[0] for item in first})
     assert any(request.id == manual.id for request in current)
+    preserved_manual = next(request for request in current if request.id == manual.id)
+    assert preserved_manual.client_type == "LEGAL_ENTITY"
     assert warehouse.capacity_generation > first_generation
 
 

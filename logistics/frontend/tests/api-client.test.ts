@@ -740,6 +740,64 @@ describe('transport errors', () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/warehouses/warehouse-1/plans/ensure?date=2026-08-30');
     expect((fetchMock.mock.calls[0]?.[1] as RequestInit).method).toBe('POST');
   });
+
+  it.each(['ensure', 'read'])('resolves stale task references after a successful plan %s without repeating the command', async (operation) => {
+    const workspace = workspaceFixture({ requests: [requestFixture({ tasks: [] })] });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(rawPlan({ unassigned_tasks: [{ task_id: 'task-1', reason_codes: ['OPTIMIZATION_TIME_LIMIT'], descriptions_ru: [], recommendation_ru: null }] })))
+      .mockResolvedValueOnce(jsonResponse(workspaceFixture()));
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+
+    const plan = operation === 'ensure'
+      ? await api.ensureAutomaticPlan('warehouse-1', '2026-08-30', workspace, controller.signal)
+      : await api.getPlan('plan-1', workspace, controller.signal);
+
+    expect(plan?.unassigned[0]?.task.id).toBe('task-1');
+    expect(plan?.unassigned[0]?.request?.name).toBe(requestFixture().name);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/warehouses/warehouse-1/workspace?planning_date=2026-08-30&request_limit=250');
+    expect(fetchMock.mock.calls.every(([, init]) => (init as RequestInit).signal === controller.signal)).toBe(true);
+  });
+
+  it('reads only the pages needed for plan task references on the exact plan date', async () => {
+    const workspace = workspaceFixture({ planning_date: '2026-08-29', requests: [] });
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(rawPlan({ unassigned_tasks: [{ task_id: 'task-1', reason_codes: ['NO_ACTIVE_DRIVER'], descriptions_ru: [] }] })))
+      .mockResolvedValueOnce(jsonResponse(workspaceFixture({ requests: [], request_next_cursor: 'request-cursor-1' })))
+      .mockResolvedValueOnce(jsonResponse(workspaceFixture({ request_next_cursor: 'request-cursor-2' })));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const plan = await api.getPlan('plan-1', workspace);
+
+    expect(plan.unassigned[0]?.task.id).toBe('task-1');
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      '/api/plans/plan-1',
+      '/api/warehouses/warehouse-1/workspace?planning_date=2026-08-30&request_limit=250',
+      '/api/warehouses/warehouse-1/workspace?planning_date=2026-08-30&request_limit=250&request_cursor=request-cursor-1',
+    ]);
+  });
+
+  it('keeps a missing task reference an explicit error after the authoritative reload', async () => {
+    const workspace = workspaceFixture({ requests: [] });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(rawPlan({ unassigned_tasks: [{ task_id: 'missing-task', reason_codes: ['UNKNOWN'], descriptions_ru: [] }] })))
+      .mockResolvedValueOnce(jsonResponse(workspace));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.ensureAutomaticPlan('warehouse-1', '2026-08-30', workspace)).rejects.toThrow('references missing tasks');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('surfaces a failed projection reload instead of fabricating a task or retrying plan creation', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(rawPlan({ unassigned_tasks: [{ task_id: 'missing-task', reason_codes: ['UNKNOWN'], descriptions_ru: [] }] })))
+      .mockResolvedValueOnce(jsonResponse({ code: 'WORKSPACE_UNAVAILABLE' }, 503));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.ensureAutomaticPlan('warehouse-1', '2026-08-30', workspaceFixture())).rejects.toMatchObject({ status: 503 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('optimization event transport', () => {
