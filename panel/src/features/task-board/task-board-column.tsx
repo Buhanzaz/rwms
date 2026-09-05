@@ -90,7 +90,8 @@ function WorkerPlanControl({
           <Button
             type="button"
             size="xs"
-            variant="outline"
+            variant="ghost"
+            className="h-6 rounded-full"
             disabled={!canManage || pending}
             aria-label={`Изменить план на день для очереди ${queue.label}`}
           >
@@ -342,7 +343,7 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
       <header
         className={cn(
           "sticky top-0 flex shrink-0 flex-col gap-2 bg-card p-3 shadow-xs",
-          !mobile && "h-32"
+          !mobile && "min-h-32"
         )}
       >
         <div className="flex h-8 shrink-0 items-start justify-between gap-2">
@@ -363,12 +364,14 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
         </div>
         <div
           data-slot="task-board-column-config"
-          className="flex h-6 shrink-0 items-center gap-1 overflow-hidden whitespace-nowrap"
+          className="flex min-h-6 shrink-0 flex-wrap items-center gap-1"
         >
-          <Badge variant="secondary">{visibleEntries.length}</Badge>
+          <Badge variant="secondary" className="h-6 rounded-full">
+            {visibleEntries.length}
+          </Badge>
           <Badge
             variant="outline"
-            className="max-w-24 min-w-0 truncate"
+            className="h-6 shrink-0 rounded-full"
             title={queueKindLabel(queue)}
           >
             {queueKindLabel(queue)}

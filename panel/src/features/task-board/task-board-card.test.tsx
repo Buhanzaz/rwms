@@ -176,6 +176,30 @@ function CollapsibleCard() {
 }
 
 describe("TaskBoardCard source details", () => {
+  it("keeps full cabin numbers visible beside an accessible compact pin action", async () => {
+    const user = userEvent.setup()
+    const onPin = vi.fn()
+    const entry = renderCard(
+      { type: "MAINTENANCE_REPAIR", sourceId: "repair-1" },
+      {
+        entryPatch: { unitNumber: "БЫТ-МОДУЛЬ-123456789" },
+        onPin,
+      }
+    )
+    expect(screen.getByText(entry.unitNumber!).className).not.toContain(
+      "truncate"
+    )
+    const pin = screen.getByRole("button", {
+      name: `Закрепить этап ${entry.unitNumber}`,
+    })
+    expect(pin.getAttribute("data-size")).toBe("icon-sm")
+    await user.click(pin)
+    expect(onPin).toHaveBeenCalledWith(entry, true)
+    expect(
+      document.querySelector('[data-slot="card-footer"]')?.className
+    ).toContain("grid-cols-2")
+  })
+
   it("shows only the requested operational details in the expanded card", () => {
     const entry = renderCard({
       type: "MAINTENANCE_REPAIR",
@@ -560,7 +584,7 @@ describe("TaskBoardCard source details", () => {
 })
 
 describe("TaskBoardCard KPI timer presentation", () => {
-  it("tints the whole card with the configured segment and renders the server timer", () => {
+  it("keeps the card surface neutral while its border shows the configured KPI segment", () => {
     renderCard(null, {
       palette: kpiPalette,
       entryPatch: {
@@ -580,7 +604,7 @@ describe("TaskBoardCard KPI timer presentation", () => {
     const card = document.querySelector<HTMLElement>('[data-slot="card"]')!
     expect(card.dataset.kpiColor).toBe("#EAB308")
     expect(card.style.borderColor).toBe("rgb(234, 179, 8)")
-    expect(card.style.backgroundColor).toBe("rgba(234, 179, 8, 0.12)")
+    expect(card.style.backgroundColor).toBe("")
     expect(screen.getByText("Осталось 50%")).toBeTruthy()
     expect(screen.getByText("Перерыв · 10:00")).toBeTruthy()
     expect(screen.getByText("10:00")).toBeTruthy()

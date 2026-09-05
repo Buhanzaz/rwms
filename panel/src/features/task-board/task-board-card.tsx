@@ -97,13 +97,9 @@ function kpiCardAppearance(
     return { color: null, style: undefined }
   }
 
-  const red = Number.parseInt(color.slice(1, 3), 16)
-  const green = Number.parseInt(color.slice(3, 5), 16)
-  const blue = Number.parseInt(color.slice(5, 7), 16)
   return {
     color,
     style: {
-      backgroundColor: `rgba(${red}, ${green}, ${blue}, 0.12)`,
       borderColor: color,
       borderLeftWidth: "4px",
     } satisfies CSSProperties,
@@ -253,15 +249,15 @@ function TaskBoardCardContent({
   const stateLabel = timerStateLabel(timer.timerState)
 
   return (
-    <CardContent className="flex flex-col gap-3">
-      <div className="flex flex-wrap gap-2">
+    <CardContent className="flex flex-col gap-2">
+      <div className="flex flex-wrap gap-1">
         <Badge variant={entry.status === "IN_PROGRESS" ? "default" : "outline"}>
           {statusLabels[entry.status]}
         </Badge>
         {inDailyPlan ? (
-          <span className="self-center text-xs font-medium text-foreground">
+          <Badge variant="outline" className="rounded-full">
             План на день
-          </span>
+          </Badge>
         ) : null}
         {entry.entryType === "SHADOW" ? (
           <Badge variant="secondary">После предыдущего этапа</Badge>
@@ -286,7 +282,7 @@ function TaskBoardCardContent({
         ) : null}
       </div>
       {!collapsed ? (
-        <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-muted-foreground">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-sm text-muted-foreground">
           <dt>Группа</dt>
           <dd className="min-w-0 truncate text-foreground">
             {groups.join(", ") || "Не назначена"}
@@ -356,7 +352,7 @@ export const TaskBoardCardPreview = memo(function TaskBoardCardPreview({
       size="sm"
       style={appearance.style}
       className={cn(
-        "w-full",
+        "w-full data-[size=sm]:[--card-spacing:--spacing(3)]",
         entry.entryType === "SHADOW" && shadowEntryCardClassName,
         routeHighlighted && "ring-2 ring-primary"
       )}
@@ -367,22 +363,29 @@ export const TaskBoardCardPreview = memo(function TaskBoardCardPreview({
     >
       <CardHeader className="flex flex-col gap-2">
         <div className="flex w-full min-w-0 items-center justify-between gap-2">
-          <CardTitle className="min-w-0 flex-1 truncate">{unitLabel}</CardTitle>
+          <CardTitle className="min-w-0 flex-1 leading-snug break-words">
+            {unitLabel}
+          </CardTitle>
           <div
             data-slot="task-board-card-actions"
             className="ml-auto flex shrink-0 items-center justify-end gap-1"
           >
             <Button
               type="button"
-              size="sm"
+              size="icon-sm"
               variant={entry.pinned ? "secondary" : "ghost"}
+              aria-label={
+                entry.pinned
+                  ? `Открепить этап ${unitLabel}`
+                  : `Закрепить этап ${unitLabel}`
+              }
+              title={entry.pinned ? "Открепить" : "Закрепить"}
               disabled
             >
               <HugeiconsIcon
                 icon={entry.pinned ? PinOffIcon : PinIcon}
                 data-icon="inline-start"
               />
-              {entry.pinned ? "Открепить" : "Закрепить"}
             </Button>
             <Button type="button" size="icon-sm" variant="ghost" disabled>
               <HugeiconsIcon icon={DragDropVerticalIcon} />
@@ -410,7 +413,7 @@ export const TaskBoardCardPreview = memo(function TaskBoardCardPreview({
         repairComplexity={repairComplexity}
       />
       {showActions ? (
-        <CardFooter className="flex flex-col gap-2">
+        <CardFooter className="grid grid-cols-2 gap-1.5 [&>button]:min-w-0 [&>button]:text-xs">
           {showTake ? (
             <Button type="button" size="sm" className="w-full" disabled>
               <HugeiconsIcon icon={PlayIcon} data-icon="inline-start" />
@@ -570,11 +573,9 @@ export const TaskBoardCard = memo(function TaskBoardCard({
       style={sortableStyle}
       size="sm"
       className={cn(
+        "data-[size=sm]:[--card-spacing:--spacing(3)]",
         entry.entryType === "SHADOW" && shadowEntryCardClassName,
-        !appearance.color &&
-          entry.status === "IN_PROGRESS" &&
-          "border-primary bg-primary/5",
-        !appearance.color && entry.status === "PAUSED" && "bg-muted/60",
+        !appearance.color && entry.status === "IN_PROGRESS" && "border-primary",
         (entry.status === "DONE" || entry.status === "CANCELLED") &&
           "opacity-65",
         routeHighlighted && "ring-2 ring-primary"
@@ -594,15 +595,18 @@ export const TaskBoardCard = memo(function TaskBoardCard({
     >
       <CardHeader className="flex flex-col gap-2">
         <div className="flex w-full min-w-0 items-center justify-between gap-2">
-          <CardTitle className="min-w-0 flex-1 truncate">{unitLabel}</CardTitle>
+          <CardTitle className="min-w-0 flex-1 leading-snug break-words">
+            {unitLabel}
+          </CardTitle>
           <div
             data-slot="task-board-card-actions"
             className="ml-auto flex shrink-0 items-center justify-end gap-1"
           >
             <Button
               type="button"
-              size="sm"
+              size="icon-sm"
               variant={entry.pinned ? "secondary" : "ghost"}
+              title={entry.pinned ? "Открепить" : "Закрепить"}
               disabled={actionPending || entry.entryType === "SHADOW"}
               aria-pressed={entry.pinned}
               aria-label={
@@ -616,7 +620,6 @@ export const TaskBoardCard = memo(function TaskBoardCard({
                 icon={entry.pinned ? PinOffIcon : PinIcon}
                 data-icon="inline-start"
               />
-              {entry.pinned ? "Открепить" : "Закрепить"}
             </Button>
             <Button
               type="button"
@@ -686,7 +689,7 @@ export const TaskBoardCard = memo(function TaskBoardCard({
         repairComplexity={repairComplexity}
       />
       {showActions ? (
-        <CardFooter className="flex flex-col gap-2">
+        <CardFooter className="grid grid-cols-2 gap-1.5 [&>button]:min-w-0 [&>button]:text-xs">
           {showTake ? (
             <Button
               type="button"

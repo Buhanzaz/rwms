@@ -119,12 +119,13 @@ function renderColumn(params: {
   onReorder?: (entry: TaskBoardEntryDto, targetIndex: number) => void
   highlightedTaskId?: string | null
   canManage?: boolean
+  kind?: TaskBoardQueueDto["kind"]
 }) {
   const renderTaskBoardColumn = (
     highlightedTaskId = params.highlightedTaskId ?? null
   ) => (
     <TaskBoardColumn
-      queue={queue(params.entries)}
+      queue={{ ...queue(params.entries), kind: params.kind ?? "REPAIR" }}
       visibleEntries={params.visibleEntries}
       now={Date.parse("2026-08-21T09:00:00Z")}
       mobile={false}
@@ -169,6 +170,23 @@ function renderColumn(params: {
 }
 
 describe("TaskBoardColumn visible command targets", () => {
+  it("fits the complete furniture queue label and aligns it with the count and daily plan", () => {
+    renderColumn({
+      entries: [],
+      visibleEntries: [],
+      kind: "FURNITURE_MOVEMENT",
+    })
+    const kind = screen.getByText("Перемещение мебели")
+    expect(kind.className).not.toContain("truncate")
+    expect(kind.className).toContain("h-6")
+    const count = screen.getByText("0")
+    expect(count.className).toContain("h-6")
+    const plan = screen.getByRole("button", { name: /Изменить план на день/ })
+    expect(plan.className).toContain("h-6")
+    expect(plan.className).toContain("rounded-full")
+    expect(plan.getAttribute("data-variant")).toBe("ghost")
+  })
+
   it("stacks cards vertically inside a fixed desktop queue column", () => {
     const first = entry("first", "WAITING")
     const second = entry("second", "WAITING")
@@ -191,7 +209,7 @@ describe("TaskBoardColumn visible command targets", () => {
     expect(scrollBody?.className).not.toContain("overflow-x-auto")
     expect(
       section.querySelector('[data-slot="task-board-column-config"]')?.className
-    ).toContain("whitespace-nowrap")
+    ).toContain("flex-wrap")
     expect(screen.getByText("План на день: 6")).toBeTruthy()
     expect(screen.getByText("План на день")).toBeTruthy()
     expect(cardStack).toBeTruthy()
