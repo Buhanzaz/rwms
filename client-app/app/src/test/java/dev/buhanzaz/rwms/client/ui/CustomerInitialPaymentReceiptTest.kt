@@ -39,7 +39,7 @@ class CustomerInitialPaymentReceiptTest {
             }
         }
         compose.onNodeWithText("СЧЁТ НА ОПЛАТУ · НЕ ФИСКАЛЬНЫЙ ЧЕК").assertIsDisplayed()
-        compose.onNodeWithText("3 шт. × 350 ₽/мес. × 2 мес.").assertIsDisplayed()
+        compose.onNodeWithText("3 шт. × 350 ₽/мес. × 2 мес.").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("14 100 ₽").performScrollTo().assertIsDisplayed()
         assertThat(confirms).isEqualTo(0)
         compose.onNodeWithTag("confirm-initial-payment").performScrollTo().assertIsEnabled().performClick()
@@ -78,6 +78,8 @@ class CustomerInitialPaymentReceiptTest {
             CustomerInitialPaymentReceipt(CustomerObservedPayment(payment, SystemClock.elapsedRealtime()), false) {}
         } }
         compose.onNodeWithText("Счёт ещё не выставлен. Оплата не подтверждена.").assertIsDisplayed()
+        compose.onNodeWithTag("payment-without-deadline").assertIsDisplayed()
+        compose.onNodeWithText("Для этого заказа срок оплаты не назначен. Автоматическая отмена по таймеру не применяется.").assertIsDisplayed()
         compose.onNodeWithTag("confirm-initial-payment").assertDoesNotExist()
     }
 

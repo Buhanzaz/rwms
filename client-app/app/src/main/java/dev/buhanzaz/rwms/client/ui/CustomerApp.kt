@@ -576,6 +576,7 @@ private fun SignedInNavigation(
                         BookingsScreen(
                             bookings = state.bookings,
                             payments = state.payments,
+                            avatarUrl = state.profile?.avatar?.thumbnailUrl,
                             paymentErrors = state.paymentErrors,
                             notifications = state.notifications,
                             updatesError = state.updatesError,

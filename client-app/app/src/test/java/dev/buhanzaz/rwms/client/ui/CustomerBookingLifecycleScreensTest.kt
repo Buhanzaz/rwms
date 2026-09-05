@@ -18,6 +18,7 @@ import dev.buhanzaz.rwms.client.data.BookingChangeApplicationState
 import dev.buhanzaz.rwms.client.data.BookingChangeOperation
 import dev.buhanzaz.rwms.client.data.BookingChangeSettlement
 import dev.buhanzaz.rwms.client.data.CustomerBooking
+import dev.buhanzaz.rwms.client.data.CustomerBookingCabin
 import dev.buhanzaz.rwms.client.data.CustomerBookingChangeQuote
 import dev.buhanzaz.rwms.client.data.CustomerCabin
 import dev.buhanzaz.rwms.client.data.CustomerRouteProfile
@@ -58,7 +59,7 @@ class CustomerBookingLifecycleScreensTest {
             }
         }
 
-        composeRule.onNodeWithText("Статус: Оформлен").assertExists()
+        composeRule.onNodeWithText("Оформлен").assertExists()
         composeRule.onNodeWithText("Обновить статусы").assertDoesNotExist()
         composeRule.onNodeWithText("Стоимость отмены: 0 ₽").assertDoesNotExist()
         composeRule.onNodeWithText("Стоимость отмены", substring = true).assertDoesNotExist()
@@ -68,6 +69,27 @@ class CustomerBookingLifecycleScreensTest {
         composeRule.runOnIdle {
             assertThat(cancelled.get()).isEqualTo("booking-a")
         }
+    }
+
+    @Test
+    fun `cancelled booking does not claim delivery is pending or offer reception for an old arrival`() {
+        val cancelled = booking("booking-cancelled", "CANCELLED").copy(
+            cabins = listOf(CustomerBookingCabin("cabin-a", "17102011", 2, "ARRIVED", true)),
+        )
+        composeRule.setContent {
+            CustomerTheme {
+                BookingsScreen(
+                    bookings = listOf(cancelled), latest = null, busy = false,
+                    onMenu = {}, onProfile = {}, onAccept = { _, _, _ -> }, onReport = { _, _, _, _, _ -> },
+                )
+            }
+        }
+        composeRule.onNodeWithText("Отменён").assertExists()
+        composeRule.onNodeWithText("Доставка отменена").performScrollTo().assertExists()
+        composeRule.onNodeWithText("Ожидает доставки").assertDoesNotExist()
+        composeRule.onNodeWithText("Принять бытовку").assertDoesNotExist()
+        composeRule.onNodeWithText("Сообщить до приёмки").assertDoesNotExist()
+        composeRule.onNodeWithTag("booking-reschedule-booking-cancelled").assertDoesNotExist()
     }
 
     @Test
@@ -273,7 +295,7 @@ class CustomerBookingLifecycleScreensTest {
             }
         }
 
-        composeRule.onNodeWithText("Статус: Отмена выполняется").assertExists()
+        composeRule.onNodeWithText("Отмена выполняется").assertExists()
         composeRule.onNodeWithText("Отмена ещё выполняется. Обновите статус немного позже.").assertExists()
         composeRule.onNodeWithText("CUSTOMER_BOOKING_CANCELLATION_PENDING").assertDoesNotExist()
         composeRule.onNodeWithTag("booking-cancel-booking-pending").assertDoesNotExist()

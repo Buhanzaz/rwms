@@ -77,14 +77,16 @@ does not fence mutations in that new cart.
 
 ## Customer flow
 
-After checkout, My Orders shows the immutable server bill as a supermarket-style non-fiscal
-receipt: cabin rental, furniture quantity × unit/month price × that cabin's months, accepted
+After checkout, My Orders shows the immutable server bill as a branded non-fiscal
+receipt with item amounts aligned to the right and a prominent exact total: cabin rental, furniture quantity × unit/month price × that cabin's months, accepted
 delivery once, and an exact whole-RUB total. A delivery not included in the bill is explicitly
 unpriced, not free. No total uses floating point or an int64 accumulator. The displayed five-minute
 payment countdown uses server time and monotonic elapsed time; only server confirmation changes
 payment status. Test payment is explicit and does not charge real money. A lost response reuses
 the durable booking/version command key and reconciles only the exact order and immutable bill.
-Old bookings without an issued bill are not displayed as paid.
+Old bookings without an issued bill are not displayed as paid. For a saved order without a server
+payment window, the receipt explains that no payment deadline or automatic timed cancellation was
+assigned. Cancelled bookings show cancelled delivery and expose no reception actions from stale arrival data.
 
 Foreground lifecycle polling reloads bookings, pending payment and the durable unread inbox.
 Only an explicit `Read` action acknowledges a message on the server. Android notifications use

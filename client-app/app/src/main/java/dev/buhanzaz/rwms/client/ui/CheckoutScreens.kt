@@ -13,14 +13,18 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.AlertDialog
@@ -37,6 +41,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -77,7 +82,7 @@ fun CartScreen(
         state.cabins.filter { it.unitId in state.selectedCabinIds }
     }
     Scaffold(
-        topBar = { CustomerTopBar("Корзина", onMenu, onProfile) },
+        topBar = { CustomerTopBar("Корзина", onMenu, onProfile, avatarUrl = state.profile?.avatar?.thumbnailUrl) },
     ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp).testTag("cart-screen"),
@@ -499,6 +504,7 @@ fun BookingsScreen(
     onConfirmInitialPayment: (String) -> Unit = {},
     onReadNotification: (String) -> Unit = {},
     onRefreshUpdates: () -> Unit = {},
+    avatarUrl: String? = null,
 ) {
     val visible = CustomerBookingPolicy.visible(latest, bookings)
     var acceptanceTarget by androidx.compose.runtime.remember {
@@ -522,23 +528,33 @@ fun BookingsScreen(
         if (!busy && problemCount > target.problems.size) problemTarget = null
     }
     Scaffold(
-        topBar = { CustomerTopBar("Мои заказы", onMenu, onProfile) },
+        topBar = { CustomerTopBar("Мои заказы", onMenu, onProfile, avatarUrl = avatarUrl) },
     ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp).testTag("bookings-screen"),
             contentPadding = PaddingValues(top = 8.dp, bottom = 100.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = onRefreshUpdates, enabled = !busy) { Text("Обновить заказы") }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = onRefreshUpdates, enabled = !busy) {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Обновить заказы")
+                        }
+                    }
                     updatesError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                     CustomerNotificationPermission()
                 }
             }
             items(notifications, key = { "notification-${it.id}" }) { notification ->
-                OutlinedCard(Modifier.fillMaxWidth().testTag("customer-notification-${notification.id}")) {
+                OutlinedCard(
+                    modifier = Modifier.fillMaxWidth().testTag("customer-notification-${notification.id}"),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+                ) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Уведомление", style = MaterialTheme.typography.titleSmall)
                         Text(notification.message)
@@ -550,39 +566,49 @@ fun BookingsScreen(
             }
             if (visible.isEmpty()) item { Text("Оформленных заказов пока нет") }
             items(visible, key = { it.bookingId ?: it.inquiryId }) { booking ->
-                OutlinedCard(Modifier.fillMaxWidth().widthIn(max = 760.dp)) {
-                    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(
-                            if (booking.orderId == null) "Оформляем заказ" else "Аренда бытовок",
-                            style = MaterialTheme.typography.titleLarge,
-                        )
-                        Text(
-                            "Статус: ${CustomerBookingLifecyclePolicy.statusLabel(booking.status)}",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        val payment = payments[booking.bookingId]
-                        if (payment != null) {
-                            CustomerInitialPaymentReceipt(payment, busy || paymentErrors[booking.bookingId] != null) {
-                                booking.bookingId?.let(onConfirmInitialPayment)
+                val payment = payments[booking.bookingId]
+                OutlinedCard(
+                    modifier = Modifier.fillMaxWidth().widthIn(max = 760.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                ) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                payment?.payment?.receipt?.orderNumber?.let { "Заказ № $it" }
+                                    ?: if (booking.orderId == null) "Оформляем заказ" else "Аренда бытовок",
+                                style = MaterialTheme.typography.titleLarge,
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                            ) {
+                                Text(
+                                    CustomerBookingLifecyclePolicy.statusLabel(booking.status),
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                )
                             }
-                        } else if (booking.orderId != null) {
-                            Text("Счёт загружается. Оплата пока недоступна.")
                         }
-                        paymentErrors[booking.bookingId]?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                         booking.deliveryAddress?.let { address ->
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Icon(Icons.Default.LocationOn, contentDescription = null)
+                                Icon(Icons.Default.LocationOn, contentDescription = null, modifier = Modifier.size(20.dp))
                                 Text(address, style = MaterialTheme.typography.bodyLarge)
                             }
                         }
                         if (booking.deliveryDate != null) {
-                            Text(
-                                formatDeliveryDate(booking.deliveryDate) +
-                                    if (booking.windowStart != null && booking.windowEnd != null) {
-                                        " · ${booking.windowStart.take(5)}–${booking.windowEnd.take(5)}"
-                                    } else "",
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Icon(Icons.Default.CalendarMonth, contentDescription = null, modifier = Modifier.size(20.dp))
+                                Text(
+                                    formatDeliveryDate(booking.deliveryDate) +
+                                        if (booking.windowStart != null && booking.windowEnd != null) {
+                                            " · ${booking.windowStart.take(5)}–${booking.windowEnd.take(5)}"
+                                        } else "",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                            }
                         }
                         CustomerBookingLifecyclePolicy.cancellationFeeLabel(booking.cancellationFeeRubles)?.let { fee ->
                             Text("Стоимость отмены: $fee")
@@ -595,18 +621,28 @@ fun BookingsScreen(
                             )
                         }
                         booking.cabins.forEach { cabin ->
-                            OutlinedCard(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Text("Бытовка № ${cabin.accountingNo} · ${cabin.rentalMonths} мес.")
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                            ) {
+                                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text("Бытовка № ${cabin.accountingNo} · ${cabin.rentalMonths} мес.", style = MaterialTheme.typography.titleSmall)
                                     Text(
-                                        if (cabin.arrivalEligible) "Прибыла" else "Ожидает доставки",
-                                        color = if (cabin.arrivalEligible) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        when (booking.status) {
+                                            "CANCELLED" -> "Доставка отменена"
+                                            "CANCELLATION_PENDING" -> "Отмена доставки выполняется"
+                                            "REJECTED" -> "Доставка не оформлена"
+                                            else -> if (cabin.arrivalEligible) "Прибыла" else "Ожидает доставки"
+                                        },
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.bodySmall,
                                     )
                                     cabin.acceptance?.let { Text("Принята ${formatDeliveryDate(it.acceptedAt.take(10))}") }
                                     cabin.problems.forEach { problem ->
                                         Text("Проблема: ${problem.description}", style = MaterialTheme.typography.bodySmall)
                                     }
-                                    if (booking.bookingId != null && cabin.arrivalEligible) {
+                                    if (booking.bookingId != null && booking.status == "COMPLETED" && cabin.arrivalEligible) {
                                         if (cabin.acceptance == null) {
                                             Button(
                                                 onClick = { acceptanceTarget = booking.bookingId to cabin },
@@ -625,6 +661,14 @@ fun BookingsScreen(
                                 }
                             }
                         }
+                        if (payment != null) {
+                            CustomerInitialPaymentReceipt(payment, busy || paymentErrors[booking.bookingId] != null) {
+                                booking.bookingId?.let(onConfirmInitialPayment)
+                            }
+                        } else if (booking.orderId != null) {
+                            Text("Счёт загружается. Оплата пока недоступна.", style = MaterialTheme.typography.bodySmall)
+                        }
+                        paymentErrors[booking.bookingId]?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                         if (CustomerBookingLifecyclePolicy.canChange(booking)) {
                             val bookingId = requireNotNull(booking.bookingId)
                             Button(
