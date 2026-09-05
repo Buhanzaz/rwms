@@ -551,19 +551,44 @@ export function RentalItemDetailPage() {
   })
   const dossierQuery = useInfiniteQuery({
     queryKey: [
-      ...rentalItemDossierQueryKey(currentRentalItemId, dossierFilters),
+      ...rentalItemDossierQueryKey(currentRentalItemId, {}),
       userCacheKey,
     ],
     initialPageParam: null as string | null,
     queryFn: ({ pageParam }) =>
       getRentalItemDossierPage(accessToken, rentalItemId!, {
-        ...dossierFilters,
         limit: 25,
         after: pageParam ?? undefined,
       }),
     getNextPageParam: (lastPage) => lastPage.nextCursor,
     retry: retryDossierQuery,
     enabled: Boolean(rentalItemId && selectedWarehouse && accessToken),
+  })
+  const sectionActivityCodes = TAB_ACTIVITY_CODES[activeTab]
+  const registerFilters: DossierActivityFilters =
+    activeTab === "history"
+      ? dossierFilters
+      : { activityCodes: sectionActivityCodes }
+  const registerQuery = useInfiniteQuery({
+    queryKey: [
+      ...rentalItemDossierQueryKey(currentRentalItemId, registerFilters),
+      userCacheKey,
+    ],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) =>
+      getRentalItemDossierPage(accessToken, rentalItemId!, {
+        ...registerFilters,
+        limit: 25,
+        after: pageParam ?? undefined,
+      }),
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
+    retry: retryDossierQuery,
+    enabled: Boolean(
+      rentalItemId &&
+      selectedWarehouse &&
+      accessToken &&
+      (sectionActivityCodes || activeTab === "history")
+    ),
   })
   const photoDossierQuery = useQuery({
     queryKey: [
@@ -712,15 +737,14 @@ export function RentalItemDetailPage() {
         : STANDARD_MEDIA_VARIANTS,
     enabled: Boolean(rentalItem),
   })
-  const sectionActivityCodes = TAB_ACTIVITY_CODES[activeTab]
-  const sectionDossierPages = sectionActivityCodes
-    ? dossierPages?.map((page) => ({
-        ...page,
-        activities: page.activities.filter((activity) =>
-          sectionActivityCodes.includes(activity.activityCode)
-        ),
-      }))
-    : dossierPages
+  const activityRegisterProps = {
+    pages: registerQuery.data?.pages,
+    error: registerQuery.error,
+    isLoading: registerQuery.isLoading,
+    hasNextPage: Boolean(registerQuery.hasNextPage),
+    isFetchingNextPage: registerQuery.isFetchingNextPage,
+    onLoadMore: () => void registerQuery.fetchNextPage(),
+  }
   const hasGeneralComment = Boolean(rentalItem?.comment?.trim())
   const generalComment =
     rentalItem && generalCommentDraft?.rentalItemId === rentalItem.id
@@ -1335,34 +1359,13 @@ export function RentalItemDetailPage() {
           />
         </TabsContent>
         <TabsContent value="inspections">
-          <DossierActivityRegister
-            pages={sectionDossierPages}
-            error={dossierQuery.error}
-            isLoading={dossierQuery.isLoading}
-            hasNextPage={Boolean(dossierQuery.hasNextPage)}
-            isFetchingNextPage={dossierQuery.isFetchingNextPage}
-            onLoadMore={() => void dossierQuery.fetchNextPage()}
-          />
+          <DossierActivityRegister {...activityRegisterProps} />
         </TabsContent>
         <TabsContent value="estimates">
-          <DossierActivityRegister
-            pages={sectionDossierPages}
-            error={dossierQuery.error}
-            isLoading={dossierQuery.isLoading}
-            hasNextPage={Boolean(dossierQuery.hasNextPage)}
-            isFetchingNextPage={dossierQuery.isFetchingNextPage}
-            onLoadMore={() => void dossierQuery.fetchNextPage()}
-          />
+          <DossierActivityRegister {...activityRegisterProps} />
         </TabsContent>
         <TabsContent value="repair">
-          <DossierActivityRegister
-            pages={sectionDossierPages}
-            error={dossierQuery.error}
-            isLoading={dossierQuery.isLoading}
-            hasNextPage={Boolean(dossierQuery.hasNextPage)}
-            isFetchingNextPage={dossierQuery.isFetchingNextPage}
-            onLoadMore={() => void dossierQuery.fetchNextPage()}
-          />
+          <DossierActivityRegister {...activityRegisterProps} />
         </TabsContent>
         <TabsContent value="reserves">
           {activeOrderReservation ? (
@@ -1422,14 +1425,7 @@ export function RentalItemDetailPage() {
           )}
         </TabsContent>
         <TabsContent value="shipments">
-          <DossierActivityRegister
-            pages={sectionDossierPages}
-            error={dossierQuery.error}
-            isLoading={dossierQuery.isLoading}
-            hasNextPage={Boolean(dossierQuery.hasNextPage)}
-            isFetchingNextPage={dossierQuery.isFetchingNextPage}
-            onLoadMore={() => void dossierQuery.fetchNextPage()}
-          />
+          <DossierActivityRegister {...activityRegisterProps} />
         </TabsContent>
         <TabsContent value="returns">
           {rentalOrderReturn ? (
@@ -1481,14 +1477,7 @@ export function RentalItemDetailPage() {
               value={dossierFilters}
               onApply={setDossierFilters}
             />
-            <DossierActivityRegister
-              pages={dossierPages}
-              error={dossierQuery.error}
-              isLoading={dossierQuery.isLoading}
-              hasNextPage={Boolean(dossierQuery.hasNextPage)}
-              isFetchingNextPage={dossierQuery.isFetchingNextPage}
-              onLoadMore={() => void dossierQuery.fetchNextPage()}
-            />
+            <DossierActivityRegister {...activityRegisterProps} />
           </div>
         </TabsContent>
         <TabsContent value="comments" className="flex flex-col gap-4">

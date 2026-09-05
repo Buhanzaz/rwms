@@ -25,6 +25,11 @@ import type {
   RentalItemCreationPhotoManifestInput,
 } from "@/features/rental-items/api/asset-rental-items-api"
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
+import type {
+  DossierActivity,
+  DossierActivityFilters,
+  GetCabinDossierQuery,
+} from "@/features/rental-items/dossier/model/dossier-service"
 
 const WAREHOUSE_ID = "11111111-1111-4111-8111-111111111111"
 const RENTAL_ITEM_ID = "22222222-2222-4222-8222-222222222222"
@@ -127,10 +132,10 @@ vi.mock(
 
 vi.mock("@/features/rental-items/dossier/api/rental-item-dossier-api", () => ({
   RENTAL_ITEM_DOSSIER_QUERY_KEY: ["rental-item-dossier"],
-  rentalItemDossierQueryKey: (rentalItemId: string) => [
-    "rental-item-dossier",
-    rentalItemId,
-  ],
+  rentalItemDossierQueryKey: (
+    rentalItemId: string,
+    filters: DossierActivityFilters
+  ) => ["rental-item-dossier", rentalItemId, filters],
   getRentalItemDossierPage: dossierApi.getRentalItemDossierPage,
 }))
 
@@ -895,6 +900,93 @@ describe("rental item command access", () => {
     expect(assetApi.updateAssetRentalItemStatus).not.toHaveBeenCalled()
     expect(assetApi.updateAssetRentalItemGeneralComment).not.toHaveBeenCalled()
     expect(assetApi.addAssetRentalItemManualNote).not.toHaveBeenCalled()
+  })
+
+  it("loads and paginates older estimates independently of the latest page and history filters", async () => {
+    const user = userEvent.setup()
+    const estimateId = "aaaaaaaa-1111-4111-8111-111111111111"
+    const estimateActivity: DossierActivity = {
+      activityId: "bbbbbbbb-1111-4111-8111-111111111111",
+      cabinId: RENTAL_ITEM_ID,
+      warehouseId: WAREHOUSE_ID,
+      activityCode: "ESTIMATE_CREATED",
+      occurredAt: "2025-01-01T10:00:00Z",
+      recordedAt: "2025-01-01T10:00:00Z",
+      actorRef: null,
+      sourceRef: {
+        producer: "maintenance-service",
+        aggregateType: "ESTIMATE",
+        aggregateId: estimateId,
+      },
+      media: [],
+      taskEvidencePhotos: [],
+    }
+    dossierApi.getRentalItemDossierPage.mockImplementation(
+      async (_token: string, _id: string, query: GetCabinDossierQuery) => ({
+        cabinId: RENTAL_ITEM_ID,
+        activities: query.activityCodes?.includes("ESTIMATE_CREATED")
+          ? [
+              {
+                ...estimateActivity,
+                ...(query.after
+                  ? {
+                      activityId: "cccccccc-1111-4111-8111-111111111111",
+                      activityCode: "ESTIMATE_COMPLETED",
+                      occurredAt: "2025-01-02T10:00:00Z",
+                    }
+                  : {}),
+              },
+            ]
+          : [],
+        nextCursor:
+          query.activityCodes?.includes("ESTIMATE_CREATED") && !query.after
+            ? "estimates-page-2"
+            : null,
+        visibility: "COMPLETE",
+      })
+    )
+    renderDetail(`/warehouse/${RENTAL_ITEM_ID}?tab=history`)
+    await screen.findByRole("heading", { level: 1, name: "БЫТ-001" })
+    await user.type(screen.getByLabelText("События с"), "2026-01-01T00:00:00Z")
+    await user.click(screen.getByRole("button", { name: "Применить" }))
+    await waitFor(() =>
+      expect(dossierApi.getRentalItemDossierPage).toHaveBeenCalledWith(
+        "asset-token",
+        RENTAL_ITEM_ID,
+        expect.objectContaining({ occurredFrom: "2026-01-01T00:00:00Z" })
+      )
+    )
+    await user.click(screen.getByRole("tab", { name: "Сметы" }))
+    await user.click(
+      await screen.findByRole("button", { name: /Смета создана/ })
+    )
+    expect(
+      screen.getByRole("link", { name: "Открыть смету" }).getAttribute("href")
+    ).toBe(`/estimates?estimateId=${estimateId}`)
+    await user.click(screen.getByRole("button", { name: "Загрузить ещё" }))
+    await waitFor(() =>
+      expect(dossierApi.getRentalItemDossierPage).toHaveBeenCalledWith(
+        "asset-token",
+        RENTAL_ITEM_ID,
+        {
+          activityCodes: [
+            "ESTIMATE_CREATED",
+            "ESTIMATE_DRAFT_CHANGED",
+            "ESTIMATE_COMPLETED",
+            "ESTIMATE_AMENDED",
+          ],
+          limit: 25,
+          after: "estimates-page-2",
+        }
+      )
+    )
+    expect(
+      await screen.findByRole("button", { name: /Смета завершена/ })
+    ).toBeTruthy()
+    await user.click(screen.getByRole("tab", { name: "История" }))
+    expect((screen.getByLabelText("События с") as HTMLInputElement).value).toBe(
+      "2026-01-01T00:00:00Z"
+    )
   })
 
   it("keeps every old-panel dossier tab in the service-backed detail", async () => {
