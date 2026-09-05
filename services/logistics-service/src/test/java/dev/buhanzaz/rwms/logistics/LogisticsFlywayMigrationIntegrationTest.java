@@ -47,6 +47,110 @@ class LogisticsFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void paymentExpiryUpgradePreservesOpenCommandsAndRequiresReadBeforeReleaseEvidence() {
+    configuration(MIGRATIONS).target("100").load().migrate();
+    UUID subjectId = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID commandId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into order_client(
+          id,version,client_type,display_name,normalized_name,phone,normalized_phone,
+          responsible_manager_id,created_by_subject_id,creation_idempotency_key,
+          creation_request_sha256,created_at,updated_at)
+        values (?,0,'INDIVIDUAL','Expiry client',?,'+79990000101','+79990000101',
+          ?,?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        clientId,
+        "expiry-client-" + clientId,
+        subjectId,
+        subjectId,
+        UUID.randomUUID(),
+        "a".repeat(64));
+    jdbc.update(
+        """
+        insert into rental_order(
+          id,version,order_number,status,client_id,manager_id,manager_display_name,
+          created_by_subject_id,created_by_display_name,created_by_role,warehouse_id,
+          creation_idempotency_key,creation_request_sha256,created_at,updated_at)
+        values (?,7,'ORD-990101','DRAFT',?,?,'Manager',?,'Manager',
+          'RENTAL_MANAGER',?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        orderId,
+        clientId,
+        subjectId,
+        subjectId,
+        warehouseId,
+        UUID.randomUUID(),
+        "b".repeat(64));
+    jdbc.update(
+        """
+        insert into rental_order_mutation_command(
+          id,order_id,operation,state,step,expected_order_version,
+          actor_subject_id,actor_role,idempotency_key,request_sha256,warehouse_id,
+          release_units_idempotency_key,release_equipment_idempotency_key,
+          equipment_release_required,intent_json,next_attempt_at,created_at,updated_at)
+        values (?,?,'CANCEL_ORDER','PENDING','RELEASE_UNITS',7,?,'RENTAL_MANAGER',
+          ?,?,?,?, ?,true,'{}',clock_timestamp(),clock_timestamp(),clock_timestamp())
+        """,
+        commandId,
+        orderId,
+        subjectId,
+        UUID.randomUUID(),
+        "c".repeat(64),
+        warehouseId,
+        UUID.randomUUID(),
+        UUID.randomUUID());
+    Map<String, Object> previous =
+        jdbc.queryForMap("select * from rental_order_mutation_command where id=?", commandId);
+    Flyway upgraded = flyway(MIGRATIONS);
+    upgraded.migrate();
+    upgraded.validate();
+    assertThat(
+            jdbc.queryForMap("select * from rental_order_mutation_command where id=?", commandId))
+        .isEqualTo(previous);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update rental_order_mutation_command set intent_json=null where id=?",
+                    commandId))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update rental_order_mutation_command set step='READ_UNITS',intent_json=null"
+                        + " where id=?",
+                    commandId))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    jdbc.update(
+        "update rental_order_mutation_command set operation='EXPIRE_UNPAID_ORDER',"
+            + " actor_role='LOGISTICS_SERVICE',actor_subject_id=?,step='READ_UNITS',intent_json=null"
+            + " where id=?",
+        dev.buhanzaz.rwms.logistics.order.domain.recovery.RentalOrderMutationCommand
+            .AUTOMATIC_RELEASE_ACTOR_ID,
+        commandId);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update rental_order_mutation_command set released_units_receipt_json='{}'"
+                        + " where id=?",
+                    commandId))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update rental_order_mutation_command set step='RELEASE_UNITS' where id=?",
+                    commandId))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    jdbc.update(
+        "update rental_order_mutation_command set step='RELEASE_UNITS',intent_json='{}' where id=?",
+        commandId);
+    assertJpaValidationStarts();
+  }
+
+  @Test
   void paymentReservationUpgradePreservesHistoricalOrdersAndRejectsFalsePaymentEvidence() {
     configuration(MIGRATIONS).target("99").load().migrate();
     UUID subjectId = UUID.randomUUID();

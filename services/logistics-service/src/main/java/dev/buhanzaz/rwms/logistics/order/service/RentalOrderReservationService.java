@@ -19,6 +19,7 @@ import dev.buhanzaz.rwms.logistics.order.domain.OrderCommandReceipt;
 import dev.buhanzaz.rwms.logistics.order.domain.AdditionalContact;
 import dev.buhanzaz.rwms.logistics.order.domain.DesiredDeliveryWindow;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentState;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderEquipmentRequirement;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderUnitTerm;
@@ -112,7 +113,10 @@ class RentalOrderReservationService {
       long expectedVersion,
       List<LogisticsDependencyGateway.OrderUnitReservation> activeUnits) {
     requireActiveMutationSnapshot(order, activeUnits);
-    if (operation == Operation.CANCEL_ORDER) {
+    if (operation == Operation.EXPIRE_UNPAID_ORDER) {
+      requireAutomaticPaymentExpiry(actor, order);
+      RentalOrderProblems.requireVersion(order, expectedVersion);
+    } else if (operation == Operation.CANCEL_ORDER) {
       if ("CUSTOMER".equals(actor.role())) {
         editability.requireEditable(actor, order);
         if (order.getStatus() != RentalOrderStatus.SAVED) {
@@ -147,13 +151,13 @@ class RentalOrderReservationService {
         equipmentRequirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(
             order.getId());
     List<LogisticsDependencyGateway.OrderUnitReservation> remainingUnits =
-        operation == Operation.CANCEL_ORDER
+        operation.releasesAllUnits()
             ? List.of()
             : activeUnits.stream()
                 .filter(reservation -> !targetUnitId.equals(reservation.unitId()))
                 .toList();
     List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> composition =
-        operation == Operation.CANCEL_ORDER
+        operation.releasesAllUnits()
             ? List.of()
             : dependencyUnitRequirements(
                 remainingUnits, existingRequirements, targetUnitId, Map.of());
@@ -768,7 +772,7 @@ class RentalOrderReservationService {
         throw RentalOrderProblems.invalidDependencyResponse();
       }
     }
-    if (operation == Operation.CANCEL_ORDER) {
+    if (operation.releasesAllUnits()) {
       Set<UUID> releasedUnitIds =
           released.stream()
               .map(LogisticsDependencyGateway.OrderUnitReservation::unitId)
@@ -868,7 +872,8 @@ class RentalOrderReservationService {
       Intent intent,
       ReleasedUnits releasedUnits,
       EquipmentReservations equipmentReservations,
-      List<LogisticsDependencyGateway.OrderUnitReservation> remainingActiveUnits) {
+      List<LogisticsDependencyGateway.OrderUnitReservation> remainingActiveUnits,
+      OffsetDateTime completedAt) {
     RentalOrder order = store.recoveryOrder(command.getOrder().getId());
     RentalOrderProblems.requireVersion(order, command.getExpectedOrderVersion());
     requireRemainingSnapshot(command, order, intent, remainingActiveUnits);
@@ -910,7 +915,9 @@ class RentalOrderReservationService {
     }
 
     RentalOrderStatus previousStatus = order.getStatus();
-    if ("CUSTOMER".equals(actor.role())) {
+    if (command.getOperation() == Operation.EXPIRE_UNPAID_ORDER) {
+      requireAutomaticPaymentExpiry(actor, order);
+    } else if ("CUSTOMER".equals(actor.role())) {
       editability.requireEditable(actor, order);
       if (order.getStatus() != RentalOrderStatus.SAVED) {
         throw RentalOrderProblems.conflict(
@@ -950,7 +957,9 @@ class RentalOrderReservationService {
         appendUnitReleasedEvidence(order.getId(), released, actor);
       }
     }
-    if (previousStatus == RentalOrderStatus.SAVED) {
+    if (command.getOperation() == Operation.EXPIRE_UNPAID_ORDER) {
+      order.completePaymentExpiry(completedAt);
+    } else if (previousStatus == RentalOrderStatus.SAVED) {
       order.cancelSavedCustomerBooking();
     } else {
       order.cancel();
@@ -963,7 +972,13 @@ class RentalOrderReservationService {
         "ORDER",
         order.getId().toString(),
         Map.of("status", previousStatus.name()),
-        Map.of("status", RentalOrderStatus.CANCELLED.name()));
+        command.getOperation() == Operation.EXPIRE_UNPAID_ORDER
+            ? Map.of(
+                "status",
+                RentalOrderStatus.CANCELLED.name(),
+                "reason",
+                "PAYMENT_RESERVATION_EXPIRED")
+            : Map.of("status", RentalOrderStatus.CANCELLED.name()));
     changed(order, actor, "status");
     return order;
   }
@@ -1321,7 +1336,7 @@ class RentalOrderReservationService {
         intent.activeUnits().stream()
             .filter(
                 unit ->
-                    command.getOperation() != Operation.CANCEL_ORDER
+                    !command.getOperation().releasesAllUnits()
                         && !unit.unitId().equals(command.getTargetUnitId()))
             .collect(
                 Collectors.toMap(
@@ -1345,7 +1360,7 @@ class RentalOrderReservationService {
   private static void requireStoredReleaseReceipt(
       RentalOrderMutationCommand command, Intent intent, ReleasedUnits releasedUnits) {
     Map<UUID, UnitReservationEvidence> activeByUnit = evidenceByUnit(intent.activeUnits());
-    if (command.getOperation() == Operation.CANCEL_ORDER) {
+    if (command.getOperation().releasesAllUnits()) {
       Set<UUID> releasedIds =
           releasedUnits.units().stream()
               .map(UnitReservationEvidence::unitId)
@@ -1469,6 +1484,15 @@ class RentalOrderReservationService {
         local,
         true,
         true);
+  }
+
+  private static void requireAutomaticPaymentExpiry(OrderActor actor, RentalOrder order) {
+    if (!RentalOrderMutationCommand.AUTOMATIC_RELEASE_ACTOR_ID.equals(actor.subjectId())
+        || !"LOGISTICS_SERVICE".equals(actor.role())
+        || order.getStatus() != RentalOrderStatus.SAVED
+        || order.getPaymentState() != RentalOrderPaymentState.EXPIRING) {
+      throw new IllegalStateException("Automatic payment expiry is not owned by this command");
+    }
   }
 
   private boolean applyDesiredRequirements(

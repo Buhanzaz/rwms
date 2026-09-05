@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.logistics.order.domain.recovery;
 
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentState;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -14,6 +15,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
+import java.nio.charset.StandardCharsets;
 import java.sql.Types;
 import java.time.OffsetDateTime;
 import java.util.Objects;
@@ -33,6 +35,10 @@ import org.hibernate.proxy.HibernateProxy;
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class RentalOrderMutationCommand {
+  /** The same stable logistics service identity used by asset's authenticated private boundary. */
+  public static final UUID AUTOMATIC_RELEASE_ACTOR_ID =
+      UUID.nameUUIDFromBytes("service:logistics-service".getBytes(StandardCharsets.UTF_8));
+
   @Id
   @GeneratedValue(strategy = GenerationType.UUID)
   @Column(name = "id", nullable = false)
@@ -92,7 +98,7 @@ public class RentalOrderMutationCommand {
   @Column(name = "equipment_release_required", nullable = false)
   private boolean equipmentReleaseRequired;
 
-  @Column(name = "intent_json", nullable = false, columnDefinition = "text")
+  @Column(name = "intent_json", columnDefinition = "text")
   private String intentJson;
 
   @Column(name = "released_units_receipt_json", columnDefinition = "text")
@@ -150,13 +156,23 @@ public class RentalOrderMutationCommand {
     if (expectedOrderVersion < 0) {
       throw new IllegalArgumentException("expectedOrderVersion is invalid");
     }
-    if ((operation == Operation.CANCEL_ORDER && targetUnitId != null)
+    if ((operation.releasesAllUnits() && targetUnitId != null)
         || (operation == Operation.REMOVE_UNIT && (targetUnitId == null || warehouseId == null))) {
       throw new IllegalArgumentException("operation target is invalid");
     }
     command.expectedOrderVersion = expectedOrderVersion;
     command.actorSubjectId = Objects.requireNonNull(actorSubjectId, "actorSubjectId");
     command.actorRole = requiredText(actorRole, 32, "actorRole");
+    boolean automaticExpiry = operation == Operation.EXPIRE_UNPAID_ORDER;
+    if ((automaticExpiry
+            && (!AUTOMATIC_RELEASE_ACTOR_ID.equals(actorSubjectId)
+                || !"LOGISTICS_SERVICE".equals(actorRole)
+                || warehouseId == null
+                || order.getPaymentState() != RentalOrderPaymentState.EXPIRING
+                || intentJson != null))
+        || (!automaticExpiry && "LOGISTICS_SERVICE".equals(actorRole))) {
+      throw new IllegalArgumentException("Automatic release provenance or state is invalid");
+    }
     command.idempotencyKey = Objects.requireNonNull(idempotencyKey, "idempotencyKey");
     command.requestSha256 = requiredHash(requestSha256);
     command.warehouseId = warehouseId;
@@ -168,9 +184,10 @@ public class RentalOrderMutationCommand {
       throw new IllegalArgumentException("step idempotency keys must differ");
     }
     command.equipmentReleaseRequired = warehouseId != null;
-    command.intentJson = requiredText(intentJson, Integer.MAX_VALUE, "intentJson");
+    command.intentJson =
+        automaticExpiry ? null : requiredText(intentJson, Integer.MAX_VALUE, "intentJson");
     command.state = State.PENDING;
-    command.step = Step.RELEASE_UNITS;
+    command.step = automaticExpiry ? Step.READ_UNITS : Step.RELEASE_UNITS;
     command.nextAttemptAt = Objects.requireNonNull(timestamp, "timestamp");
     command.createdAt = timestamp;
     command.updatedAt = timestamp;
@@ -192,6 +209,17 @@ public class RentalOrderMutationCommand {
     leaseUntil = requiredUntil;
     updatedAt = now;
     return true;
+  }
+
+  /** Freezes the first validated remote snapshot after the local payment-expiry fence commits. */
+  public void recordIntent(UUID token, String value, OffsetDateTime timestamp) {
+    requireLiveLease(token, timestamp);
+    if (operation != Operation.EXPIRE_UNPAID_ORDER || step != Step.READ_UNITS) {
+      throw new IllegalStateException("Automatic release snapshot is already settled");
+    }
+    intentJson = requiredText(value, Integer.MAX_VALUE, "intentJson");
+    step = Step.RELEASE_UNITS;
+    updatedAt = timestamp;
   }
 
   /** Records the proven release response and advances to the next required step. */
@@ -293,7 +321,13 @@ public class RentalOrderMutationCommand {
   /** Supported durable order mutations. */
   public enum Operation {
     CANCEL_ORDER,
-    REMOVE_UNIT
+    REMOVE_UNIT,
+    EXPIRE_UNPAID_ORDER;
+
+    /** Cancellation and unpaid expiry release the entire frozen order composition. */
+    public boolean releasesAllUnits() {
+      return this == CANCEL_ORDER || this == EXPIRE_UNPAID_ORDER;
+    }
   }
 
   /** Durable command lifecycle including terminal operator-visible quarantine. */
@@ -305,6 +339,7 @@ public class RentalOrderMutationCommand {
 
   /** Next replay-safe side effect or local transition required by the command. */
   public enum Step {
+    READ_UNITS,
     RELEASE_UNITS,
     RELEASE_EQUIPMENT,
     FINALIZE_LOCAL,

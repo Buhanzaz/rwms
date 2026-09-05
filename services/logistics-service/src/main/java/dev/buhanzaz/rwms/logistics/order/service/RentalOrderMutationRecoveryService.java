@@ -85,6 +85,7 @@ public class RentalOrderMutationRecoveryService {
       fixedDelayString = "${rwms.logistics.order-mutation-reconcile-delay:2s}",
       initialDelayString = "${rwms.logistics.order-mutation-reconcile-initial-delay:3s}")
   public void recoverPending() {
+    local.prepareDuePaymentExpiries();
     for (MutationClaim claim : local.claimDue()) {
       process(claim, false);
     }
@@ -136,10 +137,18 @@ public class RentalOrderMutationRecoveryService {
     MutationClaim claim = initial;
     try {
       while (true) {
+        if (claim.step() == Step.READ_UNITS) {
+          claim =
+              local.recordIntent(
+                  claim.commandId(),
+                  claim.leaseToken(),
+                  reservations.readRecoveryUnits(claim.orderId()));
+          continue;
+        }
         Intent intent = codec.intent(claim.intentJson());
         if (claim.step() == Step.RELEASE_UNITS) {
           List<LogisticsDependencyGateway.OrderUnitReservation> raw =
-              claim.operation() == Operation.CANCEL_ORDER
+              claim.operation().releasesAllUnits()
                   ? dependencies.releaseAllOrderUnits(
                       claim.releaseUnitsIdempotencyKey(),
                       claim.orderId(),

@@ -74,6 +74,14 @@ fulfillment before confirmation; completed expiry requires validated release rec
 caller. Historical rows retain null evidence and their previous admission. This additive storage
 step does not itself start timers or collect money.
 
+V101 extends the existing order mutation recovery with `EXPIRE_UNPAID_ORDER`. A database-time
+claim locks a due unpaid order, marks it `EXPIRING`, and persists `READ_UNITS` before any remote
+call. The validated snapshot, cabin release and empty furniture replacement are checkpointed
+with stable step keys; only both proven releases allow `EXPIRED`. Read failures use the same
+eight-attempt retry/quarantine policy, and automatic audit records name `LOGISTICS_SERVICE`
+without granting that role public access. New payment windows are not started by this recovery
+boundary alone.
+
 The authoritative HTTP and event contracts are
 [`contracts/openapi/logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml) and
 [`contracts/events/logistics-events.yaml`](../../contracts/events/logistics-events.yaml). Start

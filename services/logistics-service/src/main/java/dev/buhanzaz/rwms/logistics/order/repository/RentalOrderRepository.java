@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.logistics.order.repository;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import jakarta.persistence.LockModeType;
+import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -57,6 +58,33 @@ public interface RentalOrderRepository
   @EntityGraph(attributePaths = "client")
   @Query("select orders from RentalOrder orders where orders.id = :id")
   Optional<RentalOrder> findForUpdate(@Param("id") UUID id);
+
+  /** Claims expired unpaid orders without racing payment or another already-owned mutation. */
+  @Query(
+      value =
+          """
+          select orders.* from rental_order orders
+          where orders.status = 'SAVED' and orders.payment_state = 'PENDING'
+            and orders.payment_expires_at <= :timestamp
+            and not exists (
+              select 1 from rental_order_mutation_command command
+              where command.order_id = orders.id and command.state in ('PENDING', 'QUARANTINED'))
+            and not exists (
+              select 1 from customer_booking_mutation mutation
+              where mutation.order_id = orders.id and mutation.operation = 'CANCEL'
+                and mutation.state in ('PENDING', 'QUARANTINED'))
+            and not exists (
+              select 1 from shipment_furniture_movement_task replacement
+              where replacement.order_id = orders.id
+                and replacement.replacement_idempotency_key is not null
+                and replacement.replacement_completed_at is null
+                and replacement.replacement_rejected_at is null)
+          order by orders.payment_expires_at, orders.id
+          for update skip locked limit :batchSize
+          """,
+      nativeQuery = true)
+  List<RentalOrder> findDuePaymentsForUpdate(
+      @Param("timestamp") OffsetDateTime timestamp, @Param("batchSize") int batchSize);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query(

@@ -859,6 +859,15 @@ fulfillment; this storage boundary alone does not admit new windows or perform r
 Evidence: [`RentalOrder`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/domain/RentalOrder.java),
 [`V100`](../../services/logistics-service/src/main/resources/db/migration/V100__rental_order_payment_reservations.sql).
 
+V101 reuses order mutation recovery for due unpaid orders. Under the order lock it commits
+`EXPIRING` and a recoverable `READ_UNITS` command before reading asset. Validated composition,
+cabin release and empty furniture replacement retain step receipts and idempotency keys; only
+proven releases finalize `EXPIRED`. Read failures participate in the existing finite eight-attempt
+quarantine policy. Automatic audit provenance is `LOGISTICS_SERVICE`, not an impersonated customer
+or manager. This recovery boundary does not itself start new payment windows. Evidence:
+[`recovery`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderMutationRecoveryService.java),
+[`V101`](../../services/logistics-service/src/main/resources/db/migration/V101__durable_payment_reservation_expiry.sql).
+
 Global cabin monthly prices belong to logistics, not asset passport metadata. V98 seeds a
 separate versioned singleton with positive whole-ruble overrides for asset-owned type/category
 UUID pairs; every omitted pair means zero. No catalog names or cross-database foreign keys are

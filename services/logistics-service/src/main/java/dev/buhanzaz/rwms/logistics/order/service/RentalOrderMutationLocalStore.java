@@ -4,6 +4,7 @@ import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderDetailResponse;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderCommandReceipt;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.order.recovery.RentalOrderMutationCodec;
 import dev.buhanzaz.rwms.logistics.order.domain.recovery.RentalOrderMutationCommand;
 import dev.buhanzaz.rwms.logistics.order.domain.recovery.RentalOrderMutationCommand.Operation;
@@ -46,6 +47,37 @@ class RentalOrderMutationLocalStore {
   private final RentalOrderCommandStore orderStore;
   private final RentalOrderReservationService reservations;
   private final RentalOrderMutationCodec codec;
+  private final RentalOrderRepository orders;
+
+  /** Commits payment fencing and a recoverable read/release command before any dependency call. */
+  @Transactional
+  void prepareDuePaymentExpiries() {
+    OffsetDateTime timestamp = now();
+    for (RentalOrder order : orders.findDuePaymentsForUpdate(timestamp, RECOVERY_BATCH_SIZE)) {
+      if (!order.beginPaymentExpiry(timestamp)) continue;
+      orderStore.persist(order);
+      UUID actorId = RentalOrderMutationCommand.AUTOMATIC_RELEASE_ACTOR_ID;
+      UUID key =
+          UUID.nameUUIDFromBytes(
+              ("rental-payment-expiry:" + order.getId()).getBytes(StandardCharsets.UTF_8));
+      Operation operation = Operation.EXPIRE_UNPAID_ORDER;
+      commands.saveAndFlush(
+          RentalOrderMutationCommand.start(
+              order,
+              operation,
+              null,
+              order.getVersion(),
+              actorId,
+              "LOGISTICS_SERVICE",
+              key,
+              OrderCommandChecksum.sha256(operation.name(), List.of(order.getId().toString())),
+              order.getWarehouseId(),
+              stepKey(actorId, operation, key, "release-units"),
+              stepKey(actorId, operation, key, "release-equipment"),
+              null,
+              timestamp));
+    }
+  }
 
   /** Locks an order and fails closed when a recovery command is pending or quarantined. */
   @Transactional
@@ -146,6 +178,38 @@ class RentalOrderMutationLocalStore {
     return claims;
   }
 
+  /** Fences and freezes the exact unit snapshot before the first automatic release effect. */
+  @Transactional
+  MutationClaim recordIntent(
+      UUID commandId,
+      UUID leaseToken,
+      List<LogisticsDependencyGateway.OrderUnitReservation> activeUnits) {
+    RentalOrderMutationCommand command = locked(commandId, leaseToken);
+    RentalOrder order = orderStore.recoveryOrder(command.getOrder().getId());
+    OrderActor actor =
+        new OrderActor(
+            command.getActorSubjectId(),
+            command.getActorRole(),
+            "Logistics service",
+            Set.of(order.getWarehouseId()),
+            Set.of(order.getWarehouseId()),
+            false,
+            false,
+            true,
+            true);
+    Intent intent =
+        reservations.prepareMutationIntent(
+            actor,
+            command.getOperation(),
+            order,
+            null,
+            command.getExpectedOrderVersion(),
+            activeUnits);
+    command.recordIntent(leaseToken, codec.encode(intent), now());
+    commands.flush();
+    return claim(command);
+  }
+
   /** Commits the unit-release receipt before any furniture effect is attempted. */
   @Transactional
   MutationClaim recordReleasedUnits(
@@ -183,7 +247,7 @@ class RentalOrderMutationLocalStore {
             : new EquipmentReservations(List.of());
     RentalOrder order =
         reservations.finalizeMutation(
-            command, intent, releasedUnits, equipmentReservations, remainingActiveUnits);
+            command, intent, releasedUnits, equipmentReservations, remainingActiveUnits, now());
     orderStore.remember(
         command.getActorSubjectId(),
         command.getOperation().name(),

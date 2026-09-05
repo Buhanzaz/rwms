@@ -2577,6 +2577,179 @@ class OrderApiIntegrationTest {
   }
 
   @Test
+  void unpaidExpiryPersistsItsFenceBeforeReadingAndReleasesCabinAndFurnitureTogether()
+      throws Exception {
+    UUID orderId = createOrder(MANAGER_1, "manager-one", "Unpaid complete order");
+    selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
+    addUnit(orderId, MANAGER_1, UNIT_1, 1);
+    mvc.perform(
+            put(
+                    "/api/logistics/v1/orders/{orderId}/units/{unitId}/desired-equipment",
+                    orderId,
+                    UNIT_1)
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {"expectedVersion":2,"requirements":[{"equipmentId":"%s","quantity":2}]}
+                    """
+                        .formatted(EQUIPMENT))
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk());
+    seedExpiredPaymentReservation(orderId);
+    AtomicBoolean failRead = new AtomicBoolean(true);
+    when(dependencies.readOrderUnits(orderId))
+        .thenAnswer(
+            invocation -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+              assertThat(
+                      jdbc.queryForObject(
+                          "select payment_state from rental_order where id=?",
+                          String.class,
+                          orderId))
+                  .isEqualTo("EXPIRING");
+              if (failRead.getAndSet(false)) {
+                assertThat(
+                        jdbc.queryForMap(
+                            "select step,intent_json from rental_order_mutation_command where"
+                                + " order_id=?",
+                            orderId))
+                    .containsEntry("step", "READ_UNITS")
+                    .containsEntry("intent_json", null);
+                throw transientDependencyFailure();
+              }
+              return List.copyOf(reservations.get(orderId).values());
+            });
+    orderMutationRecovery.recoverPending();
+    assertThat(
+            jdbc.queryForMap(
+                "select step,attempt_count,state from rental_order_mutation_command where"
+                    + " order_id=?",
+                orderId))
+        .containsEntry("step", "READ_UNITS")
+        .containsEntry("attempt_count", 1)
+        .containsEntry("state", "PENDING");
+    assertThat(activeUnitOwners).containsKey(UNIT_1);
+    assertThat(equipmentReservations.get(orderId)).isNotEmpty();
+    verify(dependencies, never()).releaseAllOrderUnits(any(), any(), any(), anyString());
+
+    recoverOrderMutation(orderId);
+    assertThat(
+            jdbc.queryForMap(
+                "select status,payment_state,payment_source from rental_order where id=?", orderId))
+        .containsEntry("status", "CANCELLED")
+        .containsEntry("payment_state", "EXPIRED")
+        .containsEntry("payment_source", null);
+    assertThat(activeUnitOwners).doesNotContainKey(UNIT_1);
+    assertThat(equipmentReservations.get(orderId)).isEmpty();
+    verify(dependencies)
+        .releaseAllOrderUnits(
+            any(),
+            eq(orderId),
+            eq(
+                dev.buhanzaz.rwms.logistics.order.domain.recovery.RentalOrderMutationCommand
+                    .AUTOMATIC_RELEASE_ACTOR_ID),
+            eq("LOGISTICS_SERVICE"));
+    assertThat(
+            jdbc.queryForObject(
+                "select actor_role from rental_order_audit_event where order_id=? and"
+                    + " event_type='ORDER_CANCELLED'",
+                String.class,
+                orderId))
+        .isEqualTo("LOGISTICS_SERVICE");
+    assertAuditCount(orderId, "ORDER_CANCELLED", 1);
+    orderMutationRecovery.recoverPending();
+    assertAuditCount(orderId, "ORDER_CANCELLED", 1);
+  }
+
+  @Test
+  void unpaidExpiryDoesNotClaimCompletionUntilFurnitureReleaseIsRecovered() throws Exception {
+    UUID orderId = createOrder(MANAGER_1, "manager-one", "Unpaid furniture recovery");
+    selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
+    addUnit(orderId, MANAGER_1, UNIT_1, 1);
+    seedExpiredPaymentReservation(orderId);
+    AtomicBoolean failEquipment = new AtomicBoolean(true);
+    doAnswer(
+            invocation -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+              var receipt =
+                  replaceEquipmentReservationsRemotely(
+                      invocation.getArgument(1), invocation.getArgument(5));
+              if (failEquipment.getAndSet(false)) throw transientDependencyFailure();
+              return receipt;
+            })
+        .when(dependencies)
+        .replaceOrderEquipmentReservations(any(), any(), any(), any(), anyString(), any());
+    orderMutationRecovery.recoverPending();
+    assertThat(activeUnitOwners).doesNotContainKey(UNIT_1);
+    assertThat(
+            jdbc.queryForMap(
+                "select status,payment_state,payment_resolved_at from rental_order where id=?",
+                orderId))
+        .containsEntry("status", "SAVED")
+        .containsEntry("payment_state", "EXPIRING")
+        .containsEntry("payment_resolved_at", null);
+    assertThat(
+            jdbc.queryForObject(
+                "select step from rental_order_mutation_command where order_id=?",
+                String.class,
+                orderId))
+        .isEqualTo("RELEASE_EQUIPMENT");
+    recoverOrderMutation(orderId);
+    verify(dependencies, times(1)).releaseAllOrderUnits(any(), eq(orderId), any(), anyString());
+    verify(dependencies, times(2))
+        .replaceOrderEquipmentReservations(
+            any(), eq(orderId), any(), any(), eq("LOGISTICS_SERVICE"), eq(List.of()));
+    assertThat(
+            jdbc.queryForObject(
+                "select payment_state from rental_order where id=?", String.class, orderId))
+        .isEqualTo("EXPIRED");
+  }
+
+  @Test
+  void unpaidExpiryReadFailuresReachFiniteQuarantineWithoutReleasingOrInventingSuccess()
+      throws Exception {
+    UUID orderId = createOrder(MANAGER_1, "manager-one", "Unpaid quarantine");
+    selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
+    addUnit(orderId, MANAGER_1, UNIT_1, 1);
+    seedExpiredPaymentReservation(orderId);
+    org.mockito.Mockito.clearInvocations(dependencies);
+    when(dependencies.readOrderUnits(orderId)).thenThrow(transientDependencyFailure());
+    for (int attempt = 0; attempt < 8; attempt++) {
+      jdbc.update(
+          "update rental_order_mutation_command set next_attempt_at=clock_timestamp()"
+              + " where order_id=? and state='PENDING'",
+          orderId);
+      orderMutationRecovery.recoverPending();
+    }
+    assertThat(
+            jdbc.queryForMap(
+                "select state,step,attempt_count,next_attempt_at from rental_order_mutation_command"
+                    + " where order_id=?",
+                orderId))
+        .containsEntry("state", "QUARANTINED")
+        .containsEntry("step", "READ_UNITS")
+        .containsEntry("attempt_count", 8)
+        .containsEntry("next_attempt_at", null);
+    assertThat(
+            jdbc.queryForObject(
+                "select payment_state from rental_order where id=?", String.class, orderId))
+        .isEqualTo("EXPIRING");
+    orderMutationRecovery.recoverPending();
+    verify(dependencies, times(8)).readOrderUnits(orderId);
+    verify(dependencies, never()).releaseAllOrderUnits(any(), any(), any(), anyString());
+    assertThat(activeUnitOwners).containsKey(UNIT_1);
+  }
+
+  private void seedExpiredPaymentReservation(UUID orderId) {
+    jdbc.update(
+        "update rental_order set status='SAVED',payment_state='PENDING',"
+            + " payment_started_at=current_timestamp-interval '6 minutes',"
+            + " payment_expires_at=current_timestamp-interval '1 minute' where id=?",
+        orderId);
+  }
+
+  @Test
   void cancelRecoversAutonomouslyAfterUnknownOutcomeAndFencesCompetingMutation()
       throws Exception {
     UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент cancel recovery");

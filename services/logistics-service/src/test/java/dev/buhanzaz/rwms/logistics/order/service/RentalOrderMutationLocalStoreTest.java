@@ -6,6 +6,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.order.recovery.RentalOrderMutationCodec;
 import dev.buhanzaz.rwms.logistics.order.domain.recovery.RentalOrderMutationCommand;
 import dev.buhanzaz.rwms.logistics.order.domain.recovery.RentalOrderMutationCommand.Operation;
@@ -88,7 +89,8 @@ class RentalOrderMutationLocalStoreTest {
             commands,
             mock(RentalOrderCommandStore.class),
             mock(RentalOrderReservationService.class),
-            mock(RentalOrderMutationCodec.class));
+            mock(RentalOrderMutationCodec.class),
+            mock(RentalOrderRepository.class));
     return new FailureFixture(commandId, leaseToken, now, command, store);
   }
 
