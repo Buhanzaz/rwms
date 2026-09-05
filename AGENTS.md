@@ -1043,16 +1043,28 @@ dependencies, scripts, agents, screenshots, traces or runtime artifacts to the r
 
 ---
 
-# 27. Single Coding Lane
+# 27. Coordinated Agents And Model Selection
 
-Use one primary coding agent and one shared worktree for implementation and verification.
+Subagents may perform bounded implementation, inspection, verification or publication work when
+delegation helps the current task. One primary agent remains responsible for the complete result.
 
-Do not create coding, inspection or verification subagents. A publication-only helper is allowed
-only when the user explicitly requests it; it must publish the artifact built from the primary
-shared worktree and must not create another branch, worktree, clone or source snapshot.
+Choose the available LLM class and supported reasoning effort for each delegated task:
 
-One task therefore has one ordered diff and one owner. Do not represent parts of the same task as
-separate WIPs that are merged or selected later.
+* Lightweight model with low effort: clear, repeatable lookups and mechanical checks.
+* Balanced coding model with medium effort: ordinary scoped implementation and test work.
+* Strong reasoning model with high effort: ambiguous cross-component logic, security, money,
+  concurrency, recovery and difficult regressions.
+* Higher supported effort levels: only when exceptional complexity justifies the extra cost.
+
+State each agent's bounded task, allowed files, expected evidence and model/effort choice. Respect
+explicit user choices, runtime availability, account limits and the VPS resource budget.
+
+All agents use the same primary worktree and current branch. Assign non-overlapping file ownership;
+serialize overlapping edits, resource-heavy builds, commits and publication. Do not create separate
+worktrees, clones, branches, source snapshots or deferred WIPs. The primary agent reviews the
+complete shared diff, verifies and commits each coherent step, and requires a clean worktree before
+task switching, publication and handoff. Delegation does not expand publication authority or permit
+publishing an artifact that omits shared changes.
 
 ---
 
