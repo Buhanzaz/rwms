@@ -75,6 +75,95 @@ class DriverTaskWorkflowStoreTest {
           new DriverTaskWorkerContentCodec(new ObjectMapper()));
 
   @Test
+  void reconciliationWithdrawsExpiryOnlyForAnAuthoritativelyRescheduledWaitingTrip() {
+    LocalDate today = LocalDate.now(ZoneOffset.UTC);
+    for (boolean moved : List.of(false, true)) {
+      for (LogisticsDocumentType type : LogisticsDocumentType.values()) {
+        UUID warehouseId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID cabinId = UUID.randomUUID();
+        LocalDate originalDate = today.minusDays(1);
+        LocalDate observedDate = moved ? today.plusDays(1) : originalDate;
+        LogisticsDocument document = scheduledDocument(type, warehouseId, documentId, originalDate);
+        DriverLogisticsTask task =
+            DriverLogisticsTask.createGroupedDocument(
+                warehouseId,
+                cabinId,
+                documentId,
+                DriverTaskKind.valueOf(type.name()),
+                originalDate,
+                1,
+                3,
+                "Ходка",
+                "Клиент",
+                "1 бытовка",
+                UUID.randomUUID(),
+                DriverTaskAudienceMode.WAREHOUSE_DRIVERS,
+                null,
+                null,
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                "b".repeat(64));
+        task.addGroupedDocumentMember(UUID.randomUUID(), cabinId, "БТ-1", 1);
+        UUID taskId = UUID.randomUUID();
+        UUID boardTaskId = UUID.randomUUID();
+        UUID entryId = UUID.randomUUID();
+        ReflectionTestUtils.setField(task, "id", taskId);
+        task.registerBoardTask(boardTaskId, 0, entryId, "WAITING", "SCHEDULED", null);
+        task.requestTripExpiry(today, OffsetDateTime.now(ZoneOffset.UTC));
+        task.requireReconciliation("TASK_BOARD_DEPENDENCY_PERMANENT_REJECTION");
+        when(tasks.findForUpdate(taskId)).thenReturn(Optional.of(task));
+        when(tasks.findById(taskId)).thenReturn(Optional.of(task));
+        when(documents.findForUpdate(documentId)).thenReturn(Optional.of(document));
+        if (type == LogisticsDocumentType.SHIPMENT) {
+          when(documentLines.findAllByDocument_IdOrderByLineNumber(documentId))
+              .thenReturn(
+                  List.of(
+                      LogisticsDocumentLine.create(
+                          document, 1, cabinId, 0, "Клиент", null, warehouseId)));
+        }
+
+        store.confirmReconciliationStatus(
+            taskId,
+            new LogisticsDependencyGateway.DriverBoardTask(
+                boardTaskId,
+                1,
+                warehouseId,
+                task.getExternalTaskId(),
+                "Ходка",
+                "1 бытовка",
+                "Клиент",
+                new LogisticsDependencyGateway.DriverTaskAudience(
+                    DriverTaskAudienceMode.WAREHOUSE_DRIVERS, null, null),
+                "ACTIVE",
+                observedDate,
+                "SCHEDULED",
+                3,
+                false,
+                null,
+                entryId,
+                1,
+                "WAITING",
+                0));
+
+        assertThat(task.getScheduledDate()).isEqualTo(observedDate);
+        assertThat(document.getScheduledDate()).isEqualTo(observedDate);
+        assertThat(task.getTripExpiryRequestedAt() == null)
+            .as("%s moved=%s", type, moved)
+            .isEqualTo(moved);
+        assertThat(task.getState()).isEqualTo(DriverTaskState.SCHEDULED);
+        ReflectionTestUtils.setField(
+            task, "nextAttemptAt", OffsetDateTime.now(ZoneOffset.UTC).minusSeconds(1));
+        assertThat(store.nextWork(taskId).orElseThrow())
+            .isInstanceOf(
+                moved
+                    ? DriverTaskWorkflowStore.StatusWork.class
+                    : DriverTaskWorkflowStore.ExpiryWork.class);
+      }
+    }
+  }
+
+  @Test
   void furnitureCargoTransferUsesTheExistingDriverRegistrationWorkItem() {
     UUID taskId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();

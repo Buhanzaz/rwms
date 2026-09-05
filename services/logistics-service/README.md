@@ -12,6 +12,9 @@ durable logistics recovery work.
 Unfinished shipment, return and transfer trips expire after their planned calendar day in
 the owning warehouse timezone. V97 persists intent before task-board cancellation; the
 bounded driver relay retries ambiguous responses and never cancels DONE/FINALIZING work.
+An authoritative pre-start date change withdraws stale expiry intent during both normal
+polling and dependency reconciliation. Warehouse discovery failure defers calendar scans
+and promotion, not recovery of due work; new transport admission still requires its calendar.
 Expired trips do not roll into today's queue. Cancellation preserves cargo/lease custody
 and charges no customer fee: loaded cargo needs an explicit return or agreed redirection.
 `GET /api/logistics/v1/driver-tasks?warehouseId=…&expiredOnly=true` exposes the last 50

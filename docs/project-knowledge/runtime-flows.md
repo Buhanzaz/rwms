@@ -2264,8 +2264,11 @@ and
    list with no six-card display limit.
    Shipment/return/transfer dates are deadlines: after the warehouse-local day ends,
    the bounded driver relay persists V97 expiry intent and cancels unfinished task-board
-   work with a fresh version fence. DONE/FINALIZING wins a cancellation race. Expiring
-   transport cannot be promoted, reflowed or moved to a new date. The last 50 terminal
+   work with a fresh version fence. DONE/FINALIZING wins a cancellation race. Expiry
+   intent is withdrawn if a newer authoritative waiting-task date is observed, including
+   dependency reconciliation. Warehouse discovery outages defer calendar scans/promotion
+   without blocking due-task recovery; transport admission still requires warehouse time.
+   Expiring transport cannot be promoted, reflowed or moved to a new date. The last 50 terminal
    auto-cancellations remain visible through `driver-tasks?expiredOnly=true` and the panel.
    Cargo and lease ownership are unchanged; current work requires custody review and
    an explicit return or customer-agreed redirection, with no auto-cancellation fee.

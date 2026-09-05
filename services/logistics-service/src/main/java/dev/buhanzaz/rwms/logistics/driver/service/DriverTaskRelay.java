@@ -47,7 +47,15 @@ class DriverTaskRelay {
       fixedDelayString = "${rwms.logistics.driver-queue.relay-delay:1s}",
       initialDelayString = "${rwms.logistics.driver-queue.relay-initial-delay:1s}")
   void relay() {
-    var warehouses = dependencies.listWarehouseIdentities();
+    List<LogisticsDependencyGateway.WarehouseIdentity> warehouses;
+    try {
+      warehouses = dependencies.listWarehouseIdentities();
+    } catch (RuntimeException exception) {
+      log.warn(
+          "Warehouse discovery failed; calendar passes deferred, due task recovery continues",
+          exception);
+      warehouses = List.of();
+    }
     for (var warehouse : warehouses) {
       if (!warehouse.active()) continue;
       try {

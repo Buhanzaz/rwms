@@ -18,6 +18,24 @@ import org.springframework.data.domain.Pageable;
 /** Verifies that the scheduled driver recovery pass cannot materialize an unbounded backlog. */
 class DriverTaskRelayTest {
   @Test
+  void warehouseDiscoveryFailureDoesNotBlockDueTaskRecovery() {
+    var tasks = mock(DriverLogisticsTaskRepository.class);
+    var processor = mock(DriverTaskProcessor.class);
+    var scheduler = mock(DriverQueueScheduler.class);
+    var dependencies = mock(LogisticsDependencyGateway.class);
+    UUID task = UUID.randomUUID();
+    when(dependencies.listWarehouseIdentities())
+        .thenThrow(new IllegalStateException("Warehouse service is unavailable"));
+    when(tasks.findDueIds(any(), any(), any())).thenReturn(List.of(task));
+
+    new DriverTaskRelay(tasks, processor, scheduler, dependencies).relay();
+
+    verify(processor).processUntilIdle(task);
+    org.mockito.Mockito.verifyNoInteractions(scheduler);
+    verify(tasks, org.mockito.Mockito.never()).findOverdueTripIds(any(), any(), any());
+  }
+
+  @Test
   void expiryUsesWarehouseCalendarAndRunsBeforeOrdinaryProcessing() {
     var tasks = mock(DriverLogisticsTaskRepository.class);
     var processor = mock(DriverTaskProcessor.class);

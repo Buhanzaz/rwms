@@ -246,6 +246,12 @@ class DriverTaskWorkflowStore {
     }
     requireBoardTask(task, board);
     synchronizeGroupedDocumentDate(task, board);
+    if (task.getTripExpiryRequestedAt() != null
+        && "ACTIVE".equals(board.status())
+        && "WAITING".equals(board.entryStatus())
+        && !task.getScheduledDate().equals(board.scheduledDate())) {
+      task.withdrawStaleTripExpiry();
+    }
     if (task.getTaskBoardTaskId() == null) {
       task.registerBoardTask(
           board.taskId(),
