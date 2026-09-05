@@ -70,7 +70,7 @@ import dev.buhanzaz.rwms.client.data.DeliverySlot
 @Composable
 fun CartScreen(
     state: CustomerWorkflowState,
-    onMenu: () -> Unit,
+    onBack: () -> Unit,
     onProfile: () -> Unit,
     onContinue: () -> Unit,
     onToggleCabin: (String) -> Unit,
@@ -82,7 +82,9 @@ fun CartScreen(
         state.cabins.filter { it.unitId in state.selectedCabinIds }
     }
     Scaffold(
-        topBar = { CustomerTopBar("Корзина", onMenu, onProfile, avatarUrl = state.profile?.avatar?.thumbnailUrl) },
+        topBar = {
+            CustomerTopBar("Корзина", onBack = onBack, onProfile = onProfile, avatarUrl = state.profile?.avatar?.thumbnailUrl)
+        },
     ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp).testTag("cart-screen"),

@@ -1,16 +1,12 @@
 package dev.buhanzaz.rwms.client.ui
 
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -55,6 +51,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -350,11 +347,25 @@ private fun SignedInNavigation(
     var editingAvatar by remember { mutableStateOf(false) }
 
     fun topLevel(route: NavKey) {
+        val root = if (state.selectedWarehouse == null) WarehouseRoute else CatalogRoute
+        val destination = if (root is WarehouseRoute && route is CartRoute) root else route
         backStack.clear()
-        backStack.add(
-            if (state.selectedWarehouse == null && (route is CatalogRoute || route is CartRoute)) WarehouseRoute else route,
-        )
+        backStack.add(root)
+        if (destination != root && !(root is WarehouseRoute && destination is CatalogRoute)) {
+            backStack.add(destination)
+        }
         coroutineScope.launch { drawerState.close() }
+    }
+
+    fun selectDrawerDestination(route: NavKey) {
+        coroutineScope.launch {
+            drawerState.close()
+            topLevel(route)
+        }
+    }
+
+    fun backFrom(route: NavKey) {
+        if (backStack.lastOrNull() == route && backStack.size > 1) backStack.removeLastOrNull()
     }
 
     fun openProfile() {
@@ -388,22 +399,25 @@ private fun SignedInNavigation(
         gesturesEnabled = !current.isDeliveryFlowRoute() && !editingAvatar,
         drawerContent = {
             ModalDrawerSheet(
-                modifier = Modifier.fillMaxHeight(),
-                drawerContainerColor = MaterialTheme.colorScheme.surface,
+                modifier = Modifier.width(296.dp).fillMaxHeight().testTag("customer-drawer"),
+                drawerContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 1f),
                 drawerShape = RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp),
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .verticalScroll(rememberScrollState()),
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 12.dp),
                 ) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 16.dp, bottom = 20.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        CustomerStoreLogo(Modifier.width(180.dp))
-                        Spacer(Modifier.weight(1f))
-                        IconButton(onClick = { coroutineScope.launch { drawerState.close() } }) {
+                    Box(Modifier.fillMaxWidth().padding(bottom = 20.dp)) {
+                        CustomerStoreLogo(
+                            Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 48.dp)
+                                .testTag("drawer-logo"),
+                        )
+                        IconButton(
+                            onClick = { coroutineScope.launch { drawerState.close() } },
+                            modifier = Modifier.align(Alignment.TopEnd),
+                        ) {
                             Icon(Icons.Default.Close, contentDescription = "Закрыть меню")
                         }
                     }
@@ -411,28 +425,28 @@ private fun SignedInNavigation(
                         shape = RoundedCornerShape(12.dp),
                         label = { Text("Аренда") },
                         selected = current is CatalogRoute,
-                        onClick = { topLevel(CatalogRoute) },
+                        onClick = { selectDrawerDestination(CatalogRoute) },
                         icon = { Icon(Icons.Default.HomeWork, contentDescription = null) },
                     )
                     NavigationDrawerItem(
                         shape = RoundedCornerShape(12.dp),
                         label = { Text("Корзина (${state.selectedCabinIds.size})") },
                         selected = current is CartRoute || current.isDeliveryFlowRoute(),
-                        onClick = { topLevel(CartRoute) },
+                        onClick = { selectDrawerDestination(CartRoute) },
                         icon = { Icon(Icons.Default.ShoppingCart, contentDescription = null) },
                     )
                     NavigationDrawerItem(
                         shape = RoundedCornerShape(12.dp),
                         label = { Text("Мои заказы") },
                         selected = current is BookingsRoute,
-                        onClick = { topLevel(BookingsRoute) },
+                        onClick = { selectDrawerDestination(BookingsRoute) },
                         icon = { Icon(Icons.Default.Book, contentDescription = null) },
                     )
                     NavigationDrawerItem(
                         shape = RoundedCornerShape(12.dp),
                         label = { Text("Профиль") },
                         selected = current is ProfileRoute,
-                        onClick = { topLevel(ProfileRoute) },
+                        onClick = { selectDrawerDestination(ProfileRoute) },
                         icon = { Icon(Icons.Default.Person, contentDescription = null) },
                     )
                     NavigationDrawerItem(
@@ -466,17 +480,19 @@ private fun SignedInNavigation(
         Box(Modifier.fillMaxSize()) {
             NavDisplay(
                 backStack = backStack,
+                modifier = Modifier.fillMaxSize().clipToBounds(),
                 onBack = { if (backStack.size > 1) backStack.removeLastOrNull() },
                 transitionSpec = {
-                    (slideInHorizontally(tween(260)) { it / 6 } + fadeIn(tween(220))) togetherWith
-                        (slideOutHorizontally(tween(260)) { -it / 10 } + fadeOut(tween(160)))
+                    slideInHorizontally(tween(260)) { it } togetherWith
+                        slideOutHorizontally(tween(260)) { -it }
                 },
                 popTransitionSpec = {
-                    (slideInHorizontally(tween(260)) { -it / 10 } + fadeIn(tween(220))) togetherWith
-                        (slideOutHorizontally(tween(260)) { it / 6 } + fadeOut(tween(160)))
+                    slideInHorizontally(tween(260)) { -it } togetherWith
+                        slideOutHorizontally(tween(260)) { it }
                 },
                 predictivePopTransitionSpec = {
-                    slideInHorizontally { -it / 6 } togetherWith slideOutHorizontally { it }
+                    slideInHorizontally(tween(260)) { -it } togetherWith
+                        slideOutHorizontally(tween(260)) { it }
                 },
                 entryDecorators = listOf(
                     rememberSaveableStateHolderNavEntryDecorator(),
@@ -510,10 +526,10 @@ private fun SignedInNavigation(
                     entry<CartRoute> {
                         CartScreen(
                             state = state,
-                            onMenu = { coroutineScope.launch { drawerState.open() } },
+                            onBack = { backFrom(CartRoute) },
                             onProfile = ::openProfile,
                             onContinue = {
-                                if (backStack.lastOrNull() !is DeliveryMapRoute) {
+                                if (backStack.lastOrNull() is CartRoute) {
                                     backStack.add(DeliveryMapRoute)
                                 }
                             },
@@ -526,7 +542,7 @@ private fun SignedInNavigation(
                         DeliveryMapScreen(
                             state = state,
                             onProfile = ::openProfile,
-                            onBack = { backStack.removeLastOrNull() },
+                            onBack = { backFrom(DeliveryMapRoute) },
                             onAddress = onAddress,
                             onPoint = onPoint,
                             onConfirmedLocation = onConfirmedLocation,
@@ -535,7 +551,7 @@ private fun SignedInNavigation(
                             onFailedTripAcknowledgement = onFailedTripAcknowledgement,
                             onSearchSlots = onSearchSlots,
                             onSlotsReady = {
-                                if (backStack.lastOrNull() !is DeliveryDatesRoute) {
+                                if (backStack.lastOrNull() is DeliveryMapRoute) {
                                     backStack.add(DeliveryDatesRoute)
                                 }
                             },
@@ -545,10 +561,10 @@ private fun SignedInNavigation(
                         DeliveryDatesScreen(
                             state = state,
                             onProfile = ::openProfile,
-                            onBack = { backStack.removeLastOrNull() },
+                            onBack = { backFrom(DeliveryDatesRoute) },
                             onDate = { date ->
                                 val route = DeliverySlotsRoute(date)
-                                if (backStack.lastOrNull() != route) backStack.add(route)
+                                if (backStack.lastOrNull() is DeliveryDatesRoute) backStack.add(route)
                             },
                         )
                     }
@@ -557,11 +573,11 @@ private fun SignedInNavigation(
                             state = state,
                             onProfile = ::openProfile,
                             date = route.date,
-                            onBack = { backStack.removeLastOrNull() },
+                            onBack = { backFrom(route) },
                             onSelectSlot = onSelectSlot,
                             onHoldSlot = onHoldSlot,
                             onHeld = {
-                                if (backStack.lastOrNull() !is DeliveryConfirmationRoute) {
+                                if (backStack.lastOrNull() == route) {
                                     backStack.add(DeliveryConfirmationRoute)
                                 }
                             },
@@ -571,7 +587,7 @@ private fun SignedInNavigation(
                         DeliveryConfirmationScreen(
                             state = state,
                             onProfile = ::openProfile,
-                            onBack = { backStack.removeLastOrNull() },
+                            onBack = { backFrom(DeliveryConfirmationRoute) },
                             onCheckout = onCheckout,
                         )
                     }
@@ -620,9 +636,7 @@ private fun SignedInNavigation(
                             onSave = onSaveProfile,
                             onAvatarCropped = onAvatarCropped,
                             onAvatarEditingChanged = { editingAvatar = it },
-                            onBack = {
-                                if (backStack.size > 1) backStack.removeLastOrNull() else topLevel(CatalogRoute)
-                            },
+                            onBack = { backFrom(ProfileRoute) },
                         )
                     }
                     entry<GalleryRoute> { route ->
@@ -630,7 +644,7 @@ private fun SignedInNavigation(
                             cabin = state.cabins.firstOrNull { it.unitId == route.unitId }
                                 ?: state.cart?.cabins?.firstOrNull { it.unitId == route.unitId },
                             initialPage = route.initialPage,
-                            onClose = { backStack.removeLastOrNull() },
+                            onClose = { backFrom(route) },
                         )
                     }
                 },
@@ -640,7 +654,7 @@ private fun SignedInNavigation(
             ) {
                 CustomerCartButton(
                     count = state.selectedCabinIds.size,
-                    onClick = { topLevel(CartRoute) },
+                    onClick = { if (backStack.lastOrNull() !is CartRoute) backStack.add(CartRoute) },
                     modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().imePadding().padding(20.dp),
                 )
             }

@@ -458,7 +458,7 @@ class CustomerBookingLifecycleScreensTest {
                         equipmentDraft = mapOf(EquipmentKey(cabin.unitId, table.inventoryItemId) to 1L),
                         rentalTerms = mapOf(cabin.unitId to 1L),
                     ),
-                    onMenu = {},
+                    onBack = {},
                     onProfile = {},
                     onContinue = {},
                     onToggleCabin = removedCabin::set,

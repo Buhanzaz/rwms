@@ -1,6 +1,8 @@
 package dev.buhanzaz.rwms.client.ui
 
 import android.app.Application
+import androidx.activity.OnBackPressedDispatcher
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -201,6 +203,71 @@ class CustomerConditionalNavigationTest {
         composeRule.onNodeWithTag("cart-fab").performClick()
         composeRule.onNodeWithTag("cart-screen").assertExists()
         composeRule.onNodeWithTag("cart-fab").assertDoesNotExist()
+        composeRule.onNodeWithTag("header-back").performClick()
+        composeRule.onNodeWithTag("catalog-screen").assertExists()
+        composeRule.onNodeWithTag("cart-fab").assertExists()
+    }
+
+    @Test
+    fun `cart shortcut returns to the profile it was opened from`() {
+        composeRule.setContent {
+            CustomerTheme {
+                CustomerAppContent(
+                    CustomerAppState.Ready(readyCatalogWorkflow().copy(selectedCabinIds = setOf("a"))),
+                )
+            }
+        }
+        composeRule.onNodeWithTag("profile-avatar").performClick()
+        composeRule.onNodeWithTag("cart-fab").performClick()
+        composeRule.onNodeWithTag("header-back").performClick()
+        composeRule.onNodeWithTag("profile-screen").assertExists()
+        composeRule.onNodeWithTag("header-back").performClick()
+        composeRule.onNodeWithTag("catalog-screen").assertExists()
+    }
+
+    @Test
+    fun `system back from drawer cart returns to rental catalog`() {
+        var backDispatcher: OnBackPressedDispatcher? = null
+        composeRule.setContent {
+            backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+            CustomerTheme { CustomerAppContent(CustomerAppState.Ready(readyCatalogWorkflow())) }
+        }
+        composeRule.onNodeWithTag("menu-button").performClick()
+        composeRule.onNodeWithText("Корзина (0)").performClick()
+        composeRule.onNodeWithTag("cart-screen").assertExists()
+        composeRule.runOnIdle { checkNotNull(backDispatcher).onBackPressed() }
+        composeRule.onNodeWithTag("catalog-screen").assertExists()
+        composeRule.onNodeWithTag("cart-screen").assertDoesNotExist()
+    }
+
+    @Test
+    fun `forward and back transitions keep neighboring screens apart`() {
+        composeRule.setContent {
+            CustomerTheme {
+                CustomerAppContent(
+                    CustomerAppState.Ready(readyCatalogWorkflow().copy(selectedCabinIds = setOf("a"))),
+                )
+            }
+        }
+        composeRule.waitForIdle()
+        composeRule.mainClock.autoAdvance = false
+        composeRule.onNodeWithTag("cart-fab").performClick()
+        composeRule.mainClock.advanceTimeBy(128)
+        assertCatalogAndCartDoNotOverlap()
+        composeRule.mainClock.advanceTimeBy(400)
+        composeRule.onNodeWithTag("header-back").performClick()
+        composeRule.mainClock.advanceTimeBy(128)
+        assertCatalogAndCartDoNotOverlap()
+        composeRule.mainClock.autoAdvance = true
+        composeRule.onNodeWithTag("catalog-screen").assertExists()
+    }
+
+    private fun assertCatalogAndCartDoNotOverlap() {
+        val catalog = composeRule.onNodeWithTag("catalog-screen").fetchSemanticsNode().boundsInRoot
+        val cart = composeRule.onNodeWithTag("cart-screen").fetchSemanticsNode().boundsInRoot
+        assertThat(catalog.width).isGreaterThan(0f)
+        assertThat(cart.width).isGreaterThan(0f)
+        assertThat(catalog.right).isAtMost(cart.left + 1f)
     }
 
     @Test

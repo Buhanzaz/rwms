@@ -232,8 +232,10 @@ the presentation policy is in
 Navigation uses the drawer with the BLOCK BOX logo on all window sizes. A floating cart shortcut at
 the bottom right of catalog, orders and profile shows the selected cabin count when nonzero. The cart
 and delivery flow have no persistent shortcut. Forward, back and predictive-back transitions are
-explicitly defined; returning from profile restores the preceding screen. The full-height drawer
-exposes a single one-tap explicit
+synchronized full-width slides with no crossfade between translucent screens. Back from the cart or
+profile restores the preceding screen; drawer destinations retain the rental catalog (or city
+selection) as their root. The opaque, 296-dp-wide drawer has a wider logo and closes before changing
+destinations. It exposes a single one-tap explicit
 light/dark appearance toggle; system and battery appearance sources are not supported. Screens and full-screen dialogs are
 edge-to-edge and IME-aware. Customer commands are serialized, 409 reloads
 authoritative cart state, and checkout is reconciled with the durable booking
