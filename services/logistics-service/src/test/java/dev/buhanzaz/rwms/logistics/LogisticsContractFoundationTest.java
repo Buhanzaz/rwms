@@ -813,6 +813,8 @@ class LogisticsContractFoundationTest {
             "updateRentalSettings",
             "getRentalPricingSettings",
             "updateRentalPrice",
+            "getEquipmentRentalPricingSettings",
+            "updateEquipmentRentalPrice",
             "getCabinRentalPrices",
             "getShipmentTaskSettings",
             "updateShipmentTaskSettings",

@@ -1111,6 +1111,12 @@ public interface LogisticsDependencyGateway
   /** Asset-owned catalog identity; labels never identify a rental tariff. */
   record CabinPricingCatalogValue(UUID id, String name, boolean active) {}
 
+  /** Complete live furniture catalog, independent of stock and price ownership. */
+  record EquipmentPricingCatalog(List<EquipmentPricingCatalogValue> items) {}
+
+  /** Asset-owned furniture identity; one logistics tariff applies per unit per month. */
+  record EquipmentPricingCatalogValue(UUID id, String name, boolean active) {}
+
   /** Exact warehouse-scoped classification facts, independent of holds and rental terms. */
   record CabinPricingReferences(UUID warehouseId, List<CabinPricingReference> cabins) {}
 

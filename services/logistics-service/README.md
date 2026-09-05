@@ -58,6 +58,12 @@ warehouse-authorized cabin set in request order against one tariff revision. A m
 fails the entire read. Dependency failure is explicit 503, never a zero-price fallback. These
 informational prices do not reserve cabins or freeze commercial terms.
 
+`GET /api/logistics/v1/settings/equipment-rental-prices` returns the live furniture catalog with
+monthly whole-RUB prices per unit, including inactive/out-of-stock positions. The corresponding
+`PUT /settings/equipment-rental-prices/{equipmentId}` requires the same global admin authority;
+its `expectedVersion` is shared with cabin pricing. Names are not keys, new identities default
+to zero, and unavailable or malformed asset catalog facts fail explicitly with 503.
+
 Customer catalog, selection and cart cabin responses include mandatory `pricingVersion` and
 `monthlyPriceRubles` from the same tariff resolver, after customer ownership checks. The latter is
 an exact whole-ruble string, independent of delivery price; unavailable classifications fail the

@@ -94,6 +94,56 @@ class HttpLogisticsDependencyGatewayTest {
   }
 
   @Test
+  void furniturePricingCatalogUsesExactPrivateCredentialsAndRetainsInactiveItems() {
+    UUID id = UUID.randomUUID();
+    server
+        .expect(
+            requestTo(
+                "http://asset.test/api/internal/asset/v1/logistics/equipment-pricing-catalog"))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header("Authorization", "Bearer test-asset.logistics"))
+        .andRespond(
+            withSuccess(
+                """
+            {"items":[{"id":"%s","name":"Кровать","active":false}]}
+            """
+                    .formatted(id),
+                MediaType.APPLICATION_JSON));
+    assertThat(gateway.readEquipmentPricingCatalog().items())
+        .containsExactly(
+            new LogisticsDependencyGateway.EquipmentPricingCatalogValue(id, "Кровать", false));
+    server.verify();
+  }
+
+  @Test
+  void furniturePricingCatalogRejectsMissingFlagsNullValuesAndDuplicateIds() {
+    UUID id = UUID.randomUUID();
+    for (String body :
+        List.of(
+            "{}",
+            "{\"items\":null}",
+            "{\"items\":[null]}",
+            "{\"items\":[{\"id\":\"%s\",\"name\":\"Кровать\"}]}".formatted(id),
+            "{\"items\":[{\"name\":\"Кровать\",\"active\":true}]}",
+            "{\"items\":[{\"id\":\"%s\",\"name\":\" \",\"active\":true}]}".formatted(id),
+            """
+        {"items":[{"id":"%s","name":"Кровать","active":true},
+                  {"id":"%s","name":"Стол","active":true}]}
+        """
+                .formatted(id, id))) {
+      server
+          .expect(
+              requestTo(
+                  "http://asset.test/api/internal/asset/v1/logistics/equipment-pricing-catalog"))
+          .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+      assertThatThrownBy(gateway::readEquipmentPricingCatalog)
+          .isInstanceOf(LogisticsDependencyException.class);
+      server.verify();
+      server.reset();
+    }
+  }
+
+  @Test
   void pricingCatalogUsesPrivateAssetCredentialsAndRetainsInactiveUnusedValues() {
     UUID type = UUID.randomUUID();
     UUID category = UUID.randomUUID();

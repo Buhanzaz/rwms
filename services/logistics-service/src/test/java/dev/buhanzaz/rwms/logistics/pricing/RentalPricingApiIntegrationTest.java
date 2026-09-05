@@ -16,6 +16,8 @@ import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.CabinP
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.CabinPricingCatalogValue;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.CabinPricingReference;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.CabinPricingReferences;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.EquipmentPricingCatalog;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.EquipmentPricingCatalogValue;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -56,6 +58,9 @@ import tools.jackson.databind.ObjectMapper;
 class RentalPricingApiIntegrationTest {
   private static final String SETTINGS = "/api/logistics/v1/settings/rental-prices";
   private static final String PRICES = "/api/logistics/v1/cabins/rental-prices";
+  private static final String EQUIPMENT = "/api/logistics/v1/settings/equipment-rental-prices";
+  private static final UUID BED = UUID.randomUUID();
+  private static final UUID TABLE = UUID.randomUUID();
   private static final UUID ACTOR = UUID.randomUUID();
   private static final UUID WAREHOUSE = UUID.randomUUID();
   private static final UUID TYPE = UUID.randomUUID();
@@ -76,14 +81,27 @@ class RentalPricingApiIntegrationTest {
   @Autowired org.springframework.transaction.PlatformTransactionManager transactionManager;
   @MockitoBean LogisticsDependencyGateway dependencies;
   private CabinPricingCatalog currentCatalog;
+  private EquipmentPricingCatalog currentEquipmentCatalog;
 
   @BeforeEach
   void resetPrices() {
+    jdbc.update("delete from rental_pricing_equipment_rate");
     jdbc.update("delete from rental_pricing_rate");
     jdbc.update(
         "update rental_pricing_settings set version=0, updated_by_subject_id=null,"
             + " updated_at=current_timestamp");
     reset(dependencies);
+    currentEquipmentCatalog =
+        new EquipmentPricingCatalog(
+            List.of(
+                new EquipmentPricingCatalogValue(BED, "Кровать", true),
+                new EquipmentPricingCatalogValue(TABLE, "Стол", false)));
+    when(dependencies.readEquipmentPricingCatalog())
+        .thenAnswer(
+            ignored -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+              return currentEquipmentCatalog;
+            });
     currentCatalog =
         new CabinPricingCatalog(
             List.of(
@@ -392,6 +410,213 @@ class RentalPricingApiIntegrationTest {
                 .with(admin())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body(0, "8000")))
+        .andExpect(status().isServiceUnavailable());
+    assertThat(jdbc.queryForObject("select version from rental_pricing_settings", Long.class))
+        .isZero();
+  }
+
+  @Test
+  void furnitureReadIncludesInactiveAndOutOfStockItemsWithZeroWithoutWriting() throws Exception {
+    mvc.perform(get(EQUIPMENT).with(manager()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.version").value(0))
+        .andExpect(jsonPath("$.items.length()").value(2))
+        .andExpect(jsonPath("$.items[0].equipmentId").value(BED.toString()))
+        .andExpect(jsonPath("$.items[0].name").value("Кровать"))
+        .andExpect(jsonPath("$.items[0].monthlyPriceRubles").value("0"))
+        .andExpect(jsonPath("$.items[1].active").value(false))
+        .andExpect(jsonPath("$.items[1].monthlyPriceRubles").value("0"));
+    assertThat(
+            jdbc.queryForObject("select count(*) from rental_pricing_equipment_rate", Long.class))
+        .isZero();
+    assertThat(jdbc.queryForObject("select version from rental_pricing_settings", Long.class))
+        .isZero();
+  }
+
+  @Test
+  void furnitureEditsRetainExactWholeRublesAndShareCabinConcurrencyFence() throws Exception {
+    mvc.perform(
+            put(EQUIPMENT + "/" + BED)
+                .with(admin())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(0, "9223372036854775807")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.version").value(1))
+        .andExpect(jsonPath("$.items[0].monthlyPriceRubles").value("9223372036854775807"));
+    mvc.perform(
+            put(path(TYPE, CATEGORY))
+                .with(admin())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(0, "8000")))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("RENTAL_PRICING_VERSION_CONFLICT"));
+    mvc.perform(
+            put(path(TYPE, CATEGORY))
+                .with(admin())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(1, "8000")))
+        .andExpect(status().isOk());
+    mvc.perform(
+            put(EQUIPMENT + "/" + TABLE)
+                .with(admin())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(1, "500")))
+        .andExpect(status().isConflict());
+    mvc.perform(
+            put(EQUIPMENT + "/" + TABLE)
+                .with(admin())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(2, "500")))
+        .andExpect(status().isOk());
+    mvc.perform(
+            put(EQUIPMENT + "/" + BED)
+                .with(admin())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(3, "0")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.version").value(4))
+        .andExpect(jsonPath("$.items[0].monthlyPriceRubles").value("0"))
+        .andExpect(jsonPath("$.items[1].monthlyPriceRubles").value("500"));
+    mvc.perform(
+            put(EQUIPMENT + "/" + BED)
+                .with(admin())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(4, "0")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.version").value(4));
+    mvc.perform(get(SETTINGS).with(admin()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.version").value(4))
+        .andExpect(jsonPath("$.types[0].categories[0].monthlyPriceRubles").value("8000"));
+  }
+
+  @Test
+  void furnitureRenamesKeepTheRateWhileRemovedIdentitiesDisappear() throws Exception {
+    mvc.perform(
+            put(EQUIPMENT + "/" + BED)
+                .with(admin())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(0, "700")))
+        .andExpect(status().isOk());
+    currentEquipmentCatalog =
+        new EquipmentPricingCatalog(
+            List.of(new EquipmentPricingCatalogValue(BED, "Кровать двухъярусная", false)));
+    mvc.perform(get(EQUIPMENT).with(admin()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.items.length()").value(1))
+        .andExpect(jsonPath("$.items[0].name").value("Кровать двухъярусная"))
+        .andExpect(jsonPath("$.items[0].monthlyPriceRubles").value("700"));
+    currentEquipmentCatalog = new EquipmentPricingCatalog(List.of());
+    mvc.perform(get(EQUIPMENT).with(admin()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.items").isEmpty());
+    mvc.perform(
+            put(EQUIPMENT + "/" + BED)
+                .with(admin())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(1, "800")))
+        .andExpect(status().isNotFound());
+    currentEquipmentCatalog =
+        new EquipmentPricingCatalog(
+            List.of(new EquipmentPricingCatalogValue(UUID.randomUUID(), "Кровать", true)));
+    mvc.perform(get(EQUIPMENT).with(admin()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.items[0].monthlyPriceRubles").value("0"));
+    assertThat(jdbc.queryForObject("select version from rental_pricing_settings", Long.class))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void furniturePricesRequireAuthenticationAndGlobalAdminWriteAuthority() throws Exception {
+    mvc.perform(get(EQUIPMENT)).andExpect(status().isUnauthorized());
+    mvc.perform(
+            put(EQUIPMENT + "/" + BED)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(0, "700")))
+        .andExpect(status().isUnauthorized());
+    for (var denied :
+        List.of(
+            manager(),
+            actor("WAREHOUSE_MANAGER", "rwms.read rwms.write", "rwms-web", true),
+            actor("VIEWER", "rwms.read rwms.write", "rwms-web", true),
+            actor("SYSTEM_ADMIN", "rwms.read", "rwms-web", true),
+            actor("SYSTEM_ADMIN", "rwms.read rwms.write", "rwms-web", false))) {
+      mvc.perform(
+              put(EQUIPMENT + "/" + BED)
+                  .with(denied)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(body(0, "700")))
+          .andExpect(status().isForbidden());
+    }
+    mvc.perform(
+            put(EQUIPMENT + "/" + BED)
+                .with(actor("WMS_ADMIN", "admin.manage", "rwms-admin-web", true))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(0, "700")))
+        .andExpect(status().isOk());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"-1", "1.5", "01", "9223372036854775808", "", "1e3"})
+  void invalidFurniturePriceNeverMutatesSettings(String amount) throws Exception {
+    mvc.perform(
+            put(EQUIPMENT + "/" + BED)
+                .with(admin())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(0, amount)))
+        .andExpect(status().isBadRequest());
+    assertThat(jdbc.queryForObject("select version from rental_pricing_settings", Long.class))
+        .isZero();
+  }
+
+  @Test
+  void incompleteFurnitureRequestsAndUnknownIdentitiesAreRejected() throws Exception {
+    for (String request :
+        List.of(
+            "{}",
+            "{\"expectedVersion\":0}",
+            "{\"monthlyPriceRubles\":\"700\"}",
+            "{\"expectedVersion\":-1,\"monthlyPriceRubles\":\"700\"}")) {
+      mvc.perform(
+              put(EQUIPMENT + "/" + BED)
+                  .with(admin())
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(request))
+          .andExpect(status().isBadRequest());
+    }
+    mvc.perform(
+            put(EQUIPMENT + "/" + UUID.randomUUID())
+                .with(admin())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(0, "700")))
+        .andExpect(status().isNotFound());
+  }
+
+  @Test
+  void unavailableOrMalformedFurnitureCatalogCannotInventFreePrices() throws Exception {
+    for (var invalid :
+        List.of(
+            new EquipmentPricingCatalog(null),
+            new EquipmentPricingCatalog(List.of(new EquipmentPricingCatalogValue(BED, " ", true))),
+            new EquipmentPricingCatalog(
+                List.of(
+                    new EquipmentPricingCatalogValue(BED, "Кровать", true),
+                    new EquipmentPricingCatalogValue(BED, "Кровать", true))))) {
+      currentEquipmentCatalog = invalid;
+      mvc.perform(get(EQUIPMENT).with(admin())).andExpect(status().isServiceUnavailable());
+    }
+    when(dependencies.readEquipmentPricingCatalog())
+        .thenThrow(
+            new LogisticsDependencyException(
+                LogisticsDependencyException.FailureKind.TRANSIENT, "unavailable"));
+    mvc.perform(get(EQUIPMENT).with(admin()))
+        .andExpect(status().isServiceUnavailable())
+        .andExpect(jsonPath("$.code").value("RENTAL_PRICING_UNAVAILABLE"));
+    mvc.perform(
+            put(EQUIPMENT + "/" + BED)
+                .with(admin())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(0, "700")))
         .andExpect(status().isServiceUnavailable());
     assertThat(jdbc.queryForObject("select version from rental_pricing_settings", Long.class))
         .isZero();

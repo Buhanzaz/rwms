@@ -872,6 +872,12 @@ Asset's logistics-only `/equipment-pricing-catalog` exposes live furniture ident
 including inactive and out-of-stock positions; it excludes ELECTRICAL/OTHER and contains no prices.
 This supplies logistics with the catalog for the requested monthly tariff per one furniture unit.
 Evidence: [`catalog read`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/EquipmentPricingReferenceService.java).
+Logistics exposes those identities at `/api/logistics/v1/settings/equipment-rental-prices` with
+exact whole-RUB monthly prices per one unit. Ordinary rental read authorization applies to GET;
+one-identity PUT requires global rental administration and the shared cabin/furniture version.
+Names follow live renames; a deleted identity disappears and a new identity starts at zero.
+Unavailable/malformed catalog facts return 503, never fabricated free prices.
+Evidence: [`tariff owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/pricing/service/EquipmentRentalPricingService.java).
 
 Global cabin monthly prices belong to logistics, not asset passport metadata. V98 seeds a
 separate versioned singleton with positive whole-ruble overrides for asset-owned type/category

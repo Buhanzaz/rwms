@@ -2729,6 +2729,57 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/logistics/v1/settings/equipment-rental-prices:
+    get:
+      operationId: getEquipmentRentalPricingSettings
+      description: >-
+        Returns every current asset-owned FURNITURE identity, including inactive and out-of-stock
+        items, with its whole-RUB monthly price per one unit. Missing overrides mean zero.
+        Requires the ordinary rental read actor or the exact dedicated rental-manager client.
+        Labels are read live; catalog failures return 503, never an empty or zero-price fallback.
+        This read neither reserves furniture nor changes booking terms.
+      responses:
+        "200":
+          description: Current furniture catalog and shared cabin/furniture tariff revision.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EquipmentRentalPricing" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/settings/equipment-rental-prices/{equipmentId}:
+    parameters:
+      - name: equipmentId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    put:
+      operationId: updateEquipmentRentalPrice
+      description: >-
+        Sets the monthly whole-RUB price of one furniture unit for an existing FURNITURE identity.
+        Requires SYSTEM_ADMIN or WMS_ADMIN with rentalAccess and rwms.write, or the administration
+        client with admin.manage. expectedVersion is shared with cabin rental-prices: a stale edit
+        returns 409 even when the submitted amount is unchanged. Zero removes only this override;
+        a current unchanged value preserves version/audit. Catalog validation precedes the local
+        transaction. Renames preserve UUID-keyed prices; deletion hides the override without
+        recreating a catalog record. Existing booking terms are not repriced by this edit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateRentalPriceRequest" }
+      responses:
+        "200":
+          description: Current furniture tariff table after the version-fenced edit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EquipmentRentalPricing" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/settings/rental-prices:
     get:
       operationId: getRentalPricingSettings
@@ -2763,7 +2814,8 @@ paths:
       description: >-
         Sets one existing type/category pair's global monthly price. Requires SYSTEM_ADMIN or
         WMS_ADMIN with rentalAccess and rwms.write, or the administration client with admin.manage.
-        All pairs share expectedVersion. A stale edit returns 409 even if its value is unchanged;
+        All cabin pairs and furniture unit tariffs share expectedVersion. A stale edit returns 409
+        even if its value is unchanged;
         a current unchanged value preserves the version. Zero removes only that override. The
         current asset catalog is validated before the local transaction; a concurrent catalog
         deletion may leave an undisplayed UUID override, never recreate a catalog entry.
@@ -9229,6 +9281,26 @@ components:
           pattern: '^\+[1-9][0-9]{7,14}$'
           description: Configured rental support dialer number in international format, not the customer's phone. Null means unavailable.
         updatedBy: { type: string, format: uuid }
+        updatedAt: { type: string, format: date-time }
+    EquipmentRentalPricing:
+      type: object
+      additionalProperties: false
+      required: [version, items, updatedAt]
+      properties:
+        version: { type: integer, format: int64, minimum: 0 }
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [equipmentId, name, active, monthlyPriceRubles]
+            properties:
+              equipmentId: { type: string, format: uuid }
+              name: { type: string, minLength: 1, maxLength: 255 }
+              active: { type: boolean }
+              monthlyPriceRubles:
+                $ref: "#/components/schemas/RentalMonthlyPriceRubles"
+                description: Whole-RUB monthly rental price of one unit, not a purchase price or a per-booking fee.
         updatedAt: { type: string, format: date-time }
     RentalPricingSettings:
       type: object

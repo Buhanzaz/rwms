@@ -922,6 +922,10 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
     return assetOrderPresentation.readCabinPricingCatalog();
   }
 
+  public EquipmentPricingCatalog readEquipmentPricingCatalog() {
+    return assetOrderPresentation.readEquipmentPricingCatalog();
+  }
+
   public CabinPricingReferences readCabinPricingReferences(
       UUID warehouseId, List<UUID> rentalItemIds) {
     return assetOrderPresentation.readCabinPricingReferences(warehouseId, rentalItemIds);

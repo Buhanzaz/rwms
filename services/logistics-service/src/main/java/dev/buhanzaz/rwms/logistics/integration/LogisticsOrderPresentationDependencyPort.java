@@ -12,6 +12,7 @@ import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.CabinP
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.CabinPricingReferences;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.CabinSearchResult;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.ConvertedPresentationHolds;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.EquipmentPricingCatalog;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.EquipmentWarehouseAvailability;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.OrderEquipmentRequirement;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.OrderEquipmentReservation;
@@ -119,6 +120,11 @@ interface LogisticsOrderPresentationDependencyPort {
   /** Reads every current asset-owned type and category without maintaining another catalog. */
   default CabinPricingCatalog readCabinPricingCatalog() {
     throw unavailable("Cabin pricing catalog is not configured");
+  }
+
+  /** Reads live FURNITURE identities, including inactive and out-of-stock items. */
+  default EquipmentPricingCatalog readEquipmentPricingCatalog() {
+    throw unavailable("Equipment pricing catalog is not configured");
   }
 
   /** Reads every requested classification fact or fails; it never creates a reservation. */

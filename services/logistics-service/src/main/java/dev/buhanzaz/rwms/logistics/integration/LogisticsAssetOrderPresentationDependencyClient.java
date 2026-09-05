@@ -362,6 +362,36 @@ final class LogisticsAssetOrderPresentationDependencyClient {
             .toList());
   }
 
+  EquipmentPricingCatalog readEquipmentPricingCatalog() {
+    EquipmentPricingCatalogResponse response =
+        transport.get(
+            assetBase + "/equipment-pricing-catalog",
+            EquipmentPricingCatalogResponse.class,
+            ASSET_CLIENT,
+            ASSET_SCOPE,
+            "Asset-service returned an empty furniture pricing catalog",
+            DEFAULT);
+    var identities = new HashSet<UUID>();
+    if (response.items() == null
+        || response.items().stream()
+            .anyMatch(
+                value ->
+                    value == null
+                        || value.id() == null
+                        || !identities.add(value.id())
+                        || value.name() == null
+                        || value.name().isBlank()
+                        || value.name().length() > 255
+                        || value.active() == null)) {
+      throw malformed("Asset-service returned an invalid furniture pricing catalog");
+    }
+    return new EquipmentPricingCatalog(
+        response.items().stream()
+            .map(
+                value -> new EquipmentPricingCatalogValue(value.id(), value.name(), value.active()))
+            .toList());
+  }
+
   CabinPricingCatalog readCabinPricingCatalog() {
     CabinPricingCatalogResponse response =
         transport.get(
@@ -1449,6 +1479,13 @@ final class LogisticsAssetOrderPresentationDependencyClient {
 
   /** Nullable flag detects incomplete wire data instead of inventing an inactive catalog value. */
   private record CabinPricingCatalogValueResponse(UUID id, String name, Boolean active) {}
+
+  /** Nullable activity rejects incomplete furniture wire facts without inventing defaults. */
+  private record EquipmentPricingCatalogValueResponse(UUID id, String name, Boolean active) {}
+
+  /** Only the asset-owned furniture category is exposed for monthly unit tariffs. */
+  private record EquipmentPricingCatalogResponse(
+      List<EquipmentPricingCatalogValueResponse> items) {}
 
   /** Complete asset-owned taxonomy returned independently of current cabin usage. */
   private record CabinPricingCatalogResponse(
