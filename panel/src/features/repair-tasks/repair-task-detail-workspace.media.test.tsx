@@ -175,8 +175,8 @@ describe("RepairTaskDetailWorkspace media", () => {
         { mediaId: generalMediaId, generation: 2 },
       ],
       coverMediaId: generalMediaId,
+      presentation: "work-carousel",
     })
-    expect(gallery("Общие медиа задания")).not.toHaveProperty("presentation")
     expect(gallery("Фото работы «Заменить окно»")).toMatchObject({
       owner: {
         ownerType: "TASK_BOARD_ENTRY",
@@ -197,11 +197,19 @@ describe("RepairTaskDetailWorkspace media", () => {
       },
       visibleMediaIds: [resultMediaId],
       authoritativeReadyReferences: [{ mediaId: resultMediaId, generation: 5 }],
+      presentation: "work-carousel",
     })
-    expect(gallery("Фото результата задания")).not.toHaveProperty(
-      "presentation"
-    )
     expect(serviceOwnerPhotos).toHaveBeenCalledTimes(3)
+    const workspace = document.querySelector(
+      '[data-slot="repair-work-detail-workspace-grid"]'
+    )
+    expect(workspace?.className).toContain(
+      "xl:grid-rows-[20rem_minmax(18rem,1fr)]"
+    )
+    expect(workspace?.className).toContain(
+      "xl:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]"
+    )
+    expect(workspace?.className).toContain("flex-none xl:flex-1")
   })
 
   it("selects the original owner for inventory, estimate, and inherited rework media", () => {

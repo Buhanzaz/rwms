@@ -117,6 +117,8 @@ type RepairWorkDetailWorkspaceLayoutProps = {
   mobileContentFlow?: boolean
   /** Optional desktop row template for a detail workspace with a fixed visual comparison. */
   desktopGridRowsClassName?: string
+  /** Optional desktop columns when compact photos leave more room for task information. */
+  desktopGridColumnsClassName?: string
   message?: ReactNode
   photos: ReactNode
   information: ReactNode
@@ -133,6 +135,7 @@ export function RepairWorkDetailWorkspaceLayout({
   ariaLabel,
   mobileContentFlow = false,
   desktopGridRowsClassName,
+  desktopGridColumnsClassName,
   message,
   photos,
   information,
@@ -154,7 +157,9 @@ export function RepairWorkDetailWorkspaceLayout({
       <div
         data-slot="repair-work-detail-workspace-grid"
         className={cn(
-          "grid min-h-0 grid-cols-1 gap-3 p-px xl:grid-cols-[minmax(0,12fr)_minmax(0,8fr)]",
+          "grid min-h-0 grid-cols-1 gap-3 p-px",
+          desktopGridColumnsClassName ??
+            "xl:grid-cols-[minmax(0,12fr)_minmax(0,8fr)]",
           desktopGridRowsClassName ??
             "xl:grid-rows-[minmax(15rem,0.8fr)_minmax(18rem,1.2fr)]",
           mobileContentFlow ? "flex-none xl:flex-1" : "flex-1"

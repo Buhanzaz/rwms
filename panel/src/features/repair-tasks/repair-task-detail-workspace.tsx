@@ -52,19 +52,25 @@ export function RepairTaskDetailWorkspace({
   return (
     <RepairWorkDetailWorkspaceLayout
       ariaLabel={`Ремонт бытовки ${task.cabinNumber}`}
+      mobileContentFlow
+      desktopGridRowsClassName="xl:grid-rows-[20rem_minmax(18rem,1fr)]"
+      desktopGridColumnsClassName="xl:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]"
       photos={
-        <ServiceOwnerPhotos
-          accessToken={accessToken}
-          owner={repairTaskGeneralMediaOwner(task)}
-          readOnly
-          maxItems={100}
-          title="Общие медиа задания"
-          visibleMediaIds={generalMediaReferences.map(
-            (reference) => reference.mediaId
-          )}
-          authoritativeReadyReferences={generalMediaReferences}
-          coverMediaId={task.coverMediaId ?? null}
-        />
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <ServiceOwnerPhotos
+            accessToken={accessToken}
+            owner={repairTaskGeneralMediaOwner(task)}
+            readOnly
+            maxItems={100}
+            title="Общие медиа задания"
+            presentation="work-carousel"
+            visibleMediaIds={generalMediaReferences.map(
+              (reference) => reference.mediaId
+            )}
+            authoritativeReadyReferences={generalMediaReferences}
+            coverMediaId={task.coverMediaId ?? null}
+          />
+        </div>
       }
       information={
         <div className="flex flex-col gap-3">

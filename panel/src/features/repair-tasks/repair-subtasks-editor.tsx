@@ -336,6 +336,7 @@ function RepairTaskEvidencePhotos({
           owner={taskBoardEntryMediaOwner(entryId, warehouseId)}
           readOnly
           maxItems={100}
+          presentation="work-carousel"
           title={
             byEntry.size === 1
               ? "Фото результата задания"

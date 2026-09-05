@@ -98,7 +98,7 @@ describe("ServiceOwnerPhotos", () => {
     expect(retryPreviews).toHaveBeenCalledOnce()
   })
 
-  it("maps the work gallery presentation to compact always-visible carousel controls", () => {
+  it("bounds work galleries to 320px with a fixed aspect ratio and preserves full-screen requests", () => {
     const photoId = "33333333-3333-4333-8333-333333333333"
     mediaState.value = mediaValue({
       assets: [{ id: photoId, kind: "IMAGE", status: "READY" }],
@@ -158,10 +158,14 @@ describe("ServiceOwnerPhotos", () => {
       expect.objectContaining({
         showPhotoCount: true,
         controlsVisibility: "always",
-        className: "h-56 min-h-56 rounded-lg border",
+        className: "aspect-[4/3] w-full shrink-0 rounded-lg border",
         fit: "contain",
+        onRequestFullscreen: mediaState.value.requestFullscreen,
       })
     )
+    expect(
+      screen.getByRole("region", { name: "Фото работы" }).className
+    ).toContain("max-w-xs")
   })
 
   it("distinguishes an empty owner from an unavailable media service", () => {

@@ -543,7 +543,13 @@ function OwnedServiceOwnerPhotos({
   }
 
   return (
-    <section className="flex h-full min-h-0 flex-col gap-3" aria-label={title}>
+    <section
+      className={cn(
+        "flex min-h-0 flex-col gap-3",
+        workCarousel ? "w-full max-w-xs" : "h-full"
+      )}
+      aria-label={title}
+    >
       <div className="flex items-center justify-between gap-2">
         <Badge variant="secondary">
           {visibleLogicalMediaCount} из {maxItems}
@@ -616,7 +622,7 @@ function OwnedServiceOwnerPhotos({
               showPhotoCount={workCarousel}
               className={
                 workCarousel
-                  ? "h-56 min-h-56 rounded-lg border"
+                  ? "aspect-[4/3] w-full shrink-0 rounded-lg border"
                   : cn(
                       "min-h-56 flex-1 rounded-lg border",
                       shrinkToContainer && "xl:min-h-0"
