@@ -236,14 +236,15 @@ class LogisticsDriverResourceControllerIntegrationTest extends PostgresIntegrati
 
   private static String updateBody(long expectedVersion, String displayName, boolean active) {
     return """
-        {
-          "expectedVersion":%d,
-          "displayName":"%s",
-          "phone":"+7 900 999-00-00",
-          "comment":"Обновлён диспетчером",
-          "active":%s
-        }
-        """
+    {
+      "expectedVersion":%d,
+      "displayName":"%s",
+      "phone":"+7 900 999-00-00",
+      "comment":"Обновлён диспетчером",
+      "active":%s,
+      "companyId":null
+    }
+    """
         .formatted(expectedVersion, displayName, active);
   }
 

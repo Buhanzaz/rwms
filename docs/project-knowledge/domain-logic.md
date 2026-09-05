@@ -1176,6 +1176,15 @@ assigned transfer task becoming current drives version-fenced departure, and com
 drives factual arrival through a retry-stable durable relay. Logistics does not infer an executor for
 a warehouse-pool transfer whose canonical driver identity is absent.
 
+Task-board also owns a city-specific hired-company contact catalog with INN,
+contact person, phone, email, address and notes. INN is unique per home city.
+Company creates replay a stable ID, edits/deletion require the observed version,
+and warehouse VIEW/EDIT authorizes the public catalog. A contractor's optional
+company must belong to the same immutable home city, enforced by a composite
+database foreign key. Existing independent drivers remain independent. Deleting
+a company with drivers is rejected; explicit profile editing can detach a driver
+without deleting its trip history. Company contacts carry no dated assignments.
+
 A contractor is a reusable task-board-owned on-demand workforce profile and not
 a staff route candidate. It requires no known vehicle, capacity profile, shift,
 cycle or profile-level availability dates. The standalone UI uses the planning

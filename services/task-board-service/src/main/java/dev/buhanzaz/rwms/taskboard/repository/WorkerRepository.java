@@ -17,6 +17,8 @@ import org.springframework.data.repository.query.Param;
 public interface WorkerRepository extends JpaRepository<Worker, UUID> {
   List<Worker> findAllByWarehouseIdOrderByDisplayNameAsc(UUID warehouseId);
 
+  boolean existsByContractorCompanyId(UUID companyId);
+
   /**
    * Returns active workers holding the active primary qualification of the warehouse's active
    * logistics-driver queue. The existence subquery avoids duplicate identities if persistence

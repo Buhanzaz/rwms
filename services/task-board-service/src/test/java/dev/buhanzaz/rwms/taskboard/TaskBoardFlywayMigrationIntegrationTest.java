@@ -71,7 +71,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
   void cumulativeVersionFourEventSourcingAndTaskSyncMigrateCleanDatabaseAndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(46);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(48);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -144,7 +144,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
                 Map.entry("board_task", 20),
                 Map.entry("queue_entry", 22),
                 Map.entry("queue_usage_reference", 6),
-                Map.entry("task_assignment", 12),
+                Map.entry("task_assignment", 13),
                 Map.entry("task_auto_interruption", 8),
                 Map.entry("task_board_inbox", 7),
                 Map.entry("task_board_outbox", 24),
@@ -152,11 +152,12 @@ class TaskBoardFlywayMigrationIntegrationTest {
                 Map.entry("task_time_event", 10),
                 Map.entry("task_board_warehouse_lifecycle_intent", 10),
                 Map.entry("kpi_settings", 8),
-                Map.entry("queue_definition", 17),
+                Map.entry("queue_definition", 18),
                 Map.entry("queue_definition_class_binding", 8),
                 Map.entry("work_queue", 15),
                 Map.entry("work_queue_class_binding", 8),
-                Map.entry("worker", 19),
+                Map.entry("worker", 20),
+                Map.entry("contractor_company", 10),
                 Map.entry("worker_operational_assignment", 16),
                 Map.entry("worker_class", 8),
                 Map.entry("worker_class_assignment", 6),
@@ -2463,6 +2464,48 @@ class TaskBoardFlywayMigrationIntegrationTest {
                 String.class))
         .isEqualTo("kpi_settings_pkey");
     assertThat(v49.migrate().migrationsExecuted).isZero();
+  }
+
+  @Test
+  void versionFiftyOnePreservesIndependentDriversAndEnforcesCompanyCity() {
+    configuration(MIGRATION_LOCATION).target("50").load().migrate();
+    UUID city = UUID.randomUUID();
+    UUID otherCity = UUID.randomUUID();
+    UUID worker = UUID.randomUUID();
+    UUID company = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into worker(id,version,revision_marker,warehouse_id,display_name,active,credential_status,employment_type,phone)
+        values (?,0,?,?,?,true,'NOT_CONFIGURED','CONTRACTOR','123')
+        """,
+        worker,
+        UUID.randomUUID(),
+        city,
+        "Наёмный водитель");
+    Flyway migration = configuration(MIGRATION_LOCATION).target("51").load();
+    assertThat(migration.migrate().migrationsExecuted).isOne();
+    migration.validate();
+    assertThat(
+            jdbc.queryForObject(
+                "select contractor_company_id from worker where id=?", UUID.class, worker))
+        .isNull();
+    jdbc.update(
+        "insert into contractor_company(id,warehouse_id,name,inn,phone) values"
+            + " (?,?,?,'7801000001','123')",
+        company,
+        otherCity,
+        "Компания");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update worker set contractor_company_id=? where id=?", company, worker))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    jdbc.update("update contractor_company set warehouse_id=? where id=?", city, company);
+    jdbc.update("update worker set contractor_company_id=? where id=?", company, worker);
+    assertThatThrownBy(
+            () -> jdbc.update("update worker set employment_type='STAFF' where id=?", worker))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThat(migration.migrate().migrationsExecuted).isZero();
   }
 
   private Flyway flyway(String location) {

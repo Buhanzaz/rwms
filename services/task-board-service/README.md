@@ -404,6 +404,17 @@ credentials, require a vehicle or make the worker eligible for the ordinary
 primary-driver optimizer. A task becomes service-executable only after logistics registers an
 exact `ASSIGNED_DRIVER` audience for that contractor; the catalog alone grants no task access.
 
+The same owner stores hired-company contacts at
+`/api/warehouses/{warehouseId}/logistics-drivers/companies`: name, INN, contact person,
+phone, email, address and notes. INN is unique within one city; a separate record may
+exist in another city. Creates use a stable company ID, edits/deletion require
+`expectedVersion`, and warehouse VIEW/EDIT grants match the driver catalog. A driver's
+nullable `companyId` can only reference its immutable home city. Explicit null removes
+membership without deleting the driver or trip history; updates must include that field.
+Companies with drivers cannot be deleted. Flyway V51 adds this contact catalog and an
+enforced same-city membership key; existing independent drivers remain unassigned.
+Trip dates and execution still belong to existing driver assignment workflows.
+
 The daily-brigade activity read uses persisted assignment `startedAt` from TAKE
 and `finishedAt` from completion. Shift bounds select and position the display
 but never replace those timestamps. Overlapping joined-worker or legacy

@@ -1,5 +1,7 @@
 package dev.buhanzaz.rwms.taskboard.api;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import dev.buhanzaz.rwms.taskboard.domain.WorkerEmploymentType;
 import dev.buhanzaz.rwms.taskboard.domain.WorkerOperationalAssignmentMode;
 import dev.buhanzaz.rwms.taskboard.domain.WorkerOperationalAssignmentStatus;
@@ -21,12 +23,14 @@ public final class LogisticsDriverAssignmentApiModels {
    * @param displayName operator-facing name
    * @param phone contractor contact number
    * @param comment optional logistics note
+   * @param companyId optional company owned by the same immutable home city
    */
   public record CreateContractorDriverRequest(
       @NotNull UUID contractorId,
       @NotBlank @Size(max = 256) String displayName,
       @NotBlank @Size(max = 64) String phone,
-      @Size(max = 1000) String comment) {}
+      @Size(max = 1000) String comment,
+      UUID companyId) {}
 
   /**
    * Full version-fenced contractor profile replacement.
@@ -36,13 +40,15 @@ public final class LogisticsDriverAssignmentApiModels {
    * @param phone contractor contact number
    * @param comment optional logistics note
    * @param active whether the contractor may receive new work
+   * @param companyId company in the same city, or null for an independent driver
    */
   public record UpdateContractorDriverRequest(
       @NotNull @Min(0) Long expectedVersion,
       @NotBlank @Size(max = 256) String displayName,
       @NotBlank @Size(max = 64) String phone,
       @Size(max = 1000) String comment,
-      @NotNull Boolean active) {}
+      @NotNull Boolean active,
+      @JsonProperty(value = "companyId", required = true) UUID companyId) {}
 
   /**
    * Persisted contractor-driver profile without authentication data.
@@ -55,6 +61,7 @@ public final class LogisticsDriverAssignmentApiModels {
    * @param comment optional logistics note
    * @param active whether the contractor may receive work
    * @param employmentType always CONTRACTOR for this response
+   * @param companyId current company in the same home city, or null
    */
   public record ContractorDriverResponse(
       UUID workerId,
@@ -64,7 +71,8 @@ public final class LogisticsDriverAssignmentApiModels {
       String phone,
       String comment,
       boolean active,
-      WorkerEmploymentType employmentType) {}
+      WorkerEmploymentType employmentType,
+      @JsonInclude(JsonInclude.Include.ALWAYS) UUID companyId) {}
 
   /**
    * Creates one transfer-backed operational assignment without changing a worker's home warehouse.

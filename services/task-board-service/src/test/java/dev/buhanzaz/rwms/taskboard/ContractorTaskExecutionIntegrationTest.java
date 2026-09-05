@@ -112,7 +112,7 @@ class ContractorTaskExecutionIntegrationTest extends PostgresIntegrationTestSupp
     contractors.create(
         WAREHOUSE,
         new CreateContractorDriverRequest(
-            contractorId, "Наёмный Петров", "+7 900 111-22-33", "Не выдавать логин"));
+            contractorId, "Наёмный Петров", "+7 900 111-22-33", "Не выдавать логин", null));
     externalTaskId = UUID.randomUUID();
     sourceId = UUID.randomUUID();
     sourceMediaId = UUID.randomUUID();
@@ -219,7 +219,7 @@ class ContractorTaskExecutionIntegrationTest extends PostgresIntegrationTestSupp
     contractors.create(
         WAREHOUSE,
         new CreateContractorDriverRequest(
-            otherContractor, "Другой подрядчик", "+7 900 333-44-55", null));
+            otherContractor, "Другой подрядчик", "+7 900 333-44-55", null, null));
 
     mvc.perform(get(taskPath(otherContractor, externalTaskId)).with(logisticsJwt()))
         .andExpect(status().isNotFound());
@@ -280,7 +280,7 @@ class ContractorTaskExecutionIntegrationTest extends PostgresIntegrationTestSupp
     contractors.create(
         WAREHOUSE,
         new CreateContractorDriverRequest(
-            otherContractor, "Чужой подрядчик", "+7 900 555-66-77", null));
+            otherContractor, "Чужой подрядчик", "+7 900 555-66-77", null, null));
     action(
             otherContractor,
             externalTaskId,
@@ -412,7 +412,7 @@ class ContractorTaskExecutionIntegrationTest extends PostgresIntegrationTestSupp
     contractors.create(
         WAREHOUSE,
         new CreateContractorDriverRequest(
-            previousContractor, "Предыдущий подрядчик", "+7 900 777-88-99", null));
+            previousContractor, "Предыдущий подрядчик", "+7 900 777-88-99", null, null));
     UUID previousEvidenceId = UUID.randomUUID();
     insertReadyEvidence(
         firstEntry,
@@ -503,7 +503,7 @@ class ContractorTaskExecutionIntegrationTest extends PostgresIntegrationTestSupp
     contractors.create(
         WAREHOUSE,
         new CreateContractorDriverRequest(
-            otherContractor, "Чужая история", "+7 900 121-22-23", null));
+            otherContractor, "Чужая история", "+7 900 121-22-23", null, null));
     UUID foreignEvidenceId = UUID.randomUUID();
     OffsetDateTime firstRecordedAt = OffsetDateTime.now(ZoneOffset.UTC).minusHours(3);
     insertReadyEvidence(entryId, foreignEvidenceId, otherContractor, firstRecordedAt);
@@ -579,7 +579,7 @@ class ContractorTaskExecutionIntegrationTest extends PostgresIntegrationTestSupp
     contractors.create(
         WAREHOUSE,
         new CreateContractorDriverRequest(
-            otherContractor, "Чужой подрядчик", "+7 900 777-88-99", null));
+            otherContractor, "Чужой подрядчик", "+7 900 777-88-99", null, null));
     reserveEvidence(otherContractor, externalTaskId, entryId, evidenceRequest())
         .andExpect(status().isNotFound());
     reserveEvidence(contractorId, UUID.randomUUID(), entryId, evidenceRequest())
@@ -796,7 +796,7 @@ class ContractorTaskExecutionIntegrationTest extends PostgresIntegrationTestSupp
     contractors.create(
         WAREHOUSE,
         new CreateContractorDriverRequest(
-            otherContractor, "Подменённый подрядчик", "+7 900 999-00-11", null));
+            otherContractor, "Подменённый подрядчик", "+7 900 999-00-11", null, null));
     jdbc.update(
         "update task_assignment set worker_id=? where queue_entry_id=? and worker_id=?",
         otherContractor,

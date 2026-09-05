@@ -79,10 +79,7 @@ class WorkerOperationalAssignmentIntegrationTest extends PostgresIntegrationTest
     UUID transferId = UUID.randomUUID();
     CreateContractorDriverRequest contractor =
         new CreateContractorDriverRequest(
-            contractorId,
-            "Петров",
-            "+7 900 000-00-00",
-            "Смена по договору");
+            contractorId, "Петров", "+7 900 000-00-00", "Смена по договору", null);
 
     postJson("/api/internal/task-board/v1/logistics/warehouses/" + SOURCE + "/contractors", contractor)
         .andExpect(status().isCreated())
@@ -195,20 +192,15 @@ class WorkerOperationalAssignmentIntegrationTest extends PostgresIntegrationTest
   void rejectsDifferentContractorReplayAndOverlappingNonterminalAssignments() throws Exception {
     UUID contractorId = UUID.randomUUID();
     var contractor =
-        new CreateContractorDriverRequest(
-            contractorId,
-            "Сидоров",
-            "+7 901 000-00-00",
-            null);
-    postJson("/api/internal/task-board/v1/logistics/warehouses/" + SOURCE + "/contractors", contractor)
+        new CreateContractorDriverRequest(contractorId, "Сидоров", "+7 901 000-00-00", null, null);
+    postJson(
+            "/api/internal/task-board/v1/logistics/warehouses/" + SOURCE + "/contractors",
+            contractor)
         .andExpect(status().isCreated());
     postJson(
             "/api/internal/task-board/v1/logistics/warehouses/" + SOURCE + "/contractors",
             new CreateContractorDriverRequest(
-                contractorId,
-                "Сидоров",
-                "+7 999 999-99-99",
-                null))
+                contractorId, "Сидоров", "+7 999 999-99-99", null, null))
         .andExpect(status().isConflict());
 
     postJson(
@@ -308,10 +300,7 @@ class WorkerOperationalAssignmentIntegrationTest extends PostgresIntegrationTest
     postJson(
             "/api/internal/task-board/v1/logistics/warehouses/" + SOURCE + "/contractors",
             new CreateContractorDriverRequest(
-                contractorId,
-                "Кузнецов",
-                "+7 902 000-00-00",
-                null))
+                contractorId, "Кузнецов", "+7 902 000-00-00", null, null))
         .andExpect(status().isCreated());
     JsonNode planned =
         response(
@@ -463,10 +452,7 @@ class WorkerOperationalAssignmentIntegrationTest extends PostgresIntegrationTest
     postJson(
             "/api/internal/task-board/v1/logistics/warehouses/" + SOURCE + "/contractors",
             new CreateContractorDriverRequest(
-                contractorId,
-                "Волков",
-                "+7 903 000-00-00",
-                null))
+                contractorId, "Волков", "+7 903 000-00-00", null, null))
         .andExpect(status().isCreated());
 
     postJson(

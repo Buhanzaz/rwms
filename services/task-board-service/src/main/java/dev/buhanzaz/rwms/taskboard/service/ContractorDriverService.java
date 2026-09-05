@@ -35,6 +35,7 @@ public class ContractorDriverService {
   private final WorkerOperationalAssignmentRepository operationalAssignments;
   private final TaskBoardEventSourcing eventSourcing;
   private final TaskBoardProjectionWriter projectionWriter;
+  private final ContractorCompanyService companies;
 
   /** Creates an active contractor profile or returns an identical stable-ID replay. */
   @Transactional
@@ -56,6 +57,7 @@ public class ContractorDriverService {
     worker.setActive(true);
     worker.setComment(request.comment());
     worker.configureContractor(request.phone());
+    assignCompany(worker, request.companyId());
     worker = projectionWriter.saveAndFlush(workers, worker);
     eventSourcing.created(worker);
     return response(worker);
@@ -81,6 +83,7 @@ public class ContractorDriverService {
     worker.setComment(request.comment());
     worker.setActive(request.active());
     worker.configureContractor(request.phone());
+    assignCompany(worker, request.companyId());
     worker.touch();
     worker = projectionWriter.saveAndFlush(workers, worker);
     projectionWriter.refresh(worker);
@@ -134,7 +137,8 @@ public class ContractorDriverService {
         && worker.getWarehouseId().equals(warehouseId)
         && Objects.equals(worker.getDisplayName(), request.displayName().trim())
         && Objects.equals(worker.getPhone(), request.phone().trim())
-        && Objects.equals(worker.getComment(), request.comment());
+        && Objects.equals(worker.getComment(), request.comment())
+        && Objects.equals(worker.getContractorCompanyId(), request.companyId());
   }
 
   private static ContractorDriverResponse response(Worker worker) {
@@ -146,6 +150,12 @@ public class ContractorDriverService {
         worker.getPhone(),
         worker.getComment(),
         worker.isActive(),
-        worker.getEmploymentType());
+        worker.getEmploymentType(),
+        worker.getContractorCompanyId());
+  }
+
+  private void assignCompany(Worker worker, UUID companyId) {
+    if (companyId != null) companies.requireOwnedForUpdate(worker.getWarehouseId(), companyId);
+    worker.assignContractorCompany(companyId);
   }
 }

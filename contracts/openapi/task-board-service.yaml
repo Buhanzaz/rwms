@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Task Board Service API
-  version: 1.18.0
+  version: 1.19.0
   description: >-
     Canonical F2 inventory of the active task-board, workforce and queue
     registry HTTP API. All warehouse-scoped operations validate the warehouse
@@ -2193,6 +2193,90 @@ paths:
               schema: { $ref: '#/components/schemas/LogisticsDriverIdentityList' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /warehouses/{warehouseId}/logistics-drivers/companies:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: listContractorCompanies
+      description: >-
+        Lists hired-company contacts owned by this city/warehouse. Requires USER,
+        rwms.read and warehouse VIEW. No company grants access or carries trip assignments.
+      responses:
+        '200':
+          description: City-owned company catalog.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContractorCompanyList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: createContractorCompany
+      description: >-
+        Requires USER, rwms.write and warehouse EDIT. Creates one company under a
+        caller-stable companyId. Identical retries return the stored contact.
+        INN is unique within one home city; the same INN may be recorded in another city.
+        Ownership is immutable. Conflicting identities or duplicate city/INN return 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateContractorCompanyRequest' }
+      responses:
+        '201':
+          description: Created or identically replayed company.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContractorCompany' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/logistics-drivers/companies/{companyId}:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - name: companyId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      operationId: updateContractorCompany
+      description: >-
+        Replaces all contact fields under expectedVersion. Requires USER,
+        rwms.write and warehouse EDIT. Company and driver home ownership cannot change.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateContractorCompanyRequest' }
+      responses:
+        '200':
+          description: Persisted company with its current version.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContractorCompany' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      operationId: deleteContractorCompany
+      description: >-
+        Deletes an empty company under expectedVersion. Requires USER, rwms.write
+        and warehouse EDIT. A company with drivers returns 409; workers and their
+        assignment history are never deleted or detached by this command.
+      parameters:
+        - name: expectedVersion
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 0 }
+      responses:
+        '204': { description: Empty company deleted. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /warehouses/{warehouseId}/logistics-drivers/contractors:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
@@ -4914,10 +4998,69 @@ components:
     WorkerOperationalAssignmentStatus:
       type: string
       enum: [PLANNED, IN_TRANSIT, ACTIVE, COMPLETED, CANCELLED]
+    CreateContractorCompanyRequest:
+      type: object
+      additionalProperties: false
+      required: [companyId, name, inn, phone]
+      properties:
+        companyId: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 256 }
+        inn: { type: string, pattern: '^([0-9]{10}|[0-9]{12})$' }
+        contactName:
+          oneOf: [{ type: string, maxLength: 256 }, { type: 'null' }]
+        phone: { type: string, minLength: 1, maxLength: 64 }
+        email:
+          oneOf: [{ type: string, format: email, maxLength: 256 }, { type: 'null' }]
+        address:
+          oneOf: [{ type: string, maxLength: 1000 }, { type: 'null' }]
+        comment:
+          oneOf: [{ type: string, maxLength: 2000 }, { type: 'null' }]
+    UpdateContractorCompanyRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, name, inn, contactName, phone, email, address, comment]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        name: { type: string, minLength: 1, maxLength: 256 }
+        inn: { type: string, pattern: '^([0-9]{10}|[0-9]{12})$' }
+        contactName:
+          oneOf: [{ type: string, maxLength: 256 }, { type: 'null' }]
+        phone: { type: string, minLength: 1, maxLength: 64 }
+        email:
+          oneOf: [{ type: string, format: email, maxLength: 256 }, { type: 'null' }]
+        address:
+          oneOf: [{ type: string, maxLength: 1000 }, { type: 'null' }]
+        comment:
+          oneOf: [{ type: string, maxLength: 2000 }, { type: 'null' }]
+    ContractorCompany:
+      type: object
+      additionalProperties: false
+      required: [companyId, version, homeWarehouseId, name, inn, contactName, phone, email, address, comment]
+      properties:
+        companyId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        homeWarehouseId: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 256 }
+        inn: { type: string, pattern: '^([0-9]{10}|[0-9]{12})$' }
+        contactName:
+          oneOf: [{ type: string, maxLength: 256 }, { type: 'null' }]
+        phone: { type: string, minLength: 1, maxLength: 64 }
+        email:
+          oneOf: [{ type: string, format: email, maxLength: 256 }, { type: 'null' }]
+        address:
+          oneOf: [{ type: string, maxLength: 1000 }, { type: 'null' }]
+        comment:
+          oneOf: [{ type: string, maxLength: 2000 }, { type: 'null' }]
+    ContractorCompanyList:
+      type: array
+      items: { $ref: '#/components/schemas/ContractorCompany' }
     CreateContractorDriverRequest:
       type: object
       required: [contractorId, displayName, phone]
       properties:
+        companyId:
+          oneOf: [{ type: string, format: uuid }, { type: 'null' }]
+          description: Company owned by the same immutable home city; null means an independent driver.
         contractorId: { type: string, format: uuid }
         displayName: { type: string, minLength: 1, maxLength: 256 }
         phone: { type: string, minLength: 1, maxLength: 64 }
@@ -4928,8 +5071,11 @@ components:
       additionalProperties: false
     UpdateContractorDriverRequest:
       type: object
-      required: [expectedVersion, displayName, phone, comment, active]
+      required: [expectedVersion, displayName, phone, comment, active, companyId]
       properties:
+        companyId:
+          oneOf: [{ type: string, format: uuid }, { type: 'null' }]
+          description: Company owned by the same immutable home city; null means an independent driver.
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         displayName: { type: string, minLength: 1, maxLength: 256 }
         phone: { type: string, minLength: 1, maxLength: 64 }
@@ -4941,8 +5087,11 @@ components:
       additionalProperties: false
     ContractorDriver:
       type: object
-      required: [workerId, version, homeWarehouseId, displayName, phone, comment, active, employmentType]
+      required: [workerId, version, homeWarehouseId, displayName, phone, comment, active, employmentType, companyId]
       properties:
+        companyId:
+          oneOf: [{ type: string, format: uuid }, { type: 'null' }]
+          description: Company owned by the same immutable home city; null means an independent driver.
         workerId: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         homeWarehouseId: { type: string, format: uuid }

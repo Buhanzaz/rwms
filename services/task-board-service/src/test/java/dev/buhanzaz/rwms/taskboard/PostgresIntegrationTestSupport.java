@@ -51,7 +51,7 @@ abstract class PostgresIntegrationTestSupport {
             queue_usage_reference,
             queue_definition_class_binding, work_queue_class_binding, worker_deletion_intent,
             worker_group_member, worker_class_assignment,
-            worker_group, worker, work_queue, queue_definition, worker_class
+            worker_group, worker, contractor_company, work_queue, queue_definition, worker_class
           restart identity cascade
           """);
     } finally {

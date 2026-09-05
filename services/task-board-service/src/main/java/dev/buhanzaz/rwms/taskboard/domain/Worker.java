@@ -71,6 +71,21 @@ public class Worker extends AbstractVersionedEntity {
   @Column(name = "phone", length = 64)
   private String phone;
 
+  @Column(name = "contractor_company_id")
+  private UUID contractorCompanyId;
+
+  public UUID getContractorCompanyId() {
+    return contractorCompanyId;
+  }
+
+  /** The contractor service validates and locks a company in this worker's immutable home city. */
+  public void assignContractorCompany(UUID companyId) {
+    if (employmentType != WorkerEmploymentType.CONTRACTOR) {
+      throw new IllegalStateException("Компания доступна только наёмному водителю");
+    }
+    contractorCompanyId = companyId;
+  }
+
   @Column(name = "app_login", length = 128)
   private String appLogin;
 
