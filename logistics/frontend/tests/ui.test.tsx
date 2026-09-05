@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
@@ -101,7 +101,7 @@ describe('application states', () => {
       };
       return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     }));
-    useUiStore.setState({ mode: 'PLAN_DAY', section: 'SETTINGS', selected: null });
+    useUiStore.setState({ mode: 'PLAN_DAY', section: 'DRIVERS', selected: null });
     const user = userEvent.setup();
     renderApp();
 
@@ -113,6 +113,7 @@ describe('application states', () => {
     expect(within(warehouseHome).getByText('BLOCKBOX')).toBeVisible();
     expect(within(warehouseHome).getByText('Логистика')).toBeVisible();
     expect(screen.queryByText('RWMS · Логистика')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Настройки' })).not.toBeInTheDocument();
     expect(screen.queryByRole('combobox', { name: 'Текущий склад' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Добавить склад' })).not.toBeInTheDocument();
 
@@ -663,6 +664,14 @@ describe('application states', () => {
 
 describe('notification center', () => {
   beforeEach(() => useUiStore.setState({ notifications: [], notificationDurationSeconds: 8 }));
+
+  it('changes the notification duration from the bell without exposing planner settings', async () => {
+    const user = userEvent.setup();
+    render(<NotificationCenter />);
+    await user.click(screen.getByRole('button', { name: 'Уведомления' }));
+    fireEvent.change(screen.getByLabelText('Показывать уведомление, секунд'), { target: { value: '12' } });
+    expect(useUiStore.getState().notificationDurationSeconds).toBe(12);
+  });
 
   it('keeps hidden toasts in bell history and clears the full history', async () => {
     const user = userEvent.setup();

@@ -1212,7 +1212,6 @@ export function App() {
           onDeleteGeneratedWorkload={() => setDialog({ kind: 'delete-generated-workload', date: planningDate })}
           onSetMapTool={(tool) => { setMapTool(tool); toast({ tone: 'info', title: 'Инструмент карты включён' }); }}
           onSelect={(kind, id) => setSelected({ kind, id })} onMoveTask={(move) => void moveTask(move)} onToggleCycleLock={(cycle) => void toggleCycleLock(cycle)}
-          onSaveSettings={async (input) => { await execute(async () => { await api.updateWarehouse(workspace.warehouse.id, input, workspace.warehouse.version); await refresh(); flagCurrentRoutesForRefresh(); }, 'Настройки сохранены'); }}
           onCreateTransfer={(sourceWarehouseId, destinationWarehouseId) => setDialog({
             kind: 'transfer',
             ...(sourceWarehouseId ? { sourceWarehouseId } : {}),

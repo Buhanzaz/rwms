@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { RefreshCw, ScrollText } from 'lucide-react';
 import { api } from '../../api/client';
@@ -13,7 +14,16 @@ interface OperationsJournalProps {
   onSelectRequest: (requestId: UUID) => void;
 }
 
-/** Read-only server history kept outside the dispatcher action workspace. */
+/** Load the selected day's journal on demand next to the operating plan. */
+export function OperationsJournalDisclosure(props: OperationsJournalProps) {
+  const [open, setOpen] = useState(false);
+  return <section className="operations-journal-disclosure">
+    <Button type="button" aria-expanded={open} onClick={() => setOpen(!open)}><ScrollText size={15} aria-hidden="true" />{open ? 'Скрыть журнал дня' : 'Журнал дня'}</Button>
+    {open ? <OperationsJournal {...props} /> : null}
+  </section>;
+}
+
+/** Server history for the selected warehouse and operating day. */
 export function OperationsJournal({
   warehouseId,
   planningDate,
@@ -29,11 +39,11 @@ export function OperationsJournal({
   const entries = query.data ? operationalHistoryEntries(query.data) : [];
 
   return (
-    <section className="settings-journal" aria-labelledby="settings-journal-title">
-      <header className="settings-journal__header">
+    <section className="operations-journal" aria-labelledby="operations-journal-title">
+      <header className="operations-journal__header">
         <div>
-          <span className="settings-journal__eyebrow"><ScrollText size={15} aria-hidden="true" />История операций</span>
-          <h2 id="settings-journal-title">Журнал за {formatDate(planningDate)}</h2>
+          <span className="operations-journal__eyebrow"><ScrollText size={15} aria-hidden="true" />История операций</span>
+          <h2 id="operations-journal-title">Журнал за {formatDate(planningDate)}</h2>
           <p className="section-subtitle">Комментарии сервиса и решения логиста. Записи хранятся на сервере и не удаляются вместе с уведомлениями.</p>
         </div>
         <Button
@@ -56,7 +66,7 @@ export function OperationsJournal({
       ) : null}
 
       {!query.isPending && !query.isError ? (
-        <div className="settings-journal__list" aria-label="Записи журнала">
+        <div className="operations-journal__list" aria-label="Записи журнала">
           {[...entries].reverse().map((entry) => (
             <article className={`notification-history notification-history--${entry.tone}`} key={entry.key}>
               <strong>{entry.title}</strong>

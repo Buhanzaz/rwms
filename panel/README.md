@@ -54,6 +54,15 @@ Russian version: [README.ru.md](README.ru.md).
 
 ## Standalone administration
 
+- `/admin/logistics` edits the selected canonical warehouse's planning
+  algorithm, contiguous one-to-twelve-hour tariffs and exceptional map policies.
+  Representatives are selectable and keep their own configuration. Algorithm
+  and tariff changes share one version-fenced save; conflicts preserve the
+  draft until explicit reload. Policy commands save separately with their own
+  version and stable create receipt. The polygon editor loads on demand and
+  uses `VITE_MAP_STYLE_URL` or the existing OpenFreeMap Liberty style; failed
+  maps leave exact-coordinate editing available with a visible error.
+
 - `/admin/` is a standalone administrator workspace. It uses the dedicated
   `rwms-admin-web` `USER` session with exactly `admin.manage` after the OIDC
   protocol scopes; its UI gate is `SYSTEM_ADMIN` only. Browser traffic remains

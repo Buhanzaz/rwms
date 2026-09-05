@@ -213,6 +213,8 @@ function ToastItem({ notification, durationSeconds, onDismiss }: {
 export function NotificationCenter() {
   const [open, setOpen] = useState(false);
   const notifications = useUiStore((state) => state.notifications);
+  const durationSeconds = useUiStore((state) => state.notificationDurationSeconds);
+  const setDurationSeconds = useUiStore((state) => state.setNotificationDurationSeconds);
   const markRead = useUiStore((state) => state.markNotificationsRead);
   const clear = useUiStore((state) => state.clearNotifications);
   const unread = notifications.filter((notification) => !notification.read).length;
@@ -242,6 +244,7 @@ export function NotificationCenter() {
       {open ? (
         <section className="notification-center__panel" aria-label="История уведомлений">
           <header><strong>Уведомления</strong><small>{notifications.length}</small></header>
+          <div className="notification-center__preferences"><Field label="Показывать уведомление, секунд" type="number" min="1" max="60" value={durationSeconds} onChange={(event) => setDurationSeconds(Number(event.target.value))} hint="После этого уведомление остаётся в истории" /></div>
           <div className="notification-center__list">
             {[...notifications].reverse().map((notification) => (
               <article className={`notification-history notification-history--${notification.tone}`} key={notification.id}>

@@ -29,14 +29,13 @@ import type {
   ContractorDispatchMode,
   ContractorDispatchResult,
   RequestPlanningDetailsInput,
-  WarehouseUpdateInput,
 } from '../api/client';
 import { Badge, Button, EmptyState, ErrorPanel } from '../components/ui';
 import { useUiStore, type MapTool } from '../stores/ui-store';
 import { formatDate, formatDistance, formatDuration, formatTime, nextDate } from '../utils/format';
 import { PlanPanel, type PlanMove } from '../features/planning/PlanPanel';
 import { PlanningDayRequests } from '../features/planning/PlanningDayRequests';
-import { SettingsEditor } from '../features/settings/SettingsEditor';
+import { OperationsJournalDisclosure } from '../features/operations/OperationsJournal';
 import { ContractorDriversPanel } from '../features/contractors/ContractorDriversPanel';
 import { OperationsPanel } from '../features/operations/OperationsPanel';
 import { validationMessageRu } from '../utils/user-facing-error';
@@ -65,7 +64,6 @@ interface InspectorProps {
   onSelect: (kind: 'warehouse' | 'request' | 'driver' | 'vehicle' | 'shift' | 'cycle', id: UUID) => void;
   onMoveTask: (move: PlanMove) => void;
   onToggleCycleLock: (cycle: RouteCycle) => void;
-  onSaveSettings: (input: WarehouseUpdateInput) => Promise<void>;
   onCreateTransfer: (sourceWarehouseId?: UUID, destinationWarehouseId?: UUID) => void;
   onAssignContractor: (requestId: UUID) => void;
   onRescheduleUnassigned: (requestId: UUID) => void;
@@ -343,25 +341,16 @@ export function Inspector(props: InspectorProps) {
         />
         <div className="divider" />
       </> : null}
+      {mode === 'PLAN_DAY' ? <OperationsJournalDisclosure
+        warehouseId={props.workspace.planning_root_warehouse_id ?? props.workspace.warehouse.id}
+        planningDate={props.planningDate}
+        timeZone={props.workspace.warehouses.find((warehouse) => warehouse.id === (props.workspace.planning_root_warehouse_id ?? props.workspace.warehouse.id))?.timezone ?? props.workspace.warehouse.timezone}
+        onSelectRequest={(id) => props.onSelect('request', id)}
+      /> : null}
       {mode === 'SIMULATION' && props.simulation ? <><SimulationDrivers props={props} /><div className="divider" /></> : null}
       {props.plan ? <><Metrics metrics={props.plan.metrics} /><div className="divider" /><PlanPanel plan={props.plan} requests={props.workspace.requests} timeZone={props.workspace.warehouse.timezone} readOnly={props.plan.status === 'CONFIRMED'} selectedRequestId={selectedRequestId} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onSelectRequest={(id) => props.onSelect('request', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} onCreateTransfer={props.onCreateTransfer} onAssignContractor={props.onAssignContractor} onRescheduleUnassigned={props.onRescheduleUnassigned} /></> : <EmptyState title="План дня не составлен" description="Заполните условия доставок и вывозов — план пересчитается автоматически." />}
     </>; break;
     case 'UNASSIGNED': content = props.plan?.unassigned.length ? <PlanPanel plan={props.plan} requests={props.workspace.requests} timeZone={props.workspace.warehouse.timezone} showUnassignedOnly readOnly={props.plan.status === 'CONFIRMED'} selectedRequestId={selectedRequestId} onSelectCycle={(id) => props.onSelect('cycle', id)} onSelectDriverRoute={(id) => props.onSelect('driver', id)} onSelectRequest={(id) => props.onSelect('request', id)} onMove={props.onMoveTask} onToggleLock={props.onToggleCycleLock} onCreateTransfer={props.onCreateTransfer} onAssignContractor={props.onAssignContractor} onRescheduleUnassigned={props.onRescheduleUnassigned} /> : <EmptyState title="Нераспределённых заданий нет" description={props.plan ? 'Все задачи выбранного дня распределены.' : 'После расчёта плана здесь появятся задачи без назначенного маршрута.'} />; break;
-    case 'SETTINGS': content = (
-      <SettingsEditor
-        warehouse={props.workspace.warehouse}
-        busy={props.busy}
-        onSave={props.onSaveSettings}
-        journal={{
-          warehouseId: props.workspace.planning_root_warehouse_id ?? props.workspace.warehouse.id,
-          planningDate: props.planningDate,
-          timeZone: props.workspace.warehouses.find((warehouse) => (
-            warehouse.id === (props.workspace.planning_root_warehouse_id ?? props.workspace.warehouse.id)
-          ))?.timezone ?? props.workspace.warehouse.timezone,
-          onSelectRequest: (id) => props.onSelect('request', id),
-        }}
-      />
-    ); break;
   }
   return <aside id="logistics-inspector" className="inspector" aria-label="Панель логистики">
     {props.onClose ? <div className="inspector__chrome"><span>Логистика</span><Button size="sm" variant="ghost" aria-label="Скрыть панель логистики" onClick={props.onClose}><X size={16} aria-hidden="true" /></Button></div> : null}

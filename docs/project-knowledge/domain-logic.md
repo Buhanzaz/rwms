@@ -1473,9 +1473,11 @@ Only the configured residual wait may remain between customer stops
 (`max_customer_wait_minutes`, 120 by default). A larger forced gap makes that
 combination infeasible so the tasks can be assigned to separate warehouse
 cycles. Exact Valhalla legs use the resulting actual departure timestamps.
-Planner configuration also has an isolated administrative boundary under
+The configuration editor lives in `/admin/logistics`; day-operation history
+is opened on demand from the logistics day plan. Planner configuration has
+an isolated administrative boundary under
 `/api/logistics-planner/v1/admin/warehouses/{canonicalWarehouseId}`. It requires
-the `rwms-admin` client, `SYSTEM_ADMIN` and `admin.manage`; private planner IDs
+the `rwms-admin-web` client, `SYSTEM_ADMIN` and `admin.manage`; private planner IDs
 are never accepted as canonical warehouse identities. Settings and the complete
 isochrone tariff ladder share one observed warehouse version. Exceptional map
 policies retain their own version fence and idempotent create receipts, and

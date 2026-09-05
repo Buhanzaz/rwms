@@ -12,7 +12,6 @@ describe('logistics presentation persistence', () => {
       section: 'SHIFTS',
       mapTool: 'ADD_PICKUP',
       shiftVisibility: 'ARCHIVED',
-      settingsView: 'JOURNAL',
       layers: { pickups: false, routes: false },
     }));
     vi.resetModules();
@@ -24,7 +23,6 @@ describe('logistics presentation persistence', () => {
     expect(state.section).toBe('SHIFTS');
     expect(state.mapTool).toBe('ADD_PICKUP');
     expect(state.shiftVisibility).toBe('ARCHIVED');
-    expect(state.settingsView).toBe('JOURNAL');
     expect(state.layers).toMatchObject({ pickups: false, routes: false, deliveries: true });
   });
 
@@ -35,7 +33,6 @@ describe('logistics presentation persistence', () => {
     useUiStore.getState().setSection('REQUESTS');
     useUiStore.getState().setMode('PLAN_DAY');
     useUiStore.getState().setShiftVisibility('ACTIVE');
-    useUiStore.getState().setSettingsView('JOURNAL');
     useUiStore.getState().toggleLayer('pickups');
 
     const stored: unknown = JSON.parse(window.localStorage.getItem('rwms:logistics:presentation:v1') ?? '{}');
@@ -43,7 +40,6 @@ describe('logistics presentation persistence', () => {
       mode: 'PLAN_DAY',
       section: 'REQUESTS',
       shiftVisibility: 'ACTIVE',
-      settingsView: 'JOURNAL',
       layers: { pickups: false },
     });
     expect(stored).not.toHaveProperty('selected');

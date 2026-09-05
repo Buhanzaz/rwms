@@ -98,7 +98,6 @@ function inspectorProps(plan: RoutePlan, simulation: SimulationDerivedState): Co
     onSelect: () => undefined,
     onMoveTask: () => undefined,
     onToggleCycleLock: () => undefined,
-    onSaveSettings: () => Promise.resolve(),
     onCreateTransfer: () => undefined,
     onAssignContractor: () => undefined,
     onRescheduleUnassigned: () => undefined,

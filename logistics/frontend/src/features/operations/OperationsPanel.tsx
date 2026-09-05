@@ -651,7 +651,7 @@ export function OperationsPanel({ workspace, plan, planningDate, busy, onSelectR
             onSelectRequest={onSelectRequest}
             onDecide={decide}
           />
-        )) : <EmptyState title="Действий не требуется" description="Новые информационные события появятся в уведомлениях и журнале в настройках." />}
+        )) : <EmptyState title="Действий не требуется" description="Новые события появятся в уведомлениях и журнале дня." />}
       </section>
 
       <section className="operations-section" aria-labelledby="operations-proposals-title">

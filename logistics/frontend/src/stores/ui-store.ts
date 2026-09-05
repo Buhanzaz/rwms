@@ -4,7 +4,6 @@ import type { MapClickDraft, MapSelection, OptimizationTraceEvent, SimulationOve
 export type AppMode = 'PLAN_DAY' | 'SIMULATION';
 export type ThemeMode = 'light' | 'dark';
 export type ShiftVisibility = 'ACTIVE' | 'COMPLETED' | 'ARCHIVED';
-export type SettingsView = 'ALGORITHM' | 'JOURNAL';
 export type LeftSection =
   | 'WAREHOUSE'
   | 'DRIVERS'
@@ -13,8 +12,7 @@ export type LeftSection =
   | 'SHIFTS'
   | 'REQUESTS'
   | 'PLAN_DAY'
-  | 'UNASSIGNED'
-  | 'SETTINGS';
+  | 'UNASSIGNED';
 export type MapTool = 'SELECT' | 'ADD_DELIVERY' | 'ADD_PICKUP';
 
 export interface LayerVisibility {
@@ -60,7 +58,6 @@ interface UiState {
   section: LeftSection;
   mapTool: MapTool;
   shiftVisibility: ShiftVisibility;
-  settingsView: SettingsView;
   selected: MapSelection;
   mapClickDraft: MapClickDraft | null;
   layers: LayerVisibility;
@@ -76,7 +73,6 @@ interface UiState {
   setSection: (section: LeftSection) => void;
   setMapTool: (tool: MapTool) => void;
   setShiftVisibility: (visibility: ShiftVisibility) => void;
-  setSettingsView: (view: SettingsView) => void;
   setSelected: (selected: MapSelection) => void;
   setMapClickDraft: (draft: MapClickDraft | null) => void;
   toggleLayer: (layer: keyof LayerVisibility) => void;
@@ -122,12 +118,11 @@ interface PresentationPreferences {
   section: LeftSection;
   mapTool: MapTool;
   shiftVisibility: ShiftVisibility;
-  settingsView: SettingsView;
   layers: LayerVisibility;
 }
 
 const APP_MODES: readonly AppMode[] = ['PLAN_DAY', 'SIMULATION'];
-const LEFT_SECTIONS: readonly LeftSection[] = ['WAREHOUSE', 'DRIVERS', 'CONTRACTORS', 'VEHICLES', 'SHIFTS', 'REQUESTS', 'PLAN_DAY', 'UNASSIGNED', 'SETTINGS'];
+const LEFT_SECTIONS: readonly LeftSection[] = ['WAREHOUSE', 'DRIVERS', 'CONTRACTORS', 'VEHICLES', 'SHIFTS', 'REQUESTS', 'PLAN_DAY', 'UNASSIGNED'];
 const MAP_TOOLS: readonly MapTool[] = ['SELECT', 'ADD_DELIVERY', 'ADD_PICKUP'];
 const SHIFT_VISIBILITIES: readonly ShiftVisibility[] = ['ACTIVE', 'COMPLETED', 'ARCHIVED'];
 
@@ -137,7 +132,6 @@ function readPresentationPreferences(): PresentationPreferences {
     section: 'WAREHOUSE',
     mapTool: 'SELECT',
     shiftVisibility: 'ACTIVE',
-    settingsView: 'ALGORITHM',
     layers: initialLayers,
   };
   if (typeof window === 'undefined') return fallback;
@@ -153,7 +147,6 @@ function readPresentationPreferences(): PresentationPreferences {
       shiftVisibility: SHIFT_VISIBILITIES.includes(stored.shiftVisibility as ShiftVisibility)
         ? stored.shiftVisibility as ShiftVisibility
         : fallback.shiftVisibility,
-      settingsView: stored.settingsView === 'JOURNAL' ? 'JOURNAL' : 'ALGORITHM',
       layers: Object.fromEntries(Object.entries(initialLayers).map(([key, defaultValue]) => [
         key,
         typeof (storedLayers as Record<string, unknown>)[key] === 'boolean'
@@ -231,7 +224,6 @@ export const useUiStore = create<UiState>((set) => ({
   section: initialPresentation.section,
   mapTool: initialPresentation.mapTool,
   shiftVisibility: initialPresentation.shiftVisibility,
-  settingsView: initialPresentation.settingsView,
   selected: null,
   mapClickDraft: null,
   layers: initialPresentation.layers,
@@ -247,30 +239,26 @@ export const useUiStore = create<UiState>((set) => ({
     set({ theme });
   },
   setMode: (mode) => set((state) => {
-    writePresentationPreferences({ mode, section: state.section, mapTool: state.mapTool, shiftVisibility: state.shiftVisibility, settingsView: state.settingsView, layers: state.layers });
+    writePresentationPreferences({ mode, section: state.section, mapTool: state.mapTool, shiftVisibility: state.shiftVisibility, layers: state.layers });
     return { mode };
   }),
   setSection: (section) => set((state) => {
-    writePresentationPreferences({ mode: state.mode, section, mapTool: state.mapTool, shiftVisibility: state.shiftVisibility, settingsView: state.settingsView, layers: state.layers });
+    writePresentationPreferences({ mode: state.mode, section, mapTool: state.mapTool, shiftVisibility: state.shiftVisibility, layers: state.layers });
     return { section };
   }),
   setMapTool: (mapTool) => set((state) => {
-    writePresentationPreferences({ mode: state.mode, section: state.section, mapTool, shiftVisibility: state.shiftVisibility, settingsView: state.settingsView, layers: state.layers });
+    writePresentationPreferences({ mode: state.mode, section: state.section, mapTool, shiftVisibility: state.shiftVisibility, layers: state.layers });
     return { mapTool };
   }),
   setShiftVisibility: (shiftVisibility) => set((state) => {
-    writePresentationPreferences({ mode: state.mode, section: state.section, mapTool: state.mapTool, shiftVisibility, settingsView: state.settingsView, layers: state.layers });
+    writePresentationPreferences({ mode: state.mode, section: state.section, mapTool: state.mapTool, shiftVisibility, layers: state.layers });
     return { shiftVisibility };
-  }),
-  setSettingsView: (settingsView) => set((state) => {
-    writePresentationPreferences({ mode: state.mode, section: state.section, mapTool: state.mapTool, shiftVisibility: state.shiftVisibility, settingsView, layers: state.layers });
-    return { settingsView };
   }),
   setSelected: (selected) => set({ selected }),
   setMapClickDraft: (mapClickDraft) => set({ mapClickDraft }),
   toggleLayer: (layer) => set((state) => {
     const layers = { ...state.layers, [layer]: !state.layers[layer] };
-    writePresentationPreferences({ mode: state.mode, section: state.section, mapTool: state.mapTool, shiftVisibility: state.shiftVisibility, settingsView: state.settingsView, layers });
+    writePresentationPreferences({ mode: state.mode, section: state.section, mapTool: state.mapTool, shiftVisibility: state.shiftVisibility, layers });
     return { layers };
   }),
   toast: (toast) =>

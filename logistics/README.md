@@ -76,7 +76,6 @@ and never produces synthetic circles or changes persisted demand.
 │ deliveries    │                                     │                 │
 │ day plan      │                                     │                 │
 │ unassigned    │                                     │                 │
-│ settings      │                                     │                 │
 ├───────────────┴─────────────────────────────────────┴─────────────────┤
 │ simulation: start · previous · play/pause · next · end · speed · time │
 └───────────────────────────────────────────────────────────────────────┘
@@ -686,10 +685,12 @@ resource nor mutates a transfer. If no exact calculation is currently possible,
 the draft remains explicit with no fabricated arrival and can be completed at
 the existing confirmation stage.
 
-The isolated administration API exposes planning settings, the contiguous
+Planning settings have moved to `/admin/logistics`; the operating sidebar
+keeps day actions and history. Notification duration is a presentation preference
+in the bell menu. The isolated administration API exposes planning settings, the contiguous
 isochrone tariff ladder and exceptional map policies under
 `/api/logistics-planner/v1/admin/warehouses/{canonicalWarehouseId}`. It requires
-the `rwms-admin` client, `SYSTEM_ADMIN` and `admin.manage`. Settings and tariffs
+the `rwms-admin-web` client, `SYSTEM_ADMIN` and `admin.manage`. Settings and tariffs
 share the observed warehouse version; policy commands retain their own version
 and idempotent create receipts. Representatives retain their own settings.
 The existing planner owner publishes capacity after committed mutations and
@@ -970,7 +971,7 @@ See [`dynamic_operations.py`](backend/app/api/dynamic_operations.py),
 The day-operations workspace has no separate “System journal”. Structured
 notices and immutable dispatcher decisions remain durable on the backend. The
 UI merges them chronologically into the existing notification center and a
-read-only **Settings → Journal** view. Unfinished human decisions remain in the
+read-only **Day plan → Day journal** view, loaded on demand. Unfinished human decisions remain in the
 action queue and calculated changes remain in proposals. The UI shows an
 explicit warning when the server truncates the available history window.
 

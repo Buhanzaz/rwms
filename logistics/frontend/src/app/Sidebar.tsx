@@ -5,7 +5,6 @@ import {
   CarFront,
   CircleAlert,
   ContactRound,
-  Settings2,
   SquareUserRound,
   Truck,
 } from 'lucide-react';
@@ -23,7 +22,6 @@ const nav: Array<{ id: LeftSection; label: string; icon: ReactNode; count?: (wor
   { id: 'REQUESTS', label: 'Доставки', icon: <Truck size={17} />, count: (workspace) => workspace.requests.length },
   { id: 'PLAN_DAY', label: 'План дня', icon: <ClipboardList size={17} />, count: (_workspace, plan) => plan?.metrics.request_count ?? 0 },
   { id: 'UNASSIGNED', label: 'Нераспределённые', icon: <CircleAlert size={17} />, count: (_workspace, plan) => plan?.unassigned.length ?? 0 },
-  { id: 'SETTINGS', label: 'Настройки', icon: <Settings2 size={17} /> },
 ];
 
 export function Sidebar({ workspace, plan, pendingActionCount = 0, onNavigate, onOpenWarehouse }: {

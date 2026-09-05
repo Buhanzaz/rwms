@@ -334,11 +334,11 @@ paths:
       summary: Get Planning Settings
       tags:
       - Planner administration settings
-      description: SYSTEM_ADMIN only, using the isolated rwms-admin client and admin.manage scope. warehouse_id is
+      description: SYSTEM_ADMIN only, using the isolated rwms-admin-web client and admin.manage scope. warehouse_id is
         the canonical warehouse-service UUID. Representative warehouses retain their own configuration. Returns the
         owning planner configuration and effective defaults; an unconfigured workspace is an explicit error.
     put:
-      description: SYSTEM_ADMIN only, using the isolated rwms-admin client and admin.manage scope. warehouse_id is
+      description: SYSTEM_ADMIN only, using the isolated rwms-admin-web client and admin.manage scope. warehouse_id is
         the canonical warehouse-service UUID. Representative warehouses retain their own configuration. Replaces the
         observed settings and contiguous tariff ladder atomically with expected_version. Publishes capacity after
         commit and reports its actual outcome.
@@ -421,11 +421,11 @@ paths:
       summary: List Admin Policy Zones
       tags:
       - Planner administration settings
-      description: 'SYSTEM_ADMIN only, using the isolated rwms-admin client and admin.manage scope. warehouse_id is
+      description: 'SYSTEM_ADMIN only, using the isolated rwms-admin-web client and admin.manage scope. warehouse_id is
         the canonical warehouse-service UUID. Policies apply only inside the ordinary isochrone limit. Mutations retain
         the existing owner validation, version fencing, mutable-plan invalidation and capacity publication. '
     post:
-      description: SYSTEM_ADMIN only, using the isolated rwms-admin client and admin.manage scope. warehouse_id is
+      description: SYSTEM_ADMIN only, using the isolated rwms-admin-web client and admin.manage scope. warehouse_id is
         the canonical warehouse-service UUID. Policies apply only inside the ordinary isochrone limit. Mutations retain
         the existing owner validation, version fencing, mutable-plan invalidation and capacity publication. Requires
         Idempotency-Key; an identical actor and payload replay returns the original polygon.
@@ -526,7 +526,7 @@ paths:
       summary: Delete Admin Policy Zone
       tags:
       - Planner administration settings
-      description: 'SYSTEM_ADMIN only, using the isolated rwms-admin client and admin.manage scope. warehouse_id is
+      description: 'SYSTEM_ADMIN only, using the isolated rwms-admin-web client and admin.manage scope. warehouse_id is
         the canonical warehouse-service UUID. Policies apply only inside the ordinary isochrone limit. Mutations retain
         the existing owner validation, version fencing, mutable-plan invalidation and capacity publication. '
     patch:
@@ -578,7 +578,7 @@ paths:
       summary: Update Admin Policy Zone
       tags:
       - Planner administration settings
-      description: 'SYSTEM_ADMIN only, using the isolated rwms-admin client and admin.manage scope. warehouse_id is
+      description: 'SYSTEM_ADMIN only, using the isolated rwms-admin-web client and admin.manage scope. warehouse_id is
         the canonical warehouse-service UUID. Policies apply only inside the ordinary isochrone limit. Mutations retain
         the existing owner validation, version fencing, mutable-plan invalidation and capacity publication. '
 components:

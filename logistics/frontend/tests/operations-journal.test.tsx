@@ -3,9 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api, type PlanningDayOperations } from '../src/api/client';
-import { SettingsEditor } from '../src/features/settings/SettingsEditor';
-import { useUiStore } from '../src/stores/ui-store';
-import { warehouseFixture } from './fixtures';
+import { OperationsJournalDisclosure } from '../src/features/operations/OperationsJournal';
 
 const DAY = '2026-09-03';
 
@@ -57,11 +55,10 @@ function operationsFixture(): PlanningDayOperations {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  useUiStore.setState({ settingsView: 'ALGORITHM' });
 });
 
-describe('settings operations journal', () => {
-  it('loads the server history under Settings and keeps it off the day workspace', async () => {
+describe('day operations journal', () => {
+  it('loads selected day history only when the dispatcher opens its journal', async () => {
     const user = userEvent.setup();
     const getOperations = vi.spyOn(api, 'getPlanningDayOperations').mockResolvedValue(operationsFixture());
     const onSelectRequest = vi.fn();
@@ -69,22 +66,17 @@ describe('settings operations journal', () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <SettingsEditor
-          warehouse={warehouseFixture({ timezone: 'Europe/Moscow' })}
-          busy={false}
-          onSave={() => Promise.resolve()}
-          journal={{
-            warehouseId: 'warehouse-root',
-            planningDate: DAY,
-            timeZone: 'Europe/Moscow',
-            onSelectRequest,
-          }}
+        <OperationsJournalDisclosure
+          warehouseId="warehouse-root"
+          planningDate={DAY}
+          timeZone="Europe/Moscow"
+          onSelectRequest={onSelectRequest}
         />
       </QueryClientProvider>,
     );
 
-    expect(screen.getByRole('heading', { name: 'Настройки алгоритма' })).toBeVisible();
-    await user.click(screen.getByRole('tab', { name: 'Журнал' }));
+    expect(getOperations).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Журнал дня' }));
 
     await waitFor(() => expect(getOperations).toHaveBeenCalledWith('warehouse-root', DAY));
     expect(await screen.findByRole('heading', { name: 'Журнал за 03 сентября 2026 г.' })).toBeVisible();
@@ -92,7 +84,6 @@ describe('settings operations journal', () => {
     expect(screen.getByText('Клиент согласен на опоздание', { exact: false })).toBeVisible();
     expect(screen.getByText('Показано только последнее доступное окно истории за выбранный день.')).toBeVisible();
     expect(screen.queryByText('Системный журнал')).not.toBeInTheDocument();
-    expect(useUiStore.getState().settingsView).toBe('JOURNAL');
 
     await user.click(screen.getAllByRole('button', { name: 'Показать заявку' })[0]!);
     expect(onSelectRequest).toHaveBeenCalledWith('request-1');
