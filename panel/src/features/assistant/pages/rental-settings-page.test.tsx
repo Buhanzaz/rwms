@@ -10,6 +10,20 @@ const rentalSettingsApi = vi.hoisted(() => ({
 const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }))
 
 vi.mock(
+  "@/features/assistant/api/rental-pricing-api",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/features/assistant/api/rental-pricing-api")
+    >()),
+    getRentalPricingSettings: vi.fn(async () => ({
+      version: 0,
+      types: [],
+      updatedAt: "2026-09-05T11:00:00Z",
+    })),
+  })
+)
+
+vi.mock(
   "@/features/assistant/api/rental-presentations-api",
   async (importOriginal) => ({
     ...(await importOriginal<
@@ -87,6 +101,18 @@ describe("RentalSettingsPage", () => {
   afterEach(() => {
     cleanup()
     vi.clearAllMocks()
+  })
+
+  it("keeps price settings visible when hold settings fail", async () => {
+    rentalSettingsApi.getRentalSettings.mockRejectedValueOnce(
+      new Error("Нет связи")
+    )
+    renderPage()
+    await screen.findByText("Не удалось загрузить настройки")
+    expect(screen.getByRole("heading", { name: "Цены аренды" })).toBeDefined()
+    expect(
+      await screen.findByText("В справочнике нет типов бытовок")
+    ).toBeDefined()
   })
 
   it("saves an independent manual booking hold duration", async () => {

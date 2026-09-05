@@ -90,6 +90,15 @@ amounts. The optional international rental-support phone is never taken from
 customer data. Conflicts retain the draft until an explicit reload. Configuring
 a rule does not itself assess or collect a fee.
 
+The same page independently loads the logistics-owned monthly rental price table.
+Every current asset type/category combination appears automatically, including
+inactive and unused values; new combinations start at 0 RUB. Administrators edit
+only an exact whole-ruble price, saved per row with an expected version. Catalog
+renames keep the UUID-bound price; deletions disappear on refresh (also on focus
+and every 30 seconds while the page is visible). Refresh preserves unsaved rows;
+a concurrently changed price requires explicit acceptance before editing again.
+Dependency failures are shown, never replaced by zero-price data.
+
 The router exposes the operational panel for warehouse/equipment, rentals and
 orders, inventory, maintenance/acceptance, logistics, task board, assistant,
 write-offs, and settings. The current user profile determines which warehouse

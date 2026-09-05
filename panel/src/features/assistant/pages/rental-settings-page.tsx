@@ -30,6 +30,7 @@ import {
   type RentalSettings,
 } from "@/features/assistant/api/rental-presentations-api"
 import { useAuth } from "@/features/auth/use-auth"
+import { RentalPricesSettings } from "@/features/assistant/components/rental-prices-settings"
 import { ApiError } from "@/lib/api-client"
 
 const queryKey = ["rental-settings"] as const
@@ -101,25 +102,29 @@ export function RentalSettingsPage() {
         Настройка доступна системному администратору.
       </p>
     )
-  if (!settings.data) {
-    return settings.isError ? (
-      <Alert variant="destructive">
-        <AlertTitle>Не удалось загрузить настройки</AlertTitle>
-        <AlertDescription>
-          {settings.error.message}
-          <Button variant="outline" onClick={() => void settings.refetch()}>
-            Повторить
-          </Button>
-        </AlertDescription>
-      </Alert>
-    ) : (
-      <p role="status" className="text-sm text-muted-foreground">
-        Загружаем настройки…
-      </p>
-    )
-  }
+  if (!accessToken?.trim())
+    return <p role="alert">Не получен токен доступа. Войдите заново.</p>
   return (
-    <RentalSettingsForm initial={settings.data} accessToken={accessToken!} />
+    <div className="flex flex-col gap-6">
+      <RentalPricesSettings accessToken={accessToken} />
+      {settings.data ? (
+        <RentalSettingsForm initial={settings.data} accessToken={accessToken} />
+      ) : settings.isError ? (
+        <Alert variant="destructive">
+          <AlertTitle>Не удалось загрузить настройки</AlertTitle>
+          <AlertDescription>
+            {settings.error.message}
+            <Button variant="outline" onClick={() => void settings.refetch()}>
+              Повторить
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : (
+        <p role="status" className="text-sm text-muted-foreground">
+          Загружаем настройки…
+        </p>
+      )}
+    </div>
   )
 }
 
