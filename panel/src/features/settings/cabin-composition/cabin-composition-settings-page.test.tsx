@@ -42,6 +42,10 @@ vi.mock("@/features/auth/use-auth", () => ({
   }),
 }))
 
+vi.mock("./cabin-status-colors-settings", () => ({
+  CabinStatusColorsSettings: () => <p>Редактор глобальной палитры</p>,
+}))
+
 vi.mock(
   "@/features/rental-items/api/asset-rental-items-api",
   async (importOriginal) => ({
@@ -114,6 +118,15 @@ afterEach(() => {
 })
 
 describe("CabinCompositionSettingsPage", () => {
+  it("opens global status colors from the existing cabin settings without a warehouse selector", async () => {
+    renderPage()
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("tab", { name: "Цвета статусов" }))
+    expect(screen.getByText("Редактор глобальной палитры")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Добавить" })).toBeNull()
+  })
+
   it("shows names only and saves selected dimensions for a type", async () => {
     const user = userEvent.setup()
     renderPage()

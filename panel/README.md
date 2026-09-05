@@ -167,6 +167,13 @@ contexts and screens are usable.
   projection. Their handlers refresh or patch only affected query entries and
   evict media blobs whose revision changed; they do not globally clear the
   cache.
+- `Admin → Cabins → Status colors` edits the asset-owned, versioned global
+  cabin palette. WMS, the web manager and admin share its live CSS variables;
+  open windows refresh every 30 seconds, independently of the selected warehouse.
+  Unsaved previews stay local to the editor; concurrent changes require an
+  explicit reload, and failed reads visibly fall back to the base visual palette.
+  Logout and permission-boundary remounts remove session overrides. This does not
+  change status meanings or the native Android theme.
 - The rental-item dossier consumes the complete canonical activity vocabulary.
   Maintenance repair transfer preparation and completion are shown in the
   repair history using the immutable warehouse snapshot returned by

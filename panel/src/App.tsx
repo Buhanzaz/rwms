@@ -1,6 +1,7 @@
 import { useEffect, useRef, type CSSProperties } from "react"
 import { Navigate, Route, Routes } from "react-router-dom"
 import { RentalItemDetailPage } from "@/features/rental-items/rental-item-detail-page"
+import { CabinStatusPaletteSync } from "@/features/settings/cabin-composition/cabin-status-palette-sync"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
 import { WarehouseProvider } from "@/contexts/warehouse-provider"
@@ -345,6 +346,7 @@ function AppLayout() {
 export default function App() {
   return (
     <WarehouseProvider>
+      <CabinStatusPaletteSync />
       <AppLayout />
     </WarehouseProvider>
   )

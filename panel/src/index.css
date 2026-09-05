@@ -111,56 +111,88 @@
   --cart-surface-foreground: var(--background);
   --history-past: color-mix(in oklch, var(--chart-5) 72%, var(--background));
   --history-past-foreground: var(--foreground);
+  --cabin-status-rented: #0891b2;
+  --cabin-status-booked: #8b5cf6;
+  --cabin-status-repair: #f97316;
+  --cabin-status-waiting-repair-check: #eab308;
+  --cabin-status-written-off: #64748b;
+  --cabin-status-lost: #dc2626;
+  --cabin-status-capital-repair: #dc2626;
+  --cabin-status-after-rent: #f59e0b;
+  --cabin-status-waiting-estimate-confirmation: #d97706;
+  --cabin-status-sale: #c026d3;
+  --cabin-status-used-sale: #c026d3;
+  --cabin-status-reserved: #8b5cf6;
+  --cabin-status-free: #16a34a;
+  --cabin-status-warehouse: #64748b;
+  --cabin-status-own-needs: #6366f1;
+  --cabin-status-in-transfer: #0d9488;
   --status-rented-bg: color-mix(
-    in oklch,
-    var(--chart-3) 28%,
-    var(--background)
+    in srgb,
+    var(--cabin-status-rented) 24%,
+    var(--card)
   );
   --status-rented-fg: var(--foreground);
   --status-after-rent-bg: color-mix(
-    in oklch,
-    var(--chart-2) 22%,
-    var(--background)
+    in srgb,
+    var(--cabin-status-after-rent) 24%,
+    var(--card)
   );
   --status-after-rent-fg: var(--foreground);
   --status-booked-bg: color-mix(
-    in oklch,
-    var(--chart-1) 24%,
-    var(--background)
+    in srgb,
+    var(--cabin-status-booked) 24%,
+    var(--card)
   );
   --status-booked-fg: var(--foreground);
   --status-repair-bg: color-mix(
-    in oklch,
-    var(--chart-3) 36%,
-    var(--background)
+    in srgb,
+    var(--cabin-status-repair) 24%,
+    var(--card)
   );
   --status-repair-fg: var(--foreground);
   --status-capital-repair-bg: color-mix(
-    in oklch,
-    var(--chart-4) 42%,
-    var(--background)
+    in srgb,
+    var(--cabin-status-capital-repair) 24%,
+    var(--card)
   );
   --status-capital-repair-fg: var(--foreground);
-  --status-sale-bg: color-mix(in oklch, var(--chart-5) 34%, var(--background));
+  --status-sale-bg: color-mix(
+    in srgb,
+    var(--cabin-status-sale) 24%,
+    var(--card)
+  );
   --status-sale-fg: var(--foreground);
-  --status-free-bg: color-mix(in oklch, var(--muted) 70%, var(--background));
+  --status-free-bg: color-mix(
+    in srgb,
+    var(--cabin-status-free) 24%,
+    var(--card)
+  );
   --status-free-fg: var(--foreground);
   --status-warehouse-bg: color-mix(
-    in oklch,
-    var(--secondary) 76%,
-    var(--background)
+    in srgb,
+    var(--cabin-status-warehouse) 24%,
+    var(--card)
   );
   --status-warehouse-fg: var(--foreground);
   --status-own-needs-bg: color-mix(
-    in oklch,
-    var(--accent) 76%,
-    var(--background)
+    in srgb,
+    var(--cabin-status-own-needs) 24%,
+    var(--card)
   );
   --status-own-needs-fg: var(--foreground);
-  --status-waiting-repair-check-bg: var(--status-after-rent-bg);
-  --status-waiting-repair-check-fg: var(--status-after-rent-fg);
-  --status-written-off-bg: var(--primary);
-  --status-written-off-fg: var(--primary-foreground);
+  --status-waiting-repair-check-bg: color-mix(
+    in srgb,
+    var(--cabin-status-waiting-repair-check) 24%,
+    var(--card)
+  );
+  --status-waiting-repair-check-fg: var(--foreground);
+  --status-written-off-bg: color-mix(
+    in srgb,
+    var(--cabin-status-written-off) 24%,
+    var(--card)
+  );
+  --status-written-off-fg: var(--foreground);
   --acceptance-pending-bg: var(--status-after-rent-bg);
   --acceptance-pending-fg: var(--status-after-rent-fg);
   --acceptance-accepted-bg: var(--status-free-bg);

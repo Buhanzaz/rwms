@@ -14,6 +14,7 @@ import logotypeUrl from "../../../../Logotype.svg"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { WarehouseProvider } from "@/contexts/warehouse-provider"
+import { CabinStatusPaletteSync } from "@/features/settings/cabin-composition/cabin-status-palette-sync"
 import { AssistantPage } from "@/features/assistant/pages/assistant-page"
 import { useAuth } from "@/features/auth/use-auth"
 import { ClientsRoutes } from "@/features/clients/clients-routes"
@@ -187,6 +188,7 @@ function ManagerLayout() {
 export function ManagerApp() {
   return (
     <WarehouseProvider>
+      <CabinStatusPaletteSync />
       <ManagerLayout />
     </WarehouseProvider>
   )

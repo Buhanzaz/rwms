@@ -57,6 +57,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ApiError } from "@/lib/api-client"
+import { CabinStatusColorsSettings } from "./cabin-status-colors-settings"
 
 const CABIN_SETTINGS_QUERY_KEY = ["cabin-composition-settings"] as const
 
@@ -493,7 +494,9 @@ function CatalogSection({
 export function CabinCompositionSettingsPage() {
   const queryClient = useQueryClient()
   const { accessToken, currentUser } = useAuth()
-  const [activeKind, setActiveKind] = useState<CabinCatalogKind>("TYPE")
+  const [activeKind, setActiveKind] = useState<
+    CabinCatalogKind | "STATUS_COLORS"
+  >("TYPE")
   const [editor, setEditor] = useState<CatalogEditorState | null>(null)
   const [dimensionsEditor, setDimensionsEditor] =
     useState<CabinCatalogItem | null>(null)
@@ -631,7 +634,9 @@ export function CabinCompositionSettingsPage() {
         <Tabs
           className="min-w-0"
           value={activeKind}
-          onValueChange={(value) => setActiveKind(value as CabinCatalogKind)}
+          onValueChange={(value) =>
+            setActiveKind(value as CabinCatalogKind | "STATUS_COLORS")
+          }
         >
           <div className="max-w-full overflow-x-auto pb-1">
             <TabsList className="min-w-max bg-muted/75 shadow-xs backdrop-blur-md">
@@ -642,27 +647,34 @@ export function CabinCompositionSettingsPage() {
                   </TabsTrigger>
                 )
               )}
+              <TabsTrigger value="STATUS_COLORS">Цвета статусов</TabsTrigger>
             </TabsList>
           </div>
         </Tabs>
-        <Button
-          type="button"
-          size="sm"
-          onClick={() => setEditor({ mode: "create", kind: activeKind })}
-        >
-          <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-          Добавить
-        </Button>
+        {activeKind !== "STATUS_COLORS" ? (
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => setEditor({ mode: "create", kind: activeKind })}
+          >
+            <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+            Добавить
+          </Button>
+        ) : null}
       </div>
 
-      <CatalogSection
-        kind={activeKind}
-        items={itemsByKind[activeKind]}
-        settings={settings}
-        pending={mutation.isPending || deleteMutation.isPending}
-        onEdit={(item) => setEditor({ mode: "edit", item })}
-        onEditDimensions={setDimensionsEditor}
-      />
+      {activeKind === "STATUS_COLORS" ? (
+        <CabinStatusColorsSettings />
+      ) : (
+        <CatalogSection
+          kind={activeKind}
+          items={itemsByKind[activeKind]}
+          settings={settings}
+          pending={mutation.isPending || deleteMutation.isPending}
+          onEdit={(item) => setEditor({ mode: "edit", item })}
+          onEditDimensions={setDimensionsEditor}
+        />
+      )}
 
       {editor ? (
         <CatalogItemDialog

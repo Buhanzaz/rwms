@@ -40,6 +40,7 @@ import { RentalSettingsPage } from "@/features/assistant/pages/rental-settings-p
 import { useAuth } from "@/features/auth/use-auth"
 import { ClaimsPage } from "@/features/claims/claims-page"
 import { CabinCompositionSettingsPage } from "@/features/settings/cabin-composition"
+import { CabinStatusPaletteSync } from "@/features/settings/cabin-composition/cabin-status-palette-sync"
 import { EstimatesRepairsSettingsPage } from "@/features/settings/estimates-repairs/estimates-repairs-settings-page"
 import { TaskBoardSettingsPage } from "@/features/settings/task-board/task-board-settings-page"
 import { UsersPage } from "@/features/settings/users/users-page"
@@ -401,6 +402,7 @@ function AdminLayout() {
 export function AdminApp() {
   return (
     <WarehouseProvider>
+      <CabinStatusPaletteSync />
       <AdminLayout />
     </WarehouseProvider>
   )
