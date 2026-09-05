@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.logistics.order.security;
 
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentState;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
 import java.util.Arrays;
@@ -106,6 +107,12 @@ public class OrderAuthorizer {
     if (order.getStatus() != RentalOrderStatus.SAVED) {
       throw new OrderProblemException(
           HttpStatus.CONFLICT, "ORDER_NOT_SHIPPABLE", "Отгрузка доступна только для сохранённого заказа");
+    }
+    if (!RentalOrderPaymentState.allowsFulfillment(order.getPaymentState())) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "ORDER_PAYMENT_REQUIRED",
+          "Сначала подтвердите оплату бытовок и мебели");
     }
     if (order.getWarehouseId() != null && !canEditWarehouse(actor, order.getWarehouseId())) {
       throw new AccessDeniedException("Insufficient warehouse access");

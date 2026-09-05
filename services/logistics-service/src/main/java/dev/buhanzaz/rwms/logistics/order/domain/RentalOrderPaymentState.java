@@ -6,5 +6,10 @@ public enum RentalOrderPaymentState {
   CONFIRMED,
   EXPIRING,
   EXPIRED,
-  CANCELLED
+  CANCELLED;
+
+  /** Existing orders without a payment window keep their admission; a new window requires proof. */
+  public static boolean allowsFulfillment(RentalOrderPaymentState state) {
+    return state == null || state == CONFIRMED;
+  }
 }

@@ -414,6 +414,28 @@ class RentalOrderPlanningIntegrationServiceTest {
   }
 
   @Test
+  void unpaidAssignmentIsRejectedBeforeShipmentOrDriverEffects() {
+    LocalDate date = LocalDate.now(MOSCOW).plusDays(3);
+    when(order.getPaymentState())
+        .thenReturn(dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentState.PENDING);
+    var result =
+        service.apply(
+            UUID.randomUUID(),
+            request(
+                List.of(
+                    new PlanningAssignmentRequest(
+                        ORDER_ID, 7L, date, DRIVER_ID, "Водитель 1", List.of(UNIT_ONE))),
+                List.of(shiftPlan(date))));
+    assertThat(result.applied()).isEmpty();
+    assertThat(result.rejected())
+        .singleElement()
+        .satisfies(rejected -> assertThat(rejected.code()).isEqualTo("ORDER_PAYMENT_REQUIRED"));
+    verify(lifecycle, never()).prepareDocument(any(), any(), any(), any());
+    verify(rentalOrders, never()).createRentalShipment(any(), any(), any(), any(), any(), any());
+    verify(dependencies, never()).registerDriverShiftPlan(any(), any(), any());
+  }
+
+  @Test
   void automaticAssignmentRejectsTodayAndTomorrowWithoutCreatingShipment() {
     LocalDate tomorrow = LocalDate.now(MOSCOW).plusDays(1);
     when(order.getDesiredDeliveryWindows())

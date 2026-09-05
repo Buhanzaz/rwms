@@ -920,6 +920,12 @@ addition does not itself activate payment timers.
 Evidence: [`receipt owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderPaymentReceiptStore.java),
 [`V104`](../../services/logistics-service/src/main/resources/db/migration/V104__immutable_order_payment_receipts.sql).
 
+Payment-aware orders require `CONFIRMED` before planning demand, assignment, shipment creation or
+shipment furniture/replacement work. Commands recheck admission independently of stale planner
+input and return `ORDER_PAYMENT_REQUIRED`; existing null-payment orders keep their admission.
+Evidence: [`payment admission`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/domain/RentalOrderPaymentState.java),
+[`planning owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderPlanningIntegrationService.java).
+
 Public return, shipment and transfer list reads preserve their array payload but
 are bounded to `page/size` with a maximum of 100 documents. Pagination metadata
 is carried in fixed response headers, and all lines for one document page are

@@ -92,6 +92,11 @@ Missing cabin prices or a missing customer delivery quote fail closed. Reads and
 return the original receipt without consulting changed tariffs/composition. Existing orders have
 no fabricated historical bill. This storage step does not yet start a payment window.
 
+An order with payment evidence enters the route-planning feed only in `CONFIRMED`. Assignment,
+shipment creation and shipment furniture/replacement preparation independently reject an unpaid
+order with `ORDER_PAYMENT_REQUIRED` before effects. Historical null-payment orders retain their
+existing admission; timer activation and CustomerApp checkout coordination are separate steps.
+
 V100 adds nullable order-owned payment reservation evidence: a non-renewable five-minute window,
 explicit `CUSTOMER_TEST`/`MANAGER_CONFIRMATION` provenance, and separate pending, confirmed,
 releasing, expired and cancelled outcomes. The domain rejects confirmation at the deadline and

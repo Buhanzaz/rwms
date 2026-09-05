@@ -394,7 +394,7 @@ public class RentalOrder {
 
   /** Historical orders retain their former admission without inventing a confirmation. */
   public boolean isPaymentConfirmedOrNotRequired() {
-    return paymentState == null || paymentState == RentalOrderPaymentState.CONFIRMED;
+    return RentalOrderPaymentState.allowsFulfillment(paymentState);
   }
 
   private void cancelUnpaidReservation(OffsetDateTime timestamp) {

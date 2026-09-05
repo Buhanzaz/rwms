@@ -102,6 +102,10 @@ class OrderApiIntegrationTest {
   @Autowired LogisticsExternalAttemptClaimService externalAttemptClaims;
   @Autowired ShipmentProcessor shipmentProcessor;
   @Autowired RentalOrderMutationRecoveryService orderMutationRecovery;
+
+  @Autowired
+  dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository paymentAdmissionOrders;
+
   @MockitoBean LogisticsDependencyGateway dependencies;
 
   private final Map<UUID, LinkedHashMap<UUID, LogisticsDependencyGateway.OrderUnitReservation>>
@@ -2574,6 +2578,42 @@ class OrderApiIntegrationTest {
                 String.class,
                 orderId))
         .isEqualTo("SYSTEM_ADMIN");
+  }
+
+  @Test
+  void unpaidOrderIsExcludedFromPlanningAndCannotCreateShipment() throws Exception {
+    UUID orderId = createOrder(MANAGER_1, "manager-one", "Unpaid admission");
+    selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
+    addUnit(orderId, MANAGER_1, UNIT_1, 1);
+    seedExpiredPaymentReservation(orderId);
+    assertThat(
+            paymentAdmissionOrders.findAllPlanningCandidates(
+                WAREHOUSE_1, dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus.SAVED))
+        .isEmpty();
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/shipments", orderId)
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    rentalShipmentBody(
+                        2, "Водитель", LocalDate.now().plusDays(3).toString(), UNIT_1))
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("ORDER_PAYMENT_REQUIRED"));
+    assertThat(jdbc.queryForObject("select count(*) from logistics_document", Long.class)).isZero();
+    jdbc.update(
+        """
+        update rental_order set payment_state='CONFIRMED', payment_source='MANAGER_CONFIRMATION',
+          payment_confirmed_by_subject_id=?, payment_resolved_at=payment_started_at+interval '1 minute'
+        where id=?
+        """,
+        MANAGER_1,
+        orderId);
+    assertThat(
+            paymentAdmissionOrders.findAllPlanningCandidates(
+                WAREHOUSE_1, dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus.SAVED))
+        .extracting(dev.buhanzaz.rwms.logistics.order.domain.RentalOrder::getId)
+        .containsExactly(orderId);
   }
 
   @Test

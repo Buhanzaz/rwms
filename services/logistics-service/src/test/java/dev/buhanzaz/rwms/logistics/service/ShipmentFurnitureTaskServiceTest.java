@@ -46,6 +46,65 @@ class ShipmentFurnitureTaskServiceTest {
   private static final UUID EQUIPMENT_ID = UUID.fromString("00000000-0000-0000-0000-000000009221");
 
   @Test
+  void unpaidOrderCannotReportFurnitureReadyOrStartReplacementWork() {
+    RentalOrder order = mock(RentalOrder.class);
+    when(order.getId()).thenReturn(ORDER_ID);
+    when(order.getStatus()).thenReturn(RentalOrderStatus.SAVED);
+    when(order.getWarehouseId()).thenReturn(WAREHOUSE_ID);
+    when(order.getPaymentState())
+        .thenReturn(dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentState.PENDING);
+    RentalOrderRepository orders = mock(RentalOrderRepository.class);
+    when(orders.findForUpdate(ORDER_ID)).thenReturn(Optional.of(order));
+    when(orders.findWithClientById(ORDER_ID)).thenReturn(Optional.of(order));
+    LogisticsDocumentRepository documents = mock(LogisticsDocumentRepository.class);
+    LogisticsDocument shipment = mock(LogisticsDocument.class);
+    when(shipment.getDocumentType()).thenReturn(LogisticsDocumentType.SHIPMENT);
+    when(shipment.getRentalOrderId()).thenReturn(ORDER_ID);
+    when(shipment.getWarehouseId()).thenReturn(WAREHOUSE_ID);
+    when(documents.findById(SHIPMENT_ID)).thenReturn(Optional.of(shipment));
+    ShipmentFurnitureMovementTaskRepository links =
+        mock(ShipmentFurnitureMovementTaskRepository.class);
+    LogisticsDependencyGateway dependencies = mock(LogisticsDependencyGateway.class);
+    EquipmentMovementTaskService movement = mock(EquipmentMovementTaskService.class);
+    ShipmentFurnitureTaskService service =
+        new ShipmentFurnitureTaskService(
+            documents,
+            mock(LogisticsDocumentLineRepository.class),
+            orders,
+            mock(RentalOrderMutationCommandRepository.class),
+            mock(RentalOrderEquipmentRequirementRepository.class),
+            links,
+            dependencies,
+            movement,
+            mock(LogisticsWarehouseLifecycle.class),
+            mock(ShipmentFurnitureTaskResponseMapper.class));
+    assertThatThrownBy(() -> service.readiness(SHIPMENT_ID))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            error -> assertThat(error.code()).isEqualTo("ORDER_PAYMENT_REQUIRED"));
+    var command =
+        new ShipmentFurnitureTaskService.ReplacementCheckpointCommand(
+            ORDER_ID,
+            1,
+            WAREHOUSE_ID,
+            UNIT_1,
+            UNIT_2,
+            "replacement",
+            UUID.randomUUID(),
+            "WAREHOUSE_MANAGER",
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            0,
+            "a".repeat(64),
+            null);
+    assertThatThrownBy(() -> service.checkpointReplacement(command, null))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            error -> assertThat(error.code()).isEqualTo("ORDER_PAYMENT_REQUIRED"));
+    verifyNoInteractions(links, dependencies, movement);
+  }
+
+  @Test
   void replacementCheckpointRejectsOpenOrderMutationAfterLockingOrder() {
     RentalOrderRepository orders = mock(RentalOrderRepository.class);
     RentalOrderMutationCommandRepository orderMutations =

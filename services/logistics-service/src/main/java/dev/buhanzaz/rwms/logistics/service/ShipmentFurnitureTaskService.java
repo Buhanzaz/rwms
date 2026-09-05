@@ -20,6 +20,7 @@ import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.mapper.ShipmentFurnitureTaskResponseMapper;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentState;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderEquipmentRequirement;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderEquipmentRequirementRepository;
@@ -101,6 +102,7 @@ public class ShipmentFurnitureTaskService {
         orders
             .findForUpdate(first.orderId())
             .orElseThrow(() -> new LogisticsConflictException("Заказ замены не найден"));
+    requirePayment(order);
     if (orderMutationCommands.existsByOrder_IdAndStateIn(
         first.orderId(), Set.of(State.PENDING, State.QUARANTINED))) {
       throw new OrderProblemException(
@@ -630,6 +632,8 @@ public class ShipmentFurnitureTaskService {
       throw new LogisticsConflictException("Сохранённый заказ отгрузки больше не актуален");
     }
 
+    requirePayment(order);
+
     List<RentalOrderEquipmentRequirement> desiredRows =
         requirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(
             order.getId());
@@ -730,7 +734,17 @@ public class ShipmentFurnitureTaskService {
         || !shipment.getWarehouseId().equals(order.getWarehouseId())) {
       throw new LogisticsConflictException("Сохранённый заказ отгрузки больше не актуален");
     }
+    requirePayment(order);
     return order;
+  }
+
+  private static void requirePayment(RentalOrder order) {
+    if (!RentalOrderPaymentState.allowsFulfillment(order.getPaymentState())) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "ORDER_PAYMENT_REQUIRED",
+          "Сначала подтвердите оплату бытовок и мебели");
+    }
   }
 
   private static Map<UUID, ShipmentFurnitureMovementTask> existingByUnit(

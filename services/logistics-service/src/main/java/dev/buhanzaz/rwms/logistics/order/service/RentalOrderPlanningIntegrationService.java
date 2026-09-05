@@ -38,6 +38,7 @@ import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.Planni
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRentalShipmentRequest;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentState;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.order.security.OrderActor;
@@ -506,6 +507,12 @@ public class RentalOrderPlanningIntegrationService {
           HttpStatus.CONFLICT,
           "ORDER_VERSION_CONFLICT",
           "Заказ изменился после синхронизации с планировщиком");
+    }
+    if (!RentalOrderPaymentState.allowsFulfillment(order.getPaymentState())) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "ORDER_PAYMENT_REQUIRED",
+          "Сначала подтвердите оплату бытовок и мебели");
     }
     requireAssignmentType(assignment);
     requireDriverAudience(today, assignment);

@@ -14,9 +14,11 @@ import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.WarehouseOperationDirection;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRentalShipmentRequest;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentState;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderUnitTerm;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderUnitTermRepository;
+import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.repository.ShipmentFurnitureMovementTaskRepository;
@@ -120,6 +122,12 @@ class LogisticsRentalOrderShipmentCoordinator {
         || order.getWarehouseId() == null
         || order.getClient() == null) {
       throw new LogisticsConflictException("Сохранённый заказ требуется для создания отгрузки");
+    }
+    if (!RentalOrderPaymentState.allowsFulfillment(order.getPaymentState())) {
+      throw new OrderProblemException(
+          org.springframework.http.HttpStatus.CONFLICT,
+          "ORDER_PAYMENT_REQUIRED",
+          "Сначала подтвердите оплату бытовок и мебели");
     }
     UUID inventorySourceWarehouseId = inventorySource(order, request);
     warehouseAdmission.requireAdmission(
