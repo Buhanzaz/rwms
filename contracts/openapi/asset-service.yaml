@@ -1674,6 +1674,40 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/logistics/cabin-pricing-catalog:
+    get:
+      operationId: readCabinPricingCatalog
+      description: >-
+        Requires SERVICE logistics-service with exactly asset.logistics. Returns every existing
+        TYPE and CATEGORY catalog identity, including inactive entries and entries not yet used by
+        any cabin. Deleted values disappear; names are labels, not pricing keys. This read owns no
+        rental-price policy and has no hold or reservation effects.
+      responses:
+        '200':
+          description: Current global classification dimensions from one consistent asset snapshot.
+          content: { application/json: { schema: { $ref: '#/components/schemas/CabinPricingCatalog' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/internal/asset/v1/logistics/cabin-pricing-references:
+    post:
+      operationId: readCabinPricingReferences
+      description: >-
+        Requires SERVICE logistics-service with exactly asset.logistics. Reads the current TYPE
+        and CATEGORY identities of one to 100 distinct cabins in the supplied warehouse without
+        checking availability or changing holds. A missing or foreign-warehouse cabin rejects the
+        entire request with 404; no partial result or passport data is returned.
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/CabinAvailabilityRequest' } }
+      responses:
+        '200':
+          description: Complete classification references ordered by cabin UUID.
+          content: { application/json: { schema: { $ref: '#/components/schemas/CabinPricingReferences' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/internal/asset/v1/logistics/cabin-facets:
     get:
       operationId: readPresentationCabinFacets
@@ -3166,6 +3200,41 @@ components:
           description: >-
             Missing or null is replacement-safe REPLACE. APPEND is honored only when explicitly
             supplied by the caller.
+    CabinPricingCatalog:
+      type: object
+      additionalProperties: false
+      required: [types, categories]
+      properties:
+        types: { type: array, items: { $ref: '#/components/schemas/CabinPricingCatalogValue' } }
+        categories: { type: array, items: { $ref: '#/components/schemas/CabinPricingCatalogValue' } }
+    CabinPricingCatalogValue:
+      type: object
+      additionalProperties: false
+      required: [id, name, active]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        active: { type: boolean }
+    CabinPricingReferences:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, cabins]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        cabins:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CabinPricingReference' }
+    CabinPricingReference:
+      type: object
+      additionalProperties: false
+      required: [rentalItemId, rentalItemVersion, rentalTypeId, categoryId]
+      properties:
+        rentalItemId: { type: string, format: uuid }
+        rentalItemVersion: { type: integer, format: int64, minimum: 0 }
+        rentalTypeId: { type: string, format: uuid }
+        categoryId: { type: string, format: uuid }
     CabinAvailabilityRequest:
       type: object
       additionalProperties: false

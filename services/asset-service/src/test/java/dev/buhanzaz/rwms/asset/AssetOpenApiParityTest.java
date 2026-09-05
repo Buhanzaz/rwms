@@ -93,6 +93,8 @@ class AssetOpenApiParityTest {
         "/api/internal/asset/v1/logistics/orders/{orderId}/equipment-movement-plan",
         "/api/internal/asset/v1/logistics/rental-items/{rentalItemId}/furniture-movement-plan",
         "/api/internal/asset/v1/logistics/cabin-catalog",
+        "/api/internal/asset/v1/logistics/cabin-pricing-catalog",
+        "/api/internal/asset/v1/logistics/cabin-pricing-references",
         "/api/internal/asset/v1/logistics/customer-cabin-catalog",
         "/api/internal/asset/v1/inventory/assets/{assetId}",
         "/api/internal/asset/v1/inventory/captures",

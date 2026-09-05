@@ -26,6 +26,13 @@ only.
 
 ### Customer registration and rental booking
 
+The asset logistics-only `/cabin-pricing-catalog` read supplies every current TYPE
+and CATEGORY UUID, name and active flag, including unused classifications; deleted
+values disappear. `/cabin-pricing-references` resolves a complete bounded set of
+warehouse-scoped cabin UUIDs to current type/category UUIDs and cabin versions.
+Both require the exact logistics service credential and `asset.logistics` scope;
+neither exposes passports, mutates holds, or defines rental tariffs.
+
 [`auth-service.yaml`](../../contracts/openapi/auth-service.yaml) defines the
 anonymous GET `/api/auth/csrf` bootstrap and CSRF-protected POST
 `/api/customer/v1/registrations`. Through the gateway they are delegated under

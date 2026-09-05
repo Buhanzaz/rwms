@@ -51,6 +51,12 @@ type-to-dimension relations. `/cabin-catalog` — отдельный bounded rea
 facts lookup по warehouse и обязательному query. Он ищет number, type, finish,
 dimension, category, characteristics и linoleum среди всех current statuses;
 он не проверяет availability и не создаёт, не продлевает и не освобождает hold.
+`/cabin-pricing-catalog` возвращает актуальные глобальные UUID типов TYPE и
+категорий CATEGORY, включая отключённые и ещё не используемые значения;
+удалённые значения исчезают из результата. `/cabin-pricing-references` возвращает
+точные UUID типа/категории и версию для 1–100 разных бытовок одного склада.
+Отсутствующая бытовка или другой склад отклоняют весь запрос с 404. Эти чтения
+не раскрывают паспорт, не меняют резервы и не владеют тарифами аренды логистики.
 `/customer-cabin-catalog` — customer-booking read для одного обязательного
 `holdScopeId`. Он возвращает только бытовки `FREE` без active order reservation
 или operation lease, исключает live holds других scopes и сохраняет видимыми

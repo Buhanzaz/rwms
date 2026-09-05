@@ -51,6 +51,12 @@ type-to-dimension relations. `/cabin-catalog` is a separate bounded, read-only
 facts lookup by warehouse and required query. It searches number, type, finish,
 dimension, category, characteristics and linoleum across all current statuses;
 it does not check availability or create, renew or release a hold.
+`/cabin-pricing-catalog` exposes the current global TYPE and CATEGORY identities,
+including inactive and unused values; deleted values disappear from the result.
+`/cabin-pricing-references` returns the exact type/category UUIDs and cabin version
+for one to 100 distinct cabins in one warehouse. Missing or foreign-warehouse
+cabins reject the complete request with 404. Neither read exposes passport data,
+changes reservations, or owns the logistics rental-price policy.
 `/customer-cabin-catalog` is the customer-booking read for one required
 `holdScopeId`. It returns only `FREE` cabins that have no active order
 reservation or operation lease, excludes live holds of other scopes, and keeps
