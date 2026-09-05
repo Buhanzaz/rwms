@@ -94,6 +94,138 @@ class HttpLogisticsDependencyGatewayTest {
   }
 
   @Test
+  void pricingCatalogUsesPrivateAssetCredentialsAndRetainsInactiveUnusedValues() {
+    UUID type = UUID.randomUUID();
+    UUID category = UUID.randomUUID();
+    server
+        .expect(
+            requestTo("http://asset.test/api/internal/asset/v1/logistics/cabin-pricing-catalog"))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header("Authorization", "Bearer test-asset.logistics"))
+        .andRespond(
+            withSuccess(
+                """
+                {"types":[{"id":"%s","name":"БК-1","active":false}],
+                 "categories":[{"id":"%s","name":"Обычная","active":true}]}
+                """
+                    .formatted(type, category),
+                MediaType.APPLICATION_JSON));
+    var catalog = gateway.readCabinPricingCatalog();
+    assertThat(catalog.types())
+        .containsExactly(
+            new LogisticsDependencyGateway.CabinPricingCatalogValue(type, "БК-1", false));
+    assertThat(catalog.categories())
+        .containsExactly(
+            new LogisticsDependencyGateway.CabinPricingCatalogValue(category, "Обычная", true));
+    server.verify();
+  }
+
+  @Test
+  void pricingCatalogRejectsMissingFlagsNullRowsAndDuplicateIdentities() {
+    UUID id = UUID.randomUUID();
+    for (String body :
+        List.of(
+            "{\"types\":null,\"categories\":[]}",
+            "{\"types\":[null],\"categories\":[]}",
+            "{\"types\":[{\"id\":\"%s\",\"name\":\"БК-1\"}],\"categories\":[]}".formatted(id),
+            """
+            {"types":[{"id":"%s","name":"БК-1","active":true}],
+             "categories":[{"id":"%s","name":"Обычная","active":true}]}
+            """
+                .formatted(id, id))) {
+      server
+          .expect(
+              requestTo("http://asset.test/api/internal/asset/v1/logistics/cabin-pricing-catalog"))
+          .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+      assertThatThrownBy(gateway::readCabinPricingCatalog)
+          .isInstanceOf(LogisticsDependencyException.class);
+      server.verify();
+      server.reset();
+    }
+  }
+
+  @Test
+  void pricingReferencesAreExactWarehouseScopedReadsWithoutAnIdempotencyCommand() {
+    UUID warehouse = UUID.randomUUID();
+    UUID cabin = UUID.randomUUID();
+    UUID type = UUID.randomUUID();
+    UUID category = UUID.randomUUID();
+    server
+        .expect(
+            requestTo("http://asset.test/api/internal/asset/v1/logistics/cabin-pricing-references"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header("Authorization", "Bearer test-asset.logistics"))
+        .andExpect(jsonPath("$.warehouseId").value(warehouse.toString()))
+        .andExpect(jsonPath("$.rentalItemIds[0]").value(cabin.toString()))
+        .andExpect(
+            request -> assertThat(request.getHeaders().getFirst("Idempotency-Key")).isNull())
+        .andRespond(
+            withSuccess(
+                """
+                {"warehouseId":"%s","cabins":[{"rentalItemId":"%s","rentalItemVersion":7,"rentalTypeId":"%s","categoryId":"%s"}]}
+                """
+                    .formatted(warehouse, cabin, type, category),
+                MediaType.APPLICATION_JSON));
+    var references = gateway.readCabinPricingReferences(warehouse, List.of(cabin));
+    assertThat(references.warehouseId()).isEqualTo(warehouse);
+    assertThat(references.cabins())
+        .containsExactly(
+            new LogisticsDependencyGateway.CabinPricingReference(cabin, 7, type, category));
+    server.verify();
+  }
+
+  @Test
+  void pricingReferencesRejectPartialForeignAndMissingClassificationFacts() {
+    UUID warehouse = UUID.randomUUID();
+    UUID cabin = UUID.randomUUID();
+    UUID type = UUID.randomUUID();
+    UUID category = UUID.randomUUID();
+    String row =
+        "{\"rentalItemId\":\"%s\",\"rentalItemVersion\":7,\"rentalTypeId\":\"%s\",\"categoryId\":\"%s\"}"
+            .formatted(cabin, type, category);
+    for (String body :
+        List.of(
+            "{\"warehouseId\":\"%s\",\"cabins\":[]}".formatted(warehouse),
+            "{\"warehouseId\":\"%s\",\"cabins\":[%s]}".formatted(UUID.randomUUID(), row),
+            "{\"warehouseId\":\"%s\",\"cabins\":[%s,%s]}".formatted(warehouse, row, row),
+            "{\"warehouseId\":\"%s\",\"cabins\":[{\"rentalItemId\":\"%s\",\"rentalTypeId\":\"%s\",\"categoryId\":\"%s\"}]}"
+                .formatted(warehouse, cabin, type, category),
+            "{\"warehouseId\":\"%s\",\"cabins\":[{\"rentalItemId\":\"%s\",\"rentalItemVersion\":7,\"rentalTypeId\":\"%s\"}]}"
+                .formatted(warehouse, cabin, type))) {
+      server
+          .expect(
+              requestTo(
+                  "http://asset.test/api/internal/asset/v1/logistics/cabin-pricing-references"))
+          .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+      assertThatThrownBy(() -> gateway.readCabinPricingReferences(warehouse, List.of(cabin)))
+          .isInstanceOf(LogisticsDependencyException.class);
+      server.verify();
+      server.reset();
+    }
+  }
+
+  @Test
+  void pricingReferencesPreserveTheSafeAssetNotFoundCode() {
+    server
+        .expect(
+            requestTo("http://asset.test/api/internal/asset/v1/logistics/cabin-pricing-references"))
+        .andRespond(
+            withStatus(HttpStatus.NOT_FOUND)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body("{\"code\":\"ASSET_NOT_FOUND\"}"));
+    assertThatThrownBy(
+            () -> gateway.readCabinPricingReferences(UUID.randomUUID(), List.of(UUID.randomUUID())))
+        .isInstanceOfSatisfying(
+            LogisticsDependencyException.class,
+            error -> {
+              assertThat(error.kind())
+                  .isEqualTo(LogisticsDependencyException.FailureKind.PERMANENT_REJECTION);
+              assertThat(error.dependencyCode()).isEqualTo("ASSET_NOT_FOUND");
+            });
+    server.verify();
+  }
+
+  @Test
   void readsOnlyTheDedicatedCabinPhotoPresentationSnapshot() {
     UUID assetId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();

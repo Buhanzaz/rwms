@@ -45,6 +45,16 @@ An unchanged value preserves the revision and audit metadata; setting zero remov
 pair's override. Missing storage is an explicit unavailable error, never a fabricated free tariff.
 This persistence boundary does not change existing hold durations, late-change fees or bookings.
 
+`GET /api/logistics/v1/settings/rental-prices` builds the complete live type/category table,
+including inactive and unused values. `PUT /settings/rental-prices/{rentalTypeId}/{categoryId}`
+updates one existing pair for a global administrator with rental write access (including the
+isolated admin client). Prices cross the API as exact integer strings. Catalog renames preserve
+UUID-keyed prices; deletion removes a row from reads, and a new identity starts at zero even if
+its name matches a removed value. `POST /api/logistics/v1/cabins/rental-prices` resolves a complete
+warehouse-authorized cabin set in request order against one tariff revision. A missing cabin
+fails the entire read. Dependency failure is explicit 503, never a zero-price fallback. These
+informational prices do not reserve cabins or freeze commercial terms.
+
 The authoritative HTTP and event contracts are
 [`contracts/openapi/logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml) and
 [`contracts/events/logistics-events.yaml`](../../contracts/events/logistics-events.yaml). Start

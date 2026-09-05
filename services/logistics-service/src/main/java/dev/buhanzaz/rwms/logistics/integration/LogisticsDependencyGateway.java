@@ -1104,6 +1104,20 @@ public interface LogisticsDependencyGateway
   record CabinFurnitureMovementPlan(
       UUID rentalItemId, String unitNumber, List<CabinFurnitureMovementPlanLine> lines) {}
 
+  /** Complete live asset taxonomy, including inactive and currently unused values. */
+  record CabinPricingCatalog(
+      List<CabinPricingCatalogValue> types, List<CabinPricingCatalogValue> categories) {}
+
+  /** Asset-owned catalog identity; labels never identify a rental tariff. */
+  record CabinPricingCatalogValue(UUID id, String name, boolean active) {}
+
+  /** Exact warehouse-scoped classification facts, independent of holds and rental terms. */
+  record CabinPricingReferences(UUID warehouseId, List<CabinPricingReference> cabins) {}
+
+  /** Cabin version describes observed classification, not a tariff revision. */
+  record CabinPricingReference(
+      UUID rentalItemId, long rentalItemVersion, UUID rentalTypeId, UUID categoryId) {}
+
   /** Exact available asset facet values and type-dimension relations for one warehouse. */
   record CabinFacets(
       UUID warehouseId,

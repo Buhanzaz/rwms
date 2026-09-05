@@ -33,6 +33,17 @@ warehouse-scoped cabin UUIDs to current type/category UUIDs and cabin versions.
 Both require the exact logistics service credential and `asset.logistics` scope;
 neither exposes passports, mutates holds, or defines rental tariffs.
 
+Logistics owns public `GET /api/logistics/v1/settings/rental-prices` and version-fenced
+`PUT /api/logistics/v1/settings/rental-prices/{rentalTypeId}/{categoryId}`. Reads merge that
+live taxonomy with global zero-default monthly RUB prices; only global administrators with
+rental write authority can edit an existing pair. The isolated administration credential is
+supported. Prices are exact nonnegative integer strings through `Long.MAX_VALUE`, never JSON
+floating-point amounts. `POST /api/logistics/v1/cabins/rental-prices` requires warehouse VIEW
+access and resolves the complete 1–100 distinct cabin set in request order; unknown/foreign
+cabins return 404 and unavailable facts return 503, not invented zero prices. This read does
+not acquire holds, freeze rental terms or collect payment. A concurrent catalog removal can
+leave only an undisplayed UUID override, never recreate a catalog row.
+
 [`auth-service.yaml`](../../contracts/openapi/auth-service.yaml) defines the
 anonymous GET `/api/auth/csrf` bootstrap and CSRF-protected POST
 `/api/customer/v1/registrations`. Through the gateway they are delegated under

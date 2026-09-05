@@ -2729,6 +2729,88 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/logistics/v1/settings/rental-prices:
+    get:
+      operationId: getRentalPricingSettings
+      description: >-
+        Returns every currently existing asset-owned type, including inactive and unused values,
+        with every current category and the global monthly RUB price for each pair. Omitted
+        overrides are exactly zero. Names and existence are read live, so renames and deletions
+        appear without a separate logistics catalog. Requires the ordinary rental read actor,
+        including rentalAccess, or the exact dedicated rental-manager client/scope combination.
+        No hold, booking or fee changes. Dependency failure is an error, never a zero-price fallback.
+      responses:
+        "200":
+          description: Complete current taxonomy with the logistics-owned tariff revision.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RentalPricingSettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/settings/rental-prices/{rentalTypeId}/{categoryId}:
+    parameters:
+      - name: rentalTypeId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: categoryId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    put:
+      operationId: updateRentalPrice
+      description: >-
+        Sets one existing type/category pair's global monthly price. Requires SYSTEM_ADMIN or
+        WMS_ADMIN with rentalAccess and rwms.write, or the administration client with admin.manage.
+        All pairs share expectedVersion. A stale edit returns 409 even if its value is unchanged;
+        a current unchanged value preserves the version. Zero removes only that override. The
+        current asset catalog is validated before the local transaction; a concurrent catalog
+        deletion may leave an undisplayed UUID override, never recreate a catalog entry.
+        This setting read/write does not reserve cabins, assess payment or alter booked terms.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateRentalPriceRequest" }
+      responses:
+        "200":
+          description: Complete current tariff table after the version-fenced edit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RentalPricingSettings" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/cabins/rental-prices:
+    post:
+      operationId: getCabinRentalPrices
+      description: >-
+        Read-only current monthly prices for exactly 1 to 100 distinct cabin IDs in one warehouse,
+        in request order. Requires rental read access and VIEW access to that warehouse. The owner
+        checks the complete warehouse-scoped set; missing or foreign-warehouse cabins fail the whole
+        request without exposing their facts. Classification uses asset UUIDs, never display names.
+        pricingVersion is a tariff revision; rentalItemVersion describes observed classification.
+        This informational read neither acquires a hold nor freezes commercial terms.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CabinAvailabilityRequest" }
+      responses:
+        "200":
+          description: One current tariff revision resolved against the exact cabin classifications.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CabinRentalPrices" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/warehouses/{warehouseId}/shipment-task-settings:
     parameters:
       - name: warehouseId
@@ -9133,6 +9215,69 @@ components:
           description: Configured rental support dialer number in international format, not the customer's phone. Null means unavailable.
         updatedBy: { type: string, format: uuid }
         updatedAt: { type: string, format: date-time }
+    RentalPricingSettings:
+      type: object
+      additionalProperties: false
+      required: [version, types, updatedAt]
+      properties:
+        version: { type: integer, format: int64, minimum: 0 }
+        types:
+          type: array
+          items: { $ref: "#/components/schemas/RentalPricingType" }
+        updatedAt: { type: string, format: date-time }
+    RentalPricingType:
+      type: object
+      additionalProperties: false
+      required: [rentalTypeId, name, active, categories]
+      properties:
+        rentalTypeId: { type: string, format: uuid }
+        name: { type: string, minLength: 1 }
+        active: { type: boolean }
+        categories:
+          type: array
+          items: { $ref: "#/components/schemas/RentalPricingCategory" }
+    RentalPricingCategory:
+      type: object
+      additionalProperties: false
+      required: [categoryId, name, active, monthlyPriceRubles]
+      properties:
+        categoryId: { type: string, format: uuid }
+        name: { type: string, minLength: 1 }
+        active: { type: boolean }
+        monthlyPriceRubles: { $ref: "#/components/schemas/RentalMonthlyPriceRubles" }
+    RentalMonthlyPriceRubles:
+      type: string
+      pattern: '^(0|[1-9][0-9]{0,18})$'
+      description: Exact nonnegative whole RUB per month from 0 through 9223372036854775807. A string preserves monetary precision in JavaScript clients.
+    UpdateRentalPriceRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, monthlyPriceRubles]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        monthlyPriceRubles: { $ref: "#/components/schemas/RentalMonthlyPriceRubles" }
+    CabinRentalPrices:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, pricingVersion, cabins]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        pricingVersion: { type: integer, format: int64, minimum: 0 }
+        cabins:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: "#/components/schemas/CabinRentalPrice" }
+    CabinRentalPrice:
+      type: object
+      additionalProperties: false
+      required: [rentalItemId, rentalItemVersion, rentalTypeId, categoryId, monthlyPriceRubles]
+      properties:
+        rentalItemId: { type: string, format: uuid }
+        rentalItemVersion: { type: integer, format: int64, minimum: 0 }
+        rentalTypeId: { type: string, format: uuid }
+        categoryId: { type: string, format: uuid }
+        monthlyPriceRubles: { $ref: "#/components/schemas/RentalMonthlyPriceRubles" }
     ShipmentTaskSettings:
       type: object
       additionalProperties: false

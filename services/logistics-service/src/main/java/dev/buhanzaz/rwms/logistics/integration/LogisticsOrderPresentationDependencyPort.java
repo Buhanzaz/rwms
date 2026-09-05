@@ -8,6 +8,8 @@ import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.CabinC
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.CabinFacets;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.CabinFurnitureMovementPlan;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.CabinFurnitureRequirement;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.CabinPricingCatalog;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.CabinPricingReferences;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.CabinSearchResult;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.ConvertedPresentationHolds;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway.EquipmentWarehouseAvailability;
@@ -112,6 +114,17 @@ interface LogisticsOrderPresentationDependencyPort {
 
   default CabinFacets readAvailableCabinFacets(UUID warehouseId, UUID holdScopeId) {
     throw unavailable("Cabin facets are not configured");
+  }
+
+  /** Reads every current asset-owned type and category without maintaining another catalog. */
+  default CabinPricingCatalog readCabinPricingCatalog() {
+    throw unavailable("Cabin pricing catalog is not configured");
+  }
+
+  /** Reads every requested classification fact or fails; it never creates a reservation. */
+  default CabinPricingReferences readCabinPricingReferences(
+      UUID warehouseId, List<UUID> rentalItemIds) {
+    throw unavailable("Cabin pricing references are not configured");
   }
 
   /** Reads a bounded cabin fact page without acquiring or renewing any hold. */
