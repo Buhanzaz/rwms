@@ -947,7 +947,9 @@ describe("rental item command access", () => {
     )
     renderDetail(`/warehouse/${RENTAL_ITEM_ID}?tab=history`)
     await screen.findByRole("heading", { level: 1, name: "БЫТ-001" })
+    await user.click(screen.getByRole("button", { name: "Период" }))
     await user.type(screen.getByLabelText("События с"), "2026-01-01T00:00:00Z")
+    await user.click(screen.getByRole("button", { name: "Готово" }))
     await user.click(screen.getByRole("button", { name: "Применить" }))
     await waitFor(() =>
       expect(dossierApi.getRentalItemDossierPage).toHaveBeenCalledWith(
@@ -984,6 +986,7 @@ describe("rental item command access", () => {
       await screen.findByRole("button", { name: /Смета завершена/ })
     ).toBeTruthy()
     await user.click(screen.getByRole("tab", { name: "История" }))
+    await user.click(screen.getByRole("button", { name: "Период выбран" }))
     expect((screen.getByLabelText("События с") as HTMLInputElement).value).toBe(
       "2026-01-01T00:00:00Z"
     )

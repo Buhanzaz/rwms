@@ -8,6 +8,7 @@ import {
   within,
 } from "@testing-library/react"
 import type { ReactNode } from "react"
+import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -137,6 +138,36 @@ afterEach(() => {
 })
 
 describe("DossierActivityRegister", () => {
+  it("applies the compact period filter without losing its timezone and resets it", async () => {
+    const user = userEvent.setup()
+    const onApply = vi.fn()
+    render(<DossierActivityFiltersPanel value={{}} onApply={onApply} />)
+
+    expect(screen.queryByLabelText("События с")).toBeNull()
+    await user.click(screen.getByRole("button", { name: "Период" }))
+    await user.type(
+      screen.getByLabelText("События с"),
+      "2026-09-05T09:00:00+03:00"
+    )
+    await user.type(
+      screen.getByLabelText("События до"),
+      "2026-09-06T09:00:00+03:00"
+    )
+    await user.keyboard("{Enter}")
+
+    expect(onApply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        occurredFrom: "2026-09-05T09:00:00+03:00",
+        occurredBefore: "2026-09-06T09:00:00+03:00",
+      })
+    )
+    expect(screen.queryByRole("dialog", { name: "Период истории" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Период выбран" })).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Сбросить" }))
+    expect(onApply).toHaveBeenLastCalledWith({})
+    expect(screen.getByRole("button", { name: "Период" })).toBeTruthy()
+  })
+
   it("keeps activity filters collapsed by default on mobile", () => {
     viewport.isMobile = true
     render(<DossierActivityFiltersPanel value={{}} onApply={vi.fn()} />)

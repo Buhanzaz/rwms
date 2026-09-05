@@ -1,7 +1,8 @@
-import { useState, type FormEvent } from "react"
+import { useId, useState, type FormEvent } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   ArrowUpRight01Icon,
+  Calendar03Icon,
   ChevronDownIcon,
   ClipboardCheckIcon,
   ClipboardPenLineIcon,
@@ -19,7 +20,6 @@ import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
@@ -37,6 +37,14 @@ import {
 } from "@/components/ui/collapsible"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import {
   Select,
   SelectContent,
@@ -71,6 +79,15 @@ import { cn } from "@/lib/utils"
 
 const ALL_ACTIVITY_CODES = "ALL_ACTIVITY_CODES"
 const ALL_SOURCE_TYPES = "ALL_SOURCE_TYPES"
+
+const sourceTypeLabel: Record<DossierSourceType, string> = {
+  ASSET: "Имущество",
+  MAINTENANCE: "Сметы и ремонт",
+  INVENTORY: "Инвентаризация",
+  MEDIA: "Фотографии",
+  LOGISTICS: "Логистика",
+  TASK_BOARD: "Задания",
+}
 
 const activityLabel: Record<DossierActivityCode, string> = {
   CABIN_CREATED: "Бытовка создана",
@@ -167,10 +184,13 @@ export function DossierActivityFiltersPanel({
   showTechnicalFilters?: boolean
 }) {
   const [draft, setDraft] = useState(value)
+  const [periodOpen, setPeriodOpen] = useState(false)
+  const formId = useId()
   const { filtersOpen, setFiltersOpen } = useResponsiveFiltersOpen()
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    setPeriodOpen(false)
     onApply({
       occurredFrom: draft.occurredFrom?.trim() || undefined,
       occurredBefore: draft.occurredBefore?.trim() || undefined,
@@ -201,138 +221,167 @@ export function DossierActivityFiltersPanel({
       >
         <HugeiconsIcon icon={FilterIcon} aria-hidden="true" />
       </Button>
-      <Card id="dossier-activity-filters" hidden={!filtersOpen}>
-        <CardHeader>
-          <CardTitle>Фильтры истории</CardTitle>
-          <CardDescription>
-            {showTechnicalFilters
-              ? "Фильтры выполняются dossier-service. Время задаётся в RFC 3339."
-              : "Фильтры выполняются dossier-service по подтверждённым событиям."}
-          </CardDescription>
-        </CardHeader>
-        <form onSubmit={submit}>
-          <CardContent>
-            <FieldGroup className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              <Field>
-                <FieldLabel>Событие</FieldLabel>
-                <Select
-                  value={draft.activityCodes?.[0] ?? ALL_ACTIVITY_CODES}
-                  onValueChange={(activityCode) =>
-                    setDraft((current) => ({
-                      ...current,
-                      activityCodes:
-                        activityCode === ALL_ACTIVITY_CODES
-                          ? undefined
-                          : [activityCode as DossierActivityCode],
-                    }))
-                  }
-                >
-                  <SelectTrigger className="w-full" aria-label="Событие">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem value={ALL_ACTIVITY_CODES}>
-                        Все события
+      <div id="dossier-activity-filters" hidden={!filtersOpen}>
+        <form id={formId} onSubmit={submit} aria-label="Фильтры истории">
+          <FieldGroup className="flex flex-row flex-wrap items-center gap-2">
+            <Field className="w-full sm:w-auto sm:max-w-72">
+              <FieldLabel className="sr-only">Событие</FieldLabel>
+              <Select
+                value={draft.activityCodes?.[0] ?? ALL_ACTIVITY_CODES}
+                onValueChange={(activityCode) =>
+                  setDraft((current) => ({
+                    ...current,
+                    activityCodes:
+                      activityCode === ALL_ACTIVITY_CODES
+                        ? undefined
+                        : [activityCode as DossierActivityCode],
+                  }))
+                }
+              >
+                <SelectTrigger className="w-full" aria-label="Событие">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value={ALL_ACTIVITY_CODES}>
+                      Все события
+                    </SelectItem>
+                    {DOSSIER_ACTIVITY_CODES.map((code) => (
+                      <SelectItem key={code} value={code}>
+                        {activityLabel[code]}
                       </SelectItem>
-                      {DOSSIER_ACTIVITY_CODES.map((code) => (
-                        <SelectItem key={code} value={code}>
-                          {activityLabel[code]}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field>
-                <FieldLabel>Источник</FieldLabel>
-                <Select
-                  value={draft.sourceTypes?.[0] ?? ALL_SOURCE_TYPES}
-                  onValueChange={(sourceType) =>
-                    setDraft((current) => ({
-                      ...current,
-                      sourceTypes:
-                        sourceType === ALL_SOURCE_TYPES
-                          ? undefined
-                          : [sourceType as DossierSourceType],
-                    }))
-                  }
-                >
-                  <SelectTrigger
-                    className="w-full"
-                    aria-label="Источник события"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem value={ALL_SOURCE_TYPES}>
-                        Все источники
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field className="w-full sm:w-auto sm:max-w-56">
+              <FieldLabel className="sr-only">Источник</FieldLabel>
+              <Select
+                value={draft.sourceTypes?.[0] ?? ALL_SOURCE_TYPES}
+                onValueChange={(sourceType) =>
+                  setDraft((current) => ({
+                    ...current,
+                    sourceTypes:
+                      sourceType === ALL_SOURCE_TYPES
+                        ? undefined
+                        : [sourceType as DossierSourceType],
+                  }))
+                }
+              >
+                <SelectTrigger className="w-full" aria-label="Источник события">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value={ALL_SOURCE_TYPES}>
+                      Все источники
+                    </SelectItem>
+                    {DOSSIER_SOURCE_TYPES.map((sourceType) => (
+                      <SelectItem key={sourceType} value={sourceType}>
+                        {showTechnicalFilters
+                          ? sourceType
+                          : sourceTypeLabel[sourceType]}
                       </SelectItem>
-                      {DOSSIER_SOURCE_TYPES.map((sourceType) => (
-                        <SelectItem key={sourceType} value={sourceType}>
-                          {sourceType}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="dossier-occurred-from">
-                  События с
-                </FieldLabel>
-                <Input
-                  id="dossier-occurred-from"
-                  name="dossier-occurred-from"
-                  value={draft.occurredFrom ?? ""}
-                  placeholder="2026-07-18T00:00:00Z…"
-                  autoComplete="off"
-                  spellCheck={false}
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      occurredFrom: event.target.value,
-                    }))
-                  }
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="dossier-occurred-before">
-                  События до
-                </FieldLabel>
-                <Input
-                  id="dossier-occurred-before"
-                  name="dossier-occurred-before"
-                  value={draft.occurredBefore ?? ""}
-                  placeholder="2026-07-19T00:00:00Z…"
-                  autoComplete="off"
-                  spellCheck={false}
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      occurredBefore: event.target.value,
-                    }))
-                  }
-                />
-              </Field>
-            </FieldGroup>
-          </CardContent>
-          <CardFooter className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Popover open={periodOpen} onOpenChange={setPeriodOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full sm:w-auto"
+                >
+                  <HugeiconsIcon
+                    icon={Calendar03Icon}
+                    data-icon="inline-start"
+                    aria-hidden="true"
+                  />
+                  {draft.occurredFrom || draft.occurredBefore
+                    ? "Период выбран"
+                    : "Период"}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent
+                align="start"
+                className="w-80 max-w-[calc(100vw-2rem)]"
+                aria-label="Период истории"
+              >
+                <PopoverHeader>
+                  <PopoverTitle>Период истории</PopoverTitle>
+                  <PopoverDescription>
+                    Дата и время с часовым поясом. Нижняя граница включается,
+                    верхняя — нет.
+                  </PopoverDescription>
+                </PopoverHeader>
+                <FieldGroup className="gap-3">
+                  <Field>
+                    <FieldLabel htmlFor="dossier-occurred-from">
+                      События с
+                    </FieldLabel>
+                    <Input
+                      id="dossier-occurred-from"
+                      form={formId}
+                      name="dossier-occurred-from"
+                      value={draft.occurredFrom ?? ""}
+                      placeholder="2026-07-18T00:00:00+03:00"
+                      autoComplete="off"
+                      spellCheck={false}
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          occurredFrom: event.target.value,
+                        }))
+                      }
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="dossier-occurred-before">
+                      События до
+                    </FieldLabel>
+                    <Input
+                      id="dossier-occurred-before"
+                      form={formId}
+                      name="dossier-occurred-before"
+                      value={draft.occurredBefore ?? ""}
+                      placeholder="2026-07-19T00:00:00+03:00"
+                      autoComplete="off"
+                      spellCheck={false}
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          occurredBefore: event.target.value,
+                        }))
+                      }
+                    />
+                  </Field>
+                </FieldGroup>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setPeriodOpen(false)}
+                >
+                  Готово
+                </Button>
+              </PopoverContent>
+            </Popover>
             <Button type="submit" className="w-full sm:w-auto">
               Применить
             </Button>
             <Button
               type="button"
-              variant="outline"
+              variant="ghost"
               className="w-full sm:w-auto"
               onClick={reset}
             >
               Сбросить
             </Button>
-          </CardFooter>
+          </FieldGroup>
         </form>
-      </Card>
+      </div>
     </div>
   )
 }
