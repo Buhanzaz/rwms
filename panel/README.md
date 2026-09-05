@@ -98,6 +98,13 @@ renames keep the UUID-bound price; deletions disappear on refresh (also on focus
 and every 30 seconds while the page is visible). Refresh preserves unsaved rows;
 a concurrently changed price requires explicit acceptance before editing again.
 Dependency failures are shown, never replaced by zero-price data.
+
+`/admin/equipment-prices` is the separate **Стоимость наполнения** menu entry. It edits the
+live furniture catalog's monthly whole-RUB price per one unit, explicitly labelled `₽ / шт. / мес.`.
+Inactive/out-of-stock furniture remains visible. Each row saves with the shared cabin/furniture
+tariff revision; refresh and conflict handling preserve drafts. Saving either tariff refreshes
+the affected pricing caches, without clearing cabin, media or unrelated server state.
+
 Manual booking catalog/selection cards read current informational monthly prices
 by cabin UUID from `/api/logistics/v1/cabins/rental-prices`, in independent batches
 of at most 100 scoped to the user and warehouse. A failed batch can be retried

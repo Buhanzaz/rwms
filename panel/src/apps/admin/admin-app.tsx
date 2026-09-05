@@ -8,6 +8,7 @@ import {
   Home01Icon,
   Queue01Icon,
   Settings02Icon,
+  Sofa01Icon,
   Task01Icon,
   UserGroupIcon,
   WarehouseIcon,
@@ -22,6 +23,7 @@ import {
   AdminWorkScheduleSettingsPage,
 } from "@/apps/admin/general-settings-pages"
 import { ObjectSettingsPage } from "@/apps/admin/object-settings-page"
+import { EquipmentPricesPage } from "@/apps/admin/equipment-prices-page"
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -82,6 +84,11 @@ const navigationGroups: AdminNavigationGroup[] = [
     label: "Общие настройки",
     items: [
       { to: "/admin/cabins", label: "Бытовки", icon: Home01Icon },
+      {
+        to: "/admin/equipment-prices",
+        label: "Стоимость наполнения",
+        icon: Sofa01Icon,
+      },
       {
         to: "/admin/rental",
         label: "Бронирование и чат",
@@ -315,6 +322,14 @@ function AdminLayout() {
                   element={
                     <AdminSection>
                       <CabinCompositionSettingsPage />
+                    </AdminSection>
+                  }
+                />
+                <Route
+                  path="/admin/equipment-prices"
+                  element={
+                    <AdminSection>
+                      <EquipmentPricesPage />
                     </AdminSection>
                   }
                 />

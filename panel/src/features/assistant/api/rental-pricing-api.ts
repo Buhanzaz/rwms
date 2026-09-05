@@ -3,6 +3,25 @@ import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 
 export const rentalPricingSettingsKey = ["rental-pricing-settings"] as const
 export const cabinRentalPricesKey = ["cabin-rental-prices"] as const
+export const equipmentRentalPricingKey = ["equipment-rental-pricing"] as const
+
+export type EquipmentRentalPrice = {
+  equipmentId: string
+  name: string
+  active: boolean
+  monthlyPriceRubles: string
+}
+export type EquipmentRentalPricing = {
+  version: number
+  items: EquipmentRentalPrice[]
+  updatedAt: string
+}
+export type UpdateEquipmentRentalPrice = {
+  accessToken: string
+  equipmentId: string
+  expectedVersion: number
+  monthlyPriceRubles: string
+}
 
 export type CabinRentalPrice = {
   rentalItemId: string
@@ -159,6 +178,71 @@ function settings(value: unknown): RentalPricingSettings {
   )
     invalid()
   return { version: body.version, types, updatedAt: body.updatedAt }
+}
+
+function equipmentPricing(value: unknown): EquipmentRentalPricing {
+  const body = record(value)
+  if (
+    typeof body.version !== "number" ||
+    !Number.isSafeInteger(body.version) ||
+    body.version < 0 ||
+    typeof body.updatedAt !== "string" ||
+    !Number.isFinite(Date.parse(body.updatedAt))
+  )
+    invalid()
+  const ids = new Set<string>()
+  const items = list(body.items).map((value): EquipmentRentalPrice => {
+    const item = classification(value, "equipmentId")
+    const amount = record(value).monthlyPriceRubles
+    if (
+      ids.has(item.id) ||
+      item.name.length > 255 ||
+      typeof amount !== "string" ||
+      !validMonthlyRentalPrice(amount)
+    )
+      invalid()
+    ids.add(item.id)
+    return {
+      equipmentId: item.id,
+      name: item.name,
+      active: item.active,
+      monthlyPriceRubles: amount,
+    }
+  })
+  return { version: body.version, items, updatedAt: body.updatedAt }
+}
+
+function equipmentPricingUrl() {
+  return `${getGatewayRuntimeConfig().logisticsApiBaseUrl}/v1/settings/equipment-rental-prices`
+}
+
+export async function getEquipmentRentalPricing(
+  accessToken: string,
+  signal?: AbortSignal
+): Promise<EquipmentRentalPricing> {
+  return equipmentPricing(
+    await bearerRequest<unknown>(accessToken, equipmentPricingUrl(), { signal })
+  )
+}
+
+export async function updateEquipmentRentalPrice({
+  accessToken,
+  equipmentId,
+  expectedVersion,
+  monthlyPriceRubles,
+}: UpdateEquipmentRentalPrice): Promise<EquipmentRentalPricing> {
+  if (!validMonthlyRentalPrice(monthlyPriceRubles))
+    throw new Error("Укажите целую сумму от 0 до 9223372036854775807 ₽.")
+  return equipmentPricing(
+    await bearerRequest<unknown>(
+      accessToken,
+      `${equipmentPricingUrl()}/${encodeURIComponent(equipmentId)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ expectedVersion, monthlyPriceRubles }),
+      }
+    )
+  )
 }
 
 function settingsUrl() {

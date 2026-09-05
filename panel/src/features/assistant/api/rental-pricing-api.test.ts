@@ -5,6 +5,9 @@ import {
   formatMonthlyRentalPrice,
   type CabinRentalPrices,
   getRentalPricingSettings,
+  getEquipmentRentalPricing,
+  updateEquipmentRentalPrice,
+  type EquipmentRentalPricing,
   updateRentalPrice,
   validMonthlyRentalPrice,
   type RentalPricingSettings,
@@ -13,6 +16,26 @@ import {
 const id = (n: number) =>
   `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`
 const fetchMock = vi.fn()
+function equipmentTable(): EquipmentRentalPricing {
+  return {
+    version: 3,
+    updatedAt: "2026-09-05T11:00:00Z",
+    items: [
+      {
+        equipmentId: id(1),
+        name: "Кровать",
+        active: true,
+        monthlyPriceRubles: "0",
+      },
+      {
+        equipmentId: id(2),
+        name: "Стол",
+        active: false,
+        monthlyPriceRubles: "9223372036854775807",
+      },
+    ],
+  }
+}
 function table(): RentalPricingSettings {
   return {
     version: 3,
@@ -47,6 +70,90 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe("rental pricing API", () => {
+  it("loads furniture unit tariffs through the same-origin gateway with exact monetary strings", async () => {
+    fetchMock.mockResolvedValue(Response.json(equipmentTable()))
+    const signal = new AbortController().signal
+    await expect(getEquipmentRentalPricing("token", signal)).resolves.toEqual(
+      equipmentTable()
+    )
+    const [input, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(input).origin).toBe(window.location.origin)
+    expect(new URL(input).pathname).toBe(
+      "/api/logistics/v1/settings/equipment-rental-prices"
+    )
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer token")
+    expect(init.signal).toBe(signal)
+  })
+  it("updates one furniture unit tariff with the shared version and an exact amount", async () => {
+    fetchMock.mockResolvedValue(Response.json(equipmentTable()))
+    await updateEquipmentRentalPrice({
+      accessToken: "token",
+      equipmentId: id(2),
+      expectedVersion: 3,
+      monthlyPriceRubles: "9223372036854775807",
+    })
+    const [input, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(input).pathname).toBe(
+      `/api/logistics/v1/settings/equipment-rental-prices/${id(2)}`
+    )
+    expect(init.method).toBe("PUT")
+    expect(JSON.parse(init.body as string)).toEqual({
+      expectedVersion: 3,
+      monthlyPriceRubles: "9223372036854775807",
+    })
+  })
+  it.each(["", "-1", "1.50", "01", "9223372036854775808"])(
+    "rejects furniture input %s before transport",
+    async (amount) => {
+      await expect(
+        updateEquipmentRentalPrice({
+          accessToken: "token",
+          equipmentId: id(1),
+          expectedVersion: 3,
+          monthlyPriceRubles: amount,
+        })
+      ).rejects.toThrow()
+      expect(fetchMock).not.toHaveBeenCalled()
+    }
+  )
+  it.each([
+    (data: EquipmentRentalPricing) => ({ ...data, items: null }),
+    (data: EquipmentRentalPricing) => ({
+      ...data,
+      items: [data.items[0], data.items[0]],
+    }),
+    (data: EquipmentRentalPricing) => ({
+      ...data,
+      version: Number.MAX_SAFE_INTEGER + 1,
+    }),
+    (data: EquipmentRentalPricing) => ({ ...data, updatedAt: "bad" }),
+    (data: EquipmentRentalPricing) => ({
+      ...data,
+      items: [{ ...data.items[0], equipmentId: "bad" }],
+    }),
+    (data: EquipmentRentalPricing) => ({
+      ...data,
+      items: [{ ...data.items[0], active: null }],
+    }),
+    (data: EquipmentRentalPricing) => ({
+      ...data,
+      items: [{ ...data.items[0], monthlyPriceRubles: 500 }],
+    }),
+    (data: EquipmentRentalPricing) => ({
+      ...data,
+      items: [{ ...data.items[0], monthlyPriceRubles: "9223372036854775808" }],
+    }),
+    (data: EquipmentRentalPricing) => ({
+      ...data,
+      items: [{ ...data.items[0], monthlyPriceRubles: undefined }],
+    }),
+  ])(
+    "rejects malformed furniture prices rather than inventing a free tariff",
+    async (invalid) => {
+      fetchMock.mockResolvedValue(Response.json(invalid(equipmentTable())))
+      await expect(getEquipmentRentalPricing("token")).rejects.toThrow()
+    }
+  )
   it.each([
     { pricingVersion: null, monthlyPriceRubles: null },
     { pricingVersion: 0, monthlyPriceRubles: "0" },

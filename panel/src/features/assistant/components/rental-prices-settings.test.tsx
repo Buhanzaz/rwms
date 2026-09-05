@@ -22,6 +22,7 @@ vi.mock("sonner", () => ({ toast }))
 import { RentalPricesSettings } from "./rental-prices-settings"
 import {
   rentalPricingSettingsKey,
+  equipmentRentalPricingKey,
   type RentalPricingSettings,
 } from "@/features/assistant/api/rental-pricing-api"
 import { ApiError } from "@/lib/api-client"
@@ -161,6 +162,19 @@ describe("RentalPricesSettings", () => {
           monthlyPriceRubles: "9000",
         })
       )
+    )
+  })
+  it("invalidates the furniture table after the shared pricing revision changes", async () => {
+    const user = userEvent.setup()
+    const client = renderSettings()
+    client.setQueryData(equipmentRentalPricingKey, { version: 3 })
+    await screen.findByText("БК-2")
+    await user.clear(input())
+    await user.type(input(), "8500")
+    await user.click(save())
+    await waitFor(() => expect(toast.success).toHaveBeenCalled())
+    expect(client.getQueryState(equipmentRentalPricingKey)?.isInvalidated).toBe(
+      true
     )
   })
   it.each(["", "-1", "1.5", "9223372036854775808"])(

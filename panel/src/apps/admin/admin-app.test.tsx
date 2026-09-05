@@ -39,6 +39,9 @@ vi.mock("@/apps/admin/admin-object-scope", () => ({
 vi.mock("@/apps/admin/object-settings-page", () => ({
   ObjectSettingsPage: () => <div>Страница настроек объекта</div>,
 }))
+vi.mock("@/apps/admin/equipment-prices-page", () => ({
+  EquipmentPricesPage: () => <div>Страница стоимости наполнения</div>,
+}))
 vi.mock("@/apps/admin/general-settings-pages", () => ({
   AdminClassesSettingsPage: () => <div>Страница классов</div>,
   AdminKpiSettingsPage: () => <div>Страница KPI</div>,
@@ -61,6 +64,12 @@ vi.mock("@/features/settings/cabin-composition", () => ({
   CabinCompositionSettingsPage: () => <div>Страница настроек бытовок</div>,
 }))
 vi.mock(
+  "@/features/settings/cabin-composition/cabin-status-palette-sync",
+  () => ({
+    CabinStatusPaletteSync: () => null,
+  })
+)
+vi.mock(
   "@/features/settings/estimates-repairs/estimates-repairs-settings-page",
   () => ({
     EstimatesRepairsSettingsPage: () => <div>Страница смет и ремонтов</div>,
@@ -76,6 +85,11 @@ const adminRoutes = [
   ["Объекты", "/admin/warehouses", "Страница складов"],
   ["Настройки объекта", "/admin/object-settings", "Страница настроек объекта"],
   ["Бытовки", "/admin/cabins", "Страница настроек бытовок"],
+  [
+    "Стоимость наполнения",
+    "/admin/equipment-prices",
+    "Страница стоимости наполнения",
+  ],
   ["Бронирование и чат", "/admin/rental", "Страница бронирования и чата"],
   ["KPI", "/admin/kpi", "Страница KPI"],
   ["Сметы и ремонт", "/admin/estimates-repairs", "Страница смет и ремонтов"],
