@@ -30,6 +30,36 @@ public interface CustomerRentalSessionRepository
 
   Optional<CustomerRentalSession> findFirstByOrderIdOrderByCreatedAtAscIdAsc(UUID orderId);
 
+  /** Finds the checkout lineage even if its booking response was never attached to the session. */
+  @Query(
+      value =
+          """
+      select session.inquiry_id as inquiryId, booking.id as bookingId,
+             booking.presentation_id as presentationId,
+             booking.presentation_revision as presentationRevision,
+             session.delivery_slot_id as deliverySlotId
+      from customer_rental_session session
+      join client_presentation presentation on presentation.inquiry_id = session.inquiry_id
+      join presentation_booking booking on booking.presentation_id = presentation.id
+      where booking.order_id = :orderId
+        and (booking.id = session.booking_id or booking.idempotency_key = session.checkout_command_key)
+      """,
+      nativeQuery = true)
+  Optional<PaymentExpiryScope> findPaymentExpiryScope(@Param("orderId") UUID orderId);
+
+  /** Immutable identities used before taking capacity, session and order locks, in that order. */
+  interface PaymentExpiryScope {
+    UUID getInquiryId();
+
+    UUID getBookingId();
+
+    UUID getPresentationId();
+
+    long getPresentationRevision();
+
+    UUID getDeliverySlotId();
+  }
+
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select session from CustomerRentalSession session where session.inquiryId = :inquiryId")
   Optional<CustomerRentalSession> findByInquiryIdForUpdate(@Param("inquiryId") UUID inquiryId);

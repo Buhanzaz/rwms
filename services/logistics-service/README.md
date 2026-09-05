@@ -119,6 +119,12 @@ replay reads committed state after the command lock; it never reissues the bill 
 Draft/historical unknowns remain null, and a public booking waits for manager save. These API
 operations do not themselves issue an initial bill or activate new checkout payment windows.
 
+Expiry completion also locks customer capacity and the checkout before the order, releases only
+that checkout's delivery slot, and marks its session `CANCELLED`. V106 commits a deduplicated
+customer inbox entry in the same transaction. Lost checkout responses are resolved by the exact
+presentation booking/checkout key; a local failure rolls back completion and uses the existing
+bounded recovery. Manager-created orders notify only an existing exact client/account binding.
+
 V101 extends the existing order mutation recovery with `EXPIRE_UNPAID_ORDER`. A database-time
 claim locks a due unpaid order, marks it `EXPIRING`, and persists `READ_UNITS` before any remote
 call. The validated snapshot, cabin release and empty furniture replacement are checkpointed

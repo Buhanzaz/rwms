@@ -334,6 +334,28 @@ public class CustomerRentalSession {
     updatedAt = Objects.requireNonNull(timestamp, "timestamp");
   }
 
+  /** Completes an unpaid checkout only after its exact order reservation has been released. */
+  public void expirePaymentReservation(
+      UUID bookingId, UUID orderId, String presentationToken, OffsetDateTime timestamp) {
+    Objects.requireNonNull(bookingId, "bookingId");
+    Objects.requireNonNull(orderId, "orderId");
+    if ((state != CustomerSessionState.CHECKOUT_PENDING && state != CustomerSessionState.CANCELLED)
+        || (this.bookingId != null && !this.bookingId.equals(bookingId))
+        || (this.orderId != null && !this.orderId.equals(orderId))) {
+      throw new IllegalStateException("Expired payment does not match pending checkout");
+    }
+    this.bookingId = bookingId;
+    this.orderId = orderId;
+    if (this.presentationToken == null) {
+      this.presentationToken = Objects.requireNonNull(presentationToken, "presentationToken");
+    }
+    requireCompletedBookingIdentity();
+    state = CustomerSessionState.CANCELLED;
+    clearPending();
+    clearRecovery();
+    updatedAt = Objects.requireNonNull(timestamp, "timestamp");
+  }
+
   /** Fences a completed booking while its durable cancellation releases owned resources. */
   public void beginCancellation(long expectedVersion, OffsetDateTime timestamp) {
     requireExpectedVersion(expectedVersion);

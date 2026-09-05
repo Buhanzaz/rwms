@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.order.service;
 
+import dev.buhanzaz.rwms.logistics.customer.service.CustomerPaymentExpiryService;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderDetailResponse;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderCommandReceipt;
@@ -48,6 +49,7 @@ class RentalOrderMutationLocalStore {
   private final RentalOrderReservationService reservations;
   private final RentalOrderMutationCodec codec;
   private final RentalOrderRepository orders;
+  private final CustomerPaymentExpiryService customerPaymentExpiry;
 
   /** Commits payment fencing and a recoverable read/release command before any dependency call. */
   @Transactional
@@ -245,9 +247,16 @@ class RentalOrderMutationLocalStore {
         command.isEquipmentReleaseRequired()
             ? codec.equipmentReservations(command.getEquipmentReceiptJson())
             : new EquipmentReservations(List.of());
+    var expiryContext =
+        command.getOperation() == Operation.EXPIRE_UNPAID_ORDER
+            ? customerPaymentExpiry.prepare(command.getOrder().getId())
+            : null;
     RentalOrder order =
         reservations.finalizeMutation(
             command, intent, releasedUnits, equipmentReservations, remainingActiveUnits, now());
+    if (command.getOperation() == Operation.EXPIRE_UNPAID_ORDER) {
+      customerPaymentExpiry.complete(expiryContext, order, now());
+    }
     orderStore.remember(
         command.getActorSubjectId(),
         command.getOperation().name(),

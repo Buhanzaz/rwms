@@ -71,6 +71,14 @@ class CustomerBookingChangeIntegrationTest {
   @Autowired JdbcTemplate jdbc;
   @Autowired ObjectMapper json;
   @Autowired RentalOrderPaymentService initialPayments;
+
+  @Autowired
+  dev.buhanzaz.rwms.logistics.order.service.RentalOrderMutationRecoveryService
+      paymentExpiryRecovery;
+
+  @Autowired
+  dev.buhanzaz.rwms.logistics.inquiry.service.ClientPresentationTokenService presentationTokens;
+
   @Autowired CustomerRentalSessionStore checkoutSessions;
   @Autowired LogisticsTransactionLock paymentCommandLock;
   @Autowired CustomerBookingChangeService service;
@@ -239,6 +247,136 @@ class CustomerBookingChangeIntegrationTest {
                     identity, booking, UUID.randomUUID(), new ConfirmOrderPaymentRequest(0L))
                 .state())
         .isEqualTo(RentalOrderPaymentState.CONFIRMED);
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+  void paymentExpiryReleasesCapacityAndNotifiesExactlyOnceEvenAfterLostCheckoutResponse(
+      boolean lostResponse) {
+    seedPendingInitialBill();
+    UUID key =
+        jdbc.queryForObject(
+            "select idempotency_key from presentation_booking where id=?", UUID.class, booking);
+    jdbc.update(
+        "update customer_rental_session set state='CHECKOUT_PENDING',pending_command_key=?,"
+            + " pending_command_sha256=?,checkout_command_key=?,checkout_command_sha256=?,recovery_next_attempt_at=clock_timestamp() where inquiry_id=?",
+        key,
+        "a".repeat(64),
+        key,
+        "a".repeat(64),
+        inquiry);
+    jdbc.update("update customer_delivery_slot set state='CHECKOUT_PENDING' where id=?", oldSlot);
+    if (lostResponse) {
+      jdbc.update(
+          "update customer_rental_session set booking_id=null,order_id=null,presentation_token=null,recovery_next_attempt_at=null where inquiry_id=?",
+          inquiry);
+      jdbc.update(
+          "update customer_delivery_slot set booking_id=?,order_id=null where id=?", key, oldSlot);
+    }
+    jdbc.update(
+        "update rental_order set payment_started_at=current_timestamp-interval '6 minutes',"
+            + " payment_expires_at=current_timestamp-interval '1 minute' where id=?",
+        order);
+    var unrelated = offer(LocalDate.of(2026, 9, 7));
+    paymentExpiryRecovery.recoverPending();
+    assertThat(jdbc.queryForMap("select payment_state,status from rental_order where id=?", order))
+        .containsEntry("payment_state", "EXPIRED")
+        .containsEntry("status", "CANCELLED");
+    var ended = sessions.findByInquiryId(inquiry).orElseThrow();
+    assertThat(ended.getState()).isEqualTo(CustomerSessionState.CANCELLED);
+    assertThat(ended.getBookingId()).isEqualTo(booking);
+    assertThat(ended.getOrderId()).isEqualTo(order);
+    assertThat(ended.getRecoveryNextAttemptAt()).isNull();
+    if (lostResponse) {
+      var proof = presentationTokens.verify(ended.getPresentationToken());
+      assertThat(proof.presentationId())
+          .isEqualTo(
+              jdbc.queryForObject(
+                  "select presentation_id from presentation_booking where id=?",
+                  UUID.class,
+                  booking));
+    }
+    assertThat(slots.findById(oldSlot).orElseThrow().getState())
+        .isEqualTo(CustomerDeliverySlotState.RELEASED);
+    assertThat(slots.findById(unrelated.getId()).orElseThrow().getState())
+        .isEqualTo(CustomerDeliverySlotState.OFFERED);
+    assertThat(
+            jdbc.queryForMap(
+                "select customer_subject_id,booking_id,kind,read_at from customer_notification where order_id=?",
+                order))
+        .containsEntry("customer_subject_id", subject)
+        .containsEntry("booking_id", booking)
+        .containsEntry("kind", "PAYMENT_EXPIRED")
+        .containsEntry("read_at", null);
+    paymentExpiryRecovery.recoverPending();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from customer_notification where order_id=?",
+                Integer.class,
+                order))
+        .isEqualTo(1);
+    assertThat(checkoutSessions.claimPendingBooking(subject, inquiry)).isEmpty();
+  }
+
+  @Test
+  void
+      failedCustomerExpiryFinalizationRollsBackOrderAndNotificationThenRecoversWithoutRepeatingEffects() {
+    seedPendingInitialBill();
+    UUID key = UUID.randomUUID();
+    jdbc.update(
+        "update customer_rental_session set state='CHECKOUT_PENDING',pending_command_key=?,"
+            + " pending_command_sha256=?,checkout_command_key=?,checkout_command_sha256=?,recovery_next_attempt_at=clock_timestamp() where inquiry_id=?",
+        key,
+        "a".repeat(64),
+        key,
+        "a".repeat(64),
+        inquiry);
+    jdbc.update(
+        "update customer_delivery_slot set state='CHECKOUT_PENDING',booking_id=? where id=?",
+        UUID.randomUUID(),
+        oldSlot);
+    jdbc.update(
+        "update rental_order set payment_started_at=current_timestamp-interval '6 minutes',"
+            + " payment_expires_at=current_timestamp-interval '1 minute' where id=?",
+        order);
+    paymentExpiryRecovery.recoverPending();
+    assertThat(jdbc.queryForMap("select payment_state,status from rental_order where id=?", order))
+        .containsEntry("payment_state", "EXPIRING")
+        .containsEntry("status", "SAVED");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from customer_notification where order_id=?",
+                Integer.class,
+                order))
+        .isZero();
+    assertThat(
+            jdbc.queryForMap(
+                "select step,state,attempt_count from rental_order_mutation_command where order_id=?",
+                order))
+        .containsEntry("step", "FINALIZE_LOCAL")
+        .containsEntry("state", "PENDING")
+        .containsEntry("attempt_count", 1);
+    jdbc.update("update customer_delivery_slot set booking_id=? where id=?", booking, oldSlot);
+    jdbc.update(
+        "update rental_order_mutation_command set next_attempt_at=clock_timestamp() where order_id=?",
+        order);
+    paymentExpiryRecovery.recoverPending();
+    assertThat(
+            jdbc.queryForObject(
+                "select payment_state from rental_order where id=?", String.class, order))
+        .isEqualTo("EXPIRED");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from customer_notification where order_id=?",
+                Integer.class,
+                order))
+        .isEqualTo(1);
+    org.mockito.Mockito.verify(dependencies, org.mockito.Mockito.times(1))
+        .releaseAllOrderUnits(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.eq(order),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.eq("LOGISTICS_SERVICE"));
   }
 
   @Test

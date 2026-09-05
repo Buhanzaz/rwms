@@ -941,6 +941,12 @@ Customer checkout keeps its slot pending and creates no furniture work until pay
 Normal waiting releases the checkout lease without spending failure retries; incomplete order-ID
 attachment is recovered through the customer's existing booking. A released order cannot rebind
 the slot through checkout reconciliation, and terminal session state remains terminal on reload.
+Expiry finalization locks capacity then the exact checkout session before the order. Asset release,
+order terminal state, delivery-slot release, cancelled session and one subject-owned V106 inbox
+entry cannot be reported as completed separately. A lost checkout response resolves through the
+persisted presentation booking and checkout command key, including a provisional slot identity.
+Local completion failures retain the existing finite mutation retry/quarantine policy. Manager
+orders notify an existing exact client/account binding, never a guessed phone-number match.
 Evidence: [`payment owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderPaymentService.java),
 [`contract`](../../contracts/openapi/logistics-service.yaml).
 

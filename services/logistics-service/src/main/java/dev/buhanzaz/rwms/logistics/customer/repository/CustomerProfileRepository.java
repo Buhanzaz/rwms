@@ -8,4 +8,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 /** Persists the one-to-one auth-subject to rental-client customer binding. */
 public interface CustomerProfileRepository extends JpaRepository<CustomerProfile, UUID> {
   Optional<CustomerProfile> findByAuthSubjectId(UUID authSubjectId);
+
+  Optional<CustomerProfile> findByClientId(UUID clientId);
 }

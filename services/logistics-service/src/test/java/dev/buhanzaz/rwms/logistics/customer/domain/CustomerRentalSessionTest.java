@@ -207,6 +207,31 @@ class CustomerRentalSessionTest {
     assertThat(session.getRecoveryLastErrorCode()).isNull();
   }
 
+  @Test
+  void expiryAttachesLostCheckoutReceiptAndCannotCancelAnotherBookingOrResumeRecovery() {
+    var session = sessionWithSlot();
+    UUID command = UUID.randomUUID();
+    UUID booking = UUID.randomUUID();
+    UUID order = UUID.randomUUID();
+    var now = OffsetDateTime.now(ZoneOffset.UTC);
+    session.beginCheckout(0, command, HASH);
+    session.expirePaymentReservation(booking, order, "real-signed-token", now);
+    session.expirePaymentReservation(booking, order, "unused-token", now.plusSeconds(1));
+    assertThat(session.getState()).isEqualTo(CustomerSessionState.CANCELLED);
+    assertThat(session.getBookingId()).isEqualTo(booking);
+    assertThat(session.getOrderId()).isEqualTo(order);
+    assertThat(session.getPresentationToken()).isEqualTo("real-signed-token");
+    assertThat(session.getPendingCommandKey()).isNull();
+    assertThat(session.getRecoveryNextAttemptAt()).isNull();
+    assertThat(session.claimCheckoutRecovery(UUID.randomUUID(), now, now.plusMinutes(1))).isFalse();
+    assertThatThrownBy(
+            () -> session.expirePaymentReservation(UUID.randomUUID(), order, "token", now))
+        .isInstanceOf(IllegalStateException.class);
+    assertThatThrownBy(
+            () -> sessionWithSlot().expirePaymentReservation(booking, order, "token", now))
+        .isInstanceOf(IllegalStateException.class);
+  }
+
   private static CustomerDeliverySlot deliverySlot(OffsetDateTime now) {
     return CustomerDeliverySlot.offer(
         UUID.randomUUID(),
