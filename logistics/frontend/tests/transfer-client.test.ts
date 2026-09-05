@@ -214,6 +214,7 @@ describe('canonical transfer client', () => {
       displayName: 'Иванов Илья',
       phone: '+79990001122',
       comment: 'Подрядчик',
+      companyId: null,
     });
   });
 

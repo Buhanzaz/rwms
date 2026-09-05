@@ -327,7 +327,7 @@ export function Inspector(props: InspectorProps) {
   switch (section) {
     case 'WAREHOUSE': content = <WarehouseSection props={props} />; break;
     case 'DRIVERS': content = <CatalogSection props={props} kind="driver" />; break;
-    case 'CONTRACTORS': content = <ContractorDriversPanel warehouseId={props.workspace.warehouse.external_warehouse_id} warehouseName={warehouseShortName(props.workspace.warehouse)} planningDate={props.planningDate} manualRequests={manualContractorRequests} routeRequests={contractorRouteRequests} routeRequestsComplete={props.workspace.request_next_cursor == null} busy={props.busy} onDispatch={props.onDispatchContractor} />; break;
+    case 'CONTRACTORS': content = <ContractorDriversPanel key={props.workspace.warehouse.external_warehouse_id} warehouseId={props.workspace.warehouse.external_warehouse_id} warehouseName={warehouseShortName(props.workspace.warehouse)} planningDate={props.planningDate} manualRequests={manualContractorRequests} routeRequests={contractorRouteRequests} routeRequestsComplete={props.workspace.request_next_cursor == null} busy={props.busy} onDispatch={props.onDispatchContractor} />; break;
     case 'VEHICLES': content = <CatalogSection props={props} kind="vehicle" />; break;
     case 'SHIFTS': content = <ShiftsSection props={props} />; break;
     case 'REQUESTS': content = <DeliveriesSection props={props} />; break;

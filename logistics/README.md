@@ -709,6 +709,14 @@ automatic selection and disabled in manual selection because the canonical
 assignment contract does not yet support contractor pickup handoff; supported
 deliveries in the same batch are still assigned.
 
+The same section groups drivers under hired companies with INN, contact person,
+clickable phone/email, address and notes. Companies and independent drivers belong
+to one selected city. A driver can be added from the company card or its context
+menu; profile editing can change company membership within that city or clear it.
+Company contacts use the public task-board API and observed versions. A company
+with drivers cannot be deleted. Trips continue to use the selected individual
+driver and the planning date in the header; changing city clears open catalog forms.
+
 `GET /api/warehouses/{warehouse_id}/workspace` is a side-effect-free read of
 one exact warehouse-local planning date. It returns at most `request_limit`
 requests (250 by default, 1000 maximum), a stable UUID cursor and the total;

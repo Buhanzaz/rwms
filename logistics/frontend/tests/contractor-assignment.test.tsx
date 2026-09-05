@@ -1,12 +1,14 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ContractorDispatchResult } from '../src/api/client';
+import { ApiError, type ContractorDispatchResult } from '../src/api/client';
 import { ContractorAssignmentDialog } from '../src/features/contractors/ContractorAssignmentDialog';
 import { ContractorDriversPanel } from '../src/features/contractors/ContractorDriversPanel';
 import { requestFixture } from './fixtures';
 
-const contractorApi = vi.hoisted(() => ({ list: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), share: vi.fn() }));
+const contractorApi = vi.hoisted(() => ({ list: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), share: vi.fn(), companies: vi.fn(), createCompany: vi.fn(), updateCompany: vi.fn(), removeCompany: vi.fn() }));
+
+const company = { companyId: 'company-baltic', version: 4, homeWarehouseId: 'external-warehouse', name: 'Балтика', inn: '7801000001', contactName: 'Анна', phone: '+7 812 123-45-67', email: 'office@example.com', address: 'Московское шоссе', comment: 'Манипуляторы по звонку' };
 
 function dispatchResult(overrides: Partial<ContractorDispatchResult> = {}): ContractorDispatchResult {
   return {
@@ -33,10 +35,18 @@ vi.mock('../src/features/contractors/contractor-client', () => ({
   updateContractorDriver: contractorApi.update,
   deleteContractorDriver: contractorApi.remove,
   createContractorRouteShare: contractorApi.share,
+  listContractorCompanies: contractorApi.companies,
+  createContractorCompany: contractorApi.createCompany,
+  updateContractorCompany: contractorApi.updateCompany,
+  deleteContractorCompany: contractorApi.removeCompany,
 }));
 
 describe('contractor assignment dialog', () => {
   beforeEach(() => {
+    contractorApi.companies.mockReset().mockResolvedValue([]);
+    contractorApi.createCompany.mockReset().mockResolvedValue(company);
+    contractorApi.updateCompany.mockReset().mockResolvedValue(company);
+    contractorApi.removeCompany.mockReset().mockResolvedValue(undefined);
     contractorApi.list.mockReset();
     contractorApi.create.mockReset();
     contractorApi.update.mockReset();
@@ -69,6 +79,107 @@ describe('contractor assignment dialog', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('creates a company with contacts and retains the create identity after a failed request', async () => {
+    const user = userEvent.setup();
+    contractorApi.createCompany.mockRejectedValueOnce(new Error('Сервис недоступен'));
+    render(<ContractorDriversPanel warehouseId="external-warehouse" warehouseName="SPB" planningDate="2026-09-05" manualRequests={[]} busy={false} onDispatch={vi.fn()} />);
+    await user.click(await screen.findByRole('button', { name: 'Добавить компанию' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Добавить наёмную компанию' }));
+    await user.type(dialog.getByLabelText('Название компании'), 'Балтика');
+    await user.type(dialog.getByLabelText('ИНН'), '7801000001');
+    await user.type(dialog.getByLabelText('Контактное лицо'), 'Анна');
+    await user.type(dialog.getByLabelText('Телефон компании'), '+7 812 123-45-67');
+    await user.type(dialog.getByLabelText('Электронная почта'), 'office@example.com');
+    await user.click(dialog.getByRole('button', { name: 'Сохранить компанию' }));
+    expect(await dialog.findByRole('alert')).toHaveTextContent('Сервис недоступен');
+    await user.click(dialog.getByRole('button', { name: 'Сохранить компанию' }));
+    await waitFor(() => expect(contractorApi.createCompany).toHaveBeenCalledTimes(2));
+    expect(contractorApi.createCompany.mock.calls[0]?.[3]).toEqual(contractorApi.createCompany.mock.calls[1]?.[3]);
+    expect(contractorApi.createCompany.mock.calls[1]).toEqual(['token', 'external-warehouse', {
+      name: 'Балтика', inn: '7801000001', contactName: 'Анна', phone: '+7 812 123-45-67',
+      email: 'office@example.com', address: null, comment: null,
+    }, expect.any(String)]);
+  });
+
+  it('groups drivers below company contacts and dispatches that exact driver for the selected day', async () => {
+    const user = userEvent.setup();
+    contractorApi.companies.mockResolvedValue([company]);
+    contractorApi.list.mockResolvedValue([
+      { workerId: 'company-driver', displayName: 'Петров', phone: '123', active: true, companyId: company.companyId },
+      { workerId: 'independent', displayName: 'Сидоров', phone: '456', active: true, companyId: null },
+    ]);
+    const onDispatch = vi.fn().mockResolvedValue(undefined);
+    render(<ContractorDriversPanel warehouseId="external-warehouse" warehouseName="SPB" planningDate="2026-09-05" manualRequests={[requestFixture({ scheduled_date: '2026-09-05' })]} busy={false} onDispatch={onDispatch} />);
+    const card = within(await screen.findByRole('article', { name: 'Компания Балтика' }));
+    expect(card.getByRole('link', { name: '+7 812 123-45-67' })).toHaveAttribute('href', 'tel:+78121234567');
+    expect(card.getByRole('link', { name: 'office@example.com' })).toHaveAttribute('href', 'mailto:office@example.com');
+    expect(card.getByText('Петров')).toBeVisible();
+    expect(card.queryByText('Сидоров')).not.toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Водители без компании' })).getByText('Сидоров')).toBeVisible();
+    expect(screen.getByText(/5 сентября 2026/)).toBeVisible();
+    await user.click(card.getByRole('button', { name: 'Назначить на рейс' }));
+    expect(onDispatch).toHaveBeenCalledWith('company-driver', 'AUTO', []);
+  });
+
+  it('adds a driver from the company context menu and sends explicit membership', async () => {
+    const user = userEvent.setup();
+    contractorApi.companies.mockResolvedValue([company]);
+    render(<ContractorDriversPanel warehouseId="external-warehouse" planningDate="2026-09-05" manualRequests={[]} busy={false} onDispatch={vi.fn()} />);
+    fireEvent.contextMenu(await screen.findByRole('article', { name: 'Компания Балтика' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Добавить водителя в компанию' }));
+    expect(screen.getByRole('combobox', { name: 'Компания' })).toHaveValue(company.companyId);
+    await user.type(screen.getByLabelText('Имя / название'), 'Новый водитель');
+    await user.type(screen.getByLabelText('Телефон'), '123');
+    await user.click(screen.getByRole('button', { name: 'Сохранить' }));
+    await waitFor(() => expect(contractorApi.create).toHaveBeenCalledWith('token', 'external-warehouse', expect.objectContaining({ companyId: company.companyId }), expect.any(String)));
+  });
+
+  it('opens company actions from the keyboard and refreshes contacts after a version conflict', async () => {
+    const user = userEvent.setup();
+    contractorApi.companies.mockResolvedValue([company]);
+    contractorApi.updateCompany.mockRejectedValueOnce(new ApiError(409, { detail: 'Компания изменена' }, 'Конфликт версии'));
+    render(<ContractorDriversPanel warehouseId="external-warehouse" planningDate="2026-09-05" manualRequests={[]} busy={false} onDispatch={vi.fn()} />);
+    const trigger = await screen.findByRole('button', { name: 'Действия компании Балтика' });
+    trigger.focus();
+    await user.keyboard('{ArrowDown}{End}{Enter}');
+    const dialog = within(screen.getByRole('dialog', { name: 'Изменить наёмную компанию' }));
+    await user.clear(dialog.getByLabelText('Название компании'));
+    await user.type(dialog.getByLabelText('Название компании'), 'Север');
+    contractorApi.companies.mockResolvedValue([{ ...company, version: 5, name: 'Сохранённое название' }]);
+    await user.click(dialog.getByRole('button', { name: 'Сохранить компанию' }));
+    expect(await dialog.findByRole('alert')).toHaveTextContent('Закройте форму');
+    expect(contractorApi.updateCompany).toHaveBeenCalledWith('token', 'external-warehouse', expect.objectContaining({ version: 4 }), expect.objectContaining({ name: 'Север' }));
+    await user.click(dialog.getByRole('button', { name: 'Отмена' }));
+    await user.click(screen.getByRole('button', { name: 'Действия компании Сохранённое название' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Изменить компанию' }));
+    expect(screen.getByLabelText('Название компании')).toHaveValue('Сохранённое название');
+  });
+
+  it('detaches a driver explicitly and keeps company deletion unavailable while it has drivers', async () => {
+    const user = userEvent.setup();
+    contractorApi.companies.mockResolvedValue([company]);
+    contractorApi.list.mockResolvedValue([{ workerId: 'member', version: 8, displayName: 'Петров', phone: '123', active: true, companyId: company.companyId }]);
+    render(<ContractorDriversPanel warehouseId="external-warehouse" planningDate="2026-09-05" manualRequests={[]} busy={false} onDispatch={vi.fn()} />);
+    await user.click(await screen.findByRole('button', { name: 'Действия компании Балтика' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Изменить компанию' }));
+    expect(screen.getByRole('button', { name: 'Удалить' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Отмена' }));
+    await user.click(screen.getByRole('button', { name: 'Изменить' }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Компания' }), '');
+    await user.click(screen.getByRole('button', { name: 'Сохранить' }));
+    await waitFor(() => expect(contractorApi.update).toHaveBeenCalledWith('token', 'external-warehouse', expect.objectContaining({ version: 8 }), expect.objectContaining({ companyId: null })));
+  });
+
+  it('shows a catalog load failure with retry and never hides it behind an empty successful state', async () => {
+    const user = userEvent.setup();
+    contractorApi.companies.mockRejectedValueOnce(new Error('Каталог компаний недоступен'));
+    render(<ContractorDriversPanel warehouseId="external-warehouse" planningDate="2026-09-05" manualRequests={[]} busy={false} onDispatch={vi.fn()} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Каталог компаний недоступен');
+    expect(screen.queryByText('Наёмные водители не добавлены')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Обновить каталог' }));
+    expect(await screen.findByText('Иван Петров')).toBeVisible();
   });
 
   it('lists active contractor profiles and confirms a direct handoff', async () => {

@@ -1,21 +1,29 @@
 import { Copy, ListChecks, Pencil, Plus, Route as RouteIcon, Sparkles, Trash2, UserRoundCheck } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
-import type { ContractorDispatchMode, ContractorDispatchResult } from '../../api/client';
+import { ApiError, type ContractorDispatchMode, type ContractorDispatchResult } from '../../api/client';
 import { beginPanelLogin, restorePanelUser } from '../../auth/panel-oidc';
-import { Badge, Button, CheckboxField, EmptyState, Field, Modal, Spinner } from '../../components/ui';
+import { Badge, Button, CheckboxField, EmptyState, Field, Modal, SelectField, Spinner } from '../../components/ui';
 import type { LogisticsRequest, UUID } from '../../domain/types';
 import { formatDate } from '../../utils/format';
 import { customerDeliveryPurposeFromRequest, customerDeliveryPurposeLabel } from '../../utils/customer-presentation';
 import { userFacingErrorDetail } from '../../utils/user-facing-error';
 import {
   createContractorDriver,
+  createContractorCompany,
   createContractorRouteShare,
   deleteContractorDriver,
+  deleteContractorCompany,
   listContractorDrivers,
+  listContractorCompanies,
   updateContractorDriver,
+  updateContractorCompany,
   type ContractorDriver,
   type ContractorDriverInput,
+  type ContractorCompany,
+  type ContractorCompanyInput,
 } from './contractor-client';
+import { ContractorCompanyCard } from './ContractorCompanyCard';
+import { ContractorCompanyEditor } from './ContractorCompanyEditor';
 
 type Session = { status: 'loading' } | { status: 'anonymous' } | { status: 'ready'; token: string };
 
@@ -229,9 +237,12 @@ function ContractorRouteCard({ route, feedback, copying, onCopy }: {
 }
 
 /** Profile editor for a reusable contractor; route dates are never stored in a profile. */
-function ContractorEditor({ contractor, busy, onClose, onSave, onDelete }: {
+function ContractorEditor({ contractor, companies, initialCompanyId, busy, error, onClose, onSave, onDelete }: {
   contractor: ContractorDriver | null;
+  companies: ContractorCompany[];
+  initialCompanyId: UUID | null;
   busy: boolean;
+  error: string | null;
   onClose: () => void;
   onSave: (input: ContractorDriverInput) => Promise<void>;
   onDelete: (contractor: ContractorDriver) => Promise<void>;
@@ -240,16 +251,23 @@ function ContractorEditor({ contractor, busy, onClose, onSave, onDelete }: {
   const [phone, setPhone] = useState(contractor?.phone ?? '');
   const [comment, setComment] = useState(contractor?.comment ?? '');
   const [active, setActive] = useState(contractor?.active ?? true);
+  const [companyId, setCompanyId] = useState(contractor?.companyId ?? initialCompanyId ?? '');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!name.trim() || !phone.trim()) return;
-    void onSave({ displayName: name.trim(), phone: phone.trim(), comment: comment.trim(), active });
+    if (busy || !name.trim() || !phone.trim()) return;
+    void onSave({ displayName: name.trim(), phone: phone.trim(), comment: comment.trim(), active, companyId: companyId || null });
   };
   return (
-    <Modal title={contractor ? 'Изменить наёмного водителя' : 'Добавить наёмного водителя'} description="Профиль водителя хранится отдельно от назначения на рейс." onClose={onClose}>
+    <Modal title={contractor ? 'Изменить наёмного водителя' : 'Добавить наёмного водителя'} description="Выберите компанию этого города или сохраните самостоятельного водителя." onClose={() => { if (!busy) onClose(); }}>
       <form className="form-grid" onSubmit={submit}>
-        <Field className="span-2" label="Имя / название" value={name} onChange={(event) => setName(event.target.value)} required />
+        {error ? <p className="field__error span-2" role="alert">{error}</p> : null}
+        <Field className="span-2" label="Имя / название" value={name} maxLength={256} autoFocus onChange={(event) => setName(event.target.value)} required />
+        <SelectField className="span-2" label="Компания" value={companyId} onChange={(event) => setCompanyId(event.target.value)}>
+          <option value="">Без компании</option>
+          {companyId && !companies.some((company) => company.companyId === companyId) ? <option value={companyId} disabled>Компания недоступна</option> : null}
+          {companies.map((company) => <option key={company.companyId} value={company.companyId}>{company.name} · ИНН {company.inn}</option>)}
+        </SelectField>
         <Field className="span-2" label="Телефон" type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} required />
         <label className="field span-2"><span className="field__label">Комментарий</span><textarea className="input" value={comment} onChange={(event) => setComment(event.target.value)} /></label>
         {contractor ? <div className="span-2"><CheckboxField label="Активен и может получать задания" checked={active} onChange={setActive} /></div> : null}
@@ -320,6 +338,10 @@ export function ContractorDriversPanel({ warehouseId, warehouseName = 'выбр�
 }) {
   const [session, setSession] = useState<Session>({ status: 'loading' });
   const [contractors, setContractors] = useState<ContractorDriver[]>([]);
+  const [companies, setCompanies] = useState<ContractorCompany[]>([]);
+  const [companyEditor, setCompanyEditor] = useState<ContractorCompany | null | undefined>(undefined);
+  const [companyIntentId, setCompanyIntentId] = useState<UUID | null>(null);
+  const [initialCompanyId, setInitialCompanyId] = useState<UUID | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editor, setEditor] = useState<ContractorDriver | null | undefined>(undefined);
@@ -349,8 +371,15 @@ export function ContractorDriversPanel({ warehouseId, warehouseName = 'выбр�
     setLoading(true);
     setError(null);
     try {
-      setContractors(await listContractorDrivers(token, warehouseId));
+      const [drivers, cityCompanies] = await Promise.all([
+        listContractorDrivers(token, warehouseId),
+        listContractorCompanies(token, warehouseId),
+      ]);
+      setContractors(drivers);
+      setCompanies(cityCompanies);
     } catch (caught: unknown) {
+      setContractors([]);
+      setCompanies([]);
       setError(userFacingErrorDetail(caught));
     } finally {
       setLoading(false);
@@ -361,6 +390,47 @@ export function ContractorDriversPanel({ warehouseId, warehouseName = 'выбр�
     if (session.status === 'ready') void reload(session.token);
     else if (session.status !== 'loading') setLoading(false);
   }, [reload, session]);
+
+  const mutationError = async (caught: unknown) => {
+    if (caught instanceof ApiError && caught.status === 409 && session.status === 'ready') {
+      await reload(session.token);
+      setError(`${userFacingErrorDetail(caught)} Закройте форму и откройте её заново, чтобы работать с актуальными данными.`);
+    } else setError(userFacingErrorDetail(caught));
+  };
+
+  const openDriver = (companyId: UUID | null) => {
+    setError(null);
+    setInitialCompanyId(companyId);
+    setCreateIntentId(crypto.randomUUID());
+    setEditor(null);
+  };
+
+  const saveCompany = async (input: ContractorCompanyInput) => {
+    if (session.status !== 'ready') return;
+    setSaving(true);
+    setError(null);
+    try {
+      if (companyEditor) await updateContractorCompany(session.token, warehouseId, companyEditor, input);
+      else if (companyIntentId) await createContractorCompany(session.token, warehouseId, input, companyIntentId);
+      else throw new Error('Закройте форму и повторите добавление компании.');
+      setCompanyEditor(undefined);
+      setCompanyIntentId(null);
+      await reload(session.token);
+    } catch (caught: unknown) { await mutationError(caught); }
+    finally { setSaving(false); }
+  };
+
+  const removeCompany = async (company: ContractorCompany) => {
+    if (session.status !== 'ready') return;
+    setSaving(true);
+    setError(null);
+    try {
+      await deleteContractorCompany(session.token, warehouseId, company);
+      setCompanyEditor(undefined);
+      await reload(session.token);
+    } catch (caught: unknown) { await mutationError(caught); }
+    finally { setSaving(false); }
+  };
 
   const save = async (input: ContractorDriverInput) => {
     if (session.status !== 'ready') return;
@@ -373,7 +443,7 @@ export function ContractorDriversPanel({ warehouseId, warehouseName = 'выбр�
       setCreateIntentId(null);
       await reload(session.token);
     } catch (caught: unknown) {
-      setError(userFacingErrorDetail(caught));
+      await mutationError(caught);
     } finally {
       setSaving(false);
     }
@@ -388,7 +458,7 @@ export function ContractorDriversPanel({ warehouseId, warehouseName = 'выбр�
       setEditor(undefined);
       await reload(session.token);
     } catch (caught: unknown) {
-      setError(userFacingErrorDetail(caught));
+      await mutationError(caught);
     } finally {
       setSaving(false);
     }
@@ -492,38 +562,59 @@ export function ContractorDriversPanel({ warehouseId, warehouseName = 'выбр�
       (route) => route.contractorWorkerId == null || !contractorWorkerIds.has(route.contractorWorkerId),
     );
   const hasUnsupportedRwmsPickup = supportedRequests.length !== manualRequests.length;
+  const independent = contractors.filter((driver) => !driver.companyId);
+  const unresolvedCompanyDrivers = contractors.filter((driver) => driver.companyId && !companies.some((company) => company.companyId === driver.companyId));
+  const renderContractor = (contractor: ContractorDriver) => {
+    const contractorBusy = busy || dispatchingWorkerId === contractor.workerId;
+    const contractorRoutes = routes.filter((route) => route.contractorWorkerId === contractor.workerId);
+    return (
+      <article className="entity-card contractor-card" key={contractor.workerId} aria-label={`Водитель ${contractor.displayName}`}>
+        <div className="entity-card__row"><span><strong>{contractor.displayName}</strong><p><a href={`tel:${contractor.phone.replace(/[^+\d]/gu, '')}`}>{contractor.phone}</a></p></span><Badge tone={contractor.active ? 'success' : 'neutral'}>{contractor.active ? 'активен' : 'неактивен'}</Badge></div>
+        {contractor.comment ? <p>{contractor.comment}</p> : <p className="entity-card__subtitle">Без комментария</p>}
+        {contractorRoutes.map((route) => (
+          <ContractorRouteCard
+            key={route.commandId}
+            route={route}
+            feedback={routeFeedback[route.commandId]}
+            copying={copyingCommandId === route.commandId}
+            onCopy={copyRoute}
+          />
+        ))}
+        <div className="contractor-card__actions">
+          <Button size="sm" variant="primary" disabled={!contractor.active || contractorBusy || !supportedRequests.length} title={!supportedRequests.length ? 'На выбранную дату нет заданий, доступных для наёмного водителя' : undefined} onClick={() => void dispatch(contractor, 'AUTO', [])}><Sparkles size={13} />{contractorBusy ? 'Назначаем…' : 'Назначить на рейс'}</Button>
+          <Button size="sm" disabled={!contractor.active || contractorBusy || !supportedRequests.length} onClick={() => setManualContractor(contractor)}><ListChecks size={13} />Выстроить вручную</Button>
+          <Button size="sm" variant="ghost" disabled={contractorBusy} onClick={() => { setError(null); setInitialCompanyId(null); setEditor(contractor); }}><Pencil size={13} />Изменить</Button>
+        </div>
+      </article>
+    );
+  };
   if (session.status === 'loading') return <Spinner label="Проверяем доступ…" />;
   if (session.status === 'anonymous') return <EmptyState title="Нужен вход в RWMS" description="Каталог наёмных водителей хранится в общей учётной записи RWMS." action={<Button variant="primary" onClick={() => void beginPanelLogin(returnTo())}>Войти</Button>} />;
   return (
     <>
-      <div className="entity-card__row"><div><h2 className="section-title">Наёмные водители</h2><p className="section-subtitle">К наёмным водителям через {warehouseName}</p></div><Button variant="primary" onClick={() => { setCreateIntentId(crypto.randomUUID()); setEditor(null); }}><Plus size={14} />Добавить водителя</Button></div>
+      <div className="contractor-catalog-header"><div><h2 className="section-title">Наёмные водители {warehouseName}</h2><p className="section-subtitle">Контакты компаний и самостоятельных водителей города</p></div><Button variant="primary" disabled={loading || saving || busy} onClick={() => openDriver(null)}><Plus size={14} />Добавить водителя</Button></div>
       <div className="contractor-planning-date"><span>Дата рейса</span><strong>{formatDate(planningDate)}</strong></div>
       {hasUnsupportedRwmsPickup ? <p className="field__hint" role="note">Вывоз RWMS пока нельзя передать наёмному водителю — для него нужен внутренний маршрут.</p> : null}
-      {error ? <div className="error-panel" role="alert"><strong>Не удалось выполнить действие</strong><p>{error}</p></div> : null}
-      {loading ? <Spinner label="Загружаем наёмных водителей…" /> : <div className="entity-list">{contractors.map((contractor) => {
-        const contractorBusy = busy || dispatchingWorkerId === contractor.workerId;
-        const contractorRoutes = routes.filter((route) => route.contractorWorkerId === contractor.workerId);
-        return (
-          <article className="entity-card contractor-card" key={contractor.workerId}>
-            <div className="entity-card__row"><span><strong>{contractor.displayName}</strong><p>{contractor.phone}</p></span><Badge tone={contractor.active ? 'success' : 'neutral'}>{contractor.active ? 'активен' : 'неактивен'}</Badge></div>
-            {contractor.comment ? <p>{contractor.comment}</p> : <p className="entity-card__subtitle">Без комментария</p>}
-            {contractorRoutes.map((route) => (
-              <ContractorRouteCard
-                key={route.commandId}
-                route={route}
-                feedback={routeFeedback[route.commandId]}
-                copying={copyingCommandId === route.commandId}
-                onCopy={copyRoute}
-              />
-            ))}
-            <div className="contractor-card__actions">
-              <Button size="sm" variant="primary" disabled={!contractor.active || contractorBusy || !supportedRequests.length} title={!supportedRequests.length ? 'На выбранную дату нет заданий, доступных для наёмного водителя' : undefined} onClick={() => void dispatch(contractor, 'AUTO', [])}><Sparkles size={13} />{contractorBusy ? 'Назначаем…' : 'Назначить на рейс'}</Button>
-              <Button size="sm" disabled={!contractor.active || contractorBusy || !supportedRequests.length} onClick={() => setManualContractor(contractor)}><ListChecks size={13} />Выстроить вручную</Button>
-              <Button size="sm" variant="ghost" disabled={contractorBusy} onClick={() => setEditor(contractor)}><Pencil size={13} />Изменить</Button>
-            </div>
-          </article>
-        );
-      })}</div>}
+      {error && editor === undefined && companyEditor === undefined ? <div className="error-panel" role="alert"><strong>Не удалось выполнить действие</strong><p>{error}</p><Button size="sm" disabled={loading} onClick={() => void reload(session.token)}>Обновить каталог</Button></div> : null}
+      {loading ? <Spinner label="Загружаем водителей и компании…" /> : <>
+        <section className="contractor-catalog-section" aria-label="Водители без компании">
+          <header className="contractor-catalog-section__heading"><h3>Без компании</h3><Badge>{independent.length}</Badge></header>
+          <div className="entity-list">{independent.map(renderContractor)}</div>
+          {!error && independent.length === 0 ? <p className="field__hint">Самостоятельные водители пока не добавлены.</p> : null}
+        </section>
+        {unresolvedCompanyDrivers.length > 0 ? <section className="contractor-catalog-section" aria-label="Водители с недоступной компанией"><p className="field__error" role="alert">Компания части водителей отсутствует в каталоге. Обновите данные или измените компанию в профиле водителя.</p><div className="entity-list">{unresolvedCompanyDrivers.map(renderContractor)}</div></section> : null}
+        <section className="contractor-catalog-section" aria-label="Наёмные компании">
+          <header className="contractor-catalog-section__heading"><h3>Наёмные компании {warehouseName}</h3><Badge>{companies.length}</Badge><Button size="sm" variant="primary" disabled={saving || busy} onClick={() => { setError(null); setCompanyIntentId(crypto.randomUUID()); setCompanyEditor(null); }}><Plus size={14} />Добавить компанию</Button></header>
+          <div className="entity-list">{companies.map((company) => {
+            const drivers = contractors.filter((driver) => driver.companyId === company.companyId);
+            return <ContractorCompanyCard key={company.companyId} company={company} driverCount={drivers.length} disabled={saving || busy} onAddDriver={() => openDriver(company.companyId)} onEdit={() => { setError(null); setCompanyEditor(company); }}>
+              {drivers.map(renderContractor)}
+            </ContractorCompanyCard>;
+          })}</div>
+          {!error && companies.length === 0 ? <p className="field__hint">Сохраните контакты компании, чтобы быстро вызвать технику и назначить её водителя на рейс.</p> : null}
+        </section>
+      </>}
+
       {detachedRoutes.map((route) => (
         <ContractorRouteCard
           key={route.commandId}
@@ -533,9 +624,10 @@ export function ContractorDriversPanel({ warehouseId, warehouseName = 'выбр�
           onCopy={copyRoute}
         />
       ))}
-      {!loading && !contractors.length ? <EmptyState icon={<UserRoundCheck />} title="Наёмные водители не добавлены" description="Добавьте водителя, чтобы затем назначить его на рейс." /> : null}
+      {!loading && !error && !contractors.length && !companies.length ? <EmptyState icon={<UserRoundCheck />} title="Наёмные водители не добавлены" description="Добавьте водителя, чтобы затем назначить его на рейс." /> : null}
       {!loading && contractors.length > 0 && activeCount === 0 ? <p className="field__hint">Все наёмные водители неактивны. Активируйте нужного водителя через «Изменить».</p> : null}
-      {editor !== undefined ? <ContractorEditor contractor={editor} busy={saving} onClose={() => { setEditor(undefined); setCreateIntentId(null); }} onSave={save} onDelete={remove} /> : null}
+      {editor !== undefined ? <ContractorEditor contractor={editor} companies={companies} initialCompanyId={initialCompanyId} busy={saving} error={error} onClose={() => { setEditor(undefined); setCreateIntentId(null); }} onSave={save} onDelete={remove} /> : null}
+      {companyEditor !== undefined ? <ContractorCompanyEditor company={companyEditor} warehouseName={warehouseName} busy={saving} error={error} hasDrivers={companyEditor != null && contractors.some((driver) => driver.companyId === companyEditor.companyId)} onClose={() => { setCompanyEditor(undefined); setCompanyIntentId(null); }} onSave={saveCompany} onDelete={removeCompany} /> : null}
       {manualContractor ? <ManualDispatchDialog contractor={manualContractor} planningDate={planningDate} requests={supportedRequests} busy={busy || dispatchingWorkerId === manualContractor.workerId} onClose={() => setManualContractor(null)} onSubmit={(requestIds) => dispatch(manualContractor, 'MANUAL', requestIds)} /> : null}
     </>
   );

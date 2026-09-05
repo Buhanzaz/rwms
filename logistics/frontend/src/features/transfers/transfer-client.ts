@@ -299,6 +299,7 @@ export async function createTransferContractor(input: CreateTransferContractorIn
       phone: input.phone,
       comment: input.comment ?? '',
       active: true,
+      companyId: null,
     },
     input.contractorId,
   );

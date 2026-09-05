@@ -11,6 +11,7 @@ export interface ContractorDriver {
   comment: string | null;
   active: boolean;
   employmentType: 'CONTRACTOR';
+  companyId: UUID | null;
 }
 
 export interface ContractorDriverInput {
@@ -18,6 +19,24 @@ export interface ContractorDriverInput {
   phone: string;
   comment: string;
   active: boolean;
+  companyId: UUID | null;
+}
+
+/** City-owned company contacts; dates and route execution stay with individual drivers. */
+export interface ContractorCompanyInput {
+  name: string;
+  inn: string;
+  contactName: string | null;
+  phone: string;
+  email: string | null;
+  address: string | null;
+  comment: string | null;
+}
+
+export interface ContractorCompany extends ContractorCompanyInput {
+  companyId: UUID;
+  version: number;
+  homeWarehouseId: UUID;
 }
 
 /** Exact canonical task identities used to create one explicit contractor route link. */
@@ -112,6 +131,7 @@ export async function createContractorDriver(
         displayName: input.displayName,
         phone: input.phone,
         comment: input.comment,
+        companyId: input.companyId,
       }),
     },
   );
@@ -150,5 +170,35 @@ export async function deleteContractorDriver(
       headers: headers(accessToken),
     },
   );
+  if (!response.ok) await contractorResponse<never>(response);
+}
+
+function companyPath(warehouseId: UUID): string {
+  return `/api/task-board/warehouses/${encodeURIComponent(warehouseId)}/logistics-drivers/companies`;
+}
+
+export async function listContractorCompanies(accessToken: string, warehouseId: UUID): Promise<ContractorCompany[]> {
+  return contractorResponse<ContractorCompany[]>(await fetch(companyPath(warehouseId), { headers: headers(accessToken) }));
+}
+
+/** The editor retains companyId across retries; the owner checks identical create replays. */
+export async function createContractorCompany(accessToken: string, warehouseId: UUID, input: ContractorCompanyInput, companyId: UUID): Promise<ContractorCompany> {
+  return contractorResponse<ContractorCompany>(await fetch(companyPath(warehouseId), {
+    method: 'POST', headers: headers(accessToken, true), body: JSON.stringify({ companyId, ...input }),
+  }));
+}
+
+export async function updateContractorCompany(accessToken: string, warehouseId: UUID, company: ContractorCompany, input: ContractorCompanyInput): Promise<ContractorCompany> {
+  return contractorResponse<ContractorCompany>(await fetch(`${companyPath(warehouseId)}/${encodeURIComponent(company.companyId)}`, {
+    method: 'PATCH', headers: headers(accessToken, true), body: JSON.stringify({ expectedVersion: company.version, ...input }),
+  }));
+}
+
+/** The service refuses deletion while any driver still belongs to the company. */
+export async function deleteContractorCompany(accessToken: string, warehouseId: UUID, company: ContractorCompany): Promise<void> {
+  const query = new URLSearchParams({ expectedVersion: String(company.version) });
+  const response = await fetch(`${companyPath(warehouseId)}/${encodeURIComponent(company.companyId)}?${query}`, {
+    method: 'DELETE', headers: headers(accessToken),
+  });
   if (!response.ok) await contractorResponse<never>(response);
 }

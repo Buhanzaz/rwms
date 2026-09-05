@@ -5,6 +5,11 @@ import {
   listContractorDrivers,
   updateContractorDriver,
   type ContractorDriver,
+  createContractorCompany,
+  updateContractorCompany,
+  deleteContractorCompany,
+  listContractorCompanies,
+  type ContractorCompany,
 } from '../src/features/contractors/contractor-client';
 
 const contractor: ContractorDriver = {
@@ -16,6 +21,7 @@ const contractor: ContractorDriver = {
   comment: 'Подрядчик',
   active: true,
   employmentType: 'CONTRACTOR',
+  companyId: null,
 };
 
 describe('task-board contractor client', () => {
@@ -46,6 +52,7 @@ describe('task-board contractor client', () => {
       phone: contractor.phone,
       comment: contractor.comment ?? '',
       active: true,
+      companyId: null,
     };
 
     await createContractorDriver('token', contractor.homeWarehouseId, input, 'contractor-intent-id');
@@ -65,7 +72,7 @@ describe('task-board contractor client', () => {
     expect(updateInit?.method).toBe('PATCH');
     if (typeof updateInit?.body !== 'string') throw new Error('Expected a JSON request body');
     const updateBody: unknown = JSON.parse(updateInit.body);
-    expect(updateBody).toMatchObject({ expectedVersion: 3, active: false });
+    expect(updateBody).toMatchObject({ expectedVersion: 3, active: false, companyId: null });
     expect(updateBody).not.toHaveProperty('availableFrom');
     expect(updateBody).not.toHaveProperty('availableUntil');
 
@@ -73,5 +80,37 @@ describe('task-board contractor client', () => {
     const [deleteUrl, deleteInit] = fetchMock.mock.calls[2] ?? [];
     expect(deleteUrl).toBe(`/api/task-board/warehouses/${contractor.homeWarehouseId}/logistics-drivers/contractors/${contractor.workerId}?expectedVersion=3`);
     expect(deleteInit?.method).toBe('DELETE');
+  });
+
+  it('uses the same city gateway, stable company identity and observed versions for contacts', async () => {
+    const company: ContractorCompany = {
+      companyId: 'company-id', version: 7, homeWarehouseId: contractor.homeWarehouseId,
+      name: 'Балтика', inn: '7801000001', contactName: 'Иван', phone: '+7 900 000-00-00',
+      email: null, address: null, comment: null,
+    };
+    const { companyId, version, homeWarehouseId, ...input } = company;
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify([company]), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(company), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(company), { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(listContractorCompanies('token', homeWarehouseId)).resolves.toEqual([company]);
+    await createContractorCompany('token', homeWarehouseId, input, companyId);
+    await updateContractorCompany('token', homeWarehouseId, company, input);
+    await deleteContractorCompany('token', homeWarehouseId, company);
+    const base = `/api/task-board/warehouses/${homeWarehouseId}/logistics-drivers/companies`;
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([base, base, `${base}/${companyId}`, `${base}/${companyId}?expectedVersion=7`]);
+    const createBody = fetchMock.mock.calls[1]?.[1]?.body;
+    const updateBody = fetchMock.mock.calls[2]?.[1]?.body;
+    if (typeof createBody !== 'string' || typeof updateBody !== 'string') throw new Error('Expected JSON request bodies');
+    expect(JSON.parse(createBody)).toEqual({ companyId, ...input });
+    expect(JSON.parse(updateBody)).toEqual({ expectedVersion: version, ...input });
+    expect(new Headers(fetchMock.mock.calls[2]?.[1]?.headers).get('Authorization')).toBe('Bearer token');
+  });
+
+  it('surfaces catalog failures instead of returning an empty successful company list', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: 'Нет доступа' }), { status: 403 })));
+    await expect(listContractorCompanies('token', contractor.homeWarehouseId)).rejects.toMatchObject({ status: 403 });
   });
 });
