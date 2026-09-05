@@ -193,6 +193,8 @@ export interface PendingWarehouseMapPoint {
 interface MapCanvasProps {
   warehouseKinds?: ReadonlyMap<string, WarehouseKindMetadata> | undefined;
   warehouseKindsFailed?: boolean;
+  warehouseKindsLoading?: boolean;
+  onRetryWarehouseKinds?: () => void;
   cameraPadding?: MapInsets;
   workspace: WarehouseWorkspace;
   plan: RoutePlan | null;
@@ -498,6 +500,8 @@ export function MapCanvas({
   cameraPadding,
   warehouseKinds,
   warehouseKindsFailed = false,
+  warehouseKindsLoading = false,
+  onRetryWarehouseKinds,
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -1131,7 +1135,11 @@ export function MapCanvas({
       </div>
       {(layersOpen || warehouseKindsFailed || (layers.routes && routeLegend.length > 0)) ? (
         <div className="map-overlay map-overlay-stack">
-          {warehouseKindsFailed ? <div className="layer-menu" role="status">Типы складов временно недоступны. Маркеры «?» не означают основной склад. Повторная загрузка — через минуту.</div> : null}
+          {warehouseKindsFailed ? <div className="layer-menu warehouse-kind-error" role="status">
+            <strong>Типы складов временно недоступны</strong>
+            <p>Не удалось обновить справочник. Тип неподтверждённого склада отмечен знаком «?».</p>
+            {onRetryWarehouseKinds ? <Button type="button" size="sm" disabled={warehouseKindsLoading} onClick={onRetryWarehouseKinds}>{warehouseKindsLoading ? 'Обновляем…' : 'Повторить загрузку типов'}</Button> : null}
+          </div> : null}
           {layers.routes && routeLegend.length ? (
             <div className="route-legend" aria-label="Все участки построенного плана">
               <strong>Полные маршруты</strong>

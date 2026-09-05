@@ -1226,7 +1226,9 @@ restores the retained request/tasks without duplication. Presence is collected
 before row validation, so one invalid source row cannot be retired as absent.
 
 The dispatcher warehouse selector presents that ownership explicitly: one root
-row followed by indented direct representatives, then unrelated routable roots.
+row followed by indented direct representatives, then every other authorized
+routable warehouse, including representatives outside the active planning group.
+Directory metadata adds labels but never grants workspace access.
 The selected warehouse controls the visible context, while `RoutePlan.warehouse_id`
 continues to control planning commands, depot labels and root-driver shift time.
 Consequently, opening a representative never relabels a root-depot departure as

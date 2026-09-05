@@ -12,6 +12,7 @@ import {
 import type { ReactNode } from 'react';
 import type { RoutePlan, WarehouseWorkspace } from '../domain/types';
 import { useUiStore, type LeftSection } from '../stores/ui-store';
+import logotypeUrl from '../assets/logotype.svg';
 
 const nav: Array<{ id: LeftSection; label: string; icon: ReactNode; count?: (workspace: WarehouseWorkspace, plan: RoutePlan | null) => number }> = [
   { id: 'WAREHOUSE', label: 'Склад', icon: <Box size={17} /> },
@@ -25,16 +26,25 @@ const nav: Array<{ id: LeftSection; label: string; icon: ReactNode; count?: (wor
   { id: 'SETTINGS', label: 'Настройки', icon: <Settings2 size={17} /> },
 ];
 
-export function Sidebar({ workspace, plan, pendingActionCount = 0, onNavigate }: {
+export function Sidebar({ workspace, plan, pendingActionCount = 0, onNavigate, onOpenWarehouse }: {
   workspace: WarehouseWorkspace;
   plan: RoutePlan | null;
   pendingActionCount?: number;
   onNavigate?: () => void;
+  onOpenWarehouse?: () => void;
 }) {
   const section = useUiStore((state) => state.section);
   const setSection = useUiStore((state) => state.setSection);
   return (
-    <aside className="sidebar" aria-label="Разделы логистического стенда">
+    <aside className="sidebar" aria-label="Разделы логистики">
+      <button type="button" className="sidebar__brand" aria-label="Blockbox — Логистика: открыть склад" onClick={() => {
+        setSection('WAREHOUSE');
+        onOpenWarehouse?.();
+        onNavigate?.();
+      }}>
+        <img src={logotypeUrl} width={32} height={32} alt="" />
+        <span className="sidebar__brand-copy"><strong translate="no">BLOCKBOX</strong><span>Логистика</span></span>
+      </button>
       <nav className="sidebar__nav">
         {nav.map((item) => {
           const count = item.id === 'PLAN_DAY' && pendingActionCount > 0

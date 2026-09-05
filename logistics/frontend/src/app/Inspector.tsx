@@ -3,6 +3,7 @@ import {
   CalendarPlus,
   CircleAlert,
   Edit3,
+  GripVertical,
   Plus,
   Trash2,
   MapPinPlus,
@@ -310,16 +311,9 @@ export function Inspector(props: InspectorProps) {
     && request.assigned_contractor_worker_id != null
   ));
   const beginResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return;
     event.preventDefault();
-    const resize = (pointerEvent: PointerEvent) => props.onInspectorWidthChange(window.innerWidth - pointerEvent.clientX - 12);
-    const stop = () => {
-      window.removeEventListener('pointermove', resize);
-      window.removeEventListener('pointerup', stop);
-      window.removeEventListener('pointercancel', stop);
-    };
-    window.addEventListener('pointermove', resize);
-    window.addEventListener('pointerup', stop);
-    window.addEventListener('pointercancel', stop);
+    event.currentTarget.setPointerCapture(event.pointerId);
   };
   const resizeWithKeyboard = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
@@ -380,10 +374,21 @@ export function Inspector(props: InspectorProps) {
       aria-valuemin={320}
       aria-valuemax={Math.floor(window.innerWidth / 2)}
       aria-valuenow={Math.round(props.inspectorWidth)}
+      title="Потяните, чтобы изменить ширину. Двойной щелчок — исходный размер."
       onPointerDown={beginResize}
+      onPointerMove={(event) => {
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          props.onInspectorWidthChange(window.innerWidth - event.clientX - 12);
+        }
+      }}
+      onPointerUp={(event) => {
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      }}
       onKeyDown={resizeWithKeyboard}
       onDoubleClick={() => props.onInspectorWidthChange(420)}
-    />
+    >
+      <GripVertical size={16} aria-hidden="true" />
+    </button>
     <div className="inspector__body">{props.validation && !props.validation.valid ? <><ErrorPanel title="План содержит ошибки" error={new Error(props.validation.errors.map((error) => validationMessageRu(error.code, error.message)).join('\n'))} /><div className="divider" /></> : null}{props.validation?.warnings.map((warning) => <div className="explanation" key={`${warning.code}-${warning.message}`}><CircleAlert size={12} /> {validationMessageRu(warning.code, warning.message)}</div>)}{content}</div>
   </aside>;
 }

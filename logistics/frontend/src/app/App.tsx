@@ -410,8 +410,13 @@ export function App() {
     knownWarehouses
       .filter((candidate) => !candidate.representative && candidate.routing_ready)
       .forEach(append);
+    // The planning group scopes a plan, not the warehouse switcher. Every
+    // authorized routing-ready representative remains an available workspace.
+    [...knownWarehouses, ...(warehousesQuery.data ?? [])]
+      .filter((candidate) => candidate.routing_ready)
+      .forEach(append);
     return options;
-  }, [workspace]);
+  }, [warehousesQuery.data, workspace]);
   useEffect(() => {
     if (!workspace) return;
     const planningGroupWarehouseIds = new Set(
@@ -1042,7 +1047,7 @@ export function App() {
     return (
       <div className="app-shell app-shell--bootstrap">
         <header className="topbar">
-          <div className="topbar__brand"><Button className="brand-mark" aria-label="Логистика" title="Логистика">L</Button></div>
+          <div className="topbar__brand"><img src={logotypeUrl} width={32} height={32} alt="" /><span className="sidebar__brand-copy"><strong translate="no">BLOCKBOX</strong><span>Логистика</span></span></div>
           <div />
           <div className="topbar__actions">
             <ThemeSwitch />
@@ -1099,7 +1104,6 @@ export function App() {
       <div className="workspace-chrome" ref={mapLayout.chromeRef}>
       <header className="topbar">
         <div className="topbar__brand">
-          <Button className="brand-mark" onClick={() => { setMode('PLAN_DAY'); setSection('WAREHOUSE'); setInspectorOpen(true); closeSlotPlanner(); setMapTool('SELECT'); setSelected({ kind: 'warehouse', id: warehouseId }); }} aria-label="Открыть склад" title="Открыть склад"><img src={logotypeUrl} width={26} height={25} alt="" /></Button>
           <div className="topbar__warehouse-selector" ref={warehouseSelectorRef}>
             <button
               type="button"
@@ -1125,14 +1129,14 @@ export function App() {
                       type="button"
                       role="option"
                       aria-selected={selectedWarehouse}
-                      className={`topbar__warehouse-option${selectedWarehouse ? ' topbar__warehouse-option--selected' : ''}`}
+                      className={`topbar__warehouse-option${selectedWarehouse ? ' topbar__warehouse-option--selected' : ''}${candidate.representative ? ' topbar__warehouse-option--representative' : ''}`}
                       key={candidate.id}
                       onClick={() => {
                         setWarehouseSelectorOpen(false);
                         activateWarehouse(candidate.id);
                       }}
                     >
-                      <span>{warehouseOptionLabel(candidate, mainWarehouse)}</span>
+                      <span>{warehouseOptionLabel(candidate, workspace.planning_group_warehouse_ids?.includes(candidate.id) ? mainWarehouse : null)}</span>
                     </button>
                   );
                 })}
@@ -1173,6 +1177,7 @@ export function App() {
           plan={plan}
           pendingActionCount={planningDayStatusQuery.data?.pending_action_count ?? 0}
           onNavigate={() => { closeSlotPlanner(); setInspectorOpen(true); }}
+          onOpenWarehouse={() => { setMode('PLAN_DAY'); setMapTool('SELECT'); setSelected({ kind: 'warehouse', id: warehouseId }); }}
         />
         <MapCanvas
           workspace={workspace}
@@ -1197,6 +1202,8 @@ export function App() {
           cameraPadding={mapLayout.padding}
           warehouseKinds={warehouseKindsQuery.isError ? undefined : warehouseKindsQuery.data}
           warehouseKindsFailed={warehouseKindsQuery.isError}
+          warehouseKindsLoading={warehouseKindsQuery.isFetching}
+          onRetryWarehouseKinds={() => void warehouseKindsQuery.refetch()}
         />
         {inspectorOpen && !slotPlannerOpen ? <Inspector
           workspace={workspace} plan={plan} simulation={simulationState} validation={validation} busy={busy}

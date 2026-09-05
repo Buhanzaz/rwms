@@ -5,7 +5,7 @@ describe('floating map layout', () => {
   it('reserves only the visible desktop panels', () => {
     const open = mapLayout(1600, 1000, 64, 420, true, false);
     const closed = mapLayout(1600, 1000, 64, 420, false, false);
-    expect(open.padding).toEqual({ top: 148, bottom: 36, left: 256, right: 456 });
+    expect(open.padding).toEqual({ top: 148, bottom: 36, left: 284, right: 456 });
     expect(closed.padding.right).toBe(24);
     expect(open.style['--panel-top' as keyof typeof open.style]).toBe('88px');
   });

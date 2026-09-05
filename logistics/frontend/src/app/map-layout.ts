@@ -7,7 +7,7 @@ export function mapLayout(width: number, height: number, chromeHeight: number, i
   const mobile = width <= 760;
   const top = chromeHeight + 24;
   const bottom = (mobile ? 72 : 12) + (simulation ? simulationHeight + 12 : 0);
-  const sidebarWidth = mobile ? 0 : width <= 1250 ? 64 : 220;
+  const sidebarWidth = mobile ? 0 : width <= 1250 ? 64 : 248;
   const panelWidth = mobile ? width - 24 : Math.min(inspectorWidth, Math.floor(width / 2));
   const panelTop = mobile ? Math.max(top, Math.round(height * .45)) : top;
   const controlsBottom = mobile && panelOpen ? height - panelTop + 12 : bottom;

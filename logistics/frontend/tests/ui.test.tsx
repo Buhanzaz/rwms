@@ -109,7 +109,9 @@ describe('application states', () => {
     expect(warehouseSelector).toHaveTextContent('Склад СПб');
     expect(warehouseSelector).toHaveTextContent('Europe/Moscow');
     expect(warehouseSelector).toHaveAttribute('aria-expanded', 'false');
-    const warehouseHome = screen.getByRole('button', { name: 'Открыть склад' });
+    const warehouseHome = screen.getByRole('button', { name: 'Blockbox — Логистика: открыть склад' });
+    expect(within(warehouseHome).getByText('BLOCKBOX')).toBeVisible();
+    expect(within(warehouseHome).getByText('Логистика')).toBeVisible();
     expect(screen.queryByText('RWMS · Логистика')).not.toBeInTheDocument();
     expect(screen.queryByRole('combobox', { name: 'Текущий склад' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Добавить склад' })).not.toBeInTheDocument();
@@ -170,11 +172,18 @@ describe('application states', () => {
       name: 'Другой основной склад',
       city: 'Другой город',
     });
+    const otherRepresentative = warehouseFixture({
+      id: 'warehouse-other-representative',
+      external_warehouse_id: '44444444-4444-4444-8444-444444444444',
+      name: 'Склад Тверь',
+      city: 'Тверь',
+      representative: true,
+    });
     const rootWorkspace = workspaceFixture({
       warehouse: mainWarehouse,
       planning_root_warehouse_id: mainWarehouse.id,
       planning_group_warehouse_ids: [mainWarehouse.id, representativeWarehouse.id],
-      warehouses: [otherRoot, representativeWarehouse, mainWarehouse],
+      warehouses: [otherRoot, otherRepresentative, representativeWarehouse, mainWarehouse],
       requests: [],
       plans: [],
     });
@@ -183,7 +192,7 @@ describe('application states', () => {
       const url = requestUrl(input);
       let body: unknown = null;
       if (url.endsWith('/warehouses/available')) body = [];
-      else if (url.endsWith('/warehouses')) body = [mainWarehouse, representativeWarehouse, otherRoot];
+      else if (url.endsWith('/warehouses')) body = [mainWarehouse, representativeWarehouse, otherRoot, otherRepresentative];
       else if (url.includes(`/warehouses/${mainWarehouse.id}/workspace`)) body = rootWorkspace;
       else if (url.includes(`/warehouses/${representativeWarehouse.id}/workspace`)) body = representativeWorkspace;
       else if (url.includes(`/warehouses/${mainWarehouse.id}/plans/ensure`)) body = null;
@@ -212,6 +221,7 @@ describe('application states', () => {
       'Склад Основной город',
       'Представительский склад Региональный город / Основной город',
       'Склад Другой город',
+      'Представительский склад Тверь',
     ]);
     expect(options[0]).toHaveAttribute('aria-selected', 'true');
 
@@ -219,13 +229,14 @@ describe('application states', () => {
     expect(screen.queryByRole('listbox', { name: 'Склад логистической группы' })).not.toBeInTheDocument();
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
     await user.click(trigger);
-    await user.click(within(screen.getByRole('listbox', { name: 'Склад логистической группы' })).getByRole('option', { name: /Представительский склад/ }));
+    await user.click(within(screen.getByRole('listbox', { name: 'Склад логистической группы' })).getByRole('option', { name: /Представительский склад Региональный город/ }));
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Склад логистической группы' })).toHaveTextContent('Представительский склад Региональный город / Основной город'));
     expect(screen.getByRole('button', { name: 'Склад логистической группы' })).toHaveTextContent('Asia/Novosibirsk');
     expect(fetchMock.mock.calls.map(([input]) => requestUrl(input))).toContainEqual(expect.stringContaining(`/warehouses/${representativeWarehouse.id}/workspace`));
     await user.click(screen.getByRole('button', { name: 'Склад логистической группы' }));
-    expect(within(screen.getByRole('listbox', { name: 'Склад логистической группы' })).getByRole('option', { name: /Представительский склад/ })).toHaveAttribute('aria-selected', 'true');
+    expect(within(screen.getByRole('listbox', { name: 'Склад логистической группы' })).getByRole('option', { name: /Представительский склад Региональный город/ })).toHaveAttribute('aria-selected', 'true');
+    expect(within(screen.getByRole('listbox', { name: 'Склад логистической группы' })).getByRole('option', { name: 'Представительский склад Тверь' })).toBeEnabled();
     await user.click(screen.getByRole('button', { name: 'Дата планирования' }));
     expect(screen.queryByRole('listbox', { name: 'Склад логистической группы' })).not.toBeInTheDocument();
     expect(window.localStorage.getItem('rwms:logistics:last-warehouse')).toBe(representativeWarehouse.id);

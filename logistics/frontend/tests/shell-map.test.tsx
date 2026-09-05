@@ -218,8 +218,11 @@ describe('warehouse selection on the shared map', () => {
     expect(mapState.activeMap).toBe(originalMap);
     expect(mapState.setPadding).toHaveBeenLastCalledWith({ ...padding, right: 24 });
     expect(mapState.markers.at(-1)?.textContent).toBe('?');
-    view.rerender(<MapCanvas {...commonProps} warehouseKindsFailed selected={{ kind: 'warehouse', id: targetWarehouse.id }} />);
+    const onRetryWarehouseKinds = vi.fn();
+    view.rerender(<MapCanvas {...commonProps} warehouseKindsFailed onRetryWarehouseKinds={onRetryWarehouseKinds} selected={{ kind: 'warehouse', id: targetWarehouse.id }} />);
     expect(screen.getByRole('status')).toHaveTextContent('Типы складов временно недоступны');
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить загрузку типов' }));
+    expect(onRetryWarehouseKinds).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole('button', { name: `Перейти к складу ${targetWarehouse.name}` }));
     expect(onWarehouseActivate).toHaveBeenCalledWith(targetWarehouse.id);
   });

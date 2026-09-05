@@ -634,7 +634,8 @@ retains its physical route origin; exact link exclusions, allowed dates and
 recurring weekdays are applied for the planning date. Selecting a representative
 changes the visible map context without creating a duplicate day plan.
 The header selector renders the current root first, its direct representatives
-as indented rows, and then the other routable roots. Selecting a representative
+as indented rows, and then all other authorized routable warehouses, including
+representatives outside the current planning group. Selecting a representative
 keeps planning commands on the root while opening that warehouse's own context.
 Depot stops and driver timelines are always labelled from the persisted plan's
 `warehouse_id`, so opening a representative cannot relabel a physical root-depot
