@@ -84,6 +84,65 @@ it("keeps an active preview valid until its card releases the lease", async () =
   expect(dispose).toHaveBeenCalledOnce()
 })
 
+it("pins a newly loaded preview before trimming and trims again on release", async () => {
+  const firstDispose = vi.fn()
+  const secondDispose = vi.fn()
+  const first = await acquireMediaPreview("first", async () => ({
+    url: "blob:first",
+    contentType: "image/webp",
+    size: 80 * 1024 * 1024,
+    dispose: firstDispose,
+  }))
+  const second = await acquireMediaPreview("second", async () => ({
+    url: "blob:second",
+    contentType: "image/webp",
+    size: 80 * 1024 * 1024,
+    dispose: secondDispose,
+  }))
+
+  expect(firstDispose).not.toHaveBeenCalled()
+  expect(secondDispose).not.toHaveBeenCalled()
+  expect(getCachedMediaPreviewUrl("second")).toBe(second.url)
+  first.release()
+  expect(firstDispose).toHaveBeenCalledOnce()
+  expect(secondDispose).not.toHaveBeenCalled()
+  second.release()
+})
+
+it("retains a long warehouse scroll beyond 512 small photos without downloading them again", async () => {
+  const loader = vi.fn(async () => ({
+    url: "blob:small",
+    contentType: "image/webp",
+    size: 16 * 1024,
+    dispose: vi.fn(),
+  }))
+  for (let index = 0; index < 700; index += 1) {
+    const lease = await acquireMediaPreview(`small-${index}`, loader)
+    lease.release()
+  }
+  const revisited = await acquireMediaPreview("small-0", loader)
+  expect(loader).toHaveBeenCalledTimes(700)
+  expect(revisited.url).toBe("blob:small")
+  revisited.release()
+})
+
+it("deduplicates concurrent preview requests", async () => {
+  const dispose = vi.fn()
+  const loader = vi.fn(async () => ({
+    url: "blob:shared",
+    contentType: "image/webp",
+    size: 42,
+    dispose,
+  }))
+  const leases = await Promise.all([
+    acquireMediaPreview("same", loader),
+    acquireMediaPreview("same", loader),
+  ])
+  expect(loader).toHaveBeenCalledOnce()
+  leases.forEach((lease) => lease.release())
+  expect(dispose).not.toHaveBeenCalled()
+})
+
 it("retries a preview that was invalidated while its prior request was in flight", async () => {
   type Preview = {
     url: string

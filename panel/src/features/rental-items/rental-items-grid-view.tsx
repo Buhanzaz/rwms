@@ -1,10 +1,5 @@
 /* eslint-disable react-hooks/incompatible-library -- TanStack Virtual returns imperative helpers that React Compiler intentionally skips. */
-import {
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react"
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 
 import { PhotoCarousel } from "@/components/media/photo-carousel"
@@ -46,12 +41,16 @@ function RentalItemCardPhoto({
   projection,
   coverAvailability = "available",
   onOpenPhotos,
+  selectedPhotoId,
+  onSelectPhoto,
 }: {
   item: RentalItemDto
   accessToken: string
   projection: CabinCoverProjection | undefined
   coverAvailability: RentalItemCoverAvailability
   onOpenPhotos: (item: RentalItemDto) => void
+  selectedPhotoId: string | undefined
+  onSelectPhoto: (photoId: string) => void
 }) {
   const servicePhotoResult = useRentalItemCardPhotos({
     accessToken,
@@ -109,6 +108,14 @@ function RentalItemCardPhoto({
       className="h-full w-full"
       fit="cover"
       controlsVisibility="mobile-visible"
+      activeIndex={Math.max(
+        0,
+        servicePhotos.findIndex((photo) => photo.id === selectedPhotoId)
+      )}
+      onActiveIndexChange={(index) => {
+        const photo = servicePhotos[index]
+        if (photo) onSelectPhoto(photo.id)
+      }}
       onCenterClick={() => onOpenPhotos(item)}
     />
   )
@@ -165,6 +172,11 @@ export function RentalItemsGridView({
   renderItemActions,
 }: RentalItemsGridViewProps) {
   const parentRef = useRef<HTMLDivElement | null>(null)
+  // Virtual rows unmount outside the viewport; selection belongs to the grid,
+  // keyed by media identity so server reordering cannot switch the photograph.
+  const [selectedPhotos, setSelectedPhotos] = useState<Record<string, string>>(
+    {}
+  )
   const [dimensions, setDimensions] = useState({
     width: DEFAULT_GRID_WIDTH,
     height: DEFAULT_GRID_HEIGHT,
@@ -319,7 +331,7 @@ export function RentalItemsGridView({
       ref={parentRef}
       data-grid-format={`${columnCount}x${visibleRowCount}`}
       className={cn(
-        "min-w-0 overflow-auto [scrollbar-gutter:stable]",
+        "min-w-0 [scrollbar-gutter:stable] overflow-auto",
         autoHeight ? "" : "min-h-0 flex-1"
       )}
       style={autoHeight ? { height: `${gridHeight}px` } : undefined}
@@ -359,6 +371,17 @@ export function RentalItemsGridView({
                         projection={mediaCovers.get(item.id)}
                         coverAvailability={coverAvailability}
                         onOpenPhotos={onOpenPhotos}
+                        selectedPhotoId={
+                          selectedPhotos[`${item.warehouseId}:${item.id}`]
+                        }
+                        onSelectPhoto={(photoId) =>
+                          setSelectedPhotos((current) => {
+                            const key = `${item.warehouseId}:${item.id}`
+                            return current[key] === photoId
+                              ? current
+                              : { ...current, [key]: photoId }
+                          })
+                        }
                       />
                       {renderPhotoOverlay?.(item)}
                     </div>

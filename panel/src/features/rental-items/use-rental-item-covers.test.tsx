@@ -114,6 +114,31 @@ afterEach(() => {
 })
 
 describe("useRentalItemCardPhotos", () => {
+  it("renders cached photos immediately on remount without repeating byte requests", async () => {
+    const dispose = vi.fn()
+    media.createVariantObjectUrl.mockImplementation(
+      async (_token: string, _owner: unknown, requested: MediaVariant) => ({
+        url: `blob:${requested.contentPath}`,
+        size: 1024,
+        dispose,
+      })
+    )
+    const first = render(<Harness />)
+    await waitFor(() =>
+      expect(screen.getByTestId("availability").textContent).toBe("available")
+    )
+    first.unmount()
+    render(<Harness />)
+    expect(screen.getByTestId("photo-ids").textContent).toBe(
+      `${COVER_ID},${SECOND_ID}`
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId("availability").textContent).toBe("available")
+    )
+    expect(media.createVariantObjectUrl).toHaveBeenCalledTimes(2)
+    expect(dispose).not.toHaveBeenCalled()
+  })
+
   it("loads the explicit cover first and preserves the remaining preview order", async () => {
     media.createVariantObjectUrl.mockImplementation(
       async (_token: string, _owner: unknown, requested: MediaVariant) => ({

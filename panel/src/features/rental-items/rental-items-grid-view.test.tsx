@@ -7,10 +7,12 @@ import type { CabinCoverProjection } from "@/features/media/media-service"
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 
 const coverUrl = vi.hoisted(() => vi.fn())
+const virtualRows = vi.hoisted(() => ({ visible: true }))
 
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: () => ({
-    getVirtualItems: () => [{ index: 0, key: "row-0", start: 0 }],
+    getVirtualItems: () =>
+      virtualRows.visible ? [{ index: 0, key: "row-0", start: 0 }] : [],
     getTotalSize: () => 240,
     measure: vi.fn(),
   }),
@@ -26,6 +28,8 @@ vi.mock("@/components/media/photo-carousel", () => ({
     imageVariant,
     photoCount,
     controlsVisibility,
+    activeIndex: controlledActiveIndex,
+    onActiveIndexChange,
   }: {
     photos: Array<
       | string
@@ -37,8 +41,15 @@ vi.mock("@/components/media/photo-carousel", () => ({
     imageVariant: string
     photoCount: number
     controlsVisibility: string
+    activeIndex?: number
+    onActiveIndexChange?: (index: number) => void
   }) => {
-    const [activeIndex, setActiveIndex] = useState(0)
+    const [internalIndex, setInternalIndex] = useState(0)
+    const activeIndex = controlledActiveIndex ?? internalIndex
+    const setActiveIndex = (index: number) => {
+      setInternalIndex(index)
+      onActiveIndexChange?.(index)
+    }
     const photo = photos[activeIndex]
     const src =
       typeof photo === "string"
@@ -59,16 +70,14 @@ vi.mock("@/components/media/photo-carousel", () => ({
               aria-label="Предыдущее фото"
               onClick={() =>
                 setActiveIndex(
-                  (current) => (current - 1 + photos.length) % photos.length
+                  (activeIndex - 1 + photos.length) % photos.length
                 )
               }
             />
             <button
               type="button"
               aria-label="Следующее фото"
-              onClick={() =>
-                setActiveIndex((current) => (current + 1) % photos.length)
-              }
+              onClick={() => setActiveIndex((activeIndex + 1) % photos.length)}
             />
           </>
         ) : null}
@@ -125,6 +134,7 @@ beforeAll(() => {
 afterEach(() => {
   cleanup()
   coverUrl.mockReset()
+  virtualRows.visible = true
 })
 
 function renderGrid({
@@ -150,6 +160,42 @@ function renderGrid({
 }
 
 describe("RentalItemsGridView photo covers", () => {
+  it("retains the selected photo after virtual row remount and server reordering", async () => {
+    const user = userEvent.setup()
+    const photos = [
+      { id: "first", generation: 1, url: "blob:first" },
+      { id: "second", generation: 1, url: "blob:second" },
+    ]
+    coverUrl.mockReturnValue({ photos, availability: "available" })
+    const grid = () => (
+      <RentalItemsGridView
+        items={[item]}
+        gridFormat={{ columns: 1, rows: 1 }}
+        accessToken="read-token"
+        mediaCovers={new Map()}
+        onOpenPhotos={vi.fn()}
+        onOpenItem={vi.fn()}
+      />
+    )
+    const view = render(grid())
+    await user.click(screen.getByRole("button", { name: "Следующее фото" }))
+    expect(screen.getByRole("img").getAttribute("src")).toBe("blob:second")
+
+    virtualRows.visible = false
+    view.rerender(grid())
+    expect(screen.queryByRole("img")).toBeNull()
+    virtualRows.visible = true
+    view.rerender(grid())
+    expect(screen.getByRole("img").getAttribute("src")).toBe("blob:second")
+
+    coverUrl.mockReturnValue({
+      photos: [...photos].reverse(),
+      availability: "available",
+    })
+    view.rerender(grid())
+    expect(screen.getByRole("img").getAttribute("src")).toBe("blob:second")
+  })
+
   it("renders controls over the photo without changing the shared card layout", () => {
     coverUrl.mockReturnValue({ photos: [], availability: "available" })
 

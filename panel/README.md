@@ -199,6 +199,12 @@ contexts and screens are usable.
   Their driver-board cards load the authoritative repair plan only when
   expanded and render its ordered queues as separate work and material columns
   with exact quantities and units.
+- Warehouse cards retain authenticated SMALL preview Blob URLs in a bounded
+  session cache (up to 4096 entries / 128 MiB, excluding currently leased
+  overflow). Scrolling virtual rows back into view reuses these bytes and
+  preserves the selected photo by media ID. Logout, changed principal/grants,
+  and relevant media invalidations still discard protected cache data; no
+  private photo bytes are persisted to disk or treated as offline authority.
 - Shared owner-media surfaces show READY images first and READY videos through
   their compressed MP4 `PLAYBACK` variant with native controls. JPEG, PNG,
   WebP, MP4, and WebM can be added. A selected local original is shown

@@ -18,10 +18,12 @@ export type MediaPreviewLease = Readonly<{
   release: () => void
 }>
 
-const MAX_ENTRIES = 512
+const MAX_ENTRIES = 4096
+const MAX_BYTES = 128 * 1024 * 1024
 const entries = new Map<string, CacheEntry>()
 const pending = new Map<string, PendingEntry>()
 let cacheRevision = 0
+let cachedBytes = 0
 
 /** Keeps decoded preview Blob URLs until an invalidation, logout, or size cap. */
 export async function acquireMediaPreview(
@@ -42,6 +44,7 @@ export async function acquireMediaPreview(
         // Existing cards keep a lease until React replaces their projection,
         // but a newly mounted card must never receive an invalidated URL.
         entries.delete(key)
+        cachedBytes -= entry.objectUrl.size
       }
       entry = undefined
     }
@@ -73,7 +76,7 @@ export async function acquireMediaPreview(
             evicted: false,
           }
           entries.set(key, entry)
-          trim()
+          cachedBytes += objectUrl.size
         } else if (entry.objectUrl !== objectUrl) {
           objectUrl.dispose()
         }
@@ -85,6 +88,9 @@ export async function acquireMediaPreview(
 
     entry.references += 1
     entry.lastUsedAt = Date.now()
+    // Pin the new URL before enforcing the budget: visible cards may exceed
+    // the idle-cache limit, but must never receive an already revoked URL.
+    trim()
     let released = false
     return {
       url: entry.objectUrl.url,
@@ -94,6 +100,7 @@ export async function acquireMediaPreview(
         entry!.references = Math.max(0, entry!.references - 1)
         entry!.lastUsedAt = Date.now()
         if (entry!.evicted && entry!.references === 0) disposeEntry(entry!)
+        trim()
       },
     }
   }
@@ -166,6 +173,7 @@ export function clearMediaPreviewCache() {
   cacheRevision += 1
   for (const entry of entries.values()) disposeEntry(entry)
   entries.clear()
+  cachedBytes = 0
   for (const pendingEntry of pending.values()) pendingEntry.invalidated = true
   pending.clear()
 }
@@ -183,7 +191,10 @@ function markEvicted(entry: CacheEntry) {
 }
 
 function disposeEntry(entry: CacheEntry) {
-  if (entries.get(entry.key) === entry) entries.delete(entry.key)
+  if (entries.get(entry.key) === entry) {
+    entries.delete(entry.key)
+    cachedBytes -= entry.objectUrl.size
+  }
   entry.objectUrl.dispose()
 }
 
@@ -192,11 +203,15 @@ function sweep() {
 }
 
 function trim() {
-  if (entries.size <= MAX_ENTRIES) return
+  if (entries.size <= MAX_ENTRIES && cachedBytes <= MAX_BYTES) return
   const idle = [...entries.values()]
     .filter((entry) => entry.references === 0)
     .sort((left, right) => left.lastUsedAt - right.lastUsedAt)
-  while (entries.size > MAX_ENTRIES && idle.length > 0) {
-    disposeEntry(idle.shift()!)
+  while (
+    (entries.size > MAX_ENTRIES || cachedBytes > MAX_BYTES) &&
+    idle.length > 0
+  ) {
+    const entry = idle.shift()!
+    disposeEntry(entry)
   }
 }
