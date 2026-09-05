@@ -23,8 +23,8 @@ import dev.buhanzaz.rwms.client.data.CustomerCabin
 import dev.buhanzaz.rwms.client.data.CustomerRouteProfile
 import dev.buhanzaz.rwms.client.data.DeliverySlot
 import dev.buhanzaz.rwms.client.data.DeliverySlotKind
-import java.util.concurrent.atomic.AtomicReference
 import java.time.Instant
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -451,7 +451,7 @@ class CustomerBookingLifecycleScreensTest {
         composeRule.onNodeWithTag("cart-cabin-cabin-a").assertExists()
         composeRule.onNodeWithText("12 000 ₽/мес.").assertExists()
         composeRule.onNodeWithTag("cart-cabin-photo-placeholder").assertExists()
-        composeRule.onNodeWithText("Выбрано: 1").assertExists()
+        composeRule.onNodeWithText("Выбрано: 1").assertDoesNotExist()
         composeRule.onNodeWithText("№ БК-1").assertExists()
         composeRule.onNodeWithText("Блок-контейнер").assertExists()
         composeRule.onNodeWithText("Светлый дуб").assertExists()

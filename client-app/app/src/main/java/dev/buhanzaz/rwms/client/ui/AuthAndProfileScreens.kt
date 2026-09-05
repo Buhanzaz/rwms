@@ -25,7 +25,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -92,7 +91,12 @@ fun ProfileFormScreen(
         CustomerEntityType.LEGAL -> !draft.companyName.isNullOrBlank()
     }
     Scaffold(
-        topBar = { TopAppBar(title = { Text(if (existing == null) "Данные клиента" else "Профиль") }) },
+        topBar = {
+            CustomerTopBar(
+                title = if (existing == null) "Данные клиента" else "Профиль",
+                onBack = onBack,
+            )
+        },
     ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 20.dp).testTag("profile-screen"),
@@ -201,12 +205,7 @@ fun ProfileFormScreen(
                     modifier = Modifier.fillMaxWidth().testTag("profile-save"),
                     enabled = !busy && valid && (existing == null || draft != existing),
                 ) { Text(if (existing == null) "Продолжить" else "Сохранить") }
-                onBack?.let { back ->
-                    OutlinedButton(onClick = back, modifier = Modifier.fillMaxWidth(), enabled = !busy) {
-                        Text("Назад")
-                    }
-                }
-                Spacer(Modifier.height(32.dp))
+                Spacer(Modifier.height(100.dp))
             }
         }
     }
@@ -264,17 +263,19 @@ fun WarehouseScreen(
     warehouses: List<CustomerWarehouse>,
     busy: Boolean,
     onSelect: (CustomerWarehouse, Boolean) -> Unit,
-    onLogout: () -> Unit,
+    onMenu: () -> Unit,
+    onProfile: () -> Unit,
+    avatarUrl: String? = null,
 ) {
     var rememberWarehouse by rememberSaveable { mutableStateOf(false) }
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Выберите склад") }) },
+        topBar = { CustomerTopBar("Выбор города", onMenu, onProfile, avatarUrl = avatarUrl) },
     ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding).padding(20.dp).testTag("warehouse-screen"),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item { Text("Показываем склады, которые принимают клиентские бронирования.") }
+            item { Text("Выберите город, чтобы увидеть доступные бытовки.") }
             item {
                 Row(
                     modifier = Modifier
@@ -294,7 +295,7 @@ fun WarehouseScreen(
                         onCheckedChange = null,
                         enabled = !busy,
                     )
-                    Text("Запомнить выбранный склад")
+                    Text("Запомнить выбранный город")
                 }
             }
             items(warehouses, key = CustomerWarehouse::id) { warehouse ->
@@ -304,16 +305,15 @@ fun WarehouseScreen(
                     enabled = !busy,
                 ) {
                     Column(Modifier.fillMaxWidth()) {
-                        Text(warehouse.name, fontWeight = FontWeight.SemiBold)
-                        warehouse.address?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                        Text(warehouse.customerCityLabel(), fontWeight = FontWeight.SemiBold)
+                        if (warehouses.count { it.customerCityLabel() == warehouse.customerCityLabel() } > 1) {
+                            Text(warehouse.address ?: warehouse.name, style = MaterialTheme.typography.bodySmall)
+                        }
                     }
                 }
             }
             if (warehouses.isEmpty()) {
-                item { Text("Нет доступных складов", color = MaterialTheme.colorScheme.error) }
-            }
-            item {
-                OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth()) { Text("Выйти") }
+                item { Text("Нет доступных городов", color = MaterialTheme.colorScheme.error) }
             }
         }
     }

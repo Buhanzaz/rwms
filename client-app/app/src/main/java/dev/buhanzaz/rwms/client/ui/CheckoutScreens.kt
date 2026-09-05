@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,6 +22,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -85,18 +85,6 @@ fun CartScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(top = 20.dp, bottom = 32.dp),
         ) {
-            item {
-                Column(
-                    Modifier.fillMaxWidth().widthIn(max = 1_120.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text("Выбрано: ${cartCabins.size}", style = MaterialTheme.typography.titleLarge)
-                    Text(
-                        "Укажите срок аренды и дополнительные позиции для каждой бытовки.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
             items(cartCabins, key = CustomerCabin::unitId) { cabin ->
                 val serverEquipment = state.cart?.equipment.orEmpty()
                     .filter { it.cabinUnitId == cabin.unitId }
@@ -189,15 +177,15 @@ private fun CartCabinCard(
             .fillMaxWidth()
             .widthIn(max = 1_120.dp)
             .testTag("cart-cabin-${cabin.unitId}"),
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Column(Modifier.fillMaxWidth()) {
             CartCabinPhoto(
                 cabin = cabin,
-                modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                modifier = Modifier.fillMaxWidth().height(160.dp),
             )
             Column(
                 modifier = Modifier.padding(16.dp),
@@ -230,12 +218,12 @@ private fun CartCabinCard(
                             )
                         }
                     }
-                    OutlinedButton(
+                    IconButton(
                         onClick = onRemove,
                         enabled = !busy,
                         modifier = Modifier.testTag("cart-remove-${cabin.unitId}"),
                     ) {
-                        Text("Убрать")
+                        Icon(Icons.Outlined.DeleteOutline, contentDescription = "Убрать бытовку ${cabin.accountingNo}")
                     }
                 }
                 CartCabinFacts(cabin)
@@ -538,6 +526,7 @@ fun BookingsScreen(
     ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp).testTag("bookings-screen"),
+            contentPadding = PaddingValues(top = 8.dp, bottom = 100.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {

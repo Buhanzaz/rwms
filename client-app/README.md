@@ -99,12 +99,13 @@ Jetpack Compose Material 3 and Navigation 3 provide mutually exclusive
 signed-out and signed-in graphs. Every newly registered customer completes an
 individual profile. Existing individual/legal profile kinds remain immutable;
 the drawer exposes `Доступ для юрлиц` as an intentionally non-functional future-access placeholder.
-The signed-in flow then presents warehouse selection as its own step with an optional
-`Remember selected warehouse` checkbox, and only then pages through server-returned free cabins.
-The catalog header keeps the selected warehouse geometrically centered between fixed menu and
-profile actions. Tapping it grows the header downward with other available warehouses without
-moving that fixed row, then creates or resumes the corresponding warehouse-bound inquiry. The
-catalog keeps its filter action in a surface directly below the fixed header while cards scroll.
+The signed-in flow presents city selection with an optional `Remember selected city` checkbox before
+loading server-returned free cabins. Menu and profile remain available at this step. City labels come
+from the warehouse service's `city` field; warehouses in the same city retain separate identities and
+show an address/name to distinguish them. The inset glass header centers the city between menu and
+profile actions. Tapping it expands the alternatives below the fixed row, then creates or resumes the
+selected warehouse's inquiry. A background-free filter action expands a two-column facet grid directly
+below the header while cabin cards scroll.
 It filters by type, finish, dimensions, category, linoleum and characteristics, but has no text
 search. A selected type narrows dimensions to the server-returned `typeDimensions` relation and
 clears an incompatible size before the request. Cabin cards lead with an unframed accounting
@@ -220,8 +221,11 @@ not rendered as zero. The transport and recovery behavior is owned by
 the presentation policy is in
 [`CustomerPolicies.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerPolicies.kt).
 
-Phone layouts use bottom navigation and larger windows use a navigation rail;
-the focused delivery flow hides both. The full-height drawer exposes a single one-tap explicit
+Navigation uses the drawer with the BLOCK BOX logo on all window sizes. A floating cart shortcut at
+the bottom right of catalog, orders and profile shows the selected cabin count when nonzero. The cart
+and delivery flow have no persistent shortcut. Forward, back and predictive-back transitions are
+explicitly defined; returning from profile restores the preceding screen. The full-height drawer
+exposes a single one-tap explicit
 light/dark appearance toggle; system and battery appearance sources are not supported. Screens and full-screen dialogs are
 edge-to-edge and IME-aware. Customer commands are serialized, 409 reloads
 authoritative cart state, and checkout is reconciled with the durable booking

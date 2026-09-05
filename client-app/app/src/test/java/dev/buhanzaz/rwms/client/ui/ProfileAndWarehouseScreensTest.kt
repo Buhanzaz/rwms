@@ -134,13 +134,14 @@ class ProfileAndWarehouseScreensTest {
                         selectedId = selected.id
                         remembered = remember
                     },
-                    onLogout = {},
+                    onMenu = {},
+                    onProfile = {},
                 )
             }
         }
 
         composeRule.onNodeWithTag("remember-warehouse").performClick()
-        composeRule.onNodeWithText("СПБ").performClick()
+        composeRule.onNodeWithText("Санкт-Петербург").performClick()
 
         composeRule.runOnIdle {
             assertThat(selectedId).isEqualTo("warehouse-spb")

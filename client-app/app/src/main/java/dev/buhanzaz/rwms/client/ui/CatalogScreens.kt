@@ -1,6 +1,10 @@
 package dev.buhanzaz.rwms.client.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -14,10 +18,10 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -28,9 +32,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CheckCircle
@@ -44,8 +51,9 @@ import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -56,7 +64,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -82,7 +89,7 @@ import dev.buhanzaz.rwms.client.data.CustomerWarehouse
 import java.util.Locale
 
 /**
- * Shared customer header with an optional warehouse selector and a circular profile affordance.
+ * Shared glass header with an optional city selector and a circular profile affordance.
  *
  * Generic screens keep a static [title]. The catalog supplies [selectedWarehouse], [warehouses]
  * and [onWarehouseSelected]. Expanding alternatives grows the header below a fixed row whose
@@ -92,128 +99,142 @@ import java.util.Locale
 @Composable
 fun CustomerTopBar(
     title: String,
-    onMenu: () -> Unit,
-    onProfile: () -> Unit,
+    onMenu: (() -> Unit)? = null,
+    onProfile: (() -> Unit)? = null,
     selectedWarehouse: CustomerWarehouse? = null,
     warehouses: List<CustomerWarehouse> = emptyList(),
     onWarehouseSelected: ((CustomerWarehouse) -> Unit)? = null,
     avatarUrl: String? = null,
     avatarInitials: String? = null,
+    onBack: (() -> Unit)? = null,
 ) {
     var warehouseMenuExpanded by remember(selectedWarehouse?.id, warehouses) { mutableStateOf(false) }
     val alternativeWarehouses = remember(selectedWarehouse?.id, warehouses) {
         warehouses.filterNot { it.id == selectedWarehouse?.id }
     }
-    Surface(
-        modifier = Modifier.fillMaxWidth().testTag("customer-header"),
-        color = MaterialTheme.colorScheme.surface,
-        shadowElevation = 1.dp,
-    ) {
-        Column(Modifier.fillMaxWidth().statusBarsPadding()) {
-            Box(Modifier.fillMaxWidth().height(64.dp)) {
-                IconButton(
-                    onClick = onMenu,
-                    modifier = Modifier.align(Alignment.CenterStart).testTag("menu-button"),
-                ) {
-                    Icon(Icons.Default.Menu, contentDescription = "Открыть меню")
-                }
-                Box(
-                    modifier = Modifier.align(Alignment.Center).widthIn(max = 420.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (selectedWarehouse == null || onWarehouseSelected == null) {
-                        Text(
-                            title,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(horizontal = 56.dp),
+    val shape = RoundedCornerShape(16.dp)
+    Box(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Surface(
+            modifier = Modifier.fillMaxWidth().figmaButtonShadow(shape).testTag("customer-header"),
+            shape = shape,
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Column(Modifier.fillMaxWidth()) {
+                Box(Modifier.fillMaxWidth().height(60.dp)) {
+                    if (onBack != null || onMenu != null) IconButton(
+                        onClick = onBack ?: checkNotNull(onMenu),
+                        modifier = Modifier.align(Alignment.CenterStart).padding(start = 4.dp)
+                            .testTag(if (onBack == null) "menu-button" else "header-back"),
+                    ) {
+                        Icon(
+                            if (onBack == null) Icons.Default.Menu else Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = if (onBack == null) "Открыть меню" else "Назад",
                         )
-                    } else {
-                        TextButton(
-                            onClick = { warehouseMenuExpanded = !warehouseMenuExpanded },
-                            enabled = alternativeWarehouses.isNotEmpty(),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                            modifier = Modifier.testTag("warehouse-selector"),
-                        ) {
+                    }
+                    Box(
+                        modifier = Modifier.align(Alignment.Center).fillMaxWidth().padding(horizontal = 54.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (selectedWarehouse == null || onWarehouseSelected == null) {
                             Text(
-                                "Склад: ${selectedWarehouse.name}",
-                                color = MaterialTheme.colorScheme.onSurface,
-                                fontWeight = FontWeight.SemiBold,
+                                title,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 textAlign = TextAlign.Center,
+                                style = MaterialTheme.typography.titleMedium,
                             )
-                            if (alternativeWarehouses.isNotEmpty()) {
-                                Icon(
-                                    Icons.Default.ArrowDropDown,
-                                    contentDescription = "Выбрать другой склад",
-                                    tint = MaterialTheme.colorScheme.onSurface,
-                                )
-                            }
-                        }
-                    }
-                }
-                IconButton(
-                    onClick = onProfile,
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .padding(end = 8.dp)
-                        .testTag("profile-avatar"),
-                ) {
-                    Surface(
-                        modifier = Modifier.size(40.dp),
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            val initials = avatarInitials?.trim()?.takeIf(String::isNotEmpty)
-                            if (initials == null) {
-                                Icon(Icons.Default.Person, contentDescription = "Профиль")
-                            } else {
+                        } else {
+                            TextButton(
+                                onClick = { warehouseMenuExpanded = !warehouseMenuExpanded },
+                                enabled = alternativeWarehouses.isNotEmpty(),
+                                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp),
+                                modifier = Modifier.testTag("warehouse-selector"),
+                            ) {
                                 Text(
-                                    initials.take(2).uppercase(),
-                                    textAlign = TextAlign.Center,
+                                    selectedWarehouse.customerCityLabel(),
+                                    modifier = Modifier.weight(1f, fill = false),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    textAlign = TextAlign.Center,
                                 )
+                                if (alternativeWarehouses.isNotEmpty()) {
+                                    Icon(
+                                        Icons.Default.ArrowDropDown,
+                                        contentDescription = "Выбрать другой город",
+                                        tint = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                }
                             }
-                            avatarUrl?.takeIf(String::isNotBlank)?.let { url ->
-                                AsyncImage(
-                                    model = customerProfileMediaUrl(url),
-                                    contentDescription = "Фото профиля",
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize(),
-                                )
+                        }
+                    }
+                    if (onProfile != null) IconButton(
+                        onClick = onProfile,
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .padding(end = 4.dp)
+                            .testTag("profile-avatar"),
+                    ) {
+                        Surface(
+                            modifier = Modifier.size(38.dp),
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                val initials = avatarInitials?.trim()?.takeIf(String::isNotEmpty)
+                                if (initials == null) {
+                                    Icon(Icons.Default.Person, contentDescription = "Профиль")
+                                } else {
+                                    Text(
+                                        initials.take(2).uppercase(),
+                                        textAlign = TextAlign.Center,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    )
+                                }
+                                avatarUrl?.takeIf(String::isNotBlank)?.let { url ->
+                                    AsyncImage(
+                                        model = customerProfileMediaUrl(url),
+                                        contentDescription = "Фото профиля",
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                }
                             }
                         }
                     }
                 }
-            }
-            AnimatedVisibility(
-                visible = warehouseMenuExpanded && alternativeWarehouses.isNotEmpty(),
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                        .testTag("warehouse-options"),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                AnimatedVisibility(
+                    visible = warehouseMenuExpanded && alternativeWarehouses.isNotEmpty(),
                 ) {
-                    HorizontalDivider()
-                    alternativeWarehouses.forEach { warehouse ->
-                        TextButton(
-                            onClick = {
-                                warehouseMenuExpanded = false
-                                onWarehouseSelected?.invoke(warehouse)
-                            },
-                            modifier = Modifier.fillMaxWidth().testTag("warehouse-option-${warehouse.id}"),
-                        ) {
-                            Column {
-                                Text(warehouse.name)
-                                warehouse.city?.takeIf(String::isNotBlank)?.let { city ->
-                                    Text(city, style = MaterialTheme.typography.bodySmall)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 280.dp)
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                            .testTag("warehouse-options"),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        HorizontalDivider()
+                        alternativeWarehouses.forEach { warehouse ->
+                            TextButton(
+                                onClick = {
+                                    warehouseMenuExpanded = false
+                                    onWarehouseSelected?.invoke(warehouse)
+                                },
+                                modifier = Modifier.fillMaxWidth().testTag("warehouse-option-${warehouse.id}"),
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text(warehouse.customerCityLabel())
+                                    if (warehouses.count { it.customerCityLabel() == warehouse.customerCityLabel() } > 1) {
+                                        Text(warehouse.address ?: warehouse.name, style = MaterialTheme.typography.bodySmall)
+                                    }
                                 }
                             }
                         }
@@ -223,6 +244,10 @@ fun CustomerTopBar(
         }
     }
 }
+
+/** Uses the server's city field without guessing a city from an internal warehouse name. */
+internal fun CustomerWarehouse.customerCityLabel(): String =
+    city?.trim()?.takeIf(String::isNotEmpty) ?: "Город не указан"
 
 /** Displays each server-returned free cabin as one unique, photo-led rental card. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -247,7 +272,7 @@ fun CabinCatalogScreen(
         topBar = {
             Column {
                 CustomerTopBar(
-                    title = state.selectedWarehouse?.name ?: "Склад не выбран",
+                    title = state.selectedWarehouse?.customerCityLabel() ?: "Выберите город",
                     onMenu = onMenu,
                     onProfile = onProfile,
                     selectedWarehouse = state.selectedWarehouse,
@@ -258,8 +283,23 @@ fun CabinCatalogScreen(
                 )
                 CatalogStickyFilter(
                     activeFilterCount = state.filters.activeCount,
-                    onFilters = { showFilters = true },
+                    onFilters = { showFilters = !showFilters },
                 )
+                AnimatedVisibility(
+                    visible = showFilters,
+                    enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+                    exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
+                ) {
+                    CabinFilterPanel(
+                        current = state.filters,
+                        facets = state.facets,
+                        warehouseId = state.selectedWarehouse?.id,
+                        onApply = {
+                            showFilters = false
+                            onFilters(it)
+                        },
+                    )
+                }
             }
         },
     ) { padding ->
@@ -269,7 +309,7 @@ fun CabinCatalogScreen(
                 .padding(padding)
                 .padding(horizontal = 16.dp)
                 .testTag("catalog-screen"),
-            contentPadding = PaddingValues(top = 16.dp, bottom = 24.dp),
+            contentPadding = PaddingValues(top = 8.dp, bottom = 100.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -306,18 +346,6 @@ fun CabinCatalogScreen(
             }
         }
     }
-    if (showFilters) {
-        CabinFilterSheet(
-            current = state.filters,
-            facets = state.facets,
-            warehouseId = state.selectedWarehouse?.id,
-            onDismiss = { showFilters = false },
-            onApply = {
-                showFilters = false
-                onFilters(it)
-            },
-        )
-    }
     furnitureCabin?.let { cabinId ->
         FurnitureSheet(
             cabin = state.cabins.firstOrNull { it.unitId == cabinId },
@@ -335,27 +363,14 @@ private fun CatalogStickyFilter(
     activeFilterCount: Int,
     onFilters: () -> Unit,
 ) {
-    Surface(
-        modifier = Modifier.fillMaxWidth().testTag("catalog-sticky-filter"),
-        color = MaterialTheme.colorScheme.surface,
-        shadowElevation = 2.dp,
+    Box(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).testTag("catalog-sticky-filter"),
+        contentAlignment = Alignment.CenterEnd,
     ) {
-        Box(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            OutlinedButton(
-                onClick = onFilters,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                modifier = Modifier.fillMaxWidth().widthIn(max = 1120.dp).testTag("catalog-filter-button"),
-            ) {
-                Icon(
-                    Icons.Default.FilterList,
-                    contentDescription = "Фильтры, выбрано $activeFilterCount",
-                )
-                Spacer(Modifier.width(8.dp))
-                Text("Фильтры${if (activeFilterCount > 0) " · $activeFilterCount" else ""}")
-            }
+        TextButton(onClick = onFilters, modifier = Modifier.testTag("catalog-filter-button")) {
+            Icon(Icons.Default.FilterList, contentDescription = "Фильтры, выбрано $activeFilterCount")
+            Spacer(Modifier.width(8.dp))
+            Text("Фильтры${if (activeFilterCount > 0) " · $activeFilterCount" else ""}")
         }
     }
 }
@@ -371,13 +386,13 @@ private fun CabinCard(
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().widthIn(max = 1120.dp).testTag("cabin-${cabin.unitId}"),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(16.dp),
         border = BorderStroke(
             width = if (selected) 2.dp else 1.dp,
             color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
         ),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         BoxWithConstraints {
             val wide = usesWideCabinCard(maxWidth.value)
@@ -601,167 +616,122 @@ private fun CabinFact(icon: androidx.compose.ui.graphics.vector.ImageVector? = n
 
 internal fun usesWideCabinCard(widthDp: Float): Boolean = widthDp >= 920f
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+/** Expands under the catalog header; all facets occupy the same two-column grid. */
 @Composable
-private fun CabinFilterSheet(
+private fun CabinFilterPanel(
     current: CabinFilters,
     facets: dev.buhanzaz.rwms.client.data.CabinFacets,
     warehouseId: String?,
-    onDismiss: () -> Unit,
     onApply: (CabinFilters) -> Unit,
 ) {
-    var draft by remember(current) { mutableStateOf(current) }
-    val availableFacets = facets.warehouses.firstOrNull { it.warehouseId == warehouseId } ?: facets.selected
-    val compatibleDimensions = remember(availableFacets, draft.cabinType) {
-        availableFacets.compatibleDimensionsFor(draft.cabinType)
+    var draft by remember(current, warehouseId) { mutableStateOf(current) }
+    val available = facets.warehouses.firstOrNull { it.warehouseId == warehouseId } ?: facets.selected
+    val dimensions = remember(available, draft.cabinType) { available.compatibleDimensionsFor(draft.cabinType) }
+    Column(
+        modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp).verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 8.dp).testTag("catalog-filter-panel"),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            CatalogFacetField("Тип", available.cabinTypes, listOfNotNull(draft.cabinType), Modifier.weight(1f)) {
+                draft = draft.withCabinType(it, available)
+            }
+            CatalogFacetField("Отделка", available.finishes, listOfNotNull(draft.finish), Modifier.weight(1f)) {
+                draft = draft.copy(finish = it)
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            CatalogFacetField("Размер", dimensions, listOfNotNull(draft.dimensions), Modifier.weight(1f)) {
+                draft = draft.copy(dimensions = it)
+            }
+            CatalogFacetField("Категория", available.categories, listOfNotNull(draft.category), Modifier.weight(1f)) {
+                draft = draft.copy(category = it)
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            val floor = when (draft.linoleum) {
+                true -> "Линолеум"
+                false -> "Без линолеума"
+                null -> null
+            }
+            CatalogFacetField("Пол", listOf("Линолеум", "Без линолеума"), listOfNotNull(floor), Modifier.weight(1f)) {
+                draft = draft.copy(linoleum = it?.let { value -> value == "Линолеум" })
+            }
+            CatalogFacetField(
+                "Характеристики", available.characteristics, draft.characteristics.toList(),
+                Modifier.weight(1f), multiple = true,
+            ) { value ->
+                draft = draft.copy(
+                    characteristics = when {
+                        value == null -> emptySet()
+                        value in draft.characteristics -> draft.characteristics - value
+                        else -> draft.characteristics + value
+                    },
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedButton(onClick = { draft = CabinFilters() }, modifier = Modifier.weight(1f)) { Text("Сбросить") }
+            Button(onClick = { onApply(draft) }, modifier = Modifier.weight(1f)) { Text("Показать") }
+        }
     }
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .fillMaxHeight(0.92f)
-                .navigationBarsPadding()
-                .testTag("catalog-filter-sheet"),
+}
+
+@Composable
+private fun CatalogFacetField(
+    title: String,
+    options: List<String>,
+    selected: List<String>,
+    modifier: Modifier,
+    multiple: Boolean = false,
+    onSelect: (String?) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier) {
+        Surface(
+            onClick = { expanded = !expanded },
+            modifier = Modifier.fillMaxWidth().testTag("filter-field-$title"),
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         ) {
-            Text(
-                "Фильтры",
-                style = MaterialTheme.typography.headlineSmall,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+            Row(Modifier.heightIn(min = 72.dp).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(title, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        selected.joinToString().ifEmpty { "Любой" },
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(20.dp))
+            }
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Любой") },
+                onClick = {
+                    onSelect(null)
+                    expanded = false
+                },
             )
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth().weight(1f),
-                contentPadding = PaddingValues(start = 20.dp, top = 10.dp, end = 20.dp, bottom = 18.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-            item { Text("Тип", style = MaterialTheme.typography.titleMedium) }
-            item {
-                if (availableFacets.cabinTypes.isEmpty()) {
-                    EmptyFacetMessage()
-                } else {
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        availableFacets.cabinTypes.forEach { value ->
-                            FilterChip(
-                                selected = facetValuesMatch(draft.cabinType, value),
-                                onClick = {
-                                    val selectedType = value.takeUnless {
-                                        facetValuesMatch(draft.cabinType, value)
-                                    }
-                                    draft = draft.withCabinType(selectedType, availableFacets)
-                                },
-                                label = { Text(value) },
-                            )
+            if (options.isEmpty()) {
+                DropdownMenuItem(text = { Text("Нет доступных вариантов в этом городе") }, onClick = {}, enabled = false)
+            }
+            options.forEach { value ->
+                DropdownMenuItem(
+                    text = { Text(value) },
+                    trailingIcon = {
+                        if (selected.any { facetValuesMatch(it, value) }) {
+                            Icon(Icons.Default.CheckCircle, contentDescription = "Выбрано")
                         }
-                    }
-                }
-            }
-            item { Text("Отделка", style = MaterialTheme.typography.titleMedium) }
-            item {
-                if (availableFacets.finishes.isEmpty()) {
-                    EmptyFacetMessage()
-                } else {
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        availableFacets.finishes.forEach { value ->
-                            FilterChip(
-                                selected = draft.finish == value,
-                                onClick = { draft = draft.copy(finish = value.takeUnless { draft.finish == value }) },
-                                label = { Text(value) },
-                            )
-                        }
-                    }
-                }
-            }
-            item { Text("Размер", style = MaterialTheme.typography.titleMedium) }
-            item {
-                if (compatibleDimensions.isEmpty()) {
-                    EmptyFacetMessage()
-                } else {
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        compatibleDimensions.forEach { value ->
-                            FilterChip(
-                                selected = facetValuesMatch(draft.dimensions, value),
-                                onClick = {
-                                    draft = draft.copy(
-                                        dimensions = value.takeUnless {
-                                            facetValuesMatch(draft.dimensions, value)
-                                        },
-                                    )
-                                },
-                                label = { Text(value) },
-                            )
-                        }
-                    }
-                }
-            }
-            item { Text("Категория", style = MaterialTheme.typography.titleMedium) }
-            item {
-                if (availableFacets.categories.isEmpty()) {
-                    EmptyFacetMessage()
-                } else {
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        availableFacets.categories.forEach { value ->
-                            FilterChip(
-                                selected = draft.category == value,
-                                onClick = { draft = draft.copy(category = value.takeUnless { draft.category == value }) },
-                                label = { Text(value) },
-                            )
-                        }
-                    }
-                }
-            }
-            item { Text("Пол", style = MaterialTheme.typography.titleMedium) }
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = draft.linoleum == true,
-                        onClick = { draft = draft.copy(linoleum = if (draft.linoleum == true) null else true) },
-                        label = { Text("Линолеум") },
-                    )
-                    FilterChip(
-                        selected = draft.linoleum == false,
-                        onClick = { draft = draft.copy(linoleum = if (draft.linoleum == false) null else false) },
-                        label = { Text("Без линолеума") },
-                    )
-                }
-            }
-            item { Text("Характеристики", style = MaterialTheme.typography.titleMedium) }
-            item {
-                if (availableFacets.characteristics.isEmpty()) {
-                    EmptyFacetMessage()
-                } else {
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        availableFacets.characteristics.forEach { value ->
-                            FilterChip(
-                                selected = value in draft.characteristics,
-                                onClick = {
-                                    draft = draft.copy(
-                                        characteristics = if (value in draft.characteristics) {
-                                            draft.characteristics - value
-                                        } else {
-                                            draft.characteristics + value
-                                        },
-                                    )
-                                },
-                                label = { Text(value) },
-                            )
-                        }
-                    }
-                }
-            }
-            }
-            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface)
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedButton(
-                    onClick = { draft = CabinFilters() },
-                    modifier = Modifier.weight(1f),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface),
-                ) {
-                    Text("Сбросить")
-                }
-                Button(onClick = { onApply(draft) }, modifier = Modifier.weight(1f)) { Text("Показать") }
+                    },
+                    onClick = {
+                        onSelect(if (!multiple && selected.any { facetValuesMatch(it, value) }) null else value)
+                        expanded = false
+                    },
+                )
             }
         }
     }
@@ -795,15 +765,6 @@ private fun facetValuesMatch(first: String?, second: String): Boolean =
 
 private fun String.normalizedFacetValue(): String =
     trim().split(Regex("\\s+")).joinToString(" ").lowercase(Locale.ROOT)
-
-@Composable
-private fun EmptyFacetMessage() {
-    Text(
-        "Нет доступных вариантов на этом складе",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurface,
-    )
-}
 
 private fun CustomerWorkflowState.profileInitials(): String? {
     val currentProfile = profile ?: return null

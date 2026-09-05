@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -40,7 +41,7 @@ class CustomerConditionalNavigationTest {
             }
         }
 
-        composeRule.onNodeWithText("Вход").assertExists()
+        composeRule.onNodeWithText("Войти").assertExists()
         composeRule.onNodeWithTag("profile-screen").assertDoesNotExist()
     }
 
@@ -149,7 +150,7 @@ class CustomerConditionalNavigationTest {
 
         composeRule.onNodeWithTag("menu-button").performClick()
         composeRule.waitForIdle()
-        composeRule.onAllNodesWithText("Аренда").assertCountEquals(2)
+        composeRule.onAllNodesWithText("Аренда").assertCountEquals(1)
         composeRule.onNodeWithText("Свободные бытовки").assertDoesNotExist()
         composeRule.onNodeWithText("Как на телефоне").assertDoesNotExist()
         composeRule.onNodeWithTag("appearance-selector").assertDoesNotExist()
@@ -183,6 +184,47 @@ class CustomerConditionalNavigationTest {
         assertThat(shouldShowGlobalBusyOverlay(isBusy = true, current = CatalogRoute)).isTrue()
         assertThat(shouldShowGlobalBusyOverlay(isBusy = true, current = DeliveryMapRoute)).isFalse()
         assertThat(shouldShowGlobalBusyOverlay(isBusy = false, current = DeliveryMapRoute)).isFalse()
+    }
+
+    @Test
+    fun `cart shortcut appears with a live count and opens the cart without a footer`() {
+        var workflow by mutableStateOf(readyCatalogWorkflow())
+        composeRule.setContent {
+            CustomerTheme { CustomerAppContent(CustomerAppState.Ready(workflow)) }
+        }
+        composeRule.onNodeWithTag("cart-fab").assertDoesNotExist()
+        composeRule.onNodeWithText("Аренда").assertIsNotDisplayed()
+        composeRule.onAllNodesWithText("Заказы").assertCountEquals(0)
+        composeRule.runOnIdle { workflow = workflow.copy(selectedCabinIds = setOf("a", "b")) }
+        composeRule.onNodeWithTag("cart-count").assertExists()
+        composeRule.onNodeWithText("2").assertExists()
+        composeRule.onNodeWithTag("cart-fab").performClick()
+        composeRule.onNodeWithTag("cart-screen").assertExists()
+        composeRule.onNodeWithTag("cart-fab").assertDoesNotExist()
+    }
+
+    @Test
+    fun `city selection shares menu and profile and opens catalog after selection`() {
+        val initial = readyCatalogWorkflow()
+        var workflow by mutableStateOf(initial.copy(selectedWarehouse = null, warehouses = listOf(initial.selectedWarehouse!!)))
+        composeRule.setContent {
+            CustomerTheme {
+                CustomerAppContent(
+                    CustomerAppState.Ready(workflow),
+                    onWarehouse = { warehouse, _ -> workflow = workflow.copy(selectedWarehouse = warehouse) },
+                )
+            }
+        }
+        composeRule.onNodeWithTag("warehouse-screen").assertExists()
+        composeRule.onNodeWithText("Выйти").assertIsNotDisplayed()
+        composeRule.onNodeWithTag("profile-avatar").performClick()
+        composeRule.onNodeWithTag("profile-screen").assertExists()
+        composeRule.onNodeWithTag("header-back").performClick()
+        composeRule.onNodeWithTag("warehouse-screen").assertExists()
+        composeRule.onNodeWithTag("menu-button").assertExists()
+        composeRule.onNodeWithText("Санкт-Петербург").performClick()
+        composeRule.onNodeWithTag("catalog-screen").assertExists()
+        composeRule.onNodeWithTag("warehouse-screen").assertDoesNotExist()
     }
 
     private fun readyCatalogWorkflow(): CustomerWorkflowState = CustomerWorkflowState(
