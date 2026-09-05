@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, type ReactNode } from "react"
 import {
   useInfiniteQuery,
   useMutation,
@@ -288,6 +288,7 @@ function DossierActions({
   onCreateHistoricalShipment,
   onCreateHistoricalReturn,
   onSaved,
+  children,
 }: {
   rentalItem: RentalItemDto
   accessToken: string | null
@@ -298,6 +299,7 @@ function DossierActions({
   onCreateHistoricalShipment: () => void
   onCreateHistoricalReturn: () => void
   onSaved: (value: RentalItemDto) => void
+  children?: ReactNode
 }) {
   const navigate = useNavigate()
   const [statusOpen, setStatusOpen] = useState(false)
@@ -369,7 +371,11 @@ function DossierActions({
 
   return (
     <>
-      <div className="flex flex-wrap gap-2">
+      <div
+        role="group"
+        aria-label="Действия с бытовкой"
+        className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4 [&>button]:h-auto [&>button]:min-h-10 [&>button]:w-full [&>button]:justify-start [&>button]:py-2 [&>button]:text-left [&>button]:whitespace-normal"
+      >
         <Button size="sm" variant="outline" onClick={onEditPassport}>
           <HugeiconsIcon icon={PencilEdit01Icon} data-icon="inline-start" />
           Изменить паспорт
@@ -425,6 +431,7 @@ function DossierActions({
           <HugeiconsIcon icon={PencilEdit01Icon} data-icon="inline-start" />
           Изменить статус
         </Button>
+        {children}
       </div>
 
       <Dialog open={statusOpen} onOpenChange={setStatusOpen}>
@@ -911,7 +918,57 @@ export function RentalItemDetailPage() {
         </div>
       ) : null}
       <section className="shrink-0 overflow-hidden rounded-lg border bg-card">
-        <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(22rem,26rem)] xl:grid-cols-[minmax(0,1fr)_minmax(26rem,30rem)]">
+        <header className="flex flex-col gap-4 p-4 sm:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-col gap-1">
+              <p className="text-sm text-muted-foreground">Паспорт бытовки</p>
+              <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
+                {rentalItem.number}
+              </h1>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <RentalItemStatusBadge status={rentalItem.status} />
+              <Badge variant="secondary">{rentalItem.type}</Badge>
+            </div>
+          </div>
+          <DossierActions
+            rentalItem={rentalItem}
+            accessToken={accessToken}
+            canEdit={canEditRentalItem}
+            onAddPhoto={() => setPhotoUploadOpen(true)}
+            onEditPassport={() => setPassportEditOpen(true)}
+            historicalShipmentMode={historicalShipmentMode}
+            onCreateHistoricalShipment={() =>
+              setHistoricalMovementKind("SHIPMENT")
+            }
+            onCreateHistoricalReturn={() => setHistoricalMovementKind("RETURN")}
+            onSaved={setRentalItem}
+          >
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={
+                photoPresentationMutation.isPending ||
+                media.isLoading ||
+                !media.assets.some(
+                  (asset) =>
+                    asset.kind === "IMAGE" &&
+                    asset.status === "READY" &&
+                    asset.generation > 0
+                )
+              }
+              onClick={() => photoPresentationMutation.mutate()}
+            >
+              <HugeiconsIcon icon={Share08Icon} data-icon="inline-start" />
+              {photoPresentationMutation.isPending
+                ? "Создаём..."
+                : "Создать представление"}
+            </Button>
+          </DossierActions>
+        </header>
+        <Separator />
+        <div className="grid items-start lg:grid-cols-[minmax(0,1fr)_minmax(23rem,1fr)]">
           <PhotoCarousel
             photos={media.photos}
             item={rentalItem}
@@ -925,32 +982,13 @@ export function RentalItemDetailPage() {
                   ? "Фото обрабатываются"
                   : "Нет фото"
             }
-            className="h-[280px] bg-muted sm:h-[340px] md:h-[420px] lg:h-[560px]"
+            className="h-64 bg-muted sm:h-80 lg:h-[420px]"
             fit="contain"
             controlsVisibility="mobile-visible"
             onRequestFullscreen={media.requestFullscreen}
           />
-          <aside className="flex min-h-0 flex-col gap-2 border-t p-3 md:border-t-0 md:border-l">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-xl font-semibold">{rentalItem.number}</h1>
-              <RentalItemStatusBadge status={rentalItem.status} />
-              <Badge variant="secondary">{rentalItem.type}</Badge>
-            </div>
-            <DossierActions
-              rentalItem={rentalItem}
-              accessToken={accessToken}
-              canEdit={canEditRentalItem}
-              onAddPhoto={() => setPhotoUploadOpen(true)}
-              onEditPassport={() => setPassportEditOpen(true)}
-              historicalShipmentMode={historicalShipmentMode}
-              onCreateHistoricalShipment={() =>
-                setHistoricalMovementKind("SHIPMENT")
-              }
-              onCreateHistoricalReturn={() =>
-                setHistoricalMovementKind("RETURN")
-              }
-              onSaved={setRentalItem}
-            />
+          <aside className="flex min-h-0 flex-col gap-3 border-t p-4 lg:border-t-0 lg:border-l">
+            <h2 className="text-sm font-semibold">Характеристики и учёт</h2>
             {historicalMovementKind && currentUser ? (
               <HistoricalRentalMovementDialog
                 open
@@ -972,8 +1010,7 @@ export function RentalItemDetailPage() {
                 onCreated={historicalMovementCreated}
               />
             ) : null}
-            <Separator />
-            <dl className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-xs">
+            <dl className="grid grid-cols-[minmax(6.5rem,8rem)_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm [&>dd]:min-w-0 [&>dd]:break-words">
               <dt className="text-muted-foreground">Склад</dt>
               <dd>{selectedWarehouse?.name ?? "Склад"}</dd>
               <dt className="text-muted-foreground">Габариты</dt>
@@ -1010,32 +1047,6 @@ export function RentalItemDetailPage() {
                 >
                   {media.logicalPhotoCount} фото
                 </Button>
-                {canEditRentalItem ? (
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="outline"
-                    disabled={
-                      photoPresentationMutation.isPending ||
-                      media.isLoading ||
-                      !media.assets.some(
-                        (asset) =>
-                          asset.kind === "IMAGE" &&
-                          asset.status === "READY" &&
-                          asset.generation > 0
-                      )
-                    }
-                    onClick={() => photoPresentationMutation.mutate()}
-                  >
-                    <HugeiconsIcon
-                      icon={Share08Icon}
-                      data-icon="inline-start"
-                    />
-                    {photoPresentationMutation.isPending
-                      ? "Создаём..."
-                      : "Создать представление"}
-                  </Button>
-                ) : null}
               </dd>
               <dt className="text-muted-foreground">Наполнение</dt>
               <dd>

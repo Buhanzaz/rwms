@@ -1198,8 +1198,17 @@ describe("rental item command access", () => {
     const clipboardWrite = vi.spyOn(navigator.clipboard, "writeText")
     renderDetail(`/warehouse/${RENTAL_ITEM_ID}`)
 
+    const actions = await screen.findByRole("group", {
+      name: "Действия с бытовкой",
+    })
+    expect(
+      screen.getByRole("heading", { level: 1, name: "БЫТ-001" }).className
+    ).toContain("text-3xl")
+    expect(
+      within(actions).getByRole("button", { name: "Изменить паспорт" })
+    ).toBeTruthy()
     await user.click(
-      await screen.findByRole("button", { name: "Создать представление" })
+      within(actions).getByRole("button", { name: "Создать представление" })
     )
 
     await waitFor(() =>
