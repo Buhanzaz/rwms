@@ -88,14 +88,24 @@ type SwipeStartPosition = {
 const SWIPE_MIN_DISTANCE = 56
 const SWIPE_AXIS_LOCK_RATIO = 1.15
 
-function getControlsVisibilityClass(
-  controlsVisibility: PhotoCarouselControlsVisibility
-) {
-  if (controlsVisibility === "always") return "opacity-100"
-  if (controlsVisibility === "mobile-visible") {
-    return "opacity-100 lg:opacity-0 lg:group-hover/carousel:opacity-100 lg:group-focus-within/carousel:opacity-100"
-  }
-  return "opacity-0 group-hover/carousel:opacity-100 group-focus-within/carousel:opacity-100"
+function revealPhotoEdge(event: PointerEvent<HTMLDivElement>) {
+  if (event.pointerType === "touch") return
+  const { left, width } = event.currentTarget.getBoundingClientRect()
+  if (width <= 0) return
+  const x = event.clientX - left
+  const edgeWidth = width / 5
+  const opacity = (distance: number) =>
+    String(Math.max(0, Math.min(1, 1 - distance / edgeWidth)))
+  event.currentTarget.style.setProperty("--photo-edge-left", opacity(x))
+  event.currentTarget.style.setProperty(
+    "--photo-edge-right",
+    opacity(width - x)
+  )
+}
+
+function hidePhotoEdges(event: PointerEvent<HTMLDivElement>) {
+  event.currentTarget.style.setProperty("--photo-edge-left", "0")
+  event.currentTarget.style.setProperty("--photo-edge-right", "0")
 }
 
 function normalizePhotoSource(
@@ -343,8 +353,6 @@ export function PhotoCarousel({
     )
   }
 
-  const controlsClass = getControlsVisibilityClass(controlsVisibility)
-
   return (
     <>
       <Carousel
@@ -356,6 +364,9 @@ export function PhotoCarousel({
         )}
         aria-label={title ?? "Фотографии"}
         {...verticalSwipe}
+        onPointerEnter={revealPhotoEdge}
+        onPointerMove={revealPhotoEdge}
+        onPointerLeave={hidePhotoEdges}
       >
         <CarouselContent className="-ml-0 h-full">
           {safePhotos.map((photo, index) => {
@@ -425,10 +436,11 @@ export function PhotoCarousel({
             <button
               type="button"
               aria-label="Предыдущее фото"
+              data-edge="left"
+              data-visibility={controlsVisibility}
               className={cn(
-                "absolute inset-y-0 left-0 flex w-1/5 items-center justify-start bg-gradient-to-r from-black/80 via-black/40 to-transparent pl-3 text-primary-foreground transition-opacity",
-                hideEdgeControlsOnMobile && "hidden lg:flex",
-                controlsClass
+                "photo-edge-control absolute inset-y-0 left-0 flex w-1/5 items-center justify-start bg-gradient-to-r from-black/80 via-black/40 to-transparent pl-3 text-primary-foreground",
+                hideEdgeControlsOnMobile && "hidden lg:flex"
               )}
               onClick={(event) => {
                 event.stopPropagation()
@@ -440,10 +452,11 @@ export function PhotoCarousel({
             <button
               type="button"
               aria-label="Следующее фото"
+              data-edge="right"
+              data-visibility={controlsVisibility}
               className={cn(
-                "absolute inset-y-0 right-0 flex w-1/5 items-center justify-end bg-gradient-to-l from-black/80 via-black/40 to-transparent pr-3 text-primary-foreground transition-opacity",
-                hideEdgeControlsOnMobile && "hidden lg:flex",
-                controlsClass
+                "photo-edge-control absolute inset-y-0 right-0 flex w-1/5 items-center justify-end bg-gradient-to-l from-black/80 via-black/40 to-transparent pr-3 text-primary-foreground",
+                hideEdgeControlsOnMobile && "hidden lg:flex"
               )}
               onClick={(event) => {
                 event.stopPropagation()
@@ -594,6 +607,9 @@ function PhotoFullscreenViewer({
           opts={{ loop: photos.length > 1, watchDrag: photos.length > 1 }}
           className="group/fullscreen-carousel h-dvh w-screen"
           aria-label={title}
+          onPointerEnter={revealPhotoEdge}
+          onPointerMove={revealPhotoEdge}
+          onPointerLeave={hidePhotoEdges}
         >
           <CarouselContent className="-ml-0 h-dvh">
             {photos.map((photo, index) => (
@@ -640,7 +656,9 @@ function PhotoFullscreenViewer({
                 type="button"
                 aria-label="Предыдущее фото"
                 data-slot="photo-fullscreen-previous"
-                className="pointer-events-auto absolute inset-y-0 left-0 z-30 flex w-1/5 items-center justify-start bg-gradient-to-r from-black/85 via-black/45 to-transparent pl-5 text-primary-foreground opacity-100 transition-opacity focus-visible:pointer-events-auto focus-visible:opacity-100 lg:pointer-events-none lg:opacity-0 lg:group-focus-within/fullscreen-carousel:pointer-events-auto lg:group-focus-within/fullscreen-carousel:opacity-100 lg:group-hover/fullscreen-carousel:pointer-events-auto lg:group-hover/fullscreen-carousel:opacity-100"
+                data-edge="left"
+                data-visibility="mobile-visible"
+                className="photo-edge-control absolute inset-y-0 left-0 z-30 flex w-1/5 items-center justify-start bg-gradient-to-r from-black/85 via-black/45 to-transparent pl-5 text-primary-foreground"
                 onClick={(event) => {
                   event.stopPropagation()
                   goPrev()
@@ -655,7 +673,9 @@ function PhotoFullscreenViewer({
                 type="button"
                 aria-label="Следующее фото"
                 data-slot="photo-fullscreen-next"
-                className="pointer-events-auto absolute inset-y-0 right-0 z-30 flex w-1/5 items-center justify-end bg-gradient-to-l from-black/85 via-black/45 to-transparent pr-5 text-primary-foreground opacity-100 transition-opacity focus-visible:pointer-events-auto focus-visible:opacity-100 lg:pointer-events-none lg:opacity-0 lg:group-focus-within/fullscreen-carousel:pointer-events-auto lg:group-focus-within/fullscreen-carousel:opacity-100 lg:group-hover/fullscreen-carousel:pointer-events-auto lg:group-hover/fullscreen-carousel:opacity-100"
+                data-edge="right"
+                data-visibility="mobile-visible"
+                className="photo-edge-control absolute inset-y-0 right-0 z-30 flex w-1/5 items-center justify-end bg-gradient-to-l from-black/85 via-black/45 to-transparent pr-5 text-primary-foreground"
                 onClick={(event) => {
                   event.stopPropagation()
                   goNext()

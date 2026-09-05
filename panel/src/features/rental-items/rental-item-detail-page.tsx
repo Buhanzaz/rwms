@@ -916,7 +916,7 @@ export function RentalItemDetailPage() {
             }
             className="h-[280px] bg-muted sm:h-[340px] md:h-[420px] lg:h-[560px]"
             fit="contain"
-            controlsVisibility="always"
+            controlsVisibility="mobile-visible"
             onRequestFullscreen={media.requestFullscreen}
           />
           <aside className="flex min-h-0 flex-col gap-2 border-t p-3 md:border-t-0 md:border-l">

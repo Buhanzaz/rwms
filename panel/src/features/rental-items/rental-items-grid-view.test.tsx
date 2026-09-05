@@ -232,7 +232,9 @@ describe("RentalItemsGridView photo covers", () => {
     ).toBe("blob:service-small")
     expect(screen.getByTestId("grid-photo-count").textContent).toBe("2")
     expect(screen.getByTestId("grid-photo-source-count").textContent).toBe("2")
-    expect(screen.getByTestId("grid-photo-controls").textContent).toBe("always")
+    expect(screen.getByTestId("grid-photo-controls").textContent).toBe(
+      "mobile-visible"
+    )
 
     await user.click(screen.getByRole("button", { name: "Следующее фото" }))
     expect(

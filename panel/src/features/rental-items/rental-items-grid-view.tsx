@@ -108,7 +108,7 @@ function RentalItemCardPhoto({
       photoCountClassName="hidden sm:flex"
       className="h-full w-full"
       fit="cover"
-      controlsVisibility="always"
+      controlsVisibility="mobile-visible"
       onCenterClick={() => onOpenPhotos(item)}
     />
   )

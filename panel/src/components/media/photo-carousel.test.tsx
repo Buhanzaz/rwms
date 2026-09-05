@@ -1,6 +1,7 @@
 import * as React from "react"
 import {
   cleanup,
+  createEvent,
   fireEvent,
   render,
   screen,
@@ -95,7 +96,92 @@ const photos = [
   },
 ]
 
+function movePointer(
+  element: HTMLElement,
+  clientX: number,
+  pointerType = "mouse"
+) {
+  const event = createEvent.pointerMove(element)
+  Object.defineProperties(event, {
+    clientX: { value: clientX },
+    pointerType: { value: pointerType },
+  })
+  fireEvent(element, event)
+}
+
+function measurePhoto(element: HTMLElement) {
+  vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
+    left: 100,
+    right: 600,
+    top: 0,
+    bottom: 400,
+    width: 500,
+    height: 400,
+    x: 100,
+    y: 0,
+    toJSON: () => ({}),
+  })
+}
+
 describe("PhotoCarousel", () => {
+  it("progressively reveals only the nearest edge and clears it on leave", () => {
+    render(
+      <PhotoCarousel photos={photos} controlsVisibility="mobile-visible" />
+    )
+    const carousel = screen.getByLabelText("Фотографии")
+    measurePhoto(carousel)
+    const opacity = (edge: string) =>
+      Number(carousel.style.getPropertyValue(`--photo-edge-${edge}`))
+
+    movePointer(carousel, 350)
+    expect(opacity("left")).toBe(0)
+    expect(opacity("right")).toBe(0)
+    movePointer(carousel, 175)
+    expect(opacity("left")).toBeCloseTo(0.25)
+    expect(opacity("right")).toBe(0)
+    movePointer(carousel, 125)
+    expect(opacity("left")).toBeCloseTo(0.75)
+    movePointer(carousel, 100)
+    expect(opacity("left")).toBe(1)
+    movePointer(carousel, 575)
+    expect(opacity("left")).toBe(0)
+    expect(opacity("right")).toBeCloseTo(0.75)
+    fireEvent.pointerLeave(carousel)
+    expect(opacity("left")).toBe(0)
+    expect(opacity("right")).toBe(0)
+  })
+
+  it("does not apply mouse shading to touch swipes and keeps keyboard controls focusable", () => {
+    render(
+      <PhotoCarousel photos={photos} controlsVisibility="mobile-visible" />
+    )
+    const carousel = screen.getByLabelText("Фотографии")
+    measurePhoto(carousel)
+    movePointer(carousel, 100, "touch")
+    expect(carousel.style.getPropertyValue("--photo-edge-left")).toBe("")
+
+    const next = screen.getByRole("button", { name: "Следующее фото" })
+    next.focus()
+    expect(document.activeElement).toBe(next)
+    expect(next.dataset.visibility).toBe("mobile-visible")
+  })
+
+  it("uses the same progressive edges in the blue fullscreen viewer", async () => {
+    render(<PhotoCarousel photos={photos} title="Бытовка 42" />)
+    fireEvent.click(screen.getByRole("button", { name: "Открыть фото 1" }))
+    const dialog = await screen.findByRole("dialog")
+    expect(dialog.className).toContain("bg-primary")
+    const carousel = dialog.querySelector<HTMLElement>(
+      '[aria-label="Бытовка 42"]'
+    )!
+    measurePhoto(carousel)
+    movePointer(carousel, 350)
+    expect(carousel.style.getPropertyValue("--photo-edge-right")).toBe("0")
+    movePointer(carousel, 600)
+    expect(carousel.style.getPropertyValue("--photo-edge-right")).toBe("1")
+    expect(carousel.style.getPropertyValue("--photo-edge-left")).toBe("0")
+  })
+
   it("uses arrows for navigation without opening fullscreen", async () => {
     const onActiveIndexChange = vi.fn()
     const onCenterClick = vi.fn()
@@ -142,9 +228,9 @@ describe("PhotoCarousel", () => {
     )
 
     expect(nextControl?.className).toContain("bg-gradient-to-l")
-    expect(nextControl?.className).toContain(
-      "lg:group-hover/fullscreen-carousel:opacity-100"
-    )
+    expect(nextControl?.className).toContain("photo-edge-control")
+    expect(nextControl?.dataset.edge).toBe("right")
+    expect(nextControl?.dataset.visibility).toBe("mobile-visible")
     expect(previousControl?.className).toContain("bg-gradient-to-r")
 
     fireEvent.click(nextControl!)

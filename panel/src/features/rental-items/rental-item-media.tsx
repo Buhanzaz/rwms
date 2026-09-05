@@ -682,7 +682,7 @@ function FolderDetails({
               showPhotoCount
               className="h-[55svh] min-h-80 rounded-lg border bg-muted"
               fit="contain"
-              controlsVisibility="always"
+              controlsVisibility="mobile-visible"
               activeIndex={visibleActiveIndex}
               onActiveIndexChange={setActiveIndex}
               onRequestFullscreen={onRequestFullscreen}
