@@ -714,6 +714,7 @@ class LogisticsContractFoundationTest {
             "getEquipmentMovementTask",
             "cancelEquipmentMovementTask",
             "listDriverTasks",
+            "listRentalExpiredTrips",
             "createDriverTask",
             "getMaintenanceReturnArrival",
             "createMaintenanceDriverTask",
