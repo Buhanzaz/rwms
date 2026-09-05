@@ -158,6 +158,21 @@ describe("PhotoCarousel", () => {
       <PhotoCarousel photos={photos} controlsVisibility="mobile-visible" />
     )
     const carousel = screen.getByLabelText("Фотографии")
+    const blurEdges = carousel.querySelectorAll(
+      '[data-slot="progressive-blur"]'
+    )
+    expect(blurEdges).toHaveLength(2)
+    expect(
+      [...blurEdges].map((edge) => edge.getAttribute("data-position"))
+    ).toEqual(["left", "right"])
+    expect(blurEdges[0].getAttribute("aria-hidden")).toBe("true")
+    expect(blurEdges[0].children).toHaveLength(4)
+    expect(
+      (blurEdges[0].firstElementChild as HTMLElement).style.maskImage
+    ).toContain("to left")
+    expect(
+      (blurEdges[1].lastElementChild as HTMLElement).style.backdropFilter
+    ).toBe("blur(4px)")
     measurePhoto(carousel)
     const opacity = (edge: string) =>
       Number(carousel.style.getPropertyValue(`--photo-edge-${edge}`))

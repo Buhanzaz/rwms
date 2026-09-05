@@ -20,6 +20,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { ProgressiveBlur } from "@/components/ui/progressive-blur"
 import {
   Carousel,
   CarouselContent,
@@ -442,6 +443,13 @@ export function PhotoCarousel({
 
         {hasMultiplePhotos ? (
           <>
+            <ProgressiveBlur
+              position="left"
+              visibility={controlsVisibility}
+              className={
+                hideEdgeControlsOnMobile ? "hidden lg:block" : undefined
+              }
+            />
             <button
               type="button"
               aria-label="Предыдущее фото"
@@ -456,8 +464,18 @@ export function PhotoCarousel({
                 api?.scrollPrev()
               }}
             >
-              <HugeiconsIcon icon={ArrowLeft01Icon} className="size-8" />
+              <HugeiconsIcon
+                icon={ArrowLeft01Icon}
+                className="relative size-8"
+              />
             </button>
+            <ProgressiveBlur
+              position="right"
+              visibility={controlsVisibility}
+              className={
+                hideEdgeControlsOnMobile ? "hidden lg:block" : undefined
+              }
+            />
             <button
               type="button"
               aria-label="Следующее фото"
@@ -472,7 +490,10 @@ export function PhotoCarousel({
                 api?.scrollNext()
               }}
             >
-              <HugeiconsIcon icon={ArrowRight01Icon} className="size-8" />
+              <HugeiconsIcon
+                icon={ArrowRight01Icon}
+                className="relative size-8"
+              />
             </button>
             <div className="pointer-events-none absolute bottom-2 left-1/2 flex -translate-x-1/2 gap-1">
               {safePhotos.map((photo, index) => (
@@ -695,6 +716,7 @@ function PhotoFullscreenViewer({
 
           {photos.length > 1 ? (
             <>
+              <ProgressiveBlur position="left" visibility="mobile-visible" />
               <button
                 type="button"
                 aria-label="Предыдущее фото"
@@ -709,9 +731,10 @@ function PhotoFullscreenViewer({
               >
                 <HugeiconsIcon
                   icon={ArrowLeft01Icon}
-                  className="size-9 drop-shadow-md"
+                  className="relative size-9 drop-shadow-md"
                 />
               </button>
+              <ProgressiveBlur position="right" visibility="mobile-visible" />
               <button
                 type="button"
                 aria-label="Следующее фото"
@@ -726,7 +749,7 @@ function PhotoFullscreenViewer({
               >
                 <HugeiconsIcon
                   icon={ArrowRight01Icon}
-                  className="size-9 drop-shadow-md"
+                  className="relative size-9 drop-shadow-md"
                 />
               </button>
             </>
