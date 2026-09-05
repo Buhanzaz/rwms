@@ -6,6 +6,7 @@ import type {
   DriverQueueRequest,
   QueueDefinitionDto,
   QueueDefinitionRequest,
+  QueueLinkRequest,
   WorkerClassDto,
   WorkerClassRequest,
   WorkerDto,
@@ -67,6 +68,13 @@ export class HttpTaskBoardSettingsClient implements TaskBoardSettingsClient {
       token,
       `${TASK_BOARD_API}/queue-definitions/order`,
       json("PUT", { definitions })
+    )
+  }
+  linkQueueDefinitions(token: string, id: string, request: QueueLinkRequest) {
+    return bearerRequest<QueueDefinitionDto[]>(
+      token,
+      `${TASK_BOARD_API}/queue-definitions/${encodeURIComponent(id)}/link`,
+      json("PUT", request)
     )
   }
   listQueues(token: string, warehouseId: string) {

@@ -35,6 +35,7 @@ import type {
   QueueBindingRequest,
   QueueDefinitionDto,
   QueueDefinitionRequest,
+  QueueLinkRequest,
   QueueType,
   ParticipationPolicy,
   QualificationRequest,
@@ -196,6 +197,107 @@ function EditorShell({
         </form>
       </DialogContent>
     </Dialog>
+  )
+}
+
+export function QueueLinkEditorDialog({
+  definition,
+  definitions,
+  pending,
+  error,
+  onClose,
+  onSave,
+}: {
+  definition: QueueDefinitionDto
+  definitions: QueueDefinitionDto[]
+  pending: boolean
+  error: string | null
+  onClose: () => void
+  onSave: (request: QueueLinkRequest) => Promise<void>
+}) {
+  const [selectedId, setSelectedId] = useState("")
+  const linked = definition.linkedQueueDefinitionId !== null
+  const primaryClassIds = new Set(
+    definition.bindings
+      .filter((binding) => binding.participationPolicy === "PRIMARY")
+      .map((binding) => binding.workerClass.id)
+  )
+  const candidates = definitions.filter(
+    (item) =>
+      item.id !== definition.id &&
+      item.purpose === "GENERAL" &&
+      item.type !== "HOLDING" &&
+      item.linkedQueueDefinitionId === null &&
+      item.bindings.some(
+        (binding) =>
+          binding.participationPolicy === "PRIMARY" &&
+          primaryClassIds.has(binding.workerClass.id)
+      )
+  )
+  const partner = linked
+    ? definitions.find((item) => item.id === definition.linkedQueueDefinitionId)
+    : candidates.find((item) => item.id === selectedId)
+
+  return (
+    <EditorShell
+      title={`Связь очереди «${definition.name}»`}
+      description="После завершения работ группа получает следующий этап по той же бытовке в парной очереди. Один участник берёт или сдаёт задание за всю группу."
+      pending={pending}
+      error={error}
+      onClose={onClose}
+      submitLabel={linked ? "Разорвать связь" : "Связать очереди"}
+      destructiveSubmit={linked}
+      submitDisabled={!partner}
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (!partner || pending) return
+        void onSave({
+          expectedVersion: definition.version,
+          linkedQueueDefinitionId: linked ? null : partner.id,
+          linkedQueueExpectedVersion: partner.version,
+        })
+      }}
+    >
+      <FieldGroup>
+        {linked ? (
+          <Field>
+            <FieldLabel>Парная очередь</FieldLabel>
+            <p>{partner?.name ?? "Очередь недоступна — обновите список"}</p>
+            <FieldDescription>
+              Разрыв связи снимет закрепление следующего этапа за группой. После
+              этого можно выбрать другую пару.
+            </FieldDescription>
+          </Field>
+        ) : (
+          <Field data-disabled={pending || candidates.length === 0}>
+            <FieldLabel htmlFor="linked-queue">Парная очередь</FieldLabel>
+            <Select
+              value={selectedId}
+              onValueChange={setSelectedId}
+              disabled={pending || candidates.length === 0}
+            >
+              <SelectTrigger id="linked-queue" className="w-full">
+                <SelectValue placeholder="Выберите очередь" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {candidates.map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      {item.name}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <FieldDescription>
+              {candidates.length
+                ? "Доступны свободные рабочие очереди с общим основным классом исполнителей."
+                : "Нет свободных очередей с общим основным классом исполнителей."}
+            </FieldDescription>
+          </Field>
+        )}
+      </FieldGroup>
+    </EditorShell>
   )
 }
 

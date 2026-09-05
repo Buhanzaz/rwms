@@ -53,14 +53,21 @@ export type QueueDefinitionDto = {
   notifyWhenThresholdReached: boolean
   resultPhotoMinCount: number
   availableTaskLimit: number
+  linkedQueueDefinitionId: string | null
   bindings: QueueBindingDto[]
 }
 
 export type QueueDefinitionRequest = Omit<
   QueueDefinitionDto,
-  "id" | "bindings"
+  "id" | "bindings" | "linkedQueueDefinitionId"
 > & {
   bindings: QueueBindingRequest[]
+}
+
+export type QueueLinkRequest = {
+  expectedVersion: number
+  linkedQueueDefinitionId: string | null
+  linkedQueueExpectedVersion: number | null
 }
 
 export type WorkQueueDto = {

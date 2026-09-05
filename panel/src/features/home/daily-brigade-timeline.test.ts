@@ -96,6 +96,8 @@ function board(entries: TaskBoardEntryDto[]): TaskBoardSnapshotDto {
         settingsCollapsed: false,
         workerFeedEnabled: true,
         availableTaskLimit: 6,
+        linkedQueueId: null,
+        linkedQueueName: null,
         entries,
       },
     ],

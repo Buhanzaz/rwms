@@ -49,6 +49,8 @@ const mocks = vi.hoisted(() => ({
   updateQueueDefinition: vi.fn(),
   deleteQueueDefinition: vi.fn(),
   reorderQueueDefinitions: vi.fn(),
+  linkQueueDefinitions: vi.fn(),
+  globalRole: "SYSTEM_ADMIN" as CurrentUser["globalRole"],
   disableGroup: vi.fn(),
   enableGroup: vi.fn(),
   selectedWarehouse: null as { id: string } | null,
@@ -81,6 +83,7 @@ vi.mock("@/features/settings/task-board/api/task-board-settings-api", () => ({
     updateQueueDefinition: mocks.updateQueueDefinition,
     deleteQueueDefinition: mocks.deleteQueueDefinition,
     reorderQueueDefinitions: mocks.reorderQueueDefinitions,
+    linkQueueDefinitions: mocks.linkQueueDefinitions,
     disableGroup: mocks.disableGroup,
     enableGroup: mocks.enableGroup,
   },
@@ -111,7 +114,7 @@ function currentUser(): CurrentUser {
     lastName: null,
     email: null,
     principalType: "USER",
-    globalRole: "SYSTEM_ADMIN",
+    globalRole: mocks.globalRole,
     rentalAccess: true,
     warehouseAccessAll: false,
     warehouseAccesses: [{ warehouseId: WAREHOUSE_ID, level: "MANAGE" }],
@@ -137,6 +140,7 @@ function queueDefinitionFixture(
     notifyWhenThresholdReached: false,
     resultPhotoMinCount: 1,
     availableTaskLimit: 6,
+    linkedQueueDefinitionId: null,
     bindings: [],
     ...overrides,
   }
@@ -288,6 +292,7 @@ afterAll(() => {
 })
 
 beforeEach(() => {
+  mocks.globalRole = "SYSTEM_ADMIN"
   mocks.selectedWarehouse = { id: WAREHOUSE_ID }
   mocks.listQueueDefinitions.mockResolvedValue([queueDefinitionFixture()])
   mocks.listClasses.mockResolvedValue([driverClassFixture()])
@@ -297,6 +302,7 @@ beforeEach(() => {
   mocks.updateQueueDefinition.mockResolvedValue(queueDefinitionFixture())
   mocks.deleteQueueDefinition.mockResolvedValue(undefined)
   mocks.reorderQueueDefinitions.mockResolvedValue([])
+  mocks.linkQueueDefinitions.mockResolvedValue([])
   mocks.disableGroup.mockResolvedValue({})
   mocks.enableGroup.mockResolvedValue({})
 })
@@ -465,6 +471,57 @@ describe("TaskBoardSettingsPage navigation", () => {
       screen.queryByRole("button", {
         name: `Поднять очередь ${holding.name}`,
       })
+    ).toBeNull()
+  })
+
+  it("shows both pair names and refreshes a conflicting pair before another edit", async () => {
+    const user = userEvent.setup()
+    const first = queueDefinitionFixture({
+      id: "exterior",
+      name: "Внешние работы",
+      version: 3,
+      linkedQueueDefinitionId: "interior",
+    })
+    const second = queueDefinitionFixture({
+      id: "interior",
+      name: "Внутренние работы",
+      version: 7,
+      linkedQueueDefinitionId: "exterior",
+    })
+    mocks.listQueueDefinitions.mockResolvedValue([first, second])
+    mocks.linkQueueDefinitions.mockRejectedValueOnce(
+      Object.assign(new Error("Версия очереди изменилась"), { status: 409 })
+    )
+    renderPage()
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Связь очереди Внешние работы",
+      })
+    )
+    await user.click(screen.getByRole("button", { name: "Разорвать связь" }))
+    await waitFor(() =>
+      expect(mocks.linkQueueDefinitions).toHaveBeenCalledWith(
+        "task-board-token",
+        "exterior",
+        {
+          expectedVersion: 3,
+          linkedQueueDefinitionId: null,
+          linkedQueueExpectedVersion: 7,
+        }
+      )
+    )
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    expect(mocks.listQueueDefinitions.mock.calls.length).toBeGreaterThan(1)
+    expect(screen.getAllByText("Внутренние работы")).toHaveLength(2)
+    expect(screen.getAllByText("Внешние работы")).toHaveLength(2)
+  })
+
+  it("keeps queue-link management restricted to global administrators", async () => {
+    mocks.globalRole = "WAREHOUSE_MANAGER"
+    renderPage()
+    await screen.findAllByText("Ремонт")
+    expect(
+      screen.queryByRole("button", { name: "Связь очереди Ремонт" })
     ).toBeNull()
   })
 

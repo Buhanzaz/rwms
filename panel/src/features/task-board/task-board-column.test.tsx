@@ -102,6 +102,8 @@ function queue(entries: TaskBoardEntryDto[]) {
     settingsCollapsed: false,
     workerFeedEnabled: true,
     availableTaskLimit: 6,
+    linkedQueueId: null,
+    linkedQueueName: null,
     entries,
   } satisfies TaskBoardQueueDto
 }
@@ -120,18 +122,25 @@ function renderColumn(params: {
   highlightedTaskId?: string | null
   canManage?: boolean
   kind?: TaskBoardQueueDto["kind"]
+  linkedQueueName?: string
+  collapsed?: boolean
 }) {
   const renderTaskBoardColumn = (
     highlightedTaskId = params.highlightedTaskId ?? null
   ) => (
     <TaskBoardColumn
-      queue={{ ...queue(params.entries), kind: params.kind ?? "REPAIR" }}
+      queue={{
+        ...queue(params.entries),
+        kind: params.kind ?? "REPAIR",
+        linkedQueueId: params.linkedQueueName ? "partner-queue" : null,
+        linkedQueueName: params.linkedQueueName ?? null,
+      }}
       visibleEntries={params.visibleEntries}
       now={Date.parse("2026-08-21T09:00:00Z")}
       mobile={false}
       canEdit
       canManage={params.canManage ?? true}
-      collapsed={false}
+      collapsed={params.collapsed ?? false}
       actionPending={false}
       configPending={false}
       queueActionsDisabled={false}
@@ -170,6 +179,23 @@ function renderColumn(params: {
 }
 
 describe("TaskBoardColumn visible command targets", () => {
+  it.each([false, true])(
+    "shows the chain and partner name when collapsed=%s",
+    (collapsed) => {
+      renderColumn({
+        entries: [],
+        visibleEntries: [],
+        linkedQueueName: "Внутренние работы",
+        collapsed,
+      })
+      expect(
+        screen.getByRole("img", {
+          name: "Связана с очередью «Внутренние работы»",
+        })
+      ).toBeTruthy()
+    }
+  )
+
   it("fits the complete furniture queue label and aligns it with the count and daily plan", () => {
     renderColumn({
       entries: [],

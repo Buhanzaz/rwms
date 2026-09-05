@@ -2,6 +2,7 @@ import type {
   DriverQueueRequest,
   QueueDefinitionDto,
   QueueDefinitionRequest,
+  QueueLinkRequest,
   WorkerClassDto,
   WorkerClassRequest,
   WorkerDto,
@@ -32,6 +33,11 @@ export interface TaskBoardSettingsClient {
     id: string,
     expectedVersion: number
   ): Promise<void>
+  linkQueueDefinitions(
+    token: string,
+    id: string,
+    request: QueueLinkRequest
+  ): Promise<QueueDefinitionDto[]>
   reorderQueueDefinitions(
     token: string,
     definitions: QueueDefinitionOrderItem[]

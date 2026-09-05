@@ -2,6 +2,7 @@ import { useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
+  Link01Icon,
   Queue01Icon,
   Task01Icon,
   UserGroupIcon,
@@ -41,6 +42,7 @@ import {
   GroupAvailabilityDialog,
   GroupEditorDialog,
   QueueDefinitionEditorDialog,
+  QueueLinkEditorDialog,
   WorkerEditorDialog,
 } from "@/features/settings/task-board/settings-editor-dialogs"
 import { SettingsDeleteDialog } from "@/features/settings/task-board/settings-delete-dialog"
@@ -50,6 +52,7 @@ import {
 } from "@/features/settings/task-board/task-board-settings-errors"
 import { workerCredentialToggleAction } from "@/features/settings/task-board/worker-credential-action"
 import { useWarehouse } from "@/hooks/use-warehouse"
+import { TASK_BOARD_QUERY_KEY } from "@/features/task-board/api/task-board-api"
 
 type DeleteTarget =
   | { kind: "queue-definition"; item: QueueDefinitionDto }
@@ -110,6 +113,8 @@ export function TaskBoardSettingsPage({
   const [queueDefinitionEditor, setQueueDefinitionEditor] = useState<
     QueueDefinitionDto | "new" | null
   >(null)
+  const [queueLinkEditor, setQueueLinkEditor] =
+    useState<QueueDefinitionDto | null>(null)
   const [classEditor, setClassEditor] = useState<WorkerClassDto | "new" | null>(
     null
   )
@@ -165,6 +170,7 @@ export function TaskBoardSettingsPage({
 
   function closeEditors() {
     setQueueDefinitionEditor(null)
+    setQueueLinkEditor(null)
     setClassEditor(null)
     setWorkerEditor(null)
     setGroupEditor(null)
@@ -542,7 +548,23 @@ export function TaskBoardSettingsPage({
                 id: "name",
                 label: "Название",
                 getSortValue: (item) => item.name,
-                render: (item) => item.name,
+                render: (item) => {
+                  const partner = queueDefinitions.find(
+                    (definition) =>
+                      definition.id === item.linkedQueueDefinitionId
+                  )
+                  return (
+                    <div className="flex flex-col items-start gap-1">
+                      <span>{item.name}</span>
+                      {partner ? (
+                        <Badge variant="outline">
+                          <HugeiconsIcon icon={Link01Icon} aria-hidden="true" />
+                          {partner.name}
+                        </Badge>
+                      ) : null}
+                    </div>
+                  )
+                },
               },
               {
                 id: "type",
@@ -574,14 +596,32 @@ export function TaskBoardSettingsPage({
                 getSortValue: () => null,
                 render: (item) =>
                   canManageGlobal ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setQueueDefinitionEditor(item)}
-                    >
-                      Изменить
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setQueueDefinitionEditor(item)}
+                      >
+                        Изменить
+                      </Button>
+                      {item.type !== "HOLDING" ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={mutation.isPending}
+                          aria-label={`Связь очереди ${item.name}`}
+                          onClick={() => setQueueLinkEditor(item)}
+                        >
+                          <HugeiconsIcon
+                            icon={Link01Icon}
+                            data-icon="inline-start"
+                          />
+                          {item.linkedQueueDefinitionId ? "Связь" : "Связать"}
+                        </Button>
+                      ) : null}
+                    </div>
                   ) : (
                     "Только просмотр"
                   ),
@@ -846,6 +886,37 @@ export function TaskBoardSettingsPage({
         </section>
       ) : null}
 
+      {queueLinkEditor ? (
+        <QueueLinkEditorDialog
+          key={queueLinkEditor.id}
+          definition={queueLinkEditor}
+          definitions={queueDefinitions}
+          pending={mutation.isPending}
+          error={actionError}
+          onClose={closeEditors}
+          onSave={async (request) => {
+            if (!accessToken) return
+            await run(
+              async () => {
+                try {
+                  await taskBoardSettingsClient.linkQueueDefinitions(
+                    accessToken,
+                    queueLinkEditor.id,
+                    request
+                  )
+                } finally {
+                  await queryClient.invalidateQueries({
+                    queryKey: TASK_BOARD_QUERY_KEY,
+                  })
+                }
+              },
+              request.linkedQueueDefinitionId
+                ? "Очереди связаны."
+                : "Связь очередей разорвана."
+            )
+          }}
+        />
+      ) : null}
       {queueDefinitionEditor ? (
         <QueueDefinitionEditorDialog
           key={

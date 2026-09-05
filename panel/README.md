@@ -107,6 +107,11 @@ contexts and screens are usable.
   version-fenced current-brigade changes in one group command. The panel does
   not offer a second worker-table assignment action; task-board commits or
   rejects the complete change atomically.
+- The administrator's task-board catalog links two working queues under both
+  observed versions. Each paired queue shows its partner, and the operational
+  board keeps the chain indicator visible in expanded and collapsed columns.
+  The owning service keeps the next cabin stage with the group; the panel
+  exposes link/unlink commands and refreshes conflicting catalog versions.
 - `/task-board` renders queues as side-by-side desktop columns with a vertical
   card stack in each column; mobile stacks the columns. It has no date selector
   or browser-owned queue decisions. The default view shows every current REAL

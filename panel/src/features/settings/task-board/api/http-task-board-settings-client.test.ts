@@ -3,6 +3,52 @@ import { describe, expect, it, vi } from "vitest"
 import { HttpTaskBoardSettingsClient } from "@/features/settings/task-board/api/http-task-board-settings-client"
 
 describe("HttpTaskBoardSettingsClient gateway routes", () => {
+  it("links and unlinks queues with both observed versions", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(
+        async () =>
+          new Response("[]", {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+      )
+    const client = new HttpTaskBoardSettingsClient()
+    await client.linkQueueDefinitions("token", "queue/id", {
+      expectedVersion: 3,
+      linkedQueueDefinitionId: "paired-queue",
+      linkedQueueExpectedVersion: 8,
+    })
+    await client.linkQueueDefinitions("token", "queue/id", {
+      expectedVersion: 4,
+      linkedQueueDefinitionId: null,
+      linkedQueueExpectedVersion: 9,
+    })
+    for (const [input, init] of fetchMock.mock.calls) {
+      expect(new URL(String(input)).pathname).toBe(
+        "/api/task-board/queue-definitions/queue%2Fid/link"
+      )
+      expect(init?.method).toBe("PUT")
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        "Bearer token"
+      )
+    }
+    expect(
+      fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))
+    ).toEqual([
+      {
+        expectedVersion: 3,
+        linkedQueueDefinitionId: "paired-queue",
+        linkedQueueExpectedVersion: 8,
+      },
+      {
+        expectedVersion: 4,
+        linkedQueueDefinitionId: null,
+        linkedQueueExpectedVersion: 9,
+      },
+    ])
+  })
+
   it("uses the same-origin public task-board prefix", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
       async () =>

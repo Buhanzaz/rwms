@@ -214,6 +214,8 @@ function parseBoard(value: unknown): TaskBoardSnapshotDto {
       settingsQueueId: queueId,
       settingsCollapsed: false,
       workerFeedEnabled: boolean(column.workerFeedEnabled),
+      linkedQueueId: nullableText(column.linkedQueueId),
+      linkedQueueName: nullableText(column.linkedQueueName),
       availableTaskLimit: (() => {
         const limit = integer(column.availableTaskLimit)
         if (limit < 1 || limit > 50) invalid()

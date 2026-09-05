@@ -333,6 +333,7 @@ function queueFixture(
     notifyWhenThresholdReached: false,
     resultPhotoMinCount: 1,
     availableTaskLimit: 6,
+    linkedQueueDefinitionId: null,
     bindings: [],
     ...overrides,
   }

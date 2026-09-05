@@ -14,6 +14,7 @@ import {
   GroupAvailabilityDialog,
   GroupEditorDialog,
   QueueDefinitionEditorDialog,
+  QueueLinkEditorDialog,
   WorkerEditorDialog,
 } from "@/features/settings/task-board/settings-editor-dialogs"
 import type {
@@ -59,6 +60,7 @@ const movementDefinition: QueueDefinitionDto = {
   notifyWhenThresholdReached: false,
   resultPhotoMinCount: 1,
   availableTaskLimit: 6,
+  linkedQueueDefinitionId: null,
   bindings: [
     {
       id: "binding-driver",
@@ -204,6 +206,97 @@ afterAll(() => {
   }
 })
 afterEach(cleanup)
+
+describe("QueueLinkEditorDialog", () => {
+  it("selects a free compatible queue and submits both versions", async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => undefined)
+    const source = {
+      ...movementDefinition,
+      id: "exterior",
+      name: "Внешние работы",
+      version: 4,
+    }
+    const target = { ...movementDefinition, version: 8 }
+    const candidates = [
+      source,
+      target,
+      { ...target, id: "holding", name: "Выдержка", type: "HOLDING" as const },
+      {
+        ...target,
+        id: "occupied",
+        name: "Занятая очередь",
+        linkedQueueDefinitionId: "another",
+      },
+      {
+        ...target,
+        id: "driver",
+        name: "Водительская очередь",
+        purpose: "LOGISTICS_DRIVER" as const,
+      },
+      { ...target, id: "different", name: "Другой класс", bindings: [] },
+    ]
+    render(
+      <QueueLinkEditorDialog
+        definition={source}
+        definitions={candidates}
+        pending={false}
+        error={null}
+        onClose={vi.fn()}
+        onSave={onSave}
+      />
+    )
+    expect(
+      screen
+        .getByRole("button", { name: "Связать очереди" })
+        .hasAttribute("disabled")
+    ).toBe(true)
+    await user.click(screen.getByRole("combobox", { name: "Парная очередь" }))
+    expect(screen.getAllByRole("option")).toHaveLength(1)
+    await user.click(screen.getByRole("option", { name: "Внутренние работы" }))
+    await user.click(screen.getByRole("button", { name: "Связать очереди" }))
+    expect(onSave).toHaveBeenCalledWith({
+      expectedVersion: 4,
+      linkedQueueDefinitionId: target.id,
+      linkedQueueExpectedVersion: 8,
+    })
+  })
+
+  it("unlinks the displayed pair under both current versions", async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => undefined)
+    const source = {
+      ...movementDefinition,
+      linkedQueueDefinitionId: "exterior",
+      version: 9,
+    }
+    const partner = {
+      ...movementDefinition,
+      id: "exterior",
+      name: "Внешние работы",
+      linkedQueueDefinitionId: source.id,
+      version: 5,
+    }
+    render(
+      <QueueLinkEditorDialog
+        definition={source}
+        definitions={[source, partner]}
+        pending={false}
+        error={null}
+        onClose={vi.fn()}
+        onSave={onSave}
+      />
+    )
+    expect(screen.getByText("Внешние работы")).toBeTruthy()
+    expect(screen.queryByRole("combobox")).toBeNull()
+    await user.click(screen.getByRole("button", { name: "Разорвать связь" }))
+    expect(onSave).toHaveBeenCalledWith({
+      expectedVersion: 9,
+      linkedQueueDefinitionId: null,
+      linkedQueueExpectedVersion: 5,
+    })
+  })
+})
 
 describe("QueueDefinitionEditorDialog", () => {
   it("owns the global queue settings and existing class bindings", async () => {

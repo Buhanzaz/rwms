@@ -18,6 +18,7 @@ import {
   ArrowLeft01Icon,
   ArrowRight01Icon,
   CheckmarkCircle01Icon,
+  Link01Icon,
   PlayIcon,
 } from "@hugeicons/core-free-icons"
 
@@ -26,6 +27,12 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import {
   Popover,
   PopoverContent,
@@ -41,6 +48,32 @@ import {
   TaskBoardCard,
   type TaskBoardRepairComplexity,
 } from "@/features/task-board/task-board-card"
+
+function QueueLinkIndicator({ queue }: { queue: TaskBoardQueueDto }) {
+  if (!queue.linkedQueueId || !queue.linkedQueueName) return null
+  const label = `Связана с очередью «${queue.linkedQueueName}»`
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            role="img"
+            aria-label={label}
+            tabIndex={0}
+            className="inline-flex shrink-0 rounded text-primary outline-offset-4"
+          >
+            <HugeiconsIcon
+              icon={Link01Icon}
+              className="size-4"
+              aria-hidden="true"
+            />
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>{label}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
 
 function queueKindLabel(queue: TaskBoardQueueDto) {
   if (queue.kind === "MOVEMENT") return "Перемещение"
@@ -325,6 +358,7 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
           <HugeiconsIcon icon={ArrowRight01Icon} />
         </Button>
         <Badge variant="secondary">{visibleEntries.length}</Badge>
+        <QueueLinkIndicator queue={queue} />
         <span className={cn(!mobile && "[writing-mode:vertical-rl]")}>
           {queue.label}
         </span>
@@ -347,10 +381,11 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
         )}
       >
         <div className="flex h-8 shrink-0 items-start justify-between gap-2">
-          <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-2">
             <h2 className="truncate font-heading text-sm font-medium">
               {queue.label}
             </h2>
+            <QueueLinkIndicator queue={queue} />
           </div>
           <Button
             type="button"

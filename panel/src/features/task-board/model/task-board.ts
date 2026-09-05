@@ -41,6 +41,8 @@ export type TaskBoardQueueDto = {
   settingsCollapsed: boolean
   workerFeedEnabled: boolean
   availableTaskLimit: number
+  linkedQueueId: string | null
+  linkedQueueName: string | null
   entries: TaskBoardEntryDto[]
 }
 

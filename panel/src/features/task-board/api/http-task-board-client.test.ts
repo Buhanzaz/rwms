@@ -26,6 +26,8 @@ const boardResponse = {
       queueId,
       queueName: "Ремонт",
       queueType: "REPAIR",
+      linkedQueueId: null,
+      linkedQueueName: null,
       queueVersion: 4,
       workerFeedEnabled: true,
       sortOrder: 10,
@@ -96,6 +98,8 @@ const boardResponse = {
       queueId: furnitureQueueId,
       queueName: "Перемещение мебели",
       queueType: "FURNITURE_MOVEMENT",
+      linkedQueueId: null,
+      linkedQueueName: null,
       queueVersion: 2,
       workerFeedEnabled: false,
       sortOrder: 20,
@@ -201,6 +205,31 @@ describe("public task-board HTTP client", () => {
       null,
       null,
     ])
+  })
+
+  it("maps the partner identity and name on both linked columns", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        json({
+          ...boardResponse,
+          columns: boardResponse.columns.map((column, index) => ({
+            ...column,
+            linkedQueueId: boardResponse.columns[1 - index]!.queueId,
+            linkedQueueName: boardResponse.columns[1 - index]!.queueName,
+          })),
+        })
+      )
+    )
+    const board = await getHttpTaskBoard("token", warehouseId)
+    expect(board.queues[0]).toMatchObject({
+      linkedQueueId: furnitureQueueId,
+      linkedQueueName: "Перемещение мебели",
+    })
+    expect(board.queues[1]).toMatchObject({
+      linkedQueueId: queueId,
+      linkedQueueName: "Ремонт",
+    })
   })
 
   it("loads eligible groups only from the public queue route", async () => {
