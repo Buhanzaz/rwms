@@ -844,6 +844,13 @@ Evidence: [`services/inventory-service/`](../../services/inventory-service/),
 driver work and their orchestration. It persists its workflow/reconciliation
 state and calls other owners through versioned, idempotent boundaries.
 
+Asset's logistics-only order release boundary accepts `LOGISTICS_SERVICE` provenance for
+automatic cabin releases and empty furniture replacements. This is not an interactive JWT
+role, and cannot create reservations. V49 changes only the release audit constraint and
+preserves existing reservation evidence. Evidence:
+[`OrderAssetService`](../../services/asset-service/src/main/java/dev/buhanzaz/rwms/asset/service/OrderAssetService.java),
+[`V49`](../../services/asset-service/src/main/resources/db/migration/V49__logistics_service_reservation_release_actor.sql).
+
 Global cabin monthly prices belong to logistics, not asset passport metadata. V98 seeds a
 separate versioned singleton with positive whole-ruble overrides for asset-owned type/category
 UUID pairs; every omitted pair means zero. No catalog names or cross-database foreign keys are

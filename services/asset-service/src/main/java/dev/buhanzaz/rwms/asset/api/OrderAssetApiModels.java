@@ -26,7 +26,7 @@ public final class OrderAssetApiModels {
           @Size(max = 32)
           @Pattern(
               regexp =
-                  "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|CUSTOMER|VIEWER)$")
+                  "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|CUSTOMER|VIEWER|LOGISTICS_SERVICE)$")
           String actorRole) {}
 
   public record ReserveOrderUnitRequest(
@@ -59,8 +59,8 @@ public final class OrderAssetApiModels {
           @Size(max = 32)
           @Pattern(
               regexp =
-                  "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|CUSTOMER|VIEWER)$")
-              String actorRole,
+                  "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|CUSTOMER|VIEWER|LOGISTICS_SERVICE)$")
+          String actorRole,
       @NotNull @Size(max = 100) List<@NotNull @Valid OrderUnitEquipmentRequirements> units) {}
 
   /** Source-partitioned reservation view with live availability and the catalog cabin maximum. */

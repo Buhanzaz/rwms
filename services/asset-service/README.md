@@ -68,6 +68,9 @@ expired during this read, but no live hold is created, renewed or released.
 Customer-originated presentation and order-reservation commands preserve
 `CUSTOMER` as their audit role; Flyway V41 extends only the corresponding role
 constraints.
+Logistics-only order-unit release commands and empty equipment replacements also accept
+`LOGISTICS_SERVICE` audit provenance for automatic release. This does not grant a public JWT
+role or allow creating cabin/furniture reservations; V49 widens only the release audit constraint.
 `/rental-items/{id}/photo-presentation-snapshot` is a separate least-privilege read for one
 logistics-owned public photo snapshot. It returns identity/version/warehouse fencing, number,
 dimensions, finishing, category, ordered characteristic names and nullable linoleum; status,

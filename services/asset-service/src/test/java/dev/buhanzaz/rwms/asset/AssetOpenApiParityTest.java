@@ -31,6 +31,21 @@ class AssetOpenApiParityTest {
   private static final Set<String> OPENAPI_METHODS = Set.of("get", "post", "put", "delete");
 
   @Test
+  void automaticOrderReleaseRoleDoesNotWidenReservationCreationContracts() throws Exception {
+    Map<String, Object> schemas = child(child(openApi(), "components"), "schemas");
+    assertThat(list(child(schemas, "OrderReleaseActorRole").get("enum")))
+        .contains("LOGISTICS_SERVICE");
+    assertThat(list(child(schemas, "OrderActorRole").get("enum")))
+        .doesNotContain("LOGISTICS_SERVICE");
+    for (String name : List.of("OrderActorRequest", "ReplaceOrderEquipmentReservationsRequest")) {
+      assertThat(child(child(child(schemas, name), "properties"), "actorRole"))
+          .containsEntry("$ref", "#/components/schemas/OrderReleaseActorRole");
+    }
+    assertThat(child(child(child(schemas, "ReserveOrderUnitRequest"), "properties"), "actorRole"))
+        .containsEntry("$ref", "#/components/schemas/OrderActorRole");
+  }
+
+  @Test
   void openApiInventoryExactlyMatchesAssetControllers() throws Exception {
     assertThat(openApiEndpoints(openApi()))
         .containsExactlyInAnyOrderElementsOf(controllerEndpoints());

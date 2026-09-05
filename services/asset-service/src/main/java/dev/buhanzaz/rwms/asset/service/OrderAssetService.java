@@ -683,6 +683,11 @@ public class OrderAssetService {
    */
   List<OrderEquipmentReservationView> replaceEquipmentReservationsInCurrentTransaction(
       UUID orderId, ReplaceOrderEquipmentReservationsRequest request) {
+    if ("LOGISTICS_SERVICE".equals(request.actorRole()) && !request.units().isEmpty()) {
+      throw conflict(
+          "SERVICE_ACTOR_RELEASE_ONLY",
+          "Автоматическая команда может только освободить мебель заказа");
+    }
     acquireOrderCompositionLock(orderId);
     Map<UUID, Map<UUID, Long>> requiredByUnit = requirementsByUnit(request.units());
     Map<UUID, UUID> sourceByUnit =

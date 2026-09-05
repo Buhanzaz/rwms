@@ -210,7 +210,7 @@ public class OrderUnitReservation {
     if (state == OrderUnitReservationState.RELEASED) return false;
     state = OrderUnitReservationState.RELEASED;
     releasedBySubjectId = Objects.requireNonNull(actorSubjectId, "actorSubjectId");
-    releasedByRole = requireRole(actorRole);
+    releasedByRole = "LOGISTICS_SERVICE".equals(actorRole) ? actorRole : requireRole(actorRole);
     releasedAt = now();
     updatedAt = releasedAt;
     return true;

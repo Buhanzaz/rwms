@@ -103,6 +103,7 @@ class OrderAssetServiceIntegrationTest {
   @Autowired OperationLeaseRepository leases;
   @Autowired JdbcTemplate jdbc;
   @Autowired PlatformTransactionManager transactionManager;
+  @Autowired jakarta.validation.Validator validator;
 
   @DynamicPropertySource
   static void properties(DynamicPropertyRegistry registry) {
@@ -119,6 +120,112 @@ class OrderAssetServiceIntegrationTest {
   @AfterAll
   static void stopDatabase() {
     POSTGRES.stop();
+  }
+
+  @Test
+  void automaticReleasePreservesServiceProvenanceAndReplaysBothReservationEffects() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID managerId = UUID.randomUUID();
+    UUID serviceId = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    UUID cabinId = freeRental(managerId, warehouseId).id();
+    var reserved =
+        orders
+            .reserve(UUID.randomUUID(), orderId, reserveRequest(warehouseId, cabinId, managerId))
+            .response();
+    UUID equipmentId =
+        assets
+            .createEquipment(
+                managerId,
+                UUID.randomUUID(),
+                new CreateEquipmentRequest("Expiry furniture", EquipmentCategory.FURNITURE, null))
+            .response()
+            .id();
+    seedStockBalance(equipmentId, warehouseId, 2);
+    orders.replaceEquipmentReservations(
+        UUID.randomUUID(),
+        orderId,
+        equipmentReservationRequest(
+            managerId,
+            warehouseId,
+            cabinId,
+            List.of(new OrderEquipmentRequirement(equipmentId, 1L))));
+    var actor = new OrderActorRequest(serviceId, "LOGISTICS_SERVICE");
+    assertThat(validator.validate(actor)).isEmpty();
+    UUID releaseKey = UUID.randomUUID();
+    assertThat(orders.releaseAll(releaseKey, orderId, actor).response()).hasSize(1);
+    assertThat(orders.releaseAll(releaseKey, orderId, actor).replayed()).isTrue();
+    assertThat(assets.rentalItem(cabinId).status()).isEqualTo(RentalItemStatus.FREE);
+    assertThat(
+            jdbc.queryForMap(
+                "select added_by_role, released_by_role, released_by_subject_id from"
+                    + " order_unit_reservation where id=?",
+                reserved.reservationId()))
+        .containsEntry("added_by_role", "RENTAL_MANAGER")
+        .containsEntry("released_by_role", "LOGISTICS_SERVICE")
+        .containsEntry("released_by_subject_id", serviceId);
+    var releaseFurniture =
+        new ReplaceOrderEquipmentReservationsRequest(
+            warehouseId, serviceId, "LOGISTICS_SERVICE", List.of());
+    assertThat(validator.validate(releaseFurniture)).isEmpty();
+    UUID furnitureKey = UUID.randomUUID();
+    assertThat(
+            orders.replaceEquipmentReservations(furnitureKey, orderId, releaseFurniture).response())
+        .isEmpty();
+    assertThat(
+            orders.replaceEquipmentReservations(furnitureKey, orderId, releaseFurniture).replayed())
+        .isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from order_equipment_reservation where order_id=? and"
+                    + " state='ACTIVE'",
+                Integer.class,
+                orderId))
+        .isZero();
+    assertThat(
+            orders
+                .reserve(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    reserveRequest(warehouseId, cabinId, managerId))
+                .response()
+                .state())
+        .isEqualTo("ACTIVE");
+  }
+
+  @Test
+  void automaticReleaseActorCannotReserveCabinsOrRequestFurniture() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID actorId = UUID.randomUUID();
+    UUID cabinId = freeRental(actorId, warehouseId).id();
+    var reserve =
+        new ReserveOrderUnitRequest(
+            warehouseId,
+            cabinId,
+            UUID.randomUUID(),
+            "Service cannot create a booking",
+            null,
+            actorId,
+            "LOGISTICS_SERVICE");
+    assertThat(validator.validate(reserve))
+        .anyMatch(violation -> violation.getPropertyPath().toString().equals("actorRole"));
+    assertThatThrownBy(() -> orders.reserve(UUID.randomUUID(), UUID.randomUUID(), reserve))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("actorRole is invalid");
+    assertThat(assets.rentalItem(cabinId).status()).isEqualTo(RentalItemStatus.FREE);
+    assertThatThrownBy(
+            () ->
+                orders.replaceEquipmentReservations(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    new ReplaceOrderEquipmentReservationsRequest(
+                        warehouseId,
+                        actorId,
+                        "LOGISTICS_SERVICE",
+                        List.of(new OrderUnitEquipmentRequirements(cabinId, List.of())))))
+        .isInstanceOf(OrderUnitReservationConflictException.class)
+        .extracting(error -> ((OrderUnitReservationConflictException) error).code())
+        .isEqualTo("SERVICE_ACTOR_RELEASE_ONLY");
   }
 
   @Test

@@ -68,6 +68,9 @@ order и разбиваются на страницы только после п
 создаётся, не продлевается и не освобождается. Команды presentation и order
 reservation от клиента сохраняют `CUSTOMER` как audit role; Flyway V41 расширяет
 только соответствующие role constraints.
+Закрытые команды освобождения бытовок заказа и замены мебели пустым составом также принимают
+audit role `LOGISTICS_SERVICE` для автоматического освобождения. Это не публичная JWT-роль и
+не разрешение создавать резервы бытовок/мебели; V49 расширяет только constraint автора освобождения.
 `/rental-items/{id}/photo-presentation-snapshot` — отдельное least-privilege чтение для одного
 logistics-owned публичного photo snapshot. Оно возвращает identity/version/warehouse fencing,
 номер, габариты, отделку, категорию, упорядоченные названия характеристик и nullable-линолеум;

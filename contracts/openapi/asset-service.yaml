@@ -2738,13 +2738,17 @@ components:
     OrderActorRole:
       type: string
       enum: [SYSTEM_ADMIN, WMS_ADMIN, WAREHOUSE_MANAGER, RENTAL_MANAGER, CUSTOMER, VIEWER]
+    OrderReleaseActorRole:
+      type: string
+      description: Human command provenance or logistics-owned automatic release; this is not a public JWT role.
+      enum: [SYSTEM_ADMIN, WMS_ADMIN, WAREHOUSE_MANAGER, RENTAL_MANAGER, CUSTOMER, VIEWER, LOGISTICS_SERVICE]
     OrderActorRequest:
       type: object
       additionalProperties: false
       required: [actorSubjectId, actorRole]
       properties:
         actorSubjectId: { type: string, format: uuid }
-        actorRole: { $ref: '#/components/schemas/OrderActorRole' }
+        actorRole: { $ref: '#/components/schemas/OrderReleaseActorRole' }
     ReserveOrderUnitRequest:
       type: object
       additionalProperties: false
@@ -2776,12 +2780,13 @@ components:
           items: { $ref: '#/components/schemas/OrderEquipmentRequirement' }
     ReplaceOrderEquipmentReservationsRequest:
       type: object
+      description: LOGISTICS_SERVICE provenance is permitted only with an empty units array to release existing reservations.
       additionalProperties: false
       required: [warehouseId, actorSubjectId, actorRole, units]
       properties:
         warehouseId: { type: string, format: uuid }
         actorSubjectId: { type: string, format: uuid }
-        actorRole: { $ref: '#/components/schemas/OrderActorRole' }
+        actorRole: { $ref: '#/components/schemas/OrderReleaseActorRole' }
         units:
           type: array
           maxItems: 100
