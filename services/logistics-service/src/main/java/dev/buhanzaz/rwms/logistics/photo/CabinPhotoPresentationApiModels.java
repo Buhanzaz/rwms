@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.photo;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import java.time.OffsetDateTime;
@@ -39,6 +40,8 @@ public final class CabinPhotoPresentationApiModels {
   public record PublicCabinPhotoPresentationResponse(
       UUID id,
       String cabinNumber,
+      Long pricingVersion,
+      @JsonFormat(shape = JsonFormat.Shape.STRING) Long monthlyPriceRubles,
       String dimensions,
       String finishing,
       String category,

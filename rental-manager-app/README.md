@@ -27,6 +27,8 @@ Russian version: [README.ru.md](README.ru.md).
   refresh. Missing/failed prices remain unavailable; actor, dialog, warehouse and request fences
   prevent stale responses from replacing another selection or a newer price. These reads do not
   change holds or book commercial terms.
+- Sent presentation responses preserve the owner's frozen exact price and tariff revision.
+  Historical null pairs remain unknown; incomplete pairs and numeric money tokens are rejected.
 - An editable draft or saved order opens the one assistant conversation linked to that exact order.
   Reopening it reuses the server-owned conversation instead of creating a duplicate inquiry.
 - Order detail renders the authoritative selected cabins, requested equipment and rental terms from

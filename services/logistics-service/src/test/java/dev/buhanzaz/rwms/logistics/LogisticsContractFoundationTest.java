@@ -183,6 +183,8 @@ class LogisticsContractFoundationTest {
         .containsExactly(
             "id",
             "cabinNumber",
+            "pricingVersion",
+            "monthlyPriceRubles",
             "dimensions",
             "finishing",
             "category",

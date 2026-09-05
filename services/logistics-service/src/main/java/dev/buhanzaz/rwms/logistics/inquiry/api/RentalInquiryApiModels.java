@@ -203,6 +203,8 @@ public final class RentalInquiryApiModels {
   public record PresentationCabin(
       UUID id,
       String number,
+      Long pricingVersion,
+      @JsonFormat(shape = JsonFormat.Shape.STRING) Long monthlyPriceRubles,
       String rentalType,
       String dimensions,
       String finishing,

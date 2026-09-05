@@ -9,6 +9,7 @@ import { FullscreenPhotoViewer } from "@/components/media/fullscreen-photo-viewe
 import { Skeleton } from "@/components/ui/skeleton"
 import { getPublicCabinPhotoPresentation } from "@/features/rental-items/cabin-photo-presentations-api"
 import { ApiError } from "@/lib/api-client"
+import { formatMonthlyRentalPrice } from "@/features/assistant/api/rental-pricing-api"
 
 function formatCreatedAt(value: string) {
   const date = new Date(value)
@@ -94,6 +95,16 @@ export function PublicCabinPhotoPresentationPage() {
                 Представление создано {createdAt}
               </p>
             ) : null}
+            <p className="mt-3 text-xl font-semibold break-words tabular-nums">
+              {presentation.monthlyPriceRubles === null
+                ? "Цена не зафиксирована"
+                : formatMonthlyRentalPrice(presentation.monthlyPriceRubles)}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {presentation.monthlyPriceRubles === null
+                ? "Уточните стоимость у менеджера."
+                : "Цена на момент создания представления. Доставка и дополнительные услуги — отдельно."}
+            </p>
           </div>
           <Badge variant="secondary" className="shrink-0 gap-1.5">
             <HugeiconsIcon icon={Camera01Icon} aria-hidden="true" />

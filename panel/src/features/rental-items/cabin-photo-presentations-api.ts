@@ -5,6 +5,7 @@ import {
   invalidApiResponseError,
 } from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
+import { assertPresentationRentalPrice } from "@/features/assistant/api/rental-pricing-api"
 
 export type CabinPhotoPresentation = {
   id: string
@@ -27,6 +28,8 @@ export type CabinPhotoPresentationPhoto = {
 export type PublicCabinPhotoPresentation = {
   id: string
   cabinNumber: string
+  pricingVersion: number | null
+  monthlyPriceRubles: string | null
   dimensions: string | null
   finishing: string | null
   category: string | null
@@ -78,7 +81,9 @@ export async function getPublicCabinPhotoPresentation(token: string) {
   }
   if (!response.ok) throw await apiErrorFromResponse(response)
   try {
-    return (await response.json()) as PublicCabinPhotoPresentation
+    const presentation = (await response.json()) as PublicCabinPhotoPresentation
+    assertPresentationRentalPrice(presentation)
+    return presentation
   } catch (error) {
     throw invalidApiResponseError(error)
   }

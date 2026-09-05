@@ -19,6 +19,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Owns rental tariff resolution. The current asset taxonomy is read on every table request, so
@@ -68,7 +70,10 @@ public class RentalPricingService {
 
   /**
    * Caller supplies an already-authorized warehouse and cabin set, including customer ownership.
+   * Suspending a caller transaction keeps the remote read and local repeatable-read tariff snapshot
+   * independent of its persistence context. This does not release locks held by that caller.
    */
+  @Transactional(propagation = Propagation.NOT_SUPPORTED)
   public CabinRentalPricesResponse prices(UUID warehouseId, List<UUID> rentalItemIds) {
     if (warehouseId == null
         || rentalItemIds == null

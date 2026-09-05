@@ -107,6 +107,12 @@ Assistant search cards use the same price reader and caller-scoped cache; collap
 the search pauses its price requests. An admin tariff update invalidates these price
 queries only, leaving unrelated cabin/media state intact.
 
+Public client presentations and photo galleries show the exact monthly price frozen when that
+link/revision was created, separately from delivery and other charges. A later tariff change does
+not change an already-sent link. Historical links with no price snapshot explicitly ask the reader
+to contact the manager; zero is displayed only when the saved tariff is actually zero. Missing,
+partial or malformed price fields fail decoding instead of producing a free offer.
+
 The router exposes the operational panel for warehouse/equipment, rentals and
 orders, inventory, maintenance/acceptance, logistics, task board, assistant,
 write-offs, and settings. The current user profile determines which warehouse

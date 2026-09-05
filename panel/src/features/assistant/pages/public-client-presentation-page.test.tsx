@@ -97,6 +97,8 @@ function cabin(id: string, number: string, physicalBeds = 0) {
   return {
     id,
     number,
+    pricingVersion: 4,
+    monthlyPriceRubles: "8500" as string | null,
     rentalType: "Бытовка",
     dimensions: "6 × 2,4 м",
     finishing: "ДВП",
@@ -268,6 +270,34 @@ afterEach(() => {
 })
 
 describe("public client presentation", () => {
+  it("shows the frozen price and keeps historical unknowns distinct from a zero tariff", async () => {
+    api.presentation = presentation({
+      groups: [
+        {
+          key: "prices",
+          label: "Цены",
+          cabins: [
+            {
+              ...cabin("priced", "БК-1"),
+              monthlyPriceRubles: "9223372036854775807",
+            },
+            { ...cabin("zero", "БК-2"), monthlyPriceRubles: "0" },
+            {
+              ...cabin("legacy", "БК-3"),
+              pricingVersion: null,
+              monthlyPriceRubles: null,
+            },
+          ],
+        },
+      ],
+    })
+    renderPage()
+    expect(
+      await screen.findByText("9 223 372 036 854 775 807 ₽/мес.")
+    ).toBeTruthy()
+    expect(screen.getByText("0 ₽/мес.")).toBeTruthy()
+    expect(screen.getByText("Цена не зафиксирована")).toBeTruthy()
+  })
   it("renders unique cabin cards, delivery guidance, theme control and the floating cart", async () => {
     const user = userEvent.setup()
     renderPage()
@@ -283,7 +313,7 @@ describe("public client presentation", () => {
     expect(screen.getAllByText("В наличии")).toHaveLength(2)
     expect(screen.getAllByText(/Учётный № БЫТ-/)).toHaveLength(2)
     expect(screen.queryByText(/В наличии\s+\d/)).toBeNull()
-    expect(screen.queryByText(/₽/)).toBeNull()
+    expect(screen.getAllByText("8 500 ₽/мес.")).toHaveLength(2)
     expect(screen.getAllByText("Ориентир доставки")).toHaveLength(2)
     expect(
       screen.getAllByText("Точный срок уточним после адреса и маршрута.")

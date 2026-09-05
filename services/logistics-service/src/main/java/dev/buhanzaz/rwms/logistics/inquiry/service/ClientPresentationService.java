@@ -23,6 +23,8 @@ import dev.buhanzaz.rwms.logistics.order.security.OrderActor;
 import dev.buhanzaz.rwms.logistics.order.security.OrderAuthorizer;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
 import dev.buhanzaz.rwms.logistics.order.service.RentalOrderService;
+import dev.buhanzaz.rwms.logistics.pricing.api.CabinRentalPricesResponse;
+import dev.buhanzaz.rwms.logistics.pricing.service.RentalPricingService;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -71,6 +73,7 @@ public class ClientPresentationService {
   private final RentalOrderService rentalOrders;
   private final ClientDeliveryDatePolicy deliveryDatePolicy;
   private final ObjectMapper json;
+  private final RentalPricingService pricing;
 
   @Transactional
   public ClientPresentationResponse publish(
@@ -203,6 +206,17 @@ public class ClientPresentationService {
                       LogisticsDependencyGateway.CabinMediaSnapshot::photos,
                       (left, right) -> left,
                       LinkedHashMap::new));
+      CabinRentalPricesResponse priceQuote = pricing.prices(request.warehouseId(), cabinIds);
+      Map<UUID, CabinRentalPricesResponse.Price> priceById =
+          priceQuote.cabins().stream()
+              .collect(
+                  Collectors.toMap(
+                      CabinRentalPricesResponse.Price::rentalItemId, Function.identity()));
+      if (heldCabins.stream()
+          .anyMatch(cabin -> priceById.get(cabin.id()).rentalItemVersion() != cabin.version())) {
+        throw conflict(
+            "CABIN_VERSION_CONFLICT", "Бытовка изменилась при фиксации цены; повторите публикацию");
+      }
       dependencies.releasePresentationHolds(
           deterministic(
               "legacy-presentation-holds-release:"
@@ -229,6 +243,8 @@ public class ClientPresentationService {
                   sortOrder++,
                   write(cabins.get(cabinId)),
                   write(media.getOrDefault(cabinId, List.of())),
+                  priceQuote.pricingVersion(),
+                  priceById.get(cabinId).monthlyPriceRubles(),
                   timestamp));
         }
       }
@@ -407,6 +423,8 @@ public class ClientPresentationService {
           new PresentationCabin(
               cabin.id(),
               cabin.number(),
+              item.getPricingVersion(),
+              item.getMonthlyPriceRubles(),
               cabin.rentalType(),
               cabin.dimensions(),
               cabin.finishing(),

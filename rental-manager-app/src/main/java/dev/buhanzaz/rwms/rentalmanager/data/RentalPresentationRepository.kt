@@ -279,6 +279,12 @@ class RentalPresentationRepository(
     }
 
     private fun validateCabin(cabin: RentalPresentationCabinDto, token: String, cabinId: String) {
+        require(
+            (cabin.pricingVersion == null) == (cabin.monthlyPriceRubles == null) &&
+                (cabin.pricingVersion == null || cabin.pricingVersion >= 0),
+        ) {
+            "Client presentation price snapshot is invalid"
+        }
         cabin.currentContents.forEach { content ->
             canonicalUuid(content.equipmentId, "cabin equipment id")
             require(content.quantity >= 0) { "Cabin equipment quantity is invalid" }

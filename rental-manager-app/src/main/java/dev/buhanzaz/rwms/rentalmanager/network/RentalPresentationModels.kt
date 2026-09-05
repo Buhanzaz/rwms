@@ -55,6 +55,8 @@ data class RentalPresentationGroupDto(
 data class RentalPresentationCabinDto(
     val id: String,
     val number: String,
+    val pricingVersion: Long?,
+    val monthlyPriceRubles: RentalMonthlyPrice?,
     val rentalType: String?,
     val dimensions: String?,
     val finishing: String?,

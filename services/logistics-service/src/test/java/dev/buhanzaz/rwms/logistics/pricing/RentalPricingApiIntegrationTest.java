@@ -72,6 +72,8 @@ class RentalPricingApiIntegrationTest {
   @Autowired MockMvc mvc;
   @Autowired ObjectMapper json;
   @Autowired JdbcTemplate jdbc;
+  @Autowired dev.buhanzaz.rwms.logistics.pricing.service.RentalPricingService pricing;
+  @Autowired org.springframework.transaction.PlatformTransactionManager transactionManager;
   @MockitoBean LogisticsDependencyGateway dependencies;
   private CabinPricingCatalog currentCatalog;
 
@@ -339,6 +341,30 @@ class RentalPricingApiIntegrationTest {
                 .content(cabins(WAREHOUSE, List.of(CABIN))))
         .andExpect(status().isServiceUnavailable())
         .andExpect(jsonPath("$.code").value("RENTAL_PRICING_UNAVAILABLE"));
+  }
+
+  @Test
+  void priceQuoteSuspendsCallerTransactionForRemoteFactsAndRestoresItAfterSnapshotRead() {
+    when(dependencies.readCabinPricingReferences(WAREHOUSE, List.of(CABIN)))
+        .thenAnswer(
+            ignored -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+              return new CabinPricingReferences(
+                  WAREHOUSE, List.of(new CabinPricingReference(CABIN, 3, TYPE, CATEGORY)));
+            });
+    new org.springframework.transaction.support.TransactionTemplate(transactionManager)
+        .executeWithoutResult(
+            status -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isTrue();
+              assertThat(
+                      pricing
+                          .prices(WAREHOUSE, List.of(CABIN))
+                          .cabins()
+                          .getFirst()
+                          .monthlyPriceRubles())
+                  .isZero();
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isTrue();
+            });
   }
 
   @Test

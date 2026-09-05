@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   getCabinRentalPrices,
+  assertPresentationRentalPrice,
   formatMonthlyRentalPrice,
   type CabinRentalPrices,
   getRentalPricingSettings,
@@ -46,6 +47,29 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe("rental pricing API", () => {
+  it.each([
+    { pricingVersion: null, monthlyPriceRubles: null },
+    { pricingVersion: 0, monthlyPriceRubles: "0" },
+    { pricingVersion: 5, monthlyPriceRubles: "9223372036854775807" },
+  ])(
+    "accepts exact presentation prices or explicit historical unknowns",
+    (snapshot) => {
+      expect(() => assertPresentationRentalPrice(snapshot)).not.toThrow()
+    }
+  )
+  it.each([
+    {},
+    null,
+    { pricingVersion: 0 },
+    { pricingVersion: null, monthlyPriceRubles: "0" },
+    { pricingVersion: 0, monthlyPriceRubles: null },
+    { pricingVersion: -1, monthlyPriceRubles: "0" },
+    { pricingVersion: 0, monthlyPriceRubles: 100 },
+    { pricingVersion: 0, monthlyPriceRubles: "1e3" },
+    { pricingVersion: 0, monthlyPriceRubles: "9223372036854775808" },
+  ])("rejects incomplete or malformed frozen prices", (snapshot) => {
+    expect(() => assertPresentationRentalPrice(snapshot)).toThrow()
+  })
   it("loads exact amounts and inactive catalog rows through the authorized same-origin gateway", async () => {
     fetchMock.mockResolvedValue(Response.json(table()))
     const signal = new AbortController().signal

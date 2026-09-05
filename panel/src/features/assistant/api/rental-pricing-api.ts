@@ -55,6 +55,20 @@ export function formatMonthlyRentalPrice(value: string): string {
   return `${new Intl.NumberFormat("ru-RU").format(BigInt(value))} ₽/мес.`
 }
 
+/** Null pairs identify old sent links, not a zero tariff or a missing service response. */
+export function assertPresentationRentalPrice(value: unknown): void {
+  const row = record(value)
+  if (row.pricingVersion === null && row.monthlyPriceRubles === null) return
+  if (
+    typeof row.pricingVersion !== "number" ||
+    !Number.isSafeInteger(row.pricingVersion) ||
+    row.pricingVersion < 0 ||
+    typeof row.monthlyPriceRubles !== "string" ||
+    !validMonthlyRentalPrice(row.monthlyPriceRubles)
+  )
+    invalid()
+}
+
 function invalid(): never {
   throw invalidApiResponseError("Сервис вернул некорректные цены аренды.")
 }

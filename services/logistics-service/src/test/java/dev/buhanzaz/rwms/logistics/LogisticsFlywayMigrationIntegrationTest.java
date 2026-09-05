@@ -149,6 +149,93 @@ class LogisticsFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void presentationPriceUpgradePreservesHistoricalSnapshotAndEnforcesCompleteNonnegativePairs() {
+    configuration(MIGRATIONS).target("98").load().migrate();
+    UUID managerId = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID presentationId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into order_client(
+          id,version,client_type,display_name,normalized_name,created_by_subject_id,
+          responsible_manager_id,responsible_manager_display_name,
+          creation_idempotency_key,creation_request_sha256,created_at,updated_at,phone,normalized_phone)
+        values (?,0,'INDIVIDUAL','Клиент','клиент',?,?,'Менеджер',?,?,current_timestamp,current_timestamp,
+          '+79990009999','+79990009999')
+        """,
+        clientId,
+        managerId,
+        managerId,
+        UUID.randomUUID(),
+        "a".repeat(64));
+    jdbc.update(
+        """
+        insert into rental_inquiry(
+          id,version,conversation_id,client_id,manager_id,manager_display_name,
+          manager_role,warehouse_id,state,created_at,updated_at,creation_idempotency_key)
+        values (?,0,?,?,?,'Менеджер','RENTAL_MANAGER',?,'ACTIVE',current_timestamp,current_timestamp,?)
+        """,
+        inquiryId,
+        UUID.randomUUID(),
+        clientId,
+        managerId,
+        warehouseId,
+        inquiryId);
+    jdbc.update(
+        """
+        insert into client_presentation(
+          id,version,inquiry_id,revision,warehouse_id,state,expires_at,view_until,
+          last_publish_idempotency_key,last_publish_request_sha256,created_at,updated_at)
+        values (?,0,?,1,?,'ACTIVE',current_timestamp + interval '1 hour',
+          current_timestamp + interval '2 hours',?,?,current_timestamp,current_timestamp)
+        """,
+        presentationId,
+        inquiryId,
+        warehouseId,
+        UUID.randomUUID(),
+        "b".repeat(64));
+    UUID itemId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into client_presentation_item(
+          id,presentation_id,presentation_revision,rental_item_id,group_key,
+          group_label,sort_order,cabin_snapshot_json,media_snapshot_json,created_at)
+        values (?,?,1,?,'group','Бытовки',0,'{"number":"БК-1"}'::jsonb,'[]'::jsonb,current_timestamp)
+        """,
+        itemId,
+        presentationId,
+        UUID.randomUUID());
+    Map<String, Object> before =
+        jdbc.queryForMap("select * from client_presentation_item where id=?", itemId);
+    Flyway upgraded = flyway(MIGRATIONS);
+    upgraded.migrate();
+    upgraded.validate();
+    Map<String, Object> after =
+        jdbc.queryForMap("select * from client_presentation_item where id=?", itemId);
+    assertThat(after)
+        .containsEntry("pricing_version", null)
+        .containsEntry("monthly_price_rubles", null);
+    after.remove("pricing_version");
+    after.remove("monthly_price_rubles");
+    assertThat(after).isEqualTo(before);
+    assertThatThrownBy(
+            () -> jdbc.update("update client_presentation_item set monthly_price_rubles=0"))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update client_presentation_item set pricing_version=0,monthly_price_rubles=-1"))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThat(
+            jdbc.update(
+                "update client_presentation_item set pricing_version=0,monthly_price_rubles=0"))
+        .isOne();
+    assertJpaValidationStarts();
+  }
+
+  @Test
   void cleanInstallIsRepeatSafeAndCreatesOnlyLogisticsOwnedState() {
     Flyway flyway = flyway(MIGRATIONS);
     int pendingMigrations = flyway.info().pending().length;

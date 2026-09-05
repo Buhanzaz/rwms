@@ -854,6 +854,15 @@ closed. Existing hold, fee and booking state is unaffected by this persistence a
 [`RentalPricingStore`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/pricing/service/RentalPricingStore.java),
 [`V98`](../../services/logistics-service/src/main/resources/db/migration/V98__global_rental_pricing.sql).
 
+New client/photo presentations freeze the exact monthly whole-RUB price and tariff revision
+when the snapshot is created, after checking the pricing facts match its cabin version. Later
+tariff edits never reprice an already-sent revision. Historical links have explicit null pairs,
+not a zero/current-price backfill; delivery and other charges remain independent. A failed
+price read prevents publication. Evidence:
+[`ClientPresentationService`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/ClientPresentationService.java),
+[`CabinPhotoPresentationService`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/photo/CabinPhotoPresentationService.java),
+[`V99`](../../services/logistics-service/src/main/resources/db/migration/V99__presentation_rental_price_snapshots.sql).
+
 Public return, shipment and transfer list reads preserve their array payload but
 are bounded to `page/size` with a maximum of 100 documents. Pagination metadata
 is carried in fixed response headers, and all lines for one document page are

@@ -60,6 +60,13 @@ Customer catalog, selection and cart cabin responses include mandatory `pricingV
 an exact whole-ruble string, independent of delivery price; unavailable classifications fail the
 read explicitly. Existing booked-order snapshots are not repriced by these informational reads.
 
+New client-presentation revisions and cabin-photo links freeze the monthly price and tariff
+revision at creation, fenced against the cabin version used for the snapshot. Reads and exact
+create replays use that immutable price, never today's tariff. V99 leaves existing presentation
+items with two null price fields; historical photo metadata also decodes to null. Public APIs
+return those explicit unknowns instead of inventing historical zero prices. Delivery and other
+charges remain separate. A missing price dependency prevents publication with an explicit error.
+
 The authoritative HTTP and event contracts are
 [`contracts/openapi/logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml) and
 [`contracts/events/logistics-events.yaml`](../../contracts/events/logistics-events.yaml). Start

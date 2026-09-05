@@ -117,6 +117,8 @@ class RentalInquiryPresentationIntegrationTest {
   private static final UUID CABIN_2 = UUID.fromString("00000000-0000-4000-8000-000000007302");
   private static final UUID CABIN_3 = UUID.fromString("00000000-0000-4000-8000-000000007303");
   private static final UUID PHOTO = UUID.fromString("00000000-0000-4000-8000-000000007401");
+  private static final UUID PRICE_TYPE = UUID.randomUUID();
+  private static final UUID PRICE_CATEGORY = UUID.randomUUID();
 
   @Container @ServiceConnection
   static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
@@ -192,7 +194,23 @@ class RentalInquiryPresentationIntegrationTest {
     orderReservations.clear();
     releasedCabinsByOrder.clear();
     presentationHolds.clear();
+    jdbc.update("delete from rental_pricing_rate");
+    jdbc.update("update rental_pricing_settings set version=0");
     reset(dependencies, deliveryDatePolicy);
+    when(dependencies.readCabinPricingReferences(eq(WAREHOUSE), anyList()))
+        .thenAnswer(
+            invocation -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+              List<UUID> ids = invocation.getArgument(1);
+              return new LogisticsDependencyGateway.CabinPricingReferences(
+                  WAREHOUSE,
+                  ids.stream()
+                      .map(
+                          id ->
+                              new LogisticsDependencyGateway.CabinPricingReference(
+                                  id, cabin(id).version(), PRICE_TYPE, PRICE_CATEGORY))
+                      .toList());
+            });
     List<LocalDate> requestableDates =
         java.util.stream.LongStream.rangeClosed(2, 5)
             .mapToObj(RentalInquiryPresentationIntegrationTest::requestableDate)
@@ -3385,6 +3403,79 @@ class RentalInquiryPresentationIntegrationTest {
 
   private ConfirmClientPresentationRequest linkedConfirmation(UUID cabinId) {
     return confirmation(cabinId);
+  }
+
+  @Test
+  void sentPresentationFreezesExactPriceAndRevisionWhileNewPresentationUsesNewTariff()
+      throws Exception {
+    jdbc.update(
+        "insert into rental_pricing_rate values "
+            + "('00000000-0000-0000-0000-000000000001', ?, ?, ?)",
+        PRICE_TYPE,
+        PRICE_CATEGORY,
+        Long.MAX_VALUE);
+    jdbc.update("update rental_pricing_settings set version=4");
+    ClientPresentationResponse sent = publish(createInquiry().id(), List.of(CABIN_1));
+    jdbc.update("update rental_pricing_rate set monthly_price_rubles=9500");
+    jdbc.update("update rental_pricing_settings set version=5");
+
+    var oldCabin =
+        presentations.publicPresentation(token(sent)).groups().getFirst().cabins().getFirst();
+    assertThat(oldCabin.monthlyPriceRubles()).isEqualTo(Long.MAX_VALUE);
+    assertThat(oldCabin.pricingVersion()).isEqualTo(4);
+    assertThat(
+            json.readTree(json.writeValueAsString(oldCabin))
+                .get("monthlyPriceRubles")
+                .stringValue())
+        .isEqualTo("9223372036854775807");
+    var newCabin =
+        publish(createInquiry().id(), List.of(CABIN_2)).groups().getFirst().cabins().getFirst();
+    assertThat(newCabin.monthlyPriceRubles()).isEqualTo(9500);
+    assertThat(newCabin.pricingVersion()).isEqualTo(5);
+  }
+
+  @Test
+  void legacyPresentationPriceIsUnknownInsteadOfTodaysZeroDefault() {
+    ClientPresentationResponse sent = publish(createInquiry().id(), List.of(CABIN_1));
+    assertThat(sent.groups().getFirst().cabins().getFirst().monthlyPriceRubles()).isZero();
+    jdbc.update(
+        "update client_presentation_item set pricing_version=null, monthly_price_rubles=null");
+    var cabin =
+        presentations.publicPresentation(token(sent)).groups().getFirst().cabins().getFirst();
+    assertThat(cabin.monthlyPriceRubles()).isNull();
+    assertThat(cabin.pricingVersion()).isNull();
+    assertThatThrownBy(() -> jdbc.update("update client_presentation_item set pricing_version=1"))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+  }
+
+  @Test
+  void changedCabinDuringPricingCannotPublishAnInconsistentSnapshot() {
+    when(dependencies.readCabinPricingReferences(WAREHOUSE, List.of(CABIN_1)))
+        .thenReturn(
+            new LogisticsDependencyGateway.CabinPricingReferences(
+                WAREHOUSE,
+                List.of(
+                    new LogisticsDependencyGateway.CabinPricingReference(
+                        CABIN_1, 99, PRICE_TYPE, PRICE_CATEGORY))));
+    UUID inquiryId = createInquiry().id();
+    assertThatThrownBy(() -> publish(inquiryId, List.of(CABIN_1)))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            error -> assertThat(error.code()).isEqualTo("CABIN_VERSION_CONFLICT"));
+    assertThat(jdbc.queryForObject("select count(*) from client_presentation", Long.class))
+        .isZero();
+  }
+
+  @Test
+  void missingPricingFactsDoNotPublishAFreeOffer() {
+    when(dependencies.readCabinPricingReferences(WAREHOUSE, List.of(CABIN_1))).thenReturn(null);
+    UUID inquiryId = createInquiry().id();
+    assertThatThrownBy(() -> publish(inquiryId, List.of(CABIN_1)))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            error -> assertThat(error.code()).isEqualTo("RENTAL_PRICING_UNAVAILABLE"));
+    assertThat(jdbc.queryForObject("select count(*) from client_presentation", Long.class))
+        .isZero();
   }
 
   private ClientPresentationResponse publish(UUID inquiryId, List<UUID> ids) {

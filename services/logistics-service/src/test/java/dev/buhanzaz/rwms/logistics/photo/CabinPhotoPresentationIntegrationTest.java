@@ -78,6 +78,8 @@ class CabinPhotoPresentationIntegrationTest {
   private static final UUID PHOTO =
       UUID.fromString("10000000-0000-4000-8000-000000000401");
   private static final long CABIN_VERSION = 7;
+  private static final UUID PRICE_TYPE = UUID.randomUUID();
+  private static final UUID PRICE_CATEGORY = UUID.randomUUID();
 
   @Container @ServiceConnection
   static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
@@ -91,7 +93,16 @@ class CabinPhotoPresentationIntegrationTest {
   @BeforeEach
   void resetState() {
     jdbc.execute("truncate table cabin_photo_presentation");
+    jdbc.update("delete from rental_pricing_rate");
+    jdbc.update("update rental_pricing_settings set version=0");
     reset(dependencies);
+    when(dependencies.readCabinPricingReferences(WAREHOUSE, List.of(CABIN)))
+        .thenReturn(
+            new LogisticsDependencyGateway.CabinPricingReferences(
+                WAREHOUSE,
+                List.of(
+                    new LogisticsDependencyGateway.CabinPricingReference(
+                        CABIN, CABIN_VERSION, PRICE_TYPE, PRICE_CATEGORY))));
     when(dependencies.readCabinPhotoPresentationSnapshot(CABIN))
         .thenReturn(cabin(WAREHOUSE, CABIN_VERSION));
     when(dependencies.readCabinMediaSnapshots(WAREHOUSE, List.of(CABIN)))
@@ -432,7 +443,14 @@ class CabinPhotoPresentationIntegrationTest {
                 UUID.fromString(created.get("id").stringValue())));
     assertThat(storedMetadata.propertyNames())
         .containsExactlyInAnyOrder(
-            "dimensions", "finishing", "category", "characteristics", "linoleum");
+            "dimensions",
+            "finishing",
+            "category",
+            "characteristics",
+            "linoleum",
+            "pricingVersion",
+            "monthlyPriceRubles");
+    assertThat(storedMetadata.get("monthlyPriceRubles").stringValue()).isEqualTo("0");
   }
 
   @Test
@@ -454,6 +472,8 @@ class CabinPhotoPresentationIntegrationTest {
         .perform(get("/api/logistics/public/v1/cabin-photo-presentations/{token}", token))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.dimensions").value(org.hamcrest.Matchers.nullValue()))
+        .andExpect(jsonPath("$.pricingVersion").value(org.hamcrest.Matchers.nullValue()))
+        .andExpect(jsonPath("$.monthlyPriceRubles").value(org.hamcrest.Matchers.nullValue()))
         .andExpect(jsonPath("$.finishing").value(org.hamcrest.Matchers.nullValue()))
         .andExpect(jsonPath("$.category").value(org.hamcrest.Matchers.nullValue()))
         .andExpect(jsonPath("$.characteristics").isEmpty())
@@ -489,6 +509,61 @@ class CabinPhotoPresentationIntegrationTest {
         .andExpect(status().isNotFound());
     verify(dependencies, never())
         .readCabinPresentationMedia(WAREHOUSE, CABIN, PHOTO, 3, "LARGE");
+  }
+
+  @Test
+  void photoLinkKeepsExactFrozenPriceAfterTariffChangeAndNeverRereadsDependencies()
+      throws Exception {
+    jdbc.update(
+        "insert into rental_pricing_rate values "
+            + "('00000000-0000-0000-0000-000000000001', ?, ?, ?)",
+        PRICE_TYPE,
+        PRICE_CATEGORY,
+        Long.MAX_VALUE);
+    jdbc.update("update rental_pricing_settings set version=7");
+    UUID key = UUID.randomUUID();
+    MvcResult result =
+        mockMvc
+            .perform(create(key, WAREHOUSE, CABIN_VERSION))
+            .andExpect(status().isCreated())
+            .andReturn();
+    JsonNode created = json.readTree(result.getResponse().getContentAsByteArray());
+    String token = created.get("publicPath").stringValue().substring("/photos/".length());
+    jdbc.update("update rental_pricing_rate set monthly_price_rubles=8000");
+    jdbc.update("update rental_pricing_settings set version=8");
+    reset(dependencies);
+
+    mockMvc
+        .perform(get("/api/logistics/public/v1/cabin-photo-presentations/{token}", token))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.pricingVersion").value(7))
+        .andExpect(jsonPath("$.monthlyPriceRubles").value("9223372036854775807"));
+    mockMvc
+        .perform(create(key, WAREHOUSE, CABIN_VERSION))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"));
+    org.mockito.Mockito.verifyNoInteractions(dependencies);
+  }
+
+  @Test
+  void missingOrStalePricingFactsCannotCreateAPhotoLink() throws Exception {
+    when(dependencies.readCabinPricingReferences(WAREHOUSE, List.of(CABIN))).thenReturn(null);
+    mockMvc
+        .perform(create(UUID.randomUUID(), WAREHOUSE, CABIN_VERSION))
+        .andExpect(status().isServiceUnavailable())
+        .andExpect(jsonPath("$.code").value("RENTAL_PRICING_UNAVAILABLE"));
+    when(dependencies.readCabinPricingReferences(WAREHOUSE, List.of(CABIN)))
+        .thenReturn(
+            new LogisticsDependencyGateway.CabinPricingReferences(
+                WAREHOUSE,
+                List.of(
+                    new LogisticsDependencyGateway.CabinPricingReference(
+                        CABIN, CABIN_VERSION + 1, PRICE_TYPE, PRICE_CATEGORY))));
+    mockMvc
+        .perform(create(UUID.randomUUID(), WAREHOUSE, CABIN_VERSION))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("CABIN_VERSION_CONFLICT"));
+    assertThat(rowCount()).isZero();
   }
 
   @Test

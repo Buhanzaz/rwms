@@ -4,6 +4,7 @@ import com.google.common.truth.Truth.assertThat
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import dev.buhanzaz.rwms.rentalmanager.network.RentalManagerApi
+import dev.buhanzaz.rwms.rentalmanager.network.RentalMonthlyPriceAdapter
 import dev.buhanzaz.rwms.rentalmanager.network.RentalPresentationGroupRequest
 import java.util.Base64
 import java.util.UUID
@@ -28,7 +29,8 @@ class RentalPresentationRepositoryTest {
     fun setUp() {
         server = MockWebServer()
         server.start()
-        val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
+        val moshi = Moshi.Builder().add(RentalMonthlyPriceAdapter())
+            .addLast(KotlinJsonAdapterFactory()).build()
         api = Retrofit.Builder()
             .baseUrl(server.url("/"))
             .client(OkHttpClient())
@@ -58,6 +60,29 @@ class RentalPresentationRepositoryTest {
 
         assertThat(presentation).isNull()
         assertThat(mappedProblemCodes).isEmpty()
+    }
+
+    @Test
+    fun `legacy null price remains unknown but a half snapshot fails`() = runTest {
+        server.enqueue(
+            jsonResponse(
+                presentationJson()
+                    .replace("\"pricingVersion\":4", "\"pricingVersion\":null")
+                    .replace("\"monthlyPriceRubles\":\"8500\"", "\"monthlyPriceRubles\":null"),
+            ),
+        )
+        val legacy = requireNotNull(repository.get(INQUIRY_ID)).groups.single().cabins.single()
+        assertThat(legacy.pricingVersion).isNull()
+        assertThat(legacy.monthlyPriceRubles).isNull()
+
+        server.enqueue(
+            jsonResponse(
+                presentationJson()
+                    .replace("\"monthlyPriceRubles\":\"8500\"", "\"monthlyPriceRubles\":null"),
+            ),
+        )
+        assertThat(runCatching { repository.get(INQUIRY_ID) }.exceptionOrNull())
+            .isInstanceOf(IllegalArgumentException::class.java)
     }
 
     @Test
@@ -182,6 +207,8 @@ private fun presentationJson(publicPath: String = "/offer/$TOKEN"): String = """
         "cabins":[{
           "id":"$CABIN_ID",
           "number":"БК-201",
+          "pricingVersion":4,
+          "monthlyPriceRubles":"8500",
           "rentalType":"LDSP",
           "dimensions":"6x2.4",
           "finishing":"ЛДСП",

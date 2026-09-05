@@ -4,6 +4,7 @@ import {
   actOnRentalBookingAlert,
   confirmPublicPresentation,
   getPublicPresentation,
+  getClientPresentation,
   getRentalBookingAlerts,
   getRentalSettings,
   publishClientPresentation,
@@ -20,6 +21,20 @@ afterEach(() => {
 })
 
 describe("rental presentation API", () => {
+  it("validates snapshot prices on both public and authenticated presentation reads", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      Response.json({
+        groups: [{ cabins: [{ pricingVersion: 1, monthlyPriceRubles: 9500 }] }],
+      })
+    )
+    vi.stubGlobal("fetch", fetchMock)
+    await expect(getPublicPresentation("token")).rejects.toMatchObject({
+      code: "INVALID_API_RESPONSE",
+    })
+    await expect(
+      getClientPresentation({ accessToken: "token", inquiryId: INQUIRY_ID })
+    ).rejects.toMatchObject({ code: "INVALID_API_RESPONSE" })
+  })
   it("sends all rental hold settings in the exact PUT payload", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(

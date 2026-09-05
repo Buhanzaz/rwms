@@ -7,6 +7,8 @@ import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
 import dev.buhanzaz.rwms.logistics.photo.domain.CabinPhotoPresentation;
+import dev.buhanzaz.rwms.logistics.pricing.api.CabinRentalPricesResponse;
+import dev.buhanzaz.rwms.logistics.pricing.service.RentalPricingService;
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
@@ -45,6 +47,7 @@ public class CabinPhotoPresentationService {
   private final LogisticsDependencyGateway dependencies;
   private final LogisticsAuthorizer access;
   private final ObjectMapper json;
+  private final RentalPricingService pricing;
 
   /**
    * Creates one immutable photo/display-metadata snapshot or returns the exact creator-scoped
@@ -70,7 +73,12 @@ public class CabinPhotoPresentationService {
 
     LogisticsDependencyGateway.CabinPhotoPresentationAssetSnapshot cabin = readCabin(cabinId);
     validateCabin(cabinId, request, cabin);
-    CabinPhotoPresentationMetadataSnapshot metadata = metadata(cabin);
+    CabinRentalPricesResponse price = pricing.prices(request.warehouseId(), List.of(cabinId));
+    if (price.cabins().getFirst().rentalItemVersion() != cabin.version()) {
+      throw conflict(
+          "CABIN_VERSION_CONFLICT", "Бытовка изменилась при фиксации цены; обновите карточку");
+    }
+    CabinPhotoPresentationMetadataSnapshot metadata = metadata(cabin, price);
     List<CabinPhotoPresentationPhotoSnapshot> photos =
         readPhotos(request.warehouseId(), cabinId);
     CabinPhotoPresentation candidate =
@@ -104,6 +112,8 @@ public class CabinPhotoPresentationService {
     return new PublicCabinPhotoPresentationResponse(
         presentation.getId(),
         presentation.getCabinNumber(),
+        metadata.pricingVersion(),
+        metadata.monthlyPriceRubles(),
         metadata.dimensions(),
         metadata.finishing(),
         metadata.category(),
@@ -197,14 +207,17 @@ public class CabinPhotoPresentationService {
   }
 
   private static CabinPhotoPresentationMetadataSnapshot metadata(
-      LogisticsDependencyGateway.CabinPhotoPresentationAssetSnapshot cabin) {
+      LogisticsDependencyGateway.CabinPhotoPresentationAssetSnapshot cabin,
+      CabinRentalPricesResponse price) {
     try {
       return new CabinPhotoPresentationMetadataSnapshot(
           cabin.dimensions(),
           cabin.finishing(),
           cabin.category(),
           cabin.characteristics(),
-          cabin.linoleum());
+          cabin.linoleum(),
+          price.pricingVersion(),
+          price.cabins().getFirst().monthlyPriceRubles());
     } catch (IllegalArgumentException exception) {
       throw dependencyMismatch("Asset-service returned invalid photo-presentation metadata");
     }

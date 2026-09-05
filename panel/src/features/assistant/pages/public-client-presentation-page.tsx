@@ -22,6 +22,7 @@ import { ru } from "date-fns/locale"
 import { useParams } from "react-router-dom"
 
 import { PhotoCarousel } from "@/components/media/photo-carousel"
+import { formatMonthlyRentalPrice } from "@/features/assistant/api/rental-pricing-api"
 import { type Theme, useTheme } from "@/components/theme-provider"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -1345,6 +1346,18 @@ function PublicCabinCard({
           </div>
         </CardHeader>
         <CardContent className="flex flex-1 flex-col gap-5">
+          <div className="flex flex-col gap-1">
+            <p className="text-xl font-semibold break-words tabular-nums">
+              {cabin.monthlyPriceRubles === null
+                ? "Цена не зафиксирована"
+                : formatMonthlyRentalPrice(cabin.monthlyPriceRubles)}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {cabin.monthlyPriceRubles === null
+                ? "Уточните стоимость у менеджера."
+                : "Цена на момент создания представления. Доставка и дополнительные услуги — отдельно."}
+            </p>
+          </div>
           <dl className="grid grid-cols-2 gap-x-5 gap-y-4 text-sm">
             <Characteristic label="Габариты" value={cabin.dimensions} />
             <Characteristic label="Отделка" value={cabin.finishing} />

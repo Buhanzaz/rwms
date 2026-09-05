@@ -27,6 +27,8 @@ import { PublicCabinPhotoPresentationPage } from "@/features/rental-items/public
 const presentation: PublicCabinPhotoPresentation = {
   id: "11111111-1111-4111-8111-111111111111",
   cabinNumber: "БЫТ-001",
+  pricingVersion: 4,
+  monthlyPriceRubles: "8500",
   dimensions: "6 × 2,4 м",
   finishing: "ПВХ",
   category: "Обычная",
@@ -79,6 +81,26 @@ afterEach(() => {
 })
 
 describe("public cabin photo presentation", () => {
+  it("shows a historical unknown price without substituting zero", async () => {
+    api.get.mockResolvedValue({
+      ...presentation,
+      pricingVersion: null,
+      monthlyPriceRubles: null,
+    })
+    renderPage()
+    expect(await screen.findByText("Цена не зафиксирована")).toBeTruthy()
+    expect(screen.queryByText("0 ₽/мес.")).toBeNull()
+  })
+  it("shows an explicitly frozen zero tariff", async () => {
+    api.get.mockResolvedValue({
+      ...presentation,
+      pricingVersion: 0,
+      monthlyPriceRubles: "0",
+    })
+    renderPage()
+    expect(await screen.findByText("0 ₽/мес.")).toBeTruthy()
+    expect(screen.queryByText("Цена не зафиксирована")).toBeNull()
+  })
   it("owns viewport scrolling so every photo in a long presentation remains reachable", async () => {
     api.get.mockResolvedValue({
       ...presentation,
@@ -123,6 +145,10 @@ describe("public cabin photo presentation", () => {
     )
     expect(screen.getByText("6 × 2,4 м")).toBeTruthy()
     expect(screen.getByText("ПВХ")).toBeTruthy()
+    expect(screen.getByText("8 500 ₽/мес.")).toBeTruthy()
+    expect(
+      screen.getByText(/Цена на момент создания представления/)
+    ).toBeTruthy()
     expect(screen.getByText("Обычная")).toBeTruthy()
     expect(screen.getByText("Пластиковое окно")).toBeTruthy()
     expect(screen.getByText("Электрика + УЗО")).toBeTruthy()

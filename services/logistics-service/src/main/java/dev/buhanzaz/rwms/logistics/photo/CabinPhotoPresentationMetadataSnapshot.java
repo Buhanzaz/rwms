@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.photo;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -12,12 +13,18 @@ public record CabinPhotoPresentationMetadataSnapshot(
     String finishing,
     String category,
     List<String> characteristics,
-    Boolean linoleum) {
+    Boolean linoleum,
+    Long pricingVersion,
+    @JsonFormat(shape = JsonFormat.Shape.STRING) Long monthlyPriceRubles) {
   private static final int MAXIMUM_TEXT_LENGTH = 255;
   private static final int MAXIMUM_CHARACTERISTICS = 100;
 
   /** Normalizes trusted catalog labels and rejects malformed dependency or persisted values. */
   public CabinPhotoPresentationMetadataSnapshot {
+    if ((pricingVersion == null) != (monthlyPriceRubles == null)
+        || (pricingVersion != null && (pricingVersion < 0 || monthlyPriceRubles < 0))) {
+      throw new IllegalArgumentException("Rental price snapshot is invalid");
+    }
     dimensions = normalizeNullable(dimensions, "dimensions");
     finishing = normalizeNullable(finishing, "finishing");
     category = normalizeNullable(category, "category");

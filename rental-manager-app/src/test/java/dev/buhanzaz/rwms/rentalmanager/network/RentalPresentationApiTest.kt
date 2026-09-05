@@ -23,7 +23,8 @@ class RentalPresentationApiTest {
     fun setUp() {
         server = MockWebServer()
         server.start()
-        val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
+        val moshi = Moshi.Builder().add(RentalMonthlyPriceAdapter())
+            .addLast(KotlinJsonAdapterFactory()).build()
         api = Retrofit.Builder()
             .baseUrl(server.url("/"))
             .client(OkHttpClient())
@@ -47,6 +48,9 @@ class RentalPresentationApiTest {
         val presentation = requireNotNull(response.body())
         assertThat(presentation.id).isEqualTo(PRESENTATION_ID)
         assertThat(presentation.mode).isEqualTo(RentalPresentationMode.NORMAL)
+        assertThat(presentation.groups.single().cabins.single().monthlyPriceRubles?.rubles)
+            .isEqualTo(Long.MAX_VALUE)
+        assertThat(presentation.groups.single().cabins.single().pricingVersion).isEqualTo(4)
         assertThat(presentation.groups.single().cabins.single().photos.single().mediaId)
             .isEqualTo(MEDIA_ID)
         assertThat(presentation.equipmentAvailability.single().availableQuantity).isEqualTo(7)
@@ -154,6 +158,8 @@ private fun presentationJson(publicPath: String = "/offer/$TOKEN"): String = """
         "cabins":[{
           "id":"$CABIN_ID",
           "number":"БК-101",
+          "pricingVersion":4,
+          "monthlyPriceRubles":"9223372036854775807",
           "rentalType":"LDSP",
           "dimensions":"6x2.4",
           "finishing":"ЛДСП",

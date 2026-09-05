@@ -8739,6 +8739,8 @@ components:
         [
           id,
           number,
+          pricingVersion,
+          monthlyPriceRubles,
           rentalType,
           dimensions,
           finishing,
@@ -8753,6 +8755,8 @@ components:
       properties:
         id: { type: string, format: uuid }
         number: { type: string }
+        pricingVersion: { type: [integer, "null"], format: int64, minimum: 0 }
+        monthlyPriceRubles: { $ref: "#/components/schemas/PresentationMonthlyPriceRubles" }
         rentalType: { type: [string, "null"] }
         dimensions: { type: [string, "null"] }
         finishing: { type: [string, "null"] }
@@ -8838,10 +8842,12 @@ components:
       type: object
       additionalProperties: false
       required:
-        [id, cabinNumber, dimensions, finishing, category, characteristics, linoleum, createdAt, photos]
+        [id, cabinNumber, pricingVersion, monthlyPriceRubles, dimensions, finishing, category, characteristics, linoleum, createdAt, photos]
       properties:
         id: { type: string, format: uuid }
         cabinNumber: { type: string, minLength: 1, maxLength: 128 }
+        pricingVersion: { type: [integer, "null"], format: int64, minimum: 0 }
+        monthlyPriceRubles: { $ref: "#/components/schemas/PresentationMonthlyPriceRubles" }
         dimensions: { type: [string, "null"], minLength: 1, maxLength: 255 }
         finishing: { type: [string, "null"], minLength: 1, maxLength: 255 }
         category: { type: [string, "null"], minLength: 1, maxLength: 255 }
@@ -8856,6 +8862,11 @@ components:
           minItems: 1
           maxItems: 100
           items: { $ref: "#/components/schemas/CabinPhotoPresentationPhoto" }
+    PresentationMonthlyPriceRubles:
+      description: Monthly whole-RUB price frozen when this presentation revision was created; null only when the historical link has no price snapshot. Later tariff edits never reprice the sent link. Independent of delivery and other charges.
+      anyOf:
+        - $ref: "#/components/schemas/RentalMonthlyPriceRubles"
+        - type: "null"
     CreateContractorRouteShareRequest:
       type: object
       additionalProperties: false

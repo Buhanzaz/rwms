@@ -65,6 +65,13 @@ public class ClientPresentationItem {
   @Column(name = "media_snapshot_json", nullable = false, columnDefinition = "jsonb")
   private String mediaSnapshotJson;
 
+  /** Null only for links created before tariff snapshots were introduced. */
+  @Column(name = "pricing_version", updatable = false)
+  private Long pricingVersion;
+
+  @Column(name = "monthly_price_rubles", updatable = false)
+  private Long monthlyPriceRubles;
+
   @Column(name = "created_at", nullable = false)
   private OffsetDateTime createdAt;
 
@@ -77,8 +84,10 @@ public class ClientPresentationItem {
       int sortOrder,
       String cabinSnapshotJson,
       String mediaSnapshotJson,
+      long pricingVersion,
+      long monthlyPriceRubles,
       OffsetDateTime now) {
-    if (presentationRevision < 1 || sortOrder < 0) {
+    if (presentationRevision < 1 || sortOrder < 0 || pricingVersion < 0 || monthlyPriceRubles < 0) {
       throw new IllegalArgumentException("Presentation item order is invalid");
     }
     ClientPresentationItem item = new ClientPresentationItem();
@@ -90,6 +99,8 @@ public class ClientPresentationItem {
     item.sortOrder = sortOrder;
     item.cabinSnapshotJson = requireJson(cabinSnapshotJson, "cabinSnapshotJson");
     item.mediaSnapshotJson = requireJson(mediaSnapshotJson, "mediaSnapshotJson");
+    item.pricingVersion = pricingVersion;
+    item.monthlyPriceRubles = monthlyPriceRubles;
     item.createdAt = Objects.requireNonNull(now, "now");
     return item;
   }

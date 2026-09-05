@@ -15,6 +15,17 @@ afterEach(() => {
 })
 
 describe("cabin photo presentation API", () => {
+  it("rejects missing snapshot fields instead of inventing a free photo offer", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(Response.json({ cabinNumber: "БЫТ-001" }))
+    )
+    await expect(
+      getPublicCabinPhotoPresentation("token")
+    ).rejects.toMatchObject({
+      code: "INVALID_API_RESPONSE",
+    })
+  })
   it("creates an immutable snapshot through authenticated logistics", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
@@ -64,6 +75,8 @@ describe("cabin photo presentation API", () => {
           id: "44444444-4444-4444-8444-444444444444",
           cabinNumber: "БЫТ-001",
           dimensions: "6 × 2,4 м",
+          pricingVersion: 4,
+          monthlyPriceRubles: "9223372036854775807",
           finishing: "ПВХ",
           category: "Обычная",
           characteristics: ["Пластиковое окно"],
@@ -87,6 +100,8 @@ describe("cabin photo presentation API", () => {
     expect(new Headers(init.headers).get("Accept")).toBe("application/json")
     expect(presentation).toEqual(
       expect.objectContaining({
+        pricingVersion: 4,
+        monthlyPriceRubles: "9223372036854775807",
         dimensions: "6 × 2,4 м",
         finishing: "ПВХ",
         category: "Обычная",

@@ -4,27 +4,6 @@ Use this file only for unresolved contradictions or product decisions that
 block a safe implementation. This is not a backlog and does not authorize
 work.
 
-## Prices In Already-Sent Client Presentations
-
-- Status: `Open`
-- Affected owner and consumers: logistics-service client/photo presentations,
-  public presentation pages and rental-manager Android.
-- Requested behavior: display the global type/category monthly rental price in
-  presentations, as well as in manager selection and CustomerApp.
-- Contract boundary requiring a product decision: current presentation cabin and
-  photo metadata are immutable snapshots, while the new tariff read is explicitly
-  current and informational. No canonical rule yet says whether editing a tariff
-  must change the price in a link already sent to a customer.
-- Evidence: [`presentation owner`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/service/ClientPresentationService.java),
-  [`photo snapshot`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/photo/CabinPhotoPresentationMetadataSnapshot.java)
-  and the [tariff contract](../../contracts/openapi/logistics-service.yaml).
-- Smallest decision needed: freeze the displayed price when the manager sends
-  the presentation, or explicitly show the current tariff on subsequent reads.
-  This decision does not authorize repricing an already agreed booking.
-- Resolution and date: none; asked on 2026-09-05. Current-price display in manager
-  selection and customer catalog/cart is implemented independently; presentation
-  price semantics remain unimplemented pending the choice.
-
 ## Dedicated Claim Chat And Orchestration Owner
 
 - Status: `Open`

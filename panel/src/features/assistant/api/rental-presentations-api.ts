@@ -7,6 +7,7 @@ import {
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 import type { AdditionalContact } from "@/features/clients/domain/clients"
 import type { DesiredDeliveryWindow } from "@/features/orders/domain/orders"
+import { assertPresentationRentalPrice } from "@/features/assistant/api/rental-pricing-api"
 
 export type PresentationPhoto = {
   mediaId: string
@@ -20,6 +21,8 @@ export type PresentationPhoto = {
 export type PresentationCabin = {
   id: string
   number: string
+  pricingVersion: number | null
+  monthlyPriceRubles: string | null
   rentalType: string | null
   dimensions: string | null
   finishing: string | null
@@ -160,7 +163,22 @@ function publicPresentationEndpoint(token: string, path = "") {
   return `${getGatewayRuntimeConfig().logisticsApiBaseUrl}/public/v1/client-presentations/${encodeURIComponent(token)}${path}`
 }
 
-export function publishClientPresentation(params: {
+function parsePresentationPrices<
+  T extends ClientPresentation | PublicClientPresentation,
+>(value: T): T {
+  if (!value || !Array.isArray(value.groups)) {
+    throw invalidApiResponseError("Некорректные группы представления.")
+  }
+  for (const group of value.groups) {
+    if (!group || !Array.isArray(group.cabins)) {
+      throw invalidApiResponseError("Некорректные бытовки представления.")
+    }
+    for (const cabin of group.cabins) assertPresentationRentalPrice(cabin)
+  }
+  return value
+}
+
+export async function publishClientPresentation(params: {
   accessToken: string
   inquiryId: string
   warehouseId: string
@@ -174,33 +192,37 @@ export function publishClientPresentation(params: {
     rentalItemIds: string[]
   }>
 }) {
-  return bearerRequest<ClientPresentation>(
-    params.accessToken,
-    logisticsV1(
-      `/rental-inquiries/${encodeURIComponent(params.inquiryId)}/client-presentation`
-    ),
-    {
-      method: "PUT",
-      headers: { "Idempotency-Key": params.idempotencyKey },
-      body: JSON.stringify({
-        warehouseId: params.warehouseId,
-        manualBookingDraftId: params.manualBookingDraftId,
-        mode: params.mode,
-        replacementUnitIds: params.replacementUnitIds,
-        groups: params.groups,
-      }),
-    }
+  return parsePresentationPrices(
+    await bearerRequest<ClientPresentation>(
+      params.accessToken,
+      logisticsV1(
+        `/rental-inquiries/${encodeURIComponent(params.inquiryId)}/client-presentation`
+      ),
+      {
+        method: "PUT",
+        headers: { "Idempotency-Key": params.idempotencyKey },
+        body: JSON.stringify({
+          warehouseId: params.warehouseId,
+          manualBookingDraftId: params.manualBookingDraftId,
+          mode: params.mode,
+          replacementUnitIds: params.replacementUnitIds,
+          groups: params.groups,
+        }),
+      }
+    )
   )
 }
 
-export function getClientPresentation(params: {
+export async function getClientPresentation(params: {
   accessToken: string
   inquiryId: string
 }) {
-  return bearerRequest<ClientPresentation>(
-    params.accessToken,
-    logisticsV1(
-      `/rental-inquiries/${encodeURIComponent(params.inquiryId)}/client-presentation`
+  return parsePresentationPrices(
+    await bearerRequest<ClientPresentation>(
+      params.accessToken,
+      logisticsV1(
+        `/rental-inquiries/${encodeURIComponent(params.inquiryId)}/client-presentation`
+      )
     )
   )
 }
@@ -374,8 +396,12 @@ async function publicBookingJson(
   )
 }
 
-export function getPublicPresentation(token: string) {
-  return publicJson<PublicClientPresentation>(publicPresentationEndpoint(token))
+export async function getPublicPresentation(token: string) {
+  return parsePresentationPrices(
+    await publicJson<PublicClientPresentation>(
+      publicPresentationEndpoint(token)
+    )
+  )
 }
 
 export function confirmPublicPresentation(params: {

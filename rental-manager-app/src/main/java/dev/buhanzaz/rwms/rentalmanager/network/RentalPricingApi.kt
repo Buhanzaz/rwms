@@ -42,7 +42,8 @@ data class RentalMonthlyPrice(val rubles: Long) {
 /** Rejects numeric JSON tokens instead of letting Moshi coerce them to rounded strings. */
 class RentalMonthlyPriceAdapter {
     @FromJson
-    fun fromJson(reader: JsonReader): RentalMonthlyPrice {
+    fun fromJson(reader: JsonReader): RentalMonthlyPrice? {
+        if (reader.peek() == JsonReader.Token.NULL) return reader.nextNull()
         if (reader.peek() != JsonReader.Token.STRING) {
             throw JsonDataException("Rental price must be a whole-RUB string")
         }
