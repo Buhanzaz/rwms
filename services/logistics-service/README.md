@@ -55,6 +55,9 @@ the page, size, totals and continuation flag. `scheduledDate` restricts an activ
 one exact warehouse-local day; transfer reads include documents where the selected warehouse is
 either source or destination. Omission is retained only for bounded relationship lookups. Document
 lines for one page are loaded in one batch.
+For cabin passports, returns and shipments also accept optional `assetId`: the owning service
+matches document lines before pagination, across dates and states, including cancelled documents.
+The document warehouse's VIEW authorization is unchanged; the filter does not grant cross-warehouse access.
 
 The rental client, inquiry, presentation and order subset also accepts only the dedicated
 `rwms-rental-manager-web` or `rwms-rental-manager-android` credential with `RENTAL_MANAGER`,

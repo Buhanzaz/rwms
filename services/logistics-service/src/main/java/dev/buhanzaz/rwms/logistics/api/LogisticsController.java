@@ -75,11 +75,17 @@ public class LogisticsController {
   public ResponseEntity<List<LogisticsDocumentView>> listReturns(
       @AuthenticationPrincipal Jwt jwt,
       @RequestParam UUID warehouseId,
+      @RequestParam(required = false) UUID assetId,
       @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
           LocalDate scheduledDate,
       @RequestParam(name = "page", defaultValue = "0") @Min(0) int pageNumber,
       @RequestParam(name = "size", defaultValue = "50") @Min(1) @Max(100) int size) {
     access.requireRead(jwt, warehouseId);
+    if (assetId != null) {
+      return page(
+          service.cabinHistoryPage(
+              LogisticsDocumentType.RETURN, warehouseId, assetId, scheduledDate, pageNumber, size));
+    }
     return page(
         scheduledDate == null
             ? service.page(LogisticsDocumentType.RETURN, warehouseId, pageNumber, size)
@@ -182,11 +188,22 @@ public class LogisticsController {
   public ResponseEntity<List<LogisticsDocumentView>> listShipments(
       @AuthenticationPrincipal Jwt jwt,
       @RequestParam UUID warehouseId,
+      @RequestParam(required = false) UUID assetId,
       @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
           LocalDate scheduledDate,
       @RequestParam(name = "page", defaultValue = "0") @Min(0) int pageNumber,
       @RequestParam(name = "size", defaultValue = "50") @Min(1) @Max(100) int size) {
     access.requireRead(jwt, warehouseId);
+    if (assetId != null) {
+      return page(
+          service.cabinHistoryPage(
+              LogisticsDocumentType.SHIPMENT,
+              warehouseId,
+              assetId,
+              scheduledDate,
+              pageNumber,
+              size));
+    }
     return page(
         scheduledDate == null
             ? service.page(LogisticsDocumentType.SHIPMENT, warehouseId, pageNumber, size)

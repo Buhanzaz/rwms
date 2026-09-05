@@ -970,6 +970,11 @@ repair operation.
 
 ### Return Estimate Sources And Legacy Furniture
 
+The public shipment and return lists accept optional `assetId` alongside the required document
+`warehouseId`. Logistics filters by cabin before deterministic pagination, without hiding completed
+or cancelled documents or depending on the cabin's current rental state. This does not broaden
+warehouse VIEW access. The array body and `X-RWMS-*` page headers are unchanged.
+
 [`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml)
 defines `POST /returns/{documentId}/start-estimates`. Its request contains
 only immutable inspection-photo references for every return line: it does not

@@ -57,6 +57,27 @@ public interface LogisticsDocumentRepository extends JpaRepository<LogisticsDocu
   Page<LogisticsDocument> findAllByDocumentTypeAndWarehouseIdOrderByCreatedAtDescIdDesc(
       LogisticsDocumentType documentType, UUID warehouseId, Pageable pageable);
 
+  /** Filters cabin history before paging without excluding completed or cancelled documents. */
+  @Query(
+      """
+      select document from LogisticsDocument document
+      where document.documentType = :documentType
+        and document.warehouseId = :warehouseId
+        and (:allDates = true or document.scheduledDate = :scheduledDate)
+        and exists (
+          select line.id from LogisticsDocumentLine line
+          where line.document = document and line.assetId = :assetId
+        )
+      order by document.createdAt desc, document.id desc
+      """)
+  Page<LogisticsDocument> findCabinHistoryPage(
+      @Param("documentType") LogisticsDocumentType documentType,
+      @Param("warehouseId") UUID warehouseId,
+      @Param("assetId") UUID assetId,
+      @Param("allDates") boolean allDates,
+      @Param("scheduledDate") LocalDate scheduledDate,
+      Pageable pageable);
+
   /** Reads one exact warehouse-local business day for returns and shipments. */
   Page<LogisticsDocument>
       findAllByDocumentTypeAndWarehouseIdAndScheduledDateOrderByCreatedAtDescIdDesc(

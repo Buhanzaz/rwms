@@ -23,9 +23,11 @@ paths:
       description: >-
         Lists visible return documents. scheduledDate selects one exact warehouse-local business
         day; omission is retained only for bounded relationship lookups. Requires rwms.read and VIEW
-        at the document warehouse.
+        at the document warehouse. Optional assetId selects documents containing that cabin before
+        pagination, including completed and cancelled history independently of its current rental.
       parameters:
         - $ref: "#/components/parameters/WarehouseIdQuery"
+        - $ref: "#/components/parameters/DocumentAssetIdQuery"
         - $ref: "#/components/parameters/ScheduledDateQuery"
         - $ref: "#/components/parameters/PageQuery"
         - $ref: "#/components/parameters/PageSizeQuery"
@@ -183,9 +185,12 @@ paths:
       operationId: listShipments
       description: >-
         Lists visible shipment documents. scheduledDate selects one exact warehouse-local business
-        day; omission is retained only for bounded relationship lookups.
+        day; omission is retained only for bounded relationship lookups. Optional assetId selects
+        documents containing that cabin before pagination, including completed and cancelled
+        history independently of its current rental. Warehouse VIEW access remains required.
       parameters:
         - $ref: "#/components/parameters/WarehouseIdQuery"
+        - $ref: "#/components/parameters/DocumentAssetIdQuery"
         - $ref: "#/components/parameters/ScheduledDateQuery"
         - $ref: "#/components/parameters/PageQuery"
         - $ref: "#/components/parameters/PageSizeQuery"
@@ -3957,6 +3962,12 @@ components:
         Exact business date in the selected warehouse timezone. Active operation pages always
         provide it; omission remains available for bounded relationship lookups.
       schema: { type: string, format: date }
+    DocumentAssetIdQuery:
+      name: assetId
+      in: query
+      required: false
+      description: Cabin identity matched against document lines before paging. Does not change warehouse authorization.
+      schema: { type: string, format: uuid }
     PageQuery:
       name: page
       in: query

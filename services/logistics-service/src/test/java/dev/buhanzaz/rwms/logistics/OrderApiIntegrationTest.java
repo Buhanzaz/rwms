@@ -282,6 +282,86 @@ class OrderApiIntegrationTest {
   }
 
   @Test
+  void cabinDocumentHistoryFiltersBeforePagingAndKeepsCancelledFacts() throws Exception {
+    LocalDate date = LocalDate.of(2026, 9, 2);
+    for (LogisticsDocumentType type :
+        List.of(LogisticsDocumentType.SHIPMENT, LogisticsDocumentType.RETURN)) {
+      List<UUID> ids = seedPagedDocuments(type, 55, date);
+      for (int index = 0; index < 3; index++) {
+        jdbc.update(
+            "update logistics_document_line set asset_id = ? where document_id = ?",
+            UNIT_1,
+            ids.get(index));
+      }
+      jdbc.update(
+          "update logistics_document set warehouse_id = ? where id = ?", WAREHOUSE_2, ids.get(2));
+      jdbc.update(
+          "update logistics_document set state = 'CANCELLED', scheduled_date = ? where id = ?",
+          date.plusDays(1),
+          ids.get(0));
+      String path = "/api/logistics/v1/" + type.name().toLowerCase() + "s";
+
+      mvc.perform(
+              get(path)
+                  .param("warehouseId", WAREHOUSE_1.toString())
+                  .param("assetId", UNIT_1.toString())
+                  .param("size", "1")
+                  .with(readOnlyViewer(MANAGER_1, "viewer")))
+          .andExpect(status().isOk())
+          .andExpect(header().string("X-RWMS-Total-Elements", "2"))
+          .andExpect(header().string("X-RWMS-Has-Next", "true"))
+          .andExpect(jsonPath("$.length()").value(1))
+          .andExpect(jsonPath("$[0].id").value(ids.get(1).toString()));
+
+      mvc.perform(
+              get(path)
+                  .param("warehouseId", WAREHOUSE_1.toString())
+                  .param("assetId", UNIT_1.toString())
+                  .param("size", "1")
+                  .param("page", "1")
+                  .with(admin()))
+          .andExpect(status().isOk())
+          .andExpect(header().string("X-RWMS-Has-Next", "false"))
+          .andExpect(jsonPath("$[0].id").value(ids.get(0).toString()))
+          .andExpect(jsonPath("$[0].state").value("CANCELLED"));
+
+      mvc.perform(
+              get(path)
+                  .param("warehouseId", WAREHOUSE_1.toString())
+                  .param("assetId", UNIT_1.toString())
+                  .param("scheduledDate", date.plusDays(1).toString())
+                  .with(admin()))
+          .andExpect(status().isOk())
+          .andExpect(header().string("X-RWMS-Total-Elements", "1"))
+          .andExpect(jsonPath("$[0].id").value(ids.get(0).toString()));
+    }
+  }
+
+  @Test
+  void cabinHistoryDoesNotBroadenWarehouseAccessAndRejectsMalformedIdentity() throws Exception {
+    for (String type : List.of("shipments", "returns")) {
+      String path = "/api/logistics/v1/" + type;
+      mvc.perform(
+              get(path)
+                  .param("warehouseId", WAREHOUSE_2.toString())
+                  .param("assetId", UNIT_1.toString())
+                  .with(readOnlyViewer(MANAGER_1, "viewer")))
+          .andExpect(status().isForbidden());
+      mvc.perform(
+              get(path)
+                  .param("warehouseId", WAREHOUSE_1.toString())
+                  .param("assetId", "not-a-uuid")
+                  .with(admin()))
+          .andExpect(status().isBadRequest());
+      mvc.perform(
+              get(path)
+                  .param("warehouseId", WAREHOUSE_1.toString())
+                  .param("assetId", UNIT_1.toString()))
+          .andExpect(status().isUnauthorized());
+    }
+  }
+
+  @Test
   void transferListIncludesBothWarehouseDirectionsOnlyForTheSelectedDay() throws Exception {
     LocalDate scheduledDate = LocalDate.of(2026, 9, 3);
     OffsetDateTime createdAt = OffsetDateTime.parse("2026-09-01T10:00:00Z");

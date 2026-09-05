@@ -717,6 +717,18 @@ public class LogisticsDocumentService {
     return readProjection.page(type, warehouseId, pageNumber, pageSize);
   }
 
+  /** Reads a bounded cabin history page inside the caller-authorized document warehouse. */
+  public LogisticsDocumentPage cabinHistoryPage(
+      LogisticsDocumentType type,
+      UUID warehouseId,
+      UUID assetId,
+      LocalDate scheduledDate,
+      int pageNumber,
+      int pageSize) {
+    return readProjection.cabinHistoryPage(
+        type, warehouseId, assetId, scheduledDate, pageNumber, pageSize);
+  }
+
   /** Returns one exact warehouse-local operation day; transfers include both directions. */
   public LogisticsDocumentPage page(
       LogisticsDocumentType type,

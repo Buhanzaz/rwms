@@ -120,6 +120,30 @@ class LogisticsDocumentReadProjection {
     return materialize(documents);
   }
 
+  /** Reads an exact cabin's history within the already-authorized document warehouse. */
+  LogisticsDocumentPage cabinHistoryPage(
+      LogisticsDocumentType type,
+      UUID warehouseId,
+      UUID assetId,
+      LocalDate scheduledDate,
+      int pageNumber,
+      int pageSize) {
+    if (warehouseId == null || assetId == null) {
+      throw new IllegalArgumentException("warehouseId and assetId are required");
+    }
+    if (type != LogisticsDocumentType.RETURN && type != LogisticsDocumentType.SHIPMENT) {
+      throw new IllegalArgumentException("Cabin history supports returns and shipments");
+    }
+    return materialize(
+        documentRepository.findCabinHistoryPage(
+            type,
+            warehouseId,
+            assetId,
+            scheduledDate == null,
+            scheduledDate,
+            pageRequest(pageNumber, pageSize)));
+  }
+
   /** Reads only the selected warehouse-local day; transfers are visible in both directions. */
   LogisticsDocumentPage page(
       LogisticsDocumentType type,

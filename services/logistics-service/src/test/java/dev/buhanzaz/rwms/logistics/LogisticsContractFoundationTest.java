@@ -348,6 +348,13 @@ class LogisticsContractFoundationTest {
                       .isEqualTo(Map.of("$ref", "#/components/parameters/PageSizeQuery")));
     }
     Map<String, Object> response = child(responses, "DocumentList");
+    for (String path : List.of("/api/logistics/v1/returns", "/api/logistics/v1/shipments")) {
+      assertThat((List<?>) child(child(paths, path), "get").get("parameters"))
+          .anySatisfy(
+              parameter ->
+                  assertThat(parameter)
+                      .isEqualTo(Map.of("$ref", "#/components/parameters/DocumentAssetIdQuery")));
+    }
     assertThat(child(response, "headers"))
         .containsOnlyKeys(
             "X-RWMS-Page",
