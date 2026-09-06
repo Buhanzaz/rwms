@@ -82,6 +82,9 @@ the local-development default. Evidence:
   `price_isochrone_minutes`. Both fields are refreshed from the authoritative
   feed. Older or specially priced slots may have an amount without a tier;
   only an absent amount is rendered as “not calculated”, never as zero.
+- RWMS request snapshots and local request create, update, and version-fenced
+  planning-details commands accept a contact name of up to 512 characters. The
+  planner preserves that exact value in `logistics_requests.contact_name`.
 - Request preparation accepts either an explicit positive interval or a soft
   full-day option whose nullable bounds are not replaced with invented times.
 - Automatic plan creation uses

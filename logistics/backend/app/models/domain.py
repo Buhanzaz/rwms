@@ -1052,7 +1052,7 @@ class LogisticsRequest(CatalogVersionMixin, UuidPrimaryKeyMixin, TimestampMixin,
     include_driver_passport_in_notification: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
-    contact_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    contact_name: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     contact_phone: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     client_type: Mapped[str | None] = mapped_column(String(32))
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")

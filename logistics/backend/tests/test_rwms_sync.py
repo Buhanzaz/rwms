@@ -245,6 +245,66 @@ def test_planning_request_requires_complete_unique_unit_source_mapping() -> None
         RwmsPlanningRequest.model_validate(extra)
 
 
+@pytest.mark.parametrize("length", (200, 201, 255, 512))
+def test_rwms_planning_request_accepts_the_canonical_contact_name_limit(length: int) -> None:
+    """Decode Cyrillic contact snapshots through the actual strict RWMS request model."""
+
+    contact_name = "Ж" * length
+    payload = _source_request().model_dump(mode="json", by_alias=True)
+    request = RwmsPlanningRequest.model_validate({**payload, "contactName": contact_name})
+
+    assert request.contact_name == contact_name
+
+
+def test_rwms_planning_request_rejects_contact_name_over_the_canonical_limit() -> None:
+    """Reject an upstream contact that cannot be represented by the local database."""
+
+    payload = _source_request().model_dump(mode="json", by_alias=True)
+    with pytest.raises(ValueError, match="contactName"):
+        RwmsPlanningRequest.model_validate({**payload, "contactName": "Ж" * 513})
+
+
+@pytest.mark.asyncio
+async def test_rwms_client_decodes_complete_feed_with_a_512_character_contact() -> None:
+    """Validate every incoming sibling through the authenticated HTTP boundary."""
+
+    warehouse_id = uuid4()
+    long_contact = "Ж" * 512
+    long_contact_source = _source_request().model_copy(update={"contact_name": long_contact})
+    normal_source = _source_request().model_copy(update={"contact_name": "Иван Петров"})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "auth.internal":
+            return httpx.Response(
+                200,
+                json={"access_token": "opaque-token", "expires_in": 300},
+                request=request,
+            )
+        assert request.url.path == "/api/internal/logistics/v1/planning/requests"
+        return httpx.Response(
+            200,
+            json={
+                "warehouseId": str(warehouse_id),
+                "timeZone": "Europe/Moscow",
+                "generatedAt": "2026-08-28T08:00:00Z",
+                "requests": [
+                    long_contact_source.model_dump(mode="json", by_alias=True),
+                    normal_source.model_dump(mode="json", by_alias=True),
+                ],
+            },
+            request=request,
+        )
+
+    client = RwmsPlanningClient(_enabled_settings(), transport=httpx.MockTransport(handler))
+    feed = await client.get_planning_requests(
+        warehouse_id=warehouse_id,
+        date_from=date(2026, 8, 30),
+        date_to=date(2026, 8, 30),
+    )
+
+    assert [request.contact_name for request in feed.requests] == [long_contact, "Иван Петров"]
+
+
 @pytest.mark.parametrize(
     ("kind", "load_before", "load_after"),
     [("TRANSFER_LOAD", 0, 2), ("TRANSFER_UNLOAD", 2, 0)],
@@ -1037,6 +1097,68 @@ async def test_sync_geocodes_address_only_request_without_rewriting_source_paylo
     assert stored.external_payload["unitReservations"] == source.model_dump(
         mode="json", by_alias=True
     )["unitReservations"]
+
+
+@pytest.mark.asyncio
+async def test_sync_and_planning_details_preserve_a_512_character_contact_name(
+    db_session: AsyncSession,
+) -> None:
+    """Persist long and normal siblings, then retain the long value through a fenced local write."""
+
+    warehouse = await make_warehouse(db_session)
+    long_contact = "Ж" * 512
+    long_source = _source_request().model_copy(update={"contact_name": long_contact})
+    normal_source = _source_request().model_copy(update={"contact_name": "Иван Петров"})
+    command = RwmsSyncRequest(
+        warehouse_id=warehouse.external_warehouse_id,
+        date_from=date(2026, 8, 30),
+        date_to=date(2026, 8, 30),
+    )
+
+    result = await sync_warehouse_requests(
+        db_session,
+        warehouse.id,
+        command,
+        _planning_feed_client(warehouse, [long_source, normal_source]),
+    )
+    db_session.expire_all()
+    stored = list(
+        await db_session.scalars(
+            select(LogisticsRequest).where(
+                LogisticsRequest.external_id.in_([long_source.order_id, normal_source.order_id])
+            )
+        )
+    )
+    contacts_by_order = {request.external_id: request.contact_name for request in stored}
+
+    assert (result.imported, result.updated, result.failures) == (2, 0, [])
+    assert contacts_by_order == {
+        long_source.order_id: long_contact,
+        normal_source.order_id: "Иван Петров",
+    }
+
+    long_request = next(
+        request for request in stored if request.external_id == long_source.order_id
+    )
+    await catalog.set_request_planning_details(
+        db_session,
+        long_request.id,
+        RequestPlanningDetailsInput(
+            expected_version=long_request.version,
+            date=date(2026, 8, 30),
+            window_start=time(10),
+            window_end=time(14),
+            is_hard=True,
+            mandatory=True,
+            trailer_access_allowed=True,
+            contact_name=long_contact,
+            contact_phone="+79990000000",
+        ),
+    )
+    db_session.expire_all()
+    reloaded = await _stored_rwms_request(db_session, long_source.order_id)
+
+    assert reloaded.contact_name == long_contact
 
 
 @pytest.mark.asyncio

@@ -745,7 +745,7 @@ class RequestPlanningDetailsInput(ApiModel):
     mandatory: bool
     trailer_access_allowed: bool
     include_driver_passport_in_notification: bool = False
-    contact_name: str = Field(max_length=200)
+    contact_name: str = Field(max_length=512)
     contact_phone: str = Field(max_length=64)
 
     @model_validator(mode="after")
@@ -801,7 +801,7 @@ class LogisticsRequestCreate(ApiModel):
     mandatory: bool = False
     trailer_access_allowed: bool | None = None
     include_driver_passport_in_notification: bool = False
-    contact_name: str = Field(default="", max_length=200)
+    contact_name: str = Field(default="", max_length=512)
     contact_phone: str = Field(default="", max_length=64)
     client_type: Literal["INDIVIDUAL", "SOLE_PROPRIETOR", "LEGAL_ENTITY"] | None = None
     notes: str = ""
@@ -855,7 +855,7 @@ class LogisticsRequestUpdate(ApiModel):
     mandatory: bool | None = None
     trailer_access_allowed: bool | None = None
     include_driver_passport_in_notification: bool | None = None
-    contact_name: str | None = Field(default=None, max_length=200)
+    contact_name: str | None = Field(default=None, max_length=512)
     contact_phone: str | None = Field(default=None, max_length=64)
     client_type: Literal["INDIVIDUAL", "SOLE_PROPRIETOR", "LEGAL_ENTITY"] | None = None
     notes: str | None = None
@@ -1000,7 +1000,7 @@ class RwmsPlanningRequest(RwmsApiModel):
     client_type: Literal["INDIVIDUAL", "SOLE_PROPRIETOR", "LEGAL_ENTITY"] = Field(
         alias="clientType"
     )
-    contact_name: str | None = Field(default=None, alias="contactName", max_length=200)
+    contact_name: str | None = Field(default=None, alias="contactName", max_length=512)
     contact_phone: str | None = Field(default=None, alias="contactPhone", max_length=64)
     address: NonBlank
     latitude: float | None = Field(default=None, ge=-90, le=90)

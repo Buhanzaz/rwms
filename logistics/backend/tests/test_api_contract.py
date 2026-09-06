@@ -15,7 +15,9 @@ from app.schemas.domain import (
     ContractorDispatchCreate,
     DriverCreate,
     LogisticsRequestCreate,
+    LogisticsRequestUpdate,
     PlanningSettings,
+    RequestPlanningDetailsInput,
     RwmsAppliedAssignment,
     RwmsPlanningCapacityShift,
     ShiftCreate,
@@ -300,6 +302,88 @@ def test_request_input_forbids_zone_override_and_carries_mandatory() -> None:
     assert LogisticsRequestCreate.model_validate(payload).mandatory is True
     with pytest.raises(ValidationError, match="zone_id"):
         LogisticsRequestCreate.model_validate({**payload, "zone_id": str(uuid4())})
+
+
+@pytest.mark.parametrize("length", (200, 201, 255, 512))
+def test_public_request_contact_models_accept_the_canonical_contact_name_limit(
+    length: int,
+) -> None:
+    """Keep local request commands aligned with the 512-character RWMS contact snapshot."""
+
+    contact_name = "Ж" * length
+    create = LogisticsRequestCreate(
+        type="DELIVERY",
+        name="Точка",
+        latitude=55.75,
+        longitude=37.61,
+        quantity=1,
+        contact_name=contact_name,
+    )
+    update = LogisticsRequestUpdate(expected_version=1, contact_name=contact_name)
+    details = RequestPlanningDetailsInput(
+        expected_version=1,
+        date=date(2026, 8, 30),
+        mandatory=False,
+        trailer_access_allowed=True,
+        contact_name=contact_name,
+        contact_phone="+79990000000",
+    )
+
+    assert (create.contact_name, update.contact_name, details.contact_name) == (
+        contact_name,
+        contact_name,
+        contact_name,
+    )
+
+
+def test_public_request_contact_models_reject_names_over_the_canonical_limit() -> None:
+    """Reject one character beyond the shared persistence and transport boundary."""
+
+    contact_name = "Ж" * 513
+    with pytest.raises(ValidationError, match="contact_name"):
+        LogisticsRequestCreate(
+            type="DELIVERY",
+            name="Точка",
+            latitude=55.75,
+            longitude=37.61,
+            quantity=1,
+            contact_name=contact_name,
+        )
+    with pytest.raises(ValidationError, match="contact_name"):
+        LogisticsRequestUpdate(expected_version=1, contact_name=contact_name)
+    with pytest.raises(ValidationError, match="contact_name"):
+        RequestPlanningDetailsInput(
+            expected_version=1,
+            date=date(2026, 8, 30),
+            mandatory=False,
+            trailer_access_allowed=True,
+            contact_name=contact_name,
+            contact_phone="+79990000000",
+        )
+
+
+def test_openapi_exposes_the_canonical_contact_name_limit_for_public_request_commands() -> None:
+    """Publish the same contact limit that the local DTOs and database enforce."""
+
+    schemas = openapi_document()["components"]["schemas"]
+
+    def contact_name_limit(schema_name: str) -> int:
+        field = schemas[schema_name]["properties"]["contact_name"]
+        variants = field.get("anyOf", [field])
+        return next(variant["maxLength"] for variant in variants if "maxLength" in variant)
+
+    assert {
+        schema_name: contact_name_limit(schema_name)
+        for schema_name in (
+            "LogisticsRequestCreate",
+            "LogisticsRequestUpdate",
+            "RequestPlanningDetailsInput",
+        )
+    } == {
+        "LogisticsRequestCreate": 512,
+        "LogisticsRequestUpdate": 512,
+        "RequestPlanningDetailsInput": 512,
+    }
 
 
 def test_warehouse_contract_uses_contiguous_dynamic_isochrone_tariffs() -> None:

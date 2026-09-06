@@ -2550,7 +2550,7 @@
           },
           "contact_name": {
             "default": "",
-            "maxLength": 200,
+            "maxLength": 512,
             "title": "Contact Name",
             "type": "string"
           },
@@ -3117,7 +3117,7 @@
           "contact_name": {
             "anyOf": [
               {
-                "maxLength": 200,
+                "maxLength": 512,
                 "type": "string"
               },
               {
@@ -4876,7 +4876,7 @@
         "description": "Dispatcher-owned date, window, obligation, access, and notification details.",
         "properties": {
           "contact_name": {
-            "maxLength": 200,
+            "maxLength": 512,
             "title": "Contact Name",
             "type": "string"
           },

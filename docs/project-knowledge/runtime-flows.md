@@ -1550,7 +1550,10 @@ and
    `windowStart`/`windowEnd`; a confirmed `DURING_DAY` option adds a soft date
    with null bounds. Both add informational `travelZoneHours` and trailer
    access. The planner upserts by
-   stable `(warehouse, RWMS, orderId)` identity and source revision. Coordinates
+   stable `(warehouse, RWMS, orderId)` identity and source revision. RWMS contact names
+   and local create/update/planning-details commands share a 512-character limit,
+   preserved exactly in `logistics_requests.contact_name`; migration `20260906_0035`
+   widens that column and refuses a downgrade that would lose a longer name. Coordinates
    win over address; ordinary price uses the first configured hourly isochrone
    tier that covers exact one-way Valhalla travel time. The farthest configured
    tier is the hard order-acceptance boundary. Address-only input is resolved
