@@ -38,16 +38,27 @@ export function ownerProofRetryDelay(failureCount: number) {
 }
 
 export async function retryOwnerProofOperation<T>(
-  operation: () => Promise<T>
+  operation: () => Promise<T>,
+  signal?: AbortSignal
 ): Promise<T> {
   for (let failureCount = 0; ; failureCount += 1) {
+    signal?.throwIfAborted()
     try {
       return await operation()
     } catch (error) {
+      signal?.throwIfAborted()
       if (!shouldRetryOwnerProof(failureCount, error)) throw error
-      await new Promise<void>((resolve) =>
-        setTimeout(resolve, ownerProofRetryDelay(failureCount))
-      )
+      await new Promise<void>((resolve, reject) => {
+        const abort = () => {
+          clearTimeout(timer)
+          reject(signal?.reason)
+        }
+        const timer = setTimeout(() => {
+          signal?.removeEventListener("abort", abort)
+          resolve()
+        }, ownerProofRetryDelay(failureCount))
+        signal?.addEventListener("abort", abort, { once: true })
+      })
     }
   }
 }

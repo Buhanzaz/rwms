@@ -73,11 +73,18 @@ const projection: CabinCoverProjection = {
   ],
 }
 
-function Harness({ value = projection }: { value?: CabinCoverProjection }) {
+function Harness({
+  value = projection,
+  selectedPhotoId,
+}: {
+  value?: CabinCoverProjection
+  selectedPhotoId?: string
+}) {
   const result = useRentalItemCardPhotos({
     accessToken: "read-token",
-    cabinId: CABIN_ID,
+    cabinId: value.cabinId,
     warehouseId: WAREHOUSE_ID,
+    selectedPhotoId,
     projection: value,
     coverAvailability: "available",
   })
@@ -85,7 +92,10 @@ function Harness({ value = projection }: { value?: CabinCoverProjection }) {
     <div>
       <span data-testid="availability">{result.availability}</span>
       <span data-testid="photo-ids">
-        {result.photos.map((photo) => photo.id).join(",")}
+        {result.photos
+          .filter((photo) => photo.url)
+          .map((photo) => photo.id)
+          .join(",")}
       </span>
       <span data-testid="original-url">
         {result.photos[0]?.variants?.original?.url ?? ""}
@@ -306,4 +316,73 @@ describe("useRentalItemCardPhotos", () => {
 
     expect(media.createVariantObjectUrl).toHaveBeenCalledTimes(2)
   })
+})
+
+it("loads only the cover and adjacent slides from a hundred-photo projection", async () => {
+  const previews = Array.from({ length: 100 }, (_, index) => ({
+    mediaId: `media-${index}`,
+    generation: 1,
+    ...variant("SMALL", `/preview-${index}`),
+  }))
+  const value: CabinCoverProjection = {
+    cabinId: CABIN_ID,
+    photoCount: 100,
+    cover: previews[0],
+    previews,
+  }
+  media.createVariantObjectUrl.mockImplementation(
+    async (_token: string, _owner: unknown, preview: MediaVariant) => ({
+      url: `blob:${preview.contentPath}`,
+      size: 10,
+      dispose: vi.fn(),
+    })
+  )
+  const view = render(<Harness value={value} />)
+  await waitFor(() =>
+    expect(media.createVariantObjectUrl).toHaveBeenCalledTimes(3)
+  )
+  expect(
+    media.createVariantObjectUrl.mock.calls.map((call) => call[2].contentPath)
+  ).toEqual(["/preview-0", "/preview-1", "/preview-99"])
+  view.rerender(<Harness value={value} selectedPhotoId="media-50" />)
+  await waitFor(() =>
+    expect(media.createVariantObjectUrl).toHaveBeenCalledTimes(6)
+  )
+  expect(
+    media.createVariantObjectUrl.mock.calls
+      .slice(3)
+      .map((call) => call[2].contentPath)
+  ).toEqual(["/preview-50", "/preview-51", "/preview-49"])
+})
+
+it("publishes the cover while its neighbour is still downloading and aborts on unmount", async () => {
+  let neighbourSignal!: AbortSignal
+  media.createVariantObjectUrl.mockImplementation(
+    (
+      _token: string,
+      _owner: unknown,
+      preview: MediaVariant,
+      signal: AbortSignal
+    ) => {
+      if (preview.contentPath === "/cover-small")
+        return Promise.resolve({
+          url: "blob:cover",
+          size: 10,
+          dispose: vi.fn(),
+        })
+      neighbourSignal = signal
+      return new Promise((_resolve, reject) =>
+        signal.addEventListener("abort", () => reject(signal.reason), {
+          once: true,
+        })
+      )
+    }
+  )
+  const view = render(<Harness />)
+  await waitFor(() =>
+    expect(screen.getByTestId("availability").textContent).toBe("available")
+  )
+  expect(screen.getByTestId("photo-ids").textContent).toBe(COVER_ID)
+  view.unmount()
+  await waitFor(() => expect(neighbourSignal.aborted).toBe(true))
 })

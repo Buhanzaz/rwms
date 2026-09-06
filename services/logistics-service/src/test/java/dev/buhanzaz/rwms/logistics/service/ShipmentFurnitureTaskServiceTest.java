@@ -735,5 +735,11 @@ class ShipmentFurnitureTaskServiceTest {
       ((ObjectNode) missing.required("tasks").required(0)).remove(flag);
       assertThat(schema.validate(missing)).as("required flag %s", flag).isNotEmpty();
     }
+    ObjectNode nullStatus = wire.deepCopy();
+    ((ObjectNode) nullStatus.required("tasks").required(0)).putNull("status");
+    assertThat(schema.validate(nullStatus)).isNotEmpty();
+    ObjectNode extraNested = wire.deepCopy();
+    ((ObjectNode) extraNested.required("tasks").required(0)).put("legacyReady", true);
+    assertThat(schema.validate(extraNested)).isNotEmpty();
   }
 }

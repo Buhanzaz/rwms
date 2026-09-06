@@ -19,7 +19,7 @@ export async function loadCsrfToken(): Promise<CsrfToken | null> {
       parameterName?: unknown;
     };
 
-    if (typeof body.token !== "string") {
+    if (typeof body.token !== "string" || body.token.trim() === "") {
       return null;
     }
 

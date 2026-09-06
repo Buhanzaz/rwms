@@ -178,20 +178,23 @@ internal class ManagerMaintenanceReadCoordinator(
             .filter { media -> media.status == "READY" && media.generation > 0 }
             .sortedBy { media -> media.sortOrder }
             .map { media -> MediaReferenceDto(media.id, media.generation) }
-        val reviewMedia = loadAcceptanceReviewMedia(
-            sources = acceptanceReviewMediaSources(repair, linkedEstimate),
-            warehouseId = warehouseId,
-        )
-        mutableState.update { current ->
-            current.copy(
-                maintenanceAssetLabels = current.maintenanceAssetLabels + (asset.id to asset.number),
-                acceptanceEditor = MaintenanceAcceptanceEditorState(
-                    repair = repair,
-                    asset = asset,
-                    reviewMedia = reviewMedia,
-                    readyMedia = readyAcceptanceMedia,
-                ),
-            )
+        val sources = acceptanceReviewMediaSources(repair, linkedEstimate)
+        val downloaded = loadScopedPhotoUris(acceptanceReviewDownloads(sources), warehouseId)
+        try {
+            val reviewMedia = completeAcceptanceReviewMedia(sources, downloaded)
+            mutableState.update { current ->
+                current.copy(
+                    maintenanceAssetLabels = current.maintenanceAssetLabels + (asset.id to asset.number),
+                    acceptanceEditor = MaintenanceAcceptanceEditorState(
+                        repair = repair,
+                        asset = asset,
+                        reviewMedia = reviewMedia,
+                        readyMedia = readyAcceptanceMedia,
+                    ),
+                )
+            }
+        } finally {
+            media.releasePhotoUris(downloaded.map(ScopedMediaResult::uri))
         }
     }
 
@@ -292,21 +295,6 @@ internal class ManagerMaintenanceReadCoordinator(
         closeAcceptance()
         message("Приёмка добавлена в фоновые загрузки")
         onSaved()
-    }
-
-    /**
-     * Downloads one de-duplicated owner-scoped preview set, then restores the cabin, per-work and
-     * per-stage boundaries used by the acceptance screen.
-     */
-    private suspend fun loadAcceptanceReviewMedia(
-        sources: AcceptanceReviewMediaSources,
-        warehouseId: String,
-    ): AcceptanceReviewMediaState {
-        val requests = acceptanceReviewDownloads(sources)
-        return completeAcceptanceReviewMedia(
-            sources = sources,
-            downloaded = loadScopedPhotoUris(requests, warehouseId),
-        )
     }
 
     /**

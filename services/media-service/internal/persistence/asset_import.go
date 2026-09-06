@@ -13,6 +13,41 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// assetImportReceiptState distinguishes a new command from an exact, durably recorded replay.
+type assetImportReceiptState uint8
+
+const (
+	assetImportReceiptFresh assetImportReceiptState = iota
+	assetImportReceiptReplay
+)
+
+// loadAssetImportReceiptForUpdate locks the job before its receipt, preserving command lock order.
+func loadAssetImportReceiptForUpdate(
+	ctx context.Context,
+	tx pgx.Tx,
+	jobID uuid.UUID,
+	idempotencyKey uuid.UUID,
+	requestSHA256 string,
+) (assetimport.Job, assetImportReceiptState, error) {
+	job, err := loadAssetImportForUpdate(ctx, tx, jobID)
+	if err != nil {
+		return assetimport.Job{}, assetImportReceiptFresh, err
+	}
+	var priorSHA string
+	err = tx.QueryRow(ctx, `select request_sha256 from media_asset_import_retry_receipt
+		where job_id=$1 and idempotency_key=$2 for update`, jobID, idempotencyKey).Scan(&priorSHA)
+	if err == nil {
+		if priorSHA != requestSHA256 {
+			return assetimport.Job{}, assetImportReceiptFresh, assetimport.ErrIdempotencyMismatch
+		}
+		return job, assetImportReceiptReplay, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return assetimport.Job{}, assetImportReceiptFresh, err
+	}
+	return job, assetImportReceiptFresh, nil
+}
+
 // CreateAssetImport creates or exactly replays a durable preflight job without
 // persisting the public Yandex URL.
 func (repository *Repository) CreateAssetImport(ctx context.Context, command assetimport.CreateCommand) (assetimport.Job, bool, error) {
@@ -160,24 +195,21 @@ func (repository *Repository) RetryAssetImport(ctx context.Context, command asse
 		return assetimport.Job{}, false, err
 	}
 	defer tx.Rollback(ctx)
-	job, err := loadAssetImportForUpdate(ctx, tx, command.JobID)
+	job, receiptState, err := loadAssetImportReceiptForUpdate(
+		ctx,
+		tx,
+		command.JobID,
+		command.IdempotencyKey,
+		command.RequestSHA256,
+	)
 	if err != nil {
 		return assetimport.Job{}, false, err
 	}
-	var priorSHA string
-	err = tx.QueryRow(ctx, `select request_sha256 from media_asset_import_retry_receipt
-		where job_id=$1 and idempotency_key=$2 for update`, command.JobID, command.IdempotencyKey).Scan(&priorSHA)
-	if err == nil {
-		if priorSHA != command.RequestSHA256 {
-			return assetimport.Job{}, false, assetimport.ErrIdempotencyMismatch
-		}
+	if receiptState == assetImportReceiptReplay {
 		if err := tx.Commit(ctx); err != nil {
 			return assetimport.Job{}, false, err
 		}
 		return job, true, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return assetimport.Job{}, false, err
 	}
 	if job.Status != assetimport.StatusFailed || (job.FailurePhase != assetimport.PhasePreflight && job.FailurePhase != assetimport.PhaseActivation) {
 		return assetimport.Job{}, false, assetimport.ErrConflict
@@ -226,24 +258,21 @@ func (repository *Repository) ReplaceAssetImportSources(ctx context.Context, com
 		return assetimport.Job{}, false, err
 	}
 	defer tx.Rollback(ctx)
-	job, err := loadAssetImportForUpdate(ctx, tx, command.JobID)
+	job, receiptState, err := loadAssetImportReceiptForUpdate(
+		ctx,
+		tx,
+		command.JobID,
+		command.IdempotencyKey,
+		command.RequestSHA256,
+	)
 	if err != nil {
 		return assetimport.Job{}, false, err
 	}
-	var priorSHA string
-	err = tx.QueryRow(ctx, `select request_sha256 from media_asset_import_retry_receipt
-		where job_id=$1 and idempotency_key=$2 for update`, command.JobID, command.IdempotencyKey).Scan(&priorSHA)
-	if err == nil {
-		if priorSHA != command.RequestSHA256 {
-			return assetimport.Job{}, false, assetimport.ErrIdempotencyMismatch
-		}
+	if receiptState == assetImportReceiptReplay {
 		if err := tx.Commit(ctx); err != nil {
 			return assetimport.Job{}, false, err
 		}
 		return job, true, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return assetimport.Job{}, false, err
 	}
 	if job.Status != assetimport.StatusFailed || job.FailurePhase != assetimport.PhasePreflight {
 		return assetimport.Job{}, false, assetimport.ErrConflict

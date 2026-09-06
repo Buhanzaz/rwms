@@ -74,9 +74,12 @@ class MediaDownloader(
     private val api: RwmsApi,
     cacheDir: File,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    maxCacheFiles: Int = DEFAULT_MAX_CACHE_FILES,
+    maxCacheBytes: Long = DEFAULT_MAX_CACHE_BYTES,
 ) {
     private val mediaCacheDir = File(cacheDir, "manager-remote-media")
     private val cacheLocks = List(16) { Mutex() }
+    private val cache = RetainedMediaCache(mediaCacheDir, maxCacheFiles, maxCacheBytes)
 
     /**
      * Reauthorizes the exact owner, media identity and generation through the streaming original
@@ -97,29 +100,35 @@ class MediaDownloader(
         val stem = "$safeMediaId-$generation"
 
         return retryMediaReadAfterOwnerProof {
-            val body = api.originalMedia(
-                mediaId = mediaId,
-                generation = generation,
-                ownerType = ownerType,
-                ownerId = ownerId,
-                documentId = documentId,
-                lineId = lineId,
-                warehouseId = warehouseId,
-                context = context,
-            )
-            // A disconnect can happen while a successful HTTP response is being copied to the
-            // local cache, not just before headers arrive. Retry the whole idempotent read so a
-            // supplement does not lose a photo merely because its response body was interrupted.
+            cache.begin(stem)
             try {
-                withContext(ioDispatcher) {
-                    cacheLock(stem).withLock {
-                        cachedMedia(stem)?.let { cached ->
-                            Uri.fromFile(cached).toString()
-                        } ?: persistBody(stem, body, expectedContentType)
+                val body = api.originalMedia(
+                    mediaId = mediaId,
+                    generation = generation,
+                    ownerType = ownerType,
+                    ownerId = ownerId,
+                    documentId = documentId,
+                    lineId = lineId,
+                    warehouseId = warehouseId,
+                    context = context,
+                )
+                // A disconnect can happen while a successful HTTP response is being copied to
+                // the local cache, not just before headers arrive. Retry the whole idempotent read
+                // so a supplement does not lose a photo because its body was interrupted.
+                val uri = try {
+                    withContext(ioDispatcher) {
+                        cacheLock(stem).withLock {
+                            cache.find(stem)?.let(Uri::fromFile)?.toString()
+                                ?: persistBody(stem, body, expectedContentType)
+                        }
                     }
+                } finally {
+                    withContext(NonCancellable + ioDispatcher) { body.close() }
                 }
+                check(cache.retain(uri)) { "Медиафайл исчез из временного кэша" }
+                uri
             } finally {
-                withContext(NonCancellable + ioDispatcher) { body.close() }
+                cache.end(stem)
             }
         }
     }
@@ -148,39 +157,36 @@ class MediaDownloader(
             .replace(UNSAFE_FILE_NAME, "_")
         val stem = "$safeMediaId-$generation-$variantKey"
         return retryMediaReadAfterOwnerProof {
-            val body = api.mediaVariantContent(contentPath)
+            cache.begin(stem)
             try {
-                withContext(ioDispatcher) {
-                    cacheLock(stem).withLock {
-                        cachedMedia(stem)?.let { cached ->
-                            Uri.fromFile(cached).toString()
-                        } ?: persistBody(stem, body)
+                val body = api.mediaVariantContent(contentPath)
+                val uri = try {
+                    withContext(ioDispatcher) {
+                        cacheLock(stem).withLock {
+                            cache.find(stem)?.let(Uri::fromFile)?.toString()
+                                ?: persistBody(stem, body)
+                        }
                     }
+                } finally {
+                    withContext(NonCancellable + ioDispatcher) { body.close() }
                 }
+                check(cache.retain(uri)) { "Медиафайл исчез из временного кэша" }
+                uri
             } finally {
-                withContext(NonCancellable + ioDispatcher) { body.close() }
+                cache.end(stem)
             }
         }
     }
 
+    /** Adds one ownership claim for an indexed remote-media URI. */
+    internal fun retain(uri: String): Boolean = cache.retain(uri)
+
+    /** Drops one ownership claim and evicts least-recently-used unowned entries when over budget. */
+    internal fun release(uri: String) = cache.release(uri)
+
     /** Uses bounded striped locks so concurrent requests for one immutable generation promote once. */
     private fun cacheLock(stem: String): Mutex =
         cacheLocks[(stem.hashCode() and Int.MAX_VALUE) % cacheLocks.size]
-
-    /**
-     * Returns only a completed cache entry while sharing the promotion stripe across downloader
-     * instances; a fallback copy cannot become visible at a partial length.
-     */
-    private fun cachedMedia(stem: String): File? = mediaCacheDir.listFiles()
-        ?.firstNotNullOfOrNull { file ->
-            if (file.extension == "part" || file.nameWithoutExtension != stem) {
-                null
-            } else {
-                synchronized(mediaPromotionLock(file)) {
-                    file.takeIf { candidate -> candidate.exists() && candidate.length() > 0L }
-                }
-            }
-        }
 
     /** Writes a response to a random part, validates it, then exposes one complete cache target. */
     private fun persistBody(
@@ -214,6 +220,7 @@ class MediaDownloader(
                 "Медиасервис передал медиафайл не полностью"
             }
             promoteCompleteMediaCacheFile(temporary, target)
+            cache.register(stem, target)
         } catch (failure: Throwable) {
             temporary.delete()
             throw failure
@@ -222,6 +229,141 @@ class MediaDownloader(
     }
 
     private companion object {
+        const val DEFAULT_MAX_CACHE_FILES = 256
+        const val DEFAULT_MAX_CACHE_BYTES = 256L * 1024L * 1024L
         val UNSAFE_FILE_NAME = Regex("[^A-Za-z0-9._-]")
     }
+}
+
+/** In-memory ownership and LRU index for the manager's remote-media cache directory. */
+internal class RetainedMediaCache(
+    private val directory: File,
+    private val maxFiles: Int,
+    private val maxBytes: Long,
+    private val deleteFile: (File) -> Boolean = File::delete,
+) {
+    private data class Entry(
+        val stem: String,
+        val file: File,
+        val size: Long,
+        var lastAccess: Long,
+        var references: Int = 0,
+    )
+
+    private val entriesByStem = linkedMapOf<String, Entry>()
+    private val entriesByPath = mutableMapOf<String, Entry>()
+    private val inFlightByStem = mutableMapOf<String, Int>()
+    private var accessSequence = 0L
+
+    init {
+        require(maxFiles > 0) { "Лимит количества файлов кэша должен быть положительным" }
+        require(maxBytes > 0L) { "Лимит размера кэша должен быть положительным" }
+        directory.listFiles().orEmpty()
+            .asSequence()
+            .filter { file -> file.isFile && file.extension != "part" && file.length() > 0L }
+            .sortedBy(File::lastModified)
+            .forEach { file -> index(file.nameWithoutExtension, file) }
+        prune()
+    }
+
+    @Synchronized
+    fun begin(stem: String) {
+        inFlightByStem[stem] = inFlightByStem.getOrDefault(stem, 0) + 1
+    }
+
+    @Synchronized
+    fun end(stem: String) {
+        val remaining = inFlightByStem.getOrDefault(stem, 0) - 1
+        check(remaining >= 0) { "Завершена неизвестная загрузка медиафайла" }
+        if (remaining == 0) inFlightByStem.remove(stem) else inFlightByStem[stem] = remaining
+        prune()
+    }
+
+    @Synchronized
+    fun find(stem: String): File? {
+        val entry = entriesByStem[stem] ?: return null
+        if (!entry.file.isFile || entry.file.length() <= 0L) {
+            remove(entry, delete = false)
+            return null
+        }
+        entry.lastAccess = nextAccess()
+        return entry.file
+    }
+
+    @Synchronized
+    fun register(stem: String, file: File) {
+        check(file.isFile && file.length() > 0L) { "Нельзя зарегистрировать пустой медиафайл" }
+        val entry = index(stem, file)
+        entry.lastAccess = nextAccess()
+        prune()
+    }
+
+    @Synchronized
+    fun retain(uri: String): Boolean {
+        val path = Uri.parse(uri).path ?: return false
+        val entry = entriesByPath[File(path).absolutePath] ?: return false
+        if (!entry.file.isFile || entry.file.length() <= 0L) {
+            remove(entry, delete = false)
+            return false
+        }
+        entry.references++
+        entry.lastAccess = nextAccess()
+        return true
+    }
+
+    @Synchronized
+    fun release(uri: String) {
+        val path = Uri.parse(uri).path ?: return
+        val entry = entriesByPath[File(path).absolutePath] ?: return
+        if (entry.references > 0) entry.references--
+        prune()
+    }
+
+    private fun index(stem: String, file: File): Entry {
+        val path = file.absolutePath
+        entriesByPath[path]?.let { indexed ->
+            if (indexed.stem == stem) return indexed
+        }
+        entriesByStem[stem]?.let { previous ->
+            if (previous.file.absolutePath != file.absolutePath) remove(previous, delete = true)
+        }
+        entriesByPath[path]?.let { previous ->
+            if (previous.stem != stem) remove(previous, delete = false)
+        }
+        return Entry(stem, file, file.length(), nextAccess()).also { entry ->
+            entriesByStem[stem] = entry
+            entriesByPath[path] = entry
+        }
+    }
+
+    private fun prune() {
+        var totalBytes = entriesByStem.values.sumOf(Entry::size)
+        val failedDeletionPaths = mutableSetOf<String>()
+        while (entriesByStem.size > maxFiles || totalBytes > maxBytes) {
+            val candidate = entriesByStem.values
+                .asSequence()
+                .filter { entry ->
+                    entry.references == 0 && inFlightByStem.getOrDefault(entry.stem, 0) == 0
+                }
+                .filterNot { entry -> entry.file.absolutePath in failedDeletionPaths }
+                .minByOrNull(Entry::lastAccess)
+                ?: return
+            if (remove(candidate, delete = true)) {
+                totalBytes -= candidate.size
+            } else {
+                failedDeletionPaths += candidate.file.absolutePath
+            }
+        }
+    }
+
+    private fun remove(entry: Entry, delete: Boolean): Boolean {
+        if (delete && entry.file.exists() && !deleteFile(entry.file)) return false
+        if (entriesByStem[entry.stem] === entry) entriesByStem.remove(entry.stem)
+        if (entriesByPath[entry.file.absolutePath] === entry) {
+            entriesByPath.remove(entry.file.absolutePath)
+        }
+        return true
+    }
+
+    private fun nextAccess(): Long = ++accessSequence
 }

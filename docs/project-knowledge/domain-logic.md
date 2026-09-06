@@ -33,9 +33,12 @@ preserves the canonical password maxima of 128 customer characters and 200
 administrator/worker characters without rejecting valid Unicode by its UTF-8 byte length.
 
 CSRF protects that anonymous command from cross-site submission; it is not an
-abuse quota. Because the public gateway is stateless and owns no request-ledger
-database, source-address throttling remains a production-ingress obligation,
-not auth or domain state.
+abuse quota. Auth-service owns durable source-address and global registration
+limits in its `customer_registration_throttle` table. The
+[registration controller](../../services/auth-service/src/main/java/dev/buhanzaz/rwms/auth/api/CustomerRegistrationController.java)
+consumes this budget through
+[CustomerRegistrationThrottle](../../services/auth-service/src/main/java/dev/buhanzaz/rwms/auth/service/CustomerRegistrationThrottle.java)
+before registration. The stateless public edge may enforce additional ingress limits.
 
 The panel keeps its one-time OIDC state and PKCE transaction in browser
 `sessionStorage`. A duplicate delivery or remount of the same callback must

@@ -74,6 +74,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.yandex.mapkit.map.MapWindow
 import com.yandex.mapkit.mapview.MapView
+import dev.buhanzaz.rwms.driver.core.database.DriverShiftDraftEntity
 import dev.buhanzaz.rwms.driver.core.network.DriverShiftRouteOperationDto
 import dev.buhanzaz.rwms.driver.core.network.DriverVehicleInspectionItemDto
 import dev.buhanzaz.rwms.driver.core.network.TodayDriverShiftDto
@@ -99,6 +100,61 @@ fun DriverShiftHost(
 ) {
     LaunchedEffect(userId) { viewModel.bind(userId) }
     val state by viewModel.state.collectAsStateWithLifecycle()
+    DriverShiftContent(
+        state = state,
+        displayName = displayName,
+        onCapturePhoto = onCapturePhoto,
+        activeTasks = activeTasks,
+        actions = DriverShiftActions(
+            refresh = viewModel::refresh,
+            loadTraffic = viewModel::loadTraffic,
+            attachTrafficMap = viewModel::attachTrafficMap,
+            detachTrafficMap = viewModel::detachTrafficMap,
+            confirmBriefing = viewModel::confirmBriefing,
+            clearError = viewModel::clearError,
+            confirmMedicalCheck = viewModel::confirmMedicalCheck,
+            updateInspectionItem = viewModel::updateInspectionItem,
+            completeInspection = viewModel::completeInspection,
+            startShift = viewModel::startShift,
+            startClosing = viewModel::startClosing,
+            confirmWarehouseReturn = viewModel::confirmWarehouseReturn,
+            ensureClosingDraft = viewModel::ensureClosingDraft,
+            updateClosingDraft = viewModel::updateClosingDraft,
+            submitClosingReport = viewModel::submitClosingReport,
+            closeShift = viewModel::closeShift,
+        ),
+    )
+}
+
+/** The callbacks of the existing shift screen; command semantics remain in the ViewModel. */
+internal data class DriverShiftActions(
+    val refresh: () -> Unit,
+    val loadTraffic: (Double?, Double?) -> Unit,
+    val attachTrafficMap: (MapWindow) -> Unit,
+    val detachTrafficMap: (MapWindow) -> Unit,
+    val confirmBriefing: () -> Unit,
+    val clearError: () -> Unit,
+    val confirmMedicalCheck: () -> Unit,
+    val updateInspectionItem: (String, String, String?, String?) -> Unit,
+    val completeInspection: () -> Unit,
+    val startShift: () -> Unit,
+    val startClosing: () -> Unit,
+    val confirmWarehouseReturn: () -> Unit,
+    val ensureClosingDraft: () -> Unit,
+    val updateClosingDraft: ((DriverShiftDraftEntity) -> DriverShiftDraftEntity) -> Unit,
+    val submitClosingReport: (Boolean) -> Unit,
+    val closeShift: () -> Unit,
+)
+
+/** Renders the authoritative next action, including incomplete and unknown server states. */
+@Composable
+internal fun DriverShiftContent(
+    state: DriverShiftUiState,
+    displayName: String,
+    onCapturePhoto: (ShiftPhotoCaptureRequest) -> Unit,
+    activeTasks: @Composable (Boolean) -> Unit,
+    actions: DriverShiftActions,
+) {
     val today = state.today
 
     when {
@@ -106,7 +162,7 @@ fun DriverShiftHost(
         today == null -> DriverShiftUnavailableScreen(
             state = state,
             message = "Не удалось восстановить состояние смены",
-            onRefresh = viewModel::refresh,
+            onRefresh = actions.refresh,
         )
         !today.enabled -> activeTasks(false)
         today.nextRequiredAction == "SHOW_TASKS" -> ActiveTasksWithRouteTimeline(
@@ -117,71 +173,71 @@ fun DriverShiftHost(
             state = state,
             message = today.nextAvailableAt?.let { "Новая смена будет доступна ${formatDateTime(it)}" }
                 ?: "На текущую рабочую дату смена пока не назначена",
-            onRefresh = viewModel::refresh,
+            onRefresh = actions.refresh,
         )
         today.nextRequiredAction == "SHOW_DAILY_BRIEFING" -> DailyBriefingScreen(
             state = state,
             today = today,
             displayName = displayName,
-            onLoadTraffic = viewModel::loadTraffic,
-            onAttachTrafficMap = viewModel::attachTrafficMap,
-            onDetachTrafficMap = viewModel::detachTrafficMap,
-            onContinue = viewModel::confirmBriefing,
-            onClearError = viewModel::clearError,
+            onLoadTraffic = actions.loadTraffic,
+            onAttachTrafficMap = actions.attachTrafficMap,
+            onDetachTrafficMap = actions.detachTrafficMap,
+            onContinue = actions.confirmBriefing,
+            onClearError = actions.clearError,
         )
         today.nextRequiredAction == "COMPLETE_MEDICAL_CHECK" -> MedicalCheckScreen(
             state = state,
             today = today,
-            onConfirm = viewModel::confirmMedicalCheck,
-            onClearError = viewModel::clearError,
+            onConfirm = actions.confirmMedicalCheck,
+            onClearError = actions.clearError,
         )
         today.nextRequiredAction == "COMPLETE_VEHICLE_INSPECTION" -> VehicleInspectionScreen(
             state = state,
             today = today,
-            onItemResult = viewModel::updateInspectionItem,
-            onComplete = viewModel::completeInspection,
+            onItemResult = actions.updateInspectionItem,
+            onComplete = actions.completeInspection,
             onCapturePhoto = onCapturePhoto,
-            onClearError = viewModel::clearError,
+            onClearError = actions.clearError,
         )
         today.nextRequiredAction == "START_SHIFT" -> ReadyToStartScreen(
             state = state,
             today = today,
-            onStart = viewModel::startShift,
-            onClearError = viewModel::clearError,
+            onStart = actions.startShift,
+            onClearError = actions.clearError,
         )
         today.nextRequiredAction == "START_SHIFT_CLOSING" -> TasksCompletedScreen(
             state = state,
             today = today,
-            onContinue = viewModel::startClosing,
-            onClearError = viewModel::clearError,
+            onContinue = actions.startClosing,
+            onClearError = actions.clearError,
         )
         today.nextRequiredAction == "CONFIRM_WAREHOUSE_RETURN" -> WarehouseReturnScreen(
             state = state,
             today = today,
-            onConfirm = viewModel::confirmWarehouseReturn,
-            onClearError = viewModel::clearError,
+            onConfirm = actions.confirmWarehouseReturn,
+            onClearError = actions.clearError,
         )
         today.nextRequiredAction == "COMPLETE_END_OF_SHIFT_REPORT" -> ClosingFlowScreen(
             state = state,
             today = today,
-            onEnsureDraft = viewModel::ensureClosingDraft,
-            onUpdateDraft = viewModel::updateClosingDraft,
-            onSubmit = viewModel::submitClosingReport,
+            onEnsureDraft = actions.ensureClosingDraft,
+            onUpdateDraft = actions.updateClosingDraft,
+            onSubmit = actions.submitClosingReport,
             onCapturePhoto = onCapturePhoto,
-            onClearError = viewModel::clearError,
+            onClearError = actions.clearError,
         )
         today.nextRequiredAction == "CLOSE_SHIFT" -> CloseShiftScreen(
             state = state,
             today = today,
-            onClose = viewModel::closeShift,
+            onClose = actions.closeShift,
             onCapturePhoto = onCapturePhoto,
-            onClearError = viewModel::clearError,
+            onClearError = actions.clearError,
         )
-        today.nextRequiredAction == "SHIFT_CLOSED" -> ShiftClosedScreen(state, today, viewModel::clearError)
+        today.nextRequiredAction == "SHIFT_CLOSED" -> ShiftClosedScreen(state, today, actions.clearError)
         else -> DriverShiftUnavailableScreen(
             state = state,
             message = "RWMS вернул неизвестный следующий шаг: ${today.nextRequiredAction}",
-            onRefresh = viewModel::refresh,
+            onRefresh = actions.refresh,
         )
     }
 }

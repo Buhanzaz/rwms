@@ -6,7 +6,7 @@ import dev.buhanzaz.rwms.manager.media.retryMediaReadAfterOwnerProof
 import dev.buhanzaz.rwms.manager.network.InventoryFindingDto
 import dev.buhanzaz.rwms.manager.network.MediaAssetDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
-import dev.buhanzaz.rwms.manager.network.RwmsBackend
+import dev.buhanzaz.rwms.manager.network.RwmsApi
 import dev.buhanzaz.rwms.manager.uploads.readyOwnerMediaAssetsById
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -44,6 +44,9 @@ internal data class ScopedMediaResult(
  * URI.
  */
 internal interface ManagerMediaPort {
+    /** Releases every temporary download claim after state handoff or durable draft copying. */
+    fun releasePhotoUris(uris: Iterable<String>)
+
     suspend fun loadInventoryPhotoUris(
         finding: InventoryFindingDto,
         warehouseId: String,
@@ -74,9 +77,11 @@ private data class ScopedDownloadedPhoto(
  * mobile connection.
  */
 internal class ManagerMediaCoordinator(
-    private val backend: RwmsBackend,
+    private val api: RwmsApi,
     private val mediaDownloader: MediaDownloader,
 ) : ManagerMediaPort {
+    override fun releasePhotoUris(uris: Iterable<String>) = uris.forEach(mediaDownloader::release)
+
     override suspend fun loadInventoryPhotoUris(
         finding: InventoryFindingDto,
         warehouseId: String,
@@ -124,7 +129,7 @@ internal class ManagerMediaCoordinator(
         ) { scope ->
             val assets = try {
                 retryMediaReadAfterOwnerProof {
-                    backend.api.ownerMedia(
+                    api.ownerMedia(
                         ownerType = scope.ownerType,
                         ownerId = scope.ownerId,
                         warehouseId = warehouseId,
@@ -147,23 +152,31 @@ internal class ManagerMediaCoordinator(
         // photos; a small bound avoids saturating a weak mobile connection and turning a single
         // transient failure into a partially loaded editor.
         val downloadPermits = Semaphore(MANAGER_PHOTO_DOWNLOAD_PARALLELISM)
-        return coroutineScope {
-            requests.map { request ->
-                async {
-                    val downloaded = downloadPermits.withPermit {
-                        downloadScopedPhoto(
-                            request = request,
-                            assetsByScope = assetsByScope,
-                            warehouseId = warehouseId,
-                            preferCurrentOwnerReference = preferCurrentOwnerReference,
+        val completedUris = java.util.Collections.synchronizedList(mutableListOf<String>())
+        try {
+            return coroutineScope {
+                requests.map { request ->
+                    async {
+                        val downloaded = downloadPermits.withPermit {
+                            downloadScopedPhoto(
+                                request = request,
+                                assetsByScope = assetsByScope,
+                                warehouseId = warehouseId,
+                                preferCurrentOwnerReference = preferCurrentOwnerReference,
+                            )
+                        } ?: return@async null
+                        completedUris.add(downloaded.uri)
+                        ScopedMediaResult(
+                            reference = downloaded.reference,
+                            uri = downloaded.uri,
                         )
-                    } ?: return@async null
-                    ScopedMediaResult(
-                        reference = downloaded.reference,
-                        uri = downloaded.uri,
-                    )
-                }
-            }.mapNotNull { download -> download.await() }
+                    }
+                }.mapNotNull { download -> download.await() }
+            }
+        } catch (failure: Throwable) {
+            // coroutineScope has joined canceled siblings before their claims are released.
+            releasePhotoUris(completedUris)
+            throw failure
         }
     }
 

@@ -243,6 +243,39 @@ class RentalManagerViewModelTest {
     }
 
     @Test
+    fun `recreated view model retries failed command with persisted idempotency key`() = runTest {
+        val fixture = fixture()
+        fixture.viewModel.openOrder(ORDER_A.id)
+        advanceUntilIdle()
+        fixture.api.mutation = { _, _ -> throw IOException("lost response") }
+
+        fixture.viewModel.updateOrder(null, "same")
+        advanceUntilIdle()
+        val failedKey = fixture.api.keys.single()
+
+        fixture.api.mutation = { _, _ -> ORDER_A.copy(version = 2) }
+        val recreated = RentalManagerViewModel(
+            fixture.repository,
+            fixture.auth,
+            { _, _ -> },
+            {},
+            { fixture.invalidations += it },
+            fixture.savedState,
+        )
+        viewModels += recreated
+        advanceUntilIdle()
+        recreated.openOrder(ORDER_A.id)
+        advanceUntilIdle()
+
+        recreated.updateOrder(null, "same")
+        advanceUntilIdle()
+
+        assertThat(fixture.api.keys).containsExactly(failedKey, failedKey).inOrder()
+        assertThat(fixture.savedState.get<String>("updateOrder.key")).isNull()
+        assertThat(recreated.state.value.selectedOrder?.version).isEqualTo(2)
+    }
+
+    @Test
     fun `old session success cannot clear a new command key or running state`() = runTest {
         val fixture = fixture()
         fixture.viewModel.openOrder(ORDER_A.id)
@@ -338,12 +371,13 @@ class RentalManagerViewModelTest {
         }
         advanceUntilIdle()
         assertThat(vm.state.value.phase).isEqualTo(RentalManagerPhase.READY)
-        return Fixture(api, auth, vm, savedState, invalidations, events)
+        return Fixture(api, auth, repository, vm, savedState, invalidations, events)
     }
 
     private data class Fixture(
         val api: FakeApi,
         val auth: MutableStateFlow<RentalManagerAuthState>,
+        val repository: RentalManagerRepository,
         val viewModel: RentalManagerViewModel,
         val savedState: SavedStateHandle,
         val invalidations: MutableList<String>,

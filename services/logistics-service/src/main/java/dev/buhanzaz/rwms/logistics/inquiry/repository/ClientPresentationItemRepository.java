@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.logistics.inquiry.repository;
 
 import dev.buhanzaz.rwms.logistics.inquiry.domain.ClientPresentationItem;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -13,4 +14,7 @@ public interface ClientPresentationItemRepository
   List<ClientPresentationItem>
       findAllByPresentationIdAndPresentationRevisionOrderBySortOrderAscIdAsc(
           UUID presentationId, long presentationRevision);
+
+  Optional<ClientPresentationItem> findByPresentationIdAndPresentationRevisionAndRentalItemId(
+      UUID presentationId, long presentationRevision, UUID rentalItemId);
 }

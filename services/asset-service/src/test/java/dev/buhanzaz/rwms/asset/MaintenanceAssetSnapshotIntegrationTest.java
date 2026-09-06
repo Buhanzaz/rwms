@@ -131,6 +131,10 @@ class MaintenanceAssetSnapshotIntegrationTest {
     explicitNull.putNull("number");
     assertThat(schema.validate(explicitNull)).isNotEmpty();
 
+    ObjectNode extra = responseBody.deepCopy();
+    extra.put("privateComment", "must not cross the boundary");
+    assertThat(schema.validate(extra)).isNotEmpty();
+
     ObjectNode empty = responseBody.deepCopy();
     empty.put("number", "");
     assertThat(schema.validate(empty)).isNotEmpty();

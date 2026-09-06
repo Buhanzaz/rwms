@@ -288,7 +288,4 @@ interface WorkerConflictDao {
 interface WorkerInvalidationDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(event: WorkerInvalidationEntity): Long
-
-    @Query("SELECT MAX(revision) FROM worker_invalidation WHERE userId = :userId")
-    suspend fun latestRevision(userId: String): Long?
 }

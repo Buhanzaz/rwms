@@ -13,12 +13,13 @@ defines the following meaning:
 
 | Field              | Meaning                                                  |
 | ------------------ | -------------------------------------------------------- |
+| `envelopeVersion`  | Required technical envelope marker, exactly `2`.        |
 | `eventId`          | Globally unique immutable delivery identity.             |
 | `eventType`        | Stable namespaced fact name.                             |
 | `eventVersion`     | Major contract version for the payload.                  |
 | `occurredAt`       | Proven business instant when available.                  |
 | `recordedAt`       | UTC instant at which the owner recorded the fact.        |
-| `producer`         | Owning service and deployable version.                   |
+| `producer`         | Exact owning service identity, e.g. `asset-service`; no build version.                   |
 | `aggregateType`    | Producer-owned aggregate kind.                           |
 | `aggregateId`      | Opaque producer-owned identifier.                        |
 | `aggregateVersion` | Version after the committed mutation.                    |

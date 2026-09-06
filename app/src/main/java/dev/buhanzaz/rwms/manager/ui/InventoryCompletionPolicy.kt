@@ -2,7 +2,6 @@ package dev.buhanzaz.rwms.manager.ui
 
 import dev.buhanzaz.rwms.manager.network.InventoryCompletionPreviewDto
 import dev.buhanzaz.rwms.manager.network.InventoryFindingDto
-import dev.buhanzaz.rwms.manager.network.InventoryRevisionExpectationDto
 
 /** Risk codes that prevent a manager from submitting inventory completion. */
 internal val inventoryBlockingCompletionRiskCodes = setOf(
@@ -12,19 +11,6 @@ internal val inventoryBlockingCompletionRiskCodes = setOf(
     "PLAN_STALE",
     "MUTATION_IN_FLIGHT",
 )
-
-/** Builds the exact expected finding revisions used to fence inventory completion. */
-internal fun inventoryCompletionRevisionExpectations(
-    findings: List<InventoryFindingDto>,
-): List<InventoryRevisionExpectationDto> =
-    findings
-        .sortedBy(InventoryFindingDto::id)
-        .map { finding ->
-            InventoryRevisionExpectationDto(
-                findingId = finding.id,
-                expectedFindingRevision = finding.findingRevision,
-            )
-        }
 
 /** Counts preview risks by canonical server code for compact UI summaries. */
 internal fun InventoryCompletionPreviewDto.inventoryCompletionRiskCounts(): Map<String, Int> =

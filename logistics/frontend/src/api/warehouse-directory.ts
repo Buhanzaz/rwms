@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { ApiError, requireSimulatorAccessToken } from './client';
+import { requireSimulatorAccessToken } from './client';
+import { fetchApi, readApiResponse } from './http-response';
 
 const warehouseKindSchema = z.object({
   // Canonical warehouse IDs include UUIDs without RFC version/variant bits.
@@ -19,13 +20,12 @@ export type WarehouseKindMetadata = z.infer<typeof warehouseKindSchema>;
 /** Canonical labels only: directory membership never grants planner access. */
 export async function loadWarehouseKinds(signal?: AbortSignal): Promise<ReadonlyMap<string, WarehouseKindMetadata>> {
   const token = await requireSimulatorAccessToken();
-  const response = await fetch('/api/warehouse/v1/warehouses', {
+  const response = await fetchApi('/api/warehouse/v1/warehouses', {
     signal: signal ?? null,
     cache: 'no-store',
     headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
   });
-  if (!response.ok) throw new ApiError(response.status, null, 'Не удалось загрузить типы складов. Повторите обновление.');
-  const body: unknown = await response.json();
+  const body = await readApiResponse(response, 'Не удалось загрузить типы складов. Повторите обновление.');
   const parsed = z.array(warehouseKindSchema).safeParse(body);
   if (!parsed.success || new Set(parsed.data.map((item) => item.id)).size !== parsed.data.length) {
     throw new Error('Справочник вернул неподтверждённые типы складов. Обновите данные.');

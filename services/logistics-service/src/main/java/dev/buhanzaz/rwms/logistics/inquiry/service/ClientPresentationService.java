@@ -338,12 +338,17 @@ public class ClientPresentationService {
     if (!Set.of("SMALL", "LARGE").contains(variant)) {
       throw notFound("Фотография не найдена");
     }
-    String actualToken = tokens.issue(presentation.getId(), presentation.getRevision());
+    ClientPresentationItem item =
+        items
+            .findByPresentationIdAndPresentationRevisionAndRentalItemId(
+                presentation.getId(), presentation.getRevision(), cabinId)
+            .orElseThrow(() -> notFound("Фотография не найдена"));
+    List<LogisticsDependencyGateway.CabinMediaPhoto> photos =
+        read(
+            item.getMediaSnapshotJson(),
+            new TypeReference<List<LogisticsDependencyGateway.CabinMediaPhoto>>() {});
     boolean found =
-        response(presentation, actualToken).groups().stream()
-            .flatMap(group -> group.cabins().stream())
-            .filter(cabin -> cabin.id().equals(cabinId))
-            .flatMap(cabin -> cabin.photos().stream())
+        photos.stream()
             .anyMatch(
                 photo ->
                     photo.mediaId().equals(mediaId)

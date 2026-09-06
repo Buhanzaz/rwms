@@ -289,6 +289,9 @@ contexts and screens are usable.
   preserves the selected photo by media ID. Logout, changed principal/grants,
   and relevant media invalidations still discard protected cache data; no
   private photo bytes are persisted to disk or treated as offline authority.
+  Preview requests share a four-download queue. Each card requests its cover,
+  current slide and adjacent slides, shows the cover as soon as it arrives, and
+  cancels abandoned work when no other consumer needs it.
 - Shared owner-media surfaces show READY images first and READY videos through
   their compressed MP4 `PLAYBACK` variant with native controls. JPEG, PNG,
   WebP, MP4, and WebM can be added. A selected local original is shown
@@ -436,6 +439,9 @@ contexts and screens are usable.
   [assistant OpenAPI](../contracts/openapi/assistant-service.yaml), the strict
   [assistant adapter](src/features/assistant/api/assistant-api.ts), and the
   [conversation page](src/features/assistant/pages/assistant-page.tsx).
+- Leaving or switching an assistant conversation aborts the active stream and
+  releases its reader. Late events cannot update the replacement conversation;
+  the message POST is not automatically retried.
 - The assistant selection and its expiry are logistics-owned. Checkbox removal
   sends the complete remaining ID set with an idempotency key; an empty set
   releases the hold, while partial removal applies the authoritative renewed

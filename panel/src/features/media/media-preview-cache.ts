@@ -11,6 +11,10 @@ type CacheEntry = {
 type PendingEntry = {
   promise: Promise<DisposableMediaObjectUrl>
   invalidated: boolean
+  controller: AbortController
+  consumers: number
+  settled: boolean
+  priority: number
 }
 
 export type MediaPreviewLease = Readonly<{
@@ -28,11 +32,13 @@ let cachedBytes = 0
 /** Keeps decoded preview Blob URLs until an invalidation, logout, or size cap. */
 export async function acquireMediaPreview(
   key: string,
-  loader: () => Promise<DisposableMediaObjectUrl>
+  loader: (signal: AbortSignal) => Promise<DisposableMediaObjectUrl>,
+  options: { signal?: AbortSignal; priority?: number } = {}
 ): Promise<MediaPreviewLease> {
   const acquisitionRevision = cacheRevision
   sweep()
   while (true) {
+    options.signal?.throwIfAborted()
     if (acquisitionRevision !== cacheRevision) {
       throw new MediaPreviewCacheClearedError()
     }
@@ -51,11 +57,43 @@ export async function acquireMediaPreview(
     if (!entry) {
       let pendingEntry = pending.get(key)
       if (!pendingEntry || pendingEntry.invalidated) {
-        pendingEntry = { promise: loader(), invalidated: false }
+        const controller = new AbortController()
+        const next: PendingEntry = {
+          promise: undefined!,
+          invalidated: false,
+          controller,
+          consumers: 0,
+          settled: false,
+          priority: options.priority ?? 0,
+        }
+        next.promise = schedulePreviewLoad(
+          () => loader(controller.signal),
+          controller.signal,
+          () => next.priority
+        )
+          .then((objectUrl) => {
+            if (controller.signal.aborted) {
+              objectUrl.dispose()
+              throw controller.signal.reason
+            }
+            return objectUrl
+          })
+          .finally(() => {
+            next.settled = true
+          })
+        pendingEntry = next
         pending.set(key, pendingEntry)
       }
+      pendingEntry.priority = Math.min(
+        pendingEntry.priority,
+        options.priority ?? 0
+      )
+      pendingEntry.consumers += 1
       try {
-        const objectUrl = await pendingEntry.promise
+        const objectUrl = await waitForPreview(
+          pendingEntry.promise,
+          options.signal
+        )
         if (acquisitionRevision !== cacheRevision) {
           objectUrl.dispose()
           throw new MediaPreviewCacheClearedError()
@@ -81,8 +119,17 @@ export async function acquireMediaPreview(
           objectUrl.dispose()
         }
       } catch (error) {
-        if (pending.get(key) === pendingEntry) pending.delete(key)
+        if (pendingEntry.settled && pending.get(key) === pendingEntry)
+          pending.delete(key)
+        if (acquisitionRevision !== cacheRevision)
+          throw new MediaPreviewCacheClearedError()
         throw error
+      } finally {
+        pendingEntry.consumers -= 1
+        if (pendingEntry.consumers === 0 && !pendingEntry.settled) {
+          if (pending.get(key) === pendingEntry) pending.delete(key)
+          pendingEntry.controller.abort()
+        }
       }
     }
 
@@ -160,8 +207,70 @@ export function clearMediaPreviewCache() {
   for (const entry of entries.values()) disposeEntry(entry)
   entries.clear()
   cachedBytes = 0
-  for (const pendingEntry of pending.values()) pendingEntry.invalidated = true
+  for (const pendingEntry of pending.values()) {
+    pendingEntry.invalidated = true
+    pendingEntry.controller.abort()
+  }
   pending.clear()
+}
+
+const MAX_PREVIEW_DOWNLOADS = 4
+const downloadQueue: Array<{ priority: () => number; run: () => void }> = []
+let activeDownloads = 0
+
+/** One shared queue gives covers priority over adjacent slides across all visible cards. */
+function schedulePreviewLoad(
+  loader: () => Promise<DisposableMediaObjectUrl>,
+  signal: AbortSignal,
+  priority: () => number
+): Promise<DisposableMediaObjectUrl> {
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      const index = downloadQueue.indexOf(task)
+      if (index >= 0) downloadQueue.splice(index, 1)
+      reject(signal.reason)
+    }
+    const task = {
+      priority,
+      run: () => {
+        signal.removeEventListener("abort", abort)
+        activeDownloads += 1
+        void Promise.resolve()
+          .then(loader)
+          .then(resolve, reject)
+          .finally(() => {
+            activeDownloads -= 1
+            pumpDownloads()
+          })
+      },
+    }
+    if (signal.aborted) return reject(signal.reason)
+    signal.addEventListener("abort", abort, { once: true })
+    downloadQueue.push(task)
+    queueMicrotask(pumpDownloads)
+  })
+}
+
+function pumpDownloads() {
+  downloadQueue.sort((left, right) => left.priority() - right.priority())
+  while (activeDownloads < MAX_PREVIEW_DOWNLOADS && downloadQueue.length > 0) {
+    downloadQueue.shift()!.run()
+  }
+}
+
+function waitForPreview<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal
+): Promise<T> {
+  if (!signal) return promise
+  signal.throwIfAborted()
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason)
+    signal.addEventListener("abort", abort, { once: true })
+    promise
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener("abort", abort))
+  })
 }
 
 /** Signals that a principal-wide cache clear superseded an in-flight preview. */

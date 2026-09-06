@@ -319,10 +319,6 @@ class DriverLocalStore @Inject constructor(
     suspend fun cachedShiftSnapshot(userId: String): DriverShiftSnapshotEntity? =
         database.shiftSnapshotDao().snapshot(userId)
 
-    /** Replaces only the cached server projection; pending commands remain durable and visible. */
-    suspend fun saveShiftSnapshot(snapshot: DriverShiftSnapshotEntity) =
-        database.shiftSnapshotDao().upsert(snapshot)
-
     /** Atomically saves an optimistic resume projection and its encrypted state-machine command. */
     suspend fun enqueueShiftCommand(
         userId: String,
@@ -429,9 +425,6 @@ class DriverLocalStore @Inject constructor(
     suspend fun shiftDraft(userId: String, shiftId: String): DriverShiftDraftEntity? =
         database.shiftDraftDao().draft(userId, shiftId)
 
-    suspend fun clearShiftDraft(userId: String, shiftId: String) =
-        database.shiftDraftDao().delete(userId, shiftId)
-
     fun decryptOutboxPayload(operation: DriverOutboxEntity): String =
         pendingPayloadCipher.decrypt(operation.encryptedPayload)
 
@@ -471,12 +464,7 @@ class DriverLocalStore @Inject constructor(
         )
     }
 
-    fun decryptConflictCurrentEntry(conflict: DriverConflictEntity): String? =
-        conflict.encryptedCurrentEntry?.let(pendingPayloadCipher::decrypt)
-
     suspend fun updateProgress(progress: DriverSyncProgressEntity) = database.syncProgressDao().upsert(progress)
-
-    suspend fun setSession(session: DriverSessionEntity) = database.sessionDao().upsert(session)
 
     suspend fun leaseFor(userId: String): ServerTimeAnchor? = database.sessionDao().session(userId)?.let { session ->
         val server = session.serverEpochMillis ?: return@let null

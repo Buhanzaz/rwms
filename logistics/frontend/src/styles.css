@@ -463,11 +463,6 @@ textarea.input { resize: vertical; min-height: 74px; }
 .switch:disabled { cursor: not-allowed; opacity: .5; }
 .switch__thumb { width: 16px; height: 16px; display: block; border-radius: 50%; background: var(--panel); box-shadow: 0 1px 4px var(--shadow); transform: translateX(0); transition: transform .18s ease; }
 .switch[aria-checked="true"] .switch__thumb { transform: translateX(16px); background: var(--accent-foreground); }
-.switch-field { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-soft); }
-.switch-field > span { min-width: 0; display: grid; gap: 3px; }
-.switch-field strong { font-size: 11px; }
-.switch-field small { color: var(--muted); font-size: 10px; line-height: 1.35; }
-.switch-field--disabled { opacity: .62; }
 .theme-switch { width: var(--control-height); min-width: var(--control-height); height: var(--control-height); min-height: var(--control-height); padding: 0; color: var(--muted); }
 .operations-journal { display: grid; gap: 10px; }
 .operations-journal__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }

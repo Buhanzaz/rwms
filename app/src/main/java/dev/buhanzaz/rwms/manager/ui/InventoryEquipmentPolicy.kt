@@ -1,6 +1,5 @@
 package dev.buhanzaz.rwms.manager.ui
 
-import dev.buhanzaz.rwms.manager.network.CabinFurnitureRequirementDto
 import dev.buhanzaz.rwms.manager.network.EquipmentCatalogItemDto
 import dev.buhanzaz.rwms.manager.network.InventoryFindingDto
 import dev.buhanzaz.rwms.manager.network.ObservationInput
@@ -81,23 +80,6 @@ internal fun InventoryEditorState.inventoryEquipmentObservation(): ObservationIn
         ObservationInput("EXPLICIT_EMPTY", emptyList<Map<String, Any?>>())
     } else {
         ObservationInput("PRESENT", observed)
-    }
-}
-
-/**
- * The desired total is sent only to logistics, after inventory has durably recorded the
- * observation.  Asset balances are therefore changed by the resulting worker task rather than
- * being overwritten by the inspection itself.
- */
-internal fun InventoryEditorState.inventoryFurnitureDesiredContents():
-    List<CabinFurnitureRequirementDto>? {
-    inventoryEquipmentObservationValidationError()?.let { error ->
-        throw IllegalArgumentException(error)
-    }
-    if (equipmentObservationRequested != true) return null
-    return equipmentCatalog.inventoryFurnitureCatalog().mapNotNull { equipment ->
-        val quantity = requireNotNull(inventoryEquipmentQuantityText(equipment.id).toLongOrNull())
-        if (quantity > 0L) CabinFurnitureRequirementDto(equipment.id, quantity) else null
     }
 }
 

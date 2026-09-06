@@ -84,21 +84,6 @@ export function Switch({ checked, onCheckedChange, disabled = false, label }: {
   );
 }
 
-export function SwitchField({ label, description, checked, onCheckedChange, disabled = false }: {
-  label: string;
-  description?: string;
-  checked: boolean;
-  onCheckedChange: (checked: boolean) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <div className={`switch-field ${disabled ? 'switch-field--disabled' : ''}`}>
-      <span><strong>{label}</strong>{description ? <small>{description}</small> : null}</span>
-      <Switch checked={checked} onCheckedChange={onCheckedChange} disabled={disabled} label={label} />
-    </div>
-  );
-}
-
 /** Persistent single-button light/dark theme toggle shown in the logistics header. */
 export function ThemeSwitch() {
   const theme = useUiStore((state) => state.theme);

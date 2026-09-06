@@ -735,6 +735,27 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
+  void actualRouteStepRequestMatchesCanonicalClosedSchema() throws Exception {
+    ObjectNode wire =
+        (ObjectNode)
+            SCHEMA_OBJECT_MAPPER.readTree(
+                objectMapper.writeValueAsString(
+                    new RouteStepRequest(UUID.randomUUID(), "Inspection", 15)));
+    JsonSchema schema = canonicalOpenApiSchema("RouteStepRequest");
+
+    assertThat(schema.validate(wire)).isEmpty();
+    ObjectNode missingDefinition = wire.deepCopy();
+    missingDefinition.remove("queueDefinitionId");
+    assertThat(schema.validate(missingDefinition)).isNotEmpty();
+    ObjectNode nullDefinition = wire.deepCopy();
+    nullDefinition.putNull("queueDefinitionId");
+    assertThat(schema.validate(nullDefinition)).isNotEmpty();
+    ObjectNode legacyAudience = wire.deepCopy();
+    legacyAudience.putArray("audienceSelectors");
+    assertThat(schema.validate(legacyAudience)).isNotEmpty();
+  }
+
+  @Test
   void canonicalOpenApiExposesOnlyTheAggregateOrdinaryBoard() throws Exception {
     Map<String, Object> contract = yaml("openapi/task-board-service.yaml");
     Map<String, Object> paths = child(contract, "paths");

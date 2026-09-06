@@ -180,14 +180,31 @@ private data class SupportingState(
 /**
  * Defines driver feature UI state; server data and authorization remain authoritative.
  */
-class TaskDetailViewModel @Inject constructor(
+class TaskDetailViewModel internal constructor(
     private val localStore: DriverLocalStore,
     private val gateway: DriverGatewayClient,
     private val projections: DriverProjectionWriter,
-    private val scheduler: DriverSyncScheduler,
     private val warehouseClock: DriverWarehouseClock,
     private val json: Json,
+    private val requestSync: (String) -> Unit,
 ) : ViewModel() {
+    @Inject
+    constructor(
+        localStore: DriverLocalStore,
+        gateway: DriverGatewayClient,
+        projections: DriverProjectionWriter,
+        scheduler: DriverSyncScheduler,
+        warehouseClock: DriverWarehouseClock,
+        json: Json,
+    ) : this(
+        localStore = localStore,
+        gateway = gateway,
+        projections = projections,
+        warehouseClock = warehouseClock,
+        json = json,
+        requestSync = scheduler::request,
+    )
+
     private val key = MutableStateFlow<DetailKey?>(null)
     private val errors = MutableStateFlow<String?>(null)
     private val tripSnapshot = MutableStateFlow(TripUiSnapshot())
@@ -414,7 +431,7 @@ class TaskDetailViewModel @Inject constructor(
                 claimError = null,
                 details = claimedTrip ?: currentSnapshot.details,
             )
-            runCatching { scheduler.request(current.userId) }
+            runCatching { requestSync(current.userId) }
             refresh()
         }
     }
@@ -424,7 +441,7 @@ class TaskDetailViewModel @Inject constructor(
         val evidence = uiState.value.evidence.firstOrNull { it.evidenceId == evidenceId } ?: return
         if (evidence.state != "REVIEW_REQUIRED" || evidence.mediaId != null) return
         if (evidenceId !in uiState.value.retryableEvidenceIds) return
-        scheduler.request(current.userId)
+        requestSync(current.userId)
         errors.value = null
     }
 
@@ -502,7 +519,7 @@ class TaskDetailViewModel @Inject constructor(
                         payload = payload,
                     ),
                 )
-                scheduler.request(current.userId)
+                requestSync(current.userId)
             } catch (exception: CancellationException) {
                 throw exception
             } catch (exception: Exception) {

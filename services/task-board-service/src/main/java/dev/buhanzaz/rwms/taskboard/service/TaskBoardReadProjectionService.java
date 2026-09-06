@@ -49,6 +49,7 @@ class TaskBoardReadProjectionService {
   private final ObjectMapper objectMapper;
   private final WarehouseKpiClock kpiClock;
   private final DriverTaskAudienceService driverAudiences;
+  private final BoardTaskRegistrationAssembler registrationAssembler;
   private final WorkerQueuePlanPolicy workerQueuePlans;
 
   TaskBoardReadProjectionService(
@@ -66,6 +67,7 @@ class TaskBoardReadProjectionService {
       ObjectMapper objectMapper,
       WarehouseKpiClock kpiClock,
       DriverTaskAudienceService driverAudiences,
+      BoardTaskRegistrationAssembler registrationAssembler,
       WorkerQueuePlanPolicy workerQueuePlans) {
     this.tasks = tasks;
     this.entries = entries;
@@ -81,6 +83,7 @@ class TaskBoardReadProjectionService {
     this.objectMapper = objectMapper;
     this.kpiClock = kpiClock;
     this.driverAudiences = driverAudiences;
+    this.registrationAssembler = registrationAssembler;
     this.workerQueuePlans = workerQueuePlans;
   }
 
@@ -706,41 +709,10 @@ class TaskBoardReadProjectionService {
   }
 
   BoardTaskRegistrationDto registrationDto(BoardTask task) {
-    var route =
-        entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId()).stream()
-            .map(
-                entry ->
-                    new RegisteredRouteStepDto(
-                        entry.getId(),
-                        entry.getVersion(),
-                        entry.getQueue().getDefinition().getId(),
-                        entry.getQueue().getId(),
-                        entry.getQueue().getName(),
-                        entry.getRouteIndex(),
-                        entry.getQueuePosition(),
-                        entry.getEntryType(),
-                        entry.getStatus(),
-                        entry.getTaskText(),
-                        entry.getPlannedDurationMinutes()))
-            .toList();
-    return new BoardTaskRegistrationDto(
-        task.getId(),
-        task.getVersion(),
-        task.getWarehouseId(),
-        task.getExternalTaskId(),
-        task.getTitle(),
-        task.getUnitNumber(),
-        task.getDescription(),
-        task.getStatus(),
-        task.getPlannedDurationMinutes(),
-        task.getDeadlineAt(),
-        task.getScheduledDate(),
-        task.getLane(),
-        task.getPriority(),
-        task.isPinned(),
-        driverAudiences.dto(task),
-        task.getDoneAt(),
-        route);
+    return registrationAssembler.assemble(
+        task,
+        entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId()),
+        driverAudiences.dto(task));
   }
 
 

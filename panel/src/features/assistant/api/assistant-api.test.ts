@@ -492,8 +492,7 @@ describe("assistant API", () => {
         code: "INVALID_API_RESPONSE",
         message:
           "Сервис вернул некорректные данные. Обновите страницу или повторите попытку позже.",
-        diagnosticMessage:
-          "Сервис чата вернул некорректную текущую выборку.",
+        diagnosticMessage: "Сервис чата вернул некорректную текущую выборку.",
       })
     }
   )
@@ -1011,5 +1010,87 @@ describe("assistant API", () => {
       "cabin-1",
       "cabin-2",
     ])
+  })
+})
+
+describe("assistant stream lifetime", () => {
+  it.each(["parser", "callback"])(
+    "cancels and unlocks the body after a %s failure",
+    async (source) => {
+      const callbackFailure = new Error("callback failed")
+      const cancel = vi.fn().mockRejectedValue(new Error("cancel failed"))
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(
+              source === "parser"
+                ? "data: {broken\n\n"
+                : 'data: {"event":"turn.completed"}\n\n'
+            )
+          )
+        },
+        cancel,
+      })
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(stream, {
+            headers: { "Content-Type": "text/event-stream" },
+          })
+        )
+      )
+
+      const request = streamAssistantTurn({
+        accessToken: "token",
+        conversationId: CONVERSATION_ID,
+        message: "Подбор",
+        onEvent: () => {
+          throw callbackFailure
+        },
+      })
+      if (source === "parser") {
+        await expect(request).rejects.toMatchObject({
+          code: "INVALID_API_RESPONSE",
+        })
+      } else {
+        await expect(request).rejects.toBe(callbackFailure)
+      }
+      expect(cancel).toHaveBeenCalledOnce()
+      expect(stream.locked).toBe(false)
+    }
+  )
+
+  it("aborts a pending read, releases its reader and never repeats the POST", async () => {
+    const cancel = vi.fn()
+    const stream = new ReadableStream<Uint8Array>({ cancel })
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(stream, {
+        headers: { "Content-Type": "text/event-stream" },
+      })
+    )
+    vi.stubGlobal("fetch", fetch)
+    const controller = new AbortController()
+    const onEvent = vi.fn()
+    const request = streamAssistantTurn({
+      accessToken: "token",
+      conversationId: CONVERSATION_ID,
+      message: "Подбор",
+      signal: controller.signal,
+      onEvent,
+    })
+    const outcome = expect(request).rejects.toMatchObject({
+      name: "AbortError",
+    })
+    await vi.waitFor(() => expect(stream.locked).toBe(true))
+    controller.abort()
+    await outcome
+    expect(cancel).toHaveBeenCalledOnce()
+    expect(stream.locked).toBe(false)
+    expect(onEvent).not.toHaveBeenCalled()
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(fetch.mock.calls[0]?.[1]).toMatchObject({
+      method: "POST",
+      signal: controller.signal,
+    })
   })
 })

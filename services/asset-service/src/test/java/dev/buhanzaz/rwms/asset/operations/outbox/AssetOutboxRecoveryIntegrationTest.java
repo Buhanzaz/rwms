@@ -81,8 +81,19 @@ class AssetOutboxRecoveryIntegrationTest {
     assertThat(first.reviewedAt()).isNotNull();
 
     com.fasterxml.jackson.databind.node.ObjectNode responseJson =
-        (com.fasterxml.jackson.databind.node.ObjectNode) SCHEMA_JSON.readTree(mapper.writeValueAsString(first));
-    assertThat(requeueResponseSchema().validate(responseJson)).isEmpty();
+        (com.fasterxml.jackson.databind.node.ObjectNode)
+            SCHEMA_JSON.readTree(mapper.writeValueAsString(first));
+    JsonSchema responseSchema = requeueResponseSchema();
+    assertThat(responseSchema.validate(responseJson)).isEmpty();
+    var missingEventId = responseJson.deepCopy();
+    missingEventId.remove("eventId");
+    assertThat(responseSchema.validate(missingEventId)).isNotEmpty();
+    var nullEventId = responseJson.deepCopy();
+    nullEventId.putNull("eventId");
+    assertThat(responseSchema.validate(nullEventId)).isNotEmpty();
+    var extraField = responseJson.deepCopy();
+    extraField.put("priorState", "DLT");
+    assertThat(responseSchema.validate(extraField)).isNotEmpty();
 
     jdbc.update("update outbox_event set status='PUBLISHED', published_at=now() where event_id=?", eventId);
     AssetOutboxRequeueResponse retry = recovery.requeue(eventId, 0L, reviewer, "manual verification");

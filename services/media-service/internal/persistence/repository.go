@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"dev.buhanzaz.rwms/media-service/internal/media"
@@ -94,26 +95,24 @@ func actorForAsset(asset AssetRecord) *ActorReference {
 	return &copyOfActor
 }
 
-// AcquireUploadSessionContentLock serializes byte ingress for one upload
-// session across every media-service instance. The session-level advisory lock
-// is held on a dedicated pooled connection while the bounded object stream is
-// written and finalized, preventing concurrent requests from creating two
-// accepted immutable versions for the same session.
-func (repository *Repository) AcquireUploadSessionContentLock(
+func (repository *Repository) acquireNamedAdvisoryLock(
 	ctx context.Context,
-	sessionID uuid.UUID,
+	lockName string,
+	notHeldError string,
 ) (func() error, error) {
 	connection, err := repository.pool.Acquire(ctx)
 	if err != nil {
 		return nil, err
 	}
-	lockName := "media-upload-session-content:" + sessionID.String()
 	if _, err := connection.Exec(ctx, `select pg_advisory_lock(hashtextextended($1,0))`, lockName); err != nil {
 		connection.Release()
 		return nil, err
 	}
 	released := false
+	var releaseMutex sync.Mutex
 	return func() error {
+		releaseMutex.Lock()
+		defer releaseMutex.Unlock()
 		if released {
 			return nil
 		}
@@ -135,8 +134,21 @@ func (repository *Repository) AcquireUploadSessionContentLock(
 		if closeErr != nil {
 			return closeErr
 		}
-		return fmt.Errorf("upload session advisory lock was not held")
+		return errors.New(notHeldError)
 	}, nil
+}
+
+// AcquireUploadSessionContentLock serializes byte ingress for one upload
+// session across every media-service instance. The session-level advisory lock
+// is held on a dedicated pooled connection while the bounded object stream is
+// written and finalized, preventing concurrent requests from creating two
+// accepted immutable versions for the same session.
+func (repository *Repository) AcquireUploadSessionContentLock(
+	ctx context.Context,
+	sessionID uuid.UUID,
+) (func() error, error) {
+	lockName := "media-upload-session-content:" + sessionID.String()
+	return repository.acquireNamedAdvisoryLock(ctx, lockName, "upload session advisory lock was not held")
 }
 
 // AcquireUploadImageVariantContentLock serializes one immutable variant PUT
@@ -151,40 +163,8 @@ func (repository *Repository) AcquireUploadImageVariantContentLock(
 	if mediaID == uuid.Nil || (variant != media.VariantSmall && variant != media.VariantMedium && variant != media.VariantLarge) {
 		return nil, ErrConflict
 	}
-	connection, err := repository.pool.Acquire(ctx)
-	if err != nil {
-		return nil, err
-	}
 	lockName := "media-upload-image-variant:" + mediaID.String() + ":" + string(variant)
-	if _, err := connection.Exec(ctx, `select pg_advisory_lock(hashtextextended($1,0))`, lockName); err != nil {
-		connection.Release()
-		return nil, err
-	}
-	released := false
-	return func() error {
-		if released {
-			return nil
-		}
-		released = true
-		releaseContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		var unlocked bool
-		unlockErr := connection.QueryRow(releaseContext,
-			`select pg_advisory_unlock(hashtextextended($1,0))`, lockName).Scan(&unlocked)
-		if unlockErr == nil && unlocked {
-			connection.Release()
-			return nil
-		}
-		rawConnection := connection.Hijack()
-		closeErr := rawConnection.Close(releaseContext)
-		if unlockErr != nil {
-			return unlockErr
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-		return fmt.Errorf("upload image variant advisory lock was not held")
-	}, nil
+	return repository.acquireNamedAdvisoryLock(ctx, lockName, "upload image variant advisory lock was not held")
 }
 
 // UploadMode distinguishes the retained single-source compatibility ingress

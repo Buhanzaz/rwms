@@ -1093,6 +1093,11 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             externalTaskId,
             new SetTaskLaneRequest(registered.taskVersion(), TaskLane.CURRENT));
 
+    assertThat(board.registration(W1, externalTaskId)).isEqualTo(registered);
+    assertThat(board.externalTask("logistics-service", externalTaskId)).isEqualTo(registered);
+    assertThat(board.registerExternalTask("logistics-service", initialRequest))
+        .isEqualTo(registered);
+
     assertThat(registered.driverAudience().mode())
         .isEqualTo(DriverTaskAudienceMode.WAREHOUSE_DRIVERS);
     assertThat(registered.driverAudience().workerId()).isNull();

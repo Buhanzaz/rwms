@@ -49,6 +49,8 @@ export type PhotoCarouselPhoto = {
     original?: { url: string }
   }
   createdAt?: string
+  previewPending?: boolean
+  previewError?: string
   fullscreenError?: string
 }
 
@@ -134,7 +136,7 @@ function normalizePhotoSource(
     }
   }
 
-  return photo.url ? photo : null
+  return photo.url || photo.previewPending || photo.previewError ? photo : null
 }
 
 function getPhotoThumbnailUrl(photo: PhotoCarouselPhoto) {
@@ -382,7 +384,18 @@ export function PhotoCarousel({
               imageVariant === "fullscreen" &&
               onRequestFullscreen !== undefined &&
               !hasRequestedFullscreenUrl(photo, fullscreenQuality)
-            const image = fullscreenPending ? (
+            const previewPending =
+              imageVariant !== "fullscreen" &&
+              !photo.url &&
+              (photo.previewPending || photo.previewError)
+            const image = previewPending ? (
+              <div
+                className="flex h-full items-center justify-center px-3 text-center text-sm text-muted-foreground"
+                role="status"
+              >
+                {photo.previewError ?? "Загрузка фото…"}
+              </div>
+            ) : fullscreenPending ? (
               <FullscreenPhotoPlaceholder
                 photo={photo}
                 onRetry={() => onRequestFullscreen?.(photo, { retry: true })}

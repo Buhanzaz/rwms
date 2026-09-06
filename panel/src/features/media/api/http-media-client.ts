@@ -122,7 +122,8 @@ export interface MediaClient {
   createVariantObjectUrl(
     accessToken: string,
     owner: ServiceMediaOwner,
-    variant: MediaVariant | PlaybackMediaVariant
+    variant: MediaVariant | PlaybackMediaVariant,
+    signal?: AbortSignal
   ): Promise<DisposableMediaObjectUrl>
   deleteAsset(
     accessToken: string,
@@ -399,7 +400,8 @@ export class HttpMediaClient implements MediaClient {
   async createVariantObjectUrl(
     accessToken: string,
     owner: ServiceMediaOwner,
-    variant: MediaVariant | PlaybackMediaVariant
+    variant: MediaVariant | PlaybackMediaVariant,
+    signal?: AbortSignal
   ) {
     const url = parseMediaApiResponse(() =>
       requireSameOriginPath(
@@ -410,7 +412,7 @@ export class HttpMediaClient implements MediaClient {
       )
     )
     parseMediaApiResponse(() => requireExactOwnerQuery(url, owner))
-    return this.#createObjectUrl(accessToken, url, variant.contentType)
+    return this.#createObjectUrl(accessToken, url, variant.contentType, signal)
   }
 
   async deleteAsset(
@@ -529,12 +531,13 @@ export class HttpMediaClient implements MediaClient {
   async #createObjectUrl(
     accessToken: string,
     input: URL,
-    expectedContentType?: string
+    expectedContentType?: string,
+    signal?: AbortSignal
   ): Promise<DisposableMediaObjectUrl> {
     const response = await this.#request(
       accessToken,
       input,
-      { method: "GET", cache: "no-store" },
+      { method: "GET", cache: "no-store", ...(signal ? { signal } : {}) },
       expectedContentType ?? "image/*,video/*"
     )
     let blob: Blob

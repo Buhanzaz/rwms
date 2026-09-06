@@ -1,7 +1,12 @@
 package dev.buhanzaz.rwms.logistics;
 
+import static dev.buhanzaz.rwms.logistics.inquiry.api.RentalInquiryApiModels.PresentationCabinSelectionInput;
+import static dev.buhanzaz.rwms.logistics.inquiry.api.RentalInquiryApiModels.PresentationEquipmentSelectionInput;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.networknt.schema.JsonSchemaFactory;
+import com.networknt.schema.SpecVersion;
 import dev.buhanzaz.rwms.logistics.order.api.OrderController;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -11,6 +16,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -25,6 +31,40 @@ class LogisticsContractFoundationTest {
       Set.of("get", "put", "post", "delete", "options", "head", "patch", "trace");
 
   private final ObjectMapper objectMapper = new ObjectMapper();
+
+  @Test
+  void actualPresentationCabinSelectionMatchesCanonicalClosedNestedSchema() throws Exception {
+    UUID equipmentId = UUID.randomUUID();
+    var selection =
+        new PresentationCabinSelectionInput(
+            UUID.randomUUID(),
+            List.of(new PresentationEquipmentSelectionInput(equipmentId, 2L)),
+            null);
+    var schemaJson = new com.fasterxml.jackson.databind.ObjectMapper();
+    ObjectNode document = schemaJson.valueToTree(openApi());
+    document.put("$schema", "https://json-schema.org/draft/2020-12/schema");
+    document.put("$ref", "#/components/schemas/PresentationCabinSelectionInput");
+    var schema =
+        JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012).getSchema(document);
+    ObjectNode wire =
+        (ObjectNode) schemaJson.readTree(objectMapper.writeValueAsString(selection));
+
+    assertThat(schema.validate(wire)).isEmpty();
+    assertThat(wire.required("rentalMonths").isNull()).isTrue();
+    ObjectNode missingRentalItem = wire.deepCopy();
+    missingRentalItem.remove("rentalItemId");
+    assertThat(schema.validate(missingRentalItem)).isNotEmpty();
+    ObjectNode nullEquipmentId = wire.deepCopy();
+    ((ObjectNode) nullEquipmentId.required("equipment").required(0)).putNull("equipmentId");
+    assertThat(schema.validate(nullEquipmentId)).isNotEmpty();
+    ObjectNode extraNested = wire.deepCopy();
+    ((ObjectNode) extraNested.required("equipment").required(0))
+        .put("equipmentName", "must not cross the boundary");
+    assertThat(schema.validate(extraNested)).isNotEmpty();
+    ObjectNode extraTopLevel = wire.deepCopy();
+    extraTopLevel.put("uniformRentalMonths", 2);
+    assertThat(schema.validate(extraTopLevel)).isNotEmpty();
+  }
 
   @Test
   void cabinReserveRegisterIsReadOnlyAndDoesNotExposePrivateProvenance() throws Exception {

@@ -12,8 +12,6 @@ import dev.buhanzaz.rwms.driver.core.database.PendingShiftCommand
 import dev.buhanzaz.rwms.driver.core.database.TaskEvidenceEntity
 import dev.buhanzaz.rwms.driver.core.network.AuthenticatedGatewayMonitor
 import dev.buhanzaz.rwms.driver.core.network.DriverGatewayClient
-import dev.buhanzaz.rwms.driver.core.network.DriverMedicalCheckDto
-import dev.buhanzaz.rwms.driver.core.network.DriverShiftPhotoDto
 import dev.buhanzaz.rwms.driver.core.network.DriverVehicleDefectDto
 import dev.buhanzaz.rwms.driver.core.network.TodayDriverShiftDto
 import dev.buhanzaz.rwms.driver.core.network.toDriverUserMessage
@@ -71,15 +69,26 @@ data class ShiftPhotoCaptureRequest(
  */
 @HiltViewModel
 @OptIn(ExperimentalCoroutinesApi::class)
-class DriverShiftViewModel @Inject constructor(
+class DriverShiftViewModel internal constructor(
     private val localStore: DriverLocalStore,
     private val gateway: DriverGatewayClient,
     private val projections: DriverProjectionWriter,
-    private val scheduler: DriverSyncScheduler,
+    private val requestSync: (String) -> Unit,
     private val gatewayMonitor: AuthenticatedGatewayMonitor,
     private val trafficProvider: TrafficBriefingProvider,
     private val json: Json,
 ) : ViewModel() {
+    @Inject
+    constructor(
+        localStore: DriverLocalStore,
+        gateway: DriverGatewayClient,
+        projections: DriverProjectionWriter,
+        scheduler: DriverSyncScheduler,
+        gatewayMonitor: AuthenticatedGatewayMonitor,
+        trafficProvider: TrafficBriefingProvider,
+        json: Json,
+    ) : this(localStore, gateway, projections, scheduler::request, gatewayMonitor, trafficProvider, json)
+
     private val boundUserId = MutableStateFlow<String?>(null)
     private val transientError = MutableStateFlow<String?>(null)
     private val initialLoadComplete = MutableStateFlow(false)
@@ -248,7 +257,7 @@ class DriverShiftViewModel @Inject constructor(
                     defectDescription = description,
                 )
                 localStore.enqueueShiftCommand(userId, command, entity.withToday(userId, optimistic, json))
-                scheduler.request(userId)
+                requestSync(userId)
             }
         }
     }
@@ -349,7 +358,7 @@ class DriverShiftViewModel @Inject constructor(
                     defectDescription = description.takeIf { condition == "DEFECT_REPORTED" },
                 )
                 localStore.enqueueShiftCommand(userId, command, entity)
-                scheduler.request(userId)
+                requestSync(userId)
             }
         }
     }
@@ -388,7 +397,7 @@ class DriverShiftViewModel @Inject constructor(
                     ),
                 )
                 localStore.enqueueShiftCommand(userId, command, entity)
-                scheduler.request(userId)
+                requestSync(userId)
             }
         }
     }

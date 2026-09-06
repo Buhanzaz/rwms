@@ -2,7 +2,6 @@ package dev.buhanzaz.rwms.worker.core.database
 
 import android.os.SystemClock
 import androidx.room.withTransaction
-import java.time.Instant
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -339,9 +338,6 @@ class WorkerLocalStore @Inject constructor(
         )
     }
 
-    fun decryptConflictCurrentEntry(conflict: WorkerConflictEntity): String? =
-        conflict.encryptedCurrentEntry?.let(pendingPayloadCipher::decrypt)
-
     /**
      * Records the worker's explicit acceptance of the latest authoritative
      * server state; background/full-feed refreshes never acknowledge conflicts.
@@ -350,8 +346,6 @@ class WorkerLocalStore @Inject constructor(
         database.conflictDao().resolveOpenForUser(userId, System.currentTimeMillis())
 
     suspend fun updateProgress(progress: WorkerSyncProgressEntity) = database.syncProgressDao().upsert(progress)
-
-    suspend fun setSession(session: WorkerSessionEntity) = database.sessionDao().upsert(session)
 
     suspend fun leaseFor(userId: String): ServerTimeAnchor? = database.sessionDao().session(userId)?.let { session ->
         val server = session.serverEpochMillis ?: return@let null

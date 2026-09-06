@@ -321,6 +321,7 @@ export async function streamAssistantTurn(
       }
     )
   } catch (error) {
+    if (params.signal?.aborted) throw params.signal.reason
     throw apiErrorFromRequestFailure(error)
   }
   if (!response.ok) {
@@ -339,27 +340,47 @@ export async function streamAssistantTurn(
   }
 
   const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let pending = ""
-  while (true) {
-    let chunk: ReadableStreamReadResult<Uint8Array>
-    try {
-      chunk = await reader.read()
-    } catch (error) {
-      throw apiErrorFromRequestFailure(error)
-    }
-    const { done, value } = chunk
-    pending += decoder.decode(value, { stream: !done })
-    const blocks = pending.split(/\r?\n\r?\n/)
-    pending = blocks.pop() ?? ""
-    for (const block of blocks) {
-      const event = parseAssistantApiResponse(() => parseSseBlock(block))
-      if (event) params.onEvent(event)
-    }
-    if (done) break
+  const cancelRead = () => {
+    void reader.cancel(params.signal?.reason).catch(() => undefined)
   }
-  const finalEvent = parseAssistantApiResponse(() => parseSseBlock(pending))
-  if (finalEvent) params.onEvent(finalEvent)
+  params.signal?.addEventListener("abort", cancelRead, { once: true })
+  try {
+    const decoder = new TextDecoder()
+    let pending = ""
+    while (true) {
+      params.signal?.throwIfAborted()
+      let chunk: ReadableStreamReadResult<Uint8Array>
+      try {
+        chunk = await reader.read()
+      } catch (error) {
+        if (params.signal?.aborted) throw params.signal.reason
+        throw apiErrorFromRequestFailure(error)
+      }
+      params.signal?.throwIfAborted()
+      const { done, value } = chunk
+      pending += decoder.decode(value, { stream: !done })
+      const blocks = pending.split(/\r?\n\r?\n/)
+      pending = blocks.pop() ?? ""
+      for (const block of blocks) {
+        const event = parseAssistantApiResponse(() => parseSseBlock(block))
+        params.signal?.throwIfAborted()
+        if (event) params.onEvent(event)
+      }
+      if (done) break
+    }
+    params.signal?.throwIfAborted()
+    const finalEvent = parseAssistantApiResponse(() => parseSseBlock(pending))
+    if (finalEvent) params.onEvent(finalEvent)
+  } finally {
+    params.signal?.removeEventListener("abort", cancelRead)
+    try {
+      await reader.cancel()
+    } catch {
+      // Preserve the parser, callback, network, or cancellation failure.
+    } finally {
+      reader.releaseLock()
+    }
+  }
 }
 
 export function asCabinSearchResult(

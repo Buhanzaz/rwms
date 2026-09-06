@@ -1,9 +1,8 @@
 import { DateTimePicker } from "@/components/ui/date-time-picker"
-import { useMemo, useRef, useState } from "react"
+import { useMemo, useState } from "react"
 import { WarehouseIcon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { toast } from "sonner"
+import { useQuery } from "@tanstack/react-query"
 
 import { getEquipmentItems } from "@/api/equipment-api"
 import { Button } from "@/components/ui/button"
@@ -26,8 +25,6 @@ import { useAuth } from "@/features/auth/use-auth"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import {
   MAX_EQUIPMENT_MOVEMENT_WORKER_OPERATIONS,
-  createEquipmentMovementTask,
-  createEquipmentMovementTaskIdempotencyKey,
   equipmentMovementDeadlineToIso,
   equipmentMovementWorkerOperationCount,
   type CreateEquipmentMovementTaskInput,
@@ -36,27 +33,20 @@ import { RentalItemContentsQuantityRows } from "@/features/rental-items/rental-i
 import {
   canTransferRentalItemContents,
   formatRentalItemContentsSourceSummary,
-  invalidateRentalItemContentsQueries,
   rentalItemContentsTransferRows,
   RENTAL_ITEM_CONTENTS_EQUIPMENT_QUERY_KEY,
 } from "@/features/rental-items/rental-item-contents-transfer-support"
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
-import { ApiError } from "@/lib/api-client"
+import {
+  useContentsMovementMutation,
+  useRentalItemContentsDraft,
+} from "./use-rental-item-contents-movement"
 
 type Props = {
   item: RentalItemDto | null
   open: boolean
   onOpenChange: (open: boolean) => void
 }
-type Draft = { quantity: number; selected: boolean }
-
-function taskSuccessMessage(deadlineAt: string) {
-  return `Задание создано. Мебель зарезервирована до ${new Intl.DateTimeFormat(
-    "ru-RU",
-    { dateStyle: "short", timeStyle: "short" }
-  ).format(new Date(deadlineAt))}; остатки изменятся после выполнения.`
-}
-
 export function MoveContentsToStockDialog({ item, open, onOpenChange }: Props) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -90,14 +80,10 @@ function Content({
   item: RentalItemDto
   onClose: () => void
 }) {
-  const queryClient = useQueryClient()
   const { accessToken, currentUser } = useAuth()
   const canManage = hasWarehouseAccess(currentUser, item.warehouseId, "MANAGE")
   const eligible = canTransferRentalItemContents(item)
-  const [draft, setDraft] = useState<Record<string, Draft>>({})
   const [reservationDeadline, setReservationDeadline] = useState("")
-  const [errorText, setErrorText] = useState<string | null>(null)
-  const idempotencyKeys = useRef(new Map<string, string>())
 
   const equipmentQuery = useQuery({
     queryKey: [...RENTAL_ITEM_CONTENTS_EQUIPMENT_QUERY_KEY, item.warehouseId],
@@ -110,20 +96,15 @@ function Content({
     () => rentalItemContentsTransferRows(equipmentQuery.data ?? [], item.id),
     [equipmentQuery.data, item.id]
   )
-  const rows = useMemo(
-    () =>
-      sourceRows.map((row) => ({
-        ...row,
-        quantity: Math.min(
-          row.availableQuantity,
-          draft[row.equipmentId]?.quantity ?? row.availableQuantity
-        ),
-        selected: draft[row.equipmentId]?.selected ?? false,
-      })),
-    [draft, sourceRows]
-  )
-  const selectedRows = rows.filter((row) => row.selected && row.quantity > 0)
-  const allSelected = rows.length > 0 && rows.every((row) => row.selected)
+  const [errorText, setErrorText] = useState<string | null>(null)
+  const {
+    rows,
+    selectedRows,
+    allSelected,
+    toggleRow,
+    changeQuantity,
+    toggleAll,
+  } = useRentalItemContentsDraft(sourceRows, () => setErrorText(null))
   const taskLines = selectedRows.map((row) => ({
     equipmentId: row.equipmentId,
     sourceRentalItemId: item.id,
@@ -137,19 +118,11 @@ function Content({
     equipmentMovementWorkerOperationCount(taskLines) >
     MAX_EQUIPMENT_MOVEMENT_WORKER_OPERATIONS
 
-  function taskIdempotencyKey(input: CreateEquipmentMovementTaskInput) {
-    const signature = JSON.stringify(input)
-    let key = idempotencyKeys.current.get(signature)
-    if (!key) {
-      key = createEquipmentMovementTaskIdempotencyKey()
-      idempotencyKeys.current.set(signature, key)
-    }
-    return key
-  }
-
-  const mutation = useMutation({
-    mutationFn: () => {
-      if (!accessToken) throw new Error("Сессия завершена.")
+  const { mutation } = useContentsMovementMutation({
+    onErrorText: setErrorText,
+    accessToken,
+    onClose,
+    createInput: () => {
       if (!canManage) {
         throw new Error(
           "Для управления наполнением нужен доступ MANAGE к складу."
@@ -170,74 +143,9 @@ function Content({
         deadlineAt: equipmentMovementDeadlineToIso(reservationDeadline),
         lines: taskLines,
       }
-      return createEquipmentMovementTask({
-        accessToken,
-        idempotencyKey: taskIdempotencyKey(input),
-        input,
-      })
-    },
-    onSuccess: (task) => {
-      void invalidateRentalItemContentsQueries(queryClient)
-      toast.success(taskSuccessMessage(task.deadlineAt))
-      onClose()
-    },
-    onError: (error) => {
-      setErrorText(
-        error instanceof Error ? error.message : "Не удалось создать задание."
-      )
-      if (error instanceof ApiError && error.status === 409) {
-        void invalidateRentalItemContentsQueries(queryClient)
-      }
+      return input
     },
   })
-
-  function toggleRow(equipmentId: string, selected: boolean) {
-    const row = rows.find((candidate) => candidate.equipmentId === equipmentId)
-    if (!row) return
-    setErrorText(null)
-    setDraft((current) => ({
-      ...current,
-      [equipmentId]: {
-        selected,
-        quantity:
-          selected && row.quantity === 0 ? row.availableQuantity : row.quantity,
-      },
-    }))
-  }
-
-  function changeQuantity(equipmentId: string, delta: number) {
-    const row = rows.find((candidate) => candidate.equipmentId === equipmentId)
-    if (!row) return
-    const quantity = Math.min(
-      row.availableQuantity,
-      Math.max(0, row.quantity + delta)
-    )
-    setErrorText(null)
-    setDraft((current) => ({
-      ...current,
-      [equipmentId]: { quantity, selected: quantity > 0 },
-    }))
-  }
-
-  function toggleAll() {
-    const selected = !allSelected
-    setErrorText(null)
-    setDraft((current) => ({
-      ...current,
-      ...Object.fromEntries(
-        rows.map((row) => [
-          row.equipmentId,
-          {
-            selected,
-            quantity:
-              selected && row.quantity === 0
-                ? row.availableQuantity
-                : row.quantity,
-          },
-        ])
-      ),
-    }))
-  }
 
   if (!canManage || !eligible) {
     return (

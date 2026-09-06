@@ -1,4 +1,4 @@
-import { ApiError, type ProblemDetails } from '../../api/client';
+import { fetchApi, readApiResponse } from '../../api/http-response';
 import type { UUID } from '../../domain/types';
 
 /** Task-board-owned contractor profile used by dispatcher handoff forms. */
@@ -59,18 +59,8 @@ export interface ContractorRouteShare {
   externalTaskIds: UUID[];
 }
 
-async function contractorResponse<T>(response: Response): Promise<T> {
-  if (!response.ok) {
-    let problem: ProblemDetails | null = null;
-    try {
-      const value: unknown = await response.json();
-      if (value && typeof value === 'object') problem = value;
-    } catch {
-      problem = null;
-    }
-    throw new ApiError(response.status, problem, 'Не удалось выполнить запрос');
-  }
-  return response.json() as Promise<T>;
+function contractorResponse<T>(response: Response): Promise<T> {
+  return readApiResponse<T>(response, 'Не удалось выполнить запрос');
 }
 
 function headers(accessToken: string, withBody = false): HeadersInit {
@@ -88,7 +78,7 @@ export async function createContractorRouteShare(
   input: ContractorRouteShareInput,
   idempotencyKey: UUID,
 ): Promise<ContractorRouteShare> {
-  const response = await fetch(
+  const response = await fetchApi(
     `/api/logistics/v1/warehouses/${encodeURIComponent(warehouseId)}/contractor-route-shares`,
     {
       method: 'POST',
@@ -107,7 +97,7 @@ export async function listContractorDrivers(
   accessToken: string,
   warehouseId: UUID,
 ): Promise<ContractorDriver[]> {
-  const response = await fetch(
+  const response = await fetchApi(
     `/api/task-board/warehouses/${encodeURIComponent(warehouseId)}/logistics-drivers/contractors`,
     { headers: headers(accessToken) },
   );
@@ -121,7 +111,7 @@ export async function createContractorDriver(
   input: ContractorDriverInput,
   contractorId: UUID = crypto.randomUUID(),
 ): Promise<ContractorDriver> {
-  const response = await fetch(
+  const response = await fetchApi(
     `/api/task-board/warehouses/${encodeURIComponent(warehouseId)}/logistics-drivers/contractors`,
     {
       method: 'POST',
@@ -145,7 +135,7 @@ export async function updateContractorDriver(
   contractor: ContractorDriver,
   input: ContractorDriverInput,
 ): Promise<ContractorDriver> {
-  const response = await fetch(
+  const response = await fetchApi(
     `/api/task-board/warehouses/${encodeURIComponent(warehouseId)}/logistics-drivers/contractors/${encodeURIComponent(contractor.workerId)}`,
     {
       method: 'PATCH',
@@ -163,7 +153,7 @@ export async function deleteContractorDriver(
   contractor: ContractorDriver,
 ): Promise<void> {
   const query = new URLSearchParams({ expectedVersion: String(contractor.version) });
-  const response = await fetch(
+  const response = await fetchApi(
     `/api/task-board/warehouses/${encodeURIComponent(warehouseId)}/logistics-drivers/contractors/${encodeURIComponent(contractor.workerId)}?${query.toString()}`,
     {
       method: 'DELETE',
@@ -178,18 +168,18 @@ function companyPath(warehouseId: UUID): string {
 }
 
 export async function listContractorCompanies(accessToken: string, warehouseId: UUID): Promise<ContractorCompany[]> {
-  return contractorResponse<ContractorCompany[]>(await fetch(companyPath(warehouseId), { headers: headers(accessToken) }));
+  return contractorResponse<ContractorCompany[]>(await fetchApi(companyPath(warehouseId), { headers: headers(accessToken) }));
 }
 
 /** The editor retains companyId across retries; the owner checks identical create replays. */
 export async function createContractorCompany(accessToken: string, warehouseId: UUID, input: ContractorCompanyInput, companyId: UUID): Promise<ContractorCompany> {
-  return contractorResponse<ContractorCompany>(await fetch(companyPath(warehouseId), {
+  return contractorResponse<ContractorCompany>(await fetchApi(companyPath(warehouseId), {
     method: 'POST', headers: headers(accessToken, true), body: JSON.stringify({ companyId, ...input }),
   }));
 }
 
 export async function updateContractorCompany(accessToken: string, warehouseId: UUID, company: ContractorCompany, input: ContractorCompanyInput): Promise<ContractorCompany> {
-  return contractorResponse<ContractorCompany>(await fetch(`${companyPath(warehouseId)}/${encodeURIComponent(company.companyId)}`, {
+  return contractorResponse<ContractorCompany>(await fetchApi(`${companyPath(warehouseId)}/${encodeURIComponent(company.companyId)}`, {
     method: 'PATCH', headers: headers(accessToken, true), body: JSON.stringify({ expectedVersion: company.version, ...input }),
   }));
 }
@@ -197,7 +187,7 @@ export async function updateContractorCompany(accessToken: string, warehouseId: 
 /** The service refuses deletion while any driver still belongs to the company. */
 export async function deleteContractorCompany(accessToken: string, warehouseId: UUID, company: ContractorCompany): Promise<void> {
   const query = new URLSearchParams({ expectedVersion: String(company.version) });
-  const response = await fetch(`${companyPath(warehouseId)}/${encodeURIComponent(company.companyId)}?${query}`, {
+  const response = await fetchApi(`${companyPath(warehouseId)}/${encodeURIComponent(company.companyId)}?${query}`, {
     method: 'DELETE', headers: headers(accessToken),
   });
   if (!response.ok) await contractorResponse<never>(response);

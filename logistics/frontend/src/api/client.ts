@@ -34,6 +34,9 @@ import {
 } from '../features/slot-availability/types';
 import { restorePanelUser } from '../auth/panel-oidc';
 import type { components } from './schema';
+import { ApiError, fetchApi, readApiResponse } from './http-response';
+
+export { ApiError, type ProblemDetails } from './http-response';
 
 const configuredApiPrefix = import.meta.env.VITE_API_BASE_URL?.trim();
 const API_PREFIX = configuredApiPrefix?.replace(/\/+$/, '') || '/api';
@@ -59,98 +62,6 @@ export function simulatorApiUrl(path: string): string {
   return `${API_PREFIX}${path}`;
 }
 
-export interface ProblemDetails {
-  type?: unknown;
-  title?: unknown;
-  status?: unknown;
-  detail?: unknown;
-  instance?: unknown;
-  code?: unknown;
-  errors?: unknown;
-  failures?: unknown;
-  request_id?: unknown;
-  hold_id?: unknown;
-  quarantine_count?: unknown;
-}
-
-const PUBLIC_ERROR_FORBIDDEN_TEXT = /\b(?:HTTP(?:\/\d(?:\.\d)?)?|backend|exception|traceback|stack\s*trace|sql(?:alchemy)?|pydantic|validation\s+error|rms\s+logistics\s+service|valhalla|nginx|uvicorn|fastapi)\b/iu;
-const INTERNAL_ERROR_CODE = /\b(?!RWMS\b)[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/u;
-const RUSSIAN_ACTION = /(?:войдите|выберите|измените|обновите|проверьте|повторите|перенесите|добавьте|укажите|исправьте|дождитесь|обратитесь|согласуйте|освободите|свяжитесь|перезагрузите|включите|выключите|заполните|назначьте|создайте|разделите|уменьшите|увеличьте|подтвердите|снимите)/iu;
-const PROBLEM_CODE_MESSAGES: Readonly<Record<string, string>> = {
-  DELIVERY_FORBIDDEN_ZONE: 'Адрес находится в зоне, где обслуживание запрещено. Измените адрес или границу исключения.',
-  DELIVERY_OUTSIDE_ISOCHRONE: 'Адрес находится дальше предельной изохроны склада. Выберите другой склад или адрес.',
-  POLICY_ZONE_VALUES_INVALID: 'Для особой цены укажите стоимость доставки и вывоза, а для ограничений удалите цены.',
-};
-
-function safeRussianProblemText(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const normalized = value.replace(/\s+/gu, ' ').trim();
-  if (
-    !normalized
-    || normalized.length > 500
-    || !/[\u0400-\u04ff]/u.test(normalized)
-    || PUBLIC_ERROR_FORBIDDEN_TEXT.test(normalized)
-    || INTERNAL_ERROR_CODE.test(normalized)
-    || /(?:https?:\/\/|[{}[\]]|<\/?[a-z][^>]*>)/iu.test(normalized)
-  ) return null;
-  return normalized;
-}
-
-function statusAction(status: number): string {
-  if (status === 0) return 'Проверьте соединение и повторите действие.';
-  if (status === 401) return 'Войдите в RWMS и повторите действие.';
-  if (status === 403) return 'Обратитесь к администратору за необходимыми правами.';
-  if (status === 404) return 'Обновите страницу и выберите доступный объект.';
-  if (status === 409) return 'Обновите данные и повторите действие.';
-  if (status === 429) return 'Подождите немного и повторите действие.';
-  if (status === 400 || status === 422) return 'Проверьте введённые данные и повторите действие.';
-  return 'Повторите действие. Если ошибка сохранится, свяжитесь с администратором.';
-}
-
-function statusMessage(status: number): string {
-  if (status === 0) return `Сервис логистики недоступен. ${statusAction(status)}`;
-  if (status === 401) return `Сессия RWMS недоступна. ${statusAction(status)}`;
-  if (status === 403) return `Недостаточно прав для этого действия. ${statusAction(status)}`;
-  if (status === 404) return `Запрошенные данные не найдены. ${statusAction(status)}`;
-  if (status === 409) return `Данные уже изменились. ${statusAction(status)}`;
-  if (status === 429) return `Сервис получил слишком много запросов. ${statusAction(status)}`;
-  if (status === 400 || status === 422) return `Запрос содержит недопустимые данные. ${statusAction(status)}`;
-  return `Не удалось выполнить действие. ${statusAction(status)}`;
-}
-
-function actionableProblemText(value: string, status: number): string {
-  const punctuation = /[.!?]$/u.test(value) ? value : `${value}.`;
-  return RUSSIAN_ACTION.test(value) ? punctuation : `${punctuation} ${statusAction(status)}`;
-}
-
-function problemMessage(status: number, problem: ProblemDetails | null, fallback: string): string {
-  // FastAPI validation arrays and all raw diagnostics stay in `problem`; they are never presentation text.
-  const code = typeof problem?.code === 'string' ? problem.code : null;
-  if (code && PROBLEM_CODE_MESSAGES[code]) return PROBLEM_CODE_MESSAGES[code];
-  const candidate = safeRussianProblemText(problem?.detail)
-    ?? safeRussianProblemText(problem?.title)
-    ?? safeRussianProblemText(fallback);
-  return candidate ? actionableProblemText(candidate, status) : statusMessage(status);
-}
-
-export class ApiError extends Error {
-  readonly status: number;
-  readonly code: string | null;
-  readonly problem: ProblemDetails | null;
-
-  constructor(status: number, problem: ProblemDetails | null, fallback: string) {
-    const code = typeof problem?.code === 'string' ? problem.code : null;
-    const localizedProblem = code && PROBLEM_CODE_MESSAGES[code]
-      ? { ...(problem ?? {}), title: PROBLEM_CODE_MESSAGES[code] }
-      : problem;
-    super(problemMessage(status, localizedProblem, fallback));
-    this.name = 'ApiError';
-    this.status = status;
-    this.code = code;
-    this.problem = localizedProblem;
-  }
-}
-
 function authenticationRequired(detail = 'Войдите в RWMS, чтобы продолжить работу с логистикой.'): ApiError {
   return new ApiError(401, {
     type: 'urn:rwms:problem:authentication-required',
@@ -173,36 +84,13 @@ export async function requireSimulatorAccessToken(): Promise<string> {
   return token;
 }
 
-async function parseResponse<T>(response: Response): Promise<T> {
-  if (!response.ok) {
-    let problem: ProblemDetails | null = null;
-    try {
-      const value: unknown = await response.json();
-      problem = value && typeof value === 'object' ? value : null;
-    } catch {
-      problem = null;
-    }
-    throw new ApiError(response.status, problem, `HTTP ${response.status}`);
-  }
-  if (response.status === 204) return undefined as T;
-  const contentType = response.headers.get('content-type') ?? '';
-  if (!contentType.includes('application/json')) return (await response.text()) as T;
-  return (await response.json()) as T;
-}
-
 async function request<T>(path: string, init: RequestInit = {}, authenticated = true): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   headers.set('Accept', 'application/json, application/problem+json');
-  try {
-    if (authenticated) headers.set('Authorization', `Bearer ${await requireSimulatorAccessToken()}`);
-    const response = await fetch(simulatorApiUrl(path), { ...init, headers });
-    return await parseResponse<T>(response);
-  } catch (error: unknown) {
-    if (error instanceof ApiError) throw error;
-    if (init.signal?.aborted) throw error;
-    throw new ApiError(0, null, 'Сервис логистики недоступен. Проверьте соединение.');
-  }
+  if (authenticated) headers.set('Authorization', `Bearer ${await requireSimulatorAccessToken()}`);
+  const response = await fetchApi(simulatorApiUrl(path), { ...init, headers });
+  return readApiResponse<T>(response, 'Не удалось выполнить запрос', 'auto');
 }
 
 export type TruckRestrictionCategory =
@@ -254,9 +142,6 @@ export type TravelTimeContourMinutes = number;
 export interface TravelTimeContourProperties {
   contour_minutes: TravelTimeContourMinutes;
 }
-
-/** One Polygon/MultiPolygon truck isochrone returned by the private Valhalla adapter. */
-export type TravelTimeContourFeature = Feature<Polygon | MultiPolygon, TravelTimeContourProperties>;
 
 /** Provider provenance and requested origin echoed by the read-only endpoint. */
 export interface TravelTimeContourMetadata {
@@ -1177,7 +1062,7 @@ export function startOptimizationEventStream(
           cache: 'no-store',
           signal: controller.signal,
         });
-        if (!response.ok) await parseResponse<never>(response);
+        if (!response.ok) await readApiResponse<never>(response, 'Не удалось открыть поток событий');
         if (!response.body) throw new Error('Поток событий оптимизации недоступен');
         await consumeOptimizationStream(response.body, controller.signal, (event) => {
           if (event.id) lastEventId = event.id;

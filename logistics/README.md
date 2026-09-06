@@ -63,6 +63,11 @@ and never produces synthetic circles or changes persisted demand.
 
 ## Interface
 
+Planner, warehouse-directory, contractor and transfer requests share one HTTP response decoder.
+Failures retain the HTTP status and Problem Details code and produce a safe user message; a 204 response
+is decoded without a JSON body. Each adapter validates its domain payload. Request cancellation remains
+cancellation, with no automatic command retry.
+
 ```text
 ┌ warehouse context / date / close acceptance / slot / validate / mode ┐
 ├───────────────┬─────────────────────────────────────┬─────────────────┤

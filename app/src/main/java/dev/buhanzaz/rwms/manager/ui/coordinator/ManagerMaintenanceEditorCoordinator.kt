@@ -9,7 +9,7 @@ import dev.buhanzaz.rwms.manager.network.RepairDto
 import dev.buhanzaz.rwms.manager.network.RepairStageDto
 import dev.buhanzaz.rwms.manager.network.ReworkCandidateDto
 import dev.buhanzaz.rwms.manager.network.RoutingSnapshotDto
-import dev.buhanzaz.rwms.manager.network.RwmsBackend
+import dev.buhanzaz.rwms.manager.network.RwmsApi
 import dev.buhanzaz.rwms.manager.ui.components.isManagerVideoUri
 import java.time.LocalDate
 import kotlinx.coroutines.async
@@ -27,7 +27,7 @@ import kotlinx.coroutines.launch
  */
 internal class ManagerMaintenanceEditorCoordinator(
     private val runtime: ManagerCommandRuntime,
-    private val backend: RwmsBackend,
+    private val api: RwmsApi,
     private val commandKeys: StableCommandKeys,
     private val catalogAccess: ManagerMaintenanceCatalogAccess,
     private val maintenanceAssetRead: ManagerMaintenanceAssetReadPort,
@@ -103,9 +103,9 @@ internal class ManagerMaintenanceEditorCoordinator(
         val warehouseId = requireWarehouseId()
         ensureMaintenanceCatalog(warehouseId)
         refreshRepairTaskBoard()
-        val estimate = backend.api.estimate(id, warehouseId)
+        val estimate = api.estimate(id, warehouseId)
         val linkedRepair = estimate.repairId?.let { repairId ->
-            backend.api.repair(repairId, warehouseId)
+            api.repair(repairId, warehouseId)
         }
         val canAmend = estimate.lifecycle == "COMPLETED" &&
             linkedRepair?.executionState in PRE_START_REPAIR_STATES
@@ -139,60 +139,64 @@ internal class ManagerMaintenanceEditorCoordinator(
             },
             warehouseId = warehouseId,
         )
-        val routingByLineId = revision.plan.flatMap { stage ->
-            stage.includedLineIds.map { lineId -> lineId to stage.routing }
-        }.toMap()
-        mutableState.update { current ->
-            current.copy(
-                maintenanceAssetLabels = current.maintenanceAssetLabels + (asset.id to asset.number),
-                maintenanceEditor = MaintenanceEditorState(
-                    mode = MaintenanceEditorMode.ESTIMATE,
-                    entityId = estimate.id,
-                    expectedVersion = estimate.version,
-                    readOnly = estimate.lifecycle != "DRAFT" && !canAmend,
-                    selectedAsset = asset,
-                    dispatchDate = revision.dispatchDate,
-                    sourceParty = revision.sourceParty.orEmpty(),
-                    lines = revision.lines.map { line ->
-                        line.toMaintenanceLineEditor(
-                            customRouting = routingByLineId[line.id],
-                        )
-                    },
-                    photoUris = emptyList(),
-                    readyMedia = estimate.mediaReferences,
-                    readyPhotoUris = readyPhotoUris,
-                    priority = linkedRepair?.priority ?: DEFAULT_MAINTENANCE_PRIORITY,
-                    forceCapitalRepair = revision.forceCapitalRepair,
-                    movementToRepair = linkedRepair?.movementToRepair ?: false,
-                    logisticsPlanningMode = linkedRepair?.logisticsPlanningMode,
-                    logisticsScheduledDate = linkedRepair?.logisticsScheduledDate,
-                    step = 1,
-                    stages = revision.plan
-                        .filter { stage -> stage.kind == "REPAIR_WORK" }
-                        .map { stage -> stage.toMaintenanceStageEditor() },
-                    documentState = estimate.lifecycle,
-                    linkedRepairExpectedVersion = linkedRepair?.version,
-                    coverPhotoKey = estimate.coverMediaId
-                        ?.let(::maintenanceReadyPhotoKey)
-                        ?: maintenanceInitialCoverPhotoKey(estimate.mediaReferences),
-                ),
-            )
+        try {
+            val routingByLineId = revision.plan.flatMap { stage ->
+                stage.includedLineIds.map { lineId -> lineId to stage.routing }
+            }.toMap()
+            mutableState.update { current ->
+                current.copy(
+                    maintenanceAssetLabels = current.maintenanceAssetLabels + (asset.id to asset.number),
+                    maintenanceEditor = MaintenanceEditorState(
+                        mode = MaintenanceEditorMode.ESTIMATE,
+                        entityId = estimate.id,
+                        expectedVersion = estimate.version,
+                        readOnly = estimate.lifecycle != "DRAFT" && !canAmend,
+                        selectedAsset = asset,
+                        dispatchDate = revision.dispatchDate,
+                        sourceParty = revision.sourceParty.orEmpty(),
+                        lines = revision.lines.map { line ->
+                            line.toMaintenanceLineEditor(
+                                customRouting = routingByLineId[line.id],
+                            )
+                        },
+                        photoUris = emptyList(),
+                        readyMedia = estimate.mediaReferences,
+                        readyPhotoUris = readyPhotoUris,
+                        priority = linkedRepair?.priority ?: DEFAULT_MAINTENANCE_PRIORITY,
+                        forceCapitalRepair = revision.forceCapitalRepair,
+                        movementToRepair = linkedRepair?.movementToRepair ?: false,
+                        logisticsPlanningMode = linkedRepair?.logisticsPlanningMode,
+                        logisticsScheduledDate = linkedRepair?.logisticsScheduledDate,
+                        step = 1,
+                        stages = revision.plan
+                            .filter { stage -> stage.kind == "REPAIR_WORK" }
+                            .map { stage -> stage.toMaintenanceStageEditor() },
+                        documentState = estimate.lifecycle,
+                        linkedRepairExpectedVersion = linkedRepair?.version,
+                        coverPhotoKey = estimate.coverMediaId
+                            ?.let(::maintenanceReadyPhotoKey)
+                            ?: maintenanceInitialCoverPhotoKey(estimate.mediaReferences),
+                    ),
+                )
+            }
+            onReady()
+        } finally {
+            media.releasePhotoUris(readyPhotoUris.values)
         }
-        onReady()
     }
 
     fun openRepairEditor(id: String, onReady: () -> Unit) = command {
         val warehouseId = requireWarehouseId()
         ensureMaintenanceCatalog(warehouseId)
         refreshRepairTaskBoard()
-        val repair = backend.api.repair(id, warehouseId)
+        val repair = api.repair(id, warehouseId)
         val linkedEstimate = repair.estimateId?.let { estimateId ->
-            backend.api.estimate(estimateId, warehouseId)
+            api.estimate(estimateId, warehouseId)
         }
         val asset = maintenanceRentalItem(repair.rentalItemId, warehouseId)
         val content = repairEditorContent(repair)
         val reworkCandidates = if (repair.kind == "REWORK") {
-            backend.api.reworkCandidates(repair.sourceRepairId ?: repair.id, warehouseId).items
+            api.reworkCandidates(repair.sourceRepairId ?: repair.id, warehouseId).items
         } else {
             emptyList()
         }
@@ -234,39 +238,43 @@ internal class ManagerMaintenanceEditorCoordinator(
             },
             warehouseId = warehouseId,
         )
-        mutableState.update { current ->
-            current.copy(
-                maintenanceAssetLabels = current.maintenanceAssetLabels + (asset.id to asset.number),
-                maintenanceEditor = MaintenanceEditorState(
-                    mode = MaintenanceEditorMode.REPAIR,
-                    entityId = repair.id,
-                    expectedVersion = repair.version,
-                    readOnly = repair.executionState !in PRE_START_REPAIR_STATES,
-                    selectedAsset = asset,
-                    dispatchDate = repair.dispatchDate,
-                    sourceParty = repair.sourceParty.orEmpty(),
-                    lines = content.lines,
-                    photoUris = emptyList(),
-                    readyMedia = readyReferences,
-                    readyPhotoUris = readyPhotoUris,
-                    priority = repair.priority,
-                    forceCapitalRepair = repair.forceCapitalRepair,
-                    movementToRepair = repair.movementToRepair,
-                    logisticsPlanningMode = repair.logisticsPlanningMode,
-                    logisticsScheduledDate = repair.logisticsScheduledDate,
-                    step = 1,
-                    stages = content.stages,
-                    documentState = repair.executionState,
-                    repairKind = repair.kind,
-                    sourceRepairId = repair.sourceRepairId,
-                    coverPhotoKey = repair.coverMediaId
-                        ?.let(::maintenanceReadyPhotoKey)
-                        ?: maintenanceInitialCoverPhotoKey(readyReferences),
-                    reworkCandidates = reworkCandidates,
-                ),
-            )
+        try {
+            mutableState.update { current ->
+                current.copy(
+                    maintenanceAssetLabels = current.maintenanceAssetLabels + (asset.id to asset.number),
+                    maintenanceEditor = MaintenanceEditorState(
+                        mode = MaintenanceEditorMode.REPAIR,
+                        entityId = repair.id,
+                        expectedVersion = repair.version,
+                        readOnly = repair.executionState !in PRE_START_REPAIR_STATES,
+                        selectedAsset = asset,
+                        dispatchDate = repair.dispatchDate,
+                        sourceParty = repair.sourceParty.orEmpty(),
+                        lines = content.lines,
+                        photoUris = emptyList(),
+                        readyMedia = readyReferences,
+                        readyPhotoUris = readyPhotoUris,
+                        priority = repair.priority,
+                        forceCapitalRepair = repair.forceCapitalRepair,
+                        movementToRepair = repair.movementToRepair,
+                        logisticsPlanningMode = repair.logisticsPlanningMode,
+                        logisticsScheduledDate = repair.logisticsScheduledDate,
+                        step = 1,
+                        stages = content.stages,
+                        documentState = repair.executionState,
+                        repairKind = repair.kind,
+                        sourceRepairId = repair.sourceRepairId,
+                        coverPhotoKey = repair.coverMediaId
+                            ?.let(::maintenanceReadyPhotoKey)
+                            ?: maintenanceInitialCoverPhotoKey(readyReferences),
+                        reworkCandidates = reworkCandidates,
+                    ),
+                )
+            }
+            onReady()
+        } finally {
+            media.releasePhotoUris(readyPhotoUris.values)
         }
-        onReady()
     }
 
     fun startReworkEditor(sourceRepairId: String, onReady: () -> Unit) =
@@ -294,12 +302,12 @@ internal class ManagerMaintenanceEditorCoordinator(
         val warehouseId = requireWarehouseId()
         ensureMaintenanceCatalog(warehouseId)
         refreshRepairTaskBoard()
-        val source = backend.api.repair(sourceRepairId, warehouseId)
+        val source = api.repair(sourceRepairId, warehouseId)
         if (source.executionState != "COMPLETED" || source.acceptanceState != "PENDING") {
             throw IllegalStateException("Ремонт больше не ожидает приёмки")
         }
         val asset = maintenanceRentalItem(source.rentalItemId, warehouseId)
-        val candidates = backend.api.reworkCandidates(sourceRepairId, warehouseId).items
+        val candidates = api.reworkCandidates(sourceRepairId, warehouseId).items
         if (candidates.isEmpty()) {
             throw IllegalStateException("В исходном ремонте нет плана для доработки")
         }
@@ -370,9 +378,9 @@ internal class ManagerMaintenanceEditorCoordinator(
         }
 
         val (rentalItem, furnitureCatalog) = coroutineScope {
-            val rentalItemRequest = async { backend.api.rentalItem(selectedAsset.id) }
+            val rentalItemRequest = async { api.rentalItem(selectedAsset.id) }
             val catalogRequest = async {
-                backend.api.equipment(warehouseId)
+                api.equipment(warehouseId)
                     .map { it.equipment }
                     .maintenanceFurnitureCatalog()
             }
@@ -469,7 +477,7 @@ internal class ManagerMaintenanceEditorCoordinator(
                 append(requirement.quantity)
             }
         }
-        val result = backend.api.createCabinFurnitureTask(
+        val result = api.createCabinFurnitureTask(
             rentalItemId = furnitureEditor.rentalItem.id,
             idempotencyKey = commandKeys.key(signature),
             request = CreateCabinFurnitureTaskRequest(
@@ -551,7 +559,7 @@ internal class ManagerMaintenanceEditorCoordinator(
         // The picker is not allowed to rely on a stale browser-owned tenant value. For an
         // estimate, retrieve the current return documents again at the moment of selection.
         val returnMetadata = if (editor.mode == MaintenanceEditorMode.ESTIMATE) {
-            latestMaintenanceReturnMetadata(backend.api.returns(warehouseId), item.id)
+            latestMaintenanceReturnMetadata(api.returns(warehouseId), item.id)
         } else {
             null
         }
@@ -736,14 +744,14 @@ internal class ManagerMaintenanceEditorCoordinator(
         }
         viewModelScope.launch {
             try {
-                val items = backend.api.rentalItems(
+                val items = api.rentalItems(
                     warehouseId = warehouseId,
                     size = 200,
                     search = query.takeIf(String::isNotEmpty),
                     excludeStatuses = maintenanceExcludedRentalItemStatuses(editor.mode),
                 ).content
                 val returnMetadata = if (editor.mode == MaintenanceEditorMode.ESTIMATE) {
-                    val documents = backend.api.returns(warehouseId)
+                    val documents = api.returns(warehouseId)
                     items.mapNotNull { item ->
                         latestMaintenanceReturnMetadata(documents, item.id)?.let { metadata ->
                             item.id to metadata

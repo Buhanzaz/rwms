@@ -69,13 +69,28 @@ private data class SupportingState(
 /**
  * Defines worker feature UI state; server data and authorization remain authoritative.
  */
-class TaskDetailViewModel @Inject constructor(
+class TaskDetailViewModel internal constructor(
     private val localStore: WorkerLocalStore,
     private val gateway: WorkerGatewayClient,
     private val projections: WorkerProjectionWriter,
-    private val scheduler: WorkerSyncScheduler,
     private val json: Json,
+    private val requestSync: (String) -> Unit,
 ) : ViewModel() {
+    @Inject
+    constructor(
+        localStore: WorkerLocalStore,
+        gateway: WorkerGatewayClient,
+        projections: WorkerProjectionWriter,
+        scheduler: WorkerSyncScheduler,
+        json: Json,
+    ) : this(
+        localStore = localStore,
+        gateway = gateway,
+        projections = projections,
+        json = json,
+        requestSync = scheduler::request,
+    )
+
     private val key = MutableStateFlow<DetailKey?>(null)
     private val errors = MutableStateFlow<String?>(null)
     private val refreshGeneration = AtomicLong()
@@ -197,7 +212,7 @@ class TaskDetailViewModel @Inject constructor(
         val evidence = uiState.value.evidence.firstOrNull { it.evidenceId == evidenceId } ?: return
         if (evidence.state != "REVIEW_REQUIRED" || evidence.mediaId != null) return
         if (evidenceId !in uiState.value.retryableEvidenceIds) return
-        scheduler.request(current.userId)
+        requestSync(current.userId)
         errors.value = null
     }
 
@@ -299,7 +314,7 @@ class TaskDetailViewModel @Inject constructor(
                         payload = payload,
                     ),
                 )
-                scheduler.request(current.userId)
+                requestSync(current.userId)
             } catch (exception: CancellationException) {
                 throw exception
             } catch (exception: Exception) {

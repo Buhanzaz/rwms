@@ -353,6 +353,13 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
     ObjectNode zeroVersion = wire.deepCopy();
     ((ObjectNode) zeroVersion.required("plannerLineage")).put("sourcePlanVersion", 0);
     assertThat(schema.validate(zeroVersion)).isNotEmpty();
+
+    ObjectNode missingWarehouse = wire.deepCopy();
+    missingWarehouse.remove("warehouseId");
+    assertThat(schema.validate(missingWarehouse)).isNotEmpty();
+    ObjectNode extraTopLevel = wire.deepCopy();
+    extraTopLevel.put("audienceSelectors", "legacy");
+    assertThat(schema.validate(extraTopLevel)).isNotEmpty();
     ObjectNode extraLineageField = wire.deepCopy();
     ((ObjectNode) extraLineageField.required("plannerLineage")).put("legacyPlanKey", "legacy");
     assertThat(schema.validate(extraLineageField)).isNotEmpty();

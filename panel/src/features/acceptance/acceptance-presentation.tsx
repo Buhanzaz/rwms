@@ -2,13 +2,7 @@ import { Badge } from "@/components/ui/badge"
 import type { RepairTaskAcceptanceStatus } from "@/features/repair-tasks/model/repair-task"
 import { cn } from "@/lib/utils"
 
-const acceptanceStatusLabel: Record<RepairTaskAcceptanceStatus, string> = {
-  NOT_READY: "Не готова",
-  PENDING: "Ожидает приёмки",
-  IN_REWORK: "На доработке",
-  ACCEPTED: "Принята",
-  WRITTEN_OFF: "Списана",
-}
+import { acceptanceStatusLabels } from "./acceptance-formatters"
 
 const acceptanceStatusClassName: Record<RepairTaskAcceptanceStatus, string> = {
   NOT_READY: "bg-muted text-muted-foreground",
@@ -34,7 +28,7 @@ export function AcceptanceStatusBadge({
         acceptanceStatusClassName[status]
       )}
     >
-      {acceptanceStatusLabel[status]}
+      {acceptanceStatusLabels[status]}
     </Badge>
   )
 }

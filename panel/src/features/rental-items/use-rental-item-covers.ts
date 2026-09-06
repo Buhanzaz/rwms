@@ -30,11 +30,13 @@ export type RentalItemCardServicePhoto = Readonly<{
   generation: number
   url: string
   variants: NonNullable<PhotoCarouselPhoto["variants"]>
+  previewPending?: boolean
+  previewError?: string
 }>
 
 type LoadedRentalItemPhotos = Readonly<{
   signature: string
-  availability: "available" | "unavailable"
+  failedIds: readonly string[]
   photos: readonly RentalItemCardServicePhoto[]
 }>
 
@@ -107,12 +109,14 @@ export function useRentalItemCardPhotos({
   warehouseId,
   projection,
   coverAvailability,
+  selectedPhotoId,
 }: {
   accessToken: string
   cabinId: string
   warehouseId: string
   projection: CabinCoverProjection | undefined
   coverAvailability: RentalItemCoverAvailability
+  selectedPhotoId?: string
 }) {
   const [loadedPhotos, setLoadedPhotos] =
     useState<LoadedRentalItemPhotos | null>(null)
@@ -129,22 +133,33 @@ export function useRentalItemCardPhotos({
     () => getCoverFirstCabinPreviews(projection),
     [projection]
   )
-  const cachedPhotos = useMemo(
-    () =>
-      previews.flatMap((preview) => {
-        const url = getCachedMediaPreviewUrl(
-          previewCacheKey(warehouseId, cabinId, preview)
-        )
-        return url ? [previewPhoto(preview, url)] : []
-      }),
-    [cabinId, previews, warehouseId]
+  const selectedIndex = Math.max(
+    0,
+    previews.findIndex((preview) => preview.mediaId === selectedPhotoId)
   )
+  const wantedPreviews = useMemo(() => {
+    if (previews.length === 0) return []
+    const indices = [
+      selectedIndex,
+      0,
+      (selectedIndex + 1) % previews.length,
+      (selectedIndex + previews.length - 1) % previews.length,
+    ]
+    return [...new Set(indices)].map((index) => previews[index])
+  }, [previews, selectedIndex])
+  const cachedPhotos = wantedPreviews.flatMap((preview) => {
+    const url = getCachedMediaPreviewUrl(
+      previewCacheKey(warehouseId, cabinId, preview)
+    )
+    return url ? [previewPhoto(preview, url)] : []
+  })
   const photoListSignature = `${warehouseId}:${cabinId}:${previews
     .map(
       (preview) =>
         `${preview.mediaId}:${preview.generation}:${preview.contentPath}`
     )
     .join("|")}`
+  const requestSignature = `${photoListSignature}:${selectedIndex}`
   const owner = useMemo(
     () => cabinMediaOwner(cabinId, warehouseId),
     [cabinId, warehouseId]
@@ -167,59 +182,68 @@ export function useRentalItemCardPhotos({
   }, [])
 
   useEffect(() => {
-    if (coverAvailability !== "available" || previews.length === 0) return
+    if (coverAvailability !== "available" || wantedPreviews.length === 0) return
     let active = true
+    const controller = new AbortController()
     const leases: MediaPreviewLease[] = []
-
-    void Promise.allSettled(
-      previews.map((preview) =>
-        retryOwnerProofOperation(() =>
-          acquireMediaPreview(
-            mediaPreviewCacheKey({
-              warehouseId,
-              cabinId,
-              mediaId: preview.mediaId,
-              generation: preview.generation,
-              variant: preview.kind,
-            }),
+    for (const preview of wantedPreviews) {
+      void acquireMediaPreview(
+        previewCacheKey(warehouseId, cabinId, preview),
+        (signal) =>
+          retryOwnerProofOperation(
             () =>
-              mediaClient.createVariantObjectUrl(accessToken, owner, preview)
-          )
-        ).then((lease) => {
+              mediaClient.createVariantObjectUrl(
+                accessToken,
+                owner,
+                preview,
+                signal
+              ),
+            signal
+          ),
+        {
+          signal: controller.signal,
+          priority:
+            preview === previews[0] || preview === previews[selectedIndex]
+              ? 0
+              : 1,
+        }
+      )
+        .then((lease) => {
           if (!active) {
             lease.release()
-            return null
+            return
           }
           leases.push(lease)
-          return previewPhoto(preview, lease.url)
+          setLoadedPhotos((current) => ({
+            signature: requestSignature,
+            failedIds:
+              current?.signature === requestSignature ? current.failedIds : [],
+            photos: [
+              ...(current?.signature === requestSignature
+                ? current.photos
+                : []),
+              previewPhoto(preview, lease.url),
+            ],
+          }))
         })
-      )
-    )
-      .then((results) => {
-        if (!active) return
-        const photos = results.flatMap((result) =>
-          result.status === "fulfilled" && result.value ? [result.value] : []
-        )
-        const failed = results.some((result) => result.status === "rejected")
-        setLoadedPhotos({
-          signature: photoListSignature,
-          availability:
-            failed && photos.length === 0 ? "unavailable" : "available",
-          photos,
+        .catch(() => {
+          if (!active) return
+          setLoadedPhotos((current) => ({
+            signature: requestSignature,
+            photos:
+              current?.signature === requestSignature ? current.photos : [],
+            failedIds: [
+              ...(current?.signature === requestSignature
+                ? current.failedIds
+                : []),
+              preview.mediaId,
+            ],
+          }))
         })
-      })
-      .catch(() => {
-        if (active) {
-          setLoadedPhotos({
-            signature: photoListSignature,
-            availability: "unavailable",
-            photos: [],
-          })
-        }
-      })
-
+    }
     return () => {
       active = false
+      controller.abort()
       leases.forEach((lease) => lease.release())
     }
   }, [
@@ -227,26 +251,28 @@ export function useRentalItemCardPhotos({
     cabinId,
     coverAvailability,
     owner,
-    photoListSignature,
     previews,
+    requestSignature,
+    selectedIndex,
+    wantedPreviews,
     warehouseId,
   ])
 
   const requestFullscreen = useCallback(
     (photo: PhotoCarouselPhoto) => {
-      const source = loadedPhotos?.photos.find(
-        (candidate) => candidate.id === photo.id
+      const source = previews.find(
+        (candidate) => candidate.mediaId === photo.id
       )
       if (!source) return Promise.resolve()
 
-      const key = fullscreenPhotoKey(source.id, source.generation)
+      const key = fullscreenPhotoKey(source.mediaId, source.generation)
       if (fullscreenUrls[key]) return Promise.resolve()
 
       const existingRequest = fullscreenRequests.current.get(key)
       if (existingRequest) return existingRequest
 
       const request = retryOwnerProofOperation(() =>
-        mediaClient.createOriginalObjectUrl(accessToken, owner, source.id)
+        mediaClient.createOriginalObjectUrl(accessToken, owner, source.mediaId)
       )
         .then((objectUrl) => {
           if (
@@ -267,47 +293,48 @@ export function useRentalItemCardPhotos({
       fullscreenRequests.current.set(key, request)
       return request
     },
-    [accessToken, fullscreenUrls, loadedPhotos, owner, photoListSignature]
+    [accessToken, fullscreenUrls, owner, photoListSignature, previews]
   )
 
-  const photos = useMemo(
-    () =>
-      loadedPhotos?.photos.map((photo) => {
-        const originalUrl =
-          fullscreenUrls[fullscreenPhotoKey(photo.id, photo.generation)]
-        return originalUrl
-          ? {
-              ...photo,
-              variants: {
-                ...photo.variants,
-                original: { url: originalUrl },
-              },
-            }
-          : photo
-      }) ?? [],
-    [fullscreenUrls, loadedPhotos]
+  const loaded =
+    loadedPhotos?.signature === requestSignature ? loadedPhotos : null
+  const urls = new Map(
+    [...cachedPhotos, ...(loaded?.photos ?? [])].map((photo) => [
+      photo.id,
+      photo.url,
+    ])
   )
+  const wantedIds = new Set(wantedPreviews.map((preview) => preview.mediaId))
+  const photos: RentalItemCardServicePhoto[] = previews.map((preview) => {
+    const url = wantedIds.has(preview.mediaId)
+      ? (urls.get(preview.mediaId) ?? "")
+      : ""
+    const failed = loaded?.failedIds.includes(preview.mediaId) ?? false
+    const originalUrl =
+      fullscreenUrls[fullscreenPhotoKey(preview.mediaId, preview.generation)]
+    return {
+      ...previewPhoto(preview, url),
+      previewPending: !url && !failed,
+      ...(failed ? { previewError: "Не удалось загрузить фото" } : {}),
+      variants: {
+        small: { url },
+        ...(originalUrl ? { original: { url: originalUrl } } : {}),
+      },
+    }
+  })
+  const selectedPhoto = photos[selectedIndex]
+  const availability: RentalItemCoverAvailability =
+    coverAvailability !== "available"
+      ? coverAvailability
+      : !selectedPhoto || selectedPhoto.url
+        ? "available"
+        : selectedPhoto.previewError
+          ? "unavailable"
+          : "loading"
 
-  if (coverAvailability !== "available") {
-    return {
-      photos: [],
-      availability: coverAvailability,
-      requestFullscreen,
-    }
+  return {
+    photos: coverAvailability === "available" ? photos : [],
+    availability,
+    requestFullscreen,
   }
-  if (previews.length === 0) {
-    return {
-      photos: [],
-      availability: "available" as const,
-      requestFullscreen,
-    }
-  }
-  if (loadedPhotos?.signature !== photoListSignature) {
-    return {
-      photos: cachedPhotos,
-      availability: "loading" as const,
-      requestFullscreen,
-    }
-  }
-  return { ...loadedPhotos, photos, requestFullscreen }
 }

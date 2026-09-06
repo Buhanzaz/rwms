@@ -5,7 +5,7 @@ import dev.buhanzaz.rwms.manager.media.retryMediaReadAfterOwnerProof
 import dev.buhanzaz.rwms.manager.network.LogisticsDocumentDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.network.ReturnEstimateSourceDto
-import dev.buhanzaz.rwms.manager.network.RwmsBackend
+import dev.buhanzaz.rwms.manager.network.RwmsApi
 import dev.buhanzaz.rwms.manager.network.StartReturnEstimateLine
 import dev.buhanzaz.rwms.manager.network.StartReturnEstimatesRequest
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadArea
@@ -27,7 +27,7 @@ import kotlinx.coroutines.flow.update
  */
 internal class ManagerReturnCoordinator(
     private val runtime: ManagerCommandRuntime,
-    private val backend: RwmsBackend,
+    private val api: RwmsApi,
     private val backgroundUploads: Deferred<BackgroundUploadCoordinator>,
     private val commandKeys: StableCommandKeys,
     private val maintenanceRefresh: ManagerMaintenanceRefreshPort,
@@ -43,7 +43,7 @@ internal class ManagerReturnCoordinator(
 
     fun loadReturns() = command {
         val warehouseId = requireWarehouseId()
-        val documents = backend.api.returns(warehouseId)
+        val documents = api.returns(warehouseId)
         if (mutableState.value.selectedWarehouseId != warehouseId) return@command
         mutableState.update { it.copy(returns = documents) }
     }
@@ -58,7 +58,7 @@ internal class ManagerReturnCoordinator(
             )
         }
         command {
-            val currentDocument = backend.api.returnDocument(document.id).also { loaded ->
+            val currentDocument = api.returnDocument(document.id).also { loaded ->
                 require(loaded.documentType == "RETURN") {
                     "RWMS вернул не документ возврата"
                 }
@@ -155,7 +155,7 @@ internal class ManagerReturnCoordinator(
         }
         val readyMedia = loadReturnReadyMedia(document)
         val signature = "return-start-estimates:${document.id}:${document.version}"
-        val updated = backend.api.startReturnEstimates(
+        val updated = api.startReturnEstimates(
             documentId = document.id,
             expectedVersion = document.version,
             idempotencyKey = commandKeys.logisticsCommandKey(signature),
@@ -253,7 +253,7 @@ internal class ManagerReturnCoordinator(
         document: LogisticsDocumentDto,
     ): Map<String, List<MediaReferenceDto>> = document.lines.associate { line ->
         line.id to retryMediaReadAfterOwnerProof {
-            backend.api.ownerMedia(
+            api.ownerMedia(
                 ownerType = "LOGISTICS_RETURN",
                 documentId = document.id,
                 lineId = line.id,
@@ -270,7 +270,7 @@ internal class ManagerReturnCoordinator(
     ): List<ReturnEstimateSourceDto> {
         val expectedLineIds = document.lines.mapTo(linkedSetOf()) { line -> line.id }
         repeat(RETURN_ESTIMATE_SOURCE_POLL_ATTEMPTS) { attempt ->
-            val sources = backend.api.returnEstimateSources(
+            val sources = api.returnEstimateSources(
                 warehouseId = document.warehouseId,
                 returnId = document.id,
             )
@@ -300,7 +300,7 @@ internal class ManagerReturnCoordinator(
     private suspend fun currentReturnInspectionDocument(
         displayedDocument: LogisticsDocumentDto,
     ): LogisticsDocumentDto {
-        val currentDocument = backend.api.returnDocument(displayedDocument.id)
+        val currentDocument = api.returnDocument(displayedDocument.id)
         require(currentDocument.documentType == "RETURN") {
             "RWMS вернул не документ возврата"
         }

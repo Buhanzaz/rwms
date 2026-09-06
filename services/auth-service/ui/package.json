@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.9",
@@ -22,6 +23,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10",
+    "@testing-library/react": "16.3.2",
     "@types/node": "^24.5.2",
     "@types/react": "^19.1.16",
     "@types/react-dom": "^19.1.9",
@@ -30,10 +32,12 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17",
+    "jsdom": "29.1.1",
     "prettier": "^3.6.2",
     "prettier-plugin-tailwindcss": "^0.6.14",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.44.1",
-    "vite": "^7.1.7"
+    "vite": "^7.1.7",
+    "vitest": "4.1.10"
   }
 }

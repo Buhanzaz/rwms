@@ -63,6 +63,7 @@ class TaskBoardExternalMutationService {
   private final TransactionTemplate lifecycleMutations;
   private final TaskBoardQueuePositionCoordinator queuePositions;
   private final DriverTaskAudienceService driverAudiences;
+  private final BoardTaskRegistrationAssembler registrationAssembler;
   private final WorkerInvalidationHub workerInvalidations;
   private final WorkerFeedRevisionStore workerFeedRevisions;
   private final TaskAssignmentRepository assignments;
@@ -83,6 +84,7 @@ class TaskBoardExternalMutationService {
       PlatformTransactionManager transactionManager,
       TaskBoardQueuePositionCoordinator queuePositions,
       DriverTaskAudienceService driverAudiences,
+      BoardTaskRegistrationAssembler registrationAssembler,
       WorkerInvalidationHub workerInvalidations,
       WorkerFeedRevisionStore workerFeedRevisions,
       TaskAssignmentRepository assignments) {
@@ -101,6 +103,7 @@ class TaskBoardExternalMutationService {
     this.lifecycleMutations = new TransactionTemplate(transactionManager);
     this.queuePositions = queuePositions;
     this.driverAudiences = driverAudiences;
+    this.registrationAssembler = registrationAssembler;
     this.workerInvalidations = workerInvalidations;
     this.workerFeedRevisions = workerFeedRevisions;
     this.assignments = assignments;
@@ -1113,41 +1116,10 @@ class TaskBoardExternalMutationService {
   }
 
   private BoardTaskRegistrationDto registrationDto(BoardTask task) {
-    var route =
-        entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId()).stream()
-            .map(
-                entry ->
-                    new RegisteredRouteStepDto(
-                        entry.getId(),
-                        entry.getVersion(),
-                        entry.getQueue().getDefinition().getId(),
-                        entry.getQueue().getId(),
-                        entry.getQueue().getName(),
-                        entry.getRouteIndex(),
-                        entry.getQueuePosition(),
-                        entry.getEntryType(),
-                        entry.getStatus(),
-                        entry.getTaskText(),
-                        entry.getPlannedDurationMinutes()))
-            .toList();
-    return new BoardTaskRegistrationDto(
-        task.getId(),
-        task.getVersion(),
-        task.getWarehouseId(),
-        task.getExternalTaskId(),
-        task.getTitle(),
-        task.getUnitNumber(),
-        task.getDescription(),
-        task.getStatus(),
-        task.getPlannedDurationMinutes(),
-        task.getDeadlineAt(),
-        task.getScheduledDate(),
-        task.getLane(),
-        task.getPriority(),
-        task.isPinned(),
-        driverAudiences.dto(task),
-        task.getDoneAt(),
-        route);
+    return registrationAssembler.assemble(
+        task,
+        entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId()),
+        driverAudiences.dto(task));
   }
 
   private <T> T inLifecycleMutation(Supplier<T> mutation) {

@@ -415,6 +415,62 @@ describe("AssistantPage composer", () => {
     )
   })
 
+  it.each(["unmount", "switch"])(
+    "cancels the workspace turn on %s and ignores late events",
+    async (leave) => {
+      queryFixtures.conversations = [
+        conversation,
+        { ...conversation, id: "conversation-2", clientDisplayName: "ООО Юг" },
+      ]
+      let finish!: () => void
+      let pending!: {
+        signal: AbortSignal
+        onEvent: (event: AssistantTurnEvent) => void
+      }
+      assistantApi.streamAssistantTurn.mockImplementation((params) => {
+        pending = params
+        return new Promise<void>((resolve) => {
+          finish = resolve
+        })
+      })
+      const view = render(
+        <MemoryRouter>
+          <AssistantPage />
+        </MemoryRouter>
+      )
+      fireEvent.change(
+        screen.getByPlaceholderText("Напишите, какие бытовки подобрать…"),
+        {
+          target: { value: "Долгий запрос" },
+        }
+      )
+      fireEvent.click(
+        screen.getByRole("button", { name: "Отправить сообщение" })
+      )
+      expect(assistantApi.streamAssistantTurn).toHaveBeenCalledOnce()
+      expect(pending.signal.aborted).toBe(false)
+
+      if (leave === "unmount") view.unmount()
+      else fireEvent.click(screen.getByRole("button", { name: /^ООО Юг/ }))
+      expect(pending.signal.aborted).toBe(true)
+      queryRuntime.invalidateQueries.mockClear()
+      queryRuntime.detailRefetch.mockClear()
+      queryRuntime.listRefetch.mockClear()
+      queryRuntime.setQueryData.mockClear()
+      await act(async () => {
+        pending.onEvent({ event: "assistant.delta", conversationId: conversation.id, delta: "Поздний ответ" })
+        pending.onEvent({ event: "turn.completed", conversationId: conversation.id })
+        finish()
+      })
+      expect(queryRuntime.invalidateQueries).not.toHaveBeenCalled()
+      expect(queryRuntime.detailRefetch).not.toHaveBeenCalled()
+      expect(queryRuntime.listRefetch).not.toHaveBeenCalled()
+      expect(queryRuntime.setQueryData).not.toHaveBeenCalled()
+      expect(assistantApi.streamAssistantTurn).toHaveBeenCalledOnce()
+      expect(screen.queryByText("Поздний ответ")).toBeNull()
+    }
+  )
+
   it("keeps the composer background-integrated with and without an active search result", () => {
     const { rerender } = render(
       <MemoryRouter>

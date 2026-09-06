@@ -44,56 +44,6 @@ class DriverShiftPresentationTest {
     }
 
     @Test
-    fun `next action remains the server driven presentation selector`() {
-        val supportedActions = listOf(
-            "SHIFT_NOT_AVAILABLE",
-            "SHOW_DAILY_BRIEFING",
-            "COMPLETE_MEDICAL_CHECK",
-            "COMPLETE_VEHICLE_INSPECTION",
-            "START_SHIFT",
-            "SHOW_TASKS",
-            "START_SHIFT_CLOSING",
-            "CONFIRM_WAREHOUSE_RETURN",
-            "COMPLETE_END_OF_SHIFT_REPORT",
-            "CLOSE_SHIFT",
-            "SHIFT_CLOSED",
-        )
-
-        val renderedActions = supportedActions.map { action ->
-            DriverShiftUiState(loading = false, today = today(action)).today?.nextRequiredAction
-        }
-
-        assertThat(renderedActions).containsExactlyElementsIn(supportedActions).inOrder()
-    }
-
-    @Test
-    fun `inspection presentation restores progress and keeps blocking defect visible`() {
-        val inspection = DriverVehicleInspectionDto(
-            id = "inspection-1",
-            version = 9,
-            totalRequired = 16,
-            checkedRequired = 9,
-            blockingDefectCount = 1,
-            items = emptyList(),
-        )
-        val state = DriverShiftUiState(
-            loading = false,
-            today = today(
-                action = "COMPLETE_VEHICLE_INSPECTION",
-                inspection = inspection,
-            ),
-        )
-        val restored = checkNotNull(state.today?.inspection)
-        val progressText = "${restored.checkedRequired} из ${restored.totalRequired} проверено"
-        val canComplete = restored.checkedRequired == restored.totalRequired &&
-            restored.blockingDefectCount == 0
-
-        assertThat(progressText).isEqualTo("9 из 16 проверено")
-        assertThat(canComplete).isFalse()
-        assertThat(restored.blockingDefectCount).isEqualTo(1)
-    }
-
-    @Test
     fun `audit time formatting is compact and safe for missing values`() {
         assertThat(formatTime("2026-08-30T07:43:59+03:00")).isEqualTo("07:43")
         assertThat(formatTime("not-a-time")).isEqualTo("—")

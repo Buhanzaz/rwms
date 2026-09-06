@@ -2178,6 +2178,40 @@ class RentalInquiryPresentationIntegrationTest {
   }
 
   @Test
+  void presentationMediaUsesStoredMembershipWhenEquipmentCatalogIsUnavailable() {
+    ClientPresentationResponse published = publish(createInquiry().id(), List.of(CABIN_1));
+    String presentationToken = token(published);
+    var content = new LogisticsDependencyGateway.MediaContent(new byte[] {1, 2, 3}, "image/webp");
+    when(dependencies.readLogisticsEquipmentAvailability(WAREHOUSE))
+        .thenThrow(
+            new LogisticsDependencyException(
+                LogisticsDependencyException.FailureKind.TRANSIENT,
+                "Equipment catalog unavailable"));
+    when(dependencies.readCabinPresentationMedia(WAREHOUSE, CABIN_1, PHOTO, 1, "LARGE"))
+        .thenReturn(content);
+    clearInvocations(dependencies);
+
+    assertThat(presentations.media(presentationToken, CABIN_1, PHOTO, 1, "LARGE"))
+        .isEqualTo(content);
+    assertThatThrownBy(
+            () -> presentations.media(presentationToken, CABIN_2, PHOTO, 1, "LARGE"))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            problem -> {
+              assertThat(problem.status().value()).isEqualTo(404);
+              assertThat(problem.code()).isEqualTo("CLIENT_PRESENTATION_NOT_FOUND");
+            });
+    assertThatThrownBy(
+            () -> presentations.media(presentationToken, CABIN_1, PHOTO, 2, "LARGE"))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            problem -> assertThat(problem.code()).isEqualTo("CLIENT_PRESENTATION_NOT_FOUND"));
+
+    verify(dependencies).readCabinPresentationMedia(WAREHOUSE, CABIN_1, PHOTO, 1, "LARGE");
+    verify(dependencies, never()).readLogisticsEquipmentAvailability(any());
+  }
+
+  @Test
   void normalPresentationRequiresOneToFourRequestableDatesAddressAndPositiveRentalMonths() {
     RentalInquiryResponse inquiry = createInquiry();
     ClientPresentationResponse published = publish(inquiry.id(), List.of(CABIN_1));

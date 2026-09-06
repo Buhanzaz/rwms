@@ -16,7 +16,7 @@ import dev.buhanzaz.rwms.manager.network.RepairDto
 import dev.buhanzaz.rwms.manager.network.ReworkLineInputDto
 import dev.buhanzaz.rwms.manager.network.ReplaceEstimateRequest
 import dev.buhanzaz.rwms.manager.network.ReplaceRepairPlanRequest
-import dev.buhanzaz.rwms.manager.network.RwmsBackend
+import dev.buhanzaz.rwms.manager.network.RwmsApi
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadArea
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadCoordinator
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadDraft
@@ -43,7 +43,7 @@ internal interface ManagerMaintenanceEditorClosePort {
  */
 internal class ManagerMaintenancePersistenceCoordinator(
     private val runtime: ManagerCommandRuntime,
-    private val backend: RwmsBackend,
+    private val api: RwmsApi,
     private val backgroundUploads: kotlinx.coroutines.Deferred<
         dev.buhanzaz.rwms.manager.uploads.BackgroundUploadCoordinator,
     >,
@@ -459,7 +459,7 @@ internal class ManagerMaintenancePersistenceCoordinator(
         editor: MaintenanceEditorState,
         content: MaintenanceDraftContent,
     ): PersistedMaintenanceEntity = when (editor.mode) {
-        MaintenanceEditorMode.ESTIMATE -> backend.api.createEstimate(
+        MaintenanceEditorMode.ESTIMATE -> api.createEstimate(
             idempotencyKey = editor.createIdempotencyKey,
             request = CreateEstimateRequest(
                 warehouseId = requireWarehouseId(),
@@ -482,7 +482,7 @@ internal class ManagerMaintenancePersistenceCoordinator(
                 val sourceVersion = requireNotNull(editor.sourceRepairExpectedVersion) {
                     "Не указана версия исходного ремонта"
                 }
-                backend.api.createRework(
+                api.createRework(
                     repairId = sourceRepairId,
                     warehouseId = requireWarehouseId(),
                     idempotencyKey = editor.createIdempotencyKey,
@@ -496,7 +496,7 @@ internal class ManagerMaintenancePersistenceCoordinator(
                     ),
                 ).toPersistedMaintenanceEntity()
             } else {
-                backend.api.createDirectRepair(
+                api.createDirectRepair(
                     idempotencyKey = editor.createIdempotencyKey,
                     request = CreateDirectRepairRequest(
                         warehouseId = requireWarehouseId(),
@@ -566,7 +566,7 @@ internal class ManagerMaintenancePersistenceCoordinator(
                         requireNotNull(editor.linkedRepairExpectedVersion) {
                             "Сервис не вернул версию связанного ремонта"
                         }
-                    backend.api.amendEstimate(
+                    api.amendEstimate(
                         estimateId = entityId,
                         warehouseId = requireWarehouseId(),
                         idempotencyKey = maintenanceAmendmentIdempotencyKey(editor),
@@ -584,7 +584,7 @@ internal class ManagerMaintenancePersistenceCoordinator(
                         ),
                     ).toPersistedMaintenanceEntity()
                 } else {
-                    backend.api.replaceEstimate(
+                    api.replaceEstimate(
                         estimateId = entityId,
                         warehouseId = requireWarehouseId(),
                         request = ReplaceEstimateRequest(
@@ -601,7 +601,7 @@ internal class ManagerMaintenancePersistenceCoordinator(
                 }
             }
 
-            MaintenanceEditorMode.REPAIR -> backend.api.replaceRepairPlan(
+            MaintenanceEditorMode.REPAIR -> api.replaceRepairPlan(
                 repairId = entityId,
                 warehouseId = requireWarehouseId(),
                 request = ReplaceRepairPlanRequest(

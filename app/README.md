@@ -63,6 +63,13 @@ original document/line versions, media and command key survive background-upload
 recovery together. Closing arrival or changing the selected transfer invalidates
 late preflight/media responses; a changed version requires opening arrival again.
 
+Remote media uses one in-memory file index and an LRU budget of 256 files / 256 MiB.
+Downloads, open editor snapshots and composed image/video readers retain their files;
+the budget may be exceeded while those files are in use. Replacing or closing an
+editor, disposing a reader, and failed or canceled batch downloads release ownership.
+Inventory photos are copied to durable drafts before temporary claims are released;
+cache eviction never deletes those draft or capture directories.
+
 ## Screens and ownership of local state
 
 The navigation graph covers the manager home/menu, background uploads,

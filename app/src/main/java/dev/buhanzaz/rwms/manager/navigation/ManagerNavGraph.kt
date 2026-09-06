@@ -95,7 +95,12 @@ fun ManagerApp(viewModel: ManagerViewModel) {
         }
     }
     ManagerTheme {
-        ManagerNavGraph(viewModel = viewModel, uiState = uiState)
+        CompositionLocalProvider(
+            dev.buhanzaz.rwms.manager.ui.components.LocalManagerMediaDownloader provides
+                viewModel.mediaDownloader,
+        ) {
+            ManagerNavGraph(viewModel = viewModel, uiState = uiState)
+        }
     }
 }
 

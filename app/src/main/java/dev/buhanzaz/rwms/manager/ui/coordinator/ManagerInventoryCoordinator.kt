@@ -11,7 +11,7 @@ import dev.buhanzaz.rwms.manager.network.RentalItemDto
 import dev.buhanzaz.rwms.manager.network.ResolveInventoryConflictRequest
 import dev.buhanzaz.rwms.manager.network.ResolveNumberRequest
 import dev.buhanzaz.rwms.manager.network.RoutingSnapshotDto
-import dev.buhanzaz.rwms.manager.network.RwmsBackend
+import dev.buhanzaz.rwms.manager.network.RwmsApi
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadArea
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadCoordinator
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadDraft
@@ -39,7 +39,7 @@ import retrofit2.HttpException
  */
 internal class ManagerInventoryCoordinator(
     private val runtime: ManagerCommandRuntime,
-    private val backend: RwmsBackend,
+    private val api: RwmsApi,
     private val backgroundUploads: kotlinx.coroutines.Deferred<
         dev.buhanzaz.rwms.manager.uploads.BackgroundUploadCoordinator,
     >,
@@ -194,7 +194,7 @@ internal class ManagerInventoryCoordinator(
         ensureMaintenanceCatalog(session.warehouseId)
         val signature =
             "inventory-resolve:${session.id}:${session.sessionRevision}:$normalizedNumber"
-        val resolution = backend.api.resolveInventoryNumber(
+        val resolution = api.resolveInventoryNumber(
             inventoryId = session.id,
             idempotencyKey = commandKeys.key(signature),
             request = ResolveNumberRequest(
@@ -215,11 +215,11 @@ internal class ManagerInventoryCoordinator(
         val creationOptions = if (
             resolution.outcome == "MATCHED" || resolution.outcome == "NOT_FOUND"
         ) {
-            backend.api.rentalItemCreationOptions(requireWarehouseId())
+            api.rentalItemCreationOptions(requireWarehouseId())
         } else {
             null
         }
-        val equipmentCatalog = backend.api.equipment(session.warehouseId)
+        val equipmentCatalog = api.equipment(session.warehouseId)
             .map { it.equipment }
             .inventoryFurnitureCatalog()
         val parsedCharacteristics = parseInventoryCharacteristics(
@@ -315,8 +315,8 @@ internal class ManagerInventoryCoordinator(
         ensureMaintenanceCatalog(warehouseId)
         val seed = latest.inventoryReinspectionSeed(mode)
         val passport = seed.passport
-        val creationOptions = backend.api.rentalItemCreationOptions(warehouseId)
-        val equipmentCatalog = backend.api.equipment(warehouseId)
+        val creationOptions = api.rentalItemCreationOptions(warehouseId)
+        val equipmentCatalog = api.equipment(warehouseId)
             .map { it.equipment }
             .inventoryFurnitureCatalog()
         val furnitureSeed = latest.inventoryFurnitureReinspectionSeed(equipmentCatalog, mode)
@@ -325,64 +325,68 @@ internal class ManagerInventoryCoordinator(
         } else {
             emptyList()
         }
-        val persistedPhotoMedia = persistedPhotos.associate { photo ->
-            photo.uri to photo.reference
+        try {
+            val persistedPhotoMedia = persistedPhotos.associate { photo ->
+                photo.uri to photo.reference
+            }
+            val parsedCharacteristics = parseInventoryCharacteristics(
+                passport["characteristics"],
+            )
+            val planContent = if (seed.retainPreviousInspection) {
+                latest.inventoryPlanEditorContent()
+            } else {
+                RepairEditorContent(emptyList(), emptyList())
+            }
+            val previousPlan = latest.frozenPlan.takeIf { seed.retainPreviousInspection }
+            val session = mutableState.value.inventorySession
+                ?: throw IllegalStateException("Активная инвентаризация не найдена")
+            val editor = durableDraftEditor(
+                editor = InventoryEditorState(
+                    findingId = latest.id,
+                    number = latest.displayCanonicalNumber,
+                    outcome = "MATCHED",
+                    readOnly = mode == InventoryReinspectionMode.REVIEW,
+                    finding = latest,
+                    creationOptions = creationOptions,
+                    rentalType = passport.text("rentalType"),
+                    dimensions = passport.text("dimensions"),
+                    finishing = passport.text("finishing"),
+                    category = passport.text("category"),
+                    characteristics = parsedCharacteristics.selected,
+                    sanitaryToilets = parsedCharacteristics.toilets,
+                    sanitarySinks = parsedCharacteristics.sinks,
+                    sanitaryShowers = parsedCharacteristics.showers,
+                    linoleum = passport["linoleum"] as? Boolean,
+                    comment = seed.comment,
+                    photoUris = persistedPhotos.map(ScopedMediaResult::uri),
+                    coverPhotoUri = persistedPhotos
+                        .firstOrNull { photo -> photo.reference.mediaId == latest.coverMediaId }
+                        ?.uri,
+                    persistedPhotoMedia = persistedPhotoMedia,
+                    removedPersistedMediaIds = latest.inventoryReinspectionRemovedMediaIds(mode),
+                    equipmentCatalog = equipmentCatalog,
+                    equipmentObservationRequested = furnitureSeed.observationRequested,
+                    equipmentQuantities = furnitureSeed.quantities,
+                    planLines = planContent.lines,
+                    planStages = planContent.stages,
+                    planPriority = previousPlan?.priority ?: DEFAULT_MAINTENANCE_PRIORITY,
+                    planForceCapitalRepair = previousPlan?.forceCapitalRepair ?: false,
+                    planMovementToRepair = previousPlan?.movementToRepair ?: false,
+                    planLogisticsPlanningMode = if (previousPlan?.movementToRepair == true) {
+                        LOGISTICS_PLANNING_MODE_AUTO
+                    } else {
+                        null
+                    },
+                    planLogisticsScheduledDate = null,
+                ),
+                session = session,
+                route = "manager-inventory-editor",
+            )
+            mutableState.update { current -> current.copy(inventoryEditor = editor) }
+            onReady()
+        } finally {
+            media.releasePhotoUris(persistedPhotos.map(ScopedMediaResult::uri))
         }
-        val parsedCharacteristics = parseInventoryCharacteristics(
-            passport["characteristics"],
-        )
-        val planContent = if (seed.retainPreviousInspection) {
-            latest.inventoryPlanEditorContent()
-        } else {
-            RepairEditorContent(emptyList(), emptyList())
-        }
-        val previousPlan = latest.frozenPlan.takeIf { seed.retainPreviousInspection }
-        val session = mutableState.value.inventorySession
-            ?: throw IllegalStateException("Активная инвентаризация не найдена")
-        val editor = durableDraftEditor(
-            editor = InventoryEditorState(
-                findingId = latest.id,
-                number = latest.displayCanonicalNumber,
-                outcome = "MATCHED",
-                readOnly = mode == InventoryReinspectionMode.REVIEW,
-                finding = latest,
-                creationOptions = creationOptions,
-                rentalType = passport.text("rentalType"),
-                dimensions = passport.text("dimensions"),
-                finishing = passport.text("finishing"),
-                category = passport.text("category"),
-                characteristics = parsedCharacteristics.selected,
-                sanitaryToilets = parsedCharacteristics.toilets,
-                sanitarySinks = parsedCharacteristics.sinks,
-                sanitaryShowers = parsedCharacteristics.showers,
-                linoleum = passport["linoleum"] as? Boolean,
-                comment = seed.comment,
-                photoUris = persistedPhotos.map(ScopedMediaResult::uri),
-                coverPhotoUri = persistedPhotos
-                    .firstOrNull { photo -> photo.reference.mediaId == latest.coverMediaId }
-                    ?.uri,
-                persistedPhotoMedia = persistedPhotoMedia,
-                removedPersistedMediaIds = latest.inventoryReinspectionRemovedMediaIds(mode),
-                equipmentCatalog = equipmentCatalog,
-                equipmentObservationRequested = furnitureSeed.observationRequested,
-                equipmentQuantities = furnitureSeed.quantities,
-                planLines = planContent.lines,
-                planStages = planContent.stages,
-                planPriority = previousPlan?.priority ?: DEFAULT_MAINTENANCE_PRIORITY,
-                planForceCapitalRepair = previousPlan?.forceCapitalRepair ?: false,
-                planMovementToRepair = previousPlan?.movementToRepair ?: false,
-                planLogisticsPlanningMode = if (previousPlan?.movementToRepair == true) {
-                    LOGISTICS_PLANNING_MODE_AUTO
-                } else {
-                    null
-                },
-                planLogisticsScheduledDate = null,
-            ),
-            session = session,
-            route = "manager-inventory-editor",
-        )
-        mutableState.update { current -> current.copy(inventoryEditor = editor) }
-        onReady()
     }
 
     /** Enables the retained review editor in place so navigation stays on the requested step. */
@@ -417,7 +421,7 @@ internal class ManagerInventoryCoordinator(
             throw IllegalArgumentException("Причина не может быть длиннее 2000 символов")
         }
         try {
-            backend.api.resolveInventoryConflict(
+            api.resolveInventoryConflict(
                 inventoryId = session.id,
                 findingId = latest.id,
                 request = ResolveInventoryConflictRequest(
@@ -653,7 +657,7 @@ internal class ManagerInventoryCoordinator(
                 append(passport.toSortedMap().entries.joinToString())
             }
             createSignature = signature
-            finding = backend.api.createInventoryAsset(
+            finding = api.createInventoryAsset(
                 inventoryId = session.id,
                 findingId = editor.findingId,
                 idempotencyKey = commandKeys.key(signature),
@@ -665,7 +669,7 @@ internal class ManagerInventoryCoordinator(
                     safePassport = passport,
                 ),
             )
-            session = backend.api.inventory(session.id)
+            session = api.inventory(session.id)
         }
         val attached = requireNotNull(finding) { "Сервис не вернул найденную бытовку" }
         val orderedPhotoUris = editor.inventoryPhotoUrisForUpload()
@@ -697,7 +701,7 @@ internal class ManagerInventoryCoordinator(
         ) {
             retryMediaReadAfterOwnerProof {
                 readyOwnerMediaReferencesById(
-                    backend.api.ownerMedia(
+                    api.ownerMedia(
                         ownerType = "INVENTORY_FINDING",
                         ownerId = attached.id,
                         warehouseId = session.warehouseId,
@@ -906,7 +910,7 @@ internal class ManagerInventoryCoordinator(
         inventoryReadMutex.withLock {
             val cached = managerReadCache.readInventory(scope)
             val snapshot = try {
-                val active = backend.api.activeInventory(
+                val active = api.activeInventory(
                     warehouseId = warehouseId,
                     ifNoneMatch = if (force) null else cached?.activeEtag,
                 )
@@ -951,7 +955,7 @@ internal class ManagerInventoryCoordinator(
         var rentalPage = 0
         var rentalTotalPages: Int
         do {
-            val result = backend.api.rentalItems(
+            val result = api.rentalItems(
                 warehouseId = warehouseId,
                 page = rentalPage,
                 size = 200,
@@ -970,7 +974,7 @@ internal class ManagerInventoryCoordinator(
         var page = 0
         var totalPages: Int
         do {
-            val result = backend.api.inventoryFindings(inventoryId, page)
+            val result = api.inventoryFindings(inventoryId, page)
             findings += result.content
             totalPages = result.page.totalPages
             page += 1

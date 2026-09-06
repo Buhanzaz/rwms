@@ -1,7 +1,19 @@
 import type {
+  RepairTaskAcceptanceStatus,
   RepairTaskKind,
   RepairTaskOrigin,
 } from "@/features/repair-tasks/model/repair-task"
+
+export const acceptanceStatusLabels: Record<
+  RepairTaskAcceptanceStatus,
+  string
+> = {
+  NOT_READY: "Не готова",
+  PENDING: "Ожидает приёмки",
+  IN_REWORK: "На доработке",
+  ACCEPTED: "Принята",
+  WRITTEN_OFF: "Списана",
+}
 
 const dateTimeFormatter = new Intl.DateTimeFormat("ru-RU", {
   dateStyle: "medium",

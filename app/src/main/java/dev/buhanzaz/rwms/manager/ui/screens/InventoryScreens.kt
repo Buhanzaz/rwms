@@ -93,7 +93,6 @@ import dev.buhanzaz.rwms.manager.ui.inventoryRentalTypeOptions
 import dev.buhanzaz.rwms.manager.ui.inventorySemanticChanges
 import dev.buhanzaz.rwms.manager.ui.matchesInventoryNumberPrefix
 import dev.buhanzaz.rwms.manager.ui.persistedInventoryMediaReferences
-import dev.buhanzaz.rwms.manager.ui.requiresInventoryReinspectionChoice
 import dev.buhanzaz.rwms.manager.ui.toMaintenancePlanEditor
 import dev.buhanzaz.rwms.manager.ui.withInventoryRentalType
 import dev.buhanzaz.rwms.manager.ui.withMovementToRepair

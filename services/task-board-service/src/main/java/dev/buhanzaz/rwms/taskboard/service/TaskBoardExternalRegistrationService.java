@@ -65,6 +65,7 @@ class TaskBoardExternalRegistrationService {
   private final WorkerInvalidationHub workerInvalidations;
   private final WorkerFeedRevisionStore workerFeedRevisions;
   private final DriverTaskAudienceService driverAudiences;
+  private final BoardTaskRegistrationAssembler registrationAssembler;
   private final TaskBoardEntryOwnerProofService ownerProofs;
   private final JdbcTemplate jdbc;
   private final WarehouseTimeZoneGateway timeZones;
@@ -87,6 +88,7 @@ class TaskBoardExternalRegistrationService {
       WorkerInvalidationHub workerInvalidations,
       WorkerFeedRevisionStore workerFeedRevisions,
       DriverTaskAudienceService driverAudiences,
+      BoardTaskRegistrationAssembler registrationAssembler,
       TaskBoardEntryOwnerProofService ownerProofs,
       JdbcTemplate jdbc,
       WarehouseTimeZoneGateway timeZones,
@@ -107,6 +109,7 @@ class TaskBoardExternalRegistrationService {
     this.workerInvalidations = workerInvalidations;
     this.workerFeedRevisions = workerFeedRevisions;
     this.driverAudiences = driverAudiences;
+    this.registrationAssembler = registrationAssembler;
     this.ownerProofs = ownerProofs;
     this.jdbc = jdbc;
     this.timeZones = Objects.requireNonNull(timeZones);
@@ -733,41 +736,10 @@ class TaskBoardExternalRegistrationService {
 
 
   private BoardTaskRegistrationDto registrationDto(BoardTask task) {
-    var route =
-        entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId()).stream()
-            .map(
-                entry ->
-                    new RegisteredRouteStepDto(
-                        entry.getId(),
-                        entry.getVersion(),
-                        entry.getQueue().getDefinition().getId(),
-                        entry.getQueue().getId(),
-                        entry.getQueue().getName(),
-                        entry.getRouteIndex(),
-                        entry.getQueuePosition(),
-                        entry.getEntryType(),
-                        entry.getStatus(),
-                        entry.getTaskText(),
-                        entry.getPlannedDurationMinutes()))
-            .toList();
-    return new BoardTaskRegistrationDto(
-        task.getId(),
-        task.getVersion(),
-        task.getWarehouseId(),
-        task.getExternalTaskId(),
-        task.getTitle(),
-        task.getUnitNumber(),
-        task.getDescription(),
-        task.getStatus(),
-        task.getPlannedDurationMinutes(),
-        task.getDeadlineAt(),
-        task.getScheduledDate(),
-        task.getLane(),
-        task.getPriority(),
-        task.isPinned(),
-        driverAudiences.dto(task),
-        task.getDoneAt(),
-        route);
+    return registrationAssembler.assemble(
+        task,
+        entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId()),
+        driverAudiences.dto(task));
   }
 
 

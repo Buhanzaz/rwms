@@ -58,10 +58,13 @@ function RentalItemCardPhoto({
     warehouseId: item.warehouseId,
     projection,
     coverAvailability,
+    selectedPhotoId,
   })
   const servicePhotos = servicePhotoResult.photos.map((photo) => ({
     id: photo.id,
     url: photo.url,
+    previewPending: photo.previewPending,
+    previewError: photo.previewError,
     variants: { small: { url: photo.url } },
   }))
   const photoCount = Math.max(projection?.photoCount ?? 0, servicePhotos.length)

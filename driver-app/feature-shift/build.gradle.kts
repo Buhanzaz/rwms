@@ -38,6 +38,7 @@ dependencies {
     coreLibraryDesugaring(libs.desugar.jdk.libs)
 
     testImplementation(platform(libs.compose.bom))
+    testImplementation(libs.room.runtime)
     testImplementation(libs.junit)
     testImplementation(libs.truth)
     testImplementation(libs.coroutines.test)

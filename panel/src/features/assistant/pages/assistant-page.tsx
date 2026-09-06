@@ -772,6 +772,9 @@ function ConversationWorkspace({
   const [presentationOpen, setPresentationOpen] = useState(false)
   const presentationCommand = useRef(new OrderCommandIdentityRegistry())
   const selectionCommand = useRef(new OrderCommandIdentityRegistry())
+  const turnController = useRef<AbortController | null>(null)
+
+  useEffect(() => () => turnController.current?.abort(), [])
 
   const persistedSearchEnvelope = useMemo(
     () =>
@@ -944,7 +947,9 @@ function ConversationWorkspace({
   })
 
   async function sendTurn(request: AssistantTurnRequest, userContent: string) {
-    if (sending || archived) return
+    if (sending || archived || turnController.current) return
+    const controller = new AbortController()
+    turnController.current = controller
     const userMessage: AssistantMessage = {
       id: crypto.randomUUID(),
       role: "USER",
@@ -971,7 +976,9 @@ function ConversationWorkspace({
         accessToken,
         conversationId,
         ...request,
+        signal: controller.signal,
         onEvent: (event) => {
+          if (controller.signal.aborted) return
           if (event.event === "assistant.delta" && event.delta) {
             setLocalMessages((current) =>
               current.map((item) =>
@@ -1061,6 +1068,7 @@ function ConversationWorkspace({
           if (event.event === "turn.completed") terminalEvent = true
         },
       })
+      if (controller.signal.aborted) return
       if (failedCode) {
         throw new Error("LLM не смог завершить ответ. Повторите запрос.")
       }
@@ -1070,12 +1078,16 @@ function ConversationWorkspace({
       await queryClient.invalidateQueries({
         queryKey: [...ASSISTANT_QUERY_KEY, conversationId],
       })
+      if (controller.signal.aborted) return
       await detailQuery.refetch()
+      if (controller.signal.aborted) return
       await onTurnCompleted(conversationId)
+      if (controller.signal.aborted) return
       setLocalMessages([])
       setLiveClarifications(null)
       setLiveCurrentSelection(undefined)
     } catch (error) {
+      if (controller.signal.aborted) return
       if (
         error instanceof ApiError &&
         error.status === 409 &&
@@ -1088,6 +1100,7 @@ function ConversationWorkspace({
         await queryClient.invalidateQueries({
           queryKey: [...ASSISTANT_QUERY_KEY, conversationId],
         })
+        if (controller.signal.aborted) return
         await detailQuery.refetch()
       } else {
         setErrorText(
@@ -1095,8 +1108,11 @@ function ConversationWorkspace({
         )
       }
     } finally {
-      setToolRunning(false)
-      setSending(false)
+      if (turnController.current === controller) turnController.current = null
+      if (!controller.signal.aborted) {
+        setToolRunning(false)
+        setSending(false)
+      }
     }
   }
 

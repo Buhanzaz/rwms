@@ -674,5 +674,3 @@ export interface SimulationDerivedState {
   affected_task_ids: UUID[];
   warnings: ValidationMessage[];
 }
-
-export type GeoPointFeature = Feature<Point>;

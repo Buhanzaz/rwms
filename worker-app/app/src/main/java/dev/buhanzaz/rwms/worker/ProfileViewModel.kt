@@ -19,6 +19,8 @@ import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.util.UUID
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -86,15 +88,25 @@ private data class AvatarState(
 /** Loads and replaces only the authenticated worker's canonical profile avatar. */
 @HiltViewModel
 @OptIn(ExperimentalCoroutinesApi::class)
-class ProfileViewModel @Inject constructor(
+class ProfileViewModel internal constructor(
     private val localStore: WorkerLocalStore,
     private val gateway: WorkerGatewayClient,
-    @ApplicationContext private val context: Context,
+    private val context: Context,
+    private val ioDispatcher: CoroutineDispatcher,
 ) : ViewModel() {
+    @Inject
+    constructor(
+        localStore: WorkerLocalStore,
+        gateway: WorkerGatewayClient,
+        @ApplicationContext context: Context,
+    ) : this(localStore, gateway, context, Dispatchers.IO)
+
     private val userId = MutableStateFlow<String?>(null)
     private val remote = MutableStateFlow<RemoteProfile?>(null)
     private val avatar = MutableStateFlow(AvatarState())
     private var refreshJob: Job? = null
+    private var uploadJob: Job? = null
+    private var avatarRevision = 0L
 
     private val localProfile = userId.flatMapLatest { id ->
         if (id == null) {
@@ -141,6 +153,8 @@ class ProfileViewModel @Inject constructor(
 
     fun bind(userId: String) {
         if (this.userId.value == userId) return
+        avatarRevision += 1
+        uploadJob?.cancel()
         this.userId.value = userId
         remote.value = null
         avatar.value = AvatarState(loading = true)
@@ -148,12 +162,14 @@ class ProfileViewModel @Inject constructor(
     }
 
     fun refresh() {
-        if (userId.value == null) return
+        if (userId.value == null || avatar.value.uploading) return
+        val revision = ++avatarRevision
         refreshJob?.cancel()
         refreshJob = viewModelScope.launch {
             avatar.value = avatar.value.copy(loading = true, error = null)
             runCatching {
                 val workerContext = gateway.context()
+                if (revision != avatarRevision) return@launch
                 remote.value = RemoteProfile(
                     displayName = workerContext.worker.displayName,
                     login = workerContext.worker.login,
@@ -168,8 +184,11 @@ class ProfileViewModel @Inject constructor(
                 val scope = gateway.prepareWorkerProfileAvatarScope()
                 val ready = newestReadyAvatar(gateway.mediaAssets(scope).items)
                 val bitmap = ready?.let { loadAvatar(it) }
-                avatar.value = AvatarState(bitmap = bitmap)
+                if (revision != avatarRevision) return@launch
+                avatar.value = avatar.value.copy(bitmap = bitmap, loading = false)
             }.onFailure { failure ->
+                if (failure is CancellationException) throw failure
+                if (revision != avatarRevision) return@launch
                 avatar.value = avatar.value.copy(
                     loading = false,
                     error = failure.safeWorkerUserMessage("Не удалось загрузить аватар"),
@@ -179,16 +198,21 @@ class ProfileViewModel @Inject constructor(
     }
 
     fun uploadAvatar(bitmap: Bitmap, onSuccess: () -> Unit) {
-        if (avatar.value.uploading) return
-        viewModelScope.launch {
-            avatar.value = avatar.value.copy(uploading = true, error = null)
+        if (userId.value == null || avatar.value.uploading) return
+        val revision = ++avatarRevision
+        refreshJob?.cancel()
+        avatar.value = avatar.value.copy(loading = false, uploading = true, error = null)
+        uploadJob = viewModelScope.launch {
             runCatching {
-                val ready = withContext(Dispatchers.IO) { uploadAvatar(bitmap) }
+                val ready = withContext(ioDispatcher) { uploadAvatar(bitmap) }
                 val displayed = loadAvatar(ready)
                     ?: throw IllegalStateException("Ready avatar has no readable image variant")
-                avatar.value = AvatarState(bitmap = displayed)
+                if (revision != avatarRevision) return@launch
+                avatar.value = avatar.value.copy(bitmap = displayed, uploading = false)
                 onSuccess()
             }.onFailure { failure ->
+                if (failure is CancellationException) throw failure
+                if (revision != avatarRevision) return@launch
                 avatar.value = avatar.value.copy(
                     uploading = false,
                     error = failure.safeWorkerUserMessage("Не удалось сохранить аватар"),
@@ -261,7 +285,7 @@ class ProfileViewModel @Inject constructor(
         }
     }
 
-    private suspend fun loadAvatar(asset: MediaAssetDto): Bitmap? = withContext(Dispatchers.IO) {
+    private suspend fun loadAvatar(asset: MediaAssetDto): Bitmap? = withContext(ioDispatcher) {
         val path = asset.variants.firstOrNull { it.kind == "SMALL" }?.contentPath
             ?: asset.variants.firstOrNull { it.kind == "MEDIUM" }?.contentPath
             ?: asset.variants.firstOrNull { it.kind == "LARGE" }?.contentPath

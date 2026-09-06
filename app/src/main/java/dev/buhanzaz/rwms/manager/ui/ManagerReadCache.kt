@@ -5,7 +5,6 @@ import android.util.AtomicFile
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
-import dev.buhanzaz.rwms.manager.network.EstimateDto
 import dev.buhanzaz.rwms.manager.network.ExplicitNullJsonAdapterFactory
 import dev.buhanzaz.rwms.manager.network.EstimatePageDto
 import dev.buhanzaz.rwms.manager.network.InventoryFindingDto

@@ -32,8 +32,6 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -48,20 +46,18 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
@@ -78,12 +74,24 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import dev.buhanzaz.rwms.manager.media.MediaDownloader
 import java.io.File
 import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.launch
-import kotlin.math.abs
-import kotlin.math.roundToInt
+
+/** Shares the ViewModel's cache ownership with readers that outlive a published editor snapshot. */
+internal val LocalManagerMediaDownloader = staticCompositionLocalOf<MediaDownloader?> { null }
+
+/** Keeps a composed image readable until its old composition is actually disposed. */
+@Composable
+private fun RetainManagerPhoto(photoUri: String) {
+    val downloader = LocalManagerMediaDownloader.current
+    DisposableEffect(downloader, photoUri) {
+        val retained = downloader?.retain(photoUri) == true
+        onDispose { if (retained) downloader?.release(photoUri) }
+    }
+}
 
 /** Full-screen camera route. Picking an existing image stays on the preceding photo step. */
 @Composable
@@ -233,6 +241,7 @@ fun ManagerPhotoPreview(
 private fun managerPhotoImageModel(
     photoUri: String,
 ): ImageRequest {
+    RetainManagerPhoto(photoUri)
     val context = LocalContext.current
     val cacheRevision = managerLocalPhotoFile(photoUri)
         ?.lastModified()
@@ -302,6 +311,7 @@ private fun ManagerVideoPlayer(
     active: Boolean,
 ) {
     val context = LocalContext.current
+    val downloader = LocalManagerMediaDownloader.current
     val player = remember(context, videoUri) {
         ExoPlayer.Builder(context).build().apply {
             setMediaItem(MediaItem.fromUri(videoUri))
@@ -312,8 +322,12 @@ private fun ManagerVideoPlayer(
     LaunchedEffect(player, active) {
         if (!active) player.pause()
     }
-    DisposableEffect(player) {
-        onDispose { player.release() }
+    DisposableEffect(player, downloader, videoUri) {
+        val retained = downloader?.retain(videoUri) == true
+        onDispose {
+            player.release()
+            if (retained) downloader?.release(videoUri)
+        }
     }
     AndroidView(
         factory = { playerContext ->
@@ -482,6 +496,11 @@ fun ManagerPhotoGalleryDialog(
     onDismiss: () -> Unit,
 ) {
     if (photoUris.isEmpty()) return
+    val downloader = LocalManagerMediaDownloader.current
+    DisposableEffect(downloader, photoUris) {
+        val retained = photoUris.distinct().filter { downloader?.retain(it) == true }
+        onDispose { retained.forEach { downloader?.release(it) } }
+    }
     val photoCount = photoUris.size
     val pagerState = rememberPagerState(
         initialPage = managerPhotoGalleryInitialPage(initialIndex, photoCount),

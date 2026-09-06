@@ -33,6 +33,7 @@ internal val maintenanceKnownRentalItemStatuses = listOf(
     "REPAIR",
     "WAITING_REPAIR_CHECK",
     "WRITTEN_OFF",
+    "LOST",
     "CAPITAL_REPAIR",
     "AFTER_RENT",
     "WAITING_ESTIMATE_CONFIRMATION",

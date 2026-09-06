@@ -313,7 +313,4 @@ interface DriverConflictDao {
 interface DriverInvalidationDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(event: DriverInvalidationEntity): Long
-
-    @Query("SELECT MAX(revision) FROM driver_invalidation WHERE userId = :userId")
-    suspend fun latestRevision(userId: String): Long?
 }

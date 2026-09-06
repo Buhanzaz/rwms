@@ -12,12 +12,13 @@
 
 | Поле | Смысл |
 | --- | --- |
+| `envelopeVersion` | Обязательный маркер технического envelope, строго `2` |
 | `eventId` | Глобально уникальная immutable identity доставки |
 | `eventType` | Стабильное namespaced имя факта |
 | `eventVersion` | Major contract version payload |
 | `occurredAt` | Доказанный business instant, когда он известен |
 | `recordedAt` | UTC instant записи факта владельцем |
-| `producer` | Сервис-владелец и версия deployable |
+| `producer` | Точная identity сервиса-владельца, например `asset-service`, без версии сборки |
 | `aggregateType` | Тип агрегата producer |
 | `aggregateId` | Opaque identifier агрегата producer |
 | `aggregateVersion` | Версия после committed mutation |

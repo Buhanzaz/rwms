@@ -176,6 +176,7 @@ it("retries a preview that was invalidated while its prior request was in flight
   })
 
   const leasePromise = acquireMediaPreview(key, loader)
+  await vi.waitFor(() => expect(resolveFirst).toBeTypeOf("function"))
   evictMediaPreview("media-id")
   resolveFirst({
     url: "blob:stale-preview",
@@ -217,6 +218,7 @@ it("does not recreate a preview after a principal-wide clear races its loader", 
       })
   )
 
+  await vi.waitFor(() => expect(resolvePreview).toBeTypeOf("function"))
   clearMediaPreviewCache()
   resolvePreview({
     url: "blob:late-preview",
@@ -228,4 +230,101 @@ it("does not recreate a preview after a principal-wide clear races its loader", 
   await expect(pendingLease).rejects.toThrow("Media preview cache was cleared")
   expect(dispose).toHaveBeenCalledOnce()
   expect(getCachedMediaPreviewUrl(key)).toBeUndefined()
+})
+
+it("limits all cards to four downloads, prioritizes covers, and drops abandoned queued work", async () => {
+  const controllers = Array.from({ length: 8 }, () => new AbortController())
+  const started: number[] = []
+  const loaders = controllers.map((_, index) =>
+    vi.fn((signal: AbortSignal) => {
+      started.push(index)
+      return new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), {
+          once: true,
+        })
+      })
+    })
+  )
+  const requests = controllers.map((controller, index) =>
+    acquireMediaPreview(`queued-${index}`, loaders[index], {
+      signal: controller.signal,
+      priority: index < 4 ? 1 : 0,
+    })
+  )
+  const settled = Promise.allSettled(requests)
+  await vi.waitFor(() => expect(started).toHaveLength(4))
+  expect(started).toEqual([4, 5, 6, 7])
+  controllers.forEach((controller) => controller.abort())
+  expect((await settled).every((result) => result.status === "rejected")).toBe(
+    true
+  )
+  expect(started).toHaveLength(4)
+})
+
+it("cancels only the departing consumer of a shared pending preview", async () => {
+  const controller = new AbortController()
+  let finish!: (value: {
+    url: string
+    contentType: string
+    size: number
+    dispose: () => void
+  }) => void
+  let downloadSignal!: AbortSignal
+  const loader = vi.fn((signal: AbortSignal) => {
+    downloadSignal = signal
+    return new Promise<{
+      url: string
+      contentType: string
+      size: number
+      dispose: () => void
+    }>((resolve) => {
+      finish = resolve
+    })
+  })
+  const first = acquireMediaPreview("shared-cancel", loader, {
+    signal: controller.signal,
+  })
+  const firstOutcome = expect(first).rejects.toMatchObject({
+    name: "AbortError",
+  })
+  const second = acquireMediaPreview("shared-cancel", loader)
+  await vi.waitFor(() => expect(loader).toHaveBeenCalledOnce())
+  controller.abort()
+  await firstOutcome
+  expect(downloadSignal.aborted).toBe(false)
+  finish({
+    url: "blob:retained",
+    contentType: "image/webp",
+    size: 10,
+    dispose: vi.fn(),
+  })
+  const lease = await second
+  expect(lease.url).toBe("blob:retained")
+  lease.release()
+})
+
+it("disposes a late result if its last consumer left despite an uncancellable loader", async () => {
+  const controller = new AbortController()
+  const dispose = vi.fn()
+  let finish!: (value: {
+    url: string
+    contentType: string
+    size: number
+    dispose: () => void
+  }) => void
+  const request = acquireMediaPreview(
+    "late-cancel",
+    () =>
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+    { signal: controller.signal }
+  )
+  const outcome = expect(request).rejects.toMatchObject({ name: "AbortError" })
+  await vi.waitFor(() => expect(finish).toBeTypeOf("function"))
+  controller.abort()
+  await outcome
+  finish({ url: "blob:late", contentType: "image/webp", size: 10, dispose })
+  await vi.waitFor(() => expect(dispose).toHaveBeenCalledOnce())
+  expect(getCachedMediaPreviewUrl("late-cancel")).toBeUndefined()
 })

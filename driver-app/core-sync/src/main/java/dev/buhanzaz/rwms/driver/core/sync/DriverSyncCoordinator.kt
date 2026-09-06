@@ -3,7 +3,6 @@ package dev.buhanzaz.rwms.driver.core.sync
 import dev.buhanzaz.rwms.driver.core.database.PendingEvidenceReservation
 import dev.buhanzaz.rwms.driver.core.database.PendingDriverAction
 import dev.buhanzaz.rwms.driver.core.database.PendingShiftCommand
-import dev.buhanzaz.rwms.driver.core.database.TaskEvidenceEntity
 import dev.buhanzaz.rwms.driver.core.database.DriverCategoryEntity
 import dev.buhanzaz.rwms.driver.core.database.DriverDatabase
 import dev.buhanzaz.rwms.driver.core.database.DriverLocalStore

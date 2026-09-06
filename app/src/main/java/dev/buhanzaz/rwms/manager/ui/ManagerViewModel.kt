@@ -328,13 +328,16 @@ class ManagerViewModel(
     private val inventoryDraftStore = InventoryDraftStore(application)
     /* Remote media is not needed for the signed-out screen. Avoid creating Retrofit merely to
      * construct a downloader during the first composition. */
-    private val mediaDownloader by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+    internal val mediaDownloader by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         MediaDownloader(backend.api, application.cacheDir)
     }
     private val backgroundUploads = viewModelScope.async(Dispatchers.IO) {
         BackgroundUploadCoordinator(application).also { coordinator -> coordinator.initialize() }
     }
-    private val mutableState = MutableStateFlow(ManagerUiState())
+    private val mutableState = ManagerMediaStateFlow(
+        retain = { mediaDownloader.retain(it) },
+        release = { mediaDownloader.release(it) },
+    )
     private val mutableUploadOperations =
         MutableStateFlow<List<BackgroundUploadOperation>>(emptyList())
     val state: StateFlow<ManagerUiState> = mutableState.asStateFlow()
@@ -348,7 +351,7 @@ class ManagerViewModel(
         invalidateSession = { reason -> backend.auth.invalidate(reason) },
     )
 
-    private val mediaCoordinator = ManagerMediaCoordinator(backend, mediaDownloader)
+    private val mediaCoordinator = ManagerMediaCoordinator(backend.api, mediaDownloader)
     private val maintenanceCatalogCoordinator = ManagerMaintenanceCatalogCoordinator(
         runtime = commandRuntime,
         backend = backend,
@@ -364,7 +367,7 @@ class ManagerViewModel(
     )
     private val maintenanceEditorCoordinator = ManagerMaintenanceEditorCoordinator(
         runtime = commandRuntime,
-        backend = backend,
+        api = backend.api,
         commandKeys = commandKeys,
         catalogAccess = maintenanceCatalogCoordinator,
         maintenanceAssetRead = maintenanceReadCoordinator,
@@ -373,7 +376,7 @@ class ManagerViewModel(
     )
     private val maintenancePersistenceCoordinator = ManagerMaintenancePersistenceCoordinator(
         runtime = commandRuntime,
-        backend = backend,
+        api = backend.api,
         backgroundUploads = backgroundUploads,
         maintenanceRefresh = maintenanceReadCoordinator,
         catalogAccess = maintenanceCatalogCoordinator,
@@ -381,7 +384,7 @@ class ManagerViewModel(
     )
     private val inventoryCoordinator = ManagerInventoryCoordinator(
         runtime = commandRuntime,
-        backend = backend,
+        api = backend.api,
         backgroundUploads = backgroundUploads,
         commandKeys = commandKeys,
         managerReadCache = managerReadCache,
@@ -403,7 +406,7 @@ class ManagerViewModel(
     )
     private val returnCoordinator = ManagerReturnCoordinator(
         runtime = commandRuntime,
-        backend = backend,
+        api = backend.api,
         backgroundUploads = backgroundUploads,
         commandKeys = commandKeys,
         maintenanceRefresh = maintenanceReadCoordinator,
@@ -774,6 +777,7 @@ class ManagerViewModel(
         maintenancePersistenceCoordinator.createEstimate(item)
 
     override fun onCleared() {
+        mutableState.close()
         backend.auth.close()
         super.onCleared()
     }

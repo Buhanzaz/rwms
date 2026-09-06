@@ -159,12 +159,22 @@ func TestAssetImportCreatesDurableMediaAggregateAndProcessingOutboxIntegration(t
 		t.Fatalf("FailAssetImport(independent activation) = %v", otherErr)
 	}
 	retryKey := uuid.New()
-	retried, retryReplayed, retryErr := repository.RetryAssetImport(ctx, assetimport.RetryCommand{
+	retryCommand := assetimport.RetryCommand{
 		JobID: otherJobID, IdempotencyKey: retryKey,
 		RequestSHA256: assetimport.CanonicalRetrySHA(otherJobID, retryKey),
-	})
+	}
+	retried, retryReplayed, retryErr := repository.RetryAssetImport(ctx, retryCommand)
 	if retryErr != nil || retryReplayed || retried.Status != assetimport.StatusActivationPending || retried.ActivationAttempts != 0 {
 		t.Fatalf("RetryAssetImport(activation) = %#v replayed=%v error=%v", retried, retryReplayed, retryErr)
+	}
+	retried, retryReplayed, retryErr = repository.RetryAssetImport(ctx, retryCommand)
+	if retryErr != nil || !retryReplayed || retried.Status != assetimport.StatusActivationPending {
+		t.Fatalf("RetryAssetImport(replay) = %#v replayed=%v error=%v", retried, retryReplayed, retryErr)
+	}
+	retryMismatch := retryCommand
+	retryMismatch.RequestSHA256 = hex64('e')
+	if _, retryReplayed, retryErr = repository.RetryAssetImport(ctx, retryMismatch); !errors.Is(retryErr, assetimport.ErrIdempotencyMismatch) || retryReplayed {
+		t.Fatalf("RetryAssetImport(mismatch) replayed=%v error=%v", retryReplayed, retryErr)
 	}
 	otherActivation, otherClaimed, otherErr = repository.ClaimAssetImport(ctx, "asset-import-integration", time.Minute)
 	if otherErr != nil || !otherClaimed || otherActivation.Job.ID != otherJobID || otherActivation.Job.ActivationAttempts != 1 {
@@ -235,6 +245,11 @@ func TestAssetImportReplacementRequeuesOnlyFailedPreflightIntegration(t *testing
 	if err != nil || !replayed || replayedJob.Status != assetimport.StatusPreflightPending ||
 		len(replayedJob.Sources) != 1 || replayedJob.Sources[0].PublicKey != "QrStUvWxYz0123" {
 		t.Fatalf("ReplaceAssetImportSources(replay) = %#v replayed=%v error=%v", replayedJob, replayed, err)
+	}
+	mismatch := command
+	mismatch.RequestSHA256 = hex64('f')
+	if _, replayed, err = repository.ReplaceAssetImportSources(ctx, mismatch); !errors.Is(err, assetimport.ErrIdempotencyMismatch) || replayed {
+		t.Fatalf("ReplaceAssetImportSources(mismatch) replayed=%v error=%v", replayed, err)
 	}
 }
 

@@ -3,7 +3,10 @@ import type {
   RepairTaskDto,
 } from "@/features/repair-tasks/model/repair-task"
 
-import { repairTaskOriginLabel } from "./acceptance-formatters"
+import {
+  acceptanceStatusLabels,
+  repairTaskOriginLabel,
+} from "./acceptance-formatters"
 
 export type AcceptanceFiltersState = {
   sources: string[]
@@ -18,14 +21,6 @@ export type AcceptanceFilterOptions = {
   sources: Array<{ value: string; label: string }>
   sourceParties: Array<{ value: string; label: string }>
   authors: Array<{ value: string; label: string }>
-}
-
-const acceptanceStatusLabels: Record<RepairTaskAcceptanceStatus, string> = {
-  NOT_READY: "Не готова",
-  PENDING: "Ожидает приёмки",
-  IN_REWORK: "На доработке",
-  ACCEPTED: "Принята",
-  WRITTEN_OFF: "Списана",
 }
 
 export const acceptanceStatusOptions = (

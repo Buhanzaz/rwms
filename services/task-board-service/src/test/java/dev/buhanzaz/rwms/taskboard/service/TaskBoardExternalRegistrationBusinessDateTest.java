@@ -67,6 +67,7 @@ class TaskBoardExternalRegistrationBusinessDateTest {
             mock(WorkerInvalidationHub.class),
             mock(WorkerFeedRevisionStore.class),
             mock(DriverTaskAudienceService.class),
+            mock(BoardTaskRegistrationAssembler.class),
             mock(TaskBoardEntryOwnerProofService.class),
             mock(JdbcTemplate.class),
             timeZones,

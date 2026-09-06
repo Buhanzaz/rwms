@@ -1,3 +1,4 @@
+import { fetchApi, readApiResponse } from '../../api/http-response';
 import { requireSimulatorAccessToken, simulatorApiUrl } from '../../api/client';
 import { createContractorDriver } from '../contractors/contractor-client';
 
@@ -146,26 +147,6 @@ function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function canonicalProblemMessage(value: unknown, fallback: string) {
-  if (!isRecord(value)) return fallback;
-  if (typeof value.detail === 'string') return value.detail;
-  if (typeof value.title === 'string') return value.title;
-  return fallback;
-}
-
-async function readJson(response: Response, fallback: string): Promise<unknown> {
-  if (!response.ok) {
-    let problem: unknown = null;
-    try {
-      problem = await response.json();
-    } catch {
-      problem = null;
-    }
-    throw new Error(canonicalProblemMessage(problem, `${fallback} (HTTP ${response.status})`));
-  }
-  return response.json();
-}
-
 function catalogValue(value: unknown): TransferCatalogValue {
   if (!isRecord(value) || typeof value.id !== 'string' || typeof value.name !== 'string' || !value.name.trim()) {
     throw new Error('RWMS вернул некорректный справочник бытовок');
@@ -220,8 +201,8 @@ export async function loadTransferCargoCatalog(accessToken: string, warehouseId:
     fetch(`/api/asset/v1/equipment?${query}`, { headers }),
   ]);
   const [optionsValue, equipmentValue] = await Promise.all([
-    readJson(optionsResponse, 'Не удалось получить справочники бытовок'),
-    readJson(equipmentResponse, 'Не удалось получить каталог мебели'),
+    readApiResponse(optionsResponse, 'Не удалось получить справочники бытовок'),
+    readApiResponse(equipmentResponse, 'Не удалось получить каталог мебели'),
   ]);
   if (!isRecord(optionsValue) || !Array.isArray(optionsValue.typeDimensions) || !Array.isArray(equipmentValue)) {
     throw new Error('RWMS вернул некорректные данные для состава перемещения');
@@ -243,13 +224,13 @@ export async function loadTransferCargoCatalog(accessToken: string, warehouseId:
 export async function loadTransferRouteVehicles(localWarehouseId: string, planningDate: string): Promise<TransferRouteVehicle[]> {
   const accessToken = await requireSimulatorAccessToken();
   const query = new URLSearchParams({ planning_date: planningDate, request_limit: '1' });
-  const response = await fetch(simulatorApiUrl(`/warehouses/${encodeURIComponent(localWarehouseId)}/workspace?${query.toString()}`), {
+  const response = await fetchApi(simulatorApiUrl(`/warehouses/${encodeURIComponent(localWarehouseId)}/workspace?${query.toString()}`), {
     headers: {
       Accept: 'application/json, application/problem+json',
       Authorization: `Bearer ${accessToken}`,
     },
   });
-  const value = await readJson(response, 'Не удалось получить автомобили склада');
+  const value = await readApiResponse(response, 'Не удалось получить автомобили склада');
   if (!isRecord(value) || !Array.isArray(value.vehicles)) throw new Error('Логистика вернула некорректный список автомобилей');
   return value.vehicles.flatMap((candidate): TransferRouteVehicle[] => {
     if (isRecord(candidate) && candidate.warehouse_id !== localWarehouseId) {
@@ -275,13 +256,13 @@ export async function loadTransferRouteVehicles(localWarehouseId: string, planni
 /** Loads source-qualified canonical drivers without creating a simulator-owned employee. */
 export async function loadTransferDrivers(localWarehouseId: string): Promise<TransferDriver[]> {
   const accessToken = await requireSimulatorAccessToken();
-  const response = await fetch(simulatorApiUrl(`/warehouses/${encodeURIComponent(localWarehouseId)}/available-drivers`), {
+  const response = await fetchApi(simulatorApiUrl(`/warehouses/${encodeURIComponent(localWarehouseId)}/available-drivers`), {
     headers: {
       Accept: 'application/json, application/problem+json',
       Authorization: `Bearer ${accessToken}`,
     },
   });
-  const value = await readJson(response, 'Не удалось получить водителей склада');
+  const value = await readApiResponse(response, 'Не удалось получить водителей склада');
   if (!Array.isArray(value)) throw new Error('Логистика вернула некорректный список водителей');
   return value.flatMap((candidate): TransferDriver[] => {
     if (!isRecord(candidate) || typeof candidate.worker_id !== 'string' || typeof candidate.display_name !== 'string') return [];
@@ -308,10 +289,10 @@ export async function createTransferContractor(input: CreateTransferContractorIn
 
 /** Loads destination cabins currently awaiting capital repair for a return leg. */
 export async function loadCapitalRepairCards(accessToken: string, destinationWarehouseId: string): Promise<CapitalRepairCard[]> {
-  const response = await fetch(`/api/logistics/v1/driver-board?warehouseId=${encodeURIComponent(destinationWarehouseId)}`, {
+  const response = await fetchApi(`/api/logistics/v1/driver-board?warehouseId=${encodeURIComponent(destinationWarehouseId)}`, {
     headers: { Accept: 'application/json, application/problem+json', Authorization: `Bearer ${accessToken}` },
   });
-  const value = await readJson(response, 'Не удалось получить бытовки на капремонт');
+  const value = await readApiResponse(response, 'Не удалось получить бытовки на капремонт');
   const cards = isRecord(value) && Array.isArray(value.capitalRepairs) ? value.capitalRepairs : [];
   return cards.flatMap((item) => {
     if (!isRecord(item) || typeof item.repairId !== 'string' || typeof item.cabinId !== 'string' || typeof item.assetVersion !== 'number') return [];
@@ -335,7 +316,7 @@ export async function estimateTransferArrival(input: {
   cabinCount: number;
 }): Promise<TransferArrivalEstimate> {
   const accessToken = await requireSimulatorAccessToken();
-  const response = await fetch(simulatorApiUrl('/routing/transfer-arrival-estimate'), {
+  const response = await fetchApi(simulatorApiUrl('/routing/transfer-arrival-estimate'), {
     method: 'POST',
     headers: {
       Accept: 'application/json, application/problem+json',
@@ -350,7 +331,7 @@ export async function estimateTransferArrival(input: {
       cabin_count: input.cabinCount,
     }),
   });
-  const value = await readJson(response, 'Не удалось рассчитать время прибытия');
+  const value = await readApiResponse(response, 'Не удалось рассчитать время прибытия');
   if (
     !isRecord(value)
     || typeof value.estimated_arrival_at !== 'string'
@@ -370,7 +351,7 @@ export async function estimateTransferArrival(input: {
 
 /** Creates the authoritative logistics-service draft through the public same-origin gateway. */
 export async function createTransferDraft(input: CreateTransferDraftInput): Promise<CreatedTransferDraft> {
-  const response = await fetch('/api/logistics/v1/transfers', {
+  const response = await fetchApi('/api/logistics/v1/transfers', {
     method: 'POST',
     headers: {
       Accept: 'application/json, application/problem+json',
@@ -388,7 +369,7 @@ export async function createTransferDraft(input: CreateTransferDraftInput): Prom
       returnCapitalRepairLines: input.returnCapitalRepairLines ?? [],
     }),
   });
-  const value = await readJson(response, 'Не удалось создать перемещение');
+  const value = await readApiResponse(response, 'Не удалось создать перемещение');
   if (!isRecord(value) || typeof value.id !== 'string') {
     throw new Error('Логистика вернула некорректный черновик перемещения');
   }
