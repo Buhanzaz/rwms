@@ -85,6 +85,8 @@ the local-development default. Evidence:
 - RWMS request snapshots and local request create, update, and version-fenced
   planning-details commands accept a contact name of up to 512 characters. The
   planner preserves that exact value in `logistics_requests.contact_name`.
+- Assignment status reads retain the complete warehouse-day feed, including
+  records beyond 500. The separate command batch limits remain unchanged.
 - Request preparation accepts either an explicit positive interval or a soft
   full-day option whose nullable bounds are not replaced with invented times.
 - Automatic plan creation uses

@@ -1841,7 +1841,7 @@ class RwmsPlanningAssignmentStatusFeed(RwmsApiModel):
 
     warehouse_id: UUID = Field(alias="warehouseId")
     date: date
-    assignments: list[RwmsPlanningAssignmentStatus] = Field(max_length=500)
+    assignments: list[RwmsPlanningAssignmentStatus]
 
     @model_validator(mode="after")
     def validate_assignment_dates(self) -> RwmsPlanningAssignmentStatusFeed:

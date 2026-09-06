@@ -19,6 +19,7 @@ from sqlalchemy.orm import selectinload
 
 import app.api.catalog as catalog_api
 import app.api.rwms as rwms_api
+import app.integrations.rwms_sync as rwms_sync
 from app.config import Settings
 from app.db import get_session
 from app.errors import ApiError
@@ -27,6 +28,7 @@ from app.integrations.rwms_sync import (
     _build_driver_shift_plans,
     _vehicle_configuration_type,
     build_assignments_command,
+    get_plan_rwms_status,
     prepare_plan_for_rwms_apply,
     sync_warehouse_requests,
 )
@@ -45,6 +47,7 @@ from app.models import (
     Vehicle,
     Warehouse,
 )
+from app.models.domain import StopType
 from app.schemas.domain import (
     RequestDateOptionInput,
     RequestDateOptionUpdate,
@@ -56,6 +59,8 @@ from app.schemas.domain import (
     RwmsDriverShiftRouteOperation,
     RwmsIsochroneTariff,
     RwmsPlanApplyRequest,
+    RwmsPlanningAssignmentStatus,
+    RwmsPlanningAssignmentStatusFeed,
     RwmsPlanningCapacityJob,
     RwmsPlanningCapacityShift,
     RwmsPlanningDateOption,
@@ -161,6 +166,31 @@ def _planning_feed_client(
         )
     )
     return client
+
+
+def _assignment_status(
+    *,
+    scheduled_date: date,
+    order_id: UUID | None = None,
+    unit_ids: list[UUID] | None = None,
+) -> RwmsPlanningAssignmentStatus:
+    """Build one valid owner assignment status with a distinct exact unit slice."""
+
+    return RwmsPlanningAssignmentStatus(
+        order_id=order_id or uuid4(),
+        order_version=7,
+        document_id=uuid4(),
+        external_task_id=uuid4(),
+        task_version=1,
+        source_plan_id=uuid4(),
+        source_plan_version=1,
+        scheduled_date=scheduled_date,
+        unit_ids=unit_ids or [uuid4()],
+        driver_audience_mode="WAREHOUSE_DRIVERS",
+        driver_worker_id=None,
+        driver_name=None,
+        task_state="SCHEDULED",
+    )
 
 
 def _vehicle_assignment_payload(
@@ -303,6 +333,118 @@ async def test_rwms_client_decodes_complete_feed_with_a_512_character_contact() 
     )
 
     assert [request.contact_name for request in feed.requests] == [long_contact, "Иван Петров"]
+
+
+@pytest.mark.asyncio
+async def test_assignment_status_client_decodes_every_status_after_index_500() -> None:
+    """Keep the owner status read complete when one warehouse-day exceeds command batch limits."""
+
+    warehouse_id = uuid4()
+    scheduled_date = date(2026, 8, 30)
+    statuses = [_assignment_status(scheduled_date=scheduled_date) for _ in range(501)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "auth.internal":
+            return httpx.Response(
+                200,
+                json={"access_token": "opaque-token", "expires_in": 300},
+                request=request,
+            )
+        assert request.url.path == "/api/internal/logistics/v1/planning/assignments"
+        assert dict(request.url.params) == {
+            "warehouseId": str(warehouse_id),
+            "date": scheduled_date.isoformat(),
+        }
+        return httpx.Response(
+            200,
+            json={
+                "warehouseId": str(warehouse_id),
+                "date": scheduled_date.isoformat(),
+                "assignments": [
+                    status.model_dump(mode="json", by_alias=True) for status in statuses
+                ],
+            },
+            request=request,
+        )
+
+    client = RwmsPlanningClient(_enabled_settings(), transport=httpx.MockTransport(handler))
+    feed = await client.get_assignment_statuses(
+        warehouse_id=warehouse_id,
+        date=scheduled_date,
+    )
+
+    assert len(feed.assignments) == 501
+    assert feed.assignments[500].external_task_id == statuses[500].external_task_id
+
+
+@pytest.mark.asyncio
+async def test_plan_status_consumes_the_matching_owner_status_after_index_500(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Find an exact local task even when its owner status follows 500 other valid statuses."""
+
+    warehouse_id = uuid4()
+    scheduled_date = date(2026, 8, 30)
+    source = _source_request(planning_date=scheduled_date)
+    request = SimpleNamespace(
+        id=uuid4(),
+        source_system=catalog.RWMS_SOURCE_SYSTEM,
+        external_id=source.order_id,
+        external_version=source.order_version,
+        external_payload=source.model_dump(mode="json", by_alias=True),
+        customer_delivery_purpose=source.customer_delivery_purpose,
+    )
+    task = SimpleNamespace(
+        id=uuid4(),
+        request=request,
+        quantity=1,
+        part_number=1,
+        type="DELIVERY",
+    )
+    request.tasks = [task]
+    plan = SimpleNamespace(
+        id=uuid4(),
+        version=3,
+        warehouse=SimpleNamespace(external_warehouse_id=warehouse_id),
+        date=scheduled_date,
+        cycles=[
+            SimpleNamespace(
+                stops=[SimpleNamespace(stop_type=StopType.DELIVERY, task=task)],
+            )
+        ],
+        unassigned_tasks=[],
+    )
+    statuses = [_assignment_status(scheduled_date=scheduled_date) for _ in range(500)]
+    matching = _assignment_status(
+        scheduled_date=scheduled_date,
+        order_id=source.order_id,
+        unit_ids=source.unit_ids,
+    )
+    status_feed = RwmsPlanningAssignmentStatusFeed(
+        warehouse_id=warehouse_id,
+        date=scheduled_date,
+        assignments=[*statuses, matching],
+    )
+    client = SimpleNamespace(
+        ensure_enabled=lambda: None,
+        get_assignment_statuses=AsyncMock(return_value=status_feed),
+    )
+    session = SimpleNamespace(commit=AsyncMock())
+
+    async def load_plan(*_: object) -> SimpleNamespace:
+        return plan
+
+    monkeypatch.setattr(rwms_sync, "_load_plan_for_rwms_status", load_plan)
+
+    result = await get_plan_rwms_status(session, plan.id, plan.version, client)
+
+    assert len(result.tasks) == 1
+    assert result.tasks[0].task_id == task.id
+    assert result.tasks[0].document_id == matching.document_id
+    client.get_assignment_statuses.assert_awaited_once_with(
+        warehouse_id=warehouse_id,
+        date=scheduled_date,
+    )
 
 
 @pytest.mark.parametrize(
