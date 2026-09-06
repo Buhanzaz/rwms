@@ -11,10 +11,16 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.networknt.schema.JsonSchema;
+import com.networknt.schema.JsonSchemaFactory;
+import com.networknt.schema.SpecVersion;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateRentalItemRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateGeneralCommentRequest;
 import dev.buhanzaz.rwms.asset.service.AssetService;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -30,6 +36,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.yaml.snakeyaml.Yaml;
 import tools.jackson.databind.ObjectMapper;
 
 @SpringBootTest(
@@ -44,6 +51,10 @@ import tools.jackson.databind.ObjectMapper;
 @AutoConfigureMockMvc
 class MaintenanceAssetSnapshotIntegrationTest {
   private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
+  private static final com.fasterxml.jackson.databind.ObjectMapper SCHEMA_JSON =
+      new com.fasterxml.jackson.databind.ObjectMapper();
+  private static final JsonSchemaFactory SCHEMAS =
+      JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012);
 
   static {
     POSTGRES.start();
@@ -103,6 +114,30 @@ class MaintenanceAssetSnapshotIntegrationTest {
         .contains(rental.number())
         .doesNotContain(privateComment, "privatePassportValue", "private characteristics",
             "passport", "contents", "generalComment");
+
+    JsonSchema schema = maintenanceSnapshotSchema();
+    ObjectNode responseBody = (ObjectNode) SCHEMA_JSON.readTree(response);
+    assertThat(schema.validate(responseBody)).isEmpty();
+
+    ObjectNode boundary = responseBody.deepCopy();
+    boundary.put("number", "N".repeat(128));
+    assertThat(schema.validate(boundary)).isEmpty();
+
+    ObjectNode missing = responseBody.deepCopy();
+    missing.remove("number");
+    assertThat(schema.validate(missing)).isNotEmpty();
+
+    ObjectNode explicitNull = responseBody.deepCopy();
+    explicitNull.putNull("number");
+    assertThat(schema.validate(explicitNull)).isNotEmpty();
+
+    ObjectNode empty = responseBody.deepCopy();
+    empty.put("number", "");
+    assertThat(schema.validate(empty)).isNotEmpty();
+
+    ObjectNode oversized = responseBody.deepCopy();
+    oversized.put("number", "N".repeat(129));
+    assertThat(schema.validate(oversized)).isNotEmpty();
   }
 
   @Test
@@ -166,6 +201,19 @@ class MaintenanceAssetSnapshotIntegrationTest {
                 Map.of("privatePassportValue", "local-only"),
                 List.of("private-tag")))
         .response();
+  }
+
+  private JsonSchema maintenanceSnapshotSchema() throws Exception {
+    Path contract = Path.of(
+        System.getProperty("rwms.contracts.dir"), "openapi/asset-service.yaml");
+    Map<String, Object> openApi;
+    try (var input = Files.newInputStream(contract)) {
+      openApi = new Yaml().load(input);
+    }
+    ObjectNode document = SCHEMA_JSON.valueToTree(openApi);
+    document.put("$schema", "https://json-schema.org/draft/2020-12/schema");
+    document.put("$ref", "#/components/schemas/MaintenanceRentalItemSnapshot");
+    return SCHEMAS.getSchema(document);
   }
 
   private static JwtRequestPostProcessor serviceJwt(

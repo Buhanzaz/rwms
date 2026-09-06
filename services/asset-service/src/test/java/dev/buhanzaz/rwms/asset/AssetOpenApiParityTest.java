@@ -450,9 +450,13 @@ class AssetOpenApiParityTest {
             "WRITE_OFF");
     Map<String, Object> maintenanceSnapshot = child(schemas, "MaintenanceRentalItemSnapshot");
     assertThat(list(maintenanceSnapshot.get("required")))
-        .containsExactly("id", "version", "warehouseId", "status");
+        .containsExactly("id", "version", "warehouseId", "number", "status");
     assertThat(child(maintenanceSnapshot, "properties").keySet())
-        .containsExactly("id", "version", "warehouseId", "status");
+        .containsExactly("id", "version", "warehouseId", "number", "status");
+    assertThat(child(child(maintenanceSnapshot, "properties"), "number"))
+        .containsEntry("type", "string")
+        .containsEntry("minLength", 1)
+        .containsEntry("maxLength", 128);
     assertThat(list(child(schemas, "MaintenanceCharacteristicApplication").get("required")))
         .containsExactly(
             "rentalItemId",

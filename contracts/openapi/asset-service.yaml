@@ -3853,11 +3853,12 @@ components:
     MaintenanceRentalItemSnapshot:
       type: object
       additionalProperties: false
-      required: [id, version, warehouseId, status]
+      required: [id, version, warehouseId, number, status]
       properties:
         id: { type: string, format: uuid }
         version: { $ref: '#/components/schemas/ExpectedVersion' }
         warehouseId: { type: string, format: uuid }
+        number: { type: string, minLength: 1, maxLength: 128 }
         status: { $ref: '#/components/schemas/RentalItemStatus' }
     PropertyAssetKind:
       type: string
