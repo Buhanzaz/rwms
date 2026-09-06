@@ -1078,26 +1078,12 @@ class TaskBoardExternalMutationService {
     return e;
   }
 
-  private QueueEntry requireEntryForUpdate(UUID warehouseId, UUID id) {
-    var e =
-        entries.findByIdForUpdate(id).orElseThrow(() -> new NotFoundException("Этап не найден"));
-    if (!e.getTask().getWarehouseId().equals(warehouseId)) {
-      throw new NotFoundException("Этап не найден");
-    }
-    return e;
-  }
-
   private UUID id(WorkQueue q) {
     return q == null ? null : q.getId();
   }
 
   private String trim(String v) {
     return v == null || v.isBlank() ? null : v.trim();
-  }
-
-  private String compact(String value) {
-    String trimmed = trim(value);
-    return trimmed == null ? null : trimmed.replaceAll("\\s+", " ");
   }
 
   private OffsetDateTime now() {

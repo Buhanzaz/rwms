@@ -1058,11 +1058,6 @@ class TaskBoardWorkerExecutionService {
     return v == null || v.isBlank() ? null : v.trim();
   }
 
-  private String compact(String value) {
-    String trimmed = trim(value);
-    return trimmed == null ? null : trimmed.replaceAll("\\s+", " ");
-  }
-
   private OffsetDateTime now() {
     return OffsetDateTime.now(ZoneOffset.UTC);
   }

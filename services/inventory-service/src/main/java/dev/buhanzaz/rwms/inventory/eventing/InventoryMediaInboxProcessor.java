@@ -354,33 +354,6 @@ public class InventoryMediaInboxProcessor {
         mediaId.toString());
   }
 
-  private void quarantineGap(UUID eventId, MediaFact fact, long expected, String hash) {
-    jdbc.update(
-        """
-        insert into version_gap_quarantine(
-          quarantine_id,consumer_group,aggregate_type,aggregate_id,expected_version,
-          received_version,received_event_id,payload_sha256,reason_code,status,detected_at)
-        values (?,?,'MEDIA',?,?,?,?,?,'AGGREGATE_VERSION_GAP','OPEN',clock_timestamp())
-        on conflict (consumer_group,received_event_id) do nothing
-        """,
-        UUID.randomUUID(),
-        CONSUMER,
-        fact.mediaId().toString(),
-        expected,
-        fact.aggregateVersion(),
-        eventId,
-        hash);
-    jdbc.update(
-        """
-        update consumer_aggregate_checkpoint set blocked=true,
-          quarantine_reason='AGGREGATE_VERSION_GAP',updated_at=clock_timestamp()
-         where consumer_group=? and aggregate_type='MEDIA' and aggregate_id=?
-        """,
-        CONSUMER,
-        fact.mediaId().toString());
-    quarantineInbox(eventId, "AGGREGATE_VERSION_GAP");
-  }
-
   @Transactional
   public void reconcileQuarantinedAggregate(
       UUID mediaId,

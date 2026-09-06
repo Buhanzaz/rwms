@@ -835,17 +835,6 @@ public class ShipmentFurnitureTaskService {
     return values;
   }
 
-  private static List<LogisticsDependencyGateway.OrderEquipmentRequirement> dependencyRequirements(
-      Map<UUID, Long> requirements) {
-    return requirements.entrySet().stream()
-        .sorted(Map.Entry.comparingByKey())
-        .map(
-            entry ->
-                new LogisticsDependencyGateway.OrderEquipmentRequirement(
-                    entry.getKey(), entry.getValue()))
-        .toList();
-  }
-
   private List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements> activeOrderComposition(
       RentalOrder order,
       List<LogisticsDocumentLine> shipmentLines,

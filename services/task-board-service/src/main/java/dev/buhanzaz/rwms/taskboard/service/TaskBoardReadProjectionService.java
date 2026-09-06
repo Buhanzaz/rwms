@@ -517,23 +517,6 @@ class TaskBoardReadProjectionService {
     return e;
   }
 
-  private QueueEntry requireEntryForUpdate(UUID warehouseId, UUID id) {
-    var e =
-        entries.findByIdForUpdate(id).orElseThrow(() -> new NotFoundException("Этап не найден"));
-    if (!e.getTask().getWarehouseId().equals(warehouseId)) {
-      throw new NotFoundException("Этап не найден");
-    }
-    return e;
-  }
-
-  private BoardTask requireTask(UUID warehouseId, UUID id) {
-    BoardTask task = tasks.findById(id).orElseThrow(() -> new NotFoundException("Задача не найдена"));
-    if (!task.getWarehouseId().equals(warehouseId)) {
-      throw new NotFoundException("Задача не найдена");
-    }
-    return task;
-  }
-
   /** Loads the complete unfinished ordinary-board projection without per-entry lazy reads. */
   private List<QueueEntry> ordinaryEntries(UUID warehouseId) {
     return entries.findAllUnfinishedOrdinaryByWarehouseId(
@@ -583,11 +566,6 @@ class TaskBoardReadProjectionService {
 
   private String trim(String v) {
     return v == null || v.isBlank() ? null : v.trim();
-  }
-
-  private String compact(String value) {
-    String trimmed = trim(value);
-    return trimmed == null ? null : trimmed.replaceAll("\\s+", " ");
   }
 
   private OffsetDateTime now() {
