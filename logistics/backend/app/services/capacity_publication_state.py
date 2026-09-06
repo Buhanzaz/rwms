@@ -56,7 +56,10 @@ async def record_capacity_publication_success(
     """Advance the delivery cursor without hiding a newer pending generation."""
 
     warehouse = await session.scalar(
-        select(Warehouse).where(Warehouse.id == warehouse_id).with_for_update()
+        select(Warehouse)
+        .where(Warehouse.id == warehouse_id)
+        .execution_options(populate_existing=True)
+        .with_for_update()
     )
     if warehouse is None:
         return
@@ -64,12 +67,12 @@ async def record_capacity_publication_success(
         warehouse.capacity_published_generation,
         generation,
     )
-    warehouse.capacity_publish_lease_until = None
     if warehouse.capacity_generation == generation:
         warehouse.capacity_publish_status = CapacityPublicationStatus.PUBLISHED
         warehouse.capacity_publish_attempts = 0
         warehouse.capacity_publish_error_code = None
         warehouse.capacity_publish_next_attempt_at = None
+        warehouse.capacity_publish_lease_until = None
     await session.flush()
 
 
