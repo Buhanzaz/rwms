@@ -545,6 +545,58 @@ class DriverDatabaseCreateOpenRobolectricTest {
     }
 
     @Test
+    fun migrationEightToNineAddsNullableAuthoritativeShiftVersion() {
+        val context = RuntimeEnvironment.getApplication()
+        val name = "driver-room-shift-authority-migration.db"
+        context.deleteDatabase(name)
+        val versionEight = openHelper(
+            context = context,
+            name = name,
+            version = 8,
+            onCreate = { database ->
+                database.execSQL(
+                    """
+                    CREATE TABLE `driver_shift_snapshot` (
+                        `userId` TEXT NOT NULL,
+                        `shiftId` TEXT,
+                        `workDate` TEXT,
+                        `enabled` INTEGER NOT NULL,
+                        `nextRequiredAction` TEXT NOT NULL,
+                        `serializedTodayShift` TEXT NOT NULL,
+                        `serverTime` TEXT NOT NULL,
+                        `updatedAtEpochMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`userId`)
+                    )
+                    """.trimIndent(),
+                )
+            },
+        )
+        versionEight.writableDatabase.execSQL(
+            """
+            INSERT INTO `driver_shift_snapshot` VALUES
+                ('driver', 'shift', '2026-08-30', 1, 'START_SHIFT', '{}', '2026-08-30T05:00:00Z', 1)
+            """.trimIndent(),
+        )
+        versionEight.close()
+
+        val versionNine = openHelper(
+            context = context,
+            name = name,
+            version = 9,
+            onCreate = { error("Expected the version 8 database to exist") },
+            onUpgrade = { database -> DriverDatabase.MIGRATION_8_9.migrate(database) },
+        )
+        val database = versionNine.writableDatabase
+        assertThat(columns(database, "driver_shift_snapshot")).contains("authoritativeShiftVersion")
+        database.query("SELECT `authoritativeShiftVersion` FROM `driver_shift_snapshot`").use { cursor ->
+            assertThat(cursor.moveToFirst()).isTrue()
+            assertThat(cursor.isNull(0)).isTrue()
+        }
+        versionNine.close()
+        context.deleteDatabase(name)
+    }
+
+    @Test
     fun closingDraftSurvivesDatabaseReopen() {
         runBlocking {
             val context = RuntimeEnvironment.getApplication()

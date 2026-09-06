@@ -29,7 +29,7 @@ import javax.inject.Singleton
         DriverShiftSnapshotEntity::class,
         DriverShiftDraftEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = true,
 )
 /**
@@ -387,6 +387,13 @@ abstract class DriverDatabase : RoomDatabase() {
                 )
             }
         }
+
+        /** Records the raw server shift version independently from optimistic Room overlays. */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `driver_shift_snapshot` ADD COLUMN `authoritativeShiftVersion` INTEGER")
+            }
+        }
     }
 }
 
@@ -412,6 +419,7 @@ object DriverDatabaseModule {
                 DriverDatabase.MIGRATION_5_6,
                 DriverDatabase.MIGRATION_6_7,
                 DriverDatabase.MIGRATION_7_8,
+                DriverDatabase.MIGRATION_8_9,
             )
             .build()
 }

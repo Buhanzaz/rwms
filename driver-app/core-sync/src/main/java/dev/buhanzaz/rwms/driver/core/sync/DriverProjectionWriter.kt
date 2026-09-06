@@ -38,7 +38,10 @@ class DriverProjectionWriter @Inject constructor(
     /** Stores a complete server-owned shift aggregate without touching its durable command queue. */
     suspend fun applyTodayShift(userId: String, today: TodayDriverShiftDto) {
         database.withTransaction {
-            applyTodayShiftInTransaction(userId, today)
+            if (acceptsAuthoritativeTodayShift(userId, today)) {
+                val projectedToday = mergePendingShiftOverlay(userId, null, today)
+                applyTodayShiftInTransaction(userId, projectedToday, today.shift?.version)
+            }
         }
     }
 
@@ -54,12 +57,14 @@ class DriverProjectionWriter @Inject constructor(
         preservePendingOverlay: Boolean = true,
     ) {
         database.withTransaction {
-            val committedToday = if (preservePendingOverlay) {
-                mergePendingShiftOverlay(userId, operationId, today)
-            } else {
-                today
+            if (acceptsAuthoritativeTodayShift(userId, today)) {
+                val committedToday = if (preservePendingOverlay) {
+                    mergePendingShiftOverlay(userId, operationId, today)
+                } else {
+                    today
+                }
+                applyTodayShiftInTransaction(userId, committedToday, today.shift?.version)
             }
-            applyTodayShiftInTransaction(userId, committedToday)
             database.outboxDao().delete(operationId)
         }
     }
@@ -71,7 +76,7 @@ class DriverProjectionWriter @Inject constructor(
      */
     private suspend fun mergePendingShiftOverlay(
         userId: String,
-        committedOperationId: String,
+        committedOperationId: String?,
         authoritative: TodayDriverShiftDto,
     ): TodayDriverShiftDto {
         val authoritativeShift = authoritative.shift ?: return authoritative
@@ -155,7 +160,11 @@ class DriverProjectionWriter @Inject constructor(
         )
     }
 
-    private suspend fun applyTodayShiftInTransaction(userId: String, today: TodayDriverShiftDto) {
+    private suspend fun applyTodayShiftInTransaction(
+        userId: String,
+        today: TodayDriverShiftDto,
+        authoritativeShiftVersion: Long? = today.shift?.version,
+    ) {
         val now = System.currentTimeMillis()
         database.shiftSnapshotDao().upsert(
             DriverShiftSnapshotEntity(
@@ -166,6 +175,7 @@ class DriverProjectionWriter @Inject constructor(
                 nextRequiredAction = today.nextRequiredAction,
                 serializedTodayShift = json.encodeToString(today),
                 serverTime = today.serverTime,
+                authoritativeShiftVersion = authoritativeShiftVersion,
                 updatedAtEpochMillis = now,
             ),
         )
@@ -188,6 +198,23 @@ class DriverProjectionWriter @Inject constructor(
         if (shiftId != null && (today.closingReport != null || today.nextRequiredAction == "SHIFT_CLOSED")) {
             database.shiftDraftDao().delete(userId, shiftId)
         }
+    }
+
+    /** Rejects an older server snapshot without treating an optimistic overlay as authority. */
+    private suspend fun acceptsAuthoritativeTodayShift(userId: String, today: TodayDriverShiftDto): Boolean {
+        val existing = database.shiftSnapshotDao().snapshot(userId) ?: return true
+        val incomingShift = today.shift
+        if (existing.shiftId != incomingShift?.id) {
+            return today.serverTime.toEpochMillis("todayShift.serverTime") >
+                existing.serverTime.toEpochMillis("storedTodayShift.serverTime")
+        }
+        val existingVersion = existing.authoritativeShiftVersion
+        val incomingVersion = incomingShift?.version
+        if (existingVersion != null && incomingVersion != null && existingVersion != incomingVersion) {
+            return incomingVersion > existingVersion
+        }
+        return today.serverTime.toEpochMillis("todayShift.serverTime") >
+            existing.serverTime.toEpochMillis("storedTodayShift.serverTime")
     }
 
     /**

@@ -162,6 +162,10 @@ the entered closing data. Critical commands are durably queued with their
 stable operation ID, but transitions that require server authorization are not
 presented as completed until task-board confirms them. A queued close therefore
 never fabricates `SHIFT_CLOSED`; required media is rechecked before retry.
+Room records the last accepted raw server shift version separately from optimistic overlays.
+Delayed older responses cannot replace that projection; accepted reads retain pending evidence,
+and a stale command acknowledgement removes only its own queued operation. A different shift
+identity requires a later server instant. Room migration 8→9 adds the nullable version fence.
 
 If an older client captured a photo before `TAKE` and the server therefore
 rejected its reservation, a later `TAKE` or `RESUME` atomically requeues that

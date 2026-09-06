@@ -218,6 +218,8 @@ data class DriverShiftSnapshotEntity(
     val nextRequiredAction: String,
     val serializedTodayShift: String,
     val serverTime: String,
+    /** Raw version from the last accepted server response; null for an upgraded snapshot with unknown authority. */
+    val authoritativeShiftVersion: Long? = null,
     val updatedAtEpochMillis: Long,
 )
 

@@ -147,12 +147,179 @@ class DriverShiftProjectionResumeRobolectricTest {
         assertThat(afterFinal.photos.single().mediaId).isEqualTo("media-photo-1")
     }
 
+    @Test
+    fun `delayed older shift GET cannot overwrite a newer command acknowledgement`() = runTest {
+        val delayedGet = today(
+            serverTime = "2026-08-30T05:00:00Z",
+            shiftVersion = 10,
+            inspectionVersion = 10,
+            secondItem = inspectionItem(id = SECOND_ITEM_ID, version = 0, state = "NOT_CHECKED"),
+            photos = emptyList(),
+        )
+        val optimistic = today(
+            serverTime = "2026-08-30T05:00:00Z",
+            shiftVersion = 13,
+            inspectionVersion = 13,
+            secondItem = inspectionItem(
+                id = SECOND_ITEM_ID,
+                version = 2,
+                state = "DEFECT",
+                defect = localDefect(),
+            ),
+            photos = listOf(localPendingPhoto()),
+        )
+        database.shiftSnapshotDao().upsert(snapshot(optimistic, authoritativeShiftVersion = 10))
+        database.outboxDao().insert(pendingCommand(FIRST_OPERATION_ID, expectedVersion = 10, createdAt = 1))
+        database.outboxDao().insert(pendingCommand(SECOND_OPERATION_ID, expectedVersion = 11, createdAt = 2))
+        database.outboxDao().insert(pendingCommand(PHOTO_OPERATION_ID, expectedVersion = 12, createdAt = 3))
+
+        writer.commitShiftCommandResult(
+            userId = USER_ID,
+            operationId = FIRST_OPERATION_ID,
+            today = today(
+                serverTime = "2026-08-30T05:00:01Z",
+                shiftVersion = 11,
+                inspectionVersion = 11,
+                secondItem = inspectionItem(id = SECOND_ITEM_ID, version = 0, state = "NOT_CHECKED"),
+                photos = emptyList(),
+            ),
+        )
+        writer.applyTodayShift(USER_ID, delayedGet)
+
+        val stored = checkNotNull(database.shiftSnapshotDao().snapshot(USER_ID))
+        assertThat(stored.authoritativeShiftVersion).isEqualTo(11)
+        assertThat(cachedToday().shift?.version).isEqualTo(13)
+        assertThat(cachedToday().photos.single().state).isEqualTo("PENDING_SYNC")
+        assertThat(database.outboxDao().pending(USER_ID).map { it.operationId })
+            .containsExactly(SECOND_OPERATION_ID, PHOTO_OPERATION_ID)
+            .inOrder()
+    }
+
+    @Test
+    fun `accepted shift GET preserves pending optimistic overlay`() = runTest {
+        val optimistic = today(
+            serverTime = "2026-08-30T05:00:00Z",
+            shiftVersion = 13,
+            inspectionVersion = 13,
+            secondItem = inspectionItem(
+                id = SECOND_ITEM_ID,
+                version = 2,
+                state = "DEFECT",
+                defect = localDefect(),
+            ),
+            photos = listOf(localPendingPhoto()),
+        )
+        database.shiftSnapshotDao().upsert(snapshot(optimistic, authoritativeShiftVersion = 10))
+        database.outboxDao().insert(pendingCommand(SECOND_OPERATION_ID, expectedVersion = 11, createdAt = 2))
+        database.outboxDao().insert(pendingCommand(PHOTO_OPERATION_ID, expectedVersion = 12, createdAt = 3))
+
+        writer.applyTodayShift(
+            USER_ID,
+            today(
+                serverTime = "2026-08-30T05:00:01Z",
+                shiftVersion = 11,
+                inspectionVersion = 11,
+                secondItem = inspectionItem(id = SECOND_ITEM_ID, version = 0, state = "NOT_CHECKED"),
+                photos = emptyList(),
+            ),
+        )
+
+        val stored = checkNotNull(database.shiftSnapshotDao().snapshot(USER_ID))
+        assertThat(stored.authoritativeShiftVersion).isEqualTo(11)
+        assertThat(stored.serverTime).isEqualTo("2026-08-30T05:00:01Z")
+        assertThat(cachedToday().shift?.version).isEqualTo(13)
+        assertThat(cachedToday().photos.single().evidenceId).isEqualTo(PHOTO_OPERATION_ID)
+    }
+
+    @Test
+    fun `stale different or null shift response is rejected`() = runTest {
+        val authoritative = today(
+            serverTime = "2026-08-30T05:00:10Z",
+            shiftVersion = 11,
+            inspectionVersion = 11,
+            secondItem = inspectionItem(id = SECOND_ITEM_ID, version = 1, state = "OK"),
+            photos = emptyList(),
+        )
+        database.shiftSnapshotDao().upsert(snapshot(authoritative, authoritativeShiftVersion = 11))
+        val stale = today(
+            serverTime = "2026-08-30T05:00:09Z",
+            shiftVersion = 12,
+            inspectionVersion = 12,
+            secondItem = inspectionItem(id = SECOND_ITEM_ID, version = 1, state = "OK"),
+            photos = emptyList(),
+        )
+
+        writer.applyTodayShift(USER_ID, stale.copy(shift = checkNotNull(stale.shift).copy(id = "shift-2")))
+        writer.applyTodayShift(USER_ID, stale.copy(shift = null))
+
+        assertThat(cachedToday()).isEqualTo(authoritative)
+        assertThat(checkNotNull(database.shiftSnapshotDao().snapshot(USER_ID)).authoritativeShiftVersion)
+            .isEqualTo(11)
+    }
+
+    @Test
+    fun `same version with newer server time updates shift metadata`() = runTest {
+        val earlier = today(
+            serverTime = "2026-08-30T05:00:00Z",
+            shiftVersion = 11,
+            inspectionVersion = 11,
+            secondItem = inspectionItem(id = SECOND_ITEM_ID, version = 1, state = "OK"),
+            photos = emptyList(),
+        )
+        database.shiftSnapshotDao().upsert(snapshot(earlier, authoritativeShiftVersion = 11))
+        val newer = earlier.copy(
+            enabled = false,
+            serverTime = "2026-08-30T05:00:01Z",
+            nextRequiredAction = "START_SHIFT",
+        )
+
+        writer.applyTodayShift(USER_ID, newer)
+
+        assertThat(cachedToday()).isEqualTo(newer)
+        val stored = checkNotNull(database.shiftSnapshotDao().snapshot(USER_ID))
+        assertThat(stored.serverTime).isEqualTo(newer.serverTime)
+        assertThat(stored.authoritativeShiftVersion).isEqualTo(11)
+    }
+
+    @Test
+    fun `stale command acknowledgement deletes only acknowledged operation without rollback`() = runTest {
+        val authoritative = today(
+            serverTime = "2026-08-30T05:00:10Z",
+            shiftVersion = 11,
+            inspectionVersion = 11,
+            secondItem = inspectionItem(id = SECOND_ITEM_ID, version = 1, state = "OK"),
+            photos = emptyList(),
+        )
+        database.shiftSnapshotDao().upsert(snapshot(authoritative, authoritativeShiftVersion = 11))
+        database.outboxDao().insert(pendingCommand(FIRST_OPERATION_ID, expectedVersion = 10, createdAt = 1))
+        database.outboxDao().insert(pendingCommand(SECOND_OPERATION_ID, expectedVersion = 11, createdAt = 2))
+
+        writer.commitShiftCommandResult(
+            userId = USER_ID,
+            operationId = FIRST_OPERATION_ID,
+            today = today(
+                serverTime = "2026-08-30T05:00:09Z",
+                shiftVersion = 10,
+                inspectionVersion = 10,
+                secondItem = inspectionItem(id = SECOND_ITEM_ID, version = 0, state = "NOT_CHECKED"),
+                photos = emptyList(),
+            ),
+        )
+
+        assertThat(cachedToday()).isEqualTo(authoritative)
+        assertThat(database.outboxDao().pending(USER_ID).map { it.operationId })
+            .containsExactly(SECOND_OPERATION_ID)
+    }
+
     private suspend fun cachedToday(): TodayDriverShiftDto {
         val snapshot = checkNotNull(database.shiftSnapshotDao().snapshot(USER_ID))
         return json.decodeFromString(snapshot.serializedTodayShift)
     }
 
-    private fun snapshot(today: TodayDriverShiftDto): DriverShiftSnapshotEntity = DriverShiftSnapshotEntity(
+    private fun snapshot(
+        today: TodayDriverShiftDto,
+        authoritativeShiftVersion: Long? = null,
+    ): DriverShiftSnapshotEntity = DriverShiftSnapshotEntity(
         userId = USER_ID,
         shiftId = SHIFT_ID,
         workDate = WORK_DATE,
@@ -160,6 +327,7 @@ class DriverShiftProjectionResumeRobolectricTest {
         nextRequiredAction = today.nextRequiredAction,
         serializedTodayShift = json.encodeToString(today),
         serverTime = today.serverTime,
+        authoritativeShiftVersion = authoritativeShiftVersion,
         updatedAtEpochMillis = 1,
     )
 
