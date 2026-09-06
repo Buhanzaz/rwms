@@ -554,6 +554,13 @@ workload fences. [`V87`](src/main/resources/db/migration/V87__freeze_customer_bo
 stores the immutable successful customer response in the existing command receipt so exact replay
 and post-`OWNER_COMMITTED` recovery never reconstruct it from newer mutable state.
 
+The driver board loads local task details only for IDs in the current task-board snapshot.
+A separate source-ID projection preserves suppression of capital-repair cards by non-cancelled
+capital movements, including completed history, without hydrating historical tasks or members.
+Order-content enrichment shares a two-second admission budget: after it expires, remaining reads
+are not started and their readiness stays explicitly unavailable. An in-flight read still follows
+its dependency timeout; this is not a strict deadline for the entire board response.
+
 The public driver board exposes only warehouse-local current and future date columns. An overdue
 active task-board card is folded into today's column, and public move or capital-scheduling commands
 reject a target before that same warehouse-local date. It exposes repair-place capacity without a
@@ -987,6 +994,16 @@ owner, while editability alone coordinates the saved document-draft lock; no
 owner calls back into the facade.
 
 ## Warehouse isolation, fencing and orchestration
+
+Document-journal SQL and non-destructive retention counts live in the exact
+`LogisticsDocumentJournalReader` and `LogisticsRetentionCandidateReader` adapters. Their callers
+retain authorization, transaction boundaries and business interpretation. The architecture policy
+also allows native JPA SQL only by exact repository path, method and normalized query text,
+including database-clock reads and ordered `FOR UPDATE SKIP LOCKED` recovery queries.
+
+Hibernate JSON mapping explicitly uses the built-in `jackson3` provider, matching the service's
+`tools.jackson.databind.JsonNode` snapshot fields. This avoids selecting Jackson 2 from the mixed
+classpath when loading saved document evidence. JSONB columns and snapshot structures are unchanged.
 
 A user action requires the appropriate warehouse grant. A new physical logistics operation first
 obtains warehouse admission and local date information through the private warehouse boundary, then

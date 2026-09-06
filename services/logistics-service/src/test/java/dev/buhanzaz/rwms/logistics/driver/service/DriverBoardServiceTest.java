@@ -63,6 +63,7 @@ class DriverBoardServiceTest {
 
   @BeforeEach
   void warehouseClock() {
+    when(tasks.findActiveCapitalRepairSourceIds(warehouseId)).thenReturn(java.util.List.of());
     when(dependencies.readWarehouseIdentity(warehouseId))
         .thenReturn(new LogisticsDependencyGateway.WarehouseIdentity(warehouseId, 0, true, "UTC"));
     when(dependencies.warehouseTimeZoneAt(
@@ -502,7 +503,7 @@ class DriverBoardServiceTest {
         cancelled.lane(),
         cancelled.status(),
         cancelled.doneAt());
-    when(tasks.findAllByWarehouseIdOrderByCreatedAtAscIdAsc(warehouseId))
+    when(tasks.findAllByWarehouseIdAndExternalTaskIdIn(eq(warehouseId), any()))
         .thenReturn(java.util.List.of(task));
     when(dependencies.readDriverBoard(warehouseId))
         .thenReturn(
@@ -546,6 +547,52 @@ class DriverBoardServiceTest {
   }
 
   @Test
+  void completedCapitalMovementSuppressesItsRepairWithoutLoadingHistoricalTaskDetails() {
+    DriverLogisticsTask completedMove = capitalTask();
+    DriverLogisticsTask visibleRepair = capitalTask();
+    when(tasks.findActiveCapitalRepairSourceIds(warehouseId))
+        .thenReturn(java.util.List.of(completedMove.getSourceId()));
+    when(dependencies.readDriverBoard(warehouseId))
+        .thenReturn(new LogisticsDependencyGateway.DriverBoardSnapshot(
+            warehouseId, UUID.randomUUID(), 0, java.util.List.of(), java.util.List.of()));
+    when(dependencies.readRepairPlaces(warehouseId)).thenReturn(repairPlaces());
+    when(dependencies.readCapitalRepairs(warehouseId, 0, 200))
+        .thenReturn(new LogisticsDependencyGateway.CapitalRepairPage(
+            java.util.List.of(capitalRepair(completedMove), capitalRepair(visibleRepair)), 0, 200, 2));
+    when(dependencies.readRentalItemSnapshot(visibleRepair.getCabinId()))
+        .thenReturn(rentalItemSnapshot(visibleRepair));
+
+    var response = service.board(warehouseId);
+
+    assertThat(response.capitalRepairs())
+        .extracting(card -> card.repairId())
+        .containsExactly(visibleRepair.getSourceId());
+    verify(dependencies, never()).readRentalItemSnapshot(completedMove.getCabinId());
+    verify(tasks, never()).findAllByWarehouseIdOrderByCreatedAtAscIdAsc(warehouseId);
+  }
+
+  @Test
+  void unrelatedCapitalHistoryDoesNotChangeCardsOrCapitalEnrichment() {
+    DriverLogisticsTask repair = capitalTask();
+    when(dependencies.readDriverBoard(warehouseId))
+        .thenReturn(new LogisticsDependencyGateway.DriverBoardSnapshot(
+            warehouseId, UUID.randomUUID(), 0, java.util.List.of(), java.util.List.of()));
+    when(dependencies.readRepairPlaces(warehouseId)).thenReturn(repairPlaces());
+    when(dependencies.readCapitalRepairs(warehouseId, 0, 200))
+        .thenReturn(new LogisticsDependencyGateway.CapitalRepairPage(
+            java.util.List.of(capitalRepair(repair)), 0, 200, 1));
+    when(dependencies.readRentalItemSnapshot(repair.getCabinId())).thenReturn(rentalItemSnapshot(repair));
+    when(tasks.findActiveCapitalRepairSourceIds(warehouseId))
+        .thenReturn(java.util.List.of(), java.util.List.of(UUID.randomUUID()));
+
+    var withoutHistory = service.board(warehouseId);
+    var withUnrelatedHistory = service.board(warehouseId);
+
+    assertThat(withUnrelatedHistory.capitalRepairs()).isEqualTo(withoutHistory.capitalRepairs());
+    verify(dependencies, org.mockito.Mockito.times(2)).readRentalItemSnapshot(repair.getCabinId());
+  }
+
+  @Test
   void boardMergesOverdueScheduledWorkIntoTheWarehouseCurrentDate() {
     DriverLogisticsTask overdue = scheduledTask();
     DriverLogisticsTask current = scheduledTask();
@@ -553,7 +600,7 @@ class DriverBoardServiceTest {
         boardTask(overdue, 3, 4, "SCHEDULED", 0, today.minusDays(1));
     LogisticsDependencyGateway.DriverBoardTask currentBoardTask =
         boardTask(current, 1, 2, "SCHEDULED", 0, today);
-    when(tasks.findAllByWarehouseIdOrderByCreatedAtAscIdAsc(warehouseId))
+    when(tasks.findAllByWarehouseIdAndExternalTaskIdIn(eq(warehouseId), any()))
         .thenReturn(java.util.List.of(overdue, current));
     when(dependencies.readDriverBoard(warehouseId))
         .thenReturn(
@@ -585,6 +632,10 @@ class DriverBoardServiceTest {
               assertThat(column.tasks())
                   .allSatisfy(card -> assertThat(card.scheduledDate()).isEqualTo(today));
             });
+    verify(tasks)
+        .findAllByWarehouseIdAndExternalTaskIdIn(
+            warehouseId,
+            java.util.Set.of(overdue.getExternalTaskId(), current.getExternalTaskId()));
   }
 
   @Test
@@ -631,7 +682,7 @@ class DriverBoardServiceTest {
             task.getPriority(),
             java.time.OffsetDateTime.now(ZoneOffset.UTC),
             java.time.OffsetDateTime.now(ZoneOffset.UTC));
-    when(tasks.findAllByWarehouseIdOrderByCreatedAtAscIdAsc(warehouseId))
+    when(tasks.findAllByWarehouseIdAndExternalTaskIdIn(eq(warehouseId), any()))
         .thenReturn(java.util.List.of(task));
     when(dependencies.readDriverBoard(warehouseId))
         .thenReturn(
@@ -706,7 +757,7 @@ class DriverBoardServiceTest {
             readyToReleaseTask.getPriority(),
             java.time.OffsetDateTime.now(ZoneOffset.UTC),
             java.time.OffsetDateTime.now(ZoneOffset.UTC));
-    when(tasks.findAllByWarehouseIdOrderByCreatedAtAscIdAsc(warehouseId))
+    when(tasks.findAllByWarehouseIdAndExternalTaskIdIn(eq(warehouseId), any()))
         .thenReturn(java.util.List.of(reservedTask, occupiedTask, readyToReleaseTask));
     when(dependencies.readDriverBoard(warehouseId))
         .thenReturn(
@@ -816,6 +867,22 @@ class DriverBoardServiceTest {
     ReflectionTestUtils.setField(task, "id", UUID.randomUUID());
     task.registerBoardTask(UUID.randomUUID(), 0, UUID.randomUUID(), "WAITING", "SCHEDULED", null);
     return task;
+  }
+
+  private LogisticsDependencyGateway.CapitalRepair capitalRepair(DriverLogisticsTask task) {
+    return new LogisticsDependencyGateway.CapitalRepair(
+        task.getSourceId(),
+        task.getCabinId(),
+        warehouseId,
+        task.getPriority(),
+        new LogisticsDependencyGateway.RepairComplexitySnapshot(
+            "CAPITAL", "Капитальный ремонт", "#7C3AED", "540", true),
+        3);
+  }
+
+  private LogisticsDependencyGateway.RentalItemSnapshot rentalItemSnapshot(DriverLogisticsTask task) {
+    return new LogisticsDependencyGateway.RentalItemSnapshot(
+        task.getCabinId(), 1, warehouseId, task.getUnitNumber(), "CAPITAL_REPAIR", java.util.List.of());
   }
 
   private DriverLogisticsTask transferTask() {

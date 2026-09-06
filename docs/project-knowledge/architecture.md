@@ -672,15 +672,18 @@ Evidence:
 and
 [`InventorySourcePolicy`](../../platform/architecture-tests/src/test/java/dev/buhanzaz/rwms/architecture/InventorySourcePolicy.java).
 
-Logistics keeps provider-specific SQL behind four exact persistence paths:
-the rental-inquiry booked outbox store and the warehouse admission,
-single-statement blocker and operation-mark adapters. They preserve database
-time, conflict-safe insert, atomic blocker snapshots, `FOR UPDATE SKIP LOCKED`
-and conditional fencing writes; their application stores retain workflow and
-replay decisions. `LogisticsTransactionLock` is the only application-facing
-capability over the one approved native transaction advisory-lock query. The
-source policy names the exact paths and rejects arbitrary JDBC or native JPA
-SQL even inside the same persistence package.
+Logistics keeps provider-specific JDBC mechanics in exact technical persistence paths:
+event transport, the rental-inquiry booked outbox, warehouse admission/blocker/operation-mark
+adapters, and the document-journal and retention-candidate readers. Their application callers
+retain authorization, workflow, transaction boundaries and replay decisions. Native JPA queries
+are allowed only for exact repository paths, method names and normalized SQL text. The approved
+set includes advisory locks, database-clock reads, bounded `FOR UPDATE SKIP LOCKED` recovery
+claims and existing pricing/payment projections. The source policy rejects changed or additional
+native queries even within an approved repository, and arbitrary JDBC elsewhere in the package.
+
+Logistics explicitly selects Hibernate's `jackson3` JSON format mapper to match its Jackson 3
+snapshot nodes. The built-in mapper reads and writes the existing JSONB shapes; no schema adoption
+or data rewrite is part of this configuration.
 
 Evidence:
 [`RentalInquiryBookedOutboxStore`](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/inquiry/eventing/RentalInquiryBookedOutboxStore.java),

@@ -404,6 +404,13 @@ class OrderApiIntegrationTest {
             version == 0);
       }
       mvc.perform(get(path).param("size", "1").with(readOnlyViewer(MANAGER_1, "viewer")))
+          .andExpect(
+              result -> {
+                Exception resolved = result.getResolvedException();
+                if (resolved != null) {
+                  throw new AssertionError("History GET resolved an exception", resolved);
+                }
+              })
           .andExpect(status().isOk())
           .andExpect(jsonPath("$.documentId").value(documentId.toString()))
           .andExpect(jsonPath("$.documentVersion").value(3))

@@ -154,6 +154,22 @@ public interface DriverLogisticsTaskRepository extends JpaRepository<DriverLogis
   @EntityGraph(attributePaths = "members")
   List<DriverLogisticsTask> findAllByWarehouseIdOrderByCreatedAtAscIdAsc(UUID warehouseId);
 
+  @EntityGraph(attributePaths = "members")
+  List<DriverLogisticsTask> findAllByWarehouseIdAndExternalTaskIdIn(
+      UUID warehouseId, Collection<UUID> externalTaskIds);
+
+  /** Source IDs whose non-cancelled capital movement already suppresses a capital-repair card. */
+  @Query(
+      """
+      select distinct task.sourceId
+      from DriverLogisticsTask task
+      where task.warehouseId = :warehouseId
+        and task.sourceType = dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskSourceType.CAPITAL_REPAIR
+        and task.kind = dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind.CAPITAL_TO_PRODUCTION
+        and task.state <> dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskState.CANCELLED
+      """)
+  List<UUID> findActiveCapitalRepairSourceIds(@Param("warehouseId") UUID warehouseId);
+
   /** Bounded expiry candidates; completed/finalizing work is never a cancellation candidate. */
   @Query(
       """

@@ -211,6 +211,68 @@ class LogisticsSourcePolicyTest {
     assertTrue(failure.getMessage().contains("native JPA SQL is restricted"));
   }
 
+  @Test
+  void acceptsOnlyTheExactApprovedNativeMethodAndQuery() throws Exception {
+    write(
+        "src/main/java/dev/buhanzaz/rwms/logistics/customer/repository/CustomerNotificationRepository.java",
+        """
+        package dev.buhanzaz.rwms.logistics.customer.repository;
+
+        interface CustomerNotificationRepository {
+          @org.springframework.data.jpa.repository.Query(
+              value = "select clock_timestamp()",
+              nativeQuery = true)
+          java.time.Instant currentDatabaseTimestamp();
+        }
+        """);
+
+    assertDoesNotThrow(() -> LogisticsSourcePolicy.assertSourceBoundarySafe(temporaryDirectory));
+  }
+
+  @Test
+  void rejectsChangedSqlInsideAnApprovedNativeRepository() throws Exception {
+    write(
+        "src/main/java/dev/buhanzaz/rwms/logistics/customer/repository/CustomerNotificationRepository.java",
+        """
+        package dev.buhanzaz.rwms.logistics.customer.repository;
+
+        interface CustomerNotificationRepository {
+          @org.springframework.data.jpa.repository.Query(
+              value = "select transaction_timestamp()",
+              nativeQuery = true)
+          java.time.Instant currentDatabaseTimestamp();
+        }
+        """);
+
+    AssertionError failure =
+        assertThrows(
+            AssertionError.class,
+            () -> LogisticsSourcePolicy.assertSourceBoundarySafe(temporaryDirectory));
+    assertTrue(failure.getMessage().contains("exact approved repository methods and queries"));
+  }
+
+  @Test
+  void rejectsChangedMethodInsideAnApprovedNativeRepository() throws Exception {
+    write(
+        "src/main/java/dev/buhanzaz/rwms/logistics/customer/repository/CustomerNotificationRepository.java",
+        """
+        package dev.buhanzaz.rwms.logistics.customer.repository;
+
+        interface CustomerNotificationRepository {
+          @org.springframework.data.jpa.repository.Query(
+              value = "select clock_timestamp()",
+              nativeQuery = true)
+          java.time.Instant arbitraryDatabaseRead();
+        }
+        """);
+
+    AssertionError failure =
+        assertThrows(
+            AssertionError.class,
+            () -> LogisticsSourcePolicy.assertSourceBoundarySafe(temporaryDirectory));
+    assertTrue(failure.getMessage().contains("exact approved repository methods and queries"));
+  }
+
   private void write(String relativePath, String source) throws Exception {
     Path path = temporaryDirectory.resolve(relativePath);
     Files.createDirectories(path.getParent());

@@ -1546,7 +1546,8 @@ class MaintenanceOpenApiParityTest {
       case "catalogLinks" -> List.of(sample(CatalogLinkResponse.class, "catalogLink"));
       case "createCatalog", "createGlobalCatalog", "forkCatalog", "activateCatalog" ->
           createResult(CatalogVersionResponse.class);
-      case "estimates" -> List.of(sample(EstimateResponse.class, "estimate"));
+      case "estimates" ->
+          new PageResponse<>(List.of(sample(EstimateResponse.class, "estimate")), 0, 50, 1);
       case "estimate", "updateEstimate" -> sample(EstimateResponse.class, "estimate");
       case "createEstimate" -> createResult(EstimateResponse.class);
       case "completeEstimate", "amendEstimate" -> createResult(EstimateCommandResult.class);

@@ -48,11 +48,8 @@ public class MaintenanceEstimateController {
       @RequestParam(required = false) UUID rentalItemId,
       @RequestHeader(name = HttpHeaders.IF_NONE_MATCH, required = false) String ifNoneMatch) {
     access.requireRead(jwt, warehouseId);
-    List<EstimateResponse> values = service.estimates(warehouseId).stream()
-        .filter(value -> lifecycle == null || value.lifecycle() == lifecycle)
-        .filter(value -> rentalItemId == null || value.rentalItemId().equals(rentalItemId))
-        .toList();
-    PageResponse<EstimateResponse> response = page(values, page, size);
+    PageResponse<EstimateResponse> response =
+        service.estimates(warehouseId, page, size, lifecycle, rentalItemId);
     return ConditionalGet.response(
         "estimates:" + warehouseId + ':' + page + ':' + size + ':' + lifecycle + ':' + rentalItemId,
         response,
@@ -133,12 +130,6 @@ public class MaintenanceEstimateController {
 
   private EstimateResponse requireWarehouse(UUID id, UUID warehouseId) {
     return service.estimate(id, warehouseId);
-  }
-
-  private static <T> PageResponse<T> page(List<T> values, int page, int size) {
-    int from = Math.min(Math.multiplyExact(page, size), values.size());
-    int to = Math.min(from + size, values.size());
-    return new PageResponse<>(values.subList(from, to), page, size, values.size());
   }
 
   private static <T> ResponseEntity<T> idempotentOk(

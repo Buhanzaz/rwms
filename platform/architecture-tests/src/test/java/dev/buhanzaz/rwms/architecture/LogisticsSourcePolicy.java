@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -35,16 +36,13 @@ final class LogisticsSourcePolicy {
           "org\\.springframework\\.jdbc|\\bJdbcTemplate\\b|\\bJdbcClient\\b|java\\.sql\\.(?:Connection|Statement|ResultSet)");
   private static final Pattern NATIVE_JPA_QUERY =
       Pattern.compile("\\bnativeQuery\\s*=\\s*true\\b");
-  private static final Pattern APPROVED_ADVISORY_LOCK_QUERY =
+  private static final Pattern NATIVE_JPA_QUERY_DETAILS =
       Pattern.compile(
           "(?s)@(?:org\\.springframework\\.data\\.jpa\\.repository\\.)?Query\\s*\\(\\s*"
-              + "value\\s*=\\s*\"\"\"\\s*select 1\\s+from \\(\\s*"
-              + "select lock_key\\s+from unnest\\(string_to_array\\(cast\\(:lockKeys as text\\), chr\\(31\\)\\)\\) as keys\\(lock_key\\)\\s+"
-              + "order by lock_key\\s+\\) ordered\\s+cross join lateral pg_advisory_xact_lock\\(\\s*"
-              + "hashtextextended\\(cast\\(ordered\\.lock_key as text\\), 0\\)\\) ignored\\s*\"\"\"\\s*,\\s*"
-              + "nativeQuery\\s*=\\s*true\\s*\\)");
-  private static final String ADVISORY_LOCK_REPOSITORY =
-      "dev/buhanzaz/rwms/logistics/repository/LogisticsIdempotencyRecordRepository.java";
+              + "value\\s*=\\s*(?<literal>\"\"\".*?\"\"\"|\"(?:\\\\.|[^\"\\\\])*\")\\s*,\\s*"
+              + "nativeQuery\\s*=\\s*true\\s*\\)\\s*"
+              + "(?:[A-Za-z_$][A-Za-z0-9_$.<>?,\\[\\] ]*\\s+)?"
+              + "(?<method>[A-Za-z_$][A-Za-z0-9_$]*)\\s*\\([^;]*?\\)\\s*;");
   private static final String OAUTH_HTTP_TRANSPORT =
       "src/main/java/dev/buhanzaz/rwms/logistics/integration/LogisticsOAuthHttpTransport.java";
   private static final String SINGLETON_TOKEN_SCOPE_INVARIANT =
@@ -84,9 +82,139 @@ final class LogisticsSourcePolicy {
           "dev/buhanzaz/rwms/logistics/eventing/inbound/LogisticsInboundGapRecoveryService.java",
           "dev/buhanzaz/rwms/logistics/eventing/inbound/LogisticsKafkaConsumerRecoveryMonitor.java",
           "dev/buhanzaz/rwms/logistics/inquiry/eventing/RentalInquiryBookedOutboxStore.java",
+          "dev/buhanzaz/rwms/logistics/retention/persistence/LogisticsRetentionCandidateReader.java",
           "dev/buhanzaz/rwms/logistics/service/persistence/LogisticsWarehouseAdmissionPersistence.java",
+          "dev/buhanzaz/rwms/logistics/service/persistence/LogisticsDocumentJournalReader.java",
           "dev/buhanzaz/rwms/logistics/service/persistence/LogisticsWarehouseLifecycleBlockerReader.java",
           "dev/buhanzaz/rwms/logistics/service/persistence/LogisticsWarehouseOperationMarkPersistence.java");
+  private static final Map<String, Set<ApprovedNativeJpaQuery>> APPROVED_NATIVE_JPA_QUERIES =
+      Map.ofEntries(
+          Map.entry(
+              "dev/buhanzaz/rwms/logistics/repository/LogisticsIdempotencyRecordRepository.java",
+              Set.of(
+                  approved(
+                      "acquireTransactionLocks",
+                      """
+                      select 1 from (
+                        select lock_key
+                        from unnest(string_to_array(cast(:lockKeys as text), chr(31))) as keys(lock_key)
+                        order by lock_key
+                      ) ordered
+                      cross join lateral pg_advisory_xact_lock(
+                        hashtextextended(cast(ordered.lock_key as text), 0)) ignored
+                      """))),
+          Map.entry(
+              "dev/buhanzaz/rwms/logistics/pricing/repository/RentalPricingSettingsRepository.java",
+              Set.of(
+                  approved(
+                      "readEquipmentReceiptRates",
+                      """
+                      select settings.version as pricingVersion, rates.equipment_id as equipmentId,
+                             rates.monthly_price_rubles as monthlyPriceRubles
+                      from rental_pricing_settings settings
+                      left join rental_pricing_equipment_rate rates on rates.settings_id = settings.id
+                      where settings.id = :id
+                      order by rates.equipment_id
+                      """))),
+          Map.entry(
+              "dev/buhanzaz/rwms/logistics/order/repository/RentalOrderRepository.java",
+              Set.of(
+                  approved(
+                      "findDuePaymentsForUpdate",
+                      """
+                      select orders.* from rental_order orders
+                      where orders.status = 'SAVED' and orders.payment_state = 'PENDING'
+                        and orders.payment_expires_at <= :timestamp
+                        and not exists (
+                          select 1 from rental_order_mutation_command command
+                          where command.order_id = orders.id and command.state in ('PENDING', 'QUARANTINED'))
+                        and not exists (
+                          select 1 from customer_booking_mutation mutation
+                          where mutation.order_id = orders.id and mutation.operation = 'CANCEL'
+                            and mutation.state in ('PENDING', 'QUARANTINED'))
+                        and not exists (
+                          select 1 from shipment_furniture_movement_task replacement
+                          where replacement.order_id = orders.id
+                            and replacement.replacement_idempotency_key is not null
+                            and replacement.replacement_completed_at is null
+                            and replacement.replacement_rejected_at is null)
+                      order by orders.payment_expires_at, orders.id
+                      for update skip locked limit :batchSize
+                      """))),
+          Map.entry(
+              "dev/buhanzaz/rwms/logistics/order/repository/RentalOrderPaymentReceiptRepository.java",
+              Set.of(approved("currentDatabaseTimestamp", "select clock_timestamp()"))),
+          Map.entry(
+              "dev/buhanzaz/rwms/logistics/order/recovery/RentalOrderMutationCommandRepository.java",
+              Set.of(
+                  approved(
+                      "findDueForUpdate",
+                      """
+                      select command.*
+                      from rental_order_mutation_command command
+                      where command.state = 'PENDING'
+                        and command.next_attempt_at <= :timestamp
+                        and (command.lease_until is null or command.lease_until <= :timestamp)
+                      order by command.next_attempt_at, command.created_at, command.id
+                      for update skip locked
+                      limit :batchSize
+                      """),
+                  approved("currentDatabaseTimestamp", "select clock_timestamp()"))),
+          Map.entry(
+              "dev/buhanzaz/rwms/logistics/customer/repository/CustomerBookingMutationRepository.java",
+              Set.of(
+                  approved(
+                      "findDueForUpdate",
+                      """
+                      select mutation.*
+                      from customer_booking_mutation mutation
+                      where mutation.operation = 'CANCEL'
+                        and mutation.state = 'PENDING'
+                        and mutation.next_attempt_at <= :timestamp
+                        and (mutation.lease_until is null or mutation.lease_until <= :timestamp)
+                      order by mutation.next_attempt_at, mutation.created_at, mutation.id
+                      for update skip locked
+                      limit :batchSize
+                      """),
+                  approved("currentDatabaseTimestamp", "select clock_timestamp()"))),
+          Map.entry(
+              "dev/buhanzaz/rwms/logistics/customer/repository/CustomerRentalSessionRepository.java",
+              Set.of(
+                  approved(
+                      "findPaymentExpiryScope",
+                      """
+                      select session.inquiry_id as inquiryId, booking.id as bookingId,
+                             booking.presentation_id as presentationId,
+                             booking.presentation_revision as presentationRevision,
+                             session.delivery_slot_id as deliverySlotId
+                      from customer_rental_session session
+                      join client_presentation presentation on presentation.inquiry_id = session.inquiry_id
+                      join presentation_booking booking on booking.presentation_id = presentation.id
+                      where booking.order_id = :orderId
+                        and (booking.id = session.booking_id or booking.idempotency_key = session.checkout_command_key)
+                      """),
+                  approved(
+                      "findDueCheckoutRecoveryForUpdate",
+                      """
+                      select session.*
+                      from customer_rental_session session
+                      where session.state = 'CHECKOUT_PENDING'
+                        and session.booking_id is not null
+                        and session.presentation_token is not null
+                        and session.recovery_quarantined_at is null
+                        and session.recovery_next_attempt_at <= :timestamp
+                        and (
+                          session.recovery_lease_until is null
+                          or session.recovery_lease_until <= :timestamp
+                        )
+                      order by session.recovery_next_attempt_at, session.updated_at, session.id
+                      for update skip locked
+                      limit :batchSize
+                      """),
+                  approved("currentDatabaseTimestamp", "select clock_timestamp()"))),
+          Map.entry(
+              "dev/buhanzaz/rwms/logistics/customer/repository/CustomerNotificationRepository.java",
+              Set.of(approved("currentDatabaseTimestamp", "select clock_timestamp()"))));
   private static final Set<String> REQUIRED_INFRASTRUCTURE_SOURCES =
       Set.of(
           "src/main/java/dev/buhanzaz/rwms/logistics/eventing/LogisticsEventStore.java",
@@ -185,13 +313,14 @@ final class LogisticsSourcePolicy {
               + "inquiry-outbox, warehouse-admission, warehouse-blocker and warehouse-mark adapters");
     }
     long nativeQueries = NATIVE_JPA_QUERY.matcher(source).results().count();
-    if (nativeQueries > 0
-        && (!ADVISORY_LOCK_REPOSITORY.equals(relative)
-            || nativeQueries != 1
-            || !APPROVED_ADVISORY_LOCK_QUERY.matcher(source).find())) {
+    Set<ApprovedNativeJpaQuery> actualNativeQueries = nativeJpaQueries(source);
+    Set<ApprovedNativeJpaQuery> approvedNativeQueries =
+        APPROVED_NATIVE_JPA_QUERIES.getOrDefault(relative, Set.of());
+    if (nativeQueries != actualNativeQueries.size()
+        || !actualNativeQueries.equals(approvedNativeQueries)) {
       violations.add(
           path
-              + ": native JPA SQL is restricted to the exact transaction advisory-lock repository query");
+              + ": native JPA SQL is restricted to exact approved repository methods and queries");
     }
     if (MAPPER.matcher(source).find()) {
       if (!relative.contains("/mapper/") && !relative.contains("/mapping/")) {
@@ -245,6 +374,32 @@ final class LogisticsSourcePolicy {
     }
     return Set.copyOf(scopes);
   }
+
+  private static Set<ApprovedNativeJpaQuery> nativeJpaQueries(String source) {
+    var queries = new HashSet<ApprovedNativeJpaQuery>();
+    var matcher = NATIVE_JPA_QUERY_DETAILS.matcher(source);
+    while (matcher.find()) {
+      queries.add(approved(matcher.group("method"), javaStringLiteral(matcher.group("literal"))));
+    }
+    return Set.copyOf(queries);
+  }
+
+  private static ApprovedNativeJpaQuery approved(String methodName, String sql) {
+    return new ApprovedNativeJpaQuery(methodName, normalizeWhitespace(sql));
+  }
+
+  private static String javaStringLiteral(String literal) {
+    if (literal.startsWith("\"\"\"")) {
+      return literal.substring(3, literal.length() - 3);
+    }
+    return literal.substring(1, literal.length() - 1).replace("\\\"", "\"");
+  }
+
+  private static String normalizeWhitespace(String value) {
+    return value.trim().replaceAll("\\s+", " ");
+  }
+
+  private record ApprovedNativeJpaQuery(String methodName, String sql) {}
 
   private static void failIfNeeded(List<String> violations) {
     if (!violations.isEmpty()) {

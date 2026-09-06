@@ -59,7 +59,7 @@ class AuthFlywayMigrationIntegrationTest {
     void cumulativeBaselineMigratesCleanDatabaseAndRepeatIsNoOp() {
         Flyway flyway = flyway(MIGRATION_LOCATION);
 
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(10);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(11);
         flyway.validate();
         assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -78,6 +78,7 @@ class AuthFlywayMigrationIntegrationTest {
                         "event_stream_head",
                         "flyway_schema_history",
                         "inbox_message",
+                        "login_attempt_budget",
                         "oauth2_authorization",
                         "oauth2_authorization_consent",
                         "oauth2_registered_client",
@@ -164,6 +165,13 @@ class AuthFlywayMigrationIntegrationTest {
                 .containsEntry("description", "remove platform company boundary")
                 .containsEntry("script", "V11__remove_platform_company_boundary.sql")
                 .containsEntry("success", true);
+        assertThat(jdbc.queryForMap(
+                        "select version, description, script, success from flyway_schema_history "
+                                + "where version='12'"))
+                .containsEntry("version", "12")
+                .containsEntry("description", "login attempt throttle")
+                .containsEntry("script", "V12__login_attempt_throttle.sql")
+                .containsEntry("success", true);
         assertThat(columnCount("auth_subject", "company_id")).isZero();
         assertThat(jdbc.queryForObject("select to_regclass('public.company')", String.class)).isNull();
         assertThat(jdbc.queryForList(
@@ -176,6 +184,16 @@ class AuthFlywayMigrationIntegrationTest {
                         "ck_customer_registration_throttle_fingerprint",
                         "ck_customer_registration_throttle_count",
                         "ck_customer_registration_throttle_window");
+        assertThat(jdbc.queryForList(
+                        "select constraint_name from information_schema.table_constraints "
+                                + "where table_schema='public' and table_name='login_attempt_budget'",
+                        String.class))
+                .contains(
+                        "pk_login_attempt_budget",
+                        "ck_login_attempt_budget_scope",
+                        "ck_login_attempt_budget_fingerprint",
+                        "ck_login_attempt_budget_count",
+                        "ck_login_attempt_budget_window");
         assertV3Schema();
         assertThat(jdbc.queryForObject("select count(*) from auth_subject", Integer.class)).isZero();
         assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isZero();
@@ -220,7 +238,7 @@ class AuthFlywayMigrationIntegrationTest {
                 .authority(new SimpleGrantedAuthority("SCOPE_worker.tasks"))
                 .build());
 
-        assertThat(flyway(MIGRATION_LOCATION).migrate().migrationsExecuted).isEqualTo(8);
+        assertThat(flyway(MIGRATION_LOCATION).migrate().migrationsExecuted).isEqualTo(9);
 
         assertThat(clients.findByClientId("rwms-worker")).isNull();
         assertThat(clients.findByClientId("rwms-worker-android")).isNotNull();
@@ -237,7 +255,7 @@ class AuthFlywayMigrationIntegrationTest {
                 "update auth_subject set global_role='WAREHOUSE_MANAGER' where id=?",
                 managerId);
 
-        assertThat(flyway(MIGRATION_LOCATION).migrate().migrationsExecuted).isEqualTo(9);
+        assertThat(flyway(MIGRATION_LOCATION).migrate().migrationsExecuted).isEqualTo(10);
 
         assertThat(jdbc.queryForMap(
                         "select version, mobile_app_access from auth_subject where id=?",
@@ -555,7 +573,7 @@ class AuthFlywayMigrationIntegrationTest {
                 .baselineDescription("Auth post-F1C schema")
                 .load();
         adopted.baseline();
-        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(9);
+        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(10);
         adopted.validate();
         assertThat(adopted.migrate().migrationsExecuted).isZero();
 

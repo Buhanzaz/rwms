@@ -54,7 +54,7 @@ class AuthEventStoreMigrationIntegrationTest {
     void cleanInstallAppliesAllMigrationsAndRepeatIsNoOp() {
         Flyway flyway = flyway(MIGRATION_LOCATION);
 
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(10);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(11);
         flyway.validate();
         assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -71,6 +71,7 @@ class AuthEventStoreMigrationIntegrationTest {
                 "inbox_message",
                 "consumer_aggregate_checkpoint",
                 "customer_registration_throttle",
+                "login_attempt_budget",
                 "version_gap_quarantine",
                 "replay_operation_audit");
         assertThat(jdbc.queryForObject("select count(*) from domain_event", Integer.class)).isZero();
@@ -107,7 +108,7 @@ class AuthEventStoreMigrationIntegrationTest {
                 .load();
         adopted.baseline();
 
-        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(9);
+        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(10);
         adopted.validate();
         assertThat(adopted.migrate().migrationsExecuted).isZero();
 
@@ -736,7 +737,7 @@ class AuthEventStoreMigrationIntegrationTest {
         seedVersionTwoRows();
         Flyway adopted = configuration(MIGRATION_LOCATION).baselineVersion("2").load();
         adopted.baseline();
-        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(9);
+        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(10);
     }
 
     private void seedVersionTwoRows() {

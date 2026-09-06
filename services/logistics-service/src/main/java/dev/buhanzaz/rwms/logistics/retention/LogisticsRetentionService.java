@@ -12,6 +12,7 @@ import static dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiMod
 import dev.buhanzaz.rwms.logistics.retention.domain.LogisticsArchiveManifest;
 import dev.buhanzaz.rwms.logistics.retention.domain.LogisticsRetentionDataset;
 import dev.buhanzaz.rwms.logistics.retention.domain.LogisticsRetentionLegalHold;
+import dev.buhanzaz.rwms.logistics.retention.persistence.LogisticsRetentionCandidateReader;
 import dev.buhanzaz.rwms.logistics.retention.repository.LogisticsArchiveManifestRepository;
 import dev.buhanzaz.rwms.logistics.retention.repository.LogisticsRetentionLegalHoldRepository;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
@@ -23,7 +24,6 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -37,7 +37,7 @@ public class LogisticsRetentionService {
   private final LogisticsRetentionProperties properties;
   private final LogisticsRetentionLegalHoldRepository legalHolds;
   private final LogisticsArchiveManifestRepository manifests;
-  private final JdbcTemplate jdbc;
+  private final LogisticsRetentionCandidateReader candidates;
   private final Clock clock;
 
   /** Counts terminal event transport rows older than the approved online period. */
@@ -45,22 +45,8 @@ public class LogisticsRetentionService {
   public PlanningRetentionDryRunResponse dryRun() {
     OffsetDateTime generatedAt = now();
     OffsetDateTime cutoff = generatedAt.minus(properties.getEventOnline());
-    long outboxRows =
-        count(
-                "select count(*) from outbox_event where status = 'PUBLISHED' and published_at < ?",
-                cutoff)
-            + count(
-                "select count(*) from rental_inquiry_outbox where status = 'PUBLISHED' and"
-                    + " published_at < ?",
-                cutoff)
-            + count(
-                "select count(*) from warehouse_operation_mark_outbox where state = 'CONFIRMED' and"
-                    + " updated_at < ?",
-                cutoff);
-    long inboxRows =
-        count(
-            "select count(*) from inbox_message where status = 'PROCESSED' and processed_at < ?",
-            cutoff);
+    long outboxRows = candidates.countPublishedOutboxRows(cutoff);
+    long inboxRows = candidates.countProcessedInboxRows(cutoff);
     return new PlanningRetentionDryRunResponse(
         generatedAt,
         properties.getBusinessAuditProof().toDays(),
@@ -144,11 +130,6 @@ public class LogisticsRetentionService {
       throw new LogisticsConflictException("Манифест архива уже изменился");
     }
     return response(manifests.saveAndFlush(manifest));
-  }
-
-  private long count(String sql, OffsetDateTime cutoff) {
-    Long value = jdbc.queryForObject(sql, Long.class, cutoff);
-    return value == null ? 0 : value;
   }
 
   private static PlanningRetentionLegalHoldResponse response(LogisticsRetentionLegalHold hold) {

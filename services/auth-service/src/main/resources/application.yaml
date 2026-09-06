@@ -125,6 +125,19 @@ rwms:
       global-window: ${AUTH_CUSTOMER_REGISTRATION_GLOBAL_WINDOW:PT1M}
       retention: ${AUTH_CUSTOMER_REGISTRATION_THROTTLE_RETENTION:P1D}
       cleanup-delay: ${AUTH_CUSTOMER_REGISTRATION_THROTTLE_CLEANUP_DELAY:PT1H}
+    login-attempt-throttle:
+      source-ingress:
+        limit: ${AUTH_LOGIN_SOURCE_INGRESS_LIMIT:30}
+        window: ${AUTH_LOGIN_SOURCE_INGRESS_WINDOW:PT1M}
+      source-auth:
+        limit: ${AUTH_LOGIN_SOURCE_AUTH_LIMIT:20}
+        window: ${AUTH_LOGIN_SOURCE_AUTH_WINDOW:PT10M}
+      account-auth:
+        limit: ${AUTH_LOGIN_ACCOUNT_AUTH_LIMIT:10}
+        window: ${AUTH_LOGIN_ACCOUNT_AUTH_WINDOW:PT15M}
+      retention: ${AUTH_LOGIN_THROTTLE_RETENTION:P1D}
+      cleanup-delay: ${AUTH_LOGIN_THROTTLE_CLEANUP_DELAY:PT1H}
+      database-timeout: ${AUTH_LOGIN_THROTTLE_DATABASE_TIMEOUT:PT3S}
     warehouse-validation:
       enabled: ${AUTH_WAREHOUSE_VALIDATION_ENABLED:false}
       base-url: ${WAREHOUSE_SERVICE_INTERNAL_BASE_URL:}

@@ -13,6 +13,8 @@ import dev.buhanzaz.rwms.auth.eventing.AuthSubjectCredentialStore;
 import dev.buhanzaz.rwms.auth.eventing.AuthSubjectProfileStore;
 import dev.buhanzaz.rwms.auth.repository.AuthSubjectRepository;
 import dev.buhanzaz.rwms.auth.repository.UserWarehouseAccessRepository;
+import dev.buhanzaz.rwms.auth.security.LoginAttemptAdmissionFilter;
+import dev.buhanzaz.rwms.auth.service.LoginAttemptThrottle;
 import java.io.FileInputStream;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -97,6 +99,9 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtGra
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
+import org.springframework.security.web.authentication.SavedRequestAwareAuthenticationSuccessHandler;
+import org.springframework.security.web.authentication.SimpleUrlAuthenticationFailureHandler;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.util.matcher.MediaTypeRequestMatcher;
 import org.springframework.security.web.util.matcher.RequestMatcher;
@@ -115,7 +120,11 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
  */
 @Configuration
 @EnableMethodSecurity
-@EnableConfigurationProperties({AuthProperties.class, OAuthClientProperties.class})
+@EnableConfigurationProperties({
+    AuthProperties.class,
+    OAuthClientProperties.class,
+    LoginAttemptThrottleProperties.class
+})
 public class AuthorizationServerConfiguration {
     private static final String MAINTENANCE_CLIENT_ID = "maintenance-service";
     private static final Set<String> MAINTENANCE_DOWNSTREAM_SCOPES =
@@ -577,9 +586,11 @@ public class AuthorizationServerConfiguration {
      */
     @Bean
     @Order(4)
-    SecurityFilterChain webChain(HttpSecurity http) throws Exception {
+    SecurityFilterChain webChain(HttpSecurity http, LoginAttemptThrottle loginAttemptThrottle)
+            throws Exception {
         var csrf = CookieCsrfTokenRepository.withHttpOnlyFalse();
         csrf.setCookiePath("/");
+        var loginAttemptFilter = new LoginAttemptAdmissionFilter(loginAttemptThrottle);
         RequestMatcher gatewayForwardedActuator = request ->
                 isGatewayActuatorPath(request.getRequestURI())
                         || (("/auth".equals(request.getHeader("X-Forwarded-Prefix"))
@@ -606,9 +617,15 @@ public class AuthorizationServerConfiguration {
                 .exceptionHandling(exceptions -> exceptions.defaultAuthenticationEntryPointFor(
                         new HttpStatusEntryPoint(HttpStatus.FORBIDDEN),
                         gatewayForwardedActuator))
-                .formLogin(form -> form.loginPage("/login").permitAll())
+                .formLogin(form -> form.loginPage("/login")
+                        .successHandler(loginAttemptFilter.settlingSuccessHandler(
+                                new SavedRequestAwareAuthenticationSuccessHandler()))
+                        .failureHandler(loginAttemptFilter.settlingFailureHandler(
+                                new SimpleUrlAuthenticationFailureHandler("/login?error")))
+                        .permitAll())
                 .logout(logout -> logout.logoutSuccessUrl("/login?logout"))
                 .csrf(configurer -> configurer.csrfTokenRepository(csrf))
+                .addFilterBefore(loginAttemptFilter, UsernamePasswordAuthenticationFilter.class)
                 .cors(Customizer.withDefaults());
         return http.build();
     }

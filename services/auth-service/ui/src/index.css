@@ -352,6 +352,32 @@
     color: #8e1c1c;
   }
 
+  .auth-notice {
+    width: 100%;
+    padding: 1.5rem;
+    border-radius: 1rem;
+    background: rgb(255 255 255 / 85%);
+  }
+
+  .auth-notice__title {
+    margin: 0;
+    font-size: 1.5rem;
+    font-weight: 600;
+    line-height: 1.25;
+  }
+
+  .auth-notice__body {
+    margin-block: 1rem;
+    font-size: 0.875rem;
+    line-height: 1.5;
+  }
+
+  .auth-submit.auth-notice__retry {
+    background: #204b79;
+    text-align: center;
+    text-decoration: none;
+  }
+
   .auth-submit {
     position: relative;
     isolation: isolate;

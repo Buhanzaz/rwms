@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -11,10 +11,19 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.services.planner_runtime as runtime_module
+from app.models import (
+    DriverShift as DbDriverShift,
+)
+from app.models import (
+    LogisticsRequest as DbLogisticsRequest,
+)
 from app.models import PlanningDayMode, Trailer, WarehouseIsochroneTariff
+from app.models import PlanningTask as DbPlanningTask
+from app.models import RequestDateOption as DbRequestDateOption
 from app.models import Vehicle as DbVehicle
 from app.models import Warehouse as DbWarehouse
 from app.planner import (
@@ -41,7 +50,13 @@ from app.services.planner_runtime import (
 from app.services.planning_group import PlanningWarehouseGroup
 from app.services.resource_incidents import NO_RESOURCE_RESTRICTIONS, DayResourceRestrictions
 from app.slot_planning.models import PlanningReason
-from tests.factories import make_driver, make_routable_vehicle, make_shift, make_warehouse
+from tests.factories import (
+    make_driver,
+    make_request,
+    make_routable_vehicle,
+    make_shift,
+    make_warehouse,
+)
 
 MOSCOW = ZoneInfo("Europe/Moscow")
 
@@ -678,6 +693,245 @@ async def test_source_shift_is_excluded_while_vehicle_is_actively_rebased(
 
     assert loaded.input_data.shifts == ()
     assert vehicle.warehouse_id == source.id
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_day_snapshot_does_not_materialize_unrelated_retained_history(
+    db_session: AsyncSession,
+) -> None:
+    """Old requests, tasks, and shifts neither load nor perturb the relevant fingerprint."""
+
+    planning_date = date(2026, 9, 14)
+    warehouse = await make_warehouse(
+        db_session,
+        default_planning_date=planning_date,
+    )
+    warehouse_id = warehouse.id
+    driver = await make_driver(db_session, warehouse)
+    vehicle = await make_routable_vehicle(db_session, warehouse)
+    current_shift = await make_shift(
+        db_session,
+        warehouse,
+        driver,
+        vehicle,
+        date_from=planning_date,
+        date_to=planning_date,
+    )
+    current_request = await make_request(
+        db_session,
+        warehouse,
+        planning_date=planning_date,
+        quantity=1,
+    )
+    current_request_id = current_request.id
+    current_task_ids = {task.id for task in current_request.tasks}
+    next_date = planning_date + timedelta(days=1)
+    next_shift = await make_shift(
+        db_session,
+        warehouse,
+        driver,
+        vehicle,
+        date_from=next_date,
+        date_to=next_date,
+    )
+    next_request = await make_request(
+        db_session,
+        warehouse,
+        planning_date=next_date,
+        quantity=1,
+    )
+    next_request_id = next_request.id
+    next_task_ids = {task.id for task in next_request.tasks}
+    await db_session.flush()
+    db_session.expunge_all()
+
+    baseline = await RuntimePlannerFacade()._load_snapshot(
+        db_session,
+        warehouse_id,
+        planning_date,
+        None,
+        17,
+    )
+    baseline_fingerprint = baseline.warehouse_fingerprint
+    db_session.expunge_all()
+
+    warehouse = await db_session.get(DbWarehouse, warehouse_id)
+    assert warehouse is not None
+    driver = await db_session.get(type(driver), driver.id)
+    vehicle = await db_session.get(DbVehicle, vehicle.id)
+    assert driver is not None
+    assert vehicle is not None
+    old_shift = await make_shift(
+        db_session,
+        warehouse,
+        driver,
+        vehicle,
+        date_from=date(2024, 1, 1),
+        date_to=date(2024, 1, 31),
+    )
+    old_requests = [
+        await make_request(
+            db_session,
+            warehouse,
+            planning_date=date(2024, 1, day),
+            quantity=1,
+        )
+        for day in (3, 4, 5)
+    ]
+    for request in old_requests:
+        request.status = RequestStatus.COMPLETED
+    old_request_ids = {request.id for request in old_requests}
+    old_task_ids = {task.id for request in old_requests for task in request.tasks}
+    old_shift_id = old_shift.id
+    await db_session.flush()
+    db_session.expunge_all()
+
+    loaded_ids: dict[type[object], set[UUID]] = {
+        DbLogisticsRequest: set(),
+        DbPlanningTask: set(),
+        DbDriverShift: set(),
+    }
+
+    def record_load(target: object, _context: object) -> None:
+        loaded_ids[type(target)].add(target.id)  # type: ignore[attr-defined]
+
+    for model in loaded_ids:
+        event.listen(model, "load", record_load)
+    try:
+        loaded = await RuntimePlannerFacade()._load_snapshot(
+            db_session,
+            warehouse_id,
+            planning_date,
+            None,
+            17,
+            refresh_current=True,
+        )
+    finally:
+        for model in loaded_ids:
+            event.remove(model, "load", record_load)
+
+    assert loaded.warehouse_fingerprint == baseline_fingerprint
+    assert {request.id for request in loaded.input_data.requests} == {
+        str(current_request_id)
+    }
+    assert {shift.id for shift in loaded.input_data.shifts} == {str(current_shift.id)}
+    assert current_request_id in loaded_ids[DbLogisticsRequest]
+    assert current_task_ids <= loaded_ids[DbPlanningTask]
+    assert old_request_ids.isdisjoint(loaded_ids[DbLogisticsRequest])
+    assert old_task_ids.isdisjoint(loaded_ids[DbPlanningTask])
+    assert old_shift_id not in loaded_ids[DbDriverShift]
+    assert next_request_id not in loaded_ids[DbLogisticsRequest]
+    assert next_task_ids.isdisjoint(loaded_ids[DbPlanningTask])
+    assert next_shift.id not in loaded_ids[DbDriverShift]
+
+    next_snapshot = await RuntimePlannerFacade()._load_snapshot(
+        db_session,
+        warehouse_id,
+        next_date,
+        None,
+        17,
+        refresh_current=True,
+    )
+    assert {request.id for request in next_snapshot.input_data.requests} == {
+        str(next_request_id)
+    }
+    assert {shift.id for shift in next_snapshot.input_data.shifts} == {
+        str(next_shift.id)
+    }
+    current_again = await RuntimePlannerFacade()._load_snapshot(
+        db_session,
+        warehouse_id,
+        planning_date,
+        None,
+        17,
+        refresh_current=True,
+    )
+    assert {request.id for request in current_again.input_data.requests} == {
+        str(current_request_id)
+    }
+    assert {shift.id for shift in current_again.input_data.shifts} == {
+        str(current_shift.id)
+    }
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_day_snapshot_preserves_alternative_locked_and_recovery_references(
+    db_session: AsyncSession,
+) -> None:
+    """Every bounded inclusion path retains its exact request and task lineage."""
+
+    planning_date = date(2026, 9, 14)
+    warehouse = await make_warehouse(
+        db_session,
+        default_planning_date=planning_date,
+    )
+    alternative = await make_request(
+        db_session,
+        warehouse,
+        planning_date=planning_date,
+        quantity=1,
+    )
+    locked = await make_request(
+        db_session,
+        warehouse,
+        planning_date=planning_date,
+        quantity=1,
+    )
+    locked.status = RequestStatus.PLANNED
+    locked.tasks[0].locked = True
+    recovery = await make_request(
+        db_session,
+        warehouse,
+        planning_date=date(2026, 9, 15),
+        quantity=1,
+    )
+    recovery.status = RequestStatus.PLANNED
+    recovery.date_options.append(
+        DbRequestDateOption(
+            request_id=recovery.id,
+            date=planning_date,
+            priority=1,
+            window_start=time(10),
+            window_end=time(14),
+            is_hard=True,
+        )
+    )
+    frozen = await make_request(
+        db_session,
+        warehouse,
+        planning_date=planning_date,
+        quantity=1,
+    )
+    frozen.status = RequestStatus.COMPLETED
+    await db_session.flush()
+
+    loaded = await RuntimePlannerFacade()._load_snapshot(
+        db_session,
+        warehouse.id,
+        planning_date,
+        None,
+        17,
+        request_date_overrides={recovery.id: planning_date},
+        recovery_task_ids=frozenset({recovery.tasks[0].id}),
+        reference_request_ids=frozenset({frozen.id}),
+        refresh_current=True,
+    )
+
+    requests = {request.id: request for request in loaded.input_data.requests}
+    assert str(alternative.id) in requests
+    assert str(locked.id) in requests
+    assert requests[str(locked.id)].status == RequestStatus.PLANNED
+    assert requests[str(recovery.id)].status == RequestStatus.READY
+    assert requests[str(frozen.id)].status == RequestStatus.COMPLETED
+    assert alternative.tasks[0].id in loaded.core_task_by_uuid
+    assert locked.tasks[0].id in loaded.core_task_by_uuid
+    assert recovery.tasks[0].id in loaded.core_task_by_uuid
+    assert frozen.tasks[0].id in loaded.core_task_by_uuid
+    assert loaded.source_task_uuid_by_core_id[
+        loaded.core_task_by_uuid[frozen.tasks[0].id].id
+    ] == frozen.tasks[0].id
 
 
 @pytest.mark.asyncio

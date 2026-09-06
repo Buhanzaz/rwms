@@ -26,10 +26,11 @@ import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.repository.ShipmentFurnitureMovementTaskRepository;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.ShipmentFurnitureTaskService;
-import java.util.ArrayList;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -51,6 +52,7 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
 public class DriverTripProjectionService {
+  static final long BOARD_ORDER_UNITS_BUDGET_NANOS = Duration.ofSeconds(2).toNanos();
   private static final Logger log = LoggerFactory.getLogger(DriverTripProjectionService.class);
   private final DriverLogisticsTaskRepository driverTasks;
   private final LogisticsDocumentRepository documents;
@@ -89,7 +91,12 @@ public class DriverTripProjectionService {
                     .distinct()
                     .toList())
             .stream()
-            .collect(Collectors.toMap(RentalOrder::getId, Function.identity()));
+            .collect(
+                Collectors.toMap(
+                    RentalOrder::getId,
+                    Function.identity(),
+                    (left, right) -> left,
+                    LinkedHashMap::new));
     Map<UUID, Map<UUID, List<RentalOrderEquipmentRequirement>>> desiredByOrderAndCabin =
         requirements
             .findAllByOrder_IdInOrderByOrder_IdAscRentalItemIdAscEquipmentNameAscEquipmentIdAsc(
@@ -128,7 +135,17 @@ public class DriverTripProjectionService {
             .stream()
             .collect(Collectors.toMap(EquipmentMovementTask::getId, Function.identity()));
     Map<UUID, BoardOrderUnits> unitsByOrder = new LinkedHashMap<>();
+    long unitsReadStartedAt = monotonicNanos();
+    boolean unitsReadBudgetExhausted = false;
     for (UUID orderId : ordersById.keySet()) {
+      if (monotonicNanos() - unitsReadStartedAt >= BOARD_ORDER_UNITS_BUDGET_NANOS) {
+        if (!unitsReadBudgetExhausted) {
+          log.warn("Driver board order contents budget exhausted");
+          unitsReadBudgetExhausted = true;
+        }
+        unitsByOrder.put(orderId, new BoardOrderUnits(Map.of(), false));
+        continue;
+      }
       try {
         Map<UUID, LogisticsDependencyGateway.OrderUnitReservation> units =
             dependencies.readOrderUnits(orderId).stream()
@@ -175,6 +192,12 @@ public class DriverTripProjectionService {
       }
     }
     return java.util.Collections.unmodifiableMap(values);
+  }
+
+  /** A shared admission budget bounds new sequential content reads; an in-flight HTTP call still
+   * follows its configured dependency timeout and is not cancelled by this check. */
+  protected long monotonicNanos() {
+    return System.nanoTime();
   }
 
   private DriverTripDetailsResponse boardDetails(

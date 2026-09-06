@@ -937,6 +937,13 @@ make test-valhalla-truck
 
 ## Heuristic planner
 
+Runtime snapshots load shifts covering the selected date and only relevant requests: dated ready
+or locked work, references from non-archived plans for that root/date, and explicitly referenced
+plan, override or recovery requests. Plan-specific operations retain their exact request lineage,
+including archived-plan validation. Input fingerprints use this same selected request set;
+unrelated retained history does not become planner input. Reusing a database session for another
+date refreshes the filtered shift collections.
+
 `HeuristicPlanner` intentionally models the operational delivery-then-pickup
 pattern instead of pretending to be a universal VRP solver. It:
 

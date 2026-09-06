@@ -47,6 +47,12 @@ domain ownership.
 
 ## Dynamic planning-day recovery
 
+Planner snapshots select shifts covering the requested date and date-relevant ready/locked
+requests, plus references required by active plans and explicit plan/override/recovery operations.
+The fingerprint uses that same selected request set. Exact source-plan references remain available
+for historical validation and simulation; unrelated retained warehouse history is not materialized.
+See [runtime loader](../../logistics/backend/app/services/planner_runtime.py).
+
 The standalone logistics planner reuses the existing route planner, RWMS owner
 reads, capacity publisher and task-board integration. A dispatcher fact follows
 `LogisticsEvent → impact analysis → notice/action → RecoveryProposal → decision
@@ -139,6 +145,17 @@ inventory discovery/work and free/repair transfers. It records current behavior
 only; known implementation deviations remain in the architecture audit.
 
 ## Interactive authentication and public request
+
+After CSRF validation, form login reserves durable source/account budgets before password
+verification. A rejected request receives `429` with a retry interval and either static HTML or
+Problem Details. Success refunds only its authentication reservation in the same window generation;
+ingress stays counted. Database admission failure returns `503`, and a lost process reservation
+expires with its fixed window. Saved OAuth authorization requests survive throttling.
+See [auth-service configuration and semantics](../../services/auth-service/README.md#safety-properties).
+
+The repository [public Nginx log snippets](../../nginx/README.md) omit query strings and Referer and
+mask capability paths before formatting access rows, including HTTP redirects. Their activation
+requires a separate publication; repository presence does not describe the running edge format.
 
 ```mermaid
 sequenceDiagram

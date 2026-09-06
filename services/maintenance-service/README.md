@@ -206,6 +206,11 @@ the repair-stage projection is changed. Migration
 aligns both PostgreSQL topic allow-lists with the existing Kafka subscription, admitting only
 `rwms.task-board.task-evidence.v1`; it does not rewrite existing messages or move transport
 ownership.
+The estimate collection filters by warehouse, lifecycle and optional cabin, then selects its
+page in PostgreSQL ordered by creation time and ID descending. Only the selected estimates have
+their revisions, lines, plans and media loaded, in four batch reads. The total count and complete
+revision content of each selected estimate retain the existing response contract.
+
 The public repair collection applies warehouse, state, cabin, exact optional `estimateId`, and
 optional bounded `repairIds` filters plus paging in PostgreSQL before assembling repair DTOs.
 Task-board consumers use the ID filter in batches of at most 200, while estimate workspaces use the

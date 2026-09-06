@@ -14,12 +14,14 @@ import dev.buhanzaz.rwms.maintenance.repository.MaintenanceRepairRepository;
 import dev.buhanzaz.rwms.maintenance.repository.MediaFactProjectionRepository;
 import dev.buhanzaz.rwms.maintenance.repository.RepairStageRepository;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 
 /** Validates, stores and resolves maintenance media references and durable media-owner proof intent. */
@@ -249,6 +251,20 @@ final class MaintenanceMediaSupport {
       return selected;
     }
     return mediaReferences.isEmpty() ? null : mediaReferences.getFirst().mediaId();
+  }
+
+  protected Map<UUID, List<MediaReferenceInput>> mediaByAggregateIds(
+      String type, Collection<UUID> aggregateIds) {
+    if (aggregateIds.isEmpty()) return Map.of();
+    return mediaReferences
+        .findAllByAggregateTypeAndAggregateIdInOrderByAggregateIdAscMediaId(type, aggregateIds)
+        .stream()
+        .collect(
+            Collectors.groupingBy(
+                MaintenanceMediaReference::getAggregateId,
+                Collectors.mapping(
+                    value -> new MediaReferenceInput(value.getMediaId(), value.getGeneration()),
+                    Collectors.toList())));
   }
 
   protected List<MediaReferenceInput> media(String type, UUID id) {

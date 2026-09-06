@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 from geoalchemy2.shape import from_shape
 from shapely.geometry import LineString, shape
-from sqlalchemy import delete, select, true
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -50,6 +50,7 @@ from app.models import (
 from app.models import (
     PlanningTask as DbPlanningTask,
 )
+from app.models import RequestDateOption as DbRequestDateOption
 from app.models import (
     RouteCycle as DbRouteCycle,
 )
@@ -490,6 +491,7 @@ class RuntimePlannerFacade:
             plan.date,
             None,
             None,
+            reference_request_ids=self._plan_request_ids(plan),
         )
         source_cycles = tuple(
             self._core_cycle(cycle, snapshot)
@@ -631,6 +633,7 @@ class RuntimePlannerFacade:
             plan.date,
             None,
             None,
+            reference_request_ids=self._plan_request_ids(plan),
         )
         cycles = tuple(self._core_cycle(cycle, snapshot) for cycle in plan.cycles)
         validation = validate_route_plan(
@@ -673,6 +676,7 @@ class RuntimePlannerFacade:
             plan.date,
             None,
             None,
+            reference_request_ids=self._plan_request_ids(plan),
         )
         refreshed_by_id: dict[UUID, RouteCycle] = {}
         refreshed_by_shift: dict[UUID, list[RouteCycle]] = {}
@@ -780,6 +784,7 @@ class RuntimePlannerFacade:
             source.date,
             self._payload_mapping(command.payload.get("settings")),
             self._optional_int(command.payload.get("seed")),
+            reference_request_ids=self._plan_request_ids(source),
         )
         locked_cycle_ids = {
             self._optional_uuid(value)
@@ -906,6 +911,7 @@ class RuntimePlannerFacade:
             self._optional_int(command.payload.get("seed")),
             request_date_overrides=request_date_overrides or None,
             recovery_task_ids=recovery_task_ids,
+            reference_request_ids=self._plan_request_ids(source),
         )
         requested_locked_ids = {
             self._optional_uuid(value)
@@ -1075,6 +1081,7 @@ class RuntimePlannerFacade:
             source.date,
             None,
             None,
+            reference_request_ids=self._plan_request_ids(source),
         )
         run = await self._execute_generation(
             session,
@@ -1113,6 +1120,7 @@ class RuntimePlannerFacade:
             plan.date,
             None,
             None,
+            reference_request_ids=self._plan_request_ids(plan),
         )
         shift_id = self._payload_uuid(command.payload, "driver_shift_id")
         effective_at = self._payload_datetime(command.payload, "effective_at")
@@ -1230,8 +1238,9 @@ class RuntimePlannerFacade:
         recovery_task_ids: frozenset[UUID] | None = None,
         refresh_current: bool = False,
         request_scope: frozenset[UUID] | None = None,
+        reference_request_ids: frozenset[UUID] | None = None,
     ) -> _RuntimeSnapshot:
-        """Load one complete warehouse graph and translate it into planner value objects."""
+        """Load one date-bounded warehouse graph and translate it into planner value objects."""
 
         statement = (
             select(DbWarehouse)
@@ -1239,10 +1248,6 @@ class RuntimePlannerFacade:
             .options(
                 selectinload(DbWarehouse.vehicles).selectinload(DbVehicle.default_trailer),
                 selectinload(DbWarehouse.vehicles).selectinload(DbVehicle.load_profiles),
-                selectinload(DbWarehouse.shifts).selectinload(DbDriverShift.driver),
-                selectinload(DbWarehouse.shifts).selectinload(DbDriverShift.vehicle),
-                selectinload(DbWarehouse.requests).selectinload(DbLogisticsRequest.date_options),
-                selectinload(DbWarehouse.requests).selectinload(DbLogisticsRequest.tasks),
             )
         )
         workspace = await session.scalar(
@@ -1331,13 +1336,26 @@ class RuntimePlannerFacade:
                         selectinload(DbWarehouse.vehicles).selectinload(
                             DbVehicle.load_profiles
                         ),
-                        selectinload(DbWarehouse.shifts).selectinload(
-                            DbDriverShift.driver
-                        ),
-                        selectinload(DbWarehouse.shifts)
+                        selectinload(
+                            DbWarehouse.shifts.and_(
+                                DbDriverShift.date_from <= planning_date,
+                                DbDriverShift.date_to >= planning_date,
+                            )
+                        ).selectinload(DbDriverShift.driver),
+                        selectinload(
+                            DbWarehouse.shifts.and_(
+                                DbDriverShift.date_from <= planning_date,
+                                DbDriverShift.date_to >= planning_date,
+                            )
+                        )
                         .selectinload(DbDriverShift.vehicle)
                         .selectinload(DbVehicle.default_trailer),
-                        selectinload(DbWarehouse.shifts)
+                        selectinload(
+                            DbWarehouse.shifts.and_(
+                                DbDriverShift.date_from <= planning_date,
+                                DbDriverShift.date_to >= planning_date,
+                            )
+                        )
                         .selectinload(DbDriverShift.vehicle)
                         .selectinload(DbVehicle.load_profiles),
                     )
@@ -1400,16 +1418,67 @@ class RuntimePlannerFacade:
                 select(DbWarehouse).where(DbWarehouse.id.in_(vehicle_home_local_ids))
             )
         }
+        member_ids = tuple(member.id for member in planning_members)
+        date_relevant_request = or_(
+            DbLogisticsRequest.scheduled_date == planning_date,
+            and_(
+                DbLogisticsRequest.scheduled_date.is_(None),
+                DbLogisticsRequest.date_options.any(
+                    DbRequestDateOption.date == planning_date
+                ),
+            ),
+        )
+        requested_ids = {
+            *(request_date_overrides or {}),
+            *(reference_request_ids or ()),
+        }
+        explicitly_requested = (
+            DbLogisticsRequest.id.in_(requested_ids) if requested_ids else None
+        )
+        recovery_reference = (
+            DbLogisticsRequest.tasks.any(DbPlanningTask.id.in_(recovery_task_ids))
+            if recovery_task_ids
+            else None
+        )
+        active_plan_reference = DbLogisticsRequest.tasks.any(
+            DbPlanningTask.route_stops.any(
+                DbRouteStop.route_cycle.has(
+                    DbRouteCycle.route_plan.has(
+                        and_(
+                            RoutePlan.warehouse_id == warehouse_id,
+                            RoutePlan.date == planning_date,
+                            RoutePlan.status != PlanStatus.ARCHIVED,
+                        )
+                    )
+                )
+            )
+        )
+        request_relevance = (
+            DbLogisticsRequest.id.in_(request_scope)
+            if request_scope is not None
+            else or_(
+                and_(
+                    date_relevant_request,
+                    or_(
+                        DbLogisticsRequest.status == RequestStatus.READY,
+                        DbLogisticsRequest.tasks.any(DbPlanningTask.locked.is_(True)),
+                    ),
+                ),
+                active_plan_reference,
+                *(
+                    criterion
+                    for criterion in (explicitly_requested, recovery_reference)
+                    if criterion is not None
+                ),
+            )
+        )
         request_entities = list(
             (
                 await session.scalars(
                     select(DbLogisticsRequest)
                     .where(
-                        DbLogisticsRequest.warehouse_id.in_(
-                            tuple(member.id for member in planning_members)
-                        ),
-                        DbLogisticsRequest.id.in_(request_scope)
-                        if request_scope is not None else true(),
+                        DbLogisticsRequest.warehouse_id.in_(member_ids),
+                        request_relevance,
                     )
                     .options(
                         selectinload(DbLogisticsRequest.date_options),
@@ -3342,6 +3411,7 @@ class RuntimePlannerFacade:
             plan.date,
             None,
             None,
+            reference_request_ids=self._plan_request_ids(plan),
         )
         task_id = self._payload_uuid(command.payload, "task_id")
         target_cycle_id = self._payload_uuid(command.payload, "target_cycle_id")
@@ -4012,6 +4082,20 @@ class RuntimePlannerFacade:
 
         assigned = {task_id for cycle in cycles for task_id in cycle.task_ids}
         return len(assigned) + len(plan.unassigned_tasks)
+
+    @staticmethod
+    def _plan_request_ids(plan: RoutePlan) -> frozenset[UUID]:
+        """Return the exact request lineage retained by one persisted plan revision."""
+
+        return frozenset(
+            {
+                stop.task.request_id
+                for cycle in plan.cycles
+                for stop in cycle.stops
+                if stop.task is not None
+            }
+            | {item.task.request_id for item in plan.unassigned_tasks}
+        )
 
     @staticmethod
     def _expire_plan_graph(session: AsyncSession, plan: RoutePlan) -> None:

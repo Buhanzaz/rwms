@@ -8,23 +8,35 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.when;
 
+import dev.buhanzaz.rwms.maintenance.domain.EstimateLine;
+import dev.buhanzaz.rwms.maintenance.domain.EstimatePlanStage;
+import dev.buhanzaz.rwms.maintenance.domain.EstimateRevision;
+import dev.buhanzaz.rwms.maintenance.domain.EstimateState;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceEstimate;
+import dev.buhanzaz.rwms.maintenance.domain.MaintenanceMediaReference;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceRepair;
 import dev.buhanzaz.rwms.maintenance.domain.RepairAcceptanceState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairOrigin;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStage;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStageKind;
 import dev.buhanzaz.rwms.maintenance.domain.RentalItemFactProjection;
+import dev.buhanzaz.rwms.maintenance.repository.EstimateLineRepository;
+import dev.buhanzaz.rwms.maintenance.repository.EstimatePlanStageRepository;
+import dev.buhanzaz.rwms.maintenance.repository.EstimateRevisionRepository;
 import dev.buhanzaz.rwms.maintenance.integration.MaintenanceDependencyGateway;
+import dev.buhanzaz.rwms.maintenance.repository.MaintenanceMediaReferenceRepository;
 import dev.buhanzaz.rwms.maintenance.repository.MaintenanceEstimateRepository;
 import dev.buhanzaz.rwms.maintenance.repository.MaintenanceRepairRepository;
 import dev.buhanzaz.rwms.maintenance.repository.RepairStageRepository;
 import dev.buhanzaz.rwms.maintenance.repository.RentalItemFactProjectionRepository;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceConflictException;
+import jakarta.persistence.EntityManagerFactory;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -33,6 +45,10 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.hibernate.SessionFactory;
+import org.hibernate.resource.jdbc.spi.StatementInspector;
+import org.hibernate.stat.Statistics;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -53,6 +69,8 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 @SpringBootTest(
     properties = {
       "spring.jpa.hibernate.ddl-auto=validate",
+      "spring.jpa.properties.hibernate.generate_statistics=true",
+      "spring.jpa.properties.hibernate.session_factory.statement_inspector=dev.buhanzaz.rwms.maintenance.MaintenanceRepairReadWriteIntegrationTest$SqlStatementCounter",
       "rwms.platform.kafka.enabled=false",
       "rwms.maintenance.task-reconciliation.initial-delay=1h",
       "rwms.maintenance.task-reconciliation.delay=1h",
@@ -84,7 +102,15 @@ class MaintenanceRepairReadWriteIntegrationTest {
   @Autowired RepairStageRepository repairStages;
   @Autowired MaintenanceEstimateRepository estimates;
   @Autowired RentalItemFactProjectionRepository rentalItemFacts;
+  @Autowired EstimateRevisionRepository estimateRevisions;
+  @Autowired EstimateLineRepository estimateLines;
+  @Autowired EstimatePlanStageRepository estimatePlans;
+  @Autowired MaintenanceMediaReferenceRepository mediaReferences;
   @Autowired JdbcTemplate jdbc;
+  @Autowired EntityManagerFactory entityManagerFactory;
+
+  static final ThreadLocal<AtomicInteger> statementCount =
+      ThreadLocal.withInitial(AtomicInteger::new);
 
   @MockitoBean MaintenanceDependencyGateway dependencies;
 
@@ -103,11 +129,157 @@ class MaintenanceRepairReadWriteIntegrationTest {
         cascade
         """);
     reset(dependencies);
+    statementCount.remove();
     when(dependencies.preflightMaintenanceRouting(any(UUID.class), anyList()))
         .thenAnswer(
             invocation ->
                 new MaintenanceDependencyGateway.RoutingPreflight(
                     invocation.getArgument(0), true, List.of(), List.of(), List.of(), List.of()));
+  }
+
+  @Test
+  void estimatesSelectAndHydrateOnlyTheRequestedDatabasePage() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID catalogId = activeCatalog(warehouseId);
+    UUID requestedRentalItemId = UUID.randomUUID();
+    List<MaintenanceEstimate> created = new ArrayList<>();
+    for (int index = 0; index < 6; index++) {
+      created.add(
+          storeEstimate(
+              warehouseId,
+              catalogId,
+              index == 0 ? requestedRentalItemId : UUID.randomUUID(),
+              index));
+    }
+    jdbc.update(
+        "update maintenance_estimate set created_at = now() - interval '1 minute' where id = ?",
+        created.get(0).getId());
+
+    Statistics firstStatistics = beginSqlMeasurement();
+    PageResponse<EstimateResponse> first =
+        service.estimates(warehouseId, 0, 2, EstimateState.DRAFT, null);
+
+    assertThat(first.totalElements()).isEqualTo(6);
+    assertThat(first.items()).hasSize(2);
+    assertThat(first.items()).extracting(EstimateResponse::rentalItemId)
+        .doesNotContain(requestedRentalItemId);
+    assertThat(statementCount.get().get()).isEqualTo(6);
+    assertThat(firstStatistics.getEntityLoadCount())
+        .as("only the two selected estimates and their bounded child rows are hydrated")
+        .isEqualTo(10);
+    assertThat(first.items())
+        .allSatisfy(
+            estimate -> {
+              assertThat(estimate.revisions()).isNotEmpty();
+              assertThat(estimate.mediaReferences()).singleElement();
+              assertThat(estimate.revisions().getFirst().lines()).singleElement();
+              assertThat(estimate.revisions().getFirst().plan()).singleElement();
+            });
+
+    Statistics fiveStatistics = beginSqlMeasurement();
+    PageResponse<EstimateResponse> five =
+        service.estimates(warehouseId, 0, 5, EstimateState.DRAFT, null);
+    assertThat(five.totalElements()).isEqualTo(6);
+    assertThat(five.items()).hasSize(5);
+    assertThat(five.items()).extracting(EstimateResponse::rentalItemId)
+        .doesNotContain(requestedRentalItemId);
+    assertThat(statementCount.get().get()).isEqualTo(6);
+    assertThat(fiveStatistics.getEntityLoadCount())
+        .as("history outside the five selected estimates is not hydrated")
+        .isEqualTo(25);
+
+    PageResponse<EstimateResponse> exact =
+        service.estimates(warehouseId, 0, 2, EstimateState.DRAFT, requestedRentalItemId);
+    assertThat(exact.totalElements()).isOne();
+    assertThat(exact.items()).singleElement().extracting(EstimateResponse::rentalItemId)
+        .isEqualTo(requestedRentalItemId);
+    assertThat(exact.items().getFirst().revisions()).hasSize(2);
+    assertThat(exact.items().getFirst().revisions().get(1).lines().getFirst().description())
+        .isEqualTo("work-0-r2");
+  }
+
+  private MaintenanceEstimate storeEstimate(
+      UUID warehouseId, UUID catalogId, UUID rentalItemId, int index) {
+    MaintenanceEstimate estimate =
+        estimates.saveAndFlush(
+            MaintenanceEstimate.create(
+                warehouseId,
+                rentalItemId,
+                1,
+                catalogId,
+                LocalDate.of(2026, 1, 1).plusDays(index),
+                "source-" + index,
+                null,
+                "{}"));
+    int revisionCount = index == 0 ? 2 : 1;
+    for (int revision = 1; revision <= revisionCount; revision++) {
+      UUID lineId = UUID.randomUUID();
+      estimateRevisions.saveAndFlush(
+          new EstimateRevision(
+              estimate.getId(),
+              revision,
+              LocalDate.of(2026, 1, 1).plusDays(index),
+              "source-" + index,
+              null,
+              100,
+              "{}"));
+      estimateLines.saveAndFlush(
+          new EstimateLine(
+              lineId,
+              estimate.getId(),
+              revision,
+              0,
+              null,
+              "WORK",
+              "work-" + index + "-r" + revision,
+              "hour",
+              BigDecimal.ONE,
+              100,
+              60,
+              null,
+              null,
+              "line comment",
+              "[]"));
+      estimatePlans.saveAndFlush(
+          new EstimatePlanStage(
+              UUID.randomUUID(),
+              estimate.getId(),
+              revision,
+              0,
+              RepairStageKind.REPAIR_WORK,
+              UUID.randomUUID(),
+              "repair",
+              "GENERAL",
+              "[\"" + lineId + "\"]",
+              lineId,
+              "group",
+              OffsetDateTime.now(ZoneOffset.UTC)));
+    }
+    mediaReferences.saveAndFlush(
+        new MaintenanceMediaReference(
+            "ESTIMATE",
+            estimate.getId(),
+            UUID.randomUUID(),
+            1,
+            "MAINTENANCE_ESTIMATE",
+            warehouseId,
+            "{}"));
+    return estimate;
+  }
+
+  private Statistics beginSqlMeasurement() {
+    statementCount.set(new AtomicInteger());
+    Statistics statistics = entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
+    statistics.clear();
+    return statistics;
+  }
+
+  public static final class SqlStatementCounter implements StatementInspector {
+    @Override
+    public String inspect(String sql) {
+      statementCount.get().incrementAndGet();
+      return sql;
+    }
   }
 
   @Test

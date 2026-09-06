@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.maintenance.service;
 
 import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.*;
 
+import dev.buhanzaz.rwms.maintenance.domain.EstimateState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairAcceptanceState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairExecutionState;
 import java.time.LocalDate;
@@ -146,8 +147,9 @@ public class MaintenanceApplicationService {
         catalogs.activateCatalog(subjectId, key, id, routingContextWarehouseId, request));
   }
   @Transactional(readOnly = true)
-  public List<EstimateResponse> estimates(UUID warehouseId) {
-    return estimates.estimates(warehouseId);
+  public PageResponse<EstimateResponse> estimates(
+      UUID warehouseId, int page, int size, EstimateState lifecycle, UUID rentalItemId) {
+    return estimates.estimates(warehouseId, page, size, lifecycle, rentalItemId);
   }
 
   @Transactional(readOnly = true)

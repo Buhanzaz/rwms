@@ -171,6 +171,21 @@ update preserves its current persisted value.
 
 ## Safety properties
 
+- Interactive `POST /login` reserves PostgreSQL budgets after CSRF validation and before
+  password verification: by default 30 ingress attempts/minute per source, 20 authentication
+  attempts/10 minutes per source, and 10 authentication attempts/15 minutes per account.
+  Account identity uses Spring's username trimming and PostgreSQL `lower`, matching login lookup.
+  Success or an authentication infrastructure abort refunds only that request's authentication
+  units in the same window generation; ingress is retained. Failure or process interruption keeps
+  the reservation until window expiry. There is no permanent account lock.
+  Rejection returns `429`, `Retry-After` and `no-store`; explicit HTML clients receive the static
+  retry page, other clients receive Problem Details. Saved OAuth requests remain in the session.
+  Admission database failure returns `503` before hashing. Admission and settlement SQL use a
+  configurable 3-second lock/statement timeout; failed settlement remains conservative.
+  `AUTH_LOGIN_SOURCE_INGRESS_*`, `AUTH_LOGIN_SOURCE_AUTH_*` and `AUTH_LOGIN_ACCOUNT_AUTH_*`
+  configure `LIMIT`/`WINDOW`; `AUTH_LOGIN_THROTTLE_DATABASE_TIMEOUT`,
+  `AUTH_LOGIN_THROTTLE_RETENTION` (one day) and `AUTH_LOGIN_THROTTLE_CLEANUP_DELAY` (one hour)
+  configure database waits and expired-budget cleanup. Flyway V12 owns the budget table.
 - New human and confidential-client credentials use the versioned
   `pbkdf2@SpringSecurity_v5_8` encoding: HMAC-SHA256, 310,000 iterations,
   a random 16-byte salt and a 256-bit derived key. Existing factory formats, including

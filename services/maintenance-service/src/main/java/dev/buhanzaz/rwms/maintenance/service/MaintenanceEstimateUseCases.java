@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.maintenance.service;
 import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.*;
 
 import dev.buhanzaz.rwms.maintenance.domain.EstimateLine;
+import dev.buhanzaz.rwms.maintenance.domain.EstimateState;
 import dev.buhanzaz.rwms.maintenance.domain.FurnitureAccountingMode;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceAggregateType;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceEstimate;
@@ -18,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.JsonNode;
 
@@ -76,8 +78,16 @@ public class MaintenanceEstimateUseCases {
     this.creation = creation;
   }
 
-  public List<EstimateResponse> estimates(UUID warehouseId) {
-    return estimates.findAllByWarehouseIdOrderByCreatedAtDesc(warehouseId).stream().map(estimateModelSupport::estimateResponse).toList();
+  /** Selects and hydrates only the requested estimate board page. */
+  public PageResponse<EstimateResponse> estimates(
+      UUID warehouseId, int page, int size, EstimateState lifecycle, UUID rentalItemId) {
+    var selected = estimates.findPageByWarehouseId(
+        warehouseId, lifecycle, rentalItemId, PageRequest.of(page, size));
+    return new PageResponse<>(
+        estimateModelSupport.estimateResponses(selected.getContent()),
+        page,
+        size,
+        selected.getTotalElements());
   }
 
   public EstimateResponse estimate(UUID id) { return estimateModelSupport.estimateResponse(estimateModelSupport.requireEstimate(id)); }

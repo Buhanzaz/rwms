@@ -26,12 +26,16 @@ import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -63,12 +67,12 @@ public class DriverBoardService {
         dependencies.readDriverBoard(warehouseId);
     LogisticsDependencyGateway.RepairPlaceProjection places =
         dependencies.readRepairPlaces(warehouseId);
-    Map<UUID, DriverLogisticsTask> localTasks = localTasks(warehouseId);
+    Map<UUID, DriverLogisticsTask> localTasks = localTasks(warehouseId, board);
     Map<UUID, dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.DriverTripDetailsResponse>
         tripDetails = tripProjection.boardDetails(localTasks.values());
     List<DriverBoardRepairPlaceCardResponse> repairPlaces = repairPlaces(warehouseId, places);
     List<CapitalRepairCardResponse> capitalRepairs =
-        capitalRepairs(warehouseId, localTasks.values());
+        capitalRepairs(warehouseId, tasks.findActiveCapitalRepairSourceIds(warehouseId));
     LocalDate today = warehouseToday(warehouseId);
 
     return new DriverBoardResponse(
@@ -368,25 +372,26 @@ public class DriverBoardService {
         && "WAITING".equals(board.entryStatus());
   }
 
-  private Map<UUID, DriverLogisticsTask> localTasks(UUID warehouseId) {
-    Map<UUID, DriverLogisticsTask> result = new LinkedHashMap<>();
-    for (DriverLogisticsTask task :
-        tasks.findAllByWarehouseIdOrderByCreatedAtAscIdAsc(warehouseId)) {
-      result.put(task.getExternalTaskId(), task);
-    }
-    return result;
+  /** Loads local details only for task-board cards visible in this snapshot. */
+  private Map<UUID, DriverLogisticsTask> localTasks(
+      UUID warehouseId, LogisticsDependencyGateway.DriverBoardSnapshot board) {
+    Set<UUID> externalTaskIds = new LinkedHashSet<>();
+    board.current().forEach(task -> externalTaskIds.add(task.externalTaskId()));
+    board.dates().forEach(column ->
+        column.tasks().forEach(task -> externalTaskIds.add(task.externalTaskId())));
+    if (externalTaskIds.isEmpty()) return Map.of();
+    return tasks.findAllByWarehouseIdAndExternalTaskIdIn(warehouseId, externalTaskIds).stream()
+        .collect(Collectors.toMap(
+            DriverLogisticsTask::getExternalTaskId,
+            Function.identity(),
+            (left, right) -> left,
+            LinkedHashMap::new));
   }
 
   private List<CapitalRepairCardResponse> capitalRepairs(
-      UUID warehouseId, java.util.Collection<DriverLogisticsTask> localTasks) {
-    java.util.Set<UUID> alreadyMoved =
-        localTasks.stream()
-            .filter(task -> task.getKind() == DriverTaskKind.CAPITAL_TO_PRODUCTION)
-            .filter(task -> task.getSourceType() == DriverTaskSourceType.CAPITAL_REPAIR)
-            .filter(task -> task.getState() != DriverTaskState.CANCELLED)
-            .map(DriverLogisticsTask::getSourceId)
-            .collect(java.util.stream.Collectors.toUnmodifiableSet());
-    java.util.ArrayList<CapitalRepairCardResponse> result = new java.util.ArrayList<>();
+      UUID warehouseId, Collection<UUID> alreadyMovedSourceIds) {
+    Set<UUID> alreadyMoved = Set.copyOf(alreadyMovedSourceIds);
+    ArrayList<CapitalRepairCardResponse> result = new ArrayList<>();
     int page = 0;
     long loaded = 0;
     long total;
