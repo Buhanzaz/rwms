@@ -518,6 +518,14 @@ from the replaceable Yandex MapKit provider fail open without changing shift bus
 Driver-shift photos reuse the existing encrypted CameraX/media pipeline under the dedicated
 `DRIVER_SHIFT/SHIFT_EVIDENCE` media proof.
 
+DriverApp stores the authoritative shift version separately from pending-command
+overlays. Incoming GET and command snapshots are fenced before applying those
+overlays: a lower version of the same shift cannot replace a newer one, while
+same-version metadata and changes of shift identity also require newer server
+time. A stale command response acknowledges only its own outbox operation. Room
+8→9 adds the nullable server version without inferring it from older optimistic
+projections; those rows use server time until a fresh snapshot establishes it.
+
 DriverApp authentication remains anchored to the worker's immutable home warehouse. Task-board is
 the operational execution-scope owner: it resolves an active temporary or completed permanent
 assignment before creating a shift at the destination warehouse, uses that warehouse's IANA

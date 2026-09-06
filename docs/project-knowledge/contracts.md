@@ -22,8 +22,9 @@ Auth OpenAPI includes the existing administration, actor-display, private worker
 credential, and event-recovery operations. User administration requires a USER
 token from the admin client plus scope and a persisted administrator role; worker
 credentials require the task-board service identity and credential-management
-scope. Recovery requires SYSTEM_ADMIN. Missing shadow checkpoints currently
-produce HTTP 500; this documented limitation is not a successful recovery.
+scope. Recovery requires SYSTEM_ADMIN. Missing shadow checkpoints return 404;
+stale checkpoint versions or ineligible recovery state return 409, both as
+Problem Details. Corrupt authoritative replay evidence remains a server error.
 
 ## Canonical Locations
 

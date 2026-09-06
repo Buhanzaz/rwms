@@ -966,7 +966,11 @@ or payment evidence, across process recreation. Its durable inbox is acknowledge
 Android WorkManager performs connected deadline/catch-up reads and bounded retries; OS permission,
 scheduling restrictions and an encrypted remembered session govern background notification delivery,
 not the server release deadline. Notification navigation is explicit and immutable, and logout
-fences late results and removes notifications. Evidence: [CustomerApp](../../client-app/README.md),
+fences late results and removes notifications. A new CustomerApp session waits for
+the previous mutation to cancel and finish cleanup before loading its own profile
+and warehouses. While waiting, the authenticated graph stays in loading state;
+an old request cannot complete bootstrap or invalidate the new session.
+Evidence: [CustomerApp](../../client-app/README.md),
 [panel payment projection](../../panel/src/features/orders/domain/order-payment.ts).
 
 The cabin passport reserve register composes asset-service's repeatable-read snapshot of live
