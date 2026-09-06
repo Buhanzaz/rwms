@@ -261,8 +261,10 @@ package.
 Media and command effects use the public media/API flow and stable operation
 identifiers. The upload queue records progress and failure for explicit retry;
 it does not invent a successful command while offline. Problem Details are
-mapped to user-visible errors by the shared backend client. A terminal
-authentication failure clears the unusable session; a temporary refresh outage
+mapped to user-visible errors by the shared backend client. A failed queue write
+when retrying an operation or photo is reported through the same error handler; the
+original operation and photos remain durable and no new worker is scheduled.
+A terminal authentication failure clears the unusable session; a temporary refresh outage
 does not. A `409 Conflict` requires the screen to refresh/rebase the server
 version before retrying. Streamed preview and original response bodies are
 copied into the app-private cache on the IO dispatcher before a local URI is

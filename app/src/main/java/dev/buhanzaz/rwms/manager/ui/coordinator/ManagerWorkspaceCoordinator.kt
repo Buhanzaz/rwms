@@ -107,13 +107,25 @@ internal class ManagerWorkspaceCoordinator(
 
     fun retryBackgroundUpload(operationId: String) {
         viewModelScope.launch {
-            backgroundUploads.await().retry(operationId)
+            try {
+                backgroundUploads.await().retry(operationId)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                runtime.handleFailure(failure)
+            }
         }
     }
 
     fun retryBackgroundPhoto(operationId: String, photoId: String) {
         viewModelScope.launch {
-            backgroundUploads.await().retryPhoto(operationId, photoId)
+            try {
+                backgroundUploads.await().retryPhoto(operationId, photoId)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                runtime.handleFailure(failure)
+            }
         }
     }
 
