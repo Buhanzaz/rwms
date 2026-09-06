@@ -80,7 +80,8 @@
               "NOT_REQUESTED",
               "PENDING",
               "PUBLISHED",
-              "FAILED"
+              "FAILED",
+              "REVIEW_REQUIRED"
             ],
             "title": "Capacity Publish Status",
             "type": "string"
@@ -9944,7 +9945,8 @@
               "NOT_REQUESTED",
               "PENDING",
               "PUBLISHED",
-              "FAILED"
+              "FAILED",
+              "REVIEW_REQUIRED"
             ],
             "title": "Capacity Publish Status",
             "type": "string"

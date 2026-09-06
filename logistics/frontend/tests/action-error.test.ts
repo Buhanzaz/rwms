@@ -64,4 +64,15 @@ describe('action error feedback', () => {
     );
   });
 
+  it('explains stopped contractor recovery without suggesting a plan-version refresh', () => {
+    expect(actionErrorFeedback(new ApiError(409, {
+      code: 'CONTRACTOR_HANDOFF_REVIEW_REQUIRED',
+    }, 'HTTP 409'))).toEqual({
+      tone: 'warning',
+      title: 'Передача требует проверки',
+      detail: 'Автоматические попытки остановлены. Проверьте передачу и повторите назначение при необходимости.',
+      refreshPlan: false,
+    });
+  });
+
 });

@@ -25,7 +25,9 @@ class AdminPlanningSettingsRead(ApiModel):
     longitude: float
     settings: PlanningSettings
     isochrone_tariffs: list[IsochroneTariff]
-    capacity_publish_status: Literal["NOT_REQUESTED", "PENDING", "PUBLISHED", "FAILED"]
+    capacity_publish_status: Literal[
+        "NOT_REQUESTED", "PENDING", "PUBLISHED", "FAILED", "REVIEW_REQUIRED"
+    ]
 
 
 class AdminPlanningSettingsUpdate(ApiModel):

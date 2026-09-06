@@ -122,7 +122,7 @@ export interface Warehouse {
   settings: PlanningSettings;
   capacity_generation: number;
   capacity_published_generation: number;
-  capacity_publish_status: 'NOT_REQUESTED' | 'PENDING' | 'PUBLISHED' | 'FAILED';
+  capacity_publish_status: 'NOT_REQUESTED' | 'PENDING' | 'PUBLISHED' | 'FAILED' | 'REVIEW_REQUIRED';
   capacity_publish_attempts: number;
   capacity_publish_error_code: string | null;
   capacity_publish_next_attempt_at: IsoDateTime | null;

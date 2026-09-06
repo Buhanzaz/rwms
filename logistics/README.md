@@ -161,7 +161,12 @@ automatically from eligible unassigned work or select requests manually. Each
 real-RWMS handoff first persists a durable command and request reservation; its
 remote apply runs outside the database transaction and is retried with the same
 idempotency identity. Only complete success removes requests from automatic
-planning. A mixed upstream result remains pending for reconciliation and never
+planning. Automatic recovery allows three durable claims, including expired leases. Stable owner
+validation failures or an exhausted budget enter `REVIEW_REQUIRED`, preserving the immutable command,
+partial-result evidence and request reservations. The API returns `409 CONTRACTOR_HANDOFF_REVIEW_REQUIRED`
+without `Retry-After`; the UI explains that automatic attempts have stopped. Repeating the existing authorized contractor
+assignment or dispatch resumes the same command with a new lease token; late callbacks from an older
+lease cannot finalize or release its reservations. A mixed upstream result never
 pretends that every request was assigned. The handoff records the concrete
 active worker but deliberately creates no simulator vehicle, shift or route
 cycle. A successful canonical handoff also returns and projects its durable
@@ -816,7 +821,11 @@ commits local work and a durable `PENDING` publication record in one
 transaction. An unavailable optional RWMS capacity projection becomes
 `FAILED` with a safe error code and operator warning; it never rolls back local
 work or converts test demand into an RWMS order. A leased worker automatically
-retries only the latest due generation with bounded backoff, while a delayed
+retries only the latest due generation with a three-attempt durable budget and bounded backoff.
+A stable owner validation failure or exhausted budget becomes `REVIEW_REQUIRED` outside automatic
+claims, retaining the last published projection. The UI explains that publication has stopped;
+committing reviewed warehouse settings or the existing capacity reconciliation operation creates a
+new generation and resets its budget. A delayed
 older success cannot hide newer pending work. Completion refreshes the locked generation before
 advancing its monotone delivery cursor; only a matching generation clears retry and lease fields.
 The newer generation retains its due time, attempts, error and lease. `POST

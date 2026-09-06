@@ -267,7 +267,9 @@ class WarehouseRead(ApiModel):
     settings: dict[str, Any]
     capacity_generation: int
     capacity_published_generation: int
-    capacity_publish_status: Literal["NOT_REQUESTED", "PENDING", "PUBLISHED", "FAILED"]
+    capacity_publish_status: Literal[
+        "NOT_REQUESTED", "PENDING", "PUBLISHED", "FAILED", "REVIEW_REQUIRED"
+    ]
     capacity_publish_attempts: int
     capacity_publish_error_code: str | None
     capacity_publish_next_attempt_at: AwareDatetime | None

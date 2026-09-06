@@ -121,11 +121,14 @@ describe('application states', () => {
     expect(useUiStore.getState()).toMatchObject({ mode: 'PLAN_DAY', section: 'WAREHOUSE', selected: { kind: 'warehouse', id: warehouse.id } });
   });
 
-  it('explains that a committed settings change is retrying its slot projection', async () => {
+  it.each([
+    ['FAILED', 'Слоты обновляются', 'повторно сохранять форму не нужно'],
+    ['REVIEW_REQUIRED', 'Обновление слотов требует проверки', 'сохраните их для повторной публикации'],
+  ] as const)('explains a committed settings projection in %s state', async (status, title, guidance) => {
     const warehouse = warehouseFixture({
       capacity_generation: 12,
       capacity_published_generation: 11,
-      capacity_publish_status: 'FAILED',
+      capacity_publish_status: status,
       capacity_publish_attempts: 1,
       capacity_publish_error_code: 'RWMS_CAPACITY_UNAVAILABLE',
       capacity_publish_next_attempt_at: '2026-08-31T04:00:05Z',
@@ -151,9 +154,10 @@ describe('application states', () => {
     renderApp();
 
     const warning = await screen.findByRole('alert');
-    expect(warning).toHaveTextContent('Слоты обновляются');
+    expect(warning).toHaveTextContent(title);
     expect(warning).toHaveTextContent('Локальные настройки сохранены');
-    expect(warning).toHaveTextContent('повторно сохранять форму не нужно');
+    expect(warning).toHaveTextContent(guidance);
+    if (status === 'REVIEW_REQUIRED') expect(warning).not.toHaveTextContent('обновляются автоматически');
     expect(warning).not.toHaveTextContent('RWMS_CAPACITY_UNAVAILABLE');
   });
 

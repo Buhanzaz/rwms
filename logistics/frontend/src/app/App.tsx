@@ -1112,9 +1112,14 @@ export function App() {
     workspace.warehouse.capacity_generation > workspace.warehouse.capacity_published_generation
     && (workspace.warehouse.capacity_publish_status === 'PENDING'
       || workspace.warehouse.capacity_publish_status === 'FAILED');
+  const capacityPublicationReviewRequired =
+    workspace.warehouse.capacity_generation > workspace.warehouse.capacity_published_generation
+    && workspace.warehouse.capacity_publish_status === 'REVIEW_REQUIRED';
   const workspaceWarning = workspace.rwms_refresh_warning
     ? userFacingErrorDetail(new Error(workspace.rwms_refresh_warning), 'Не все заявки удалось обновить. Повторите загрузку позже.')
-    : capacityPublicationPending
+    : capacityPublicationReviewRequired
+      ? 'Локальные настройки сохранены. Автоматическое обновление слотов остановлено. Проверьте настройки склада и сохраните их для повторной публикации.'
+      : capacityPublicationPending
       ? 'Локальные настройки сохранены. Доступные слоты RWMS обновляются автоматически; повторно сохранять форму не нужно.'
       : null;
   const mainWarehouse = workspace.warehouses.find((candidate) => (
@@ -1188,7 +1193,7 @@ export function App() {
       </header>
       {workspaceWarning ? (
         <div className="workspace-refresh-warning" role="alert">
-          <strong>{workspace.rwms_refresh_warning ? 'RWMS обновлён частично' : 'Слоты обновляются'}</strong>
+          <strong>{workspace.rwms_refresh_warning ? 'RWMS обновлён частично' : capacityPublicationReviewRequired ? 'Обновление слотов требует проверки' : 'Слоты обновляются'}</strong>
           <span>{workspaceWarning}</span>
         </div>
       ) : null}

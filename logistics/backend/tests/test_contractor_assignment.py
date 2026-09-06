@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, date, datetime, time, timedelta
 from typing import cast
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from app.api.serializers import request_read
 from app.db import utc_now
@@ -36,6 +42,9 @@ from app.schemas.domain import (
 )
 from app.services.contractor_assignment import (
     CONTRACTOR_HANDOFF,
+    _finalize_handoff_command,
+    _record_handoff_failure,
+    _record_handoff_rejection,
     _request_handoff_identities,
     apply_claimed_contractor_handoff,
     assign_request_to_contractor,
@@ -81,6 +90,16 @@ class ContractorDirectoryClient:
         assert at is not None
         self.directory_calls.append((warehouse_id, at, include_incoming))
         return [self.identity]
+
+
+def _independent_session_factory() -> tuple[async_sessionmaker[AsyncSession], AsyncEngine]:
+    """Open independent sessions for lease-fencing integration proofs."""
+
+    database_url = os.getenv("TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("TEST_DATABASE_URL is not configured")
+    engine = create_async_engine(database_url, pool_pre_ping=True)
+    return async_sessionmaker(engine, expire_on_commit=False), engine
 
 
 async def _ready_request(
@@ -1132,8 +1151,10 @@ async def test_rwms_handoff_releases_transaction_before_directory_and_apply(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("upstream_status", [408, 502])
 async def test_lost_response_keeps_recoverable_pending_command_and_replays_same_key(
     db_session: AsyncSession,
+    upstream_status: int,
 ) -> None:
     """A lost response never reports completion and worker replay cannot duplicate the effect."""
 
@@ -1147,7 +1168,7 @@ async def test_lost_response_keeps_recoverable_pending_command_and_replays_same_
     ) -> RwmsApplyResult:
         del command
         idempotency_keys.append(idempotency_key)
-        raise ApiError(502, "RWMS_REQUEST_FAILED", "upstream response was lost")
+        raise ApiError(upstream_status, "RWMS_REQUEST_FAILED", "upstream response was lost")
 
     client.apply_assignments.side_effect = lost_response
     with pytest.raises(ApiError) as pending:
@@ -1212,6 +1233,200 @@ async def test_lost_response_keeps_recoverable_pending_command_and_replays_same_
     assert request.status == RequestStatus.PLANNED
     assert request.assignment_type == CONTRACTOR_HANDOFF
     assert request.assigned_by == TEST_ACTOR
+
+
+@pytest.mark.asyncio
+async def test_exhausted_partial_handoff_keeps_reservation_and_reuses_authorized_assignment(
+    db_session: AsyncSession,
+) -> None:
+    """A reviewed retry reuses the fenced command instead of creating a new handoff."""
+
+    request, client, contractor_id, source = await _rwms_delivery(db_session)
+    keys: list[str] = []
+
+    async def partial_failure(_command: object, *, idempotency_key: str) -> RwmsApplyResult:
+        keys.append(idempotency_key)
+        return RwmsApplyResult(
+            applied=[
+                RwmsAppliedAssignment(
+                    order_id=source.order_id,
+                    order_version=source.order_version,
+                    document_id=uuid4(),
+                    external_task_id=uuid4(),
+                    task_version=1,
+                    replayed=False,
+                )
+            ],
+            rejected=[
+                RwmsRejectedAssignment(
+                    order_id=source.order_id, code="ASSIGNMENT_SLICE_CONFLICT", message="partial"
+                )
+            ],
+        )
+
+    client.apply_assignments.side_effect = partial_failure
+    for attempt in range(3):
+        if attempt == 0:
+            with pytest.raises(ApiError) as pending:
+                await assign_request_to_contractor(
+                    db_session,
+                    request.id,
+                    ContractorAssignmentCreate(contractor_worker_id=contractor_id),
+                    cast(RwmsPlanningClient, client),
+                    assigned_by=TEST_ACTOR,
+                )
+            assert pending.value.code == "CONTRACTOR_HANDOFF_PENDING"
+        else:
+            command = await db_session.scalar(select(ContractorHandoffCommand))
+            assert command is not None
+            command.next_attempt_at = utc_now() - timedelta(seconds=1)
+            await db_session.commit()
+            claimed = await claim_due_contractor_handoffs(db_session, limit=1)
+            await db_session.commit()
+            assert len(claimed) == 1
+            with pytest.raises(ApiError) as pending:
+                await apply_claimed_contractor_handoff(
+                    db_session, claimed[0], cast(RwmsPlanningClient, client)
+                )
+            if attempt == 2:
+                assert pending.value.status_code == 409
+                assert pending.value.code == "CONTRACTOR_HANDOFF_REVIEW_REQUIRED"
+                assert "Retry-After" not in pending.value.headers
+            else:
+                assert pending.value.code == "CONTRACTOR_HANDOFF_PENDING"
+
+    command = await db_session.scalar(select(ContractorHandoffCommand))
+    assert command is not None
+    assert command.status == ContractorHandoffStatus.REVIEW_REQUIRED
+    assert (
+        command.lease_until is None
+        and command.lease_token is None
+        and command.next_attempt_at is None
+    )
+    assert command.error_code == "RWMS_PARTIAL_ASSIGNMENT_RESULT"
+    assert request.contractor_handoff_command_id == command.id
+    assert await claim_due_contractor_handoffs(db_session, limit=1) == ()
+
+    async def recovered(_command: object, *, idempotency_key: str) -> RwmsApplyResult:
+        keys.append(idempotency_key)
+        return RwmsApplyResult(
+            applied=[
+                RwmsAppliedAssignment(
+                    order_id=source.order_id,
+                    order_version=source.order_version,
+                    document_id=uuid4(),
+                    external_task_id=uuid4(),
+                    task_version=1,
+                    replayed=True,
+                )
+            ],
+            rejected=[],
+        )
+
+    client.apply_assignments.side_effect = recovered
+    assigned = await assign_request_to_contractor(
+        db_session,
+        request.id,
+        ContractorAssignmentCreate(contractor_worker_id=contractor_id),
+        cast(RwmsPlanningClient, client),
+        assigned_by=TEST_ACTOR,
+    )
+    assert assigned.status == RequestStatus.PLANNED
+    assert (
+        await db_session.get(ContractorHandoffCommand, command.id)
+    ).status == ContractorHandoffStatus.SUCCEEDED
+    assert keys == [str(command.id)] * 4
+
+
+@pytest.mark.asyncio
+async def test_stale_contractor_lease_cannot_mutate_newer_lease_or_release_reservation() -> None:
+    """Only the current lease token may finalize, reject, or retry a reserved handoff."""
+
+    sessions, database_engine = _independent_session_factory()
+    warehouse_id = None
+    command_id = None
+    request_id = None
+    client = None
+    try:
+        async with sessions() as setup:
+            request, client, contractor_id, _source = await _rwms_delivery(setup)
+            client.apply_assignments.side_effect = ApiError(
+                503, "RWMS_REQUEST_FAILED", "initial upstream outage"
+            )
+            with pytest.raises(ApiError):
+                await assign_request_to_contractor(
+                    setup,
+                    request.id,
+                    ContractorAssignmentCreate(contractor_worker_id=contractor_id),
+                    cast(RwmsPlanningClient, client),
+                    assigned_by=TEST_ACTOR,
+                )
+            command = await setup.scalar(select(ContractorHandoffCommand))
+            assert command is not None
+            warehouse_id = request.warehouse_id
+            command_id = command.id
+            request_id = request.id
+            await setup.commit()
+
+        async with sessions() as session_a:
+            command_a = await session_a.get(ContractorHandoffCommand, command_id)
+            assert command_a is not None
+            command_a.next_attempt_at = utc_now() - timedelta(seconds=1)
+            await session_a.commit()
+            claimed_a = (await claim_due_contractor_handoffs(session_a, limit=1))[0]
+            await session_a.commit()
+
+            async with sessions() as session_b:
+                command_b = await session_b.get(ContractorHandoffCommand, command_id)
+                assert command_b is not None
+                command_b.lease_until = utc_now() - timedelta(seconds=1)
+                await session_b.commit()
+                claimed_b = (await claim_due_contractor_handoffs(session_b, limit=1))[0]
+                await session_b.commit()
+
+            assert not await _finalize_handoff_command(session_a, claimed_a, [])
+            assert not await _record_handoff_rejection(session_a, claimed_a, ["STALE_LEASE"])
+            await _record_handoff_failure(
+                session_a,
+                claimed_a,
+                ApiError(503, "RWMS_REQUEST_FAILED", "stale lease"),
+            )
+
+        async with sessions() as verification:
+            command = await verification.get(ContractorHandoffCommand, command_id)
+            request = await verification.get(LogisticsRequest, request_id)
+            assert command is not None and request is not None
+            assert command.status == ContractorHandoffStatus.APPLYING
+            assert command.attempts == 3
+            assert command.lease_token == claimed_b.lease_token
+            assert command.lease_until is not None
+            assert request.contractor_handoff_command_id == command_id
+
+            command.lease_until = utc_now() - timedelta(seconds=1)
+            await verification.commit()
+            assert await claim_due_contractor_handoffs(verification, limit=1) == ()
+            assert command.status == ContractorHandoffStatus.REVIEW_REQUIRED
+            assert command.attempts == 3
+            assert command.lease_token is None
+            assert command.lease_until is None
+            assert command.next_attempt_at is None
+            assert request.contractor_handoff_command_id == command_id
+            await verification.commit()
+
+        assert client is not None
+        assert client.apply_assignments.await_count == 1
+    finally:
+        if warehouse_id is not None:
+            async with sessions() as cleanup:
+                if command_id is not None:
+                    await cleanup.execute(
+                        delete(ContractorHandoffCommand).where(
+                            ContractorHandoffCommand.id == command_id
+                        )
+                    )
+                await cleanup.execute(delete(Warehouse).where(Warehouse.id == warehouse_id))
+                await cleanup.commit()
+        await database_engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -1348,9 +1563,7 @@ async def test_rejected_handoff_can_retry_after_source_revision_changes(
             "source_revision": "e" * 64,
             "unit_reservations": [
                 reservation.model_copy(
-                    update={
-                        "inventory_source_warehouse_id": revised_source_warehouse_id
-                    }
+                    update={"inventory_source_warehouse_id": revised_source_warehouse_id}
                 )
                 for reservation in source.unit_reservations
             ],

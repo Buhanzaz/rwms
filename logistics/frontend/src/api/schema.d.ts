@@ -1687,7 +1687,7 @@ export interface components {
              * Capacity Publish Status
              * @enum {string}
              */
-            capacity_publish_status: "NOT_REQUESTED" | "PENDING" | "PUBLISHED" | "FAILED";
+            capacity_publish_status: "NOT_REQUESTED" | "PENDING" | "PUBLISHED" | "FAILED" | "REVIEW_REQUIRED";
             /** Isochrone Tariffs */
             isochrone_tariffs: components["schemas"]["IsochroneTariff"][];
             /** Latitude */
@@ -5508,7 +5508,7 @@ export interface components {
              * Capacity Publish Status
              * @enum {string}
              */
-            capacity_publish_status: "NOT_REQUESTED" | "PENDING" | "PUBLISHED" | "FAILED";
+            capacity_publish_status: "NOT_REQUESTED" | "PENDING" | "PUBLISHED" | "FAILED" | "REVIEW_REQUIRED";
             /** Capacity Published Generation */
             capacity_published_generation: number;
             /** City */

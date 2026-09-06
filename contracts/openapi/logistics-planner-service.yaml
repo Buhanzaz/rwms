@@ -1070,6 +1070,7 @@ components:
           - PENDING
           - PUBLISHED
           - FAILED
+          - REVIEW_REQUIRED
           title: Capacity Publish Status
           type: string
         isochrone_tariffs:

@@ -17,6 +17,7 @@ const conflictTitles: Readonly<Record<string, string>> = {
   VEHICLE_SHIFT_OVERLAP: 'Машина уже занята в смене',
   CATALOG_VERSION_CONFLICT: 'Смена уже изменена',
   DATABASE_CONSTRAINT_VIOLATION: 'Объект используется в сохранённом плане',
+  CONTRACTOR_HANDOFF_REVIEW_REQUIRED: 'Передача требует проверки',
 };
 
 /** Keeps domain conflicts distinct from optimistic plan-version conflicts. */

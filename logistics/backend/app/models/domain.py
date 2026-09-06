@@ -67,6 +67,7 @@ class CapacityPublicationStatus(StrEnum):
     PENDING = "PENDING"
     PUBLISHED = "PUBLISHED"
     FAILED = "FAILED"
+    REVIEW_REQUIRED = "REVIEW_REQUIRED"
 
 
 class ContractorHandoffStatus(StrEnum):
@@ -76,6 +77,7 @@ class ContractorHandoffStatus(StrEnum):
     APPLYING = "APPLYING"
     SUCCEEDED = "SUCCEEDED"
     REJECTED = "REJECTED"
+    REVIEW_REQUIRED = "REVIEW_REQUIRED"
 
 
 class RequestRescheduleHoldState(StrEnum):
@@ -472,14 +474,15 @@ class ContractorHandoffCommand(UuidPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "contractor_handoff_commands"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('PENDING', 'APPLYING', 'SUCCEEDED', 'REJECTED')",
+            "status IN ('PENDING', 'APPLYING', 'SUCCEEDED', 'REJECTED', 'REVIEW_REQUIRED')",
             name="valid_status",
         ),
         CheckConstraint("attempts >= 0", name="nonnegative_attempts"),
         CheckConstraint("jsonb_array_length(request_ids) > 0", name="nonempty_requests"),
         CheckConstraint("length(assigned_by) > 0", name="nonempty_assigned_by"),
         CheckConstraint(
-            "(status = 'APPLYING') = (lease_until IS NOT NULL)",
+            "(status = 'APPLYING' AND lease_until IS NOT NULL AND lease_token IS NOT NULL) "
+            "OR (status <> 'APPLYING' AND lease_until IS NULL AND lease_token IS NULL)",
             name="lease_matches_applying",
         ),
         CheckConstraint(
@@ -516,6 +519,7 @@ class ContractorHandoffCommand(UuidPrimaryKeyMixin, TimestampMixin, Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     error_code: Mapped[str | None] = mapped_column(String(128))
     rejection_codes: Mapped[list[str]] = mapped_column(
         MutableList.as_mutable(JSONB), nullable=False, default=list
@@ -543,7 +547,8 @@ class Warehouse(CatalogVersionMixin, UuidPrimaryKeyMixin, TimestampMixin, Base):
             name="published_capacity_not_ahead",
         ),
         CheckConstraint(
-            "capacity_publish_status IN ('NOT_REQUESTED', 'PENDING', 'PUBLISHED', 'FAILED')",
+            "capacity_publish_status IN "
+            "('NOT_REQUESTED', 'PENDING', 'PUBLISHED', 'FAILED', 'REVIEW_REQUIRED')",
             name="valid_capacity_publish_status",
         ),
         CheckConstraint("capacity_publish_attempts >= 0", name="nonnegative_capacity_attempts"),

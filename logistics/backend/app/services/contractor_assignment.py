@@ -7,7 +7,7 @@ from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from uuid import UUID, uuid5
+from uuid import UUID, uuid4, uuid5
 from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
@@ -57,6 +57,8 @@ _CONTRACTOR_COMMAND_NAMESPACE = UUID("d7724ad2-e9e7-49db-bc5f-cefd664448c7")
 _SAFE_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
 _HANDOFF_LEASE_SECONDS = 60
 _MAX_HANDOFF_BACKOFF_SECONDS = 300
+_MAX_HANDOFF_ATTEMPTS = 3
+_HANDOFF_REVIEW_STATUS_CODES = frozenset({400, 403, 404, 405, 410, 415, 422})
 _PARTIAL_RESULT_CODE = "RWMS_PARTIAL_ASSIGNMENT_RESULT"
 _MUTABLE_PLAN_STATUSES = {
     PlanStatus.DRAFT,
@@ -70,6 +72,7 @@ class ClaimedContractorHandoff:
     """Immutable command snapshot safe to carry across the transaction-free HTTP call."""
 
     command_id: UUID
+    lease_token: UUID
     payload: RwmsAssignmentsCommand
 
 
@@ -79,9 +82,31 @@ def _pending_error() -> ApiError:
     return ApiError(
         503,
         "CONTRACTOR_HANDOFF_PENDING",
-        "Передача сохранена и будет повторена автоматически. Назначение ещё не завершено.",
+        (
+            "Передача сохранена. Назначение ещё не подтверждено; "
+            "проверьте его состояние перед повтором."  # noqa: RUF001
+        ),
         headers={"Retry-After": "5"},
     )
+
+
+def _review_required_error() -> ApiError:
+    """Return the operator outcome after the bounded automatic budget is exhausted."""
+
+    return ApiError(
+        409,
+        "CONTRACTOR_HANDOFF_REVIEW_REQUIRED",
+        (
+            "Автоматические попытки остановлены. Проверьте передачу и "
+            "повторите назначение при необходимости."
+        ),
+    )
+
+
+def _handoff_requires_review(exc: Exception) -> bool:
+    """Treat stable owner validation as a human decision, not an automatic retry."""
+
+    return isinstance(exc, ApiError) and exc.status_code in _HANDOFF_REVIEW_STATUS_CODES
 
 
 async def dispatch_requests_to_contractor(
@@ -108,6 +133,7 @@ async def dispatch_requests_to_contractor(
                     (
                         ContractorHandoffStatus.PENDING,
                         ContractorHandoffStatus.APPLYING,
+                        ContractorHandoffStatus.REVIEW_REQUIRED,
                     )
                 ),
             )
@@ -574,6 +600,8 @@ async def _dispatch_read_for_command(
         raise RuntimeError("contractor handoff command disappeared")
     if command.status == ContractorHandoffStatus.REJECTED:
         raise _rejected_error(command)
+    if command.status == ContractorHandoffStatus.REVIEW_REQUIRED:
+        raise _review_required_error()
     if command.status != ContractorHandoffStatus.SUCCEEDED:
         raise _pending_error()
     request_ids = [UUID(value) for value in command.request_ids]
@@ -701,6 +729,8 @@ async def _stage_contractor_handoff(
             )
         if existing.status == ContractorHandoffStatus.REJECTED:
             raise _rejected_error(existing)
+        if existing.status == ContractorHandoffStatus.REVIEW_REQUIRED:
+            raise _review_required_error()
         if existing.status == ContractorHandoffStatus.SUCCEEDED:
             raise RuntimeError("completed contractor command lost its request assignment")
         raise _pending_error()
@@ -721,6 +751,7 @@ async def _stage_contractor_handoff(
         attempts=1,
         next_attempt_at=None,
         lease_until=now + timedelta(seconds=_HANDOFF_LEASE_SECONDS),
+        lease_token=uuid4(),
         error_code=None,
         rejection_codes=[],
         completed_at=None,
@@ -740,7 +771,11 @@ def _claimed_snapshot(command: ContractorHandoffCommand) -> ClaimedContractorHan
         payload = RwmsAssignmentsCommand.model_validate(command.command_payload)
     except ValidationError as exc:
         raise RuntimeError("persisted contractor command is invalid") from exc
-    return ClaimedContractorHandoff(command_id=command.id, payload=payload)
+    if command.lease_token is None:
+        raise RuntimeError("claimed contractor handoff is missing its lease token")
+    return ClaimedContractorHandoff(
+        command_id=command.id, lease_token=command.lease_token, payload=payload
+    )
 
 
 async def claim_due_contractor_handoffs(
@@ -751,7 +786,7 @@ async def claim_due_contractor_handoffs(
     """Lease a bounded due batch with skip-locked multi-instance fencing."""
 
     now = utc_now()
-    commands = list(
+    candidates = list(
         await session.scalars(
             select(ContractorHandoffCommand)
             .where(
@@ -776,16 +811,26 @@ async def claim_due_contractor_handoffs(
                 ContractorHandoffCommand.created_at,
                 ContractorHandoffCommand.id,
             )
+            .execution_options(populate_existing=True)
             .with_for_update(skip_locked=True)
             .limit(limit)
         )
     )
     lease_until = now + timedelta(seconds=_HANDOFF_LEASE_SECONDS)
-    for command in commands:
+    commands: list[ContractorHandoffCommand] = []
+    for command in candidates:
+        if command.attempts >= _MAX_HANDOFF_ATTEMPTS:
+            command.status = ContractorHandoffStatus.REVIEW_REQUIRED
+            command.next_attempt_at = None
+            command.lease_until = None
+            command.lease_token = None
+            continue
         command.status = ContractorHandoffStatus.APPLYING
         command.attempts += 1
         command.next_attempt_at = None
         command.lease_until = lease_until
+        command.lease_token = uuid4()
+        commands.append(command)
     await session.flush()
     return tuple(_claimed_snapshot(command) for command in commands)
 
@@ -802,6 +847,7 @@ async def resume_contractor_handoff(
     command = await session.scalar(
         select(ContractorHandoffCommand)
         .where(ContractorHandoffCommand.id == command_id)
+        .execution_options(populate_existing=True)
         .with_for_update()
     )
     if command is None:
@@ -813,6 +859,9 @@ async def resume_contractor_handoff(
         error = _rejected_error(command)
         await session.commit()
         raise error
+    if command.status == ContractorHandoffStatus.REVIEW_REQUIRED and not force:
+        await session.commit()
+        raise _review_required_error()
     now = utc_now()
     if (
         command.status == ContractorHandoffStatus.APPLYING
@@ -832,6 +881,7 @@ async def resume_contractor_handoff(
     command.attempts += 1
     command.next_attempt_at = None
     command.lease_until = now + timedelta(seconds=_HANDOFF_LEASE_SECONDS)
+    command.lease_token = uuid4()
     claimed = _claimed_snapshot(command)
     await session.commit()
     await apply_claimed_contractor_handoff(session, claimed, client)
@@ -853,18 +903,16 @@ async def apply_claimed_contractor_handoff(
             result.applied
             or await _handoff_has_partial_result(session, claimed.command_id)
         ):
-            await _record_partial_handoff_result(
-                session,
-                claimed.command_id,
-                [item.code for item in result.rejected],
-            )
+            if await _record_partial_handoff_result(
+                session, claimed, [item.code for item in result.rejected]
+            ):
+                raise _review_required_error()
             raise _pending_error()
         if result.rejected:
-            await _record_handoff_rejection(
-                session,
-                claimed.command_id,
-                [item.code for item in result.rejected],
-            )
+            if not await _record_handoff_rejection(
+                session, claimed, [item.code for item in result.rejected]
+            ):
+                raise _pending_error()
             command = await session.get(ContractorHandoffCommand, claimed.command_id)
             assert command is not None
             raise _rejected_error(command)
@@ -872,82 +920,93 @@ async def apply_claimed_contractor_handoff(
             _external_task_ids_by_order(claimed.payload, result.applied)
         except ApiError as exc:
             if result.applied:
-                await _record_partial_handoff_result(
-                    session,
-                    claimed.command_id,
-                    ["RWMS_APPLY_RESPONSE_MISMATCH"],
-                )
+                if await _record_partial_handoff_result(
+                    session, claimed, ["RWMS_APPLY_RESPONSE_MISMATCH"]
+                ):
+                    raise _review_required_error() from exc
                 raise _pending_error() from exc
             raise
-        await _finalize_handoff_command(
-            session,
-            claimed.command_id,
-            result.applied,
-        )
+        if not await _finalize_handoff_command(session, claimed, result.applied):
+            raise _pending_error()
     except ApiError as exc:
         if exc.code in {
             "CONTRACTOR_ASSIGNMENT_REJECTED",
             "CONTRACTOR_HANDOFF_PENDING",
+            "CONTRACTOR_HANDOFF_REVIEW_REQUIRED",
         }:
             raise
         await session.rollback()
-        await _record_handoff_failure(session, claimed.command_id, exc)
+        if await _record_handoff_failure(session, claimed, exc):
+            raise _review_required_error() from exc
         raise _pending_error() from exc
     except Exception as exc:
         await session.rollback()
-        await _record_handoff_failure(session, claimed.command_id, exc)
+        if await _record_handoff_failure(session, claimed, exc):
+            raise _review_required_error() from exc
         raise _pending_error() from exc
 
 
 async def _record_handoff_failure(
     session: AsyncSession,
-    command_id: UUID,
+    claimed: ClaimedContractorHandoff,
     exc: Exception,
-) -> None:
+) -> bool:
     """Release a failed lease and schedule capped exponential retry without raw text."""
 
     command = await session.scalar(
         select(ContractorHandoffCommand)
-        .where(ContractorHandoffCommand.id == command_id)
+        .where(ContractorHandoffCommand.id == claimed.command_id)
+        .execution_options(populate_existing=True)
         .with_for_update()
     )
-    if command is None or command.status in {
-        ContractorHandoffStatus.SUCCEEDED,
-        ContractorHandoffStatus.REJECTED,
-    }:
+    if (
+        command is None
+        or command.status != ContractorHandoffStatus.APPLYING
+        or command.lease_token != claimed.lease_token
+    ):
         await session.commit()
-        return
+        return False
     delay_seconds = min(
         _MAX_HANDOFF_BACKOFF_SECONDS,
         5 * (2 ** min(max(command.attempts - 1, 0), 6)),
     )
-    command.status = ContractorHandoffStatus.PENDING
+    if _handoff_requires_review(exc) or command.attempts >= _MAX_HANDOFF_ATTEMPTS:
+        command.status = ContractorHandoffStatus.REVIEW_REQUIRED
+        command.next_attempt_at = None
+    else:
+        command.status = ContractorHandoffStatus.PENDING
+        command.next_attempt_at = utc_now() + timedelta(seconds=delay_seconds)
     command.lease_until = None
-    command.next_attempt_at = utc_now() + timedelta(seconds=delay_seconds)
+    command.lease_token = None
     if command.error_code != _PARTIAL_RESULT_CODE:
         command.error_code = _handoff_error_code(exc)
     await session.commit()
+    return command.status == ContractorHandoffStatus.REVIEW_REQUIRED
 
 
 async def _record_handoff_rejection(
     session: AsyncSession,
-    command_id: UUID,
+    claimed: ClaimedContractorHandoff,
     rejection_codes: Sequence[str],
-) -> None:
+) -> bool:
     """Persist a typed terminal rejection and release every local reservation."""
 
     command = await session.scalar(
         select(ContractorHandoffCommand)
-        .where(ContractorHandoffCommand.id == command_id)
+        .where(ContractorHandoffCommand.id == claimed.command_id)
+        .execution_options(populate_existing=True)
         .with_for_update()
     )
     if command is None:
         raise RuntimeError("contractor handoff command disappeared")
-    if command.status == ContractorHandoffStatus.SUCCEEDED:
+    if (
+        command.status != ContractorHandoffStatus.APPLYING
+        or command.lease_token != claimed.lease_token
+    ):
         await session.commit()
-        return
+        return False
     safe_codes = _safe_rejection_codes(rejection_codes)
-    requests = await _command_requests(session, command_id, for_update=True)
+    requests = await _command_requests(session, claimed.command_id, for_update=True)
     for request in requests:
         if request.assignment_type is None:
             request.contractor_handoff_command_id = None
@@ -955,43 +1014,55 @@ async def _record_handoff_rejection(
                 request.status = RequestStatus.READY
     command.status = ContractorHandoffStatus.REJECTED
     command.lease_until = None
+    command.lease_token = None
     command.next_attempt_at = None
     command.error_code = "CONTRACTOR_ASSIGNMENT_REJECTED"
     command.rejection_codes = safe_codes
     command.completed_at = utc_now()
     await session.commit()
+    return True
 
 
 async def _record_partial_handoff_result(
     session: AsyncSession,
-    command_id: UUID,
+    claimed: ClaimedContractorHandoff,
     rejection_codes: Sequence[str],
-) -> None:
+) -> bool:
     """Keep a mixed upstream result retryable without undoing possibly applied effects."""
 
     command = await session.scalar(
         select(ContractorHandoffCommand)
-        .where(ContractorHandoffCommand.id == command_id)
+        .where(ContractorHandoffCommand.id == claimed.command_id)
+        .execution_options(populate_existing=True)
         .with_for_update()
     )
-    if command is None:
-        raise RuntimeError("contractor handoff command disappeared")
-    if command.status in {
-        ContractorHandoffStatus.SUCCEEDED,
-        ContractorHandoffStatus.REJECTED,
-    }:
+    if (
+        command is None
+        or command.status != ContractorHandoffStatus.APPLYING
+        or command.lease_token != claimed.lease_token
+    ):
         await session.commit()
-        return
+        return False
     delay_seconds = min(
         _MAX_HANDOFF_BACKOFF_SECONDS,
         5 * (2 ** min(max(command.attempts - 1, 0), 6)),
     )
-    command.status = ContractorHandoffStatus.PENDING
+    command.status = (
+        ContractorHandoffStatus.REVIEW_REQUIRED
+        if command.attempts >= _MAX_HANDOFF_ATTEMPTS
+        else ContractorHandoffStatus.PENDING
+    )
     command.lease_until = None
-    command.next_attempt_at = utc_now() + timedelta(seconds=delay_seconds)
+    command.lease_token = None
+    command.next_attempt_at = (
+        None
+        if command.status == ContractorHandoffStatus.REVIEW_REQUIRED
+        else utc_now() + timedelta(seconds=delay_seconds)
+    )
     command.error_code = _PARTIAL_RESULT_CODE
     command.rejection_codes = _safe_rejection_codes(rejection_codes)
     await session.commit()
+    return command.status == ContractorHandoffStatus.REVIEW_REQUIRED
 
 
 def _safe_rejection_codes(rejection_codes: Sequence[str]) -> list[str]:
@@ -1016,31 +1087,31 @@ async def _handoff_has_partial_result(session: AsyncSession, command_id: UUID) -
 
 async def _finalize_handoff_command(
     session: AsyncSession,
-    command_id: UUID,
+    claimed: ClaimedContractorHandoff,
     applied: Sequence[RwmsAppliedAssignment],
-) -> None:
+) -> bool:
     """Finalize local assignment and plan invalidation after confirmed upstream apply."""
 
     command = await session.scalar(
         select(ContractorHandoffCommand)
-        .where(ContractorHandoffCommand.id == command_id)
+        .where(ContractorHandoffCommand.id == claimed.command_id)
+        .execution_options(populate_existing=True)
         .with_for_update()
     )
     if command is None:
         raise RuntimeError("contractor handoff command disappeared")
-    if command.status == ContractorHandoffStatus.SUCCEEDED:
+    if (
+        command.status != ContractorHandoffStatus.APPLYING
+        or command.lease_token != claimed.lease_token
+    ):
         await session.commit()
-        return
-    if command.status == ContractorHandoffStatus.REJECTED:
-        error = _rejected_error(command)
-        await session.commit()
-        raise error
+        return False
     try:
         command_payload = RwmsAssignmentsCommand.model_validate(command.command_payload)
     except ValidationError as exc:
         raise RuntimeError("persisted contractor command is invalid") from exc
     external_task_ids_by_order = _external_task_ids_by_order(command_payload, applied)
-    requests = await _command_requests(session, command_id, for_update=True)
+    requests = await _command_requests(session, claimed.command_id, for_update=True)
     expected_ids = [UUID(value) for value in command.request_ids]
     if [request.id for request in requests] != expected_ids:
         raise RuntimeError("contractor handoff request reservation is incomplete")
@@ -1063,7 +1134,7 @@ async def _finalize_handoff_command(
     if None in rwms_request_ids or rwms_request_ids != set(external_task_ids_by_order):
         raise RuntimeError("contractor handoff response does not map to reserved RWMS requests")
     for handoff_sequence, request in enumerate(requests):
-        if request.contractor_handoff_command_id != command_id:
+        if request.contractor_handoff_command_id != claimed.command_id:
             raise RuntimeError("contractor handoff request reservation changed")
         request_external_task_ids = (
             external_task_ids_by_order[request.external_id]
@@ -1094,11 +1165,13 @@ async def _finalize_handoff_command(
         )
     command.status = ContractorHandoffStatus.SUCCEEDED
     command.lease_until = None
+    command.lease_token = None
     command.next_attempt_at = None
     command.error_code = None
     command.rejection_codes = []
     command.completed_at = utc_now()
     await session.commit()
+    return True
 
 
 def _external_task_ids_by_order(
