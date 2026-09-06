@@ -63,10 +63,12 @@ This design solves four concrete problems:
   returns one asset and finalized `READY` facts complete that exact task-board
   reservation. WorkerApp and manager identities cannot use this owner.
 - **Customer-bound logistics media:** the exact `USER/CUSTOMER`,
-  `rwms-customer-android`, sole-`customer.rental` identity may use only
+  `rwms-customer-android` identity with `customer.rental` as its only domain scope may use only
   `LOGISTICS_SHIPMENT/SHIPMENT` or
   `LOGISTICS_CUSTOMER_PROFILE/PROFILE_AVATAR` media whose current logistics
-  owner proof is bound to that JWT subject. The selected active warehouse is
+  owner proof is bound to that JWT subject. Only the OIDC protocol scopes
+  `openid`, `profile` and `offline_access` may accompany `customer.rental`; any other scope
+  is rejected, including manager, administrator and worker permissions. The selected active warehouse is
   an authorization scope for the profile avatar, not profile identity. Create
   replay, upload session, source/variant content, finalize, list, reads and
   logical delete all recheck the same subject; a customer-shaped malformed

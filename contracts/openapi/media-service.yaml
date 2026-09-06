@@ -570,8 +570,9 @@ paths:
       operationId: createUploadSession
       description: >-
         Requires USER with rwms.write and warehouse EDIT, CustomerApp USER with
-        exactly customer.rental for its subject-bound LOGISTICS_SHIPMENT or
-        LOGISTICS_CUSTOMER_PROFILE owner, or WORKER with exactly worker.tasks
+        customer.rental as its sole domain scope for its subject-bound LOGISTICS_SHIPMENT or
+        LOGISTICS_CUSTOMER_PROFILE owner (only openid, profile and offline_access may accompany
+        customer.rental as OIDC protocol scopes), or WORKER with exactly worker.tasks
         for its own TASK_BOARD_WORKER_PROFILE/PROFILE_AVATAR, or with exactly
         one of worker.tasks or driver.tasks only for TASK_BOARD_ENTRY/WORK_RESULT,
         or specifically driver.tasks for DRIVER_SHIFT/SHIFT_EVIDENCE, and a

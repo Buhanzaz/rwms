@@ -186,7 +186,7 @@ func TestCustomerRentalCreatesOnlyItsSubjectBoundShipmentUpload(t *testing.T) {
 	}}
 	principal := auth.Principal{
 		SubjectID: subjectID, Role: "CUSTOMER", ClientID: "rwms-customer-android",
-		Scopes: map[string]struct{}{"customer.rental": {}},
+		Scopes: map[string]struct{}{"openid": {}, "profile": {}, "offline_access": {}, "customer.rental": {}},
 	}
 	server := newTestServer(t, repository, validatorStub{principal: principal}, &storeStub{})
 	body := fmt.Sprintf(`{"ownerType":"LOGISTICS_SHIPMENT","documentId":"%s","lineId":"%s","warehouseId":"%s","context":"SHIPMENT","fileName":"delivery.jpg","contentType":"image/jpeg","contentLength":128,"checksumSha256":"%s","sortOrder":0}`,
@@ -226,7 +226,7 @@ func TestCustomerRentalCreatesProfileAvatarButManagerCannotUseProfileOwner(t *te
 	}}
 	customer := auth.Principal{
 		SubjectID: subjectID, Role: "CUSTOMER", ClientID: "rwms-customer-android",
-		Scopes: map[string]struct{}{"customer.rental": {}},
+		Scopes: map[string]struct{}{"openid": {}, "profile": {}, "offline_access": {}, "customer.rental": {}},
 	}
 	body := fmt.Sprintf(`{"ownerType":"LOGISTICS_CUSTOMER_PROFILE","ownerId":"%s","warehouseId":"%s","context":"PROFILE_AVATAR","fileName":"avatar.jpg","contentType":"image/jpeg","contentLength":128,"checksumSha256":"%s","sortOrder":0}`,
 		profileID, warehouseID, strings.Repeat("a", 64))
@@ -273,6 +273,33 @@ func TestCustomerRentalCreatesProfileAvatarButManagerCannotUseProfileOwner(t *te
 	}
 }
 
+func TestCustomerProfileUploadRejectsAdditionalDomainScopesBeforeRepository(t *testing.T) {
+	for _, extra := range []string{"rwms.read", "rwms.write", "admin.manage", "worker.tasks", "driver.tasks", "unknown.scope"} {
+		t.Run(extra, func(t *testing.T) {
+			profileID, warehouseID := uuid.New(), uuid.New()
+			repository := &repositoryStub{}
+			customer := auth.Principal{
+				SubjectID: uuid.New(), Role: "CUSTOMER", ClientID: "rwms-customer-android",
+				Scopes: map[string]struct{}{"openid": {}, "profile": {}, "offline_access": {}, "customer.rental": {}, extra: {}},
+				Grants: []auth.WarehouseGrant{{WarehouseID: warehouseID, Level: auth.Edit}},
+			}
+			server := newTestServer(t, repository, validatorStub{principal: customer}, &storeStub{})
+			body := fmt.Sprintf(`{"ownerType":"LOGISTICS_CUSTOMER_PROFILE","ownerId":"%s","warehouseId":"%s","context":"PROFILE_AVATAR","fileName":"avatar.jpg","contentType":"image/jpeg","contentLength":128,"checksumSha256":"%s","sortOrder":0}`,
+				profileID, warehouseID, strings.Repeat("a", 64))
+			request := httptest.NewRequest(http.MethodPost, "/api/media/v1/upload-sessions", strings.NewReader(body))
+			request.Header.Set("Authorization", "Bearer customer")
+			request.Header.Set("Idempotency-Key", uuid.NewString())
+			response := httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, request)
+			if response.Code != http.StatusForbidden || repository.createCalls != 0 ||
+				!strings.Contains(response.Body.String(), `"code":"MEDIA_FORBIDDEN"`) {
+				t.Fatalf("over-scoped profile create = %d %s; calls=%d", response.Code,
+					response.Body.String(), repository.createCalls)
+			}
+		})
+	}
+}
+
 func TestCustomerRentalFinalizeCarriesItsAuthorizedSubject(t *testing.T) {
 	documentID, lineID, warehouseID, subjectID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	sessionID, mediaID := uuid.New(), uuid.New()
@@ -287,7 +314,7 @@ func TestCustomerRentalFinalizeCarriesItsAuthorizedSubject(t *testing.T) {
 	repository := &repositoryStub{sessionAsset: asset, finalizeAsset: asset, finalizeReplay: true}
 	principal := auth.Principal{
 		SubjectID: subjectID, Role: "CUSTOMER", ClientID: "rwms-customer-android",
-		Scopes: map[string]struct{}{"customer.rental": {}},
+		Scopes: map[string]struct{}{"openid": {}, "profile": {}, "offline_access": {}, "customer.rental": {}},
 	}
 	server := newTestServer(t, repository, validatorStub{principal: principal}, &storeStub{})
 	body := fmt.Sprintf(`{"objectVersionId":"version-1","etag":"etag-1","checksumSha256":"%s"}`,
@@ -320,7 +347,7 @@ func TestCustomerProfileFinalizeCarriesItsAuthorizedSubject(t *testing.T) {
 	repository := &repositoryStub{sessionAsset: asset, finalizeAsset: asset, finalizeReplay: true}
 	principal := auth.Principal{
 		SubjectID: subjectID, Role: "CUSTOMER", ClientID: "rwms-customer-android",
-		Scopes: map[string]struct{}{"customer.rental": {}},
+		Scopes: map[string]struct{}{"openid": {}, "profile": {}, "offline_access": {}, "customer.rental": {}},
 	}
 	server := newTestServer(t, repository, validatorStub{principal: principal}, &storeStub{})
 	body := fmt.Sprintf(`{"objectVersionId":"version-1","etag":"etag-1","checksumSha256":"%s"}`,
@@ -1461,7 +1488,7 @@ func TestCustomerRentalListsOnlyShipmentOwnerMedia(t *testing.T) {
 	}}}}
 	principal := auth.Principal{
 		SubjectID: subjectID, Role: "CUSTOMER", ClientID: "rwms-customer-android",
-		Scopes: map[string]struct{}{"customer.rental": {}},
+		Scopes: map[string]struct{}{"openid": {}, "profile": {}, "offline_access": {}, "customer.rental": {}},
 	}
 	server := newTestServer(t, repository, validatorStub{principal: principal}, &storeStub{})
 	path := fmt.Sprintf("/api/media/v1/assets?ownerType=LOGISTICS_SHIPMENT&documentId=%s&lineId=%s&warehouseId=%s&context=SHIPMENT",
@@ -1525,7 +1552,7 @@ func TestCustomerProfileMediaListReadDeleteAreCustomerOnly(t *testing.T) {
 	}
 	customer := auth.Principal{
 		SubjectID: subjectID, Role: "CUSTOMER", ClientID: "rwms-customer-android",
-		Scopes: map[string]struct{}{"customer.rental": {}},
+		Scopes: map[string]struct{}{"openid": {}, "profile": {}, "offline_access": {}, "customer.rental": {}},
 	}
 	store := &storeStub{objectBody: body, statMetadata: media.ObjectMetadata{
 		VersionID: original.ObjectVersionID, SizeBytes: int64(len(body)), ContentType: original.ContentType,

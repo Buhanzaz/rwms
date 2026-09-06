@@ -47,31 +47,89 @@ func TestValidatorAcceptsValidRS256UserToken(t *testing.T) {
 
 func TestValidatorAcceptsOnlyExactCustomerRentalIdentity(t *testing.T) {
 	fixture := newJWTFixture(t)
-	claims := fixture.validClaims(uuid.New())
-	claims["global_role"] = "CUSTOMER"
-	claims["client_id"] = "rwms-customer-android"
-	claims["scope"] = "customer.rental"
-
-	principal, err := fixture.validator.Validate(context.Background(), "Bearer "+fixture.sign(t, testKeyID, claims, jwt.SigningMethodRS256))
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if !principal.IsCustomerRental() || !principal.IsCustomerIdentity() {
-		t.Fatalf("customer principal = %#v", principal)
-	}
-
-	for _, mutate := range []func(Principal) Principal{
-		func(value Principal) Principal { value.Role = "MANAGER"; return value },
-		func(value Principal) Principal { value.ClientID = "manager-android"; return value },
-		func(value Principal) Principal {
-			value.Scopes = map[string]struct{}{"customer.rental": {}, "rwms.read": {}}
-			return value
-		},
+	for _, scope := range []string{
+		"customer.rental",
+		"openid customer.rental",
+		"profile customer.rental",
+		"offline_access customer.rental",
+		"openid profile customer.rental",
+		"openid offline_access customer.rental",
+		"profile offline_access customer.rental",
+		"openid profile offline_access customer.rental",
 	} {
-		changed := mutate(principal)
-		if changed.IsCustomerRental() || !changed.IsCustomerIdentity() {
-			t.Fatalf("non-exact customer identity accepted = %#v", changed)
+		for _, representation := range []string{"string", "array"} {
+			t.Run(representation+"/"+strings.ReplaceAll(scope, " ", "_"), func(t *testing.T) {
+				claims := fixture.validClaims(uuid.New())
+				claims["global_role"] = "CUSTOMER"
+				claims["client_id"] = "rwms-customer-android"
+				claims["scope"] = scope
+				claims["warehouse_access"] = []any{}
+				if representation == "array" {
+					claims["scope"] = strings.Fields(scope)
+				}
+
+				principal, err := fixture.validator.Validate(context.Background(), "Bearer "+fixture.sign(t, testKeyID, claims, jwt.SigningMethodRS256))
+				if err != nil {
+					t.Fatalf("Validate() error = %v", err)
+				}
+				if !principal.IsCustomerRental() || !principal.IsCustomerIdentity() ||
+					principal.SubjectID.String() != claims["sub"] || len(principal.Grants) != 0 {
+					t.Fatalf("customer principal = %#v", principal)
+				}
+				if err := principal.Require("rwms.write", uuid.New(), Edit); !errors.Is(err, ErrForbidden) {
+					t.Fatalf("customer acquired warehouse write access: %v", err)
+				}
+			})
 		}
+	}
+}
+
+func TestValidatorRejectsNonExactCustomerRentalIdentity(t *testing.T) {
+	fixture := newJWTFixture(t)
+	tests := []struct {
+		name   string
+		mutate func(jwt.MapClaims)
+	}{
+		{name: "missing domain scope", mutate: func(claims jwt.MapClaims) { claims["scope"] = "openid profile offline_access" }},
+		{name: "missing scopes", mutate: func(claims jwt.MapClaims) { delete(claims, "scope") }},
+		{name: "foreign role", mutate: func(claims jwt.MapClaims) { claims["global_role"] = "MANAGER" }},
+		{name: "foreign client", mutate: func(claims jwt.MapClaims) { claims["client_id"] = "rwms-manager-android" }},
+		{name: "missing client", mutate: func(claims jwt.MapClaims) { delete(claims, "client_id") }},
+		{name: "worker principal", mutate: func(claims jwt.MapClaims) { claims["principal_type"] = "WORKER" }},
+		{name: "service principal", mutate: func(claims jwt.MapClaims) { claims["principal_type"] = "SERVICE" }},
+		{name: "invalid subject", mutate: func(claims jwt.MapClaims) { claims["sub"] = "not-a-uuid" }},
+		{name: "nil subject", mutate: func(claims jwt.MapClaims) { claims["sub"] = uuid.Nil.String() }},
+	}
+	for _, extra := range []string{"rwms.read", "rwms.write", "admin.manage", "worker.tasks", "driver.tasks", "unknown.scope"} {
+		tests = append(tests, struct {
+			name   string
+			mutate func(jwt.MapClaims)
+		}{
+			name: "forbidden extra " + extra,
+			mutate: func(claims jwt.MapClaims) {
+				claims["scope"] = []string{"openid", "profile", "offline_access", "customer.rental", extra}
+			},
+		})
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			claims := fixture.validClaims(uuid.New())
+			claims["global_role"] = "CUSTOMER"
+			claims["client_id"] = "rwms-customer-android"
+			claims["scope"] = "openid profile offline_access customer.rental"
+			test.mutate(claims)
+
+			principal, err := fixture.validator.Validate(context.Background(), "Bearer "+fixture.sign(t, testKeyID, claims, jwt.SigningMethodRS256))
+			if err != nil {
+				if !errors.Is(err, ErrForbidden) {
+					t.Fatalf("Validate() error = %v, want forbidden", err)
+				}
+				return
+			}
+			if principal.IsCustomerRental() || !principal.IsCustomerIdentity() {
+				t.Fatalf("non-exact customer identity accepted = %#v", principal)
+			}
+		})
 	}
 }
 

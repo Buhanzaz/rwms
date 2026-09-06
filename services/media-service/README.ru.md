@@ -66,10 +66,12 @@ source и result; неподтверждённые размеры видео о�
   reservation task-board. WorkerApp и manager identities такой owner применять
   не могут.
 - **Привязанные к клиенту logistics media.** Точная identity
-  `USER/CUSTOMER`, `rwms-customer-android` с единственным
+  `USER/CUSTOMER`, `rwms-customer-android` с единственным прикладным scope
   `customer.rental` может работать только с `LOGISTICS_SHIPMENT/SHIPMENT` или
   `LOGISTICS_CUSTOMER_PROFILE/PROFILE_AVATAR` media, чей текущий logistics
-  owner proof привязан к subject этого JWT. Выбранный активный склад служит
+  owner proof привязан к subject этого JWT. Вместе с `customer.rental` допустимы только
+  протокольные OIDC scopes `openid`, `profile` и `offline_access`; любой другой scope,
+  включая права менеджера, администратора и работника, отклоняется. Выбранный активный склад служит
   authorization scope аватара, а не identity профиля. Create replay, upload
   session, source/variant content, finalize, list, reads и логическое удаление
   повторно проверяют тот же subject; malformed customer-shaped token, другой

@@ -1009,8 +1009,10 @@ Evidence:
    route, and submits one registration command. Auth-service serializes the
    normalized login and atomically stores credential, `USER/CUSTOMER` identity,
    projection, event and outbox before returning `201`.
-2. Authorization Code with S256 PKCE issues only `customer.rental` through
-   `rwms-customer-android`. Logistics verifies principal type, role, scope,
+2. Authorization Code with S256 PKCE issues `customer.rental` as the only domain scope through
+   `rwms-customer-android`, alongside the OIDC protocol scopes `openid`, `profile` and
+   `offline_access`. Media accepts only those protocol scopes in addition to `customer.rental`;
+   any other scope remains forbidden for customer media. Logistics verifies principal type, role, scope,
    audience and `client_id`/`azp` before reading customer state.
 3. The customer creates one individual/legal profile. Its kind and auth/client
    binding remain immutable, while contact/display fields are editable under

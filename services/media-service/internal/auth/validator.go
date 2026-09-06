@@ -153,12 +153,23 @@ func (validator *Validator) Validate(ctx context.Context, authorization string) 
 
 // IsCustomerRental reports whether a USER token is the exact CustomerApp
 // principal admitted to subject-bound logistics shipment and profile media.
+// customer.rental must be its only domain scope; the native client's standard
+// OIDC protocol scopes do not grant additional media access.
 func (principal Principal) IsCustomerRental() bool {
-	if principal.Role != "CUSTOMER" || principal.ClientID != "rwms-customer-android" || len(principal.Scopes) != 1 {
+	if principal.Role != "CUSTOMER" || principal.ClientID != "rwms-customer-android" {
 		return false
 	}
-	_, present := principal.Scopes["customer.rental"]
-	return present
+	if _, present := principal.Scopes["customer.rental"]; !present {
+		return false
+	}
+	for scope := range principal.Scopes {
+		switch scope {
+		case "customer.rental", "openid", "profile", "offline_access":
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // IsCustomerIdentity reports whether any customer-only claim is present. It
