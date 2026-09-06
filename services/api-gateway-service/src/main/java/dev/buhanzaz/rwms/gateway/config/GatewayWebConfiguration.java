@@ -24,10 +24,13 @@ public class GatewayWebConfiguration {
   /** Registers the earliest filter that removes client-supplied forwarding headers. */
   @Bean
   FilterRegistrationBean<TrustedForwardedHeaderFilter> trustedForwardedHeaderFilter(
-      GatewayProperties properties) {
+      GatewayProperties properties,
+      ObjectMapper objectMapper,
+      RwmsProblemDetailFactory problems) {
     var registration =
         new FilterRegistrationBean<>(
-            new TrustedForwardedHeaderFilter());
+            new TrustedForwardedHeaderFilter(
+                properties.getTrustedProxyAddresses(), objectMapper, problems));
     registration.setOrder(Ordered.HIGHEST_PRECEDENCE);
     return registration;
   }

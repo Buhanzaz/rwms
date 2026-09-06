@@ -45,6 +45,7 @@ logging:
 rwms:
   gateway:
     public-base-uri: ${GATEWAY_PUBLIC_BASE_URI}
+    trusted-proxy-addresses: ${GATEWAY_TRUSTED_PROXY_ADDRESSES:127.0.0.1,::1}
     routes:
       auth-uri: ${AUTH_SERVICE_URL}
       task-board-uri: ${TASK_BOARD_SERVICE_URL}

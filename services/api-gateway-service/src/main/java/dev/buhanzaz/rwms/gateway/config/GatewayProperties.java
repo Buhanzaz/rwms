@@ -35,6 +35,8 @@ public class GatewayProperties {
   @Valid private final Sse sse = new Sse();
   @Setter
   @NotNull private URI publicBaseUri;
+  @Setter
+  @NotNull private List<String> trustedProxyAddresses = List.of();
 
   /** Private HTTP origins for the services exposed through the public gateway. */
   @Getter

@@ -114,12 +114,16 @@ replacement for the owning service's OpenAPI contract.
 
 The gateway remains stateless and does not keep a source-address rate-limit
 store. It strips caller-supplied forwarding headers and supplies auth-service
-with the canonical immediate TCP peer address; auth-service owns the durable
-per-source and global registration budgets. Production ingress throttling
-remains defence in depth. When a reverse proxy is introduced, its trusted-peer
-boundary must be configured explicitly or multiple users behind that proxy
-will intentionally share one immediate-peer budget. CSRF protection prevents
-cross-site submission but is not abuse throttling.
+with a verified numeric source address. `GATEWAY_TRUSTED_PROXY_ADDRESSES` lists
+trusted immediate proxy peers (default `127.0.0.1,::1` for the current local
+Nginx edge). Such peers must overwrite `X-Real-IP` with their observed client
+address, as the current Nginx configuration does. The gateway accepts exactly
+one IP literal, normalizes equivalent IPv6 forms, and rejects malformed or
+multiple values with 400. A missing header or an untrusted peer uses the TCP
+peer address; caller `Forwarded` and `X-Forwarded-*` never select identity.
+Auth-service owns durable per-source and global registration budgets.
+Production ingress throttling remains defence in depth. CSRF protection
+prevents cross-site submission but is not abuse throttling.
 
 The dedicated routes are intentionally more specific than their general service
 routes:

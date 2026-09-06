@@ -112,12 +112,17 @@ API gateway: проверка host/headers, CORS, JWT, route policy, observabili
 
 Gateway остаётся stateless и не хранит source-address rate-limit state. Он
 удаляет forwarding headers вызывающей стороны и передаёт auth-service
-канонический адрес непосредственного TCP peer; долговечные per-source и
-глобальный budgets регистрации принадлежат auth-service. Throttling на
-production ingress остаётся дополнительным слоем защиты. При появлении reverse
-proxy его trusted-peer boundary необходимо настроить явно, иначе пользователи
-за ним намеренно разделят один immediate-peer budget. CSRF-защита предотвращает
-cross-site submission, но не является abuse throttling.
+проверенный числовой адрес клиента. `GATEWAY_TRUSTED_PROXY_ADDRESSES` задаёт
+доверенные адреса непосредственного proxy (по умолчанию `127.0.0.1,::1` для
+текущего локального Nginx). Такой proxy обязан перезаписывать `X-Real-IP`
+наблюдаемым адресом клиента; текущая конфигурация Nginx это делает. Gateway
+принимает ровно один IP literal, нормализует эквивалентные формы IPv6 и
+отклоняет неверные или множественные значения с 400. При отсутствии заголовка
+или недоверенном peer используется TCP-адрес; клиентские `Forwarded` и
+`X-Forwarded-*` не определяют identity. Долговечные per-source и глобальный
+budgets регистрации принадлежат auth-service. Throttling на production ingress
+остаётся дополнительным слоем защиты. CSRF-защита предотвращает cross-site
+submission, но не является abuse throttling.
 
 Специальные маршруты намеренно имеют приоритет над общими маршрутами сервиса:
 

@@ -12,6 +12,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import dev.buhanzaz.rwms.gateway.config.GatewayProperties;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -70,6 +71,7 @@ class GatewayRouteIntegrationTest {
   private static final List<CapturedRequest> ASSISTANT_REQUESTS = new CopyOnWriteArrayList<>();
 
   @Autowired MockMvc mvc;
+  @Autowired GatewayProperties properties;
 
   @BeforeAll
   static void startDownstreams() throws IOException {
@@ -745,19 +747,22 @@ class GatewayRouteIntegrationTest {
                 .header("X-Forwarded-Host", "evil.example")
                 .header("X-Forwarded-Proto", "http")
                 .header("X-Forwarded-Prefix", "/evil")
+                .header("X-Real-IP", "203.0.113.90")
                 .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
         .andExpect(status().isOk());
 
     assertThat(TASK_BOARD_REQUESTS).singleElement().satisfies(request -> {
       assertThat(request.forwarded()).doesNotContain("evil.example");
+      assertThat(request.realIp()).isEmpty();
       assertThat(request.forwardedHost()).doesNotContain("evil.example");
       assertThat(request.forwardedPrefix()).doesNotContain("/evil");
     });
   }
 
   @Test
-  void authReceivesOnlyCanonicalPublicForwardedMetadata() throws Exception {
+  void authReceivesCanonicalMetadataAndVerifiedClientAddressesOnly() throws Exception {
     AUTH_REQUESTS.clear();
+    assertThat(properties.getTrustedProxyAddresses()).containsExactly("127.0.0.1", "::1");
 
     mvc.perform(
             publicGet("/auth/login")
@@ -767,22 +772,101 @@ class GatewayRouteIntegrationTest {
                 .header("X-Forwarded-Port", "81")
                 .header("X-Forwarded-Prefix", "/evil")
                 .header("X-Forwarded-For", "203.0.113.90")
+                .header("X-Real-IP", "198.51.100.41")
                 .with(request -> {
-                  request.setRemoteAddr("198.51.100.42");
+                  request.setRemoteAddr("127.0.0.1");
                   return request;
                 }))
         .andExpect(status().isFound())
         .andExpect(header().string(HttpHeaders.LOCATION, "https://panel.example/auth/authorize"))
         .andExpect(header().string(HttpHeaders.SET_COOKIE, "AUTH_SESSION=session; Path=/auth; HttpOnly"));
+    mvc.perform(
+            publicGet("/auth/login")
+                .header("X-Real-IP", "198.51.100.42")
+                .with(request -> {
+                  request.setRemoteAddr("127.0.0.1");
+                  return request;
+                }))
+        .andExpect(status().isFound());
+    mvc.perform(
+            publicGet("/auth/login").with(request -> {
+              request.setRemoteAddr("127.0.0.1");
+              return request;
+            }))
+        .andExpect(status().isFound());
+    mvc.perform(
+            publicGet("/auth/login")
+                .header("X-Real-IP", "203.0.113.99")
+                .header("X-Forwarded-For", "203.0.113.98")
+                .with(request -> {
+                  request.setRemoteAddr("198.51.100.43");
+                  return request;
+                }))
+        .andExpect(status().isFound());
 
-    assertThat(AUTH_REQUESTS).singleElement().satisfies(request -> {
+    assertThat(AUTH_REQUESTS).allSatisfy(request -> {
       assertThat(request.forwarded()).doesNotContain("evil.example");
+      assertThat(request.realIp()).isEmpty();
       assertThat(request.forwardedHost()).containsExactly("panel.example");
       assertThat(request.forwardedProto()).containsExactly("https");
       assertThat(request.forwardedPort()).containsExactly("443");
       assertThat(request.forwardedPrefix()).containsExactly("/auth");
-      assertThat(request.forwardedFor()).containsExactly("198.51.100.42");
     });
+    assertThat(AUTH_REQUESTS)
+        .extracting(request -> request.forwardedFor().getFirst())
+        .containsExactly("198.51.100.41", "198.51.100.42", "127.0.0.1", "198.51.100.43");
+  }
+
+  @Test
+  void trustedProxyAndClientIpv6FormsUseCanonicalNumericIdentity() throws Exception {
+    AUTH_REQUESTS.clear();
+
+    mvc.perform(
+            publicGet("/auth/login")
+                .header("X-Real-IP", "2001:db8::1")
+                .with(request -> {
+                  request.setRemoteAddr("::1");
+                  return request;
+                }))
+        .andExpect(status().isFound());
+    mvc.perform(
+            publicGet("/auth/login")
+                .header("X-Real-IP", "2001:0db8:0:0:0:0:0:1")
+                .with(request -> {
+                  request.setRemoteAddr("0:0:0:0:0:0:0:1");
+                  return request;
+                }))
+        .andExpect(status().isFound());
+
+    assertThat(AUTH_REQUESTS)
+        .extracting(request -> request.forwardedFor().getFirst())
+        .containsExactly("2001:db8:0:0:0:0:0:1", "2001:db8:0:0:0:0:0:1");
+  }
+
+  @Test
+  void trustedProxyRejectsPresentMalformedOrMultipleClientAddresses() throws Exception {
+    AUTH_REQUESTS.clear();
+
+    mvc.perform(
+            publicGet("/auth/login")
+                .header("X-Real-IP", "client.example")
+                .with(request -> {
+                  request.setRemoteAddr("127.0.0.1");
+                  return request;
+                }))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("GATEWAY_INVALID_CLIENT_ADDRESS"));
+    mvc.perform(
+            publicGet("/auth/login")
+                .header("X-Real-IP", "198.51.100.42", "203.0.113.42")
+                .with(request -> {
+                  request.setRemoteAddr("127.0.0.1");
+                  return request;
+                }))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("GATEWAY_INVALID_CLIENT_ADDRESS"));
+
+    assertThat(AUTH_REQUESTS).isEmpty();
   }
 
   @Test
@@ -1068,6 +1152,7 @@ class GatewayRouteIntegrationTest {
         exchange.getRequestURI().getRawQuery(),
         exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION),
         exchange.getRequestHeaders().getOrDefault("Forwarded", List.of()),
+        exchange.getRequestHeaders().getOrDefault("X-Real-IP", List.of()),
         exchange.getRequestHeaders().getOrDefault("X-Forwarded-For", List.of()),
         exchange.getRequestHeaders().getOrDefault("X-Forwarded-Host", List.of()),
         exchange.getRequestHeaders().getOrDefault("X-Forwarded-Prefix", List.of()),
@@ -1137,6 +1222,7 @@ class GatewayRouteIntegrationTest {
       String query,
       String authorization,
       List<String> forwarded,
+      List<String> realIp,
       List<String> forwardedFor,
       List<String> forwardedHost,
       List<String> forwardedPrefix,
