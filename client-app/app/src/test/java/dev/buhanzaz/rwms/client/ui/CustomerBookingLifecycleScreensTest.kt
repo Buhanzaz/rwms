@@ -473,9 +473,13 @@ class CustomerBookingLifecycleScreensTest {
         composeRule.onNodeWithTag("cart-cabin-cabin-a").assertExists()
         composeRule.onNodeWithText("12 000 ₽/мес.").assertExists()
         composeRule.onNodeWithTag("cart-cabin-photo-placeholder").assertExists()
+        val typeBounds = composeRule.onNodeWithTag("cart-cabin-type-cabin-a").fetchSemanticsNode().boundsInRoot
+        val numberBounds = composeRule.onNodeWithTag("cart-cabin-number-cabin-a").fetchSemanticsNode().boundsInRoot
+        assertThat(typeBounds.left).isLessThan(numberBounds.left)
         composeRule.onNodeWithText("Выбрано: 1").assertDoesNotExist()
         composeRule.onNodeWithText("№ БК-1").assertExists()
         composeRule.onNodeWithText("Блок-контейнер").assertExists()
+        composeRule.onNodeWithText("Удалить").assertExists()
         composeRule.onNodeWithText("Светлый дуб").assertExists()
         composeRule.onNodeWithText("Стол · 1 шт.").assertExists()
         composeRule.onNodeWithText("Мебель по выбору").assertDoesNotExist()

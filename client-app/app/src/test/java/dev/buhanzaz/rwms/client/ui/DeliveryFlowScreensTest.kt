@@ -1,10 +1,16 @@
 package dev.buhanzaz.rwms.client.ui
 
 import android.app.Application
+import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextInputSelection
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasTestTag
@@ -37,6 +43,87 @@ class DeliveryFlowScreensTest {
     val composeRule = createComposeRule()
 
     @Test
+    fun `address search matches header geometry and preserves native cursor edits`() {
+        val changedAddress = AtomicReference("Санкт-Петербург, длинная улица, дом 123, корпус 4, помещение 567")
+        composeRule.setContent {
+            var address by remember { mutableStateOf(changedAddress.get()) }
+            CustomerTheme {
+                Column {
+                    CustomerTopBar("Адрес доставки")
+                    DeliveryAddressPanel(
+                        address = address,
+                        geocoding = false,
+                        status = null,
+                        suggestions = emptyList(),
+                        continueEnabled = false,
+                        onAddress = { address = it; changedAddress.set(it) },
+                        onSearch = {},
+                        onSuggestion = {},
+                        onVoice = {},
+                        onContinue = {},
+                    )
+                }
+            }
+        }
+        val header = composeRule.onNodeWithTag("customer-header").fetchSemanticsNode().boundsInRoot
+        val search = composeRule.onNodeWithTag("delivery-search-bar").fetchSemanticsNode().boundsInRoot
+        assertThat(search.width).isWithin(1f).of(header.width)
+        assertThat(search.height).isWithin(1f).of(header.height)
+        val field = composeRule.onNodeWithTag("delivery-address-field")
+        field.performClick().performTextInputSelection(TextRange(0))
+        field.performTextInput("Начало ")
+        composeRule.runOnIdle { assertThat(changedAddress.get()).startsWith("Начало Санкт-Петербург") }
+        val length = changedAddress.get().length
+        field.performTextInputSelection(TextRange(length)).performTextInput(" конец")
+        composeRule.runOnIdle { assertThat(changedAddress.get()).endsWith("567 конец") }
+    }
+
+    @Test
+    fun `same delivery price is shown once across several time choices`() {
+        composeRule.setContent {
+            CustomerTheme {
+                DeliverySlotsScreen(
+                    state = CustomerWorkflowState(
+                        bootstrapping = false,
+                        slots = listOf(slot("morning", "2026-09-01", "09:00:00"), slot("afternoon", "2026-09-01", "12:00:00")),
+                    ),
+                    date = "2026-09-01",
+                    onBack = {}, onSelectSlot = {}, onHoldSlot = {}, onHeld = {},
+                )
+            }
+        }
+        composeRule.onAllNodesWithText("12 500 ₽").assertCountEquals(1)
+        composeRule.onNodeWithTag("delivery-slot-morning").assertExists()
+        composeRule.onNodeWithTag("delivery-slot-afternoon").assertExists()
+    }
+
+    @Test
+    fun `different delivery offers retain their own amounts without inventing a shared tariff`() {
+        composeRule.setContent {
+            CustomerTheme {
+                DeliverySlotsScreen(
+                    state = CustomerWorkflowState(
+                        bootstrapping = false,
+                        slots = listOf(slot("morning", "2026-09-01", "09:00:00"), slot("afternoon", "2026-09-01", "12:00:00").copy(deliveryPriceRubles = 16000)),
+                    ),
+                    date = "2026-09-01",
+                    onBack = {}, onSelectSlot = {}, onHoldSlot = {}, onHeld = {},
+                )
+            }
+        }
+        composeRule.onNodeWithText("Зависит от выбранного времени").assertExists()
+        composeRule.onNodeWithText("12 500 ₽").assertExists()
+        composeRule.onNodeWithText("16 000 ₽").assertExists()
+    }
+
+    @Test
+    fun `hold deadline uses the warehouse zone without relying on the device clock`() {
+        assertThat(customerHoldDeadlineLabel("2026-09-07T10:30:00Z", "Europe/Moscow"))
+            .isEqualTo("7 сентября, 13:30")
+        assertThat(customerHoldDeadlineLabel("invalid", "Europe/Moscow")).isNull()
+    }
+
+    @Test
     fun `date step renders and selects only server returned dates`() {
         val selectedDate = AtomicReference<String>()
         val workflow = CustomerWorkflowState(
@@ -60,7 +147,7 @@ class DeliveryFlowScreensTest {
         composeRule.onNodeWithTag("delivery-date-2026-09-01").assertExists()
         composeRule.onNodeWithTag("delivery-date-2026-09-02").assertExists()
         composeRule.onNodeWithTag("delivery-date-2026-09-03").assertDoesNotExist()
-        composeRule.onNodeWithText("Стоимость доставки: 12 500 ₽").assertExists()
+        composeRule.onNodeWithText("12 500 ₽").assertExists()
         composeRule.onNodeWithText("Особая зона доставки", substring = true).assertDoesNotExist()
         composeRule.onNodeWithText("Изохрона", substring = true).assertDoesNotExist()
         val explanationBounds = composeRule.onNodeWithTag("delivery-date-explanation").fetchSemanticsNode().boundsInRoot

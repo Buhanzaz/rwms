@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.client.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -26,7 +27,6 @@ import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -184,15 +184,15 @@ private fun CartCabinCard(
             .fillMaxWidth()
             .widthIn(max = 1_120.dp)
             .testTag("cart-cabin-${cabin.unitId}"),
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
         Column(Modifier.fillMaxWidth()) {
             CartCabinPhoto(
                 cabin = cabin,
-                modifier = Modifier.fillMaxWidth().height(160.dp),
+                modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
             )
             Column(
                 modifier = Modifier.padding(16.dp),
@@ -200,38 +200,28 @@ private fun CartCabinCard(
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(
-                                "№ ${cabin.accountingNo}",
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            Text(
-                                cabin.type ?: "Тип не указан",
-                                modifier = Modifier.weight(1f),
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                        }
-                        cabin.category?.let { category ->
-                            Text(
-                                category,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    IconButton(
-                        onClick = onRemove,
-                        enabled = !busy,
-                        modifier = Modifier.testTag("cart-remove-${cabin.unitId}"),
-                    ) {
-                        Icon(Icons.Outlined.DeleteOutline, contentDescription = "Убрать бытовку ${cabin.accountingNo}")
-                    }
+                    Text(
+                        cabin.type ?: "Тип не указан",
+                        modifier = Modifier.weight(1f).testTag("cart-cabin-type-${cabin.unitId}"),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        "№ ${cabin.accountingNo}",
+                        modifier = Modifier.testTag("cart-cabin-number-${cabin.unitId}"),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                cabin.category?.let { category ->
+                    Text(
+                        category,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
                 CartCabinFacts(cabin)
                 Text(
@@ -262,12 +252,22 @@ private fun CartCabinCard(
                         onMonths = onMonths,
                     )
                 }
-                OutlinedButton(
-                    onClick = onAdditional,
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth().testTag("cart-additional-${cabin.unitId}"),
-                ) {
-                    Text("+ Дополнительно")
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(
+                        onClick = onAdditional,
+                        enabled = !busy,
+                        modifier = Modifier.weight(1f).testTag("cart-additional-${cabin.unitId}"),
+                    ) {
+                        Text("+ Дополнительно")
+                    }
+                    OutlinedButton(
+                        onClick = onRemove,
+                        enabled = !busy,
+                        modifier = Modifier.weight(1f).testTag("cart-remove-${cabin.unitId}"),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+                    ) {
+                        Text("Удалить", color = MaterialTheme.colorScheme.error)
+                    }
                 }
             }
         }

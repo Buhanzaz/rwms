@@ -30,10 +30,14 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
@@ -62,8 +66,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -71,17 +73,21 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -418,37 +424,25 @@ fun DeliveryMapScreen(
 internal fun DeliverySlotCalculationOverlay() {
     Dialog(
         onDismissRequest = {},
-        properties = DialogProperties(
-            dismissOnBackPress = false,
-            dismissOnClickOutside = false,
-            usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false,
-        ),
+        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
     ) {
         Surface(
-            modifier = Modifier.fillMaxSize().testTag("delivery-slot-calculation-overlay"),
-            color = CustomerStoreNavy.copy(alpha = 0.38f),
+            modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth().testTag("delivery-slot-calculation-overlay"),
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         ) {
-            Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth().widthIn(max = 420.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                ) {
-                    Column(
-                        modifier = Modifier.padding(28.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(20.dp),
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(40.dp).testTag("delivery-slot-calculation-progress"),
-                            color = MaterialTheme.colorScheme.primary,
-                            strokeWidth = 3.dp,
-                        )
-                        Text("Идёт расчёт свободных слотов", style = MaterialTheme.typography.titleMedium)
-                    }
-                }
+            Column(
+                modifier = Modifier.padding(28.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(20.dp),
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(40.dp).testTag("delivery-slot-calculation-progress"),
+                    color = MaterialTheme.colorScheme.primary,
+                    strokeWidth = 3.dp,
+                )
+                Text("Идёт расчёт свободных слотов", style = MaterialTheme.typography.titleMedium)
             }
         }
     }
@@ -486,31 +480,17 @@ fun DeliveryDatesScreen(
                     Modifier.fillMaxWidth().widthIn(max = 760.dp).padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("Выберите удобный день", style = MaterialTheme.typography.headlineSmall)
+                    DeliveryStepIntro(2, "Выберите удобный день")
                     Text(
                         "Учли маршрут до вашего адреса и занятость машин.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.testTag("delivery-date-explanation"),
                     )
-                    val deliveryPrice = DeliverySlotPolicy.deliveryPriceRubles(state.slots)
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surface,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.LocalShipping, contentDescription = null, modifier = Modifier.size(22.dp))
-                            Spacer(Modifier.width(10.dp))
-                            Text(
-                                text = deliveryPrice?.let { "Стоимость доставки: ${CustomerMoneyFormatter.wholeRubles(it)}" }
-                                    ?: CustomerMoneyFormatter.wholeRubles(null),
-                                style = MaterialTheme.typography.titleMedium,
-                                color = if (deliveryPrice == null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.testTag("delivery-price"),
-                            )
-                        }
-                    }
+                    DeliveryPriceSummary(
+                        price = DeliverySlotPolicy.deliveryPriceRubles(state.slots),
+                        varies = state.slots.map(DeliverySlot::deliveryPriceRubles).distinct().size > 1,
+                    )
                 }
             }
             items(dates, key = DeliveryDateAvailability::date) { availability ->
@@ -563,6 +543,7 @@ fun DeliverySlotsScreen(
         DeliverySlotPolicy.byDate(state.slots).firstOrNull { it.date == date }?.slots.orEmpty()
     }
     val selected = slots.firstOrNull { it.slotId == state.selectedSlotId }
+    val pricesVary = slots.map(DeliverySlot::deliveryPriceRubles).distinct().size > 1
     var holdRequested by rememberSaveable(date) { mutableStateOf(false) }
 
     LaunchedEffect(holdRequested, state.heldSlot?.slot?.slotId, state.selectedSlotId) {
@@ -592,11 +573,14 @@ fun DeliverySlotsScreen(
                 Column(
                     Modifier.fillMaxWidth().widthIn(max = 760.dp).padding(horizontal = 16.dp, vertical = 12.dp),
                 ) {
-                    Text("Выберите время", style = MaterialTheme.typography.headlineSmall)
+                    DeliveryStepIntro(3, "Выберите время")
+                    Spacer(Modifier.height(8.dp))
                     Text(formatDeliveryDate(date), style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        state.address,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    Text(state.address, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(16.dp))
+                    DeliveryPriceSummary(
+                        price = if (pricesVary) selected?.deliveryPriceRubles else DeliverySlotPolicy.deliveryPriceRubles(slots),
+                        varies = pricesVary && selected == null,
                     )
                 }
             }
@@ -635,11 +619,13 @@ fun DeliverySlotsScreen(
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold,
                             )
-                            Text(
-                                CustomerMoneyFormatter.wholeRubles(slot.deliveryPriceRubles),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                            if (pricesVary) {
+                                Text(
+                                    CustomerMoneyFormatter.wholeRubles(slot.deliveryPriceRubles),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                     }
                 }
@@ -731,7 +717,7 @@ fun DeliveryConfirmationScreen(
                         Modifier.fillMaxWidth().widthIn(max = 760.dp).padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Text("Проверьте заказ", style = MaterialTheme.typography.headlineSmall)
+                        DeliveryStepIntro(4, "Проверьте заказ")
                         Text("Адрес, время доставки и срок аренды.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
@@ -750,8 +736,17 @@ fun DeliveryConfirmationScreen(
                                     tint = MaterialTheme.colorScheme.primary,
                                 )
                                 Spacer(Modifier.width(8.dp))
-                                Text("Слот временно закреплён", fontWeight = FontWeight.SemiBold)
+                                Text("Время доставки закреплено", style = MaterialTheme.typography.titleMedium)
                             }
+                            customerHoldDeadlineLabel(held.expiresAt, state.selectedWarehouse?.timezone)?.let { deadline ->
+                                Text(
+                                    "Резерв до $deadline",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.testTag("delivery-hold-deadline"),
+                                )
+                            }
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                             ConfirmationFact("Адрес", state.address)
                             ConfirmationFact("Дата", formatDeliveryDate(held.date))
                             ConfirmationFact(
@@ -762,9 +757,9 @@ fun DeliveryConfirmationScreen(
                             ConfirmationFact(
                                 "Проезд к объекту",
                                 if (held.siteCabinCapacity == 2) {
-                                    "До 2 бытовок за один приезд"
+                                    "До 2 бытовок за одну доставку"
                                 } else {
-                                    "По 1 бытовке за один приезд"
+                                    "По 1 бытовке за одну доставку"
                                 },
                             )
                             ConfirmationFact(
@@ -782,13 +777,16 @@ fun DeliveryConfirmationScreen(
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     ) {
                         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text("Срок аренды по бытовкам", style = MaterialTheme.typography.titleMedium)
+                            Text("Бытовки и срок аренды", style = MaterialTheme.typography.titleMedium)
                             val cartCabins = state.cart?.cabins.orEmpty().ifEmpty {
                                 state.cabins.filter { it.unitId in state.selectedCabinIds }
                             }
                             if (cartCabins.isNotEmpty()) {
                                 cartCabins.forEach { cabin ->
-                                    Text("№ ${cabin.accountingNo} — ${state.rentalTerms[cabin.unitId] ?: 1L} мес.")
+                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Text("№ ${cabin.accountingNo} — ${state.rentalTerms[cabin.unitId] ?: 1L} мес.", style = MaterialTheme.typography.bodyLarge)
+                                        Text(CustomerMoneyFormatter.monthlyRentalPrice(cabin.monthlyPriceRubles), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
                                 }
                             } else {
                                 state.selectedCabinIds.groupBy { state.rentalTerms[it] ?: 1L }
@@ -798,6 +796,14 @@ fun DeliveryConfirmationScreen(
                             }
                         }
                     }
+                }
+                item {
+                    Text(
+                        "Точный счёт за аренду, комплектацию и доставку появится после подтверждения бронирования. До оплаты вы сможете проверить все суммы.",
+                        modifier = Modifier.widthIn(max = 760.dp).fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
                 item {
                     Button(
@@ -822,8 +828,9 @@ fun DeliveryConfirmationScreen(
     }
 }
 
+/** Native editor owns selection and horizontal scrolling; only text changes leave this UI boundary. */
 @Composable
-private fun DeliveryAddressPanel(
+internal fun DeliveryAddressPanel(
     address: String,
     geocoding: Boolean,
     status: String?,
@@ -836,47 +843,93 @@ private fun DeliveryAddressPanel(
     onContinue: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Surface(
-        modifier = modifier.widthIn(max = 760.dp).fillMaxWidth().navigationBarsPadding()
-            .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 40.dp)
-            .figmaButtonShadow(RoundedCornerShape(16.dp)),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    val editor = rememberTextFieldState(address)
+    val scrollState = rememberScrollState()
+    val latestAddress by rememberUpdatedState(address)
+    val latestOnAddress by rememberUpdatedState(onAddress)
+    LaunchedEffect(address) {
+        // Parent echoes must not replace selection, composing text or the native scroll position.
+        if (editor.text.toString() != address) editor.setTextAndPlaceCursorAtEnd(address)
+    }
+    LaunchedEffect(editor) {
+        snapshotFlow { editor.text.toString() }.collect { text ->
+            if (text != latestAddress) latestOnAddress(text)
+        }
+    }
+    val shape = RoundedCornerShape(16.dp)
+    Column(
+        modifier = modifier.fillMaxWidth().navigationBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Column(
-            Modifier.padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+        Surface(
+            modifier = Modifier.fillMaxWidth().figmaButtonShadow(shape).testTag("delivery-search-bar"),
+            shape = shape,
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         ) {
-            if (suggestions.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 60.dp).padding(end = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = onVoice, enabled = !geocoding) {
+                    Icon(Icons.Default.Mic, contentDescription = "Голосовой ввод адреса")
+                }
+                BasicTextField(
+                    state = editor,
+                    scrollState = scrollState,
+                    lineLimits = TextFieldLineLimits.SingleLine,
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    onKeyboardAction = { onSearch(editor.text.toString()) },
+                    modifier = Modifier.weight(1f).padding(vertical = 6.dp, horizontal = 4.dp)
+                        .testTag("delivery-address-field")
+                        .semantics { contentDescription = "Адрес доставки" },
+                    decorator = { innerTextField ->
+                        Box {
+                            if (editor.text.isEmpty()) {
+                                Text("Поиск адреса", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            innerTextField()
+                        }
+                    },
+                )
+                Button(
+                    onClick = {
+                        if (editor.text.toString() == latestAddress && continueEnabled) onContinue()
+                    },
+                    enabled = continueEnabled && editor.text.toString() == address,
+                    modifier = Modifier.size(48.dp).testTag("delivery-map-continue"),
+                    contentPadding = PaddingValues(0.dp),
+                ) {
+                    Icon(Icons.Default.ChevronRight, contentDescription = "Продолжить к выбору даты")
+                }
+            }
+        }
+        if (suggestions.isNotEmpty()) {
+            Surface(
+                shape = shape,
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
                 LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 240.dp)
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 220.dp)
                         .testTag("delivery-address-suggestions"),
                 ) {
                     items(
                         items = suggestions,
-                        key = { suggestion ->
-                            listOf(
-                                suggestion.searchText,
-                                suggestion.latitude?.toString().orEmpty(),
-                                suggestion.longitude?.toString().orEmpty(),
-                            ).joinToString("|")
-                        },
+                        key = { listOf(it.searchText, it.latitude?.toString().orEmpty(), it.longitude?.toString().orEmpty()).joinToString("|") },
                     ) { suggestion ->
                         Surface(
                             onClick = { onSuggestion(suggestion) },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("delivery-address-suggestion"),
+                            modifier = Modifier.fillMaxWidth().testTag("delivery-address-suggestion"),
                             color = MaterialTheme.colorScheme.surface,
                         ) {
                             Text(
                                 suggestion.displayText,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
-                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 12.dp),
+                                style = MaterialTheme.typography.bodyMedium,
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -885,54 +938,16 @@ private fun DeliveryAddressPanel(
                     }
                 }
             }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextField(
-                    value = address,
-                    onValueChange = onAddress,
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("delivery-address-field"),
-                    placeholder = { Text("Поиск адреса") },
-                    leadingIcon = {
-                        IconButton(onClick = onVoice, enabled = !geocoding) {
-                            Icon(Icons.Default.Mic, contentDescription = "Голосовой ввод адреса")
-                        }
-                    },
-                    singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { onSearch(address) }),
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        disabledIndicatorColor = Color.Transparent,
-                    ),
-                )
-                Button(
-                    onClick = onContinue,
-                    enabled = continueEnabled,
-                    modifier = Modifier.size(56.dp).testTag("delivery-map-continue"),
-                    contentPadding = PaddingValues(0.dp),
+        }
+        if (status != null) {
+            Surface(shape = shape, color = MaterialTheme.colorScheme.surface) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Icon(Icons.Default.ChevronRight, contentDescription = "Продолжить к выбору даты")
-                }
-            }
-            if (status != null) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    if (geocoding) {
-                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(6.dp))
-                    }
-                    Text(
-                        status,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    if (geocoding) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Text(status, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -983,7 +998,7 @@ internal fun DeliveryResponsibilityDialog(
                     modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-                    Text("Сколько бытовок объект может принять за один заезд?", style = MaterialTheme.typography.bodyLarge)
+                    Text("Сколько бытовок объект может принять за одну доставку?", style = MaterialTheme.typography.bodyLarge)
                     if (selectedCabinCount == 1) {
                         Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
                             Text(
@@ -993,26 +1008,34 @@ internal fun DeliveryResponsibilityDialog(
                             )
                         }
                     } else {
-                        Row(
+                        Column(
                             modifier = Modifier.fillMaxWidth().testTag("site-cabin-capacity-selector"),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             (1..2).forEach { capacity ->
                                 val selected = capacity == siteCabinCapacity
                                 Surface(
-                                    onClick = { onSiteCabinCapacity(capacity) },
-                                    enabled = !busy,
-                                    modifier = Modifier.weight(1f).testTag("site-cabin-capacity-$capacity"),
+                                    modifier = Modifier.fillMaxWidth().testTag("site-cabin-capacity-$capacity")
+                                        .selectable(selected = selected, enabled = !busy, role = Role.RadioButton) {
+                                            onSiteCabinCapacity(capacity)
+                                        },
                                     shape = RoundedCornerShape(12.dp),
-                                    color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                                    color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
                                     border = BorderStroke(
-                                        if (selected) 2.dp else 1.dp,
+                                        1.dp,
                                         if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
                                     ),
                                 ) {
-                                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        Text(if (capacity == 1) "1 бытовка" else "2 бытовки", style = MaterialTheme.typography.titleMedium)
-                                        Text(if (capacity == 1) "Без прицепа" else "С прицепом", style = MaterialTheme.typography.bodySmall)
+                                    Row(
+                                        Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    ) {
+                                        RadioButton(selected = selected, onClick = null, enabled = !busy)
+                                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                            Text(if (capacity == 1) "По 1 бытовке за одну доставку" else "До 2 бытовок за одну доставку", style = MaterialTheme.typography.bodyLarge)
+                                            Text(if (capacity == 1) "Без прицепа" else "С прицепом", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
                                     }
                                 }
                             }
@@ -1059,10 +1082,10 @@ private fun DeliveryConsentRow(
             .toggleable(value = checked, enabled = enabled, role = Role.Checkbox, onValueChange = onChecked)
             .padding(horizontal = 8.dp, vertical = 10.dp)
             .testTag(tag),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.Top,
     ) {
-        Checkbox(checked = checked, onCheckedChange = null, enabled = enabled)
-        Text(text, modifier = Modifier.weight(1f).padding(start = 12.dp), style = MaterialTheme.typography.bodyMedium)
+        Checkbox(checked = checked, onCheckedChange = null, enabled = enabled, modifier = Modifier.size(24.dp))
+        Text(text, modifier = Modifier.weight(1f).padding(start = 12.dp), style = MaterialTheme.typography.bodyLarge)
     }
 }
 
@@ -1088,6 +1111,7 @@ internal fun DeliveryLocationUnavailableDialog(message: String, onDismiss: () ->
     )
 }
 
+/** Compact date choice with a secondary, downward preview of the available time windows. */
 @Composable
 private fun DeliveryDateCard(
     availability: DeliveryDateAvailability,
@@ -1095,25 +1119,31 @@ private fun DeliveryDateCard(
     onExpand: () -> Unit,
     onSelect: () -> Unit,
 ) {
-    OutlinedCard(
+    Surface(
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+        color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = Modifier
-            .fillMaxWidth()
-            .widthIn(max = 760.dp)
-            .padding(horizontal = 16.dp),
+        modifier = Modifier.widthIn(max = 760.dp).fillMaxWidth().padding(horizontal = 16.dp),
     ) {
         Column {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 16.dp, top = 14.dp, bottom = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Default.CalendarMonth, contentDescription = null)
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(formatDeliveryDate(availability.date), style = MaterialTheme.typography.titleMedium)
-                    Text("Свободных окон: ${availability.slots.size}", style = MaterialTheme.typography.bodySmall)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    onClick = onSelect,
+                    color = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier.weight(1f).testTag("delivery-date-${availability.date}"),
+                ) {
+                    Row(
+                        Modifier.heightIn(min = 84.dp).padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        Icon(Icons.Default.CalendarMonth, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(formatDeliveryDate(availability.date), style = MaterialTheme.typography.titleMedium)
+                            Text("Свободных окон: ${availability.slots.size}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Icon(Icons.Default.ChevronRight, contentDescription = "Выбрать дату", modifier = Modifier.size(20.dp))
+                    }
                 }
                 IconButton(onClick = onExpand, modifier = Modifier.testTag("delivery-date-expand-${availability.date}")) {
                     Icon(
@@ -1123,30 +1153,66 @@ private fun DeliveryDateCard(
                 }
             }
             AnimatedVisibility(expanded) {
-                Column {
-                    HorizontalDivider()
+                Column(Modifier.fillMaxWidth().heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     availability.slots.forEach { slot ->
                         Row(
-                            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 9.dp),
+                            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             Icon(Icons.Default.Schedule, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text(deliverySlotTimeLabel(slot))
+                            Text(deliverySlotTimeLabel(slot), style = MaterialTheme.typography.bodyMedium)
                         }
                     }
                 }
             }
-            Button(
-                onClick = onSelect,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 16.dp, end = 16.dp, bottom = 12.dp)
-                    .testTag("delivery-date-${availability.date}"),
-            ) { Text("Выбрать дату") }
         }
     }
 }
+
+/** Describes the actual four-step delivery flow, without introducing additional destinations. */
+@Composable
+private fun DeliveryStepIntro(step: Int, title: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Доставка · шаг $step из 4", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+        Text(title, style = MaterialTheme.typography.headlineSmall)
+    }
+}
+
+/** Displays supplied delivery amounts once; differing or missing offers stay explicit. */
+@Composable
+private fun DeliveryPriceSummary(price: Int?, varies: Boolean) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Row(
+            Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(Icons.Default.LocalShipping, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Стоимость доставки", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    if (varies) "Зависит от выбранного времени" else CustomerMoneyFormatter.wholeRubles(price),
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.testTag("delivery-price"),
+                )
+            }
+        }
+    }
+}
+
+/** Formats only the owner-provided deadline in the warehouse zone; device time does not extend a hold. */
+internal fun customerHoldDeadlineLabel(expiresAt: String, warehouseTimeZone: String?): String? = runCatching {
+    val instant = java.time.OffsetDateTime.parse(expiresAt)
+    val local = instant.atZoneSameInstant(warehouseTimeZone?.let(java.time.ZoneId::of) ?: instant.offset)
+    DateTimeFormatter.ofPattern("d MMMM, HH:mm", Locale.forLanguageTag("ru")).format(local)
+}.getOrNull()
 
 @Composable
 private fun ConfirmationFact(label: String, value: String) {

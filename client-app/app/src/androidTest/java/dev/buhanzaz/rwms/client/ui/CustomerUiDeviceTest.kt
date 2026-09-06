@@ -74,8 +74,9 @@ class CustomerUiDeviceTest {
     fun readableFilters() {
         showWorkflow(CustomerAppearanceMode.LIGHT)
         composeRule.onNodeWithTag("catalog-filter-button").performClick()
-        composeRule.onNodeWithTag("cabin-native-cabin").assertDoesNotExist()
-        composeRule.onNodeWithText("Показать").assertIsDisplayed()
+        composeRule.onNodeWithTag("cabin-native-cabin").assertIsDisplayed()
+        composeRule.onNodeWithText("Сбросить фильтры").assertIsDisplayed()
+        composeRule.onNodeWithText("Показать").assertDoesNotExist()
         composeRule.onNodeWithTag("filter-field-Тип").performClick()
         composeRule.onNodeWithText("БК-2").assertIsDisplayed()
         saveScreen("filters-light")

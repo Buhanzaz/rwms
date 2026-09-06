@@ -269,6 +269,7 @@ class CustomerAppViewModel @Inject constructor(
     private var mutationJob: Job? = null
     private var sessionGeneration = 0L
     private var activeSessionMarker: String? = null
+    private var pendingFilters: Pair<String, CabinFilters>? = null
 
     /** Conditional signed-out/signed-in state. */
     val state: StateFlow<CustomerAppState> = mutableState.asStateFlow()
@@ -282,6 +283,7 @@ class CustomerAppViewModel @Inject constructor(
                         .takeUnless { auth is CustomerAuthState.SignedOut }
                     sessionGeneration += 1
                     activeSessionMarker = null
+                    pendingFilters = null
                     bootstrappedSession = false
                     mutableState.value = when (auth) {
                         is CustomerAuthState.SignedOut -> CustomerAppState.SignedOut(auth.message)
@@ -419,17 +421,41 @@ class CustomerAppViewModel @Inject constructor(
         }
     }
 
-    /** Replaces cabin filters and reloads page zero from the authoritative free inventory. */
-    fun applyFilters(filters: CabinFilters) = launchMutation {
-        val inquiryId = requireNotNull(mutableWorkflow.value.inquiryId)
-        val page = repository.cabins(inquiryId, filters, 0)
-        mutableWorkflow.value = mutableWorkflow.value.copy(
-            filters = filters,
-            cabins = page.content,
-            cabinPage = page.page,
-            cabinTotalPages = page.totalPages,
-            estimatedDeliveryDates = page.estimatedDeliveryDates,
-        )
+    /** Keeps the latest filter intent until the current request releases the shared command lane. */
+    fun applyFilters(filters: CabinFilters) {
+        val current = mutableWorkflow.value
+        val inquiryId = current.inquiryId ?: return
+        if (current.bootstrapping || authRepository.state.value != CustomerAuthState.SignedIn) return
+        pendingFilters = inquiryId to filters
+        drainPendingFilters()
+    }
+
+    private fun drainPendingFilters() {
+        if (mutationGate.isActive()) return
+        val request = pendingFilters ?: return
+        val current = mutableWorkflow.value
+        if (current.bootstrapping || current.inquiryId != request.first ||
+            authRepository.state.value != CustomerAuthState.SignedIn
+        ) {
+            pendingFilters = null
+            return
+        }
+        val marker = activeSessionMarker ?: return
+        val generation = sessionGeneration
+        launchMutation(onAdmitted = { pendingFilters = null }) {
+            val (inquiryId, filters) = request
+            val page = repository.cabins(inquiryId, filters, 0)
+            if (!isCurrentMutationSession(generation, marker) ||
+                mutableWorkflow.value.inquiryId != inquiryId || pendingFilters != null
+            ) return@launchMutation
+            mutableWorkflow.value = mutableWorkflow.value.copy(
+                filters = filters,
+                cabins = page.content,
+                cabinPage = page.page,
+                cabinTotalPages = page.totalPages,
+                estimatedDeliveryDates = page.estimatedDeliveryDates,
+            )
+        }
     }
 
     /** Appends the next authoritative page without duplicating cabins already rendered. */
@@ -537,7 +563,8 @@ class CustomerAppViewModel @Inject constructor(
 
     /** Stores an address draft and invalidates any earlier address-to-point confirmation. */
     fun setAddress(address: String) {
-        if (mutationGate.isActive()) return
+        // Background order reads must not drop text edits or leave a stale confirmed address.
+        if (mutableWorkflow.value.busy || mutableWorkflow.value.bootstrapping) return
         mutableWorkflow.value = mutableWorkflow.value.copy(
             address = address,
             deliveryLocationConfirmed = false,
@@ -1133,6 +1160,13 @@ class CustomerAppViewModel @Inject constructor(
                     mutableWorkflow.value = mutableWorkflow.value.copy(busy = false, bootstrapping = false)
                 }
                 mutationGate.leave()
+                if (pendingFilters != null && isCurrentMutationSession(generation, marker)) {
+                    viewModelScope.launch {
+                        // Let the current undispatched launch finish assigning its tracked job first.
+                        kotlinx.coroutines.yield()
+                        drainPendingFilters()
+                    }
+                }
             }
         }
     }

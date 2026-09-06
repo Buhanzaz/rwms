@@ -14,6 +14,7 @@ import dev.buhanzaz.rwms.client.data.CustomerCabin
 import dev.buhanzaz.rwms.client.data.CustomerCart
 import dev.buhanzaz.rwms.client.data.CustomerEntityType
 import dev.buhanzaz.rwms.client.data.CabinFacets
+import dev.buhanzaz.rwms.client.data.CabinFilters
 import dev.buhanzaz.rwms.client.data.CabinPage
 import dev.buhanzaz.rwms.client.data.CheckoutRequest
 import dev.buhanzaz.rwms.client.data.CustomerNotification
@@ -76,6 +77,9 @@ class CustomerSessionBootstrapTest {
     private var profileCalls = 0
     private var holdNextBookings = false
     private var heldBookings: Continuation<List<CustomerBooking>>? = null
+    private var holdNextCabins = false
+    private var heldCabins: Continuation<CabinPage>? = null
+    private val cabinTypeQueries = mutableListOf<Pair<String, String?>>()
     private var currentProfile = profile("first-customer")
     private var currentWarehouse = warehouse("first-warehouse")
     private var checkoutFixture: CheckoutFixture? = null
@@ -124,6 +128,8 @@ class CustomerSessionBootstrapTest {
     fun tearDown() = runBlocking {
         heldBookings?.resumeWith(Result.success(emptyList()))
         heldBookings = null
+        heldCabins?.resumeWith(Result.success(CabinPage()))
+        heldCabins = null
         viewModels.clear()
         auth.logout()
         workflowStore.clear()
@@ -207,6 +213,52 @@ class CustomerSessionBootstrapTest {
         assertThat(workflow.error).isNotNull()
     }
 
+    @Test
+    fun `latest filters wait behind polling and supersede an unfinished filter response`() = runTest(dispatcher) {
+        val fixture = checkoutFixture()
+        val viewModel = signedInCheckoutViewModel()
+        cabinTypeQueries.clear()
+        holdNextBookings = true
+        viewModel.refreshCustomerUpdates()
+        runCurrent()
+        assertThat(heldBookings).isNotNull()
+
+        viewModel.applyFilters(CabinFilters(cabinType = "БК-1"))
+        viewModel.applyFilters(CabinFilters(cabinType = "БК-2"))
+        assertThat(cabinTypeQueries).isEmpty()
+        holdNextCabins = true
+        val polling = requireNotNull(heldBookings)
+        heldBookings = null
+        polling.resumeWith(Result.success(emptyList()))
+        runCurrent()
+        assertThat(cabinTypeQueries).containsExactly(fixture.inquiryId to "БК-2")
+
+        val latest = CabinFilters(cabinType = "БК-3")
+        viewModel.applyFilters(latest)
+        holdNextCabins = true
+        val superseded = requireNotNull(heldCabins)
+        heldCabins = null
+        superseded.resumeWith(Result.success(CabinPage(content = listOf(fixture.cabin.copy(unitId = "obsolete")))))
+        runCurrent()
+        val waiting = (viewModel.state.value as CustomerAppState.Ready).workflow
+        assertThat(waiting.filters).isEqualTo(CabinFilters())
+        assertThat(waiting.cabins).containsExactly(fixture.cabin)
+        assertThat(cabinTypeQueries).containsExactly(
+            fixture.inquiryId to "БК-2",
+            fixture.inquiryId to "БК-3",
+        ).inOrder()
+
+        val latestRead = requireNotNull(heldCabins)
+        heldCabins = null
+        val latestCabin = fixture.cabin.copy(unitId = "latest")
+        latestRead.resumeWith(Result.success(CabinPage(content = listOf(latestCabin))))
+        runCurrent()
+        val completed = (viewModel.state.value as CustomerAppState.Ready).workflow
+        assertThat(completed.filters).isEqualTo(latest)
+        assertThat(completed.cabins).containsExactly(latestCabin)
+        assertThat(completed.busy).isFalse()
+    }
+
     private fun exerciseOldPollingCompletion(failed: Boolean) = runTest(dispatcher, timeout = 30.seconds) {
         val api = customerApi()
         val repository = CustomerRepository(context, api, json, workflowStore)
@@ -278,8 +330,18 @@ class CustomerSessionBootstrapTest {
             "inquiry" -> checkoutFixture?.session ?: error("Unexpected inquiry read")
             "cart" -> checkoutFixture?.cart ?: error("Unexpected cart read")
             "facets" -> CabinFacets()
-            "cabins" -> checkoutFixture?.let { CabinPage(content = listOf(it.cabin), totalElements = 1, totalPages = 1) }
-                ?: error("Unexpected cabins read")
+            "cabins" -> {
+                val parameters = requireNotNull(args)
+                cabinTypeQueries += (parameters[0] as String) to (parameters[1] as String?)
+                if (holdNextCabins) {
+                    holdNextCabins = false
+                    @Suppress("UNCHECKED_CAST")
+                    val continuation = parameters.last() as Continuation<CabinPage>
+                    heldCabins = continuation
+                    COROUTINE_SUSPENDED
+                } else checkoutFixture?.let { CabinPage(content = listOf(it.cabin), totalElements = 1, totalPages = 1) }
+                    ?: error("Unexpected cabins read")
+            }
             "equipment" -> emptyList<Any>()
             "searchSlots" -> checkoutFixture?.let { listOf(it.slot) } ?: error("Unexpected slot search")
             "holdSlot" -> checkoutFixture?.let { HeldDeliverySlot(it.cart.version, it.slot) }

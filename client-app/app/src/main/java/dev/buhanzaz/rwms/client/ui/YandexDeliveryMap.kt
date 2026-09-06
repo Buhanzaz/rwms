@@ -394,8 +394,12 @@ internal fun DeliveryMapPointPicker(
     val darkTheme = MaterialTheme.colorScheme.surface.luminance() < 0.5f
     val density = LocalDensity.current
     val imeBottom = WindowInsets.ime.getBottom(density)
-    val logoBottom = maxOf(imeBottom, WindowInsets.navigationBars.getBottom(density)) +
-        with(density) { 8.dp.roundToPx() }
+    // The panel measurement excludes IME padding and includes its own navigation-bar inset.
+    // Attribution sits above the entire search panel, including its downward suggestions.
+    val logoBottom = maxOf(
+        WindowInsets.navigationBars.getBottom(density),
+        imeBottom + with(density) { bottomControlsClearance.roundToPx() },
+    )
     val latestOnPoint by rememberUpdatedState(onPoint)
     val latestOnCurrentLocation by rememberUpdatedState(onCurrentLocation)
     val initialTarget = deliveryMapInitialTarget(latitude, longitude, depotLatitude, depotLongitude)

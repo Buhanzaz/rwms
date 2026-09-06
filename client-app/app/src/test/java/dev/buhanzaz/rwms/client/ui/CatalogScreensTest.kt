@@ -7,7 +7,6 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.client.data.CabinFacetWarehouse
 import dev.buhanzaz.rwms.client.data.CabinFacets
@@ -119,8 +118,8 @@ class CatalogScreensTest {
 
         composeRule.onNodeWithTag("catalog-filter-panel").assertExists()
         composeRule.onNodeWithText("Тип").assertExists()
-        composeRule.onNodeWithText("Сбросить").assertExists()
-        composeRule.onNodeWithText("Показать").assertExists()
+        composeRule.onNodeWithText("Сбросить фильтры").assertExists()
+        composeRule.onNodeWithText("Показать").assertDoesNotExist()
         val typeBounds = composeRule.onNodeWithTag("filter-field-Тип").fetchSemanticsNode().boundsInRoot
         val finishBounds = composeRule.onNodeWithTag("filter-field-Отделка").fetchSemanticsNode().boundsInRoot
         val sizeBounds = composeRule.onNodeWithTag("filter-field-Размер").fetchSemanticsNode().boundsInRoot
@@ -129,6 +128,8 @@ class CatalogScreensTest {
         assertThat(typeBounds.top).isWithin(1f).of(finishBounds.top)
         composeRule.onNodeWithTag("filter-field-Тип").performClick()
         composeRule.onNodeWithText("Нет доступных вариантов в этом городе").assertExists()
+        val optionsBounds = composeRule.onNodeWithTag("filter-options-Тип").fetchSemanticsNode().boundsInRoot
+        assertThat(optionsBounds.top).isAtLeast(typeBounds.bottom)
     }
 
     @Test
@@ -164,7 +165,6 @@ class CatalogScreensTest {
         composeRule.onNodeWithText(compatibleDimension).assertExists()
         composeRule.onNodeWithText(incompatibleDimension).assertDoesNotExist()
         composeRule.onNodeWithText(compatibleDimension).performClick()
-        composeRule.onNodeWithText("Показать").performScrollTo().performClick()
 
         composeRule.runOnIdle {
             assertThat(appliedFilters).isEqualTo(CabinFilters(cabinType = "БК-1", dimensions = compatibleDimension))
@@ -172,7 +172,44 @@ class CatalogScreensTest {
     }
 
     @Test
-    fun `filters replace cards without moving the header and close without applying drafts`() {
+    fun `visible characteristics and reset apply without a second action`() {
+        var appliedFilters: CabinFilters? = null
+        composeRule.setContent {
+            CustomerTheme {
+                CabinCatalogScreen(
+                    state = catalogState().copy(
+                        filters = CabinFilters(finish = "Графит"),
+                        facets = CabinFacets(
+                            warehouses = listOf(
+                                CabinFacetWarehouse(
+                                    warehouseId = "warehouse-spb",
+                                    name = "СПБ",
+                                    characteristics = listOf("Пластиковое окно", "Усиленная дверь"),
+                                ),
+                            ),
+                        ),
+                    ),
+                    onMenu = {}, onProfile = {}, onFilters = { appliedFilters = it },
+                    onLoadMore = {}, onToggleCabin = {}, onEquipment = { _, _, _ -> },
+                    onPhoto = { _, _ -> }, onWarehouse = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("catalog-filter-button").performClick()
+        composeRule.onNodeWithTag("filter-characteristics").assertExists()
+        composeRule.onNodeWithTag("filter-characteristic-Пластиковое окно").performClick()
+        composeRule.runOnIdle {
+            assertThat(appliedFilters).isEqualTo(
+                CabinFilters(finish = "Графит", characteristics = setOf("Пластиковое окно")),
+            )
+        }
+        composeRule.onNodeWithTag("catalog-filter-reset").performClick()
+        composeRule.runOnIdle { assertThat(appliedFilters).isEqualTo(CabinFilters()) }
+    }
+
+    @Test
+    fun `filters stay above cards and apply each choice without moving the header`() {
         var appliedFilters: CabinFilters? = null
         composeRule.setContent {
             CustomerTheme {
@@ -186,14 +223,14 @@ class CatalogScreensTest {
         }
         val originalHeader = composeRule.onNodeWithTag("customer-header").fetchSemanticsNode().boundsInRoot
         composeRule.onNodeWithTag("catalog-filter-button").performClick()
-        composeRule.onNodeWithTag("cabin-cabin-1").assertDoesNotExist()
+        composeRule.onNodeWithTag("cabin-cabin-1").assertExists()
         val filterHeader = composeRule.onNodeWithTag("customer-header").fetchSemanticsNode().boundsInRoot
         assertThat(filterHeader).isEqualTo(originalHeader)
         composeRule.onNodeWithTag("filter-field-Пол").performClick()
         composeRule.onNodeWithText("Линолеум").performClick()
         composeRule.onNodeWithText("Закрыть фильтры").performClick()
         composeRule.onNodeWithTag("cabin-cabin-1").assertExists()
-        assertThat(appliedFilters).isNull()
+        assertThat(appliedFilters).isEqualTo(CabinFilters(linoleum = true))
     }
 
     @Test
@@ -239,7 +276,7 @@ class CatalogScreensTest {
     }
 
     @Test
-    fun `catalog card leads with number and omits deprecated status and delivery details`() {
+    fun `catalog card leads with type and omits deprecated status and delivery details`() {
         composeRule.setContent {
             CustomerTheme {
                 CabinCatalogScreen(
@@ -261,8 +298,7 @@ class CatalogScreensTest {
 
         val numberBounds = composeRule.onNodeWithTag("cabin-number-cabin-1").fetchSemanticsNode().boundsInRoot
         val typeBounds = composeRule.onNodeWithTag("cabin-type-cabin-1").fetchSemanticsNode().boundsInRoot
-        assertThat(numberBounds.left).isLessThan(typeBounds.left)
-        assertThat(numberBounds.height).isWithin(1f).of(typeBounds.height)
+        assertThat(typeBounds.left).isLessThan(numberBounds.left)
         composeRule.onNodeWithText("№ БК-1").assertExists()
         composeRule.onNodeWithText("Офисная бытовка").assertExists()
         composeRule.onNodeWithText("8 000 ₽/мес.").assertExists()

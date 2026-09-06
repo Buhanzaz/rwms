@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.client.ui
 
+import android.graphics.Color as AndroidColor
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
@@ -31,6 +32,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -49,10 +51,8 @@ import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -63,6 +63,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -71,13 +72,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
 import dev.buhanzaz.rwms.client.BuildConfig
 import dev.buhanzaz.rwms.client.data.AvailableEquipment
@@ -266,7 +271,6 @@ fun CabinCatalogScreen(
     var showFilters by remember { mutableStateOf(false) }
     var furnitureCabin by remember { mutableStateOf<String?>(null) }
     val catalogScroll = rememberLazyListState()
-    val filterScroll = rememberLazyListState()
     BackHandler(enabled = showFilters) { showFilters = false }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -291,7 +295,7 @@ fun CabinCatalogScreen(
         },
     ) { padding ->
         LazyColumn(
-            state = if (showFilters) filterScroll else catalogScroll,
+            state = catalogScroll,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
@@ -307,42 +311,38 @@ fun CabinCatalogScreen(
                         current = state.filters,
                         facets = state.facets,
                         warehouseId = state.selectedWarehouse?.id,
-                        onApply = {
-                            showFilters = false
-                            onFilters(it)
-                        },
+                        onApply = onFilters,
                     )
                 }
-            } else {
-                if (state.cabins.isEmpty() && !state.busy) {
-                    item {
-                        Text(
-                            "Свободных бытовок по выбранным условиям нет",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(32.dp),
-                        )
-                    }
-                }
-                items(state.cabins, key = CustomerCabin::unitId) { cabin ->
-                    val selected = cabin.unitId in state.selectedCabinIds
-                    CabinCard(
-                        cabin = cabin,
-                        selected = selected,
-                        onToggle = { onToggleCabin(cabin.unitId) },
-                        onFurniture = { furnitureCabin = cabin.unitId },
-                        onPhoto = { page -> onPhoto(cabin.unitId, page) },
+            }
+            if (state.cabins.isEmpty() && !state.busy) {
+                item {
+                    Text(
+                        "Свободных бытовок по выбранным условиям нет",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(32.dp),
                     )
                 }
-                if (state.cabinPage + 1 < state.cabinTotalPages) {
-                    item {
-                        OutlinedButton(
-                            onClick = onLoadMore,
-                            modifier = Modifier.fillMaxWidth().widthIn(max = 1120.dp),
-                            enabled = !state.busy,
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                        ) {
-                            Text("Показать ещё")
-                        }
+            }
+            items(state.cabins, key = CustomerCabin::unitId) { cabin ->
+                val selected = cabin.unitId in state.selectedCabinIds
+                CabinCard(
+                    cabin = cabin,
+                    selected = selected,
+                    onToggle = { onToggleCabin(cabin.unitId) },
+                    onFurniture = { furnitureCabin = cabin.unitId },
+                    onPhoto = { page -> onPhoto(cabin.unitId, page) },
+                )
+            }
+            if (state.cabinPage + 1 < state.cabinTotalPages) {
+                item {
+                    OutlinedButton(
+                        onClick = onLoadMore,
+                        modifier = Modifier.fillMaxWidth().widthIn(max = 1120.dp),
+                        enabled = !state.busy,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    ) {
+                        Text("Показать ещё")
                     }
                 }
             }
@@ -389,13 +389,13 @@ private fun CabinCard(
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().widthIn(max = 1120.dp).testTag("cabin-${cabin.unitId}"),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(20.dp),
         border = BorderStroke(
             width = if (selected) 2.dp else 1.dp,
             color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
         ),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
         BoxWithConstraints {
             val wide = usesWideCabinCard(maxWidth.value)
@@ -458,16 +458,16 @@ private fun CabinCardBody(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "№ ${cabin.accountingNo}",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.testTag("cabin-number-${cabin.unitId}"),
-            )
-            Text(
                 cabin.type ?: "Тип не указан",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f).testTag("cabin-type-${cabin.unitId}"),
+            )
+            Text(
+                "№ ${cabin.accountingNo}",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.testTag("cabin-number-${cabin.unitId}"),
             )
         }
         FlowRow(
@@ -619,7 +619,7 @@ private fun CabinFact(icon: androidx.compose.ui.graphics.vector.ImageVector? = n
 
 internal fun usesWideCabinCard(widthDp: Float): Boolean = widthDp >= 920f
 
-/** Replaces the cards below the fixed header with one opaque two-column filter form. */
+/** Expands server-owned facets above the catalog without replacing its current results. */
 @Composable
 private fun CabinFilterPanel(
     current: CabinFilters,
@@ -630,10 +630,19 @@ private fun CabinFilterPanel(
     var draft by remember(current, warehouseId) { mutableStateOf(current) }
     val available = facets.warehouses.firstOrNull { it.warehouseId == warehouseId } ?: facets.selected
     val dimensions = remember(available, draft.cabinType) { available.compatibleDimensionsFor(draft.cabinType) }
+    fun apply(next: CabinFilters) {
+        draft = next
+        onApply(next)
+    }
+    val shape = RoundedCornerShape(16.dp)
     Surface(
-        modifier = Modifier.widthIn(max = 760.dp).fillMaxWidth().testTag("catalog-filter-panel"),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 1f),
+        modifier = Modifier
+            .widthIn(max = 760.dp)
+            .fillMaxWidth()
+            .figmaButtonShadow(shape)
+            .testTag("catalog-filter-panel"),
+        shape = shape,
+        color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(
@@ -642,18 +651,18 @@ private fun CabinFilterPanel(
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 CatalogFacetField("Тип", available.cabinTypes, listOfNotNull(draft.cabinType), Modifier.weight(1f)) {
-                    draft = draft.withCabinType(it, available)
+                    apply(draft.withCabinType(it, available))
                 }
                 CatalogFacetField("Отделка", available.finishes, listOfNotNull(draft.finish), Modifier.weight(1f)) {
-                    draft = draft.copy(finish = it)
+                    apply(draft.copy(finish = it))
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 CatalogFacetField("Размер", dimensions, listOfNotNull(draft.dimensions), Modifier.weight(1f)) {
-                    draft = draft.copy(dimensions = it)
+                    apply(draft.copy(dimensions = it))
                 }
                 CatalogFacetField("Категория", available.categories, listOfNotNull(draft.category), Modifier.weight(1f)) {
-                    draft = draft.copy(category = it)
+                    apply(draft.copy(category = it))
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -663,25 +672,47 @@ private fun CabinFilterPanel(
                     null -> null
                 }
                 CatalogFacetField("Пол", listOf("Линолеум", "Без линолеума"), listOfNotNull(floor), Modifier.weight(1f)) {
-                    draft = draft.copy(linoleum = it?.let { value -> value == "Линолеум" })
-                }
-                CatalogFacetField(
-                    "Характеристики", available.characteristics, draft.characteristics.toList(),
-                    Modifier.weight(1f), multiple = true,
-                ) { value ->
-                    draft = draft.copy(
-                        characteristics = when {
-                            value == null -> emptySet()
-                            value in draft.characteristics -> draft.characteristics - value
-                            else -> draft.characteristics + value
-                        },
-                    )
+                    apply(draft.copy(linoleum = it?.let { value -> value == "Линолеум" }))
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedButton(onClick = { draft = CabinFilters() }, modifier = Modifier.weight(1f)) { Text("Сбросить") }
-                Button(onClick = { onApply(draft) }, modifier = Modifier.weight(1f)) { Text("Показать") }
+            if (available.characteristics.isNotEmpty()) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().testTag("filter-characteristics"),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text("Характеристики", style = MaterialTheme.typography.labelLarge)
+                    available.characteristics.forEach { value ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("filter-characteristic-$value")
+                                .toggleable(
+                                    value = value in draft.characteristics,
+                                    role = Role.Checkbox,
+                                ) { checked ->
+                                    apply(
+                                        draft.copy(
+                                            characteristics = if (checked) draft.characteristics + value
+                                            else draft.characteristics - value,
+                                        ),
+                                    )
+                                },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(
+                                checked = value in draft.characteristics,
+                                onCheckedChange = null,
+                            )
+                            Text(value, modifier = Modifier.padding(start = 4.dp))
+                        }
+                    }
+                }
             }
+            OutlinedButton(
+                onClick = { apply(CabinFilters()) },
+                modifier = Modifier.fillMaxWidth().testTag("catalog-filter-reset"),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            ) { Text("Сбросить фильтры") }
         }
     }
 }
@@ -692,11 +723,10 @@ private fun CatalogFacetField(
     options: List<String>,
     selected: List<String>,
     modifier: Modifier,
-    multiple: Boolean = false,
     onSelect: (String?) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    Box(modifier) {
+    Column(modifier) {
         Surface(
             onClick = { expanded = !expanded },
             modifier = Modifier.fillMaxWidth().testTag("filter-field-$title"),
@@ -717,39 +747,48 @@ private fun CatalogFacetField(
                 Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(20.dp))
             }
         }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            modifier = Modifier.widthIn(min = 220.dp, max = 320.dp).testTag("filter-options-$title"),
-            shape = RoundedCornerShape(12.dp),
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 1f),
-            tonalElevation = 0.dp,
-            shadowElevation = 0.dp,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-        ) {
-            DropdownMenuItem(
-                text = { Text("Любой") },
-                onClick = {
-                    onSelect(null)
-                    expanded = false
-                },
-            )
-            if (options.isEmpty()) {
-                DropdownMenuItem(text = { Text("Нет доступных вариантов в этом городе") }, onClick = {}, enabled = false)
-            }
-            options.forEach { value ->
-                DropdownMenuItem(
-                    text = { Text(value) },
-                    trailingIcon = {
-                        if (selected.any { facetValuesMatch(it, value) }) {
-                            Icon(Icons.Default.CheckCircle, contentDescription = "Выбрано")
+        if (expanded) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 240.dp)
+                    .testTag("filter-options-$title"),
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            ) {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    TextButton(
+                        onClick = {
+                            onSelect(null)
+                            expanded = false
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Любой") }
+                    if (options.isEmpty()) {
+                        Text(
+                            "Нет доступных вариантов в этом городе",
+                            modifier = Modifier.padding(12.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    options.forEach { value ->
+                        TextButton(
+                            onClick = {
+                                onSelect(if (selected.any { facetValuesMatch(it, value) }) null else value)
+                                expanded = false
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text(value, modifier = Modifier.weight(1f), textAlign = TextAlign.Start)
+                                if (selected.any { facetValuesMatch(it, value) }) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = "Выбрано")
+                                }
+                            }
                         }
-                    },
-                    onClick = {
-                        onSelect(if (!multiple && selected.any { facetValuesMatch(it, value) }) null else value)
-                        expanded = false
-                    },
-                )
+                    }
+                }
             }
         }
     }
@@ -847,8 +886,12 @@ fun FullscreenCabinGallery(cabin: CustomerCabin?, initialPage: Int, onClose: () 
         LaunchedClose(onClose)
         return
     }
-    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.scrim) {
+    Dialog(
+        onDismissRequest = onClose,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+    ) {
+        Surface(Modifier.fillMaxSize(), color = Color.Black) {
+            GallerySystemBars()
             val pager = rememberPagerState(initialPage = initialPage.coerceIn(cabin.photos.indices)) { cabin.photos.size }
             Box(Modifier.fillMaxSize()) {
                 HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
@@ -859,16 +902,52 @@ fun FullscreenCabinGallery(cabin: CustomerCabin?, initialPage: Int, onClose: () 
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
-                FloatingActionButton(
+                IconButton(
                     onClick = onClose,
-                    modifier = Modifier.align(Alignment.TopEnd).padding(24.dp),
-                ) { Icon(Icons.Default.Close, contentDescription = "Закрыть фотографии") }
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .statusBarsPadding()
+                        .padding(12.dp)
+                        .testTag("gallery-close"),
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Закрыть фотографии",
+                        tint = Color.White,
+                    )
+                }
                 Text(
                     "${pager.currentPage + 1} / ${cabin.photos.size}",
-                    color = MaterialTheme.colorScheme.surface,
-                    modifier = Modifier.align(Alignment.BottomCenter).padding(28.dp),
+                    color = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(20.dp),
                 )
             }
+        }
+    }
+}
+
+/** Colors only the transient dialog window so closing the gallery restores the host system bars. */
+@Composable
+private fun GallerySystemBars() {
+    val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window ?: return
+    DisposableEffect(dialogWindow) {
+        val statusBarColor = dialogWindow.statusBarColor
+        val navigationBarColor = dialogWindow.navigationBarColor
+        val controller = WindowInsetsControllerCompat(dialogWindow, dialogWindow.decorView)
+        val lightStatusBars = controller.isAppearanceLightStatusBars
+        val lightNavigationBars = controller.isAppearanceLightNavigationBars
+        dialogWindow.statusBarColor = AndroidColor.BLACK
+        dialogWindow.navigationBarColor = AndroidColor.BLACK
+        controller.isAppearanceLightStatusBars = false
+        controller.isAppearanceLightNavigationBars = false
+        onDispose {
+            dialogWindow.statusBarColor = statusBarColor
+            dialogWindow.navigationBarColor = navigationBarColor
+            controller.isAppearanceLightStatusBars = lightStatusBars
+            controller.isAppearanceLightNavigationBars = lightNavigationBars
         }
     }
 }

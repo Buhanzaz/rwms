@@ -97,16 +97,17 @@ individual profile. Existing individual/legal profile kinds remain immutable;
 The signed-in flow presents city selection with an optional `Remember selected city` checkbox before
 loading server-returned free cabins. Menu and profile remain available at this step. City labels come
 from the warehouse service's `city` field; warehouses in the same city retain separate identities and
-show an address/name to distinguish them. The inset glass header centers the city between menu and
+show an address/name to distinguish them. The inset header centers the city between menu and
 profile actions. Tapping it expands the alternatives below the fixed row, then creates or resumes the
-selected warehouse's inquiry. A background-free filter action opens an opaque two-column facet form directly
-below the fixed header, replacing the cards until applied or closed. The form uses the content
-scroll area and keeps the catalog scroll position when closed; option menus have opaque fills.
-It filters by type, finish, dimensions, category, linoleum and characteristics, but has no text
-search. A selected type narrows dimensions to the server-returned `typeDimensions` relation and
-clears an incompatible size before the request. Cabin cards lead with an unframed accounting
-number followed by the type at the same title scale; they omit provisional availability and
-delivery copy. Swipe/full-screen photos never navigate to a passport. Available warehouse
+selected warehouse's inquiry. A filter action expands an opaque facet panel in the same scrollable list as the cabins. Each change
+and reset immediately requests server results; rapid changes retain the latest choice until the
+current request finishes. Single-choice lists open downward with bounded internal scrolling, and
+characteristics remain visible as checkboxes. There is no text search or apply button. A selected
+type narrows dimensions to the server-returned `typeDimensions` relation and clears an incompatible
+size before the request. Catalog and cart cards share photo proportions, surfaces and a full-width
+header with type on the left and accounting number on the right. The cart has a labelled `Удалить`
+action. Full-screen photos use a black background and system areas with an unframed white close
+control; they never navigate to a passport. Available warehouse
 furniture can be assigned per cabin as `+ Additional`.
 
 Catalog and cart cabin cards show the current logistics-owned monthly rental price, keyed by
@@ -140,22 +141,28 @@ fixed-window or full-day slots, then per-cabin term review and checkout. Every s
 required `kind`: `FIXED_WINDOW` displays its exact interval, while `DURING_DAY` displays
 `В течение дня. Точное время подтвердит логист` in the date preview, slot choice and confirmation
 without hiding its non-null server bounds. Flexible arrival is listed last within each date, including
-rescheduling offers; fixed windows retain their time ordering.
+rescheduling offers; fixed windows retain their time ordering. Date/time steps show a shared
+server delivery price once when all offers have the same price; differing prices remain explicit
+on their rows. Confirmation shows the hold deadline in the selected warehouse’s timezone. The
+server remains responsible for hold expiry and the final bill.
 
 The map uses the stylable `MapType.VECTOR_MAP` in flat 2D mode at the logistics-owned depot, keeps pan/pinch inside MapKit and shows plus, minus and a
 bottom-right current-location arrow. A tapped, suggested or device point is rendered immediately
 with a blue bitmap-backed cube pin. Its blue palette and night mode follow the app's explicit
 light/dark appearance. The shared header and glass controls use the same palette; map controls hide
 while the keyboard is open. The native map uses MapKit's movable TextureView mode so it follows
-Compose page transitions. The required Yandex attribution stays in the reserved gap below the address
-panel at the bottom left, above system UI or the keyboard, using the SDK's logo alignment and padding API. Tapping the arrow is the only action that requests Android approximate/precise
+Compose page transitions. The required Yandex attribution stays above the complete address panel at the bottom left,
+including its suggestions and the keyboard, using the SDK's logo alignment and padding API. Tapping the arrow is the only action that requests Android approximate/precise
 location permission; cancellable one-shot Android location requests race only enabled GPS,
 network and passive providers, recenter the marker and reverse-geocode the same address/point
 binding. Denial, disabled providers, timeout and a missing result are shown explicitly. There is no
 layer toggle;
 satellite and hybrid layers are not requested. The bottom panel contains only
 address search, Yandex/Alice voice input, status and the continue arrow; it remains fixed above
-the IME and cannot be dragged. Live Yandex suggestions appear while the customer types. Selecting
+the IME and cannot be dragged. Its closed row matches the header’s 60 dp height and 16 dp side
+gutters. Native state-based text editing keeps the caret and horizontal scroll when a long address
+is edited; background order reads do not discard those edits. Live Yandex suggestions open downward
+in a separate bounded panel while the customer types. Selecting
 a suggestion, submitting typed text, tapping the map or using current location places the marker
 and resolves one exact address/point without displaying a redundant confirmation banner.
 Russian speech is accepted only from
@@ -168,11 +175,11 @@ private-site attestations and slots.
 Pressing continue with a confirmed address/point and non-empty server cart first opens a modal for
 site receiving capacity, private-site truck access and failed-trip responsibility. One selected
 cabin fixes capacity to `1` and a truck without a trailer; two or more selected cabins expose a
-pair of equal-width `1`/`2` options where `2` means a truck with a trailer. Capacity changes invalidate prior offers,
+pair of stable full-width `1`/`2` rows where `2` means a truck with a trailer. Capacity changes invalidate prior offers,
 holds and attestations. Both checkboxes are required before the slot request is sent, and the same
 capacity is fenced again on hold. Navigation advances to dates only after a newer server search
 generation succeeds; failures cannot open an empty date destination. While
-that request is active, a non-dismissible overlay blocks repeated input and
+that request is active, a non-dismissible opaque dialog blocks repeated input and
 shows a spinner above `Идёт расчёт свободных слотов`; it disappears on success
 or error. The later hold revalidates the same two frozen facts with capacity and rejects a stale or
 incomplete offer. Changing either answer preserves returned offers and the selected slot but clears
