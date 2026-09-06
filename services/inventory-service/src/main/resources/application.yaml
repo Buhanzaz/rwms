@@ -118,6 +118,7 @@ rwms:
     eventing:
       outbox:
         relay-delay: ${INVENTORY_KAFKA_OUTBOX_RELAY_DELAY:1s}
+        max-attempts: ${INVENTORY_KAFKA_OUTBOX_MAX_ATTEMPTS:4}
         lease-duration: ${INVENTORY_KAFKA_OUTBOX_LEASE_DURATION:30s}
         instance-id: ${INVENTORY_KAFKA_INSTANCE_ID:inventory-service}
     security:

@@ -44,6 +44,17 @@ public class InventoryAuthorizer {
     requireWarehouse(jwt, warehouseId, AccessLevel.MANAGE);
   }
 
+  /** Requires a global administrator and the write/admin scope for event delivery recovery. */
+  public void requireEventingRecovery(Jwt jwt) {
+    if (developmentBypass) return;
+    requireUserScope(jwt, "rwms.write");
+    String role = jwt.getClaimAsString("global_role");
+    if (!"SYSTEM_ADMIN".equals(role) && !"WMS_ADMIN".equals(role)) {
+      throw new AccessDeniedException(
+          "Eventing recovery requires a SYSTEM_ADMIN or WMS_ADMIN role");
+    }
+  }
+
   public WarehouseScope readScope(Jwt jwt) {
     return scope(jwt, "rwms.read", AccessLevel.VIEW);
   }

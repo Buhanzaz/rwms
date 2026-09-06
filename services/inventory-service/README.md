@@ -247,6 +247,20 @@ event IDs, validate contract shape and retain retry/quarantine/DLT state locally
 capture-release and publication flows retain durable attempts so retries do not create a second
 session or guess an uncertain dependency result.
 
+Inventory outbox and sanitized DLT publication have a finite per-record budget
+(`INVENTORY_KAFKA_OUTBOX_MAX_ATTEMPTS`, default `4`). Broker rejection, publication
+exceptions and expired claims consume that budget. Exhaustion retains the exact
+body in outbox `QUARANTINED` or DLT `FAILED`; an unpublished aggregate head keeps
+later versions blocked. Administrators recover intact records through
+`POST /api/inventory/v1/operations/outbox/{eventId}/requeue` or
+`POST /api/inventory/v1/operations/dead-letters/{dltId}/requeue`, supplying
+`expectedReviewVersion` and a non-blank reason. The authenticated reviewer and
+previous failure are recorded in an immutable audit. Exact replay returns the
+original `PENDING` receipt even after publication; changed/stale reviews conflict,
+and review cannot override corrupt or unsafe stored data.
+Terminal backlogs are exposed separately as `rwms.inventory.outbox.terminal.current`
+and `rwms.inventory.dlt.terminal.current`.
+
 An inspection plan may carry the optional explicit `forceCapitalRepair` choice; omission means
 `false` and JSON `null` is rejected. Inventory persists it in immutable frozen-plan and final-plan
 evidence, includes it in the final-plan hash/publication request, and never recalculates maintenance

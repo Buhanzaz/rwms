@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Inventory Service API
-  version: 1.7.0
+  version: 1.8.0
   x-rwms-owner: inventory-service
   x-rwms-stability: approved-stage-7
   description: >-
@@ -22,6 +22,7 @@ tags:
   - { name: Completion }
   - { name: Publication }
   - { name: Statistics }
+  - { name: Operations }
 paths:
   /api/inventory/v1/sessions:
     get:
@@ -758,6 +759,59 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/inventory/v1/operations/outbox/{eventId}/requeue:
+    parameters:
+      - name: eventId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Operations]
+      operationId: requeueInventoryOutboxEvent
+      description: >-
+        Requires a USER with SYSTEM_ADMIN or WMS_ADMIN, plus rwms.write; the isolated admin
+        application may instead use its exact admin.manage scope. expectedReviewVersion fences
+        concurrent review. The immutable event identity, ordered aggregate head, envelope and
+        payload are validated before the same record returns to PENDING. Later aggregate versions
+        remain blocked until this head is published.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EventingRecoveryRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/EventingRecoveryResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+  /api/inventory/v1/operations/dead-letters/{dltId}/requeue:
+    parameters:
+      - name: dltId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Operations]
+      operationId: requeueInventoryDeadLetter
+      description: >-
+        Requires a USER with SYSTEM_ADMIN or WMS_ADMIN, plus rwms.write; the isolated admin
+        application may instead use its exact admin.manage scope. expectedReviewVersion fences
+        concurrent review. A FAILED sanitized dead letter returns to PENDING only after its exact
+        three-field safe body and checksum are validated; checksum failures cannot be overridden.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EventingRecoveryRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/EventingRecoveryResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
 components:
   securitySchemes:
     bearerJwt: { type: http, scheme: bearer, bearerFormat: JWT }
@@ -808,6 +862,10 @@ components:
       in: query
       schema: { type: string, enum: ["completedAt,asc", "completedAt,desc", "businessDate,asc", "businessDate,desc"], default: "completedAt,desc" }
   responses:
+    EventingRecoveryResponse:
+      description: Stable receipt for the reviewed transition to PENDING.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/EventingRecoveryReceipt' } } }
     SessionPageResponse:
       description: Server-paged session history.
       headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
@@ -919,6 +977,23 @@ components:
     NullableUuid: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
     NullableDateTime: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
     NullableSha256: { oneOf: [{ $ref: '#/components/schemas/Sha256' }, { type: 'null' }] }
+    EventingRecoveryRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedReviewVersion, reason]
+      properties:
+        expectedReviewVersion: { type: integer, format: int64, minimum: 0 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+    EventingRecoveryReceipt:
+      type: object
+      additionalProperties: false
+      required: [recordKind, recordId, status, reviewVersion, reviewedAt]
+      properties:
+        recordKind: { type: string, enum: [OUTBOX, DLT] }
+        recordId: { type: string, format: uuid }
+        status: { type: string, enum: [PENDING] }
+        reviewVersion: { type: integer, format: int64, minimum: 1 }
+        reviewedAt: { type: string, format: date-time }
     StartSessionRequest:
       type: object
       additionalProperties: false

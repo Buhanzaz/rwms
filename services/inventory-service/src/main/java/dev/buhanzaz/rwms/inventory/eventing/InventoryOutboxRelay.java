@@ -43,7 +43,9 @@ public class InventoryOutboxRelay {
   }
 
   public boolean relayOne() {
-    var optional = store.claim(properties.instanceId(), properties.leaseDuration());
+    var optional =
+        store.claim(
+            properties.instanceId(), properties.leaseDuration(), properties.maxAttempts());
     if (optional.isEmpty()) return false;
     InventoryOutboxStore.Claim claim = optional.get();
     if (!InventoryEventChecksum.sha256(claim.envelopeBody()).equals(claim.envelopeSha256())
@@ -68,7 +70,7 @@ public class InventoryOutboxRelay {
       log.warn(
           "Inventory outbox publish failed safely [failureType={}]",
           exception.getClass().getName());
-      store.transientFailure(claim);
+      store.transientFailure(claim, properties.maxAttempts());
       return false;
     }
   }

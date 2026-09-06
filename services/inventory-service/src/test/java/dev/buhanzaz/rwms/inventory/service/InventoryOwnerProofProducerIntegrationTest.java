@@ -168,7 +168,7 @@ class InventoryOwnerProofProducerIntegrationTest {
     InventoryOutboxRelay relay =
         new InventoryOutboxRelay(
             outbox,
-            new InventoryOutboxProperties("owner-proof-test", Duration.ofSeconds(30)),
+            new InventoryOutboxProperties("owner-proof-test", Duration.ofSeconds(30), 4),
             deadLetters,
             bridge);
     for (int index = 0; index < expected.size(); index++) {

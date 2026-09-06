@@ -48,7 +48,7 @@ class InventoryFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsNoSeedOrImporter() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(28);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(29);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames())
@@ -92,11 +92,16 @@ class InventoryFlywayMigrationIntegrationTest {
             "inbox_message",
             "consumer_aggregate_checkpoint",
             "version_gap_quarantine",
-            "sanitized_dead_letter")
+            "sanitized_dead_letter",
+            "inventory_eventing_recovery_review")
         .doesNotContain("legacy_inventory", "browser_inventory", "inventory_import");
     assertThat(count("inventory_session")).isZero();
     assertThat(count("inventory_finding")).isZero();
     assertThat(count("domain_event")).isZero();
+    assertThat(columns("outbox_event"))
+        .contains("terminal_phase", "terminal_reason", "review_version", "reviewed_at");
+    assertThat(columns("sanitized_dead_letter"))
+        .contains("terminal_phase", "terminal_reason", "review_version", "reviewed_at");
     assertThat(columns("finding_plan_stage")).contains(
         "catalog_node_id", "catalog_node_name", "routing_queue_id", "routing_queue_name",
         "routing_queue_type")
@@ -143,6 +148,120 @@ class InventoryFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void v29BackfillsTerminalDeliveryMetadataWithoutChangingStoredBodiesOrIdentity() {
+    Flyway beforeV29 =
+        Flyway.configure()
+            .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+            .locations(MIGRATIONS)
+            .target("28")
+            .baselineOnMigrate(false)
+            .cleanDisabled(true)
+            .validateOnMigrate(true)
+            .load();
+    assertThat(beforeV29.migrate().migrationsExecuted).isEqualTo(28);
+    UUID dltEventId = UUID.randomUUID();
+    UUID quarantinedEventId = UUID.randomUUID();
+    for (UUID eventId : Set.of(dltEventId, quarantinedEventId)) {
+      jdbc.update(
+          """
+          insert into domain_event(
+            event_id,aggregate_type,aggregate_id,aggregate_version,event_type,event_version,
+            recorded_at,correlation_id,event_body,event_sha256)
+          values (?,'SESSION',?,0,'inventory.session.started.v1',1,
+            clock_timestamp(),?,'{}'::jsonb,?)
+          """,
+          eventId,
+          eventId.toString(),
+          UUID.randomUUID(),
+          "1".repeat(64));
+    }
+    jdbc.update(
+        """
+        insert into outbox_event(
+          event_id,aggregate_type,aggregate_id,aggregate_version,event_type,topic,
+          envelope_body,envelope_sha256,status,attempt_count,next_attempt_at,dlt_at,
+          last_error_code,created_at)
+        values (?,'SESSION',?,0,'inventory.session.started.v1','rwms.inventory.session.v1',
+          '{"payload":"dlt"}'::jsonb,?,'DLT',1,clock_timestamp(),clock_timestamp(),
+          'ENVELOPE_REJECTED',clock_timestamp())
+        """,
+        dltEventId,
+        dltEventId.toString(),
+        "2".repeat(64));
+    jdbc.update(
+        """
+        insert into outbox_event(
+          event_id,aggregate_type,aggregate_id,aggregate_version,event_type,topic,
+          envelope_body,envelope_sha256,status,attempt_count,next_attempt_at,
+          last_error_code,created_at)
+        values (?,'SESSION',?,0,'inventory.session.started.v1','rwms.inventory.session.v1',
+          '{"payload":"quarantined"}'::jsonb,?,'QUARANTINED',4,clock_timestamp(),
+          'PUBLISH_FAILED',clock_timestamp())
+        """,
+        quarantinedEventId,
+        quarantinedEventId.toString(),
+        "3".repeat(64));
+    UUID deadLetterId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into sanitized_dead_letter(
+          dlt_id,destination,message_sha256,failure_code,safe_body,body_sha256,status,
+          attempt_count,next_attempt_at,last_error_code,created_at)
+        values (?,'rwms.inventory.dlt.v1',?,'PROCESSING_FAILED',?::jsonb,?,'FAILED',1,
+          clock_timestamp(),'CHECKSUM_MISMATCH',clock_timestamp())
+        """,
+        deadLetterId,
+        "4".repeat(64),
+        "{\"failureCode\":\"PROCESSING_FAILED\",\"messageSha256\":\""
+            + "4".repeat(64)
+            + "\",\"recordedAt\":\"2026-07-17T12:00:00Z\"}",
+        "5".repeat(64));
+    var beforeOutbox =
+        jdbc.queryForList(
+            "select event_id,status,envelope_body::text as body,envelope_sha256 from outbox_event order by event_id");
+    var beforeDeadLetter =
+        jdbc.queryForList(
+            "select dlt_id,status,safe_body::text as body,body_sha256 from sanitized_dead_letter");
+
+    Flyway latest = flyway(MIGRATIONS);
+    assertThat(latest.migrate().migrationsExecuted).isOne();
+    latest.validate();
+
+    assertThat(
+            jdbc.queryForList(
+                "select event_id,status,envelope_body::text as body,envelope_sha256 from outbox_event order by event_id"))
+        .isEqualTo(beforeOutbox);
+    assertThat(
+            jdbc.queryForList(
+                "select dlt_id,status,safe_body::text as body,body_sha256 from sanitized_dead_letter"))
+        .isEqualTo(beforeDeadLetter);
+    assertThat(
+            jdbc.queryForMap(
+                "select terminal_phase,terminal_reason,review_version,reviewed_at from outbox_event where event_id=?",
+                dltEventId))
+        .containsEntry("terminal_phase", "VALIDATION")
+        .containsEntry("terminal_reason", "ENVELOPE_REJECTED")
+        .containsEntry("review_version", 0L)
+        .containsEntry("reviewed_at", null);
+    assertThat(
+            jdbc.queryForMap(
+                "select terminal_phase,terminal_reason,review_version,reviewed_at from outbox_event where event_id=?",
+                quarantinedEventId))
+        .containsEntry("terminal_phase", "PUBLISH")
+        .containsEntry("terminal_reason", "PUBLISH_FAILED")
+        .containsEntry("review_version", 0L)
+        .containsEntry("reviewed_at", null);
+    assertThat(
+            jdbc.queryForMap(
+                "select terminal_phase,terminal_reason,review_version,reviewed_at from sanitized_dead_letter where dlt_id=?",
+                deadLetterId))
+        .containsEntry("terminal_phase", "VALIDATION")
+        .containsEntry("terminal_reason", "CHECKSUM_MISMATCH")
+        .containsEntry("review_version", 0L)
+        .containsEntry("reviewed_at", null);
+  }
+
+  @Test
   void v28FencesFutureTaskBoardCalendarEvidenceAndStalesOnlyActiveDrafts() {
     Flyway beforeV28 =
         Flyway.configure()
@@ -182,7 +301,7 @@ class InventoryFlywayMigrationIntegrationTest {
         "b".repeat(64));
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isOne();
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(2);
     latest.validate();
 
     assertThat(
@@ -250,7 +369,7 @@ class InventoryFlywayMigrationIntegrationTest {
         inventoryId + ":" + findingId);
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(3);
     latest.validate();
 
     assertThat(
@@ -298,7 +417,7 @@ class InventoryFlywayMigrationIntegrationTest {
     insertV23NoWorkPlanEntry(inventoryId, findingId, assetId, 0, 0);
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(4);
     upgraded.validate();
 
     assertThat(
@@ -381,7 +500,7 @@ class InventoryFlywayMigrationIntegrationTest {
         findingId);
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(12);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(13);
     upgraded.validate();
 
     assertThat(
@@ -479,7 +598,7 @@ class InventoryFlywayMigrationIntegrationTest {
     assertThat(count("finding_media_reference")).isEqualTo(9);
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(11);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(12);
     upgraded.validate();
 
     assertThat(
@@ -706,7 +825,7 @@ class InventoryFlywayMigrationIntegrationTest {
         now());
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(10);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(11);
     upgraded.validate();
 
     assertThat(
@@ -789,7 +908,7 @@ class InventoryFlywayMigrationIntegrationTest {
         activeInventoryId, UUID.randomUUID(), "ASSET_SNAPSHOT_CONFLICT", 6);
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(9);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(10);
     upgraded.validate();
 
     assertThat(
@@ -914,7 +1033,7 @@ class InventoryFlywayMigrationIntegrationTest {
     UUID staleIntentId = insertV23Publication(inventoryId, staleFindingId, finalPlanSha, 2);
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(6);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(7);
     upgraded.validate();
 
     assertThat(
@@ -1100,7 +1219,7 @@ class InventoryFlywayMigrationIntegrationTest {
         UUID.randomUUID());
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(17);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(18);
     upgraded.validate();
 
     assertThat(
@@ -1201,7 +1320,7 @@ class InventoryFlywayMigrationIntegrationTest {
     insertFinding(inventoryId, findingId, UUID.randomUUID(), "V10-COVER");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(19);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(20);
     upgraded.validate();
     assertThat(columns("inventory_finding")).contains("cover_media_id");
     assertThat(
@@ -1258,7 +1377,7 @@ class InventoryFlywayMigrationIntegrationTest {
             + "\"queueCode\":\"REPAIR\"}");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(20);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(21);
     upgraded.validate();
     assertThat(columns("finding_plan_stage"))
         .contains(
@@ -1360,7 +1479,7 @@ class InventoryFlywayMigrationIntegrationTest {
         technicalOnlyExpectedId);
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(23);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(24);
     latest.validate();
 
     assertThat(jdbc.queryForObject(
@@ -1525,7 +1644,7 @@ class InventoryFlywayMigrationIntegrationTest {
         current.plusDays(7));
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(21);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(22);
     latest.validate();
 
     assertThat(
@@ -1769,7 +1888,7 @@ class InventoryFlywayMigrationIntegrationTest {
         .containsEntry("expected_item_id", null)
         .containsEntry("membership_active", true);
 
-    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(24);
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(25);
     assertThat(
             jdbc.queryForObject(
                 "select expected_population_count from inventory_session where id=?",
@@ -1954,6 +2073,24 @@ class InventoryFlywayMigrationIntegrationTest {
                         + "3".repeat(64)
                         + "\",\"recordedAt\":\"2026-07-17T12:00:00Z\",\"rawError\":\"secret\"}",
                     "4".repeat(64)))
+        .isInstanceOf(DataIntegrityViolationException.class);
+
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    insert into sanitized_dead_letter(
+                      dlt_id,destination,message_sha256,failure_code,safe_body,body_sha256,
+                      status,attempt_count,next_attempt_at,created_at)
+                    values (?,'rwms.inventory.dlt.v1',?,'PROCESSING_FAILED',?::jsonb,?,
+                      'FAILED',4,clock_timestamp(),clock_timestamp())
+                    """,
+                    UUID.randomUUID(),
+                    "5".repeat(64),
+                    "{\"failureCode\":\"PROCESSING_FAILED\",\"messageSha256\":\""
+                        + "5".repeat(64)
+                        + "\",\"recordedAt\":\"2026-07-17T12:00:00Z\"}",
+                    "6".repeat(64)))
         .isInstanceOf(DataIntegrityViolationException.class);
   }
 

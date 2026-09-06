@@ -9,49 +9,36 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * Lease-based persistence boundary for ordered inventory transactional-outbox delivery.
- */
+/** Persists finite, lease-fenced publication of sanitized inventory dead letters. */
 @Repository
-public class InventoryOutboxStore {
+public class InventoryDeadLetterRelayStore {
   private final JdbcTemplate jdbc;
 
-  public InventoryOutboxStore(JdbcTemplate jdbc) {
+  public InventoryDeadLetterRelayStore(JdbcTemplate jdbc) {
     this.jdbc = jdbc;
   }
 
-  /**
-   * Claims one ordered inventory aggregate head in an independent transaction. Expired claims
-   * consume the same finite attempt budget; an exhausted head stays terminal and blocks successors.
-   * The issued token fences later state changes against a replacement claimant.
-   */
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public Optional<Claim> claim(String owner, Duration leaseDuration, int maxAttempts) {
-    UUID leaseToken = UUID.randomUUID();
+    UUID token = UUID.randomUUID();
     ClaimedRow row =
         jdbc
             .query(
                 """
                 with candidate as (
-                  select event_id,status='IN_FLIGHT' as expired,
+                  select dlt_id,status='IN_FLIGHT' as expired,
                          (attempt_count+case when status='IN_FLIGHT' then 1 else 0 end)>=? as exhausted
-                    from outbox_event candidate
-                   where ((status='PENDING' and next_attempt_at<=clock_timestamp())
-                       or (status='IN_FLIGHT' and lease_until<clock_timestamp()))
-                     and not exists (
-                       select 1 from outbox_event earlier
-                        where earlier.aggregate_type=candidate.aggregate_type
-                          and earlier.aggregate_id=candidate.aggregate_id
-                          and earlier.aggregate_version<candidate.aggregate_version
-                          and earlier.status<>'PUBLISHED')
-                   order by created_at,event_id for update skip locked limit 1
+                    from sanitized_dead_letter
+                   where (status='PENDING' and next_attempt_at<=clock_timestamp())
+                      or (status='IN_FLIGHT' and lease_until<clock_timestamp())
+                   order by created_at,dlt_id for update skip locked limit 1
                 )
-                update outbox_event event
+                update sanitized_dead_letter letter
                    set status=case
-                         when candidate.exhausted then 'QUARANTINED'
+                         when candidate.exhausted then 'FAILED'
                          else 'IN_FLIGHT'
                        end,
-                       attempt_count=event.attempt_count+case when candidate.expired then 1 else 0 end,
+                       attempt_count=letter.attempt_count+case when candidate.expired then 1 else 0 end,
                        lease_owner=case
                          when candidate.exhausted then null else ? end,
                        lease_token=case
@@ -60,7 +47,7 @@ public class InventoryOutboxStore {
                          when candidate.exhausted then null
                          else clock_timestamp()+(?*interval '1 millisecond') end,
                        last_error_code=case
-                         when candidate.expired then 'LEASE_EXPIRED' else event.last_error_code end,
+                         when candidate.expired then 'LEASE_EXPIRED' else letter.last_error_code end,
                        terminal_phase=case
                          when candidate.exhausted then
                            case when candidate.expired then 'LEASE' else 'PUBLISH' end
@@ -68,24 +55,22 @@ public class InventoryOutboxStore {
                        terminal_reason=case
                          when candidate.exhausted then 'RETRY_BUDGET_EXHAUSTED'
                          else null end
-                  from candidate where event.event_id=candidate.event_id
-                returning event.status,event.event_id,event.aggregate_id,event.topic,
-                          event.envelope_body::text,event.envelope_sha256,event.attempt_count
+                  from candidate where letter.dlt_id=candidate.dlt_id
+                returning letter.status,letter.dlt_id,letter.safe_body::text,letter.body_sha256,
+                          letter.attempt_count
                 """,
                 (resultSet, rowNumber) ->
                     new ClaimedRow(
                         resultSet.getString("status"),
                         new Claim(
-                            resultSet.getObject("event_id", UUID.class),
-                            resultSet.getString("aggregate_id"),
-                            resultSet.getString("topic"),
-                            resultSet.getString("envelope_body"),
-                            resultSet.getString("envelope_sha256").trim(),
+                            resultSet.getObject("dlt_id", UUID.class),
+                            resultSet.getString("safe_body"),
+                            resultSet.getString("body_sha256").trim(),
                             resultSet.getInt("attempt_count"),
-                            leaseToken)),
+                            token)),
                 maxAttempts,
                 owner,
-                leaseToken,
+                token,
                 leaseDuration.toMillis())
             .stream()
             .findFirst()
@@ -95,83 +80,80 @@ public class InventoryOutboxStore {
   }
 
   @Transactional(propagation = Propagation.REQUIRES_NEW)
-  public boolean published(Claim claim) {
-    return jdbc.update(
-            """
-            update outbox_event set status='PUBLISHED',published_at=clock_timestamp(),
-              lease_owner=null,lease_token=null,lease_until=null,last_error_code=null
-             where event_id=? and status='IN_FLIGHT' and lease_token=?
-            """,
-            claim.eventId(),
-            claim.leaseToken())
-        == 1;
+  public void published(Claim claim) {
+    jdbc.update(
+        """
+        update sanitized_dead_letter set status='PUBLISHED',published_at=clock_timestamp(),
+          lease_owner=null,lease_token=null,lease_until=null,last_error_code=null
+         where dlt_id=? and status='IN_FLIGHT' and lease_token=?
+        """,
+        claim.id(),
+        claim.token());
+  }
+
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
+  public void validationFailure(Claim claim) {
+    jdbc.update(
+        """
+        update sanitized_dead_letter set status='FAILED',attempt_count=attempt_count+1,
+          lease_owner=null,lease_token=null,lease_until=null,last_error_code='CHECKSUM_MISMATCH',
+          terminal_phase='VALIDATION',terminal_reason='CHECKSUM_MISMATCH'
+         where dlt_id=? and status='IN_FLIGHT' and lease_token=?
+        """,
+        claim.id(),
+        claim.token());
   }
 
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void transientFailure(Claim claim, int maxAttempts) {
-    int attempts = Math.addExact(claim.attemptCount(), 1);
+    int attempts = Math.addExact(claim.attempts(), 1);
     if (attempts >= maxAttempts) {
       jdbc.update(
           """
-          update outbox_event set status='QUARANTINED',attempt_count=?,
+          update sanitized_dead_letter set status='FAILED',attempt_count=?,
             lease_owner=null,lease_token=null,lease_until=null,last_error_code='PUBLISH_FAILED',
             terminal_phase='PUBLISH',terminal_reason='RETRY_BUDGET_EXHAUSTED'
-           where event_id=? and status='IN_FLIGHT' and lease_token=?
+           where dlt_id=? and status='IN_FLIGHT' and lease_token=?
           """,
           attempts,
-          claim.eventId(),
-          claim.leaseToken());
+          claim.id(),
+          claim.token());
       return;
     }
     long delaySeconds = 1L << Math.min(attempts - 1, 6);
     jdbc.update(
         """
-        update outbox_event set status='PENDING',attempt_count=?,
+        update sanitized_dead_letter set status='PENDING',attempt_count=?,
           next_attempt_at=clock_timestamp()+(?*interval '1 second'),
           lease_owner=null,lease_token=null,lease_until=null,last_error_code='PUBLISH_FAILED'
-         where event_id=? and status='IN_FLIGHT' and lease_token=?
+         where dlt_id=? and status='IN_FLIGHT' and lease_token=?
         """,
         attempts,
         delaySeconds,
-        claim.eventId(),
-        claim.leaseToken());
-  }
-
-  @Transactional(propagation = Propagation.REQUIRES_NEW)
-  public void validationFailure(Claim claim, String code) {
-    jdbc.update(
-        """
-        update outbox_event set status='DLT',attempt_count=attempt_count+1,
-            dlt_at=clock_timestamp(),lease_owner=null,lease_token=null,lease_until=null,
-            last_error_code=?,terminal_phase='VALIDATION',terminal_reason=?
-         where event_id=? and status='IN_FLIGHT' and lease_token=?
-        """,
-        code,
-        code,
-        claim.eventId(),
-        claim.leaseToken());
+        claim.id(),
+        claim.token());
   }
 
   @Transactional(propagation = Propagation.MANDATORY)
-  public Optional<RecoveryCandidate> lockForRecovery(UUID eventId) {
+  public Optional<RecoveryCandidate> lockForRecovery(UUID dltId) {
     return jdbc
         .query(
             """
-            select event_id,aggregate_type,aggregate_id,aggregate_version,event_type,topic,
-              envelope_body::text,envelope_sha256,status,attempt_count,last_error_code,
+            select dlt_id,destination,source_topic,source_event_id,message_sha256,failure_code,
+              safe_body::text,body_sha256,status,attempt_count,last_error_code,
               terminal_phase,terminal_reason,review_version,reviewed_at
-             from outbox_event where event_id=? for update
+             from sanitized_dead_letter where dlt_id=? for update
             """,
             (resultSet, rowNumber) ->
                 new RecoveryCandidate(
-                    resultSet.getObject("event_id", UUID.class),
-                    resultSet.getString("aggregate_type"),
-                    resultSet.getString("aggregate_id"),
-                    resultSet.getLong("aggregate_version"),
-                    resultSet.getString("event_type"),
-                    resultSet.getString("topic"),
-                    resultSet.getString("envelope_body"),
-                    resultSet.getString("envelope_sha256").trim(),
+                    resultSet.getObject("dlt_id", UUID.class),
+                    resultSet.getString("destination"),
+                    resultSet.getString("source_topic"),
+                    resultSet.getObject("source_event_id", UUID.class),
+                    resultSet.getString("message_sha256").trim(),
+                    resultSet.getString("failure_code"),
+                    resultSet.getString("safe_body"),
+                    resultSet.getString("body_sha256").trim(),
                     resultSet.getString("status"),
                     resultSet.getInt("attempt_count"),
                     resultSet.getString("last_error_code"),
@@ -179,43 +161,26 @@ public class InventoryOutboxStore {
                     resultSet.getString("terminal_reason"),
                     resultSet.getLong("review_version"),
                     resultSet.getObject("reviewed_at", OffsetDateTime.class)),
-            eventId)
+            dltId)
         .stream()
         .findFirst();
   }
 
   @Transactional(propagation = Propagation.MANDATORY)
-  public boolean isCurrentOrderedHead(RecoveryCandidate candidate) {
-    Boolean result =
-        jdbc.queryForObject(
-            """
-            select not exists (
-              select 1 from outbox_event predecessor
-               where predecessor.aggregate_type=? and predecessor.aggregate_id=?
-                 and predecessor.aggregate_version<? and predecessor.status<>'PUBLISHED')
-            """,
-            Boolean.class,
-            candidate.aggregateType(),
-            candidate.aggregateId(),
-            candidate.aggregateVersion());
-    return Boolean.TRUE.equals(result);
-  }
-
-  @Transactional(propagation = Propagation.MANDATORY)
-  public Optional<ReviewReceipt> recoveryReview(UUID eventId, long expectedReviewVersion) {
+  public Optional<ReviewReceipt> recoveryReview(UUID dltId, long expectedReviewVersion) {
     return jdbc
         .query(
             """
             select request_fingerprint,review_version,reviewed_at
               from inventory_eventing_recovery_review
-             where record_kind='OUTBOX' and record_id=? and expected_review_version=?
+             where record_kind='DLT' and record_id=? and expected_review_version=?
             """,
             (resultSet, rowNumber) ->
                 new ReviewReceipt(
                     resultSet.getString("request_fingerprint").trim(),
                     resultSet.getLong("review_version"),
                     resultSet.getObject("reviewed_at", OffsetDateTime.class)),
-            eventId,
+            dltId,
             expectedReviewVersion)
         .stream()
         .findFirst();
@@ -232,32 +197,32 @@ public class InventoryOutboxStore {
         .query(
             """
             with updated as (
-              update outbox_event
+              update sanitized_dead_letter
                  set status='PENDING',attempt_count=0,next_attempt_at=clock_timestamp(),
-                     lease_owner=null,lease_token=null,lease_until=null,published_at=null,dlt_at=null,
+                     lease_owner=null,lease_token=null,lease_until=null,published_at=null,
                      last_error_code=null,terminal_phase=null,terminal_reason=null,
                      review_version=review_version+1,reviewed_at=clock_timestamp()
-               where event_id=? and review_version=? and status in ('DLT','QUARANTINED')
-              returning event_id,review_version,status,reviewed_at
+               where dlt_id=? and review_version=? and status='FAILED'
+              returning dlt_id,review_version,status,reviewed_at
             ), audit as (
               insert into inventory_eventing_recovery_review(
                 record_kind,record_id,expected_review_version,review_version,prior_status,
                 prior_last_error_code,prior_terminal_phase,prior_terminal_reason,
                 prior_attempt_count,reviewer_subject_id,review_reason,request_fingerprint,reviewed_at)
-              select 'OUTBOX',event_id,?,review_version,?,?,?,?,?,?,?,?,reviewed_at from updated
+              select 'DLT',dlt_id,?,review_version,?,?,?,?,?,?,?,?,reviewed_at from updated
               returning record_id,review_version
             )
-            select updated.event_id,updated.review_version,updated.status,updated.reviewed_at
+            select updated.dlt_id,updated.review_version,updated.status,updated.reviewed_at
               from updated join audit
-                on audit.record_id=updated.event_id and audit.review_version=updated.review_version
+                on audit.record_id=updated.dlt_id and audit.review_version=updated.review_version
             """,
             (resultSet, rowNumber) ->
                 new RecoveryTruth(
-                    resultSet.getObject("event_id", UUID.class),
+                    resultSet.getObject("dlt_id", UUID.class),
                     resultSet.getLong("review_version"),
                     resultSet.getString("status"),
                     resultSet.getObject("reviewed_at", OffsetDateTime.class)),
-            candidate.eventId(),
+            candidate.id(),
             expectedReviewVersion,
             expectedReviewVersion,
             candidate.status(),
@@ -274,24 +239,17 @@ public class InventoryOutboxStore {
 
   private record ClaimedRow(String status, Claim claim) {}
 
-  public record Claim(
-      UUID eventId,
-      String aggregateId,
-      String topic,
-      String envelopeBody,
-      String envelopeSha256,
-      int attemptCount,
-      UUID leaseToken) {}
+  public record Claim(UUID id, String body, String hash, int attempts, UUID token) {}
 
   public record RecoveryCandidate(
-      UUID eventId,
-      String aggregateType,
-      String aggregateId,
-      long aggregateVersion,
-      String eventType,
-      String topic,
-      String envelopeBody,
-      String envelopeSha256,
+      UUID id,
+      String destination,
+      String sourceTopic,
+      UUID sourceEventId,
+      String messageSha256,
+      String failureCode,
+      String body,
+      String bodySha256,
       String status,
       int attemptCount,
       String lastErrorCode,
@@ -301,7 +259,7 @@ public class InventoryOutboxStore {
       OffsetDateTime reviewedAt) {}
 
   public record RecoveryTruth(
-      UUID eventId, long reviewVersion, String status, OffsetDateTime reviewedAt) {}
+      UUID id, long reviewVersion, String status, OffsetDateTime reviewedAt) {}
 
   public record ReviewReceipt(
       String requestFingerprint, long reviewVersion, OffsetDateTime reviewedAt) {}

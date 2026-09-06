@@ -54,6 +54,10 @@ public final class InventoryOperationalMetrics {
           from outbox_event
          where status in ('PENDING', 'IN_FLIGHT')
         """);
+    registerCountGauge(
+        "rwms.inventory.outbox.terminal.current",
+        "Inventory outbox records terminally rejected and awaiting reconciliation.",
+        "select count(*) from outbox_event where status in ('DLT', 'QUARANTINED')");
     registerAgeGauge(
         "rwms.inventory.outbox.oldest.age.seconds",
         "Age in seconds of the oldest inventory outbox record awaiting broker acknowledgement.",
@@ -217,6 +221,10 @@ public final class InventoryOperationalMetrics {
           from sanitized_dead_letter
          where status in ('PENDING', 'IN_FLIGHT', 'FAILED')
         """);
+    registerCountGauge(
+        "rwms.inventory.dlt.terminal.current",
+        "Sanitized inventory DLT records terminally failed and awaiting reconciliation.",
+        "select count(*) from sanitized_dead_letter where status = 'FAILED'");
   }
 
   private void registerCountGauge(String name, String description, String sql) {

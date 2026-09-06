@@ -249,6 +249,21 @@ transport: relay арендует ordered aggregate head, проверяет sto
 capture-release и publication flows сохраняют durable attempts, поэтому retry не создаёт второй
 session и не угадывает uncertain dependency result.
 
+Публикация inventory outbox и sanitized DLT ограничена числом попыток для каждой
+записи (`INVENTORY_KAFKA_OUTBOX_MAX_ATTEMPTS`, по умолчанию `4`). Отказ брокера,
+исключение публикации и истёкший claim расходуют этот лимит. После исчерпания
+точное тело сохраняется в outbox `QUARANTINED` или DLT `FAILED`; неопубликованная
+первая версия агрегата продолжает блокировать последующие. Администратор
+возобновляет неповреждённую запись через
+`POST /api/inventory/v1/operations/outbox/{eventId}/requeue` или
+`POST /api/inventory/v1/operations/dead-letters/{dltId}/requeue`, передавая
+`expectedReviewVersion` и непустую причину. Субъект JWT и прежний отказ сохраняются
+в неизменяемом журнале. Точный повтор возвращает исходную квитанцию `PENDING`
+даже после публикации; изменённая или устаревшая проверка даёт конфликт,
+а повреждённые или небезопасные данные возобновить нельзя.
+Терминальные записи отдельно показывают метрики
+`rwms.inventory.outbox.terminal.current` и `rwms.inventory.dlt.terminal.current`.
+
 План осмотра может содержать необязательный явный выбор `forceCapitalRepair`: отсутствие означает
 `false`, а JSON `null` отклоняется. Inventory хранит его в неизменяемых frozen-plan и final-plan
 evidence, включает в hash итогового плана/publication request и сам не пересчитывает maintenance

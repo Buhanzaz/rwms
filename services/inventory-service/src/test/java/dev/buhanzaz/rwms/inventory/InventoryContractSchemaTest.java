@@ -61,6 +61,8 @@ class InventoryContractSchemaTest {
             "POST /api/inventory/v1/sessions/{inventoryId}/outcome/recalculate",
             "POST /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/publication/retry",
             "POST /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/publication/close",
+            "POST /api/inventory/v1/operations/outbox/{eventId}/requeue",
+            "POST /api/inventory/v1/operations/dead-letters/{dltId}/requeue",
             "GET /api/inventory/v1/statistics/sessions",
             "GET /api/inventory/v1/statistics/summary");
 
@@ -105,6 +107,34 @@ class InventoryContractSchemaTest {
             "displayCanonicalNumber,asc",
             "displayCanonicalNumber,desc");
     assertAllLocalReferencesResolve(document, document);
+  }
+
+  @Test
+  void eventingRecoveryContractRequiresVersionedReviewAndReturnsStableReceipt() throws Exception {
+    Map<String, Object> document = yaml("openapi/inventory-service.yaml");
+    Map<String, Object> paths = child(document, "paths");
+    Map<String, Object> schemas = child(child(document, "components"), "schemas");
+
+    assertThat(
+            child(
+                    child(paths, "/api/inventory/v1/operations/outbox/{eventId}/requeue"),
+                    "post")
+                .get("description")
+                .toString())
+        .contains("SYSTEM_ADMIN", "WMS_ADMIN", "expectedReviewVersion", "aggregate");
+    assertThat(
+            child(
+                    child(
+                        paths,
+                        "/api/inventory/v1/operations/dead-letters/{dltId}/requeue"),
+                    "post")
+                .get("description")
+                .toString())
+        .contains("FAILED", "checksum", "cannot be overridden");
+    assertThat(required(schemas, "EventingRecoveryRequest"))
+        .containsExactly("expectedReviewVersion", "reason");
+    assertThat(required(schemas, "EventingRecoveryReceipt"))
+        .containsExactly("recordKind", "recordId", "status", "reviewVersion", "reviewedAt");
   }
 
   @Test

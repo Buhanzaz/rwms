@@ -1,5 +1,8 @@
 package dev.buhanzaz.rwms.inventory.eventing;
 
+import com.networknt.schema.JsonSchemaFactory;
+import com.networknt.schema.SpecVersion;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -17,7 +20,14 @@ import dev.buhanzaz.rwms.inventory.eventing.InventoryEventStore.AppendCommand;
 import dev.buhanzaz.rwms.inventory.service.InventoryApplicationService;
 import dev.buhanzaz.rwms.platform.contracts.OpaqueActorReference;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -27,11 +37,15 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.cloud.stream.binding.BindingService;
 import org.springframework.cloud.stream.function.StreamBridge;
 import org.springframework.context.ApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.http.HttpHeaders;
 import org.springframework.messaging.Message;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -40,9 +54,11 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
+import org.yaml.snakeyaml.Yaml;
 
 @SpringBootTest(
     classes = InventoryServiceApplication.class,
+    webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
     properties = {
       "spring.jpa.hibernate.ddl-auto=validate",
       "rwms.platform.kafka.enabled=false",
@@ -52,6 +68,7 @@ import tools.jackson.databind.node.ObjectNode;
 class InventoryEventingIntegrationTest {
   private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
   private static final String SESSION_TOPIC = "rwms.inventory.session.v1";
+  private static final HttpClient HTTP = HttpClient.newHttpClient();
 
   static {
     POSTGRES.start();
@@ -60,6 +77,8 @@ class InventoryEventingIntegrationTest {
   @Autowired InventoryEventStore events;
   @Autowired InventoryOutboxStore outbox;
   @Autowired InventoryDeadLetterStore deadLetters;
+  @Autowired InventoryDeadLetterRelayStore deadLetterRelayStore;
+  @Autowired InventoryEventingRecoveryService eventingRecovery;
   @Autowired InventoryMediaInboxProcessor media;
   @Autowired InventoryMediaFactProjectionRepository mediaFacts;
   @Autowired InventoryMediaRetryStore mediaRetries;
@@ -68,8 +87,10 @@ class InventoryEventingIntegrationTest {
   @Autowired JdbcTemplate jdbc;
   @Autowired ObjectMapper mapper;
   @Autowired ApplicationContext context;
+  @LocalServerPort int port;
   @Autowired BindingService bindingService;
   @MockitoBean InventoryApplicationService inventory;
+  @MockitoBean JwtDecoder jwtDecoder;
 
   @DynamicPropertySource
   static void properties(DynamicPropertyRegistry registry) {
@@ -91,6 +112,12 @@ class InventoryEventingIntegrationTest {
           version_gap_quarantine,sanitized_dead_letter,inventory_media_fact_projection
         restart identity cascade
         """);
+    when(jwtDecoder.decode("admin-token"))
+        .thenReturn(userToken("admin-token", "SYSTEM_ADMIN", "rwms.write"));
+    when(jwtDecoder.decode("wms-admin-token"))
+        .thenReturn(userToken("wms-admin-token", "WMS_ADMIN", "rwms.write"));
+    when(jwtDecoder.decode("manager-token"))
+        .thenReturn(userToken("manager-token", "WAREHOUSE_MANAGER", "rwms.write"));
   }
 
   @Test
@@ -342,7 +369,145 @@ class InventoryEventingIntegrationTest {
   }
 
   @Test
-  void businessOutboxAndDltRelayRetryBrokerOutageIndefinitelyAndPublishOnlyAfterAck() {
+  void businessOutboxAndDltRelayStopAtBudgetAndResumeOnlyAfterReviewedRecovery() {
+    UUID aggregateId = UUID.randomUUID();
+    var firstEvent =
+        events.initialize(
+        "SESSION",
+        aggregateId,
+        "inventory.session.started.v1",
+        SESSION_TOPIC,
+        mapper.createObjectNode().put("step", 0),
+        UUID.randomUUID(),
+        null,
+        null);
+    var secondEvent =
+        events.append(
+            "SESSION",
+            aggregateId,
+            0,
+            "inventory.session.completed.v1",
+            SESSION_TOPIC,
+            mapper.createObjectNode().put("step", 1),
+            UUID.randomUUID(),
+            firstEvent.eventId(),
+            null);
+    StreamBridge bridge = mock(StreamBridge.class);
+    when(bridge.send(anyString(), any(Message.class)))
+        .thenReturn(false)
+        .thenReturn(false)
+        .thenThrow(new IllegalStateException("broker unavailable"));
+    InventoryOutboxProperties properties =
+        new InventoryOutboxProperties("inventory-event-test", Duration.ofSeconds(30), 3);
+    InventoryOutboxRelay relay =
+        new InventoryOutboxRelay(outbox, properties, deadLetters, bridge);
+
+    for (int attempt = 0; attempt < 3; attempt++) {
+      jdbc.update(
+          "update outbox_event set next_attempt_at=clock_timestamp() where aggregate_id=?",
+          aggregateId.toString());
+      assertThat(relay.relayOne()).isFalse();
+    }
+    assertThat(
+            jdbc.queryForObject(
+                "select status from outbox_event where event_id=?",
+                String.class,
+                firstEvent.eventId()))
+        .isEqualTo("QUARANTINED");
+    assertThat(
+            jdbc.queryForMap(
+                "select attempt_count,terminal_phase,terminal_reason from outbox_event where event_id=?",
+                firstEvent.eventId()))
+        .containsEntry("attempt_count", 3)
+        .containsEntry("terminal_phase", "PUBLISH")
+        .containsEntry("terminal_reason", "RETRY_BUDGET_EXHAUSTED");
+    assertThat(
+            jdbc.queryForObject(
+                "select status from outbox_event where event_id=?",
+                String.class,
+                secondEvent.eventId()))
+        .isEqualTo("PENDING");
+    assertThat(relay.relayOne()).isFalse();
+    assertThat(jdbc.queryForObject("select count(*) from sanitized_dead_letter", Integer.class))
+        .isZero();
+
+    UUID reviewer = UUID.randomUUID();
+    var outboxReceipt =
+        eventingRecovery.requeueOutbox(
+            firstEvent.eventId(),
+            0L,
+            reviewer,
+            "broker recovered");
+    assertThat(outboxReceipt.status()).isEqualTo("PENDING");
+    assertThat(outboxReceipt.reviewVersion()).isOne();
+    when(bridge.send(anyString(), any(Message.class))).thenReturn(true);
+    assertThat(relay.relayOne()).isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "select status from outbox_event where event_id=?",
+                String.class,
+                firstEvent.eventId()))
+        .isEqualTo("PUBLISHED");
+    assertThat(
+            eventingRecovery.requeueOutbox(
+                outboxReceipt.recordId(), 0L, reviewer, "broker recovered"))
+        .isEqualTo(outboxReceipt);
+    assertThatThrownBy(
+            () ->
+                eventingRecovery.requeueOutbox(
+                    outboxReceipt.recordId(), 0L, reviewer, "different review"))
+        .hasMessageContaining("bound to another request");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update inventory_eventing_recovery_review set review_reason='changed' where record_id=?",
+                    outboxReceipt.recordId()))
+        .hasMessageContaining("append-only");
+    assertThat(relay.relayOne()).isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "select status from outbox_event where event_id=?",
+                String.class,
+                secondEvent.eventId()))
+        .isEqualTo("PUBLISHED");
+
+    deadLetters.record("PROCESSING_FAILED", "e".repeat(64), SESSION_TOPIC, UUID.randomUUID());
+    StreamBridge dltBridge = mock(StreamBridge.class);
+    when(dltBridge.send(anyString(), any(Message.class)))
+        .thenReturn(false)
+        .thenThrow(new IllegalStateException("broker unavailable"))
+        .thenReturn(false);
+    InventoryDeadLetterRelay dltRelay =
+        new InventoryDeadLetterRelay(deadLetterRelayStore, properties, dltBridge);
+    for (int attempt = 0; attempt < 3; attempt++) {
+      jdbc.update("update sanitized_dead_letter set next_attempt_at=clock_timestamp()");
+      dltRelay.relayOne();
+    }
+    assertThat(
+            jdbc.queryForObject("select status from sanitized_dead_letter", String.class))
+        .isEqualTo("FAILED");
+    assertThat(
+            jdbc.queryForMap(
+                "select attempt_count,terminal_phase,terminal_reason from sanitized_dead_letter"))
+        .containsEntry("attempt_count", 3)
+        .containsEntry("terminal_phase", "PUBLISH")
+        .containsEntry("terminal_reason", "RETRY_BUDGET_EXHAUSTED");
+    UUID dltId =
+        jdbc.queryForObject("select dlt_id from sanitized_dead_letter", UUID.class);
+    var dltReceipt =
+        eventingRecovery.requeueDeadLetter(dltId, 0L, reviewer, "broker recovered");
+    when(dltBridge.send(anyString(), any(Message.class))).thenReturn(true);
+    dltRelay.relayOne();
+    assertThat(
+            jdbc.queryForObject("select status from sanitized_dead_letter", String.class))
+        .isEqualTo("PUBLISHED");
+    assertThat(
+            eventingRecovery.requeueDeadLetter(dltId, 0L, reviewer, "broker recovered"))
+        .isEqualTo(dltReceipt);
+  }
+
+  @Test
+  void expiredClaimsAndExistingOverBudgetRowsBecomeTerminalWithoutAnotherPublish() {
     UUID aggregateId = UUID.randomUUID();
     events.initialize(
         "SESSION",
@@ -353,57 +518,209 @@ class InventoryEventingIntegrationTest {
         UUID.randomUUID(),
         null,
         null);
-    StreamBridge bridge = mock(StreamBridge.class);
-    when(bridge.send(anyString(), any(Message.class))).thenReturn(false);
+
+    assertThat(outbox.claim("first", Duration.ofSeconds(30), 2)).isPresent();
+    jdbc.update("update outbox_event set lease_until=clock_timestamp()-interval '1 second'");
+    assertThat(outbox.claim("second", Duration.ofSeconds(30), 2)).isPresent();
+    jdbc.update("update outbox_event set lease_until=clock_timestamp()-interval '1 second'");
+    assertThat(outbox.claim("third", Duration.ofSeconds(30), 2)).isEmpty();
+    assertThat(jdbc.queryForObject("select status from outbox_event", String.class))
+        .isEqualTo("QUARANTINED");
+    assertThat(jdbc.queryForObject("select terminal_phase from outbox_event", String.class))
+        .isEqualTo("LEASE");
+
+    deadLetters.record("PROCESSING_FAILED", "f".repeat(64), SESSION_TOPIC, UUID.randomUUID());
+    jdbc.update("update sanitized_dead_letter set attempt_count=2");
+    assertThat(deadLetterRelayStore.claim("dlt", Duration.ofSeconds(30), 2)).isEmpty();
+    assertThat(jdbc.queryForObject("select status from sanitized_dead_letter", String.class))
+        .isEqualTo("FAILED");
+    assertThat(jdbc.queryForObject("select terminal_phase from sanitized_dead_letter", String.class))
+        .isEqualTo("PUBLISH");
+  }
+
+  @Test
+  void checksumFailedDeadLetterCannotBeRecoveredWithoutAnIntactSafeBody() {
+    deadLetters.record("PROCESSING_FAILED", "a".repeat(64), SESSION_TOPIC, UUID.randomUUID());
+    jdbc.update("update sanitized_dead_letter set body_sha256=?", "0".repeat(64));
     InventoryOutboxProperties properties =
-        new InventoryOutboxProperties("inventory-event-test", Duration.ofSeconds(30));
-    InventoryOutboxRelay relay =
-        new InventoryOutboxRelay(outbox, properties, deadLetters, bridge);
+        new InventoryOutboxProperties("inventory-event-test", Duration.ofSeconds(30), 3);
+    InventoryDeadLetterRelay relay =
+        new InventoryDeadLetterRelay(deadLetterRelayStore, properties, mock(StreamBridge.class));
 
-    for (int attempt = 0; attempt < 6; attempt++) {
-      jdbc.update(
-          "update outbox_event set next_attempt_at=clock_timestamp() where aggregate_id=?",
-          aggregateId.toString());
-      assertThat(relay.relayOne()).isFalse();
-    }
-    assertThat(
-            jdbc.queryForObject(
-                "select status from outbox_event where aggregate_id=?",
-                String.class,
-                aggregateId.toString()))
-        .isEqualTo("PENDING");
-    assertThat(jdbc.queryForObject("select count(*) from sanitized_dead_letter", Integer.class))
-        .isZero();
-    when(bridge.send(anyString(), any(Message.class))).thenReturn(true);
+    relay.relayOne();
+    UUID dltId =
+        jdbc.queryForObject("select dlt_id from sanitized_dead_letter", UUID.class);
+    assertThat(jdbc.queryForObject("select status from sanitized_dead_letter", String.class))
+        .isEqualTo("FAILED");
+    assertThatThrownBy(
+            () -> eventingRecovery.requeueDeadLetter(dltId, 0L, UUID.randomUUID(), "reviewed"))
+        .hasMessageContaining("checksum");
+  }
+
+  @Test
+  void retryBudgetConfigurationRejectsNonPositiveValues() {
+    assertThatThrownBy(
+            () ->
+                new InventoryOutboxProperties(
+                    "inventory-event-test", Duration.ofSeconds(30), 0))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("positive");
+  }
+
+  @Test
+  void recoveryHttpBoundaryEnforcesReviewAuthValidationIntegrityAndCanonicalReceipt()
+      throws Exception {
+    UUID aggregateId = UUID.randomUUID();
+    var event =
+        events.initialize(
+            "SESSION",
+            aggregateId,
+            "inventory.session.started.v1",
+            SESSION_TOPIC,
+            mapper.createObjectNode().put("step", 0),
+            UUID.randomUUID(),
+            null,
+            null);
     jdbc.update(
-        "update outbox_event set next_attempt_at=clock_timestamp() where aggregate_id=?",
-        aggregateId.toString());
-    assertThat(relay.relayOne()).isTrue();
-    assertThat(
-            jdbc.queryForObject(
-                "select status from outbox_event where aggregate_id=?",
-                String.class,
-                aggregateId.toString()))
-        .isEqualTo("PUBLISHED");
+        """
+        update outbox_event set status='QUARANTINED',attempt_count=4,
+          last_error_code='PUBLISH_FAILED',terminal_phase='PUBLISH',
+          terminal_reason='RETRY_BUDGET_EXHAUSTED' where event_id=?
+        """,
+        event.eventId());
+    String path = "/api/inventory/v1/operations/outbox/" + event.eventId() + "/requeue";
+    String request = "{\"expectedReviewVersion\":0,\"reason\":\"broker reviewed\"}";
 
-    deadLetters.record("PROCESSING_FAILED", "e".repeat(64), SESSION_TOPIC, UUID.randomUUID());
-    StreamBridge dltBridge = mock(StreamBridge.class);
-    when(dltBridge.send(anyString(), any(Message.class))).thenReturn(false);
-    InventoryDeadLetterRelay dltRelay =
-        new InventoryDeadLetterRelay(jdbc, properties, dltBridge);
-    for (int attempt = 0; attempt < 6; attempt++) {
-      jdbc.update("update sanitized_dead_letter set next_attempt_at=clock_timestamp()");
-      dltRelay.relayOne();
-    }
+    assertThat(post(path, null, request).statusCode()).isEqualTo(401);
+    assertThat(post(path, "manager-token", request).statusCode()).isEqualTo(403);
+    assertThat(post(path, "admin-token", "{\"reason\":\"reviewed\"}").statusCode())
+        .isEqualTo(422);
     assertThat(
-            jdbc.queryForObject("select status from sanitized_dead_letter", String.class))
-        .isEqualTo("PENDING");
-    when(dltBridge.send(anyString(), any(Message.class))).thenReturn(true);
-    jdbc.update("update sanitized_dead_letter set next_attempt_at=clock_timestamp()");
-    dltRelay.relayOne();
+            post(
+                    path,
+                    "admin-token",
+                    "{\"expectedReviewVersion\":0,\"reason\":\"   \"}")
+                .statusCode())
+        .isEqualTo(422);
+    var unicodeEvent =
+        events.initialize(
+            "SESSION",
+            UUID.randomUUID(),
+            "inventory.session.started.v1",
+            SESSION_TOPIC,
+            mapper.createObjectNode().put("step", 0),
+            UUID.randomUUID(),
+            null,
+            null);
+    jdbc.update(
+        """
+        update outbox_event set status='QUARANTINED',attempt_count=4,
+          last_error_code='PUBLISH_FAILED',terminal_phase='PUBLISH',
+          terminal_reason='RETRY_BUDGET_EXHAUSTED' where event_id=?
+        """,
+        unicodeEvent.eventId());
+    String unicodePath =
+        "/api/inventory/v1/operations/outbox/" + unicodeEvent.eventId() + "/requeue";
+    String twoThousandEmoji = "😀".repeat(2000);
     assertThat(
-            jdbc.queryForObject("select status from sanitized_dead_letter", String.class))
-        .isEqualTo("PUBLISHED");
+            post(
+                    unicodePath,
+                    "admin-token",
+                    "{\"expectedReviewVersion\":0,\"reason\":\""
+                        + twoThousandEmoji
+                        + "\"}")
+                .statusCode())
+        .isEqualTo(200);
+    jdbc.update(
+        """
+        update outbox_event set status='QUARANTINED',attempt_count=4,
+          last_error_code='PUBLISH_FAILED',terminal_phase='PUBLISH',
+          terminal_reason='RETRY_BUDGET_EXHAUSTED' where event_id=?
+        """,
+        unicodeEvent.eventId());
+    assertThat(
+            post(
+                    unicodePath,
+                    "admin-token",
+                    "{\"expectedReviewVersion\":1,\"reason\":\""
+                        + "😀".repeat(2001)
+                        + "\"}")
+                .statusCode())
+        .isEqualTo(422);
+
+    HttpResponse<String> success = post(path, "admin-token", request);
+    assertThat(success.statusCode()).isEqualTo(200);
+    String receipt = success.body();
+    assertRecoveryReceiptMatchesContract(receipt);
+
+    InventoryOutboxStore.Claim claim =
+        outbox.claim("http-recovery", Duration.ofSeconds(30), 4).orElseThrow();
+    assertThat(claim.eventId()).isEqualTo(event.eventId());
+    assertThat(outbox.published(claim)).isTrue();
+    HttpResponse<String> replayResponse = post(path, "admin-token", request);
+    assertThat(replayResponse.statusCode()).isEqualTo(200);
+    String replay = replayResponse.body();
+    assertThat(replay).isEqualTo(receipt);
+    assertThat(
+            post(
+                    path,
+                    "admin-token",
+                    "{\"expectedReviewVersion\":0,\"reason\":\"changed\"}")
+                .statusCode())
+        .isEqualTo(409);
+    assertThat(
+            post(
+                    path,
+                    "admin-token",
+                    "{\"expectedReviewVersion\":1,\"reason\":\"stale\"}")
+                .statusCode())
+        .isEqualTo(409);
+
+    var corrupt =
+        events.initialize(
+            "SESSION",
+            UUID.randomUUID(),
+            "inventory.session.started.v1",
+            SESSION_TOPIC,
+            mapper.createObjectNode().put("step", 0),
+            UUID.randomUUID(),
+            null,
+            null);
+    jdbc.update(
+        """
+        update outbox_event set status='QUARANTINED',attempt_count=4,
+          last_error_code='PUBLISH_FAILED',terminal_phase='PUBLISH',
+          terminal_reason='RETRY_BUDGET_EXHAUSTED',envelope_sha256=? where event_id=?
+        """,
+        "0".repeat(64),
+        corrupt.eventId());
+    assertThat(
+            post(
+                    "/api/inventory/v1/operations/outbox/"
+                        + corrupt.eventId()
+                        + "/requeue",
+                    "admin-token",
+                    request)
+                .statusCode())
+        .isEqualTo(409);
+
+    deadLetters.record("PROCESSING_FAILED", "b".repeat(64), SESSION_TOPIC, UUID.randomUUID());
+    UUID dltId = jdbc.queryForObject("select dlt_id from sanitized_dead_letter", UUID.class);
+    jdbc.update(
+        """
+        update sanitized_dead_letter set status='FAILED',attempt_count=4,
+          last_error_code='PUBLISH_FAILED',terminal_phase='PUBLISH',
+          terminal_reason='RETRY_BUDGET_EXHAUSTED' where dlt_id=?
+        """,
+        dltId);
+    HttpResponse<String> dltSuccess =
+        post(
+            "/api/inventory/v1/operations/dead-letters/" + dltId + "/requeue",
+            "wms-admin-token",
+            request);
+    assertThat(dltSuccess.statusCode()).isEqualTo(200);
+    String dltReceipt = dltSuccess.body();
+    assertRecoveryReceiptMatchesContract(dltReceipt);
   }
 
   @Test
@@ -639,6 +956,46 @@ class InventoryEventingIntegrationTest {
                 "select count(*) from sanitized_dead_letter where failure_code='PROCESSING_FAILED'",
                 Integer.class))
         .isOne();
+  }
+
+  private void assertRecoveryReceiptMatchesContract(String responseBody) throws Exception {
+    com.fasterxml.jackson.databind.ObjectMapper json =
+        new com.fasterxml.jackson.databind.ObjectMapper();
+    Path contract =
+        Path.of(System.getProperty("rwms.contracts.dir"), "openapi/inventory-service.yaml");
+    java.util.Map<String, Object> yaml;
+    try (var input = Files.newInputStream(contract)) {
+      yaml = new Yaml().load(input);
+    }
+    com.fasterxml.jackson.databind.node.ObjectNode document = json.valueToTree(yaml);
+    document.put("$schema", "https://json-schema.org/draft/2020-12/schema");
+    document.put("$ref", "#/components/schemas/EventingRecoveryReceipt");
+    var schema =
+        JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012).getSchema(document);
+    assertThat(schema.validate(json.readTree(responseBody))).isEmpty();
+  }
+
+  private HttpResponse<String> post(String path, String token, String body) throws Exception {
+    HttpRequest.Builder request =
+        HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
+            .header(HttpHeaders.CONTENT_TYPE, "application/json");
+    if (token != null) request.header(HttpHeaders.AUTHORIZATION, "Bearer " + token);
+    return HTTP.send(
+        request.POST(HttpRequest.BodyPublishers.ofString(body)).build(),
+        HttpResponse.BodyHandlers.ofString());
+  }
+
+  private static Jwt userToken(String tokenValue, String role, String scope) {
+    Instant now = Instant.now();
+    return Jwt.withTokenValue(tokenValue)
+        .header("alg", "none")
+        .subject(UUID.randomUUID().toString())
+        .issuedAt(now)
+        .expiresAt(now.plusSeconds(300))
+        .claim("principal_type", "USER")
+        .claim("global_role", role)
+        .claim("scope", scope)
+        .build();
   }
 
   private AppendCommand command(UUID aggregateId, long expectedVersion, UUID correlationId) {

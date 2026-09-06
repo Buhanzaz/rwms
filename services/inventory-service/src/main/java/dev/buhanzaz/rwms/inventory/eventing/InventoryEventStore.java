@@ -340,7 +340,7 @@ public class InventoryEventStore {
         .orElseThrow(() -> new IllegalStateException("Inventory aggregate snapshot does not exist"));
   }
 
-  private static void requireFamily(String aggregateType, String eventType, String topic) {
+  static void requireFamily(String aggregateType, String eventType, String topic) {
     requireApprovedAggregateType(aggregateType);
     boolean approved =
         switch (aggregateType) {
@@ -364,7 +364,7 @@ public class InventoryEventStore {
     }
   }
 
-  private static void rejectForbidden(JsonNode node) {
+  static void rejectForbidden(JsonNode node) {
     if (node == null || !node.isObject())
       throw new IllegalArgumentException("Event payload must be an object");
     node.propertyNames()

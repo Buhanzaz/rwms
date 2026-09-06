@@ -40,6 +40,7 @@ class InventoryOperationalMetricsIntegrationTest {
   private static final List<String> METRICS =
       List.of(
           "rwms.inventory.outbox.backlog",
+          "rwms.inventory.outbox.terminal.current",
           "rwms.inventory.outbox.oldest.age.seconds",
           "rwms.inventory.inbox.retry.current",
           "rwms.inventory.inbox.quarantined.current",
@@ -58,7 +59,8 @@ class InventoryOperationalMetricsIntegrationTest {
           "rwms.inventory.furniture.loss.unresolved.current",
           "rwms.inventory.furniture.loss.failed.current",
           "rwms.inventory.furniture.loss.oldest.unresolved.age.seconds",
-          "rwms.inventory.dlt.backlog");
+          "rwms.inventory.dlt.backlog",
+          "rwms.inventory.dlt.terminal.current");
 
   static {
     POSTGRES.start();
@@ -107,6 +109,8 @@ class InventoryOperationalMetricsIntegrationTest {
   void readsOperationalAlertValuesFromTheAuthoritativeDatabase() {
     insertOutbox("PENDING", 180);
     insertOutbox("IN_FLIGHT", 60);
+    insertOutbox("DLT", 30);
+    insertOutbox("QUARANTINED", 20);
     insertInbox("RETRY");
     insertInbox("QUARANTINED");
     insertInbox("DLT");
@@ -132,6 +136,7 @@ class InventoryOperationalMetricsIntegrationTest {
     insertFurnitureLoss("BLOCKED", 440);
 
     assertThat(metric("rwms.inventory.outbox.backlog")).isEqualTo(2.0);
+    assertThat(metric("rwms.inventory.outbox.terminal.current")).isEqualTo(2.0);
     assertAgeAtLeast("rwms.inventory.outbox.oldest.age.seconds", 175.0);
     assertThat(metric("rwms.inventory.inbox.retry.current")).isEqualTo(1.0);
     assertThat(metric("rwms.inventory.inbox.quarantined.current")).isEqualTo(1.0);
@@ -152,6 +157,7 @@ class InventoryOperationalMetricsIntegrationTest {
     assertThat(metric("rwms.inventory.furniture.loss.failed.current")).isEqualTo(2.0);
     assertAgeAtLeast("rwms.inventory.furniture.loss.oldest.unresolved.age.seconds", 435.0);
     assertThat(metric("rwms.inventory.dlt.backlog")).isEqualTo(3.0);
+    assertThat(metric("rwms.inventory.dlt.terminal.current")).isEqualTo(1.0);
   }
 
   private void assertAgeAtLeast(String metricName, double seconds) {
@@ -208,14 +214,22 @@ class InventoryOperationalMetricsIntegrationTest {
         """
         insert into outbox_event(
           event_id,aggregate_type,aggregate_id,aggregate_version,event_type,topic,envelope_body,
-          envelope_sha256,status,attempt_count,next_attempt_at,created_at)
+          envelope_sha256,status,attempt_count,next_attempt_at,terminal_phase,terminal_reason,
+          dlt_at,created_at)
         values (?,'SESSION',?,0,'inventory.session.started.v1','rwms.inventory.session.v1',?::jsonb,
-          ?,'PENDING',0,clock_timestamp(),clock_timestamp()-(? * interval '1 second'))
+          ?,?,0,clock_timestamp(),?,?,case when ?='DLT' then clock_timestamp() else null end,
+          clock_timestamp()-(? * interval '1 second'))
         """,
         eventId,
         aggregateId.toString(),
         "{}",
         HASH_A,
+        status,
+        "DLT".equals(status) ? "VALIDATION" : "QUARANTINED".equals(status) ? "PUBLISH" : null,
+        "DLT".equals(status)
+            ? "ENVELOPE_REJECTED"
+            : "QUARANTINED".equals(status) ? "RETRY_BUDGET_EXHAUSTED" : null,
+        status,
         ageSeconds);
   }
 
@@ -316,9 +330,9 @@ class InventoryOperationalMetricsIntegrationTest {
         """
         insert into sanitized_dead_letter(
           dlt_id,destination,source_topic,source_event_id,message_sha256,failure_code,safe_body,
-          body_sha256,status,attempt_count,next_attempt_at,created_at)
+          body_sha256,status,attempt_count,next_attempt_at,terminal_phase,terminal_reason,created_at)
         values (?,'rwms.inventory.dlt.v1','rwms.inventory.session.v1',?,?,?,?::jsonb,?,
-          ?,1,clock_timestamp(),clock_timestamp())
+          ?,1,clock_timestamp(),?,?,clock_timestamp())
         """,
         UUID.randomUUID(),
         UUID.randomUUID(),
@@ -326,7 +340,9 @@ class InventoryOperationalMetricsIntegrationTest {
         "PROCESSING_FAILED",
         safeBody,
         HASH_B,
-        status);
+        status,
+        "FAILED".equals(status) ? "PUBLISH" : null,
+        "FAILED".equals(status) ? "RETRY_BUDGET_EXHAUSTED" : null);
   }
 
   private UUID insertSession() {
