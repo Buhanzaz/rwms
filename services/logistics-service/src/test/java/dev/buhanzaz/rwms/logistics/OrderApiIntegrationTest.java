@@ -2891,7 +2891,7 @@ class OrderApiIntegrationTest {
   }
 
   @Test
-  void savingAHistoricalSavedOrderDoesNotBackfillABillOrStartAPaymentWindow() throws Exception {
+  void savedOrderWithoutPaymentEvidenceCannotBeResavedToBypassAdmission() throws Exception {
     UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент исторического заказа");
     selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
     addUnit(orderId, MANAGER_1, UNIT_1, 1);
@@ -2903,9 +2903,8 @@ class OrderApiIntegrationTest {
                 .param("expectedVersion", "2")
                 .header("Idempotency-Key", UUID.randomUUID())
                 .with(manager(MANAGER_1, "manager-one")))
-        .andExpect(status().isOk())
-        .andExpect(jsonPath("$.version").value(2))
-        .andExpect(jsonPath("$.status").value("SAVED"));
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("ORDER_PAYMENT_PENDING"));
     JsonNode payment = readOrderPayment(orderId);
     assertThat(payment.get("state").isNull()).isTrue();
     assertThat(payment.get("startedAt").isNull()).isTrue();
@@ -2983,11 +2982,63 @@ class OrderApiIntegrationTest {
   }
 
   @Test
-  void unpaidOrderIsExcludedFromPlanningAndCannotCreateShipment() throws Exception {
-    UUID orderId = createOrder(MANAGER_1, "manager-one", "Unpaid admission");
+  void onlyExplicitlyPaidOrdersEnterPlanningAndCreateShipment() throws Exception {
+    UUID orderId = createOrder(MANAGER_1, "manager-one", "Paid admission");
     selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
     addUnit(orderId, MANAGER_1, UNIT_1, 1);
-    seedExpiredPaymentReservation(orderId);
+    seedClientSelectedRentalTerms(orderId, Map.of(UNIT_1, 2L));
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/save", orderId)
+                .param("expectedVersion", "2")
+                .header("Idempotency-Key", UUID.randomUUID())
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk());
+    assertThat(readOrderPayment(orderId).get("state").stringValue()).isEqualTo("PENDING");
+    assertThat(
+            paymentAdmissionOrders.findAllPlanningCandidates(
+                WAREHOUSE_1, dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus.SAVED))
+        .isEmpty();
+    String shipmentDate = futureDate(1);
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/shipments", orderId)
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(rentalShipmentBody(3, "Водитель", shipmentDate, UNIT_1))
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("ORDER_PAYMENT_REQUIRED"));
+    assertThat(jdbc.queryForObject("select count(*) from logistics_document", Long.class)).isZero();
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/payment/confirm", orderId)
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":3}")
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.state").value("CONFIRMED"))
+        .andExpect(jsonPath("$.orderVersion").value(4));
+    assertThat(
+            paymentAdmissionOrders.findAllPlanningCandidates(
+                WAREHOUSE_1, dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus.SAVED))
+        .extracting(dev.buhanzaz.rwms.logistics.order.domain.RentalOrder::getId)
+        .containsExactly(orderId);
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/shipments", orderId)
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(rentalShipmentBody(4, "Водитель", shipmentDate, UNIT_1))
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isCreated());
+  }
+
+  @Test
+  void savedOrderWithoutPaymentEvidenceCannotEnterPlanningOrCreateShipment() throws Exception {
+    UUID orderId = createOrder(MANAGER_1, "manager-one", "Unknown payment admission");
+    selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
+    addUnit(orderId, MANAGER_1, UNIT_1, 1);
+    seedClientSelectedRentalTerms(orderId, Map.of(UNIT_1, 2L));
+    // Existing unknown evidence stays unknown; neither admission nor a read may backfill it.
+    jdbc.update("update rental_order set status='SAVED' where id=?", orderId);
     assertThat(
             paymentAdmissionOrders.findAllPlanningCandidates(
                 WAREHOUSE_1, dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus.SAVED))
@@ -2996,26 +3047,15 @@ class OrderApiIntegrationTest {
             post("/api/logistics/v1/orders/{orderId}/shipments", orderId)
                 .header("Idempotency-Key", UUID.randomUUID())
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(
-                    rentalShipmentBody(
-                        2, "Водитель", LocalDate.now().plusDays(3).toString(), UNIT_1))
+                .content(rentalShipmentBody(2, "Водитель", futureDate(3), UNIT_1))
                 .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isConflict())
         .andExpect(jsonPath("$.code").value("ORDER_PAYMENT_REQUIRED"));
     assertThat(jdbc.queryForObject("select count(*) from logistics_document", Long.class)).isZero();
-    jdbc.update(
-        """
-        update rental_order set payment_state='CONFIRMED', payment_source='MANAGER_CONFIRMATION',
-          payment_confirmed_by_subject_id=?, payment_resolved_at=payment_started_at+interval '1 minute'
-        where id=?
-        """,
-        MANAGER_1,
-        orderId);
-    assertThat(
-            paymentAdmissionOrders.findAllPlanningCandidates(
-                WAREHOUSE_1, dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus.SAVED))
-        .extracting(dev.buhanzaz.rwms.logistics.order.domain.RentalOrder::getId)
-        .containsExactly(orderId);
+    JsonNode payment = readOrderPayment(orderId);
+    assertThat(payment.get("state").isNull()).isTrue();
+    assertThat(payment.get("receipt").isNull()).isTrue();
+    assertThat(payment.get("canConfirm").booleanValue()).isFalse();
   }
 
   @Test

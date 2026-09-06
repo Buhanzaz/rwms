@@ -416,8 +416,8 @@ public class RentalOrder {
     updatedAt = nextUpdatedAt();
   }
 
-  /** Historical orders retain their former admission without inventing a confirmation. */
-  public boolean isPaymentConfirmedOrNotRequired() {
+  /** Reports explicit payment evidence; an absent payment window never grants fulfillment. */
+  public boolean isPaymentConfirmed() {
     return RentalOrderPaymentState.allowsFulfillment(paymentState);
   }
 
@@ -440,19 +440,16 @@ public class RentalOrder {
   }
 
   /**
-   * Fulfils a saved order without retroactively requiring V42 delivery facts from historical rows;
-   * every order saved after V42 has already passed {@link #requireFulfillmentDetails()}.
+   * Fulfils an explicitly paid saved order. Delivery details are validated when the order is saved.
    */
   public boolean fulfill() {
     if (status == RentalOrderStatus.FULFILLED) return false;
     if (status != RentalOrderStatus.SAVED) {
       throw new IllegalStateException("Order cannot be fulfilled in its current state");
     }
-    if (!isPaymentConfirmedOrNotRequired()) {
+    if (!isPaymentConfirmed()) {
       throw new IllegalStateException("Order payment is not confirmed");
     }
-    // New saves already enforce delivery details. Legacy SAVED rows remain fulfillable after the
-    // additive V42 migration without fabricating historical dates or contact facts.
     status = RentalOrderStatus.FULFILLED;
     updatedAt = nextUpdatedAt();
     return true;

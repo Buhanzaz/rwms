@@ -6,7 +6,7 @@ work.
 
 ## Resolved: Payment Before Inclusion In A Driver Route
 
-- Status: `Resolved — implementation verification pending`
+- Status: `Resolved — payment admission verified`
 - Affected owner and consumers: logistics-service planner application,
   task-board driver workday snapshots and the standalone planner.
 - Requested behavior: resolve audit R-006 so that a failed shift registration
@@ -14,7 +14,8 @@ work.
 - Conflicting contract or invariant: the canonical apply operation requires
   every assigned-driver snapshot to register before shipment creation/replay and
   retains valid parts when another part is rejected. Its route operations are
-  immutable and executable. Existing admission checks also reject unpaid or
+  immutable itinerary snapshots; executable work separately requires committed shipment/task
+  identities. Existing admission checks also reject unpaid or
   near-date automatic assignments before driver effects. Registering a mixed
   route before those checks publishes stops for rejected assignments, while
   dropping its stops is not supported by the current identity contract:
@@ -29,8 +30,13 @@ work.
   of the order's delivery/transfer in a driver route require confirmed payment.
   A mixed paid/unpaid route is therefore an admission defect, not a supported
   partial-application workflow. Historical payment omissions do not justify an
-  exception to this rule. This decision defines the required behavior; feed,
-  closing and application boundaries still need source verification and fixes.
+  exception to this rule. The R006a owner change requires strict `CONFIRMED` in the Spring
+  feed, assignment, shipment and saved-order furniture gates, and before checkout slot confirmation.
+  Null evidence stays unknown; draft editing, its warehouse replacement preparation and exact
+  committed shipment replay are preserved.
+  This payment change passed 216 owner, HTTP/PostgreSQL and contract checks without skips.
+  The standalone planner consumes the owner's strict feed without another payment-state copy.
+  The original shift-registration ordering issue remains unfinished in R-006.
 - Verification record: the initial ordering-only change was removed after two
   admission regressions; it is not a completed fix. No production data or runtime
   was changed. Exact retries must preserve and truthfully report any already

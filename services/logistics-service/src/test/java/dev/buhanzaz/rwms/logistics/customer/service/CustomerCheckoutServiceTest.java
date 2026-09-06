@@ -124,7 +124,6 @@ class CustomerCheckoutServiceTest {
 
   @ParameterizedTest
   @EnumSource(value = RentalOrderPaymentState.class, names = "CONFIRMED")
-  @NullSource
   void retriesFurnitureCreationWithOneStableTaskKeyBeforeCompletingSession(
       RentalOrderPaymentState paymentState) {
     CustomerRentalService rentals = mock(CustomerRentalService.class);
@@ -266,6 +265,7 @@ class CustomerCheckoutServiceTest {
   @EnumSource(
       value = RentalOrderPaymentState.class,
       names = {"PENDING", "EXPIRING", "EXPIRED", "CANCELLED"})
+  @NullSource
   void unpaidOrReleasedOrderNeverConfirmsCapacityOrStartsFurnitureAndDoesNotCountAsFailure(
       RentalOrderPaymentState paymentState) {
     var sessions = mock(CustomerRentalSessionStore.class);

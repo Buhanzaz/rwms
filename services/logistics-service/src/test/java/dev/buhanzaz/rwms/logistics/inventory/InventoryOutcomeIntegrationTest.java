@@ -41,6 +41,7 @@ import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
 import dev.buhanzaz.rwms.logistics.order.domain.DesiredDeliveryWindow;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentSource;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderUnitTerm;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderQuotedPrice;
@@ -1311,6 +1312,10 @@ class InventoryOutcomeIntegrationTest {
               DesiredDeliveryWindow.create(
                   LocalDate.of(2026, 8, 21), LocalDate.of(2026, 8, 21))));
       order.saveForFulfillment();
+      OffsetDateTime paymentStartedAt = OffsetDateTime.now();
+      order.startPaymentReservation(paymentStartedAt);
+      order.confirmPayment(
+          RentalOrderPaymentSource.MANAGER_CONFIRMATION, SUBJECT, paymentStartedAt.plusSeconds(1));
       if (status == RentalOrderStatus.FULFILLED) order.fulfill();
     }
     RentalOrder persisted = rentalOrders.saveAndFlush(order);

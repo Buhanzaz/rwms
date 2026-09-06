@@ -102,10 +102,13 @@ no fabricated historical bill. The first DRAFT-to-SAVED transition captures this
 one five-minute database-time payment window in the same transaction. Pending composition is
 frozen; reads, save replays and later saves never reissue or extend it.
 
-An order with payment evidence enters the route-planning feed only in `CONFIRMED`. Assignment,
+A `SAVED` order enters the route-planning feed only with `CONFIRMED` payment. Assignment,
 shipment creation and shipment furniture/replacement preparation independently reject an unpaid
-order with `ORDER_PAYMENT_REQUIRED` before effects. Historical null-payment orders retain their
-existing admission. CustomerApp checkout retains pending delivery capacity until confirmation.
+saved order with `ORDER_PAYMENT_REQUIRED` before effects. Null payment evidence does not grant admission
+and is never backfilled by a read. CustomerApp checkout retains pending delivery capacity until
+confirmation. Draft editing and its warehouse replacement preparation remain available before
+payment; exact committed shipment retries
+replay before mutable payment, status and version checks.
 
 V100 adds nullable order-owned payment reservation evidence: a non-renewable five-minute window,
 explicit `CUSTOMER_TEST`/`MANAGER_CONFIRMATION` provenance, and separate pending, confirmed,
@@ -303,8 +306,8 @@ A terminal result confirms or releases that capacity. New payment-aware checkout
 `CHECKOUT_PENDING` until order payment is `CONFIRMED`; no furniture work or slot confirmation starts
 while payment is pending or being released. Healthy payment waiting releases its recovery lease and
 reschedules a check without consuming failure attempts. Payment reads resolve the owned booking even
-if an interrupted checkout has not yet attached its completed order ID. Historical null-payment
-orders retain their previous admission. Checkout creates the ordinary saved rental order,
+if an interrupted checkout has not yet attached its completed order ID. Missing payment evidence
+also keeps checkout pending. Checkout creates the ordinary saved rental order,
 carries each cabin's own initial rental duration into it and creates deterministic per-cabin
 furniture tasks. A transport retry with the same intent reuses the original
 domain idempotency key and reconciles a lost response through

@@ -72,7 +72,8 @@ class RentalOrderEditabilityService {
         || activeUnits == null
         || activeUnits.isEmpty()
         || (!actor.globalAdministrator() && !actor.localAdministrator())
-        || !RentalOrderPaymentState.allowsFulfillment(order.getPaymentState())
+        || (order.getStatus() == RentalOrderStatus.SAVED
+            && !RentalOrderPaymentState.allowsFulfillment(order.getPaymentState()))
         || !actor.writeScope()
         || !access.isVisible(actor, order)
         || order.getWarehouseId() == null

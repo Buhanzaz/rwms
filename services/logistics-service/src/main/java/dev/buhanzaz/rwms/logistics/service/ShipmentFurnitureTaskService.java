@@ -102,7 +102,8 @@ public class ShipmentFurnitureTaskService {
         orders
             .findForUpdate(first.orderId())
             .orElseThrow(() -> new LogisticsConflictException("Заказ замены не найден"));
-    requirePayment(order);
+    // Draft replacement prepares the booking; every later state requires confirmed payment.
+    if (order.getStatus() != RentalOrderStatus.DRAFT) requirePayment(order);
     if (orderMutationCommands.existsByOrder_IdAndStateIn(
         first.orderId(), Set.of(State.PENDING, State.QUARANTINED))) {
       throw new OrderProblemException(

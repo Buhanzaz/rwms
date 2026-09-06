@@ -26,6 +26,7 @@ import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
 import dev.buhanzaz.rwms.logistics.order.domain.DesiredDeliveryWindow;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentSource;
 import dev.buhanzaz.rwms.logistics.order.repository.OrderClientRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
@@ -519,6 +520,10 @@ class ReturnCompletionSagaIntegrationTest {
         List.of(DesiredDeliveryWindow.create(LocalDate.now(), LocalDate.now())));
     order.selectWarehouse(WAREHOUSE);
     order.saveForFulfillment();
+    OffsetDateTime paymentStartedAt = OffsetDateTime.now();
+    order.startPaymentReservation(paymentStartedAt);
+    order.confirmPayment(
+        RentalOrderPaymentSource.MANAGER_CONFIRMATION, SUBJECT, paymentStartedAt.plusSeconds(1));
     order.fulfill();
     order = orders.saveAndFlush(order);
     LogisticsDocument shipment =

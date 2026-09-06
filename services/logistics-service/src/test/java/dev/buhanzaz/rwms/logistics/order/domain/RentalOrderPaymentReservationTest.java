@@ -23,7 +23,7 @@ class RentalOrderPaymentReservationTest {
     assertThat(order.getPaymentStartedAt()).isEqualTo(START);
     assertThat(order.getPaymentExpiresAt()).isEqualTo(START.plusMinutes(5));
     assertThat(order.getPaymentResolvedAt()).isNull();
-    assertThat(order.isPaymentConfirmedOrNotRequired()).isFalse();
+    assertThat(order.isPaymentConfirmed()).isFalse();
     assertThatThrownBy(order::fulfill).hasMessage("Order payment is not confirmed");
     assertThatThrownBy(order::requireEditable).hasMessageContaining("frozen");
     assertThatThrownBy(() -> order.replaceClientDeliveryDetails("Changed", null, null, List.of()))
@@ -46,7 +46,7 @@ class RentalOrderPaymentReservationTest {
     assertThat(order.getPaymentConfirmedBySubjectId()).isEqualTo(actorId);
     assertThat(order.getPaymentConfirmedByBookingId()).isNull();
     assertThat(order.beginPaymentExpiry(START.plusMinutes(6))).isFalse();
-    assertThat(order.isPaymentConfirmedOrNotRequired()).isTrue();
+    assertThat(order.isPaymentConfirmed()).isTrue();
     order.requireEditable();
     assertThat(order.fulfill()).isTrue();
   }
@@ -141,13 +141,14 @@ class RentalOrderPaymentReservationTest {
   }
 
   @Test
-  void historicalSavedOrderRetainsItsAdmissionWithoutInventingPaymentEvidence() {
+  void savedOrderWithoutPaymentEvidenceCannotBeFulfilled() {
     RentalOrder order = saved();
     assertThat(order.getPaymentState()).isNull();
     assertThat(order.getPaymentExpiresAt()).isNull();
     assertThat(order.beginPaymentExpiry(START.plusDays(1))).isFalse();
-    assertThat(order.isPaymentConfirmedOrNotRequired()).isTrue();
-    assertThat(order.fulfill()).isTrue();
+    assertThat(order.isPaymentConfirmed()).isFalse();
+    assertThatThrownBy(order::fulfill).hasMessage("Order payment is not confirmed");
+    assertThat(order.getStatus()).isEqualTo(RentalOrderStatus.SAVED);
     assertThat(order.getPaymentSource()).isNull();
   }
 

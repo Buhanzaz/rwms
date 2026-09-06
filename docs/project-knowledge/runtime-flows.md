@@ -1143,8 +1143,10 @@ Evidence:
 8. Checkout uses one stable domain idempotency key to publish/confirm the
    existing presentation receipt, convert asset holds, save the ordinary rental
    order with each cabin's exact initial rental duration, confirm the durable
-   delivery slot and create deterministic per-cabin furniture tasks. Once the receipt is saved, the slot is
-   `CHECKOUT_PENDING` capacity until terminal confirmation or release. A new
+   delivery slot and create deterministic per-cabin furniture tasks. Slot confirmation and
+   furniture creation require explicit `CONFIRMED` order payment; null evidence never grants
+   admission. Until then the slot remains temporary `CHECKOUT_PENDING` capacity, released through
+   the owning expiry/cancellation workflow. A new
    transport retry for the same intent adopts the original domain key; a lost
    response is reconciled from the saved receipt and cannot create a duplicate
    order or task. Both the presentation booking and customer checkout receipt
@@ -1540,8 +1542,11 @@ and
    per-order failure. Directory/import commits happen before support-network
    HTTP and a separate auto-planning transaction, so later network or planning
    failure does not roll back demand. The feed contains
-   SAVED unshipped remainders, exact order versions, cabin IDs and accepted
-   dates. A confirmed fixed CustomerApp option adds hard
+   explicitly paid (`CONFIRMED`) SAVED unshipped remainders, exact order versions, cabin IDs and
+   accepted dates. Missing payment evidence is excluded without fabricating a confirmation.
+   New assignment, shipment and furniture commands for saved orders independently enforce the same payment gate;
+   exact committed shipment retries replay before mutable admission checks. Draft editing and its
+   warehouse replacement preparation remain available before payment. A confirmed fixed CustomerApp option adds hard
    `windowStart`/`windowEnd`; a confirmed `DURING_DAY` option adds a soft date
    with null bounds. Both add informational `travelZoneHours` and trailer
    access. The planner upserts by

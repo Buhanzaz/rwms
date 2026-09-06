@@ -23,6 +23,7 @@ import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
 import dev.buhanzaz.rwms.logistics.order.domain.DesiredDeliveryWindow;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentSource;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderEquipmentRequirement;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderUnitTerm;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderQuotedPrice;
@@ -313,6 +314,10 @@ class ShipmentWorkflowSagaIntegrationTest {
                 LocalDate.now().plusDays(1), LocalDate.now().plusDays(1))));
     order.selectWarehouse(WAREHOUSE);
     order.saveForFulfillment();
+    OffsetDateTime paymentStartedAt = OffsetDateTime.now();
+    order.startPaymentReservation(paymentStartedAt);
+    order.confirmPayment(
+        RentalOrderPaymentSource.MANAGER_CONFIRMATION, SUBJECT, paymentStartedAt.plusSeconds(1));
     order = orders.saveAndFlush(order);
     rentalTerms.saveAndFlush(
         RentalOrderUnitTerm.create(order, ASSET, 1, new RentalOrderQuotedPrice(null, null)));
@@ -496,6 +501,10 @@ class ShipmentWorkflowSagaIntegrationTest {
         List.of(DesiredDeliveryWindow.create(shipmentDate, shipmentDate)));
     order.selectWarehouse(WAREHOUSE);
     order.saveForFulfillment();
+    OffsetDateTime paymentStartedAt = OffsetDateTime.now();
+    order.startPaymentReservation(paymentStartedAt);
+    order.confirmPayment(
+        RentalOrderPaymentSource.MANAGER_CONFIRMATION, SUBJECT, paymentStartedAt.plusSeconds(1));
     order = orders.saveAndFlush(order);
     rentalTerms.saveAndFlush(
         RentalOrderUnitTerm.create(order, ASSET, 1, new RentalOrderQuotedPrice(null, null)));
@@ -648,6 +657,10 @@ class ShipmentWorkflowSagaIntegrationTest {
         List.of(DesiredDeliveryWindow.create(LocalDate.now(), LocalDate.now())));
     order.selectWarehouse(WAREHOUSE);
     order.saveForFulfillment();
+    OffsetDateTime paymentStartedAt = OffsetDateTime.now();
+    order.startPaymentReservation(paymentStartedAt);
+    order.confirmPayment(
+        RentalOrderPaymentSource.MANAGER_CONFIRMATION, SUBJECT, paymentStartedAt.plusSeconds(1));
     order = orders.saveAndFlush(order);
     rentalTerms.saveAndFlush(
         RentalOrderUnitTerm.create(order, ASSET, 1, new RentalOrderQuotedPrice(null, null)));

@@ -1,6 +1,6 @@
 package dev.buhanzaz.rwms.logistics.order.domain;
 
-/** Five-minute reservation lifecycle; null means no payment window, including historical orders. */
+/** Five-minute reservation lifecycle; null carries no evidence of payment. */
 public enum RentalOrderPaymentState {
   PENDING,
   CONFIRMED,
@@ -8,8 +8,8 @@ public enum RentalOrderPaymentState {
   EXPIRED,
   CANCELLED;
 
-  /** Existing orders without a payment window keep their admission; a new window requires proof. */
+  /** Only an explicit confirmation admits a saved order to planning and fulfillment. */
   public static boolean allowsFulfillment(RentalOrderPaymentState state) {
-    return state == null || state == CONFIRMED;
+    return state == CONFIRMED;
   }
 }

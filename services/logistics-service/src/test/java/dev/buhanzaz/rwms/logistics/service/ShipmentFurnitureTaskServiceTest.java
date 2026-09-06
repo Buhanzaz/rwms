@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.logistics.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -13,11 +14,13 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.domain.ShipmentFurnitureMovementTask;
+import dev.buhanzaz.rwms.logistics.equipment.api.EquipmentMovementTaskApiModels.EquipmentMovementTaskResponse;
 import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskService;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.mapper.ShipmentFurnitureTaskResponseMapper;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderEquipmentRequirement;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentState;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderEquipmentRequirementRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
@@ -34,6 +37,9 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.NullSource;
 import org.mockito.ArgumentCaptor;
 
 class ShipmentFurnitureTaskServiceTest {
@@ -46,13 +52,90 @@ class ShipmentFurnitureTaskServiceTest {
   private static final UUID EQUIPMENT_ID = UUID.fromString("00000000-0000-0000-0000-000000009221");
 
   @Test
-  void unpaidOrderCannotReportFurnitureReadyOrStartReplacementWork() {
+  void draftReplacementCanPrepareFurnitureBeforeAPaymentWindowExists() {
+    RentalOrder order = mock(RentalOrder.class);
+    when(order.getId()).thenReturn(ORDER_ID);
+    when(order.getStatus()).thenReturn(RentalOrderStatus.DRAFT);
+    when(order.getWarehouseId()).thenReturn(WAREHOUSE_ID);
+    RentalOrderRepository orders = mock(RentalOrderRepository.class);
+    when(orders.findForUpdate(ORDER_ID)).thenReturn(Optional.of(order));
+    ShipmentFurnitureMovementTaskRepository links =
+        mock(ShipmentFurnitureMovementTaskRepository.class);
+    when(links.saveAllAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    EquipmentMovementTaskService movement = mock(EquipmentMovementTaskService.class);
+    EquipmentMovementTaskResponse movementResponse = mock(EquipmentMovementTaskResponse.class);
+    UUID movementId = UUID.randomUUID();
+    when(movementResponse.id()).thenReturn(movementId);
+    when(movement.create(any(), any(), any(), any()))
+        .thenReturn(new EquipmentMovementTaskService.CreateResult(movementResponse, false));
+    ShipmentFurnitureTaskService service =
+        new ShipmentFurnitureTaskService(
+            mock(LogisticsDocumentRepository.class),
+            mock(LogisticsDocumentLineRepository.class),
+            orders,
+            mock(RentalOrderMutationCommandRepository.class),
+            mock(RentalOrderEquipmentRequirementRepository.class),
+            links,
+            mock(LogisticsDependencyGateway.class),
+            movement,
+            mock(LogisticsWarehouseLifecycle.class),
+            mock(ShipmentFurnitureTaskResponseMapper.class));
+    var command =
+        new ShipmentFurnitureTaskService.ReplacementCheckpointCommand(
+            ORDER_ID,
+            0,
+            WAREHOUSE_ID,
+            UNIT_1,
+            UNIT_2,
+            "replacement",
+            UUID.randomUUID(),
+            "WAREHOUSE_MANAGER",
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            0,
+            "a".repeat(64),
+            null);
+    var line =
+        new LogisticsDependencyGateway.OrderFurnitureMovementPlanLine(
+            EQUIPMENT_ID,
+            "Стол",
+            UUID.randomUUID(),
+            WAREHOUSE_ID,
+            UNIT_1,
+            "CABIN_NON_RENTED",
+            0,
+            WAREHOUSE_ID,
+            UNIT_2,
+            "CABIN_NON_RENTED",
+            1);
+    var plan =
+        new LogisticsDependencyGateway.OrderFurnitureMovementPlan(
+            ORDER_ID, UNIT_2, "СПБ-002", List.of(line));
+
+    ShipmentFurnitureMovementTask checkpoint = service.checkpointReplacement(command, plan);
+
+    assertThat(order.getPaymentState()).isNull();
+    assertThat(checkpoint.getOrder()).isSameAs(order);
+    assertThat(checkpoint.getDocument()).isNull();
+    assertThat(checkpoint.getEquipmentMovementTaskId()).isEqualTo(movementId);
+    assertThat(checkpoint.getLineCount()).isEqualTo(1);
+    verify(movement).freezeReplacementSources(movementId, List.of(line));
+    verify(movement).deferReplacementPreparation(movementId);
+  }
+
+  @ParameterizedTest
+  @NullSource
+  @EnumSource(
+      value = RentalOrderPaymentState.class,
+      mode = EnumSource.Mode.EXCLUDE,
+      names = "CONFIRMED")
+  void unpaidOrderCannotReportFurnitureReadyOrStartReplacementWork(
+      RentalOrderPaymentState paymentState) {
     RentalOrder order = mock(RentalOrder.class);
     when(order.getId()).thenReturn(ORDER_ID);
     when(order.getStatus()).thenReturn(RentalOrderStatus.SAVED);
     when(order.getWarehouseId()).thenReturn(WAREHOUSE_ID);
-    when(order.getPaymentState())
-        .thenReturn(dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentState.PENDING);
+    when(order.getPaymentState()).thenReturn(paymentState);
     RentalOrderRepository orders = mock(RentalOrderRepository.class);
     when(orders.findForUpdate(ORDER_ID)).thenReturn(Optional.of(order));
     when(orders.findWithClientById(ORDER_ID)).thenReturn(Optional.of(order));
@@ -110,6 +193,8 @@ class ShipmentFurnitureTaskServiceTest {
     RentalOrderMutationCommandRepository orderMutations =
         mock(RentalOrderMutationCommandRepository.class);
     RentalOrder order = mock(RentalOrder.class);
+    // This scenario reaches the mutation fence only after payment admission succeeds.
+    when(order.getPaymentState()).thenReturn(RentalOrderPaymentState.CONFIRMED);
     when(orders.findForUpdate(ORDER_ID)).thenReturn(Optional.of(order));
     when(orderMutations.existsByOrder_IdAndStateIn(
             ORDER_ID, Set.of(State.PENDING, State.QUARANTINED)))
@@ -179,6 +264,7 @@ class ShipmentFurnitureTaskServiceTest {
     RentalOrder order = mock(RentalOrder.class);
     when(order.getId()).thenReturn(ORDER_ID);
     when(order.getStatus()).thenReturn(RentalOrderStatus.SAVED);
+    when(order.getPaymentState()).thenReturn(RentalOrderPaymentState.CONFIRMED);
     when(order.getWarehouseId()).thenReturn(WAREHOUSE_ID);
     when(orders.findWithClientById(ORDER_ID)).thenReturn(Optional.of(order));
     when(requirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(
@@ -248,6 +334,7 @@ class ShipmentFurnitureTaskServiceTest {
     RentalOrder order = mock(RentalOrder.class);
     when(order.getId()).thenReturn(ORDER_ID);
     when(order.getStatus()).thenReturn(RentalOrderStatus.SAVED);
+    when(order.getPaymentState()).thenReturn(RentalOrderPaymentState.CONFIRMED);
     when(order.getWarehouseId()).thenReturn(WAREHOUSE_ID);
     when(orders.findWithClientById(ORDER_ID)).thenReturn(Optional.of(order));
     RentalOrderEquipmentRequirement desired = mock(RentalOrderEquipmentRequirement.class);
@@ -404,6 +491,7 @@ class ShipmentFurnitureTaskServiceTest {
     RentalOrder order = mock(RentalOrder.class);
     when(order.getId()).thenReturn(ORDER_ID);
     when(order.getStatus()).thenReturn(RentalOrderStatus.SAVED);
+    when(order.getPaymentState()).thenReturn(RentalOrderPaymentState.CONFIRMED);
     when(order.getWarehouseId()).thenReturn(WAREHOUSE_ID);
     when(orders.findForUpdate(ORDER_ID)).thenReturn(Optional.of(order));
     when(requirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(

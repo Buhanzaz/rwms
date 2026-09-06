@@ -44,8 +44,7 @@ public interface RentalOrderRepository
       from RentalOrder orders
       where orders.warehouseId = :warehouseId
         and orders.status = :status
-        and (orders.paymentState is null
-          or orders.paymentState = dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentState.CONFIRMED)
+        and orders.paymentState = dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentState.CONFIRMED
       order by orders.createdAt, orders.id
       """)
   List<RentalOrder> findAllPlanningCandidates(

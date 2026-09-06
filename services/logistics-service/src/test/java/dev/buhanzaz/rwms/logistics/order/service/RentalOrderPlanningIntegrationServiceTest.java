@@ -41,6 +41,7 @@ import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRentalShi
 import dev.buhanzaz.rwms.logistics.order.domain.DesiredDeliveryWindow;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentState;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
@@ -62,6 +63,9 @@ import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.NullSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 
@@ -125,6 +129,7 @@ class RentalOrderPlanningIntegrationServiceTest {
     when(order.getVersion()).thenReturn(7L);
     when(order.getWarehouseId()).thenReturn(WAREHOUSE_ID);
     when(order.getStatus()).thenReturn(RentalOrderStatus.SAVED);
+    when(order.getPaymentState()).thenReturn(RentalOrderPaymentState.CONFIRMED);
     when(orders.findPlanningCandidateById(ORDER_ID)).thenReturn(Optional.of(order));
     when(lines.findAssignedRentalShipmentAssetIds(eq(ORDER_ID), any())).thenReturn(List.of());
     when(driverTasks.findAllBySourceTypeAndSourceIdIn(
@@ -413,11 +418,16 @@ class RentalOrderPlanningIntegrationServiceTest {
         }));
   }
 
-  @Test
-  void unpaidAssignmentIsRejectedBeforeShipmentOrDriverEffects() {
+  @ParameterizedTest
+  @NullSource
+  @EnumSource(
+      value = RentalOrderPaymentState.class,
+      mode = EnumSource.Mode.EXCLUDE,
+      names = "CONFIRMED")
+  void unpaidAssignmentIsRejectedBeforeShipmentOrDriverEffects(
+      RentalOrderPaymentState paymentState) {
     LocalDate date = LocalDate.now(MOSCOW).plusDays(3);
-    when(order.getPaymentState())
-        .thenReturn(dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentState.PENDING);
+    when(order.getPaymentState()).thenReturn(paymentState);
     var result =
         service.apply(
             UUID.randomUUID(),
@@ -669,8 +679,12 @@ class RentalOrderPlanningIntegrationServiceTest {
     verify(rentalOrders, never()).createRentalShipment(any(), any(), any(), any(), any(), any());
   }
 
-  @Test
-  void retryReturnsPriorShipmentBeforeDateVersionAndAssignmentChecks() {
+  @ParameterizedTest
+  @NullSource
+  @EnumSource(RentalOrderPaymentState.class)
+  void retryReturnsPriorShipmentBeforePaymentDateVersionAndAssignmentChecks(
+      RentalOrderPaymentState paymentState) {
+    when(order.getPaymentState()).thenReturn(paymentState);
     LocalDate formerlyEligibleDate = LocalDate.now(MOSCOW).plusDays(1);
     var priorResult = documentResult(UUID.randomUUID());
     when(rentalOrders.replayRentalShipment(any(), eq(ORDER_ID), any(), any()))

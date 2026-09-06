@@ -988,8 +988,8 @@ paths:
         authoritative over the address. The response includes only the normalized client legal
         type and contact facts required for dispatcher actions; furniture and unrelated client
         facts remain omitted.
-        Orders with a payment window enter this feed only after confirmation. Historical orders
-        without payment evidence keep their previous admission.
+        Only orders with CONFIRMED payment enter this feed. Missing payment evidence never
+        grants planning admission and is not backfilled by this read.
       parameters:
         - $ref: "#/components/parameters/WarehouseIdQuery"
         - name: dateFrom
@@ -1985,8 +1985,9 @@ paths:
         atomically issues the immutable initial bill from known cabin quotes and current furniture
         tariffs, including accepted delivery where present, and starts one five-minute database-time
         payment window. Unknown required prices fail closed. PENDING composition is frozen until
-        confirmation; replay never reissues the bill or extends time. Previously SAVED historical
-        orders retain their existing null payment evidence.
+        confirmation; an exact committed save replay returns the original result without reissuing
+        the bill or extending time. A new save command for a SAVED order without CONFIRMED payment
+        returns ORDER_PAYMENT_PENDING (409); missing evidence stays unknown.
         Saving does not implicitly choose a shipment batch; create one explicitly with selected
         unitIds.
       responses:
@@ -2036,8 +2037,9 @@ paths:
         A cabin cannot be selected by another non-cancelled shipment. When this shipment reaches
         SHIPPED, logistics creates one cabin-level return document per shipped line, each linked by
         rentalShipmentId, so return dates and drivers can be changed independently.
-        When the order has a payment window, its payment must be confirmed before any shipment
-        effect; otherwise the command returns ORDER_PAYMENT_REQUIRED (409).
+        New shipments require CONFIRMED order payment, including when payment evidence is absent;
+        otherwise the command returns ORDER_PAYMENT_REQUIRED (409). An exact retry of a committed
+        shipment replays before mutable payment, status and version checks.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
