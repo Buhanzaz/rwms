@@ -622,6 +622,8 @@ contexts and screens are usable.
   asset-service contents and shows a text-labelled required, action-needed,
   loaded, empty, or unavailable state. Scheduling dialogs repeat the furniture
   summary for exactly the cabins in the pending command.
+  A cabin with no furniture movement task displays the server's content readiness and the
+  absence of a task explicitly; it does not request task details or render a link with a null ID.
 - A direct historical shipment created by completed inventory has no order,
   driver, address or stock-allocation workflow. Its expanded row instead shows
   the frozen inventory client/date and the exact

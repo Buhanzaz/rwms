@@ -180,18 +180,23 @@ function shipmentFurnitureTaskStatus(
 ): ShipmentFurnitureTaskStatus {
   const source = object(value)
   const lineCount = integer(source.lineCount)
-  if (lineCount < 1) invalidResponse()
   return {
     rentalItemId: uuid(source.rentalItemId),
     unitNumber: nonBlankText(source.unitNumber),
-    taskId: uuid(source.taskId),
-    externalTaskId: uuid(source.externalTaskId),
+    taskId: nullableUuid(source.taskId),
+    externalTaskId: nullableUuid(source.externalTaskId),
     taskBoardTaskId: nullableUuid(source.taskBoardTaskId),
-    taskState: oneOf<ShipmentFurnitureTaskState>(
-      source.taskState,
-      SHIPMENT_FURNITURE_TASK_STATES
-    ),
+    taskState:
+      source.taskState === null
+        ? null
+        : oneOf<ShipmentFurnitureTaskState>(
+            source.taskState,
+            SHIPMENT_FURNITURE_TASK_STATES
+          ),
     lineCount,
+    movementTaskCreated: boolean(source.movementTaskCreated),
+    movementTaskCompleted: boolean(source.movementTaskCompleted),
+    contentReady: boolean(source.contentReady),
   }
 }
 

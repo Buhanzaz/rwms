@@ -740,7 +740,23 @@ describe("LogisticsShipmentsPage", () => {
           shipmentId: documentId,
           shipmentVersion: documentId === DRAFT_ID ? 2 : 5,
           state: documentId === DRAFT_ID ? "REQUIRES_TASK_CREATION" : "READY",
-          tasks: [],
+          tasks:
+            documentId === DRAFT_ID
+              ? [
+                  {
+                    rentalItemId: ASSET_ID,
+                    unitNumber: ASSET_NUMBER,
+                    taskId: null,
+                    externalTaskId: null,
+                    taskBoardTaskId: null,
+                    taskState: null,
+                    lineCount: 0,
+                    movementTaskCreated: false,
+                    movementTaskCompleted: false,
+                    contentReady: false,
+                  },
+                ]
+              : [],
         })
     )
     shipmentApi.createShipmentFurnitureTasks.mockResolvedValue({
@@ -758,9 +774,21 @@ describe("LogisticsShipmentsPage", () => {
     const user = userEvent.setup()
     renderPage()
 
+    const addFurniture = (
+      await screen.findAllByRole("button", { name: "Добавить мебель" })
+    )[0]!
     await user.click(
-      (await screen.findAllByRole("button", { name: "Добавить мебель" }))[0]!
+      (await screen.findAllByRole("button", { name: "Показать состав" }))[0]!
     )
+    expect(
+      (await screen.findAllByText("Задание на перемещение ещё не создано."))
+        .length
+    ).toBeGreaterThan(0)
+    expect(
+      equipmentMovementTasksApi.getEquipmentMovementTask
+    ).not.toHaveBeenCalled()
+    expect(document.querySelector('a[href*="externalTaskId=null"]')).toBeNull()
+    await user.click(addFurniture)
 
     await waitFor(() =>
       expect(shipmentApi.createShipmentFurnitureTasks).toHaveBeenCalledWith({

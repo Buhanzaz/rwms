@@ -2024,9 +2024,44 @@ class RentalInquiryPresentationIntegrationTest {
             requestableDate(2),
             requestableDate(4),
             requestableDate(3));
+    List<PresentationCabinSelectionInput> selections =
+        List.of(
+            new PresentationCabinSelectionInput(CABIN_1, List.of(), 2L),
+            new PresentationCabinSelectionInput(CABIN_2, List.of(), 6L));
+    assertThatThrownBy(
+            () ->
+                bookings.confirm(
+                    token,
+                    UUID.randomUUID(),
+                    new ConfirmClientPresentationRequest(
+                        List.of(
+                            new PresentationCabinSelectionInput(CABIN_1, List.of(), 2L),
+                            new PresentationCabinSelectionInput(CABIN_2, List.of(), null)),
+                        selectedDays.stream()
+                            .map(date -> new DesiredDeliveryWindowInput(date, date))
+                            .toList(),
+                        null,
+                        "Санкт-Петербург, Тестовая улица, 1",
+                        null,
+                        null,
+                        null)))
+        .isInstanceOfSatisfying(
+            OrderProblemException.class,
+            failure ->
+                assertThat(failure.code()).isEqualTo("CLIENT_PRESENTATION_RENTAL_MONTHS_REQUIRED"));
     UUID bookingKey = UUID.randomUUID();
     PresentationBookingResponse booking =
-        bookings.confirm(token, bookingKey, confirmation(CABIN_1, selectedDays, 2L));
+        bookings.confirm(
+            token,
+            bookingKey,
+            new ConfirmClientPresentationRequest(
+                selections,
+                selectedDays.stream().map(date -> new DesiredDeliveryWindowInput(date, date)).toList(),
+                null,
+                "Санкт-Петербург, Тестовая улица, 1",
+                null,
+                null,
+                null));
 
     assertThat(booking.state()).isEqualTo("COMPLETED");
     assertThat(booking.orderId()).isNotNull();
@@ -2061,10 +2096,17 @@ class RentalInquiryPresentationIntegrationTest {
         .isEqualTo(2L);
     assertThat(
             jdbc.queryForObject(
+                "select rental_months from rental_order_unit_term where order_id=? and rental_item_id=?",
+                Long.class,
+                booking.orderId(),
+                CABIN_2))
+        .isEqualTo(6L);
+    assertThat(
+            jdbc.queryForObject(
                 "select rental_months from presentation_booking where id=?",
                 Long.class,
                 booking.bookingId()))
-        .isEqualTo(2L);
+        .isNull();
     assertThat(
             jdbc.queryForObject(
                 "select state from rental_inquiry where id=?", String.class, inquiry.id()))
@@ -2084,14 +2126,21 @@ class RentalInquiryPresentationIntegrationTest {
         bookings.confirm(
             token,
             bookingKey,
-            confirmation(
-                CABIN_1,
+            new ConfirmClientPresentationRequest(
+                selections,
                 List.of(
                     requestableDate(4),
                     requestableDate(5),
                     requestableDate(3),
-                    requestableDate(2)),
-                2L));
+                    requestableDate(2))
+                    .stream()
+                    .map(date -> new DesiredDeliveryWindowInput(date, date))
+                    .toList(),
+                null,
+                "Санкт-Петербург, Тестовая улица, 1",
+                null,
+                null,
+                null));
     assertThat(replay.bookingId()).isEqualTo(booking.bookingId());
     assertThat(replay.orderId()).isEqualTo(booking.orderId());
     verify(dependencies, times(1))
@@ -2100,7 +2149,7 @@ class RentalInquiryPresentationIntegrationTest {
             eq(inquiry.id()),
             eq(booking.orderId()),
             eq(WAREHOUSE),
-            eq(List.of(CABIN_1)),
+            eq(List.of(CABIN_1, CABIN_2)),
             eq(inquiry.client().id()),
             eq("ООО Север"),
             eq(MANAGER),

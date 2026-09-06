@@ -30,6 +30,7 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-webmvc-test")
     testImplementation("org.springframework.security:spring-security-test")
     testImplementation("org.yaml:snakeyaml")
+    testImplementation("com.networknt:json-schema-validator:1.5.9")
     testImplementation(libs.spring.cloud.stream.test.binder)
     testImplementation(libs.archunit.junit5)
     testImplementation(libs.mapstruct)

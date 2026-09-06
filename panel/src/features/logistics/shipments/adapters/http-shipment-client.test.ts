@@ -259,6 +259,9 @@ describe("HttpShipmentClient", () => {
           taskBoardTaskId: null,
           taskState: "AWAITING_WORKER",
           lineCount: 2,
+          movementTaskCreated: true,
+          movementTaskCompleted: false,
+          contentReady: false,
         },
       ],
     }
@@ -280,6 +283,57 @@ describe("HttpShipmentClient", () => {
       "Bearer shipment-token"
     )
   })
+
+  it.each([false, true])(
+    "accepts readiness before a movement task exists (content ready: %s)",
+    async (contentReady) => {
+      const response = {
+        shipmentId: DOCUMENT_ID,
+        shipmentVersion: 4,
+        state: contentReady ? "READY" : "REQUIRES_TASK_CREATION",
+        tasks: [
+          {
+            rentalItemId: ASSET_ID,
+            unitNumber: "БЫТ-041",
+            taskId: null,
+            externalTaskId: null,
+            taskBoardTaskId: null,
+            taskState: null,
+            lineCount: 0,
+            movementTaskCreated: false,
+            movementTaskCompleted: false,
+            contentReady,
+          },
+        ],
+      }
+      const fetchMock = vi.fn().mockResolvedValue(json(response))
+      vi.stubGlobal("fetch", fetchMock)
+      await expect(
+        new HttpShipmentClient().getFurnitureReadiness(
+          "shipment-token",
+          DOCUMENT_ID
+        )
+      ).resolves.toEqual(response)
+      for (const invalid of [
+        { taskId: undefined },
+        { taskState: "UNKNOWN" },
+        { lineCount: -1 },
+        { movementTaskCreated: undefined },
+        { movementTaskCompleted: "false" },
+        { contentReady: undefined },
+      ]) {
+        fetchMock.mockResolvedValue(
+          json({ ...response, tasks: [{ ...response.tasks[0], ...invalid }] })
+        )
+        await expect(
+          new HttpShipmentClient().getFurnitureReadiness(
+            "shipment-token",
+            DOCUMENT_ID
+          )
+        ).rejects.toThrow()
+      }
+    }
+  )
 
   it("preserves the exact furniture frozen by an inventory shipment", async () => {
     const inventoryFurniture = [

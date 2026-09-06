@@ -7640,15 +7640,21 @@ components:
       type: object
       additionalProperties: false
       required:
-        [rentalItemId, unitNumber, taskId, externalTaskId, taskBoardTaskId, taskState, lineCount]
+        [rentalItemId, unitNumber, taskId, externalTaskId, taskBoardTaskId, taskState, lineCount, movementTaskCreated, movementTaskCompleted, contentReady]
       properties:
         rentalItemId: { type: string, format: uuid }
         unitNumber: { type: string, minLength: 1, maxLength: 64 }
-        taskId: { type: string, format: uuid }
-        externalTaskId: { type: string, format: uuid }
+        taskId: { type: [string, "null"], format: uuid }
+        externalTaskId: { type: [string, "null"], format: uuid }
         taskBoardTaskId: { type: [string, "null"], format: uuid }
-        taskState: { $ref: "#/components/schemas/EquipmentMovementTaskState" }
-        lineCount: { type: integer, minimum: 1 }
+        taskState:
+          oneOf:
+            - { $ref: "#/components/schemas/EquipmentMovementTaskState" }
+            - { type: "null" }
+        lineCount: { type: integer, minimum: 0 }
+        movementTaskCreated: { type: boolean }
+        movementTaskCompleted: { type: boolean }
+        contentReady: { type: boolean }
     ShipmentFurnitureReadiness:
       type: object
       additionalProperties: false
@@ -9777,7 +9783,8 @@ components:
           type: [integer, "null"]
           format: int64
           minimum: 1
-          description: Required only for NORMAL and applied to every cabin selected in this presentation; it must be absent for REPLACEMENT.
+          maximum: 120
+          description: Required only for NORMAL when no selected cabin supplies its own rentalMonths, then applied to every selected cabin; it must be absent for REPLACEMENT and when every selected cabin supplies rentalMonths.
         deliveryAddress:
           type: [string, "null"]
           minLength: 1
@@ -9825,6 +9832,12 @@ components:
           type: array
           maxItems: 100
           items: { $ref: "#/components/schemas/PresentationEquipmentSelectionInput" }
+        rentalMonths:
+          type: [integer, "null"]
+          format: int64
+          minimum: 1
+          maximum: 120
+          description: Optional only for NORMAL. It must be supplied for every selected cabin when using different rental terms, and then the top-level rentalMonths must be absent.
     PublicClientPresentation:
       type: object
       additionalProperties: false

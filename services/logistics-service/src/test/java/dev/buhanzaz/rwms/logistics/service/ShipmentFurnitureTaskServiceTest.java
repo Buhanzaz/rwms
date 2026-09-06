@@ -8,13 +8,19 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.networknt.schema.JsonSchemaFactory;
+import com.networknt.schema.SpecVersion;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentFurnitureReadinessState;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentFurnitureReadinessView;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.domain.ShipmentFurnitureMovementTask;
 import dev.buhanzaz.rwms.logistics.equipment.api.EquipmentMovementTaskApiModels.EquipmentMovementTaskResponse;
+import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTask;
+import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskService;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.mapper.ShipmentFurnitureTaskResponseMapper;
@@ -22,14 +28,16 @@ import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderEquipmentRequirement;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentState;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
-import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderEquipmentRequirementRepository;
-import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.order.domain.recovery.RentalOrderMutationCommand.State;
 import dev.buhanzaz.rwms.logistics.order.recovery.RentalOrderMutationCommandRepository;
+import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderEquipmentRequirementRepository;
+import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.repository.ShipmentFurnitureMovementTaskRepository;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -38,9 +46,11 @@ import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.NullSource;
 import org.mockito.ArgumentCaptor;
+import org.yaml.snakeyaml.Yaml;
 
 class ShipmentFurnitureTaskServiceTest {
   private static final UUID SHIPMENT_ID = UUID.fromString("00000000-0000-0000-0000-000000009201");
@@ -298,8 +308,10 @@ class ShipmentFurnitureTaskServiceTest {
     verifyNoInteractions(dependencies, movementTasks, mapper);
   }
 
-  @Test
-  void shipmentPlanCarriesEveryActiveOrderCabinAcrossSplitTrips() {
+  @ParameterizedTest
+  @CsvSource({"false,false", "true,false", "false,true", "true,true"})
+  void readinessPreservesEveryCabinAndReportsMissingOrCompletedFurnitureTasks(
+      boolean needsFurniture, boolean completedTask) throws Exception {
     LogisticsDocumentRepository documents = mock(LogisticsDocumentRepository.class);
     LogisticsDocumentLineRepository documentLines = mock(LogisticsDocumentLineRepository.class);
     RentalOrderRepository orders = mock(RentalOrderRepository.class);
@@ -353,7 +365,23 @@ class ShipmentFurnitureTaskServiceTest {
     when(second.getInventorySourceWarehouseId()).thenReturn(WAREHOUSE_ID);
     when(documentLines.findAllByDocument_IdOrderByLineNumber(SHIPMENT_ID))
         .thenReturn(List.of(first, second));
-    when(taskLinks.findAllByDocument_IdOrderByUnitNumberAsc(SHIPMENT_ID)).thenReturn(List.of());
+    var existingLinks = new java.util.ArrayList<ShipmentFurnitureMovementTask>();
+    if (completedTask) {
+      for (UUID unitId : List.of(UNIT_1, UNIT_2)) {
+        UUID taskId = UUID.randomUUID();
+        ShipmentFurnitureMovementTask link = mock(ShipmentFurnitureMovementTask.class);
+        when(link.getRentalItemId()).thenReturn(unitId);
+        when(link.getUnitNumber()).thenReturn("СПБ");
+        when(link.getEquipmentMovementTaskId()).thenReturn(taskId);
+        when(link.getLineCount()).thenReturn(1);
+        EquipmentMovementTask task = mock(EquipmentMovementTask.class);
+        when(task.getExternalTaskId()).thenReturn(UUID.randomUUID());
+        when(task.getState()).thenReturn(EquipmentMovementTaskState.COMPLETED);
+        when(movementTasks.required(taskId)).thenReturn(task);
+        existingLinks.add(link);
+      }
+    }
+    when(taskLinks.findAllByDocument_IdOrderByUnitNumberAsc(SHIPMENT_ID)).thenReturn(existingLinks);
     when(dependencies.readOrderUnits(ORDER_ID))
         .thenReturn(List.of(reservation(UNIT_1), reservation(UNIT_2), reservation(UNIT_3)));
     when(dependencies.planOrderFurnitureMovements(
@@ -366,11 +394,49 @@ class ShipmentFurnitureTaskServiceTest {
         .thenAnswer(
             invocation ->
                 new LogisticsDependencyGateway.OrderFurnitureMovementPlan(
-                    ORDER_ID, invocation.getArgument(2), "СПБ", List.of()));
+                    ORDER_ID,
+                    invocation.getArgument(2),
+                    "СПБ",
+                    needsFurniture
+                        ? List.of(
+                            new LogisticsDependencyGateway.OrderFurnitureMovementPlanLine(
+                                EQUIPMENT_ID,
+                                "Кровать",
+                                UUID.randomUUID(),
+                                WAREHOUSE_ID,
+                                null,
+                                "STOCK",
+                                1,
+                                WAREHOUSE_ID,
+                                invocation.getArgument(2),
+                                "CABIN_NON_RENTED",
+                                1))
+                        : List.of()));
 
     var readiness = service.readiness(SHIPMENT_ID);
 
-    assertThat(readiness.state()).isEqualTo(ShipmentFurnitureReadinessState.READY);
+    assertThat(readiness.state())
+        .isEqualTo(
+            needsFurniture
+                ? completedTask
+                    ? ShipmentFurnitureReadinessState.BLOCKED
+                    : ShipmentFurnitureReadinessState.REQUIRES_TASK_CREATION
+                : ShipmentFurnitureReadinessState.READY);
+    assertThat(readiness.tasks())
+        .hasSize(2)
+        .allSatisfy(
+            task -> {
+              assertThat(task.movementTaskCreated()).isEqualTo(completedTask);
+              assertThat(task.movementTaskCompleted()).isEqualTo(completedTask);
+              assertThat(task.contentReady()).isEqualTo(!needsFurniture);
+              if (!completedTask) {
+                assertThat(task.taskId()).isNull();
+                assertThat(task.externalTaskId()).isNull();
+                assertThat(task.taskState()).isNull();
+                assertThat(task.lineCount()).isZero();
+              }
+            });
+    assertReadinessMatchesCanonicalSchema(readiness);
     @SuppressWarnings("unchecked")
     ArgumentCaptor<List<LogisticsDependencyGateway.OrderUnitEquipmentRequirements>> composition =
         ArgumentCaptor.forClass(List.class);
@@ -646,5 +712,28 @@ class ShipmentFurnitureTaskServiceTest {
         null,
         false,
         item);
+  }
+
+  private static void assertReadinessMatchesCanonicalSchema(
+      ShipmentFurnitureReadinessView readiness) throws Exception {
+    var schemaJson = new com.fasterxml.jackson.databind.ObjectMapper();
+    ObjectNode contract;
+    try (var input =
+        Files.newInputStream(
+            Path.of(System.getProperty("rwms.contracts.dir"), "openapi/logistics-service.yaml"))) {
+      contract = schemaJson.valueToTree(new Yaml().load(input));
+    }
+    contract.put("$schema", "https://json-schema.org/draft/2020-12/schema");
+    contract.put("$ref", "#/components/schemas/ShipmentFurnitureReadiness");
+    var schema = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012).getSchema(contract);
+    var wire =
+        schemaJson.readTree(
+            new tools.jackson.databind.json.JsonMapper().writeValueAsString(readiness));
+    assertThat(schema.validate(wire)).isEmpty();
+    for (String flag : List.of("movementTaskCreated", "movementTaskCompleted", "contentReady")) {
+      ObjectNode missing = wire.deepCopy();
+      ((ObjectNode) missing.required("tasks").required(0)).remove(flag);
+      assertThat(schema.validate(missing)).as("required flag %s", flag).isNotEmpty();
+    }
   }
 }

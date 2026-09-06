@@ -122,11 +122,14 @@ export type ShipmentFurnitureTaskState =
 export type ShipmentFurnitureTaskStatus = {
   rentalItemId: string
   unitNumber: string
-  taskId: string
-  externalTaskId: string
+  taskId: string | null
+  externalTaskId: string | null
   taskBoardTaskId: string | null
-  taskState: ShipmentFurnitureTaskState
+  taskState: ShipmentFurnitureTaskState | null
   lineCount: number
+  movementTaskCreated: boolean
+  movementTaskCompleted: boolean
+  contentReady: boolean
 }
 
 export type ShipmentFurnitureReadiness = {

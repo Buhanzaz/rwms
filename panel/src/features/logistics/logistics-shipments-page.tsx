@@ -241,10 +241,11 @@ function desiredWindowsForShipment(
 }
 
 function furnitureTaskHref(readiness: ShipmentFurnitureReadiness | undefined) {
+  const tasks =
+    readiness?.tasks.filter((task) => task.externalTaskId !== null) ?? []
   const task =
-    readiness?.tasks.find((candidate) => candidate.taskState !== "COMPLETED") ??
-    readiness?.tasks[0]
-  return task
+    tasks.find((candidate) => candidate.taskState !== "COMPLETED") ?? tasks[0]
+  return task?.externalTaskId
     ? `/task-board?externalTaskId=${encodeURIComponent(task.externalTaskId)}`
     : null
 }
@@ -375,35 +376,37 @@ export function LogisticsShipmentsPage() {
     [furnitureReadinessQueries, furnitureReadinessShipments]
   )
   const furnitureTaskReferences = useMemo(() => {
-    const tasks = new Map<string, ShipmentFurnitureTaskStatus>()
+    const tasks = new Set<string>()
     furnitureReadinessByShipmentId.forEach((readiness) => {
-      readiness.tasks.forEach((task) => tasks.set(task.taskId, task))
+      readiness.tasks.forEach((task) => {
+        if (task.taskId !== null) tasks.add(task.taskId)
+      })
     })
     return [...tasks.values()]
   }, [furnitureReadinessByShipmentId])
   const furnitureTaskQueries = useQueries({
-    queries: furnitureTaskReferences.map((task) => ({
+    queries: furnitureTaskReferences.map((taskId) => ({
       queryKey: [
         "logistics",
         "shipment-composition-furniture-task",
         currentUser?.id ?? "unknown-user",
-        task.taskId,
+        taskId,
       ],
-      queryFn: () => getEquipmentMovementTask(accessToken!, task.taskId),
+      queryFn: () => getEquipmentMovementTask(accessToken!, taskId),
       enabled: Boolean(accessToken),
       refetchInterval: 3_000,
     })),
   })
   const furnitureMovementTasksById = useMemo(() => {
     const tasks = new Map<string, ShipmentFurnitureMovementTaskReference>()
-    furnitureTaskReferences.forEach((task, index) => {
+    furnitureTaskReferences.forEach((taskId, index) => {
       const query = furnitureTaskQueries[index]
       const reference: ShipmentFurnitureMovementTaskReference = query?.data
         ? { status: "available", task: query.data }
         : query?.isLoading
           ? { status: "loading" }
           : { status: "unavailable" }
-      tasks.set(task.taskId, reference)
+      tasks.set(taskId, reference)
     })
     return tasks
   }, [furnitureTaskQueries, furnitureTaskReferences])
@@ -1525,6 +1528,7 @@ function ShipmentLines({
         const rentalTerm = desiredUnit?.rentalTerm ?? null
         const furnitureTasks = (furnitureReadiness?.tasks ?? []).filter(
           (task) => {
+            if (task.taskId === null) return task.rentalItemId === line.assetId
             const movementTask = furnitureMovementTasksById.get(task.taskId)
             if (movementTask?.status !== "available") {
               return task.rentalItemId === line.assetId
@@ -1679,6 +1683,18 @@ function FurnitureMovementTasks({
     <section className="flex flex-col gap-2">
       <h3 className="text-sm font-medium">Задание на перемещение</h3>
       {furnitureTasks.map((furnitureTask) => {
+        if (furnitureTask.taskId === null) {
+          return (
+            <p
+              key={furnitureTask.rentalItemId}
+              className="text-sm text-muted-foreground"
+            >
+              {furnitureTask.contentReady
+                ? "Мебель соответствует заказу."
+                : "Задание на перемещение ещё не создано."}
+            </p>
+          )
+        }
         const reference = movementTasksById.get(furnitureTask.taskId)
         if (reference?.status === "loading") {
           return (

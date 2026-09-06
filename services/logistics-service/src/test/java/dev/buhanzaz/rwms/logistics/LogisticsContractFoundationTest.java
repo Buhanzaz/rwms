@@ -1690,6 +1690,16 @@ class LogisticsContractFoundationTest {
             "longitude",
             "additionalContacts");
     assertThat(confirmation.get("required")).isEqualTo(List.of("selections"));
+    Map<String, Object> cabinSelection = child(schemas, "PresentationCabinSelectionInput");
+    Map<String, Object> cabinSelectionProperties = child(cabinSelection, "properties");
+    assertThat(cabinSelectionProperties).containsOnlyKeys("rentalItemId", "equipment", "rentalMonths");
+    assertThat(child(cabinSelectionProperties, "rentalMonths"))
+        .containsEntry("type", List.of("integer", "null"))
+        .containsEntry("format", "int64")
+        .containsEntry("minimum", 1)
+        .containsEntry("maximum", 120);
+    assertThat(child(child(confirmation, "properties"), "rentalMonths"))
+        .containsEntry("maximum", 120);
     Map<String, Object> desiredWindows =
         child(child(confirmation, "properties"), "desiredDeliveryWindows");
     assertThat(desiredWindows.get("minItems")).isEqualTo(1);

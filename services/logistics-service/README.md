@@ -508,6 +508,11 @@ the completion and makes the local movement `RECONCILIATION_REQUIRED` with
 `TASK_BOARD_COMPLETED_AFTER_RESERVATION_EXPIRY`; it never rejects the worker fact or blindly applies
 an expired source reservation that another workflow may have reused.
 
+Shipment furniture readiness returns `movementTaskCreated`, `movementTaskCompleted` and
+`contentReady` for each cabin. Before a movement task exists, its IDs and state are null and
+`lineCount` is zero; content can already be ready without creating a task. Completed movement
+with a remaining furniture difference still blocks readiness.
+
 The public board and task detail expose the whole trip: operation, client, address and coordinates,
 primary plus client/order additional contacts, comment, advisory delivery dates, actual assigned
 date, cabins and per-cabin desired/actual furniture with movement-task and readiness facts. After
@@ -635,8 +640,10 @@ shared availability rows remain visible with their per-cabin maximum. Confirmati
 per cabin and atomically converts holds plus the authoritative all-order furniture composition.
 Every `NORMAL` public presentation therefore requires one to four server-requestable client
 delivery days, a required delivery address, an optional complete latitude/longitude pair, nullable
-additional contacts normalized to an empty list, and a positive initial `rentalMonths`; none is
-prefilled from the linked order. The durable booking receipt chronologically normalizes those facts,
+additional contacts normalized to an empty list, and an initial rental duration of 1–120 months.
+The request supplies either `rentalMonths` for every selected cabin with no global duration,
+or one global `rentalMonths` with all per-cabin durations omitted; partial mixtures are rejected.
+None is prefilled from the linked order. The durable booking receipt chronologically normalizes those facts,
 and the local post-conversion transition stores the ordered order delivery days and creates a term
 only for every newly converted cabin. Retry checks include every delivery fact and duration, so a
 mismatched replay conflicts and can never rewrite an existing cabin term. A `REPLACEMENT` presentation exposes current order facts read-only
