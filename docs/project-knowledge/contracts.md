@@ -6,11 +6,24 @@ The asset-owned internal maintenance rental-item snapshot requires the canonical
 `number` (a non-null string of 1–128 characters). Owner HTTP serialization and the
 maintenance consumer retain that same value.
 
+Task-board external registration accepts optional nullable `plannerLineage` for
+dated logistics driver tasks. A supplied lineage requires all four immutable fields:
+`sourcePlanId`, `sourcePlanVersion`, `sourcePlanWarehouseId`, and `sourcePlanDate`.
+The plan date matches `scheduledDate`; the plan's root warehouse may differ from
+the task's operational warehouse. Exact replay fences all four values.
+
 The transfer fact `logistics.transfer.cancellation-started.v1` is registered for
 publication and accepted by the canonical logistics schema/catalog and dossier
 routing. It carries `TRANSFER/CANCELLING` and destination identity, uses the
 aggregate ID as the Kafka key, and remains document-level journal evidence with
 ordering and deduplication; it does not identify a cabin for an activity entry.
+
+Auth OpenAPI includes the existing administration, actor-display, private worker
+credential, and event-recovery operations. User administration requires a USER
+token from the admin client plus scope and a persisted administrator role; worker
+credentials require the task-board service identity and credential-management
+scope. Recovery requires SYSTEM_ADMIN. Missing shadow checkpoints currently
+produce HTTP 500; this documented limitation is not a successful recovery.
 
 ## Canonical Locations
 
