@@ -26,6 +26,7 @@ import dev.buhanzaz.rwms.auth.integration.warehouse.WarehouseExistenceClient;
 import dev.buhanzaz.rwms.auth.mapper.AuthResponseMapper;
 import dev.buhanzaz.rwms.auth.repository.AuthSubjectRepository;
 import dev.buhanzaz.rwms.auth.repository.UserWarehouseAccessRepository;
+import dev.buhanzaz.rwms.auth.repository.UserWarehouseAccessRepository.UserAccessRow;
 import dev.buhanzaz.rwms.auth.security.AuthPrincipal;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -83,8 +84,7 @@ public class UserAdministrationService {
         AuthSubject current = currentSubject(actor);
         requireUserAdministrator(current);
         List<AuthSubject> visible = subjects.findAllByPrincipalTypeOrderByUsername(PrincipalType.USER);
-        return visible.stream()
-                .map(this::adminResponse)
+        return adminResponses(visible).stream()
                 .sorted(java.util.Comparator.comparing(AdminUserResponse::username, String.CASE_INSENSITIVE_ORDER))
                 .toList();
     }
@@ -143,10 +143,13 @@ public class UserAdministrationService {
         var requestedIds = new LinkedHashSet<>(subjectIds);
         Map<UUID, AuthSubject> foundSubjects = subjects.findAllById(requestedIds).stream()
                 .collect(java.util.stream.Collectors.toMap(AuthSubject::getId, subject -> subject));
+        Map<UUID, AuthSubjectProfileStore.Profile> profilesBySubjectId =
+                profiles.findAllBySubjectIds(foundSubjects.keySet());
         return requestedIds.stream()
                 .map(foundSubjects::get)
                 .filter(Objects::nonNull)
-                .map(subject -> responseMapper.toActorDisplay(subject, profiles.require(subject.getId())))
+                .map(subject -> responseMapper.toActorDisplay(
+                        subject, requiredProfile(profilesBySubjectId, subject.getId())))
                 .toList();
     }
 
@@ -438,6 +441,55 @@ public class UserAdministrationService {
                                     .comment(),
                             normalizedOptional(requested.request().comment()));
         });
+    }
+
+    /** Builds the complete interactive-user list from batched profile, grant, and note reads. */
+    private List<AdminUserResponse> adminResponses(List<AuthSubject> subjectsToRender) {
+        if (subjectsToRender.isEmpty()) {
+            return List.of();
+        }
+        var subjectIds = subjectsToRender.stream()
+                .map(AuthSubject::getId)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        Map<UUID, AuthSubjectProfileStore.Profile> profilesBySubjectId =
+                profiles.findAllBySubjectIds(subjectIds);
+        List<UserAccessRow> accessRows = accesses.findAllResponseRowsByPrincipalTypeOrderByUserIdAndWarehouseId(PrincipalType.USER);
+        var accessRowsBySubjectId = accessRows.stream()
+                .collect(java.util.stream.Collectors.groupingBy(
+                        UserAccessRow::userId, LinkedHashMap::new, java.util.stream.Collectors.toList()));
+        Map<UUID, UserWarehouseAccessNoteStore.Note> notesByAccessId = accessNotes.findAllByAccessIds(
+                accessRows.stream().map(UserAccessRow::accessId).collect(java.util.stream.Collectors.toSet()));
+        return subjectsToRender.stream()
+                .map(subject -> adminResponse(
+                        subject,
+                        requiredProfile(profilesBySubjectId, subject.getId()),
+                        accessRowsBySubjectId.getOrDefault(subject.getId(), List.of()),
+                        notesByAccessId))
+                .toList();
+    }
+
+    private AuthSubjectProfileStore.Profile requiredProfile(
+            Map<UUID, AuthSubjectProfileStore.Profile> profilesBySubjectId, UUID subjectId) {
+        return java.util.Optional.ofNullable(profilesBySubjectId.get(subjectId))
+                .orElseThrow(() -> new IllegalStateException("Auth subject PII vault entry is missing"));
+    }
+
+    private AdminUserResponse adminResponse(
+            AuthSubject subject,
+            AuthSubjectProfileStore.Profile profile,
+            List<UserAccessRow> accessRows,
+            Map<UUID, UserWarehouseAccessNoteStore.Note> notesByAccessId) {
+        List<WarehouseAccessDto> warehouseAccesses = accessRows.stream()
+                .map(access -> new WarehouseAccessDto(
+                        access.warehouseId(),
+                        access.accessLevel(),
+                        java.util.Optional.ofNullable(notesByAccessId.get(access.accessId()))
+                                .orElseThrow(() -> new IllegalStateException(
+                                        "Warehouse access note vault entry is missing"))
+                                .comment(),
+                        access.active()))
+                .toList();
+        return responseMapper.toAdmin(subject, profile, warehouseAccesses);
     }
 
     /** Builds the administrator representation from the authorization projection and note vault. */

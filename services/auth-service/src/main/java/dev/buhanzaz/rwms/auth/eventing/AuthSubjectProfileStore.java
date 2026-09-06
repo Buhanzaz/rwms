@@ -3,6 +3,10 @@ package dev.buhanzaz.rwms.auth.eventing;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Collection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -119,6 +123,45 @@ public class AuthSubjectProfileStore {
                 .stream()
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException("Auth subject PII vault entry is missing"));
+    }
+
+    /**
+     * Reads private profiles for the requested response set in one vault query.
+     *
+     * @param subjectIds authorization-subject identifiers
+     * @return profiles keyed by subject identifier
+     */
+    @Transactional(readOnly = true)
+    public Map<UUID, Profile> findAllBySubjectIds(Collection<UUID> subjectIds) {
+        if (subjectIds.isEmpty()) {
+            return Map.of();
+        }
+        return jdbc.execute((java.sql.Connection connection) -> {
+            java.sql.Array identifiers = connection.createArrayOf("uuid", subjectIds.toArray(UUID[]::new));
+            try (PreparedStatement statement = connection.prepareStatement("""
+                select subject_id, username, first_name, last_name, email, time_zone_id,
+                       external_worker_id, profile_revision, profile_sha256
+                  from auth_subject_pii
+                 where subject_id = any (?)
+                """)) {
+                statement.setArray(1, identifiers);
+                try (ResultSet result = statement.executeQuery()) {
+                    var profiles = new java.util.LinkedHashMap<UUID, Profile>();
+                    while (result.next()) {
+                        Profile profile = new Profile(
+                                result.getObject("subject_id", UUID.class), result.getString("username"),
+                                result.getString("first_name"), result.getString("last_name"),
+                                result.getString("email"), result.getString("time_zone_id"),
+                                result.getString("external_worker_id"), result.getObject("profile_revision", UUID.class),
+                                result.getString("profile_sha256"));
+                        profiles.put(profile.subjectId(), profile);
+                    }
+                    return Map.copyOf(profiles);
+                }
+            } finally {
+                identifiers.free();
+            }
+        });
     }
 
     /**

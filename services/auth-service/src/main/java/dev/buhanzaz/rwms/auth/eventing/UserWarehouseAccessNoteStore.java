@@ -3,6 +3,9 @@ package dev.buhanzaz.rwms.auth.eventing;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Collection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Function;
@@ -81,6 +84,34 @@ public class UserWarehouseAccessNoteStore {
                         userId)
                 .stream()
                 .collect(Collectors.toUnmodifiableMap(Note::accessId, Function.identity()));
+    }
+
+    /** Reads notes by the requested access identifiers in one vault query. */
+    @Transactional(readOnly = true)
+    public Map<UUID, Note> findAllByAccessIds(Collection<UUID> accessIds) {
+        if (accessIds.isEmpty()) {
+            return Map.of();
+        }
+        return jdbc.execute((java.sql.Connection connection) -> {
+            java.sql.Array identifiers = connection.createArrayOf("uuid", accessIds.toArray(UUID[]::new));
+            try (PreparedStatement statement = connection.prepareStatement("""
+                select access_id, comment_text, note_revision
+                  from user_warehouse_access_note
+                 where access_id = any (?)
+                """)) {
+                statement.setArray(1, identifiers);
+                try (ResultSet result = statement.executeQuery()) {
+                    var notes = new java.util.LinkedHashMap<UUID, Note>();
+                    while (result.next()) {
+                        Note note = new Note(result.getObject("access_id", UUID.class), result.getString("comment_text"), result.getObject("note_revision", UUID.class));
+                        notes.put(note.accessId(), note);
+                    }
+                    return Map.copyOf(notes);
+                }
+            } finally {
+                identifiers.free();
+            }
+        });
     }
 
     private OffsetDateTime databaseNow() {
