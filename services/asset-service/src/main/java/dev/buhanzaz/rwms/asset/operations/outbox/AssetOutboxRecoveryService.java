@@ -74,7 +74,7 @@ public class AssetOutboxRecoveryService {
     AssetKafkaOutboxStore.RecoveryTruth truth = outbox.requeueAfterReview(
             candidate, expectedReviewVersion, reviewerSubjectId, reviewReason, fingerprint)
         .orElseThrow(() -> new AssetConflictException("Outbox recovery changed concurrently"));
-    return response(truth);
+    return response(candidate, truth);
   }
 
   static String normalizeReason(String reason) {
@@ -162,13 +162,14 @@ public class AssetOutboxRecoveryService {
 
   private static AssetOutboxRequeueResponse response(AssetKafkaOutboxStore.RecoveryCandidate candidate) {
     return new AssetOutboxRequeueResponse(
-        candidate.eventId(), candidate.reviewVersion(), candidate.status(), candidate.attemptCount(),
-        candidate.lastErrorCode(), candidate.reviewedAt());
+        candidate.eventId(), candidate.aggregateType(), candidate.aggregateId(), candidate.aggregateVersion(),
+        "PENDING", candidate.reviewVersion(), candidate.reviewedAt());
   }
 
-  private static AssetOutboxRequeueResponse response(AssetKafkaOutboxStore.RecoveryTruth truth) {
+  private static AssetOutboxRequeueResponse response(
+      AssetKafkaOutboxStore.RecoveryCandidate candidate, AssetKafkaOutboxStore.RecoveryTruth truth) {
     return new AssetOutboxRequeueResponse(
-        truth.eventId(), truth.reviewVersion(), truth.status(), truth.attemptCount(),
-        truth.lastErrorCode(), truth.reviewedAt());
+        candidate.eventId(), candidate.aggregateType(), candidate.aggregateId(), candidate.aggregateVersion(),
+        "PENDING", truth.reviewVersion(), truth.reviewedAt());
   }
 }

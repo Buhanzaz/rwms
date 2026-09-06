@@ -323,6 +323,9 @@ the relay validates and acknowledges the stored envelope, and terminal failures 
 path. The service keeps local inbox/replay and invalidation handling rather than treating Kafka as
 the source of mutable asset state. Terminal outbox recovery is an administrator-reviewed,
 checksum-validated requeue of an existing fact, not event reconstruction.
+Its response is the accepted command receipt: event and aggregate identity/version, `state=PENDING`,
+review version and review time. An exact retry returns that same receipt even after publication;
+it does not report the outbox row's later delivery state.
 
 `ASSET_KAFKA_ENABLED` controls Kafka relay and consumer beans. It may be false only in an explicit
 `dev` or `test` profile; any other profile fails startup if delivery is disabled. The startup fence

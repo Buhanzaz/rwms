@@ -6,10 +6,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
 import dev.buhanzaz.rwms.asset.service.AssetChecksum;
 import dev.buhanzaz.rwms.asset.service.AssetConflictException;
+import com.networknt.schema.JsonSchema;
+import com.networknt.schema.JsonSchemaFactory;
+import com.networknt.schema.SpecVersion;
 import dev.buhanzaz.rwms.platform.contracts.CorrelationContext;
 import dev.buhanzaz.rwms.platform.contracts.DomainEventEnvelopeV2;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -23,6 +28,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.yaml.snakeyaml.Yaml;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -37,6 +43,10 @@ import tools.jackson.databind.node.ObjectNode;
 @Testcontainers(disabledWithoutDocker = true)
 class AssetOutboxRecoveryIntegrationTest {
   @Container static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
+  private static final com.fasterxml.jackson.databind.ObjectMapper SCHEMA_JSON =
+      new com.fasterxml.jackson.databind.ObjectMapper();
+  private static final JsonSchemaFactory SCHEMAS =
+      JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012);
 
   @DynamicPropertySource
   static void properties(DynamicPropertyRegistry registry) {
@@ -61,20 +71,27 @@ class AssetOutboxRecoveryIntegrationTest {
     insertOutbox(eventId, aggregateId, 0, "DLT");
 
     AssetOutboxRequeueResponse first = recovery.requeue(eventId, 0L, reviewer, "  manual verification  ");
-    AssetOutboxRequeueResponse retry = recovery.requeue(eventId, 0L, reviewer, "manual verification");
 
     assertThat(first.eventId()).isEqualTo(eventId);
+    assertThat(first.aggregateType()).isEqualTo(AssetAggregateType.RENTAL_ITEM.name());
+    assertThat(first.aggregateId()).isEqualTo(aggregateId.toString());
+    assertThat(first.aggregateVersion()).isZero();
+    assertThat(first.state()).isEqualTo("PENDING");
     assertThat(first.reviewVersion()).isEqualTo(1);
-    assertThat(first.status()).isEqualTo("PENDING");
-    assertThat(first.attemptCount()).isZero();
-    assertThat(first.lastErrorCode()).isNull();
     assertThat(first.reviewedAt()).isNotNull();
+
+    com.fasterxml.jackson.databind.node.ObjectNode responseJson =
+        (com.fasterxml.jackson.databind.node.ObjectNode) SCHEMA_JSON.readTree(mapper.writeValueAsString(first));
+    assertThat(requeueResponseSchema().validate(responseJson)).isEmpty();
+
+    jdbc.update("update outbox_event set status='PUBLISHED', published_at=now() where event_id=?", eventId);
+    AssetOutboxRequeueResponse retry = recovery.requeue(eventId, 0L, reviewer, "manual verification");
     assertThat(retry).isEqualTo(first);
     assertThat(jdbc.queryForMap("""
         select status,attempt_count,dlt_at,last_error_code,review_version,reviewed_at
         from outbox_event where event_id=?
         """, eventId))
-        .containsEntry("status", "PENDING")
+        .containsEntry("status", "PUBLISHED")
         .containsEntry("attempt_count", 0)
         .containsEntry("dlt_at", null)
         .containsEntry("last_error_code", null)
@@ -96,6 +113,18 @@ class AssetOutboxRecoveryIntegrationTest {
     assertThatThrownBy(() -> jdbc.update(
         "update asset_outbox_recovery_review set review_reason='changed' where event_id=?", eventId))
         .isInstanceOf(DataAccessException.class);
+  }
+
+  private JsonSchema requeueResponseSchema() throws Exception {
+    Path contract = Path.of(System.getProperty("rwms.contracts.dir"), "openapi/asset-service.yaml");
+    Map<String, Object> openApi;
+    try (var input = Files.newInputStream(contract)) {
+      openApi = new Yaml().load(input);
+    }
+    com.fasterxml.jackson.databind.node.ObjectNode document = SCHEMA_JSON.valueToTree(openApi);
+    document.put("$schema", "https://json-schema.org/draft/2020-12/schema");
+    document.put("$ref", "#/components/schemas/AssetOutboxRequeueResponse");
+    return SCHEMAS.getSchema(document);
   }
 
   @Test

@@ -327,6 +327,9 @@ at-least-once transport: outbox store арендует один ordered aggregat
 inbox/replay и invalidation handling, а не считает Kafka источником изменяемого asset state. Terminal
 outbox recovery — это administrator-reviewed, checksum-validated requeue существующего fact, а не
 reconstruction события.
+Ответ — квитанция принятой команды: идентичность события и агрегата, версия агрегата,
+`state=PENDING`, версия и время review. Точный повтор возвращает ту же квитанцию даже после
+публикации события; последующее состояние доставки строки outbox в неё не подставляется.
 
 `ASSET_KAFKA_ENABLED` управляет Kafka relay и consumer beans. Он может быть `false` только в явном
 профиле `dev` или `test`; любой другой профиль отклоняет startup при выключенной доставке. Startup

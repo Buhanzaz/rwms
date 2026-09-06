@@ -50,7 +50,8 @@ class AssetOutboxRecoveryServiceTest {
     AssetOutboxRequeueResponse response = service.requeue(eventId, 7L, reviewer, "  manually verified  ");
 
     assertThat(response).isEqualTo(new AssetOutboxRequeueResponse(
-        eventId, 8, "PENDING", 0, null, reviewedAt));
+        eventId, candidate.aggregateType(), candidate.aggregateId(), candidate.aggregateVersion(),
+        "PENDING", 8, reviewedAt));
     ArgumentCaptor<String> fingerprint = ArgumentCaptor.forClass(String.class);
     verify(outbox).requeueAfterReview(
         eq(candidate), eq(7L), eq(reviewer), eq("manually verified"), fingerprint.capture());
@@ -58,7 +59,7 @@ class AssetOutboxRecoveryServiceTest {
   }
 
   @Test
-  void returnsCurrentTruthForAnExactAlreadyAppliedReviewWithoutRequeueingAgain() throws Exception {
+  void returnsTheSameReceiptForAnExactAlreadyAppliedReviewWithoutRequeueingAgain() throws Exception {
     UUID eventId = UUID.randomUUID();
     UUID aggregateId = UUID.randomUUID();
     UUID reviewer = UUID.randomUUID();
@@ -71,7 +72,8 @@ class AssetOutboxRecoveryServiceTest {
     AssetOutboxRequeueResponse response = service.requeue(eventId, 2L, reviewer, reason);
 
     assertThat(response).isEqualTo(new AssetOutboxRequeueResponse(
-        eventId, 3, "PUBLISHED", current.attemptCount(), current.lastErrorCode(), current.reviewedAt()));
+        eventId, current.aggregateType(), current.aggregateId(), current.aggregateVersion(),
+        "PENDING", current.reviewVersion(), current.reviewedAt()));
     verify(outbox, never()).isCurrentOrderedHead(current);
     verify(outbox, never()).requeueAfterReview(
         eq(current), eq(2L), eq(reviewer), eq(reason), anyString());

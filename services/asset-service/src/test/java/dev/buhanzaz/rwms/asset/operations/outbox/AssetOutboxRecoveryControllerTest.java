@@ -26,7 +26,8 @@ class AssetOutboxRecoveryControllerTest {
     UUID eventId = UUID.randomUUID();
     UUID subjectId = UUID.randomUUID();
     AssetOutboxRequeueResponse expected = new AssetOutboxRequeueResponse(
-        eventId, 1, "PENDING", 0, null, Instant.parse("2026-08-05T11:00:00Z"));
+        eventId, "RENTAL_ITEM", subjectId.toString(), 0, "PENDING", 1,
+        Instant.parse("2026-08-05T11:00:00Z"));
     when(recovery.requeue(eventId, 0L, subjectId, "  verified  ")).thenReturn(expected);
 
     AssetOutboxRequeueResponse response = controller.requeue(

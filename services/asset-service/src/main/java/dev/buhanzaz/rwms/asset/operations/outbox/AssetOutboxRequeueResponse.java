@@ -3,11 +3,12 @@ package dev.buhanzaz.rwms.asset.operations.outbox;
 import java.time.Instant;
 import java.util.UUID;
 
-/** Current read truth after a requeue or an exact idempotent retry. */
+/** Immutable accepted requeue receipt; {@code state} describes the requested requeue command. */
 public record AssetOutboxRequeueResponse(
     UUID eventId,
+    String aggregateType,
+    String aggregateId,
+    long aggregateVersion,
+    String state,
     long reviewVersion,
-    String status,
-    int attemptCount,
-    String lastErrorCode,
     Instant reviewedAt) {}
