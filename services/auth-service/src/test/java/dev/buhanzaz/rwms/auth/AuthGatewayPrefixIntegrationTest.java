@@ -22,7 +22,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
-@SpringBootTest(properties = "rwms.auth.issuer=https://edge.example.test/auth")
+@SpringBootTest(properties = "rwms.auth.issuer=https://localhost/auth")
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @Testcontainers
@@ -40,15 +40,15 @@ class AuthGatewayPrefixIntegrationTest {
     void discoveryUsesExactlyOneAuthPrefixAndForwardedLoginStaysUnderPrefix() throws Exception {
         mvc.perform(get("/.well-known/openid-configuration"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.issuer").value("https://edge.example.test/auth"))
+                .andExpect(jsonPath("$.issuer").value("https://localhost/auth"))
                 .andExpect(jsonPath("$.authorization_endpoint")
-                        .value("https://edge.example.test/auth/oauth2/authorize"))
+                        .value("https://localhost/auth/oauth2/authorize"))
                 .andExpect(jsonPath("$.token_endpoint")
-                        .value("https://edge.example.test/auth/oauth2/token"));
+                        .value("https://localhost/auth/oauth2/token"));
 
         mvc.perform(get("/oauth2/authorize")
                         .header("X-Forwarded-Proto", "https")
-                        .header("X-Forwarded-Host", "edge.example.test")
+                        .header("X-Forwarded-Host", "localhost")
                         .header("X-Forwarded-Prefix", "/auth")
                         .accept(MediaType.TEXT_HTML)
                         .queryParam("response_type", "code")
@@ -60,21 +60,21 @@ class AuthGatewayPrefixIntegrationTest {
                         .queryParam("code_challenge", "5JpQbJlRyOBY47l0mJC0RGkxXcsBqmCOlYz7TcneQKc")
                         .queryParam("code_challenge_method", "S256"))
                 .andExpect(status().is3xxRedirection())
-                .andExpect(header().string("Location", "https://edge.example.test/auth/login"));
+                .andExpect(header().string("Location", "https://localhost/auth/login"));
 
         mvc.perform(get("/login")
                         .header("X-Forwarded-Proto", "https")
-                        .header("X-Forwarded-Host", "edge.example.test")
+                        .header("X-Forwarded-Host", "localhost")
                         .header("X-Forwarded-Prefix", "/auth"))
                 .andExpect(status().isOk());
 
         mvc.perform(post("/logout")
                         .with(csrf())
                         .header("X-Forwarded-Proto", "https")
-                        .header("X-Forwarded-Host", "edge.example.test")
+                        .header("X-Forwarded-Host", "localhost")
                         .header("X-Forwarded-Prefix", "/auth"))
                 .andExpect(status().is3xxRedirection())
-                .andExpect(header().string("Location", "https://edge.example.test/auth/login?logout"));
+                .andExpect(header().string("Location", "https://localhost/auth/login?logout"));
 
         String index = new ClassPathResource("static/index.html").getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
         assertThat(index).contains("src=\"./assets/", "href=\"./assets/");
