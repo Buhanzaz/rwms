@@ -139,6 +139,11 @@ Flyway V34 добавляет `worker_feed_enabled=true` каждой сущес
 `TAKE`/`JOIN` повторяют тот же серверный fence. Work-queue facts совместимо добавляют оба поля, а
 replay удаляет их только при сравнении immutable historical facts, записанных до этого добавления.
 
+Этапы маршрута наследуют доступ работников из worker-class bindings физической очереди. Manager
+board не принимает per-stage audience selectors в запросах маршрута и не возвращает их в
+`BoardEntry`; native `WorkerTaskDetail` по-прежнему возвращает эффективные queue-derived
+`audienceSelectors`, используемые WorkerApp и DriverApp.
+
 Logistics driver task дополнительно несёт одну сохранённую аудиторию:
 `UNASSIGNED`, `ASSIGNED_DRIVER` или `WAREHOUSE_DRIVERS`. Задавать её может
 только точный driver-task source logistics-service. Только назначенная работа содержит worker

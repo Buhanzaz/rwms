@@ -136,6 +136,11 @@ waiting `REAL` cards. Native detail, media-reader proof and `TAKE`/`JOIN` repeat
 fence. Work-queue facts add the two controls compatibly, while replay removes them only when
 comparing immutable historical facts that predate the addition.
 
+Route stages inherit their worker access from the physical queue's worker-class bindings. The
+manager board neither accepts per-stage audience selectors in route requests nor returns them on
+`BoardEntry`; native `WorkerTaskDetail` still returns the effective queue-derived
+`audienceSelectors` used by WorkerApp and DriverApp.
+
 Logistics driver tasks additionally carry one persisted audience:
 `UNASSIGNED`, `ASSIGNED_DRIVER`, or `WAREHOUSE_DRIVERS`. Only the exact
 logistics-service driver-task source may set it. Only assigned work carries a worker identity; that

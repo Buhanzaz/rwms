@@ -9,7 +9,12 @@ import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RouteStepRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.TaskSourceReferenceDto;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.WorkQueueDto;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.networknt.schema.JsonSchema;
 import com.networknt.schema.JsonSchemaFactory;
 import com.networknt.schema.SpecVersion;
@@ -31,13 +36,16 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.web.servlet.MockMvc;
 import org.yaml.snakeyaml.Yaml;
 import tools.jackson.databind.ObjectMapper;
 
 @SpringBootTest
 @ActiveProfiles("test")
+@AutoConfigureMockMvc
 class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
   private static final UUID WAREHOUSE =
       UUID.fromString("00000000-0000-0000-0000-000000000401");
@@ -50,6 +58,7 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
   @Autowired TaskBoardService board;
   @Autowired JdbcTemplate jdbc;
   @Autowired ObjectMapper objectMapper;
+  @Autowired MockMvc mvc;
 
   @BeforeEach
   void clean() {
@@ -549,8 +558,14 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
     Map<String, Object> workerTaskDetail = child(schemas, "WorkerTaskDetail");
     assertThat(workerTaskDetail.get("required"))
         .asList()
-        .contains("source", "routeStepIndex");
-    assertThat(child(workerTaskDetail, "properties")).containsKey("routeStepIndex");
+        .contains("source", "routeStepIndex", "audienceSelectors");
+    assertThat(child(workerTaskDetail, "properties"))
+        .containsKeys("routeStepIndex", "audienceSelectors");
+    assertThat(
+            child(child(workerTaskDetail, "properties"), "audienceSelectors")
+                .get("items")
+                .toString())
+        .contains("#/components/schemas/AudienceSelector");
     assertThat(child(child(workerTaskDetail, "properties"), "source").get("oneOf").toString())
         .contains("#/components/schemas/TaskSourceReference", "type=null");
     assertThat(
@@ -665,14 +680,58 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
                 "taskVersion",
                 "status",
                 "cancelledAt"));
-    assertThat(
-            ((List<?>) child(schemas, "BoardEntry").get("required")).stream()
-                .map(String::valueOf)
-                .toList())
-        .contains("source");
+    Map<String, Object> boardEntry = child(schemas, "BoardEntry");
+    assertThat(((List<?>) boardEntry.get("required")).stream().map(String::valueOf).toList())
+        .contains("source")
+        .doesNotContain("audienceSelectors");
+    assertThat(child(boardEntry, "properties")).doesNotContainKey("audienceSelectors");
+    Map<String, Object> routeStep = child(schemas, "RouteStepRequest");
+    assertThat(child(routeStep, "properties")).doesNotContainKey("audienceSelectors");
     assertThat(child(schemas, "TaskSourceReference").get("required"))
         .isEqualTo(List.of("type", "sourceId"));
     assertAllLocalReferencesResolve(contract, contract);
+  }
+
+  @Test
+  void actualManagerBoardOmitsUnimplementedPerStageAudienceSelectorsAndMatchesCanonicalSchema()
+      throws Exception {
+    var queue = createQueue("Queue-owned audience");
+    board.createTask(
+        WAREHOUSE,
+        new CreateBoardTaskRequest(
+            UUID.randomUUID(),
+            "Queue-owned audience task",
+            null,
+            null,
+            null,
+            null,
+            List.of(new RouteStepRequest(queue.definitionId(), null, null))));
+
+    String response =
+        mvc.perform(
+                get("/api/warehouses/{warehouseId}/task-board", WAREHOUSE)
+                    .with(
+                        jwt()
+                            .jwt(
+                                token ->
+                                    token
+                                        .claim("principal_type", "USER")
+                                        .claim("global_role", "SYSTEM_ADMIN")
+                                        .claim("scope", "rwms.read"))))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.columns[0].entries[0].audienceSelectors").doesNotExist())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+
+    JsonSchema schema = canonicalOpenApiSchema("TaskBoardSnapshot");
+    ObjectNode body = (ObjectNode) SCHEMA_OBJECT_MAPPER.readTree(response);
+    assertThat(schema.validate(body)).isEmpty();
+
+    ObjectNode oldShape = body.deepCopy();
+    ((ObjectNode) oldShape.required("columns").required(0).required("entries").required(0))
+        .putArray("audienceSelectors");
+    assertThat(schema.validate(oldShape)).isNotEmpty();
   }
 
   @Test
@@ -748,6 +807,14 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
             System.getProperty("rwms.contracts.dir"),
             "events/task-board/task-board-events-v1.schema.json");
     return JSON_SCHEMA_FACTORY.getSchema(SCHEMA_OBJECT_MAPPER.readTree(Files.readString(path)));
+  }
+
+  private JsonSchema canonicalOpenApiSchema(String schemaName) throws Exception {
+    ObjectNode document =
+        SCHEMA_OBJECT_MAPPER.valueToTree(yaml("openapi/task-board-service.yaml"));
+    document.put("$schema", "https://json-schema.org/draft/2020-12/schema");
+    document.put("$ref", "#/components/schemas/" + schemaName);
+    return JSON_SCHEMA_FACTORY.getSchema(document);
   }
 
   private WorkQueueDto createQueue(String name) {
