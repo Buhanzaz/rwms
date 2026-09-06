@@ -5,7 +5,6 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsReconciliationRequest;
-import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsReconciliationRequestRepository;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -23,7 +22,6 @@ import org.springframework.stereotype.Service;
 class LogisticsDocumentReconciliationCoordinator {
   private static final String RECONCILE_DOCUMENT = "RECONCILE_DOCUMENT";
 
-  private final LogisticsDocumentRepository documentRepository;
   private final LogisticsReconciliationRequestRepository reconciliationRequestRepository;
   private final LogisticsDocumentIdempotency idempotency;
   private final LogisticsDocumentReadProjection readProjection;
