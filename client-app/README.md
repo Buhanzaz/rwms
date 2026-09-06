@@ -106,8 +106,9 @@ loading server-returned free cabins. Menu and profile remain available at this s
 from the warehouse service's `city` field; warehouses in the same city retain separate identities and
 show an address/name to distinguish them. The inset glass header centers the city between menu and
 profile actions. Tapping it expands the alternatives below the fixed row, then creates or resumes the
-selected warehouse's inquiry. A background-free filter action expands a two-column facet grid directly
-below the header while cabin cards scroll.
+selected warehouse's inquiry. A background-free filter action opens an opaque two-column facet form directly
+below the fixed header, replacing the cards until applied or closed. The form uses the content
+scroll area and keeps the catalog scroll position when closed; option menus have opaque fills.
 It filters by type, finish, dimensions, category, linoleum and characteristics, but has no text
 search. A selected type narrows dimensions to the server-returned `typeDimensions` relation and
 clears an incompatible size before the request. Cabin cards lead with an unframed accounting
@@ -152,8 +153,9 @@ The map uses the stylable `MapType.VECTOR_MAP` in flat 2D mode at the logistics-
 bottom-right current-location arrow. A tapped, suggested or device point is rendered immediately
 with a blue bitmap-backed cube pin. Its blue palette and night mode follow the app's explicit
 light/dark appearance. The shared header and glass controls use the same palette; map controls hide
-while the keyboard is open. The required Yandex attribution stays above the measured address panel
-at the bottom left, using the SDK's logo alignment and padding API. Tapping the arrow is the only action that requests Android approximate/precise
+while the keyboard is open. The native map uses MapKit's movable TextureView mode so it follows
+Compose page transitions. The required Yandex attribution stays in the reserved gap below the address
+panel at the bottom left, above system UI or the keyboard, using the SDK's logo alignment and padding API. Tapping the arrow is the only action that requests Android approximate/precise
 location permission; cancellable one-shot Android location requests race only enabled GPS,
 network and passive providers, recenter the marker and reverse-geocode the same address/point
 binding. Denial, disabled providers, timeout and a missing result are shown explicitly. There is no

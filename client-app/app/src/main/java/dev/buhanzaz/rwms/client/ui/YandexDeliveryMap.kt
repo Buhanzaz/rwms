@@ -10,6 +10,7 @@ import android.location.LocationManager
 import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
+import android.view.LayoutInflater
 import android.view.MotionEvent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Box
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -74,6 +76,7 @@ import com.yandex.mapkit.search.SuggestSession
 import com.yandex.mapkit.search.SuggestType
 import com.yandex.runtime.Error
 import com.yandex.runtime.image.ImageProvider
+import dev.buhanzaz.rwms.client.R
 import java.lang.ref.WeakReference
 import java.util.concurrent.Executor
 import kotlin.math.roundToInt
@@ -391,7 +394,8 @@ internal fun DeliveryMapPointPicker(
     val darkTheme = MaterialTheme.colorScheme.surface.luminance() < 0.5f
     val density = LocalDensity.current
     val imeBottom = WindowInsets.ime.getBottom(density)
-    val logoBottom = with(density) { bottomControlsClearance.roundToPx() } + imeBottom
+    val logoBottom = maxOf(imeBottom, WindowInsets.navigationBars.getBottom(density)) +
+        with(density) { 8.dp.roundToPx() }
     val latestOnPoint by rememberUpdatedState(onPoint)
     val latestOnCurrentLocation by rememberUpdatedState(onCurrentLocation)
     val initialTarget = deliveryMapInitialTarget(latitude, longitude, depotLatitude, depotLongitude)
@@ -424,7 +428,7 @@ internal fun DeliveryMapPointPicker(
             },
             update = {
                 mapHandle.render(deliveryMapRenderState(latitude, longitude, darkTheme))
-                mapHandle.positionAttribution(with(density) { 20.dp.roundToPx() }, logoBottom.coerceAtLeast(1))
+                mapHandle.positionAttribution(with(density) { 16.dp.roundToPx() }, logoBottom.coerceAtLeast(1))
             },
             modifier = Modifier.fillMaxSize(),
         )
@@ -522,7 +526,8 @@ private class YandexDeliveryMapHandle(
     initialNightMode: Boolean,
     private val onPoint: (Point, Float) -> Unit,
 ) {
-    val mapView: MapView = MapView(context).apply {
+    // Movable MapKit views use TextureView so their pixels follow Compose page transitions.
+    val mapView: MapView = (LayoutInflater.from(context).inflate(R.layout.delivery_map_view, null, false) as MapView).apply {
         contentDescription = "Карта выбора точки доставки"
     }
     private val map: Map = mapView.mapWindow.map
@@ -556,7 +561,7 @@ private class YandexDeliveryMapHandle(
         map.move(CameraPosition(Point(initialLatitude, initialLongitude), initialZoom, 0f, 0f))
     }
 
-    /** Keeps provider attribution above the measured address panel, including the keyboard inset. */
+    /** Keeps provider attribution in the reserved bottom-left gap above system UI or the keyboard. */
     fun positionAttribution(horizontalPadding: Int, bottomPadding: Int) {
         map.logo.setPadding(com.yandex.mapkit.logo.Padding(horizontalPadding, bottomPadding))
     }

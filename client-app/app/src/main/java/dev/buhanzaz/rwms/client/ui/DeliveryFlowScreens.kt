@@ -75,6 +75,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -836,7 +837,8 @@ private fun DeliveryAddressPanel(
     modifier: Modifier = Modifier,
 ) {
     Surface(
-        modifier = modifier.fillMaxWidth().widthIn(max = 760.dp).navigationBarsPadding().padding(16.dp)
+        modifier = modifier.widthIn(max = 760.dp).fillMaxWidth().navigationBarsPadding()
+            .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 40.dp)
             .figmaButtonShadow(RoundedCornerShape(16.dp)),
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surface,
@@ -958,14 +960,16 @@ internal fun DeliveryResponsibilityDialog(
     } else {
         "Машина без прицепа проедет к адресу и сможет работать на объекте"
     }
+    val dialogShape = RoundedCornerShape(16.dp)
     Dialog(
         onDismissRequest = { if (!busy) onDismiss() },
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         Surface(
-            modifier = Modifier.fillMaxWidth().widthIn(max = 560.dp).padding(20.dp).heightIn(max = 700.dp),
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surface,
+            modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth().padding(20.dp).heightIn(max = 700.dp)
+                .figmaButtonShadow(dialogShape).testTag("delivery-responsibility-dialog"),
+            shape = dialogShape,
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 1f),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         ) {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -1051,12 +1055,14 @@ private fun DeliveryConsentRow(
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .clip(RoundedCornerShape(12.dp))
             .toggleable(value = checked, enabled = enabled, role = Role.Checkbox, onValueChange = onChecked)
+            .padding(horizontal = 8.dp, vertical = 10.dp)
             .testTag(tag),
-        verticalAlignment = Alignment.Top,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Checkbox(checked = checked, onCheckedChange = null, enabled = enabled)
-        Text(text, modifier = Modifier.padding(start = 10.dp, top = 2.dp), style = MaterialTheme.typography.bodyMedium)
+        Text(text, modifier = Modifier.weight(1f).padding(start = 12.dp), style = MaterialTheme.typography.bodyMedium)
     }
 }
 

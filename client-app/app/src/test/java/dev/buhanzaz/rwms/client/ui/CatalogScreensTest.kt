@@ -7,6 +7,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.client.data.CabinFacetWarehouse
 import dev.buhanzaz.rwms.client.data.CabinFacets
@@ -163,11 +164,36 @@ class CatalogScreensTest {
         composeRule.onNodeWithText(compatibleDimension).assertExists()
         composeRule.onNodeWithText(incompatibleDimension).assertDoesNotExist()
         composeRule.onNodeWithText(compatibleDimension).performClick()
-        composeRule.onNodeWithText("Показать").performClick()
+        composeRule.onNodeWithText("Показать").performScrollTo().performClick()
 
         composeRule.runOnIdle {
             assertThat(appliedFilters).isEqualTo(CabinFilters(cabinType = "БК-1", dimensions = compatibleDimension))
         }
+    }
+
+    @Test
+    fun `filters replace cards without moving the header and close without applying drafts`() {
+        var appliedFilters: CabinFilters? = null
+        composeRule.setContent {
+            CustomerTheme {
+                CabinCatalogScreen(
+                    state = catalogState().copy(cabins = listOf(catalogCabin())),
+                    onMenu = {}, onProfile = {}, onFilters = { appliedFilters = it },
+                    onLoadMore = {}, onToggleCabin = {}, onEquipment = { _, _, _ -> },
+                    onPhoto = { _, _ -> }, onWarehouse = {},
+                )
+            }
+        }
+        val originalHeader = composeRule.onNodeWithTag("customer-header").fetchSemanticsNode().boundsInRoot
+        composeRule.onNodeWithTag("catalog-filter-button").performClick()
+        composeRule.onNodeWithTag("cabin-cabin-1").assertDoesNotExist()
+        val filterHeader = composeRule.onNodeWithTag("customer-header").fetchSemanticsNode().boundsInRoot
+        assertThat(filterHeader).isEqualTo(originalHeader)
+        composeRule.onNodeWithTag("filter-field-Пол").performClick()
+        composeRule.onNodeWithText("Линолеум").performClick()
+        composeRule.onNodeWithText("Закрыть фильтры").performClick()
+        composeRule.onNodeWithTag("cabin-cabin-1").assertExists()
+        assertThat(appliedFilters).isNull()
     }
 
     @Test

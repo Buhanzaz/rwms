@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.client.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -30,6 +31,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -267,6 +269,9 @@ fun CabinCatalogScreen(
 ) {
     var showFilters by remember { mutableStateOf(false) }
     var furnitureCabin by remember { mutableStateOf<String?>(null) }
+    val catalogScroll = rememberLazyListState()
+    val filterScroll = rememberLazyListState()
+    BackHandler(enabled = showFilters) { showFilters = false }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
@@ -283,13 +288,25 @@ fun CabinCatalogScreen(
                 )
                 CatalogStickyFilter(
                     activeFilterCount = state.filters.activeCount,
+                    expanded = showFilters,
                     onFilters = { showFilters = !showFilters },
                 )
-                AnimatedVisibility(
-                    visible = showFilters,
-                    enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
-                    exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
-                ) {
+            }
+        },
+    ) { padding ->
+        LazyColumn(
+            state = if (showFilters) filterScroll else catalogScroll,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 16.dp)
+                .testTag("catalog-screen"),
+            contentPadding = PaddingValues(top = 8.dp, bottom = 100.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            if (showFilters) {
+                item(key = "filters") {
                     CabinFilterPanel(
                         current = state.filters,
                         facets = state.facets,
@@ -300,47 +317,36 @@ fun CabinCatalogScreen(
                         },
                     )
                 }
-            }
-        },
-    ) { padding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp)
-                .testTag("catalog-screen"),
-            contentPadding = PaddingValues(top = 8.dp, bottom = 100.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            if (state.cabins.isEmpty() && !state.busy) {
-                item {
-                    Text(
-                        "Свободных бытовок по выбранным условиям нет",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(32.dp),
+            } else {
+                if (state.cabins.isEmpty() && !state.busy) {
+                    item {
+                        Text(
+                            "Свободных бытовок по выбранным условиям нет",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(32.dp),
+                        )
+                    }
+                }
+                items(state.cabins, key = CustomerCabin::unitId) { cabin ->
+                    val selected = cabin.unitId in state.selectedCabinIds
+                    CabinCard(
+                        cabin = cabin,
+                        selected = selected,
+                        onToggle = { onToggleCabin(cabin.unitId) },
+                        onFurniture = { furnitureCabin = cabin.unitId },
+                        onPhoto = { page -> onPhoto(cabin.unitId, page) },
                     )
                 }
-            }
-            items(state.cabins, key = CustomerCabin::unitId) { cabin ->
-                val selected = cabin.unitId in state.selectedCabinIds
-                CabinCard(
-                    cabin = cabin,
-                    selected = selected,
-                    onToggle = { onToggleCabin(cabin.unitId) },
-                    onFurniture = { furnitureCabin = cabin.unitId },
-                    onPhoto = { page -> onPhoto(cabin.unitId, page) },
-                )
-            }
-            if (state.cabinPage + 1 < state.cabinTotalPages) {
-                item {
-                    OutlinedButton(
-                        onClick = onLoadMore,
-                        modifier = Modifier.fillMaxWidth().widthIn(max = 1120.dp),
-                        enabled = !state.busy,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                    ) {
-                        Text("Показать ещё")
+                if (state.cabinPage + 1 < state.cabinTotalPages) {
+                    item {
+                        OutlinedButton(
+                            onClick = onLoadMore,
+                            modifier = Modifier.fillMaxWidth().widthIn(max = 1120.dp),
+                            enabled = !state.busy,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                        ) {
+                            Text("Показать ещё")
+                        }
                     }
                 }
             }
@@ -361,6 +367,7 @@ fun CabinCatalogScreen(
 @Composable
 private fun CatalogStickyFilter(
     activeFilterCount: Int,
+    expanded: Boolean,
     onFilters: () -> Unit,
 ) {
     Box(
@@ -368,9 +375,9 @@ private fun CatalogStickyFilter(
         contentAlignment = Alignment.CenterEnd,
     ) {
         TextButton(onClick = onFilters, modifier = Modifier.testTag("catalog-filter-button")) {
-            Icon(Icons.Default.FilterList, contentDescription = "Фильтры, выбрано $activeFilterCount")
+            Icon(if (expanded) Icons.Default.Close else Icons.Default.FilterList, contentDescription = null)
             Spacer(Modifier.width(8.dp))
-            Text("Фильтры${if (activeFilterCount > 0) " · $activeFilterCount" else ""}")
+            Text(if (expanded) "Закрыть фильтры" else "Фильтры${if (activeFilterCount > 0) " · $activeFilterCount" else ""}")
         }
     }
 }
@@ -616,7 +623,7 @@ private fun CabinFact(icon: androidx.compose.ui.graphics.vector.ImageVector? = n
 
 internal fun usesWideCabinCard(widthDp: Float): Boolean = widthDp >= 920f
 
-/** Expands under the catalog header; all facets occupy the same two-column grid. */
+/** Replaces the cards below the fixed header with one opaque two-column filter form. */
 @Composable
 private fun CabinFilterPanel(
     current: CabinFilters,
@@ -627,52 +634,58 @@ private fun CabinFilterPanel(
     var draft by remember(current, warehouseId) { mutableStateOf(current) }
     val available = facets.warehouses.firstOrNull { it.warehouseId == warehouseId } ?: facets.selected
     val dimensions = remember(available, draft.cabinType) { available.compatibleDimensionsFor(draft.cabinType) }
-    Column(
-        modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp).verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 8.dp).testTag("catalog-filter-panel"),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+    Surface(
+        modifier = Modifier.widthIn(max = 760.dp).fillMaxWidth().testTag("catalog-filter-panel"),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 1f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            CatalogFacetField("Тип", available.cabinTypes, listOfNotNull(draft.cabinType), Modifier.weight(1f)) {
-                draft = draft.withCabinType(it, available)
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                CatalogFacetField("Тип", available.cabinTypes, listOfNotNull(draft.cabinType), Modifier.weight(1f)) {
+                    draft = draft.withCabinType(it, available)
+                }
+                CatalogFacetField("Отделка", available.finishes, listOfNotNull(draft.finish), Modifier.weight(1f)) {
+                    draft = draft.copy(finish = it)
+                }
             }
-            CatalogFacetField("Отделка", available.finishes, listOfNotNull(draft.finish), Modifier.weight(1f)) {
-                draft = draft.copy(finish = it)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                CatalogFacetField("Размер", dimensions, listOfNotNull(draft.dimensions), Modifier.weight(1f)) {
+                    draft = draft.copy(dimensions = it)
+                }
+                CatalogFacetField("Категория", available.categories, listOfNotNull(draft.category), Modifier.weight(1f)) {
+                    draft = draft.copy(category = it)
+                }
             }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            CatalogFacetField("Размер", dimensions, listOfNotNull(draft.dimensions), Modifier.weight(1f)) {
-                draft = draft.copy(dimensions = it)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                val floor = when (draft.linoleum) {
+                    true -> "Линолеум"
+                    false -> "Без линолеума"
+                    null -> null
+                }
+                CatalogFacetField("Пол", listOf("Линолеум", "Без линолеума"), listOfNotNull(floor), Modifier.weight(1f)) {
+                    draft = draft.copy(linoleum = it?.let { value -> value == "Линолеум" })
+                }
+                CatalogFacetField(
+                    "Характеристики", available.characteristics, draft.characteristics.toList(),
+                    Modifier.weight(1f), multiple = true,
+                ) { value ->
+                    draft = draft.copy(
+                        characteristics = when {
+                            value == null -> emptySet()
+                            value in draft.characteristics -> draft.characteristics - value
+                            else -> draft.characteristics + value
+                        },
+                    )
+                }
             }
-            CatalogFacetField("Категория", available.categories, listOfNotNull(draft.category), Modifier.weight(1f)) {
-                draft = draft.copy(category = it)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(onClick = { draft = CabinFilters() }, modifier = Modifier.weight(1f)) { Text("Сбросить") }
+                Button(onClick = { onApply(draft) }, modifier = Modifier.weight(1f)) { Text("Показать") }
             }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            val floor = when (draft.linoleum) {
-                true -> "Линолеум"
-                false -> "Без линолеума"
-                null -> null
-            }
-            CatalogFacetField("Пол", listOf("Линолеум", "Без линолеума"), listOfNotNull(floor), Modifier.weight(1f)) {
-                draft = draft.copy(linoleum = it?.let { value -> value == "Линолеум" })
-            }
-            CatalogFacetField(
-                "Характеристики", available.characteristics, draft.characteristics.toList(),
-                Modifier.weight(1f), multiple = true,
-            ) { value ->
-                draft = draft.copy(
-                    characteristics = when {
-                        value == null -> emptySet()
-                        value in draft.characteristics -> draft.characteristics - value
-                        else -> draft.characteristics + value
-                    },
-                )
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedButton(onClick = { draft = CabinFilters() }, modifier = Modifier.weight(1f)) { Text("Сбросить") }
-            Button(onClick = { onApply(draft) }, modifier = Modifier.weight(1f)) { Text("Показать") }
         }
     }
 }
@@ -692,10 +705,10 @@ private fun CatalogFacetField(
             onClick = { expanded = !expanded },
             modifier = Modifier.fillMaxWidth().testTag("filter-field-$title"),
             shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.surface,
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 1f),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         ) {
-            Row(Modifier.heightIn(min = 72.dp).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.heightIn(min = 68.dp).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(title, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
@@ -708,7 +721,16 @@ private fun CatalogFacetField(
                 Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(20.dp))
             }
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.widthIn(min = 220.dp, max = 320.dp).testTag("filter-options-$title"),
+            shape = RoundedCornerShape(12.dp),
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 1f),
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        ) {
             DropdownMenuItem(
                 text = { Text("Любой") },
                 onClick = {
