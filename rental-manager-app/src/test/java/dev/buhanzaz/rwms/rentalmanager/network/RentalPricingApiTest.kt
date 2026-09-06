@@ -36,7 +36,7 @@ class RentalPricingApiTest {
     }
 
     @Test
-    fun `price read sends only warehouse and cabin ids without command idempotency`() = runTest {
+    fun `price read sends canonical rental item ids without command idempotency`() = runTest {
         enqueue(payload("\"9223372036854775807\""))
         assertThat(repository.prices(WAREHOUSE, listOf(CABIN))).containsEntry(CABIN, Long.MAX_VALUE)
         val request = server.takeRequest()
@@ -44,7 +44,7 @@ class RentalPricingApiTest {
         assertThat(request.path).isEqualTo("/api/logistics/v1/cabins/rental-prices")
         assertThat(request.getHeader("Idempotency-Key")).isNull()
         assertThat(request.body.readUtf8())
-            .isEqualTo("""{"warehouseId":"$WAREHOUSE","ids":["$CABIN"]}""")
+            .isEqualTo("""{"warehouseId":"$WAREHOUSE","rentalItemIds":["$CABIN"]}""")
     }
 
     @Test

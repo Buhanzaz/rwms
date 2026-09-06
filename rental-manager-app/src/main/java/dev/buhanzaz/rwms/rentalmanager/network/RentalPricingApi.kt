@@ -13,8 +13,8 @@ interface RentalPricingApi {
     suspend fun cabinPrices(@Body request: CabinRentalPricesRequest): CabinRentalPricesDto
 }
 
-/** Bounded cabin identities; the gateway verifies warehouse access for the current manager. */
-data class CabinRentalPricesRequest(val warehouseId: String, val ids: List<String>)
+/** Bounded cabin identities for a warehouse-scoped tariff lookup. */
+data class CabinRentalPricesRequest(val warehouseId: String, val rentalItemIds: List<String>)
 
 /** Complete price read from one logistics tariff revision. */
 data class CabinRentalPricesDto(
