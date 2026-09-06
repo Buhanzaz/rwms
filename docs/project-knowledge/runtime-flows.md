@@ -840,9 +840,13 @@ binds return, shipment, transfer and the canonical
 `rwms.logistics.rental-inquiry.events.v1` output from one ordered authority.
 Operational gauges report local pending/terminal evidence, version gaps and
 bounded external-attempt work; they do not replace ordered relay recovery or
-authorize an automatic backlog rewrite. The rental-inquiry outbox currently
-has only `PENDING` and `PUBLISHED`, so its gauges do not invent a terminal or
-reviewed state.
+authorize an automatic backlog rewrite. The rental-inquiry outbox consumes a finite delivery
+budget in individual committed `IN_FLIGHT` claims; token-fenced completion preserves earlier
+successful rows when a later send fails. Exhausted or invalid events remain `QUARANTINED` with
+unchanged bytes, IDs and checksum. Its global-admin recovery operation requires the observed
+recovery version and a reason, revalidates the retained envelope and payload, and records an
+immutable review. Exact replay returns the historical `PENDING` receipt even after publication;
+backlog and terminal gauges expose the persisted delivery state.
 
 Outbox claims are fenced by a lease token. Publication wait must be shorter than
 the lease. A checksum or schema mismatch is quarantined instead of sent. A

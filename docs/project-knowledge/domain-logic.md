@@ -1628,7 +1628,14 @@ representatives keep their own settings. The existing planner owner handles
 capacity publication after commit and invalidation of mutable policy-stale plans.
 Capacity success refreshes the locked warehouse generation before advancing the monotone published
 cursor. Only completion of the current generation clears publication status, retry fields and
-lease; a late success preserves the newer generation's pending delivery obligation.
+lease; a late success preserves the newer generation's pending delivery obligation. Automatic capacity
+publication and contractor handoff each allow three persisted attempts, including expired leases.
+Stable owner validation failures or exhaustion enter `REVIEW_REQUIRED` outside automatic claims.
+Capacity retains its last valid projection; a new generation starts a new budget. Contractor review
+retains command identity, partial-result evidence and reservations; the existing authorized assignment
+or dispatch command resumes that same identity under a new lease token. The terminal API outcome is
+`409 CONTRACTOR_HANDOFF_REVIEW_REQUIRED` without a retry header and with explicit operator guidance.
+Late callbacks cannot finalize or release the newer lease's reservations.
 Evidence: [`admin settings API`](../../logistics/backend/app/api/admin_settings.py)
 and [`canonical contract`](../../contracts/openapi/logistics-planner-service.yaml).
 
