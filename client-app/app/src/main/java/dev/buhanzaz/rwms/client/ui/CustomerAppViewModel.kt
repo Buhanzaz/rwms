@@ -35,7 +35,10 @@ import dev.buhanzaz.rwms.client.data.InquirySession
 import java.time.Instant
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -263,6 +266,9 @@ class CustomerAppViewModel @Inject constructor(
     private val mutableState = MutableStateFlow<CustomerAppState>(CustomerAppState.Loading)
     private val mutationGate = CustomerMutationGate()
     private var bootstrappedSession = false
+    private var mutationJob: Job? = null
+    private var sessionGeneration = 0L
+    private var activeSessionMarker: String? = null
 
     /** Conditional signed-out/signed-in state. */
     val state: StateFlow<CustomerAppState> = mutableState.asStateFlow()
@@ -270,6 +276,24 @@ class CustomerAppViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             authRepository.state.collectLatest { auth ->
+                val marker = authRepository.notificationSession()
+                if (auth != CustomerAuthState.SignedIn || marker != activeSessionMarker) {
+                    val registrationDraft = mutableWorkflow.value.registrationProfileDraft
+                        .takeUnless { auth is CustomerAuthState.SignedOut }
+                    sessionGeneration += 1
+                    activeSessionMarker = null
+                    bootstrappedSession = false
+                    mutableState.value = when (auth) {
+                        is CustomerAuthState.SignedOut -> CustomerAppState.SignedOut(auth.message)
+                        CustomerAuthState.Authenticating -> CustomerAppState.SignedOut(submitting = true)
+                        else -> CustomerAppState.Loading
+                    }
+                    // Keep the old gate owned until its job has finished every cleanup path.
+                    mutationJob?.cancelAndJoin()
+                    mutationJob = null
+                    mutableWorkflow.value = CustomerWorkflowState(registrationProfileDraft = registrationDraft)
+                    activeSessionMarker = marker
+                }
                 when (auth) {
                     CustomerAuthState.Loading -> mutableState.value = CustomerAppState.Loading
                     CustomerAuthState.Authenticating -> mutableState.value = CustomerAppState.SignedOut(submitting = true)
@@ -282,7 +306,6 @@ class CustomerAppViewModel @Inject constructor(
                     CustomerAuthState.SignedIn -> {
                         mutableState.value = CustomerAppState.Ready(mutableWorkflow.value)
                         if (!bootstrappedSession) {
-                            bootstrappedSession = true
                             bootstrap()
                         }
                     }
@@ -291,7 +314,9 @@ class CustomerAppViewModel @Inject constructor(
         }
         viewModelScope.launch {
             mutableWorkflow.collectLatest { workflow ->
-                if (authRepository.state.value == CustomerAuthState.SignedIn) {
+                if (authRepository.state.value == CustomerAuthState.SignedIn &&
+                    activeSessionMarker != null && activeSessionMarker == authRepository.notificationSession()
+                ) {
                     mutableState.value = CustomerAppState.Ready(workflow)
                 }
             }
@@ -1000,7 +1025,7 @@ class CustomerAppViewModel @Inject constructor(
         mutableWorkflow.value = mutableWorkflow.value.copy(error = null)
     }
 
-    private fun bootstrap() = launchMutation(showBusy = false) {
+    private fun bootstrap() = launchMutation(showBusy = false, onAdmitted = { bootstrappedSession = true }) {
         val profile = repository.profileOrNull()
         val warehouses = if (profile != null) repository.warehouses() else emptyList()
         mutableWorkflow.value = mutableWorkflow.value.copy(
@@ -1029,15 +1054,27 @@ class CustomerAppViewModel @Inject constructor(
         refreshCustomerUpdatesOwned()
     }
 
-    private fun launchMutation(showBusy: Boolean = true, block: suspend () -> Unit) {
+    private fun launchMutation(
+        showBusy: Boolean = true,
+        onAdmitted: () -> Unit = {},
+        block: suspend () -> Unit,
+    ) {
+        val marker = activeSessionMarker ?: return
+        if (authRepository.state.value != CustomerAuthState.SignedIn ||
+            authRepository.notificationSession() != marker
+        ) return
         if (!mutationGate.tryEnter()) return
-        viewModelScope.launch {
+        val generation = sessionGeneration
+        onAdmitted()
+        // Enter try/finally before exposing the job to session cancellation, even before dispatch.
+        mutationJob = viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
             if (showBusy) mutableWorkflow.value = mutableWorkflow.value.copy(busy = true, error = null)
             try {
                 block()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: CustomerApiException) {
+                if (!isCurrentMutationSession(generation, marker)) return@launch
                 if (CustomerInquiryRecoveryPolicy.isArchivedInquiry(failure)) {
                     mutableWorkflow.value = mutableWorkflow.value.copy(error = recoverArchivedWorkflow())
                 } else {
@@ -1089,13 +1126,20 @@ class CustomerAppViewModel @Inject constructor(
                     mutableWorkflow.value = mutableWorkflow.value.copy(error = failure.message.takeUnless { acceptedChange || recoveredWaiver })
                 }
             } catch (_: Throwable) {
+                if (!isCurrentMutationSession(generation, marker)) return@launch
                 mutableWorkflow.value = mutableWorkflow.value.copy(error = "Не удалось выполнить действие")
             } finally {
-                mutableWorkflow.value = mutableWorkflow.value.copy(busy = false, bootstrapping = false)
+                if (isCurrentMutationSession(generation, marker)) {
+                    mutableWorkflow.value = mutableWorkflow.value.copy(busy = false, bootstrapping = false)
+                }
                 mutationGate.leave()
             }
         }
     }
+
+    private fun isCurrentMutationSession(generation: Long, marker: String): Boolean =
+        sessionGeneration == generation && activeSessionMarker == marker &&
+            authRepository.notificationSession() == marker
 
     private suspend fun reloadAfterConflict(): Boolean {
         val bookings = runCatching { repository.bookings() }.getOrNull()

@@ -89,6 +89,9 @@ payment window, the receipt explains that no payment deadline or automatic timed
 assigned. Cancelled bookings show cancelled delivery and expose no reception actions from stale arrival data.
 
 Foreground lifecycle polling reloads bookings, pending payment and the durable unread inbox.
+Changing the authentication session cancels and joins the previous UI mutation before admitting
+the new profile/warehouse bootstrap. Until cleanup completes the app stays loading; a late old
+result cannot finish or invalidate the replacement session.
 Only an explicit `Read` action acknowledges a message on the server. Android notifications use
 an immutable explicit app intent with no order payload or credentials; a bounded local delivery-ID
 cache prevents repeated alerts without becoming domain state. WorkManager schedules a connected
