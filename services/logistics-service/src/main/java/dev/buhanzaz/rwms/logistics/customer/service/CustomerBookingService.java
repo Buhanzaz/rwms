@@ -4,7 +4,6 @@ import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.AcceptC
 import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerBookingCabin;
 import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerBookingResponse;
 import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerCabinAcceptanceResponse;
-import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerCabinProblemPhase;
 import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerCabinProblemResponse;
 import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerProblemMediaReference;
 import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerShipmentMediaOwner;
@@ -12,6 +11,7 @@ import static dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.ReportC
 
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerCabinAcceptance;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerCabinProblem;
+import dev.buhanzaz.rwms.logistics.customer.domain.CustomerCabinProblemPhase;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlot;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerRentalSession;
 import dev.buhanzaz.rwms.logistics.customer.mapper.CustomerReceptionResponseMapper;

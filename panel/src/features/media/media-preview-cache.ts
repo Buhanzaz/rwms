@@ -144,20 +144,6 @@ export function evictMediaPreview(mediaId: string | undefined) {
   }
 }
 
-export function evictCabinMediaPreviews(
-  warehouseId: string | undefined,
-  cabinId: string | undefined
-) {
-  if (!warehouseId || !cabinId) return
-  const prefix = `${warehouseId}:${cabinId}:`
-  for (const entry of entries.values()) {
-    if (entry.key.startsWith(prefix)) markEvicted(entry)
-  }
-  for (const [key, pendingEntry] of pending) {
-    if (key.startsWith(prefix)) pendingEntry.invalidated = true
-  }
-}
-
 export function evictWarehouseMediaPreviews(warehouseId: string | undefined) {
   if (!warehouseId) return
   const prefix = `${warehouseId}:`

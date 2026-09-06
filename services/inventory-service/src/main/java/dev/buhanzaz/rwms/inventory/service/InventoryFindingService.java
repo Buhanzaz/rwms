@@ -59,6 +59,8 @@ import tools.jackson.databind.node.ObjectNode;
  */
 @Service
 final class InventoryFindingService extends InventoryFindingWorkflowSupport {
+  private final InventoryFindingConflictPolicy conflictPolicy;
+
   InventoryFindingService(
       InventorySessionRepository sessions,
       InventoryFindingRepository findings,
@@ -95,6 +97,7 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
         canonicalJson,
         authorizer,
         transactionManager);
+    conflictPolicy = new InventoryFindingConflictPolicy(mapper, canonicalJson);
   }
 
   /**
@@ -318,7 +321,7 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
                 ? ReconciliationState.MISSING
                 : finding.getInspection() == InspectionState.NOT_INSPECTED
                     ? ReconciliationState.MATCHED
-                    : validationService.conflictViews(finding, session.getWarehouseId(), live).isEmpty()
+                    : conflictPolicy.conflictViews(finding, session.getWarehouseId(), live).isEmpty()
                         ? ReconciliationState.MATCHED
                         : ReconciliationState.CONFLICT;
         finding.refreshCurrentAsset(
@@ -548,7 +551,7 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
     if (!session.getWarehouseId().equals(asset.warehouseId())) {
       outcome = "CROSS_WAREHOUSE_CONFLICT";
       reconciliation = ReconciliationState.MISSING;
-    } else if (validationService.isTerminalDispositionStatus(asset.status())) {
+    } else if (InventoryFindingConflictPolicy.isTerminalDispositionStatus(asset.status())) {
       outcome = "EXCLUDED_STATUS_CONFLICT";
       reconciliation = ReconciliationState.MISSING;
     } else {
@@ -920,7 +923,7 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
           "Укажите причину сохранения данных осмотра");
     }
     CurrentItemSnapshot current = currentTruth.currentSnapshot();
-    String fingerprint = validationService.semanticFingerprint(current);
+    String fingerprint = conflictPolicy.semanticFingerprint(current);
     InventoryFinding saved =
         transactions.execute(
             ignored -> {

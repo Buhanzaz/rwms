@@ -9,8 +9,6 @@ export const GRID_HEADER_CELL_CLASS =
   "border-b px-3 py-3 text-left text-xs font-medium text-muted-foreground"
 export const GRID_CELL_CLASS = "border-b px-3 py-2 align-middle"
 export const GRID_TABLE_ROW_CLASS = "h-[49px]"
-export const GRID_FLEX_CELL_CLASS = "md:px-3 md:py-2 md:align-middle"
-export const GRID_FLEX_ROW_CLASS = "md:min-h-[49px]"
 
 export function GridSortButton({
   label,

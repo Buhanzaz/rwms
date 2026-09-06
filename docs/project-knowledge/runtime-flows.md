@@ -2319,19 +2319,18 @@ and
    relay retry reuses it, and a changed snapshot replaces only a not-yet-started task under the
    existing task/entry version fences. Task-board persists those snapshots for its existing offline
    feeds.
-4. The logistics board reads task-board placement plus a batched logistics trip
+4. The driver-board API reads task-board placement plus a batched logistics trip
    projection. The owner projection retains operation, address/coordinates,
    contacts, client wishes, actual scheduled date, cabins and per-cabin
-   desired/actual furniture, movement-task state and readiness. The panel
-   renders only grouped shipment/return projections, suppresses legacy raw
-   cards, task/trip numbers and client wishes, and displays the scheduled day as
-   `Дата выполнения задания`; each cabin uses actual contents plus exactly one
-   final filling status. Board enrichment performs at most one asset order read
+   desired/actual furniture, movement-task state and readiness. The active Panel
+   uses dated shipment, return and transfer pages. Its retired `/logistics/board`
+   and `/logistics/order-tasks` routes redirect to shipments; `/logistics/tasks`
+   redirects to transfers. The disconnected board implementations were removed,
+   while shared API/model consumers remain. Board enrichment performs at most one asset order read
    per distinct rental order; an unavailable owner snapshot is explicit rather
    than false readiness. The public board publishes only warehouse-local
    current/future columns; overdue rolling maintenance cards are folded into
-   `currentDate`, while the Current lane remains a vertically scrollable ordered
-   list with no six-card display limit.
+   `currentDate`; the API retains the complete ordered Current lane.
    Shipment/return/transfer dates are deadlines: after the warehouse-local day ends,
    the bounded driver relay persists V97 expiry intent and cancels unfinished task-board
    work with a fresh version fence. DONE/FINALIZING wins a cancellation race. Expiry
@@ -2345,7 +2344,7 @@ and
    The isolated Manager app polls `rental-expired-trips` across all of the current rental
    manager's readable warehouses, with a bounded 50-row operational-only projection and
    no expansion of full-order visibility.
-5. Dragging a card always moves the whole grouped task. A locked local
+5. A driver-board move command always moves the whole grouped task. A locked local
    pre-start check runs before task-board; after version-fenced remote success
    logistics synchronizes the owning document date while preserving the desired
    delivery date. Public move and capital-scheduling commands reject a target
@@ -2502,7 +2501,7 @@ Evidence:
 [`media task-entry projection`](../../services/media-service/internal/persistence/task_board_owner_projection.go),
 [`DriverLocalStore.kt`](../../driver-app/core-database/src/main/java/dev/buhanzaz/rwms/driver/core/database/DriverLocalStore.kt),
 [`TaskDetailScreen.kt`](../../driver-app/feature-task-detail/src/main/java/dev/buhanzaz/rwms/driver/feature/taskdetail/TaskDetailScreen.kt),
-[`logistics-board-page.tsx`](../../panel/src/features/logistics/driver-board/logistics-board-page.tsx),
+[`Panel routes`](../../panel/src/App.tsx),
 [`Worker TasksScreen.kt`](../../worker-app/feature-tasks/src/main/java/dev/buhanzaz/rwms/worker/feature/tasks/TasksScreen.kt),
 [`Worker task detail`](../../worker-app/feature-task-detail/src/main/java/dev/buhanzaz/rwms/worker/feature/taskdetail/TaskDetailScreen.kt),
 [`Worker offline recovery`](../../worker-app/core-database/src/main/java/dev/buhanzaz/rwms/worker/core/database/WorkerLocalStore.kt),

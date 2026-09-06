@@ -205,27 +205,6 @@ export function canEditRepairTaskPlan(task: RepairTaskDto) {
   )
 }
 
-export function assertRepairTaskSubtasksValid(
-  subtasks: RepairTaskSubtaskDto[]
-) {
-  const ids = new Set<string>()
-  subtasks.forEach((subtask, index) => {
-    if (!subtask.id || ids.has(subtask.id)) {
-      throw new Error(
-        `Подзадание ${index + 1}: идентификатор должен быть уникальным`
-      )
-    }
-    ids.add(subtask.id)
-    if (
-      subtask.plannedDurationMinutes !== null &&
-      (!Number.isFinite(subtask.plannedDurationMinutes) ||
-        subtask.plannedDurationMinutes < 0)
-    ) {
-      throw new Error(`Подзадание ${index + 1}: некорректный норматив времени`)
-    }
-  })
-}
-
 export function createNewRepairTaskDraft(
   dispatchDate: string,
   seed?: RepairTaskReworkSeed,

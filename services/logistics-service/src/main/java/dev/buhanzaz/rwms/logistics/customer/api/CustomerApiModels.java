@@ -1,6 +1,8 @@
 package dev.buhanzaz.rwms.logistics.customer.api;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
+import dev.buhanzaz.rwms.logistics.customer.domain.CustomerCabinProblemCategory;
+import dev.buhanzaz.rwms.logistics.customer.domain.CustomerCabinProblemPhase;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerDeliverySlotKind;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerEntityType;
 import jakarta.validation.Valid;
@@ -426,19 +428,6 @@ public final class CustomerApiModels {
   /** Ready media generation attached to a customer-reported cabin problem. */
   public record CustomerProblemMediaReference(
       @NotNull UUID mediaId, @Min(1) long generation) {}
-
-  /** Supported customer problem categories for an arrived cabin. */
-  public enum CustomerCabinProblemCategory {
-    MISSING_EQUIPMENT,
-    UNSUITABLE_CABIN,
-    OTHER
-  }
-
-  /** Whether a problem was recorded before or after signed customer acceptance. */
-  public enum CustomerCabinProblemPhase {
-    BEFORE_ACCEPTANCE,
-    AFTER_ACCEPTANCE
-  }
 
   /** Customer problem report linked to ready evidence belonging to the exact shipment line. */
   public record ReportCustomerCabinProblemRequest(

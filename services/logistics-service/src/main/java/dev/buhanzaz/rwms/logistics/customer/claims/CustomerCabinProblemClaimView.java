@@ -1,7 +1,7 @@
 package dev.buhanzaz.rwms.logistics.customer.claims;
 
-import dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerCabinProblemCategory;
-import dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerCabinProblemPhase;
+import dev.buhanzaz.rwms.logistics.customer.domain.CustomerCabinProblemCategory;
+import dev.buhanzaz.rwms.logistics.customer.domain.CustomerCabinProblemPhase;
 import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
 import java.time.OffsetDateTime;
 import java.util.List;

@@ -73,13 +73,6 @@ export type MaintenanceEstimateLine = Omit<
 
 export type MaintenanceReworkLineDisposition = "ADDED" | "REPEAT"
 
-export type MaintenanceReworkLineMetadata = {
-  disposition: MaintenanceReworkLineDisposition
-  sourceRepairId: string | null
-  sourceLineId: string | null
-  lineageRootLineId: string
-}
-
 export type MaintenanceReworkCandidateLine = {
   sourceRepairId: string
   sourceLineId: string

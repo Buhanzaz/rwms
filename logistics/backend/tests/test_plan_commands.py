@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.errors import ApiError
 from app.models import LogisticsRequest, ManualChangeAudit, RoutePlan, Trailer, UnassignedTask
 from app.models.domain import PlanStatus
+from app.planner import DriverShift as PlannerDriverShift
 from app.schemas.domain import (
     GeneratePlanRequest,
     ManualChangeCommand,
@@ -21,7 +22,7 @@ from app.schemas.domain import (
 )
 from app.services import catalog, plans
 from app.services.auto_planning import generate_missing_draft_plans
-from app.services.planner_runtime import RuntimePlannerFacade
+from app.services.planner_runtime import RuntimePlannerFacade, _delay_selected_shifts
 from tests.factories import (
     make_driver,
     make_request,
@@ -34,6 +35,45 @@ from tests.test_truck_cycle_router import RecordingTruckProvider
 
 pytestmark = pytest.mark.integration
 TEST_ACTOR = "test-logistics-user"
+
+
+def test_delay_selected_shifts_preserves_unselected_and_clamps_to_shift_end() -> None:
+    """A requested delay cannot create an invalid duty interval."""
+
+    first = PlannerDriverShift(
+        id="first",
+        driver_id="driver-1",
+        driver_name="First driver",
+        vehicle_id="vehicle-1",
+        start_at=datetime.fromisoformat("2026-08-30T08:00:00+03:00"),
+        end_at=datetime.fromisoformat("2026-08-30T10:00:00+03:00"),
+    )
+    clamped = PlannerDriverShift(
+        id="clamped",
+        driver_id="driver-2",
+        driver_name="Second driver",
+        vehicle_id="vehicle-2",
+        start_at=datetime.fromisoformat("2026-08-30T09:00:00+03:00"),
+        end_at=datetime.fromisoformat("2026-08-30T09:30:00+03:00"),
+    )
+    untouched = PlannerDriverShift(
+        id="untouched",
+        driver_id="driver-3",
+        driver_name="Third driver",
+        vehicle_id="vehicle-3",
+        start_at=datetime.fromisoformat("2026-08-30T11:00:00+03:00"),
+        end_at=datetime.fromisoformat("2026-08-30T14:00:00+03:00"),
+    )
+
+    shifted = _delay_selected_shifts(
+        (first, clamped, untouched),
+        {"first", "clamped"},
+        60,
+    )
+
+    assert shifted[0].start_at == datetime.fromisoformat("2026-08-30T09:00:00+03:00")
+    assert shifted[1].start_at == clamped.end_at - timedelta(seconds=1)
+    assert shifted[2] is untouched
 
 
 async def _unassigned_plan(

@@ -93,13 +93,6 @@ export function getRepairTaskBySourceEstimateId(
   return repairTasksClient.getBySourceEstimateId(sourceEstimateId, warehouseId)
 }
 
-export function getRepairTaskSnapshotBySourceEstimateId(
-  sourceEstimateId: string,
-  warehouseId: string
-) {
-  return repairTasksClient.getBySourceEstimateId(sourceEstimateId, warehouseId)
-}
-
 function buildWriteCommand(params: {
   draft: RepairTaskEditorDraft
   warehouseId: string

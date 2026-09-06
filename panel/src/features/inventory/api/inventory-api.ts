@@ -28,7 +28,6 @@ import type {
   InventoryPlanningSettings,
   InventorySessionView,
   UpdateInventoryFinalPlanRequest,
-  UpdateInventoryPlanningSettingsRequest,
 } from "@/features/inventory/model/inventory-service"
 import type {
   LogisticsPlanningMode,
@@ -617,17 +616,6 @@ export async function getInventoryPlanningSettings(
     await accessToken(),
     warehouseId
   )
-}
-
-export async function saveInventoryPlanningSettings(
-  warehouseId: string,
-  request: UpdateInventoryPlanningSettingsRequest
-) {
-  return inventoryHttp.updateInventoryPlanningSettings({
-    accessToken: await accessToken(),
-    warehouseId,
-    request,
-  })
 }
 
 export async function getInventoryFinalPlan(inventoryId: string) {

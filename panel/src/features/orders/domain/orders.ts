@@ -1,8 +1,4 @@
-import {
-  formatRentalItemContents,
-  type RentalItemDto,
-  type RentalItemStatus,
-} from "@/features/rental-items/model/rental-item"
+import type { RentalItemStatus } from "@/features/rental-items/model/rental-item"
 import {
   CLIENT_TYPES,
   CLIENT_TYPE_LABELS,
@@ -221,56 +217,6 @@ export type OrderAuditEvent = {
 }
 
 export { normalizeClientDisplayName, normalizeClientSearch }
-
-export function orderUnitToRentalItem(unit: OrderRentalUnit): RentalItemDto {
-  const contentsItems = unit.contents.map((content) => ({
-    equipmentId: content.equipmentId,
-    equipmentName: content.equipmentName,
-    name: content.equipmentName,
-    quantity: content.quantity,
-    locationKind: content.locationKind,
-  }))
-  const characteristics = (unit.characteristics ?? "")
-    .split(",")
-    .map((name) => name.trim())
-    .filter((name) => name !== "")
-    .map((name, index) => ({
-      // The logistics order snapshot still provides display names rather than
-      // catalog UUIDs. This adapter is read-only: the synthetic key is never
-      // rendered or sent in a command.
-      id: `${unit.id}:characteristic:${index}`,
-      name,
-    }))
-
-  return {
-    id: unit.id,
-    version: unit.version,
-    warehouseId: unit.warehouseId,
-    number: unit.number,
-    // An order candidate is a read-only logistics snapshot. It has no
-    // composition UUIDs and cannot be opened in the passport editor.
-    rentalTypeId: "",
-    dimensionId: "",
-    finishingId: "",
-    type: unit.rentalType ?? "—",
-    dimensions: unit.dimensions,
-    finishing: unit.finishing,
-    category: unit.category,
-    characteristics,
-    linoleum: unit.linoleum,
-    status: unit.status,
-    comment: null,
-    contents: formatRentalItemContents(contentsItems),
-    contentsItems,
-    shipmentDate: null,
-    tenant: null,
-    price: null,
-    passport: {},
-    tags: unit.tags,
-    createdAt: unit.createdAt,
-    updatedAt: unit.updatedAt,
-  }
-}
 
 export function formatOrderDateTime(value: string) {
   return new Intl.DateTimeFormat("ru-RU", {

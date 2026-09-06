@@ -1977,6 +1977,138 @@ class HttpLogisticsDependencyGatewayTest {
   }
 
   @Test
+  void decodesTheSharedEquipmentMovementReservationFromANestedReplacementReceipt() {
+    UUID key = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID presentationId = UUID.randomUUID();
+    UUID oldUnitId = UUID.randomUUID();
+    UUID newUnitId = UUID.randomUUID();
+    UUID actorId = UUID.randomUUID();
+    UUID movementId = UUID.randomUUID();
+    UUID lineId = UUID.randomUUID();
+    UUID equipmentId = UUID.randomUUID();
+    UUID sourceBalanceId = UUID.randomUUID();
+    UUID movementReservationId = UUID.randomUUID();
+    OffsetDateTime reservedUntil = OffsetDateTime.parse("2026-08-12T15:00:00Z");
+    server
+        .expect(
+            requestTo(
+                "http://asset.test/api/internal/asset/v1/logistics/orders/"
+                    + orderId
+                    + "/units/replace"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header("Authorization", "Bearer test-asset.logistics"))
+        .andExpect(header("Idempotency-Key", key.toString()))
+        .andRespond(
+            withSuccess(
+                replacementReceiptJson(
+                    orderId,
+                    warehouseId,
+                    oldUnitId,
+                    newUnitId,
+                    actorId,
+                    movementReservationId,
+                    movementId,
+                    lineId,
+                    equipmentId,
+                    sourceBalanceId,
+                    "LOGISTICS_EQUIPMENT_MOVEMENT",
+                    reservedUntil),
+                MediaType.APPLICATION_JSON));
+
+    LogisticsDependencyGateway.OrderUnitsReplacementReceipt receipt =
+        gateway.replaceOrderUnits(
+            key,
+            orderId,
+            warehouseId,
+            warehouseId,
+            presentationId,
+            actorId,
+            "RENTAL_MANAGER",
+            List.of(),
+            List.of(
+                new LogisticsDependencyGateway.OrderUnitReplacement(oldUnitId, newUnitId, null)));
+
+    assertThat(receipt.replacements())
+        .singleElement()
+        .satisfies(
+            replacement ->
+                assertThat(replacement.movementReservations())
+                    .singleElement()
+                    .satisfies(
+                        reservation -> {
+                          assertThat(reservation.reservationId()).isEqualTo(movementReservationId);
+                          assertThat(reservation.ownerType())
+                              .isEqualTo("LOGISTICS_EQUIPMENT_MOVEMENT");
+                          assertThat(reservation.movementId()).isEqualTo(movementId);
+                          assertThat(reservation.lineId()).isEqualTo(lineId);
+                          assertThat(reservation.equipmentId()).isEqualTo(equipmentId);
+                          assertThat(reservation.sourceBalanceId()).isEqualTo(sourceBalanceId);
+                          assertThat(reservation.reservedUntil()).isEqualTo(reservedUntil);
+                        }));
+    server.verify();
+  }
+
+  @Test
+  void rejectsAMalformedEquipmentMovementReservationInANestedReplacementReceipt() {
+    UUID key = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID presentationId = UUID.randomUUID();
+    UUID oldUnitId = UUID.randomUUID();
+    UUID newUnitId = UUID.randomUUID();
+    UUID actorId = UUID.randomUUID();
+    server
+        .expect(
+            requestTo(
+                "http://asset.test/api/internal/asset/v1/logistics/orders/"
+                    + orderId
+                    + "/units/replace"))
+        .andRespond(
+            withSuccess(
+                replacementReceiptJson(
+                    orderId,
+                    warehouseId,
+                    oldUnitId,
+                    newUnitId,
+                    actorId,
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    "ORDER_REPLACEMENT",
+                    OffsetDateTime.parse("2026-08-12T15:00:00Z")),
+                MediaType.APPLICATION_JSON));
+
+    assertThatThrownBy(
+            () ->
+                gateway.replaceOrderUnits(
+                    key,
+                    orderId,
+                    warehouseId,
+                    warehouseId,
+                    presentationId,
+                    actorId,
+                    "RENTAL_MANAGER",
+                    List.of(),
+                    List.of(
+                        new LogisticsDependencyGateway.OrderUnitReplacement(
+                            oldUnitId, newUnitId, null))))
+        .isInstanceOf(LogisticsDependencyException.class)
+        .satisfies(
+            exception -> {
+              LogisticsDependencyException dependency = (LogisticsDependencyException) exception;
+              assertThat(dependency.kind())
+                  .isEqualTo(LogisticsDependencyException.FailureKind.CONFIGURATION);
+              assertThat(dependency.getMessage())
+                  .isEqualTo("Asset-service returned an invalid equipment movement reservation");
+            });
+    server.verify();
+  }
+
+  @Test
   void serializesAllocatableRebalancePurposeForEquipmentMovementReservations() {
     assertEquipmentMovementReservationPurpose(
         LogisticsDependencyGateway.EquipmentMovementPurpose.ALLOCATABLE_REBALANCE);
@@ -2141,6 +2273,78 @@ class HttpLogisticsDependencyGatewayTest {
             purpose);
     assertThat(reservation.equipmentName()).isEqualTo("Стол");
     server.verify();
+  }
+
+  private static String replacementReceiptJson(
+      UUID orderId,
+      UUID warehouseId,
+      UUID oldUnitId,
+      UUID newUnitId,
+      UUID actorId,
+      UUID movementReservationId,
+      UUID movementId,
+      UUID lineId,
+      UUID equipmentId,
+      UUID sourceBalanceId,
+      String ownerType,
+      OffsetDateTime reservedUntil) {
+    return """
+    {
+      "replacements":[{
+        "releasedReservation":{
+          "reservationId":"00000000-0000-0000-0000-000000000001",
+          "reservationVersion":1,"orderId":"%s","rentalItemId":"%s",
+          "warehouseId":"%s","state":"RELEASED","addedBySubjectId":"%s",
+          "addedByRole":"RENTAL_MANAGER","createdAt":"2026-08-12T12:00:00Z",
+          "releasedAt":"2026-08-12T13:00:00Z","replayed":false,
+          "unit":{"id":"%s","version":3,"warehouseId":"%s","number":"OLD-1",
+            "status":"FREE","rentalType":"STANDARD","tags":[],"contents":[],
+            "createdAt":"2026-08-01T12:00:00Z","updatedAt":"2026-08-12T13:00:00Z"}
+        },
+        "replacementReservation":{
+          "reservationId":"00000000-0000-0000-0000-000000000002",
+          "reservationVersion":0,"orderId":"%s","rentalItemId":"%s",
+          "warehouseId":"%s","state":"ACTIVE","addedBySubjectId":"%s",
+          "addedByRole":"RENTAL_MANAGER","createdAt":"2026-08-12T13:00:00Z",
+          "releasedAt":null,"replayed":false,
+          "unit":{"id":"%s","version":1,"warehouseId":"%s","number":"NEW-1",
+            "status":"RESERVED","rentalType":"STANDARD","tags":[],"contents":[],
+            "createdAt":"2026-08-01T12:00:00Z","updatedAt":"2026-08-12T13:00:00Z"}
+        },
+        "movementReservations":[{
+          "reservationId":"%s","version":0,"ownerType":"%s","movementId":"%s",
+          "lineId":"%s","equipmentId":"%s","equipmentName":"Стол",
+          "sourceBalanceId":"%s","sourceWarehouseId":"%s","sourceRentalItemId":"%s",
+          "sourceLocationKind":"CABIN_NON_RENTED","quantity":2,"state":"ACTIVE",
+          "reservedUntil":"%s","executedAt":null
+        }],
+        "contentReady":true
+      }],
+      "replayed":false
+    }
+    """
+        .formatted(
+            orderId,
+            oldUnitId,
+            warehouseId,
+            actorId,
+            oldUnitId,
+            warehouseId,
+            orderId,
+            newUnitId,
+            warehouseId,
+            actorId,
+            newUnitId,
+            warehouseId,
+            movementReservationId,
+            ownerType,
+            movementId,
+            lineId,
+            equipmentId,
+            sourceBalanceId,
+            warehouseId,
+            oldUnitId,
+            reservedUntil);
   }
 
   @Test

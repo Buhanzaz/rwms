@@ -106,9 +106,7 @@ from app.routing import (
 from app.routing.truck_profile import (
     CargoDimensions,
     OperationalAxleLoadProfile,
-    TrailerSpec,
     TruckConfigurationType,
-    VehicleRoutingSpec,
 )
 from app.schemas.domain import (
     CyclePatch,
@@ -117,6 +115,7 @@ from app.schemas.domain import (
     RoutePlanRead,
 )
 from app.services import plans as plan_service
+from app.services.dynamic_support import mode_allows
 from app.services.planning_group import resolve_planning_warehouse_group
 from app.services.resource_incidents import DayResourceRestrictions
 from app.services.support_resource_candidates import (
@@ -136,8 +135,10 @@ from app.services.vehicle_availability import (
 from app.simulation import DelayOverride, DriverUnavailableOverride, propagate_delays
 from app.slot_planning.configuration import (
     effective_vehicle_cabin_capacity,
+    trailer_routing_spec,
     vehicle_equipment_snapshot,
     vehicle_has_available_trailer,
+    vehicle_routing_spec,
     warehouse_slot_configuration,
 )
 from app.slot_planning.models import PlanningReason, WarehouseSlotConfiguration
@@ -242,6 +243,26 @@ def _physical_shifts(shifts: Iterable[DriverShift]) -> tuple[DriverShift, ...]:
     for shift in sorted(shifts, key=lambda item: (item.id, _shift_option_id(item))):
         by_id.setdefault(shift.id, shift)
     return tuple(by_id.values())
+
+
+def _delay_selected_shifts(
+    shifts: Iterable[DriverShift],
+    selected_shift_ids: Collection[str],
+    delay_minutes: int,
+) -> tuple[DriverShift, ...]:
+    """Delay selected starts while preserving every valid duty interval."""
+
+    delay = timedelta(minutes=delay_minutes)
+    latest_start_offset = timedelta(seconds=1)
+    return tuple(
+        replace(
+            shift,
+            start_at=min(shift.start_at + delay, shift.end_at - latest_start_offset),
+        )
+        if shift.id in selected_shift_ids
+        else shift
+        for shift in shifts
+    )
 
 
 class _CachedRoutingProvider:
@@ -803,21 +824,16 @@ class RuntimePlannerFacade:
             if self._optional_uuid(value) is not None
         }
         if delay_minutes is not None and delay_minutes > 0 and delayed_shift_ids:
-            shifted_resources = tuple(
-                replace(
-                    shift,
-                    start_at=min(
-                        shift.start_at + timedelta(minutes=delay_minutes),
-                        shift.end_at - timedelta(seconds=1),
-                    ),
-                )
-                if shift.id in delayed_shift_ids
-                else shift
-                for shift in snapshot.input_data.shifts
-            )
             snapshot = replace(
                 snapshot,
-                input_data=replace(snapshot.input_data, shifts=shifted_resources),
+                input_data=replace(
+                    snapshot.input_data,
+                    shifts=_delay_selected_shifts(
+                        snapshot.input_data.shifts,
+                        delayed_shift_ids,
+                        delay_minutes,
+                    ),
+                ),
             )
         return await self._execute_generation(
             session,
@@ -930,21 +946,16 @@ class RuntimePlannerFacade:
             if self._optional_uuid(value) is not None
         }
         if delay_minutes is not None and delay_minutes > 0 and delayed_shift_ids:
-            shifted_resources = tuple(
-                replace(
-                    shift,
-                    start_at=min(
-                        shift.start_at + timedelta(minutes=delay_minutes),
-                        shift.end_at - timedelta(seconds=1),
-                    ),
-                )
-                if shift.id in delayed_shift_ids
-                else shift
-                for shift in snapshot.input_data.shifts
-            )
             snapshot = replace(
                 snapshot,
-                input_data=replace(snapshot.input_data, shifts=shifted_resources),
+                input_data=replace(
+                    snapshot.input_data,
+                    shifts=_delay_selected_shifts(
+                        snapshot.input_data.shifts,
+                        delayed_shift_ids,
+                        delay_minutes,
+                    ),
+                ),
             )
         if command.payload.get("effective_at") is not None:
             earliest_start = max(
@@ -1512,17 +1523,7 @@ class RuntimePlannerFacade:
                 (option.date for option in request.date_options),
                 planning_date,
             )
-            and (
-                day_mode == PlanningDayMode.DELIVERIES_AND_PICKUPS
-                or (
-                    day_mode == PlanningDayMode.DELIVERIES_ONLY
-                    and request.type == "DELIVERY"
-                )
-                or (
-                    day_mode == PlanningDayMode.PICKUPS_ONLY
-                    and request.type == "PICKUP"
-                )
-            )
+            and mode_allows(day_mode, request.type)
         ]
         policy_zones = tuple(
             await session.scalars(
@@ -2459,9 +2460,9 @@ class RuntimePlannerFacade:
             name=vehicle.name,
             capacity=effective_vehicle_cabin_capacity(vehicle, unavailable_trailer_ids),
             active=vehicle.active,
-            routing_spec=RuntimePlannerFacade._vehicle_routing_spec(vehicle),
+            routing_spec=vehicle_routing_spec(vehicle),
             default_trailer=(
-                RuntimePlannerFacade._trailer_spec(vehicle.default_trailer)
+                trailer_routing_spec(vehicle.default_trailer)
                 if vehicle_has_available_trailer(vehicle, unavailable_trailer_ids)
                 else None
             ),
@@ -2472,63 +2473,6 @@ class RuntimePlannerFacade:
                 )
                 for profile in vehicle.load_profiles
             ),
-        )
-
-    @staticmethod
-    def _vehicle_routing_spec(vehicle: DbVehicle) -> VehicleRoutingSpec:
-        """Translate nullable persisted equipment values without inventing defaults."""
-
-        return VehicleRoutingSpec(
-            vehicle_id=vehicle.id,
-            is_hgv=vehicle.is_hgv,
-            tare_weight_kg=vehicle.tare_weight_kg,
-            max_gross_weight_kg=vehicle.max_gross_weight_kg,
-            length_mm=vehicle.length_mm,
-            width_mm=vehicle.width_mm,
-            height_mm=vehicle.height_mm,
-            axle_count=vehicle.axle_count,
-            max_axle_load_kg=vehicle.max_axle_load_kg,
-            payload_capacity_kg=vehicle.payload_capacity_kg,
-            platform_length_mm=vehicle.platform_length_mm,
-            platform_width_mm=vehicle.platform_width_mm,
-            platform_height_from_ground_mm=vehicle.platform_height_from_ground_mm,
-            max_platform_payload_kg=vehicle.max_platform_payload_kg,
-            max_cargo_length_mm=vehicle.max_cargo_length_mm,
-            max_cargo_width_mm=vehicle.max_cargo_width_mm,
-            max_cargo_height_mm=vehicle.max_cargo_height_mm,
-            max_cargo_weight_kg=vehicle.max_cargo_weight_kg,
-            can_use_trailer=vehicle.can_use_trailer,
-            combined_length_with_trailer_mm=vehicle.combined_length_with_trailer_mm,
-            coupling_length_mm=vehicle.coupling_length_mm,
-            height_safety_margin_mm=vehicle.height_safety_margin_mm,
-            width_safety_margin_mm=vehicle.width_safety_margin_mm,
-            weight_safety_margin_kg=vehicle.weight_safety_margin_kg,
-        )
-
-    @staticmethod
-    def _trailer_spec(trailer: Any | None) -> TrailerSpec | None:
-        """Translate an optional assigned trailer into the pure routing boundary."""
-
-        if trailer is None or not trailer.active:
-            return None
-        return TrailerSpec(
-            trailer_id=trailer.id,
-            tare_weight_kg=trailer.tare_weight_kg,
-            max_gross_weight_kg=trailer.max_gross_weight_kg,
-            length_mm=trailer.length_mm,
-            width_mm=trailer.width_mm,
-            height_mm=trailer.height_mm,
-            platform_length_mm=trailer.platform_length_mm,
-            platform_width_mm=trailer.platform_width_mm,
-            platform_height_from_ground_mm=trailer.platform_height_from_ground_mm,
-            max_platform_payload_kg=trailer.max_platform_payload_kg,
-            payload_capacity_kg=trailer.payload_capacity_kg,
-            axle_count=trailer.axle_count,
-            max_axle_load_kg=trailer.max_axle_load_kg,
-            max_cargo_length_mm=trailer.max_cargo_length_mm,
-            max_cargo_width_mm=trailer.max_cargo_width_mm,
-            max_cargo_height_mm=trailer.max_cargo_height_mm,
-            max_cargo_weight_kg=trailer.max_cargo_weight_kg,
         )
 
     @staticmethod

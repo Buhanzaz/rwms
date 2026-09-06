@@ -4,11 +4,6 @@ export type MediaProcessingStatus =
 export type MediaViewerContext =
   "ESTIMATE" | "INSPECTION" | "WORK" | "WAREHOUSE" | "HISTORY"
 
-export type OriginalMediaViewerContext = Extract<
-  MediaViewerContext,
-  "ESTIMATE" | "INSPECTION" | "WORK"
->
-
 export type MediaUserPreferencesDto = {
   showOriginalPhotos: boolean
 }

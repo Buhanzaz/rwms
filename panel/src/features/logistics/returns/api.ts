@@ -17,9 +17,6 @@ export const listReturns = (
   assetId?: string
 ) => returnClient.list(accessToken, warehouseId, scheduledDate, assetId)
 
-export const getReturn = (accessToken: string, documentId: string) =>
-  returnClient.get(accessToken, documentId)
-
 export const createReturn = (input: ReturnCreateCommand) =>
   returnClient.create(input)
 

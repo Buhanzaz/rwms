@@ -505,7 +505,7 @@ final class LogisticsAssetOperationsDependencyClient {
             ASSET_SCOPE,
             "Dependency returned an empty response",
             DEFAULT);
-    return movementReservation(response);
+    return EquipmentMovementReservationResponse.decode(response);
   }
 
   EquipmentMovementReservation releaseEquipmentMovementReservation(
@@ -525,7 +525,7 @@ final class LogisticsAssetOperationsDependencyClient {
             ASSET_SCOPE,
             "Dependency returned an empty response",
             DEFAULT);
-    return movementReservation(response);
+    return EquipmentMovementReservationResponse.decode(response);
   }
 
   EquipmentMovementExecution executeEquipmentMovement(
@@ -646,43 +646,6 @@ final class LogisticsAssetOperationsDependencyClient {
         response.state(),
         response.expiresAt(),
         response.committedAt());
-  }
-
-  private static EquipmentMovementReservation movementReservation(
-      EquipmentMovementReservationResponse response) {
-    if (response == null
-        || response.reservationId() == null
-        || response.version() < 0
-        || !"LOGISTICS_EQUIPMENT_MOVEMENT".equals(response.ownerType())
-        || response.movementId() == null
-        || response.lineId() == null
-        || response.equipmentId() == null
-        || response.equipmentName() == null
-        || response.equipmentName().isBlank()
-        || response.sourceBalanceId() == null
-        || response.sourceWarehouseId() == null
-        || response.sourceLocationKind() == null
-        || response.quantity() < 1
-        || response.state() == null
-        || response.reservedUntil() == null) {
-      throw malformed("Asset-service returned an invalid equipment movement reservation");
-    }
-    return new EquipmentMovementReservation(
-        response.reservationId(),
-        response.version(),
-        response.ownerType(),
-        response.movementId(),
-        response.lineId(),
-        response.equipmentId(),
-        response.equipmentName(),
-        response.sourceBalanceId(),
-        response.sourceWarehouseId(),
-        response.sourceRentalItemId(),
-        response.sourceLocationKind(),
-        response.quantity(),
-        response.state(),
-        response.reservedUntil(),
-        response.executedAt());
   }
 
   private static EquipmentMovementExecution movementExecution(
@@ -1006,27 +969,6 @@ final class LogisticsAssetOperationsDependencyClient {
    */
   private record ReleaseEquipmentMovementReservationRequest(
       long expectedReservationVersion, UUID movementId, UUID lineId) {}
-
-  /**
-   * Asset-service reservation truth used by logistics to track source location, quantity, version,
-   * expiry, and execution state.
-   */
-  private record EquipmentMovementReservationResponse(
-      UUID reservationId,
-      long version,
-      String ownerType,
-      UUID movementId,
-      UUID lineId,
-      UUID equipmentId,
-      String equipmentName,
-      UUID sourceBalanceId,
-      UUID sourceWarehouseId,
-      UUID sourceRentalItemId,
-      String sourceLocationKind,
-      long quantity,
-      String state,
-      OffsetDateTime reservedUntil,
-      OffsetDateTime executedAt) {}
 
   /**
    * Per-line execution command that fences a reservation and declares its destination stock

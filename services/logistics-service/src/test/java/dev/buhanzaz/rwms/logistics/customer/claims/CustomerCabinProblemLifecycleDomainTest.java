@@ -3,8 +3,8 @@ package dev.buhanzaz.rwms.logistics.customer.claims;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerCabinProblemCategory;
-import dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerCabinProblemPhase;
+import dev.buhanzaz.rwms.logistics.customer.domain.CustomerCabinProblemCategory;
+import dev.buhanzaz.rwms.logistics.customer.domain.CustomerCabinProblemPhase;
 import dev.buhanzaz.rwms.logistics.customer.domain.CustomerCabinProblem;
 import java.time.OffsetDateTime;
 import java.util.UUID;

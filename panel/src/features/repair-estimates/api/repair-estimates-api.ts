@@ -41,8 +41,6 @@ export type ReturnEstimateSourceDto = MaintenanceReturnEstimateSource
 const repairEstimatesClient: RepairEstimatesClient =
   new HttpMaintenanceRepairEstimatesAdapter(panelEstimateRentalItemsClient)
 
-const INITIAL_RENTAL_ITEM_PAGE_SIZE = 100
-
 export function repairEstimateListQueryKey(
   warehouseId: string,
   status?: RepairEstimateStatus
@@ -78,10 +76,6 @@ export function returnEstimateSourcesQueryKey(
   ] as const
 }
 
-export function estimateRentalItemsQueryKey(warehouseId: string) {
-  return [...ESTIMATE_RENTAL_ITEMS_QUERY_KEY, warehouseId] as const
-}
-
 export function listRepairEstimates(
   warehouseId: string,
   status?: RepairEstimateStatus
@@ -103,16 +97,6 @@ export function listReturnEstimateSources(
     warehouseId,
     returnId
   )
-}
-
-export async function listEstimateRentalItems(warehouseId: string) {
-  const page = await panelEstimateRentalItemsClient.search({
-    warehouseId,
-    search: "",
-    page: 0,
-    size: INITIAL_RENTAL_ITEM_PAGE_SIZE,
-  })
-  return page.items
 }
 
 export function searchEstimateRentalItems(
@@ -197,18 +181,6 @@ export async function saveRepairEstimateDraft(params: {
     )
     .map(toTaskPlanCommand)
   return repairEstimatesClient.saveDraft({ ...command, taskPlans })
-}
-
-export async function prepareRepairEstimateCompletion(
-  draft: RepairEstimateEditorDraft
-) {
-  const snapshot = await getOperationalRepairEstimateCatalog()
-  const catalog = createRepairEstimateCatalogIndex(snapshot)
-  return {
-    catalog,
-    issues: validateAutoCompletion(draft.lines, catalog),
-    taskPlans: buildRepairEstimateTaskPlans(draft.lines, catalog),
-  }
 }
 
 function completionPlans(

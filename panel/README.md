@@ -592,7 +592,7 @@ contexts and screens are usable.
   dialog](src/features/orders/components/order-unit-replacement-dialog.tsx) and
   [order adapter](src/features/orders/api/orders-api.ts).
 
-## Logistics driver board
+## Operational logistics
 
 - Shipment and return forms select an active driver by opaque worker ID. A planned warehouse
   transfer may separately name its trip driver and resource-reposition intent; an unassigned
@@ -634,32 +634,14 @@ contexts and screens are usable.
   document shape. Transfer-only responses require null driver and rental
   shipment fields and are rejected explicitly when required fields are missing
   or contain shipment data; the panel never fabricates a successful transfer.
-- `/logistics/board` shows only shipment and return cards in horizontal calendar
-  columns. Each date contains independently collapsible active-driver queues and
-  an unassigned queue only when such cards exist. Current and scheduled lanes
-  remain distinct inside the same driver section, and cards collapse
-  independently.
-- The dated board renders only grouped shipment/return projections; legacy
-  cards without a trip projection and transfers are hidden. A card headline is
-  `Отгрузить бытовку` or `Вернуть бытовку`, never a task/trip number or raw
-  legacy text. It shows `Дата выполнения задания`, not the client wish. Each
-  cabin shows actual filling as `Название: Nшт` and exactly one final status:
-  gray `Нет наполнения`, orange `Ожидает наполнения`, yellow `Ожидает выноса
-  наполнения`, or green `Наполнение готово`.
-- A logistics card can be reordered only inside its existing date, lane and
-  driver queue. The client sends task and entry versions with the new index; it
-  never changes the driver audience through drag and drop.
-- `/logistics/tasks` is the separate shared warehouse movement board. It keeps
-  transfer, general movement, repair-place and capital-repair workflows without
-  driver sections or driver identity in the UI.
-- Optimistic movement is presentation state only. A rejection restores the
-  prior board and refreshes the authoritative projection; a driver-directory
-  failure leaves known tasks and board commands available.
+- The retired `/logistics/board` and `/logistics/order-tasks` URLs redirect to
+  `/logistics/shipments`; `/logistics/tasks` redirects to `/logistics/transfers`.
+  Their disconnected board implementations and dedicated tests have been removed.
+  The shared driver-board API/model remain available to supported consumers.
 
 See the [canonical logistics contract](../contracts/openapi/logistics-service.yaml),
-[board model](src/features/logistics/driver-board/driver-board-model.ts), and
-[logistics board](src/features/logistics/driver-board/logistics-board-page.tsx),
-[movement board](src/features/logistics/driver-board/driver-board-page.tsx), and
+[active routes](src/App.tsx),
+[shipment page](src/features/logistics/logistics-shipments-page.tsx), and
 [warehouse-transfer adapter](src/features/logistics/warehouse-transfers/adapters/http-warehouse-transfer-client.ts).
 
 ## Daily brigade status

@@ -8,7 +8,7 @@ from typing import Any
 
 from app.config import Settings
 from app.errors import ApiError
-from app.models import Vehicle, Warehouse
+from app.models import Trailer, Vehicle, Warehouse
 from app.routing import (
     GeoPoint,
     MockRoutingProvider,
@@ -52,6 +52,61 @@ def effective_vehicle_cabin_capacity(
         min(2, vehicle.capacity)
         if vehicle_has_available_trailer(vehicle, unavailable_trailer_ids)
         else 1
+    )
+
+
+def vehicle_routing_spec(vehicle: Vehicle) -> VehicleRoutingSpec:
+    """Translate nullable persisted vehicle values without inventing defaults."""
+
+    return VehicleRoutingSpec(
+        vehicle_id=vehicle.id,
+        is_hgv=vehicle.is_hgv,
+        tare_weight_kg=vehicle.tare_weight_kg,
+        max_gross_weight_kg=vehicle.max_gross_weight_kg,
+        length_mm=vehicle.length_mm,
+        width_mm=vehicle.width_mm,
+        height_mm=vehicle.height_mm,
+        axle_count=vehicle.axle_count,
+        max_axle_load_kg=vehicle.max_axle_load_kg,
+        payload_capacity_kg=vehicle.payload_capacity_kg,
+        platform_length_mm=vehicle.platform_length_mm,
+        platform_width_mm=vehicle.platform_width_mm,
+        platform_height_from_ground_mm=vehicle.platform_height_from_ground_mm,
+        max_platform_payload_kg=vehicle.max_platform_payload_kg,
+        max_cargo_length_mm=vehicle.max_cargo_length_mm,
+        max_cargo_width_mm=vehicle.max_cargo_width_mm,
+        max_cargo_height_mm=vehicle.max_cargo_height_mm,
+        max_cargo_weight_kg=vehicle.max_cargo_weight_kg,
+        can_use_trailer=vehicle.can_use_trailer,
+        combined_length_with_trailer_mm=vehicle.combined_length_with_trailer_mm,
+        coupling_length_mm=vehicle.coupling_length_mm,
+        height_safety_margin_mm=vehicle.height_safety_margin_mm,
+        width_safety_margin_mm=vehicle.width_safety_margin_mm,
+        weight_safety_margin_kg=vehicle.weight_safety_margin_kg,
+    )
+
+
+def trailer_routing_spec(trailer: Trailer) -> TrailerSpec:
+    """Translate nullable persisted trailer values without selecting availability."""
+
+    return TrailerSpec(
+        trailer_id=trailer.id,
+        tare_weight_kg=trailer.tare_weight_kg,
+        max_gross_weight_kg=trailer.max_gross_weight_kg,
+        length_mm=trailer.length_mm,
+        width_mm=trailer.width_mm,
+        height_mm=trailer.height_mm,
+        platform_length_mm=trailer.platform_length_mm,
+        platform_width_mm=trailer.platform_width_mm,
+        platform_height_from_ground_mm=trailer.platform_height_from_ground_mm,
+        max_platform_payload_kg=trailer.max_platform_payload_kg,
+        payload_capacity_kg=trailer.payload_capacity_kg,
+        axle_count=trailer.axle_count,
+        max_axle_load_kg=trailer.max_axle_load_kg,
+        max_cargo_length_mm=trailer.max_cargo_length_mm,
+        max_cargo_width_mm=trailer.max_cargo_width_mm,
+        max_cargo_height_mm=trailer.max_cargo_height_mm,
+        max_cargo_weight_kg=trailer.max_cargo_weight_kg,
     )
 
 
@@ -141,55 +196,8 @@ def vehicle_equipment_snapshot(
     )
     return VehicleEquipmentSnapshot(
         vehicle_id=str(vehicle.id),
-        vehicle=VehicleRoutingSpec(
-            vehicle_id=vehicle.id,
-            is_hgv=vehicle.is_hgv,
-            tare_weight_kg=vehicle.tare_weight_kg,
-            max_gross_weight_kg=vehicle.max_gross_weight_kg,
-            length_mm=vehicle.length_mm,
-            width_mm=vehicle.width_mm,
-            height_mm=vehicle.height_mm,
-            axle_count=vehicle.axle_count,
-            max_axle_load_kg=vehicle.max_axle_load_kg,
-            payload_capacity_kg=vehicle.payload_capacity_kg,
-            platform_length_mm=vehicle.platform_length_mm,
-            platform_width_mm=vehicle.platform_width_mm,
-            platform_height_from_ground_mm=vehicle.platform_height_from_ground_mm,
-            max_platform_payload_kg=vehicle.max_platform_payload_kg,
-            max_cargo_length_mm=vehicle.max_cargo_length_mm,
-            max_cargo_width_mm=vehicle.max_cargo_width_mm,
-            max_cargo_height_mm=vehicle.max_cargo_height_mm,
-            max_cargo_weight_kg=vehicle.max_cargo_weight_kg,
-            can_use_trailer=vehicle.can_use_trailer,
-            combined_length_with_trailer_mm=vehicle.combined_length_with_trailer_mm,
-            coupling_length_mm=vehicle.coupling_length_mm,
-            height_safety_margin_mm=vehicle.height_safety_margin_mm,
-            width_safety_margin_mm=vehicle.width_safety_margin_mm,
-            weight_safety_margin_kg=vehicle.weight_safety_margin_kg,
-        ),
-        trailer=(
-            TrailerSpec(
-                trailer_id=trailer.id,
-                tare_weight_kg=trailer.tare_weight_kg,
-                max_gross_weight_kg=trailer.max_gross_weight_kg,
-                length_mm=trailer.length_mm,
-                width_mm=trailer.width_mm,
-                height_mm=trailer.height_mm,
-                platform_length_mm=trailer.platform_length_mm,
-                platform_width_mm=trailer.platform_width_mm,
-                platform_height_from_ground_mm=trailer.platform_height_from_ground_mm,
-                max_platform_payload_kg=trailer.max_platform_payload_kg,
-                payload_capacity_kg=trailer.payload_capacity_kg,
-                axle_count=trailer.axle_count,
-                max_axle_load_kg=trailer.max_axle_load_kg,
-                max_cargo_length_mm=trailer.max_cargo_length_mm,
-                max_cargo_width_mm=trailer.max_cargo_width_mm,
-                max_cargo_height_mm=trailer.max_cargo_height_mm,
-                max_cargo_weight_kg=trailer.max_cargo_weight_kg,
-            )
-            if trailer is not None
-            else None
-        ),
+        vehicle=vehicle_routing_spec(vehicle),
+        trailer=trailer_routing_spec(trailer) if trailer is not None else None,
         axle_profiles=tuple(
             OperationalAxleLoadProfile(
                 configuration_type=TruckConfigurationType(profile.configuration_type),

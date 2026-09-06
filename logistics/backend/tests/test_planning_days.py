@@ -1,18 +1,29 @@
 """Integration coverage for one-way warehouse planning-date finalization."""
 
-from datetime import date
+from datetime import date, datetime
 from unittest.mock import AsyncMock
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import ApiError
-from app.models import PlanningDayClosure
+from app.models import (
+    LogisticsActionStatus,
+    LogisticsEvent,
+    LogisticsEventType,
+    LogisticsHumanAction,
+    LogisticsNotice,
+    PlanningDayClosure,
+    PlanningDayMode,
+    PlanningDayPolicy,
+)
 from app.services.planning_days import close_planning_day, get_planning_day_status
 from tests.factories import make_request, make_warehouse
 
 pytestmark = pytest.mark.integration
+ZONE = ZoneInfo("Europe/Moscow")
 
 
 @pytest.mark.asyncio
@@ -53,6 +64,86 @@ async def test_close_day_is_one_way_and_idempotent(db_session: AsyncSession) -> 
         )
     )
     assert closure_count == 1
+
+
+@pytest.mark.asyncio
+async def test_open_and_closed_status_share_policy_and_pending_action_projection(
+    db_session: AsyncSession,
+) -> None:
+    """Closing a day retains its mode/version and counts only actionable queue items."""
+
+    planning_date = date(2026, 8, 31)
+    warehouse = await make_warehouse(db_session, default_planning_date=planning_date)
+    policy = PlanningDayPolicy(
+        warehouse_id=warehouse.id,
+        date=planning_date,
+        mode=PlanningDayMode.PICKUPS_ONLY,
+        version=4,
+        changed_by="test-user",
+    )
+    event = LogisticsEvent(
+        warehouse_id=warehouse.id,
+        day=planning_date,
+        event_type=LogisticsEventType.MANUAL_PLAN_CHANGE,
+        idempotency_key="planning-day-status-projection",
+        occurred_at=datetime(2026, 8, 31, 9, tzinfo=ZONE),
+        actor="test-user",
+        facts={},
+    )
+    db_session.add_all((policy, event))
+    await db_session.flush()
+    notice = LogisticsNotice(
+        event_id=event.id,
+        warehouse_id=warehouse.id,
+        day=planning_date,
+        notice_type="TEST",
+        severity="INFO",
+        reason_codes=["TEST"],
+        facts={},
+        message_ru="Тест",
+        requires_action=True,
+        status="REQUIRES_ACTION",
+    )
+    db_session.add(notice)
+    await db_session.flush()
+    db_session.add_all(
+        LogisticsHumanAction(
+            notice_id=notice.id,
+            event_id=event.id,
+            warehouse_id=warehouse.id,
+            day=planning_date,
+            action_type=f"TEST_{status}",
+            status=status,
+        )
+        for status in (
+            LogisticsActionStatus.PENDING,
+            LogisticsActionStatus.IN_PROGRESS,
+            LogisticsActionStatus.RESOLVED,
+        )
+    )
+    await db_session.flush()
+
+    open_status = await get_planning_day_status(db_session, warehouse.id, planning_date)
+    planner = AsyncMock()
+    planner.generate_plan.return_value = None
+    closed = await close_planning_day(
+        db_session,
+        planner,
+        warehouse.id,
+        planning_date,
+        closed_by="test-user",
+    )
+
+    assert (open_status.mode, open_status.mode_version, open_status.pending_action_count) == (
+        PlanningDayMode.PICKUPS_ONLY,
+        4,
+        2,
+    )
+    assert (
+        closed.status.mode,
+        closed.status.mode_version,
+        closed.status.pending_action_count,
+    ) == (open_status.mode, open_status.mode_version, open_status.pending_action_count)
 
 
 @pytest.mark.asyncio

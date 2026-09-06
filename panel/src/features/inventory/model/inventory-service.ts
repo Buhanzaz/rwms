@@ -595,12 +595,6 @@ export type InventoryPlanSelection =
       stages: InventoryPlanStageSelection[]
     }
 
-export type InventoryPublicationBatch = {
-  inventoryId: string
-  aggregateState: InventoryAggregatePublicationState
-  intents: InventoryPublicationIntent[]
-}
-
 export type RecalculateInventoryOutcomeRequest = {
   expectedSessionRevision: number
   finalPlanVersion: number
@@ -615,21 +609,6 @@ export type OutcomeRecalculation = {
   furnitureReconciliationState: InventoryFurnitureReconciliationState
   createdPublicationCount: number
   requeuedPublicationCount: number
-}
-
-export type InventoryCreateIntent = {
-  findingId: string
-  idempotencyKey: string
-  number: string
-}
-
-export type InventoryPublicationReconcileEvidence = {
-  reconcileReason: string
-  currentPreconditionSha256: string
-}
-
-export type InventoryCommandIdentity = {
-  idempotencyKey: string
 }
 
 export type InventoryStatisticsSummary = {
@@ -649,31 +628,5 @@ export type InventorySessionStatistics = {
 export type InventoryStatisticsPage = {
   content: InventorySessionStatistics[]
   page: InventoryPageMetadata
-}
-
-export type InventoryMediaAsset = {
-  id: string
-  fileName: string
-  contentType: string
-  kind: "IMAGE" | "VIDEO"
-  status: "UPLOADING" | "PROCESSING" | "READY" | "FAILED" | "DELETED"
-  version: number
-  generation: number
-  rotationDegrees: 0 | 90 | 180 | 270
-  sortOrder: number
-  sizeBytes: number | null
-  createdAt: string
-  variants: Array<{
-    kind: "SMALL" | "MEDIUM" | "LARGE"
-    contentType: string
-    url: string
-    width: number | null
-    height: number | null
-  }>
-}
-
-export type InventoryMediaScope = {
-  ownerId: string
-  warehouseId: string
 }
 import type { LogisticsPlanningMode } from "@/features/repair-estimates/model/repair-estimate"

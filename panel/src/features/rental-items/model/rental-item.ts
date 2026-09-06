@@ -16,11 +16,6 @@ export type RentalItemStatus =
   | "OWN_NEEDS"
   | "IN_TRANSFER"
 
-export type MoveRentalItemContentToStockPayload = {
-  name: string
-  quantity: number
-}
-
 export const RENTAL_ITEM_STATUS_LABEL: Record<RentalItemStatus, string> = {
   RENTED: "Аренда",
   BOOKED: "Бронь",
@@ -165,17 +160,6 @@ export type RentalItemsTableSchema = {
   columns: RentalItemsColumnConfig[]
   filters: RentalItemsFilterDefinition[]
   searchableFieldIds: RentalItemsColumnKey[]
-}
-
-export type RentalItemsQueryParams = {
-  warehouseId: string
-  page?: number
-  size?: number
-  search?: string
-  sortBy?: RentalItemsColumnKey
-  sortDirection?: "asc" | "desc"
-  filters?: RentalItemsFiltersState
-  excludeStatuses?: RentalItemStatus[]
 }
 
 export type PageResponse<T> = {
@@ -362,8 +346,6 @@ const RENTAL_ITEM_FIELD_DEFINITIONS: RentalItemFieldDefinition[] = [
 const FIELD_DEFINITION_BY_ID = new Map(
   RENTAL_ITEM_FIELD_DEFINITIONS.map((definition) => [definition.id, definition])
 )
-
-export const EMPTY_RENTAL_ITEMS_TABLE_SCHEMA = buildRentalItemsTableSchema([])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -677,22 +659,6 @@ export function getRentalItemSortValue(
   }
 
   return formatRentalItemFieldValue(item, key)
-}
-
-export function getRentalItemSearchText(
-  item: RentalItemDto,
-  searchableFieldIds: RentalItemsColumnKey[]
-) {
-  return searchableFieldIds
-    .flatMap((fieldId) => {
-      if (fieldId === "characteristics") {
-        return item.characteristics.map((characteristic) => characteristic.name)
-      }
-
-      return [formatRentalItemFieldValue(item, fieldId)]
-    })
-    .join(" ")
-    .toLowerCase()
 }
 
 export function formatRentalItemContents(

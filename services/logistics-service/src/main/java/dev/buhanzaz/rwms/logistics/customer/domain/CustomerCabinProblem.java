@@ -1,7 +1,5 @@
 package dev.buhanzaz.rwms.logistics.customer.domain;
 
-import dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerCabinProblemCategory;
-import dev.buhanzaz.rwms.logistics.customer.api.CustomerApiModels.CustomerCabinProblemPhase;
 import dev.buhanzaz.rwms.logistics.customer.claims.CustomerCabinProblemResolutionKind;
 import dev.buhanzaz.rwms.logistics.customer.claims.CustomerCabinProblemStatus;
 import jakarta.persistence.Column;

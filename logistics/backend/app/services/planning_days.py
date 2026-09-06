@@ -98,6 +98,38 @@ def _status(
     )
 
 
+async def _day_policy_state(
+    session: AsyncSession,
+    warehouse_id: UUID,
+    planning_date: date,
+) -> tuple[PlanningDayPolicy | None, int]:
+    """Load the mode and open human-action count used by each day status projection."""
+
+    policy = await session.scalar(
+        select(PlanningDayPolicy).where(
+            PlanningDayPolicy.warehouse_id == warehouse_id,
+            PlanningDayPolicy.date == planning_date,
+        )
+    )
+    pending_action_count = len(
+        tuple(
+            await session.scalars(
+                select(LogisticsHumanAction.id).where(
+                    LogisticsHumanAction.warehouse_id == warehouse_id,
+                    LogisticsHumanAction.day == planning_date,
+                    LogisticsHumanAction.status.in_(
+                        (
+                            LogisticsActionStatus.PENDING,
+                            LogisticsActionStatus.IN_PROGRESS,
+                        )
+                    ),
+                )
+            )
+        )
+    )
+    return policy, pending_action_count
+
+
 async def get_planning_day_status(
     session: AsyncSession,
     warehouse_id: UUID,
@@ -112,27 +144,10 @@ async def get_planning_day_status(
             PlanningDayClosure.date == planning_date,
         )
     )
-    policy = await session.scalar(
-        select(PlanningDayPolicy).where(
-            PlanningDayPolicy.warehouse_id == warehouse.id,
-            PlanningDayPolicy.date == planning_date,
-        )
-    )
-    pending_action_count = len(
-        tuple(
-            await session.scalars(
-                select(LogisticsHumanAction.id).where(
-                    LogisticsHumanAction.warehouse_id == warehouse.id,
-                    LogisticsHumanAction.day == planning_date,
-                    LogisticsHumanAction.status.in_(
-                        (
-                            LogisticsActionStatus.PENDING,
-                            LogisticsActionStatus.IN_PROGRESS,
-                        )
-                    ),
-                )
-            )
-        )
+    policy, pending_action_count = await _day_policy_state(
+        session,
+        warehouse.id,
+        planning_date,
     )
     plan_id = await _latest_plan_id(session, warehouse.id, planning_date)
     return _status(
@@ -188,27 +203,10 @@ async def close_planning_day(
     )
     await session.refresh(closure)
     plan_id = await _latest_plan_id(session, warehouse.id, planning_date)
-    policy = await session.scalar(
-        select(PlanningDayPolicy).where(
-            PlanningDayPolicy.warehouse_id == warehouse.id,
-            PlanningDayPolicy.date == planning_date,
-        )
-    )
-    pending_action_count = len(
-        tuple(
-            await session.scalars(
-                select(LogisticsHumanAction.id).where(
-                    LogisticsHumanAction.warehouse_id == warehouse.id,
-                    LogisticsHumanAction.day == planning_date,
-                    LogisticsHumanAction.status.in_(
-                        (
-                            LogisticsActionStatus.PENDING,
-                            LogisticsActionStatus.IN_PROGRESS,
-                        )
-                    ),
-                )
-            )
-        )
+    policy, pending_action_count = await _day_policy_state(
+        session,
+        warehouse.id,
+        planning_date,
     )
     mandatory_task_ids = set(
         await session.scalars(

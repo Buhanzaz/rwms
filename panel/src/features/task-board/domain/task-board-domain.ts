@@ -1,24 +1,4 @@
-import type {
-  TaskBoardEntryDto,
-  TaskBoardQueueDto,
-} from "@/features/task-board/model/task-board"
-
-export function taskBoardTargetIndexAt(
-  entries: TaskBoardEntryDto[],
-  entryId: string
-) {
-  const index = entries.findIndex((entry) => entry.id === entryId)
-  return Math.max(0, Math.min(index, entries.length - 1))
-}
-
-export function canMoveEntryToQueue(entry: TaskBoardEntryDto) {
-  return (
-    entry.status !== "IN_PROGRESS" &&
-    entry.status !== "PAUSED" &&
-    entry.status !== "DONE" &&
-    entry.status !== "CANCELLED"
-  )
-}
+import type { TaskBoardQueueDto } from "@/features/task-board/model/task-board"
 
 export function mergeQueueCollapsedSettings(params: {
   current: Set<string>

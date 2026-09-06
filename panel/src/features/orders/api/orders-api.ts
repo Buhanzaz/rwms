@@ -19,7 +19,6 @@ import {
   type OrderUnitCandidate,
 } from "@/features/orders/domain/orders"
 import {
-  createClient,
   listClients,
   parseRentalClient,
 } from "@/features/clients/api/clients-api"
@@ -598,14 +597,6 @@ export async function listOrderClients(params: {
   size?: number
 }): Promise<OrderPage<OrderClientSearchItem>> {
   return listClients(params)
-}
-
-export async function createOrderClient(params: {
-  accessToken: string
-  idempotencyKey: string
-  input: CreateClientInput
-}): Promise<OrderClientSearchItem> {
-  return createClient(params)
 }
 
 export async function listClientOrders(params: {

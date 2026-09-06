@@ -11,15 +11,6 @@ import type {
   InventoryPermission,
 } from "@/features/inventory/model/inventory"
 
-export const INVENTORY_REQUIRED_ACCESS = {
-  VIEW: "VIEW",
-  START: "EDIT",
-  FINDING_MUTATION: "EDIT",
-  MEDIA_MUTATION: "EDIT",
-  COMPLETE: "MANAGE",
-  PUBLICATION: "MANAGE",
-} as const satisfies Record<string, WarehouseAccessLevel>
-
 const permissionsByAccess: Record<WarehouseAccessLevel, InventoryPermission[]> =
   {
     VIEW: ["VIEW"],

@@ -37,8 +37,6 @@ export const RENTAL_MANAGER_AUTH_CONFIG: AuthApplicationConfig = {
   routePrefix: "/manager/",
   sessionStoragePrefix: "rwms.rental-manager.oidc.",
 }
-
-export const AUTH_CLIENT_ID = PANEL_AUTH_CONFIG.clientId
 export const AUTH_SCOPE = PANEL_AUTH_CONFIG.scope
 
 export function getRedirectUri(config: AuthApplicationConfig) {
@@ -47,12 +45,4 @@ export function getRedirectUri(config: AuthApplicationConfig) {
 
 export function getPostLogoutRedirectUri(config: AuthApplicationConfig) {
   return `${window.location.origin}${config.postLogoutPath}`
-}
-
-export function getPanelRedirectUri() {
-  return getRedirectUri(PANEL_AUTH_CONFIG)
-}
-
-export function getPanelPostLogoutRedirectUri() {
-  return getPostLogoutRedirectUri(PANEL_AUTH_CONFIG)
 }
