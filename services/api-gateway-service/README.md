@@ -187,6 +187,10 @@ implementations and make safe evolution harder.
 
 ## Streaming, failures, and observability
 
+The SSE header deadline cancels the underlying outbound HTTP exchange and returns `504`.
+A response arriving after timeout or cancellation has its body subscription cancelled;
+the gateway releases the connection slot once so another stream can connect.
+
 SSE is transport-only at the gateway. The gateway limits concurrent streams,
 uses asynchronous I/O, filters forwarded headers, and cancels the upstream
 subscription when the client disconnects. Event meaning, replay, ordering, and

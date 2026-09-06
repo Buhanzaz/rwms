@@ -8,6 +8,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import dev.buhanzaz.rwms.gateway.web.GatewayUpstreamProblemWriter;
 import jakarta.servlet.AsyncContext;
 import jakarta.servlet.AsyncEvent;
 import jakarta.servlet.AsyncListener;
@@ -23,17 +24,66 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Flow;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.net.ssl.SSLSession;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.http.client.HttpClientSettings;
+import org.springframework.cloud.gateway.server.mvc.filter.HttpHeadersFilter.RequestHttpHeadersFilter;
+import org.springframework.cloud.gateway.server.mvc.filter.HttpHeadersFilter.ResponseHttpHeadersFilter;
+import org.springframework.test.util.ReflectionTestUtils;
 
 class SseProxyHandlerLifecycleTest {
+
+  @Test
+  void headerDeadlineCancelsTheOriginalExchangeAndCancelsLateResponseBodyOnce() throws Exception {
+    SseProxyHandler handler = handler(Duration.ofSeconds(10));
+    LateCompletingFuture<HttpResponse<Flow.Publisher<List<ByteBuffer>>>> upstream =
+        new LateCompletingFuture<>();
+    ControlledPublisher publisher = new ControlledPublisher();
+    try {
+      CompletableFuture<HttpResponse<Flow.Publisher<List<ByteBuffer>>>> deadline =
+          applyHeaderTimeout(handler, upstream);
+
+      assertThat(deadline.completeExceptionally(new TimeoutException("header deadline"))).isTrue();
+      ExecutionException failure =
+          org.junit.jupiter.api.Assertions.assertThrows(
+              ExecutionException.class, deadline::get);
+      assertThat(failure).hasCauseInstanceOf(TimeoutException.class);
+      assertThat(upstream.cancellations()).isEqualTo(1);
+
+      assertThat(upstream.complete(response(publisher))).isTrue();
+      assertThat(publisher.subscriptions()).isEqualTo(1);
+      assertThat(publisher.cancellations()).isEqualTo(1);
+    } finally {
+      handler.destroy();
+    }
+  }
+
+  @Test
+  void cancellingHeaderDeadlineBeforeHeadersCancelsTheOriginalExchange() {
+    SseProxyHandler handler = handler(Duration.ofSeconds(10));
+    CompletableFuture<HttpResponse<Flow.Publisher<List<ByteBuffer>>>> upstream =
+        new CompletableFuture<>();
+    try {
+      CompletableFuture<HttpResponse<Flow.Publisher<List<ByteBuffer>>>> deadline =
+          applyHeaderTimeout(handler, upstream);
+
+      assertThat(deadline.cancel(true)).isTrue();
+      assertThat(upstream).isCancelled();
+    } finally {
+      handler.destroy();
+    }
+  }
 
   @Test
   void clientDisconnectAfterHeadersBeforeSubscriptionCancelsBodyAndReleasesSlotOnce()
@@ -267,6 +317,30 @@ class SseProxyHandlerLifecycleTest {
         release);
   }
 
+  @SuppressWarnings("unchecked")
+  private static CompletableFuture<HttpResponse<Flow.Publisher<List<ByteBuffer>>>>
+      applyHeaderTimeout(
+          SseProxyHandler handler,
+          CompletableFuture<HttpResponse<Flow.Publisher<List<ByteBuffer>>>> upstream) {
+    return (CompletableFuture<HttpResponse<Flow.Publisher<List<ByteBuffer>>>>)
+        ReflectionTestUtils.invokeMethod(handler, "applyHeaderTimeout", upstream);
+  }
+
+  private static SseProxyHandler handler(Duration headerTimeout) {
+    GatewayProperties properties = new GatewayProperties();
+    properties.getSse().setHeaderTimeout(headerTimeout);
+    HttpClientSettings httpClientSettings = mock(HttpClientSettings.class);
+    when(httpClientSettings.connectTimeout()).thenReturn(Duration.ofSeconds(2));
+    ObjectProvider<RequestHttpHeadersFilter> requestFilters = mock(ObjectProvider.class);
+    ObjectProvider<ResponseHttpHeadersFilter> responseFilters = mock(ObjectProvider.class);
+    return new SseProxyHandler(
+        properties,
+        httpClientSettings,
+        mock(GatewayUpstreamProblemWriter.class),
+        requestFilters,
+        responseFilters);
+  }
+
   private static AsyncContext immediateAsyncContext() {
     AsyncContext asyncContext = mock(AsyncContext.class);
     doAnswer(invocation -> {
@@ -482,6 +556,20 @@ class SseProxyHandlerLifecycleTest {
       this.subscriber
           .get()
           .onNext(List.of(ByteBuffer.wrap(value.getBytes(StandardCharsets.UTF_8))));
+    }
+  }
+
+  private static final class LateCompletingFuture<T> extends CompletableFuture<T> {
+    private final AtomicInteger cancellations = new AtomicInteger();
+
+    @Override
+    public boolean cancel(boolean mayInterruptIfRunning) {
+      this.cancellations.incrementAndGet();
+      return false;
+    }
+
+    int cancellations() {
+      return this.cancellations.get();
     }
   }
 }

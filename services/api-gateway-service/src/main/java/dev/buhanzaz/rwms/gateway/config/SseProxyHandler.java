@@ -221,15 +221,25 @@ final class SseProxyHandler
 
   private CompletableFuture<HttpResponse<Flow.Publisher<List<ByteBuffer>>>> applyHeaderTimeout(
       CompletableFuture<HttpResponse<Flow.Publisher<List<ByteBuffer>>>> upstream) {
-    CompletableFuture<HttpResponse<Flow.Publisher<List<ByteBuffer>>>> timed =
-        upstream.orTimeout(this.headerTimeout.toMillis(), TimeUnit.MILLISECONDS);
-    timed.whenComplete(
+    CompletableFuture<HttpResponse<Flow.Publisher<List<ByteBuffer>>>> deadline =
+        new CompletableFuture<>();
+    upstream.whenComplete(
+        (upstreamResponse, error) -> {
+          if (error != null) {
+            deadline.completeExceptionally(error);
+          } else if (!deadline.complete(upstreamResponse)) {
+            StreamBridge.cancelUnsubscribedBody(upstreamResponse.body());
+          }
+        });
+    deadline.orTimeout(this.headerTimeout.toMillis(), TimeUnit.MILLISECONDS);
+    deadline.whenComplete(
         (ignored, error) -> {
-          if (error != null && contains(error, TimeoutException.class)) {
+          if (deadline.isCancelled()
+              || (error != null && contains(error, TimeoutException.class))) {
             upstream.cancel(true);
           }
         });
-    return timed;
+    return deadline;
   }
 
   private void initializeHeaderFilters() {
