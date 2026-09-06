@@ -40,6 +40,8 @@ export type ServiceOwnerMediaUploadJob = Readonly<{
   folderId: string
   commandKeys: MediaUploadCommandKeys
   onProgress?: (percentage: number) => void
+  /** Retains this server receipt even when another file in the batch fails. */
+  onUploaded?: (asset: MediaAsset) => void
 }>
 
 export type ServiceOwnerVideo = Readonly<{
@@ -331,10 +333,11 @@ export function useServiceOwnerMedia({
                 job.commandKeys
               )
         )
+        job.onUploaded?.(result.asset)
         return result.asset
       })
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey }),
   })
   const deleteMutation = useMutation({
     mutationFn: async (asset: MediaAsset) => {

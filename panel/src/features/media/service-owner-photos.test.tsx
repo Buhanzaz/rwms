@@ -301,7 +301,14 @@ describe("ServiceOwnerPhotos", () => {
       kind: "IMAGE",
       status: "PROCESSING",
     }
-    const upload = vi.fn().mockResolvedValue([uploadedAsset])
+    const upload = vi.fn(
+      async (
+        jobs: Array<{ onUploaded: (asset: typeof uploadedAsset) => void }>
+      ) => {
+        jobs[0]!.onUploaded(uploadedAsset)
+        return [uploadedAsset]
+      }
+    )
     mediaState.value = mediaValue({ upload })
 
     const view = render(
@@ -369,9 +376,17 @@ describe("ServiceOwnerPhotos", () => {
       }
     )
     const upload = vi.fn(
-      (jobs: Array<{ onProgress: (percentage: number) => void }>) => {
+      (
+        jobs: Array<{
+          onProgress: (percentage: number) => void
+          onUploaded: (asset: Record<string, unknown>) => void
+        }>
+      ) => {
         expect(jobs).toHaveLength(1)
-        return uploadResult
+        return uploadResult.then((assets) => {
+          jobs[0]!.onUploaded(assets[0]!)
+          return assets
+        })
       }
     )
     mediaState.value = mediaValue({ upload, pending: true })

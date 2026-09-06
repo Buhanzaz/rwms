@@ -15,6 +15,8 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import type {
+  MediaAsset,
+  MediaUploadCommandKeys,
   ReadyMediaReference,
   ServiceMediaOwner,
 } from "@/features/media/media-service"
@@ -56,9 +58,17 @@ type OwnedPendingMedia = Readonly<{
   progress: number
   status: "UPLOADING" | "PROCESSING" | "FAILED"
   assetId: string | null
+  folderId: string
+  sortOrder: number
+  commandKeys: MediaUploadCommandKeys
 }>
 
 type ServiceOwnerPhotosPresentation = "default" | "work-carousel"
+
+type CreatedOwnerMedia = Readonly<{
+  owner: ServiceMediaOwner
+  mediaIds: readonly string[]
+}>
 
 export function ServiceOwnerPhotos({
   accessToken,
@@ -97,7 +107,13 @@ export function ServiceOwnerPhotos({
   onReadyStateChange?: (ready: boolean) => void
   onCoverMediaIdChange?: (mediaId: string | null) => void
 }) {
-  if (owner === null) {
+  // Keep the upload session mounted when ensureOwner updates the parent's document.
+  const [creatingOwner] = useState(owner === null && Boolean(ensureOwner))
+  const [createdMedia, setCreatedMedia] = useState<CreatedOwnerMedia | null>(
+    null
+  )
+  const resolvedOwner = owner ?? createdMedia?.owner ?? null
+  if (resolvedOwner === null || (creatingOwner && createdMedia === null)) {
     return (
       <UnownedServiceOwnerPhotos
         accessToken={accessToken}
@@ -109,6 +125,8 @@ export function ServiceOwnerPhotos({
         coverMediaId={coverMediaId}
         requireCover={requireCover}
         onCoverMediaIdChange={onCoverMediaIdChange}
+        onComplete={setCreatedMedia}
+        onReadyStateChange={onReadyStateChange}
       />
     )
   }
@@ -116,7 +134,8 @@ export function ServiceOwnerPhotos({
   return (
     <OwnedServiceOwnerPhotos
       accessToken={accessToken}
-      owner={owner}
+      owner={resolvedOwner}
+      initialSessionMediaIds={createdMedia?.mediaIds}
       readOnly={readOnly}
       maxItems={maxItems}
       title={title}
@@ -150,6 +169,7 @@ function OwnedServiceOwnerPhotos({
   onReadyReferencesChange,
   onReadyStateChange,
   onCoverMediaIdChange,
+  initialSessionMediaIds = [],
 }: {
   accessToken: string | null
   owner: ServiceMediaOwner
@@ -166,11 +186,14 @@ function OwnedServiceOwnerPhotos({
   onReadyReferencesChange?: (references: ReadyMediaReference[]) => void
   onReadyStateChange?: (ready: boolean) => void
   onCoverMediaIdChange?: (mediaId: string | null) => void
+  initialSessionMediaIds?: readonly string[]
 }) {
   const workCarousel = presentation === "work-carousel"
   const [managerOpen, setManagerOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
-  const [sessionMediaIds, setSessionMediaIds] = useState<readonly string[]>([])
+  const [sessionMediaIds, setSessionMediaIds] = useState<readonly string[]>(
+    initialSessionMediaIds
+  )
   const [removedMediaIds, setRemovedMediaIds] = useState<readonly string[]>([])
   const [pendingUploads, setPendingUploads] = useState<OwnedPendingMedia[]>([])
   const pendingUploadsRef = useRef<OwnedPendingMedia[]>([])
@@ -368,6 +391,7 @@ function OwnedServiceOwnerPhotos({
         pending: item.status !== "FAILED",
         uploadProgress: item.progress,
         coverEligible: false,
+        retryable: item.status === "FAILED" && !item.assetId,
       })),
     ],
     [
@@ -456,32 +480,40 @@ function OwnedServiceOwnerPhotos({
     readyStateCallback.current?.(ready)
   }, [ready])
 
-  function addFiles(files: File[]) {
-    const remaining = Math.max(0, maxItems - visibleLogicalMediaCount)
-    const selected = files.slice(0, remaining).map((file) => ({
-      id: crypto.randomUUID(),
-      file,
-      kind: file.type.startsWith("video/")
-        ? ("VIDEO" as const)
-        : ("IMAGE" as const),
-      previewUrl: URL.createObjectURL(file),
-      progress: 0,
-      status: "UPLOADING" as const,
-      assetId: null,
-    }))
-    if (selected.length === 0) return
-    const folderId = crypto.randomUUID()
-    const offset = visibleLogicalMediaCount
-    setPendingUploads((current) => [...current, ...selected])
+  function uploadFiles(selected: readonly OwnedPendingMedia[]) {
+    const selectedIds = new Set(selected.map((item) => item.id))
+    setPendingUploads((current) =>
+      current.map((item) =>
+        selectedIds.has(item.id)
+          ? { ...item, status: "UPLOADING", progress: 0 }
+          : item
+      )
+    )
     void media
       .upload(
-        selected.map((file, index) => ({
+        selected.map((file) => ({
           file: file.file,
-          folderId,
-          sortOrder: offset + index,
-          commandKeys: {
-            createSession: crypto.randomUUID(),
-            uploadAndFinalize: crypto.randomUUID(),
+          folderId: file.folderId,
+          sortOrder: file.sortOrder,
+          commandKeys: file.commandKeys,
+          onUploaded: (asset: MediaAsset) => {
+            setPendingUploads((current) =>
+              current.map((item) =>
+                item.id === file.id
+                  ? {
+                      ...item,
+                      assetId: asset.id,
+                      progress: 100,
+                      status: "PROCESSING",
+                    }
+                  : item
+              )
+            )
+            if (authoritativeMediaIdSet) {
+              setSessionMediaIds((current) => [
+                ...new Set([...current, asset.id]),
+              ])
+            }
           },
           onProgress: (progress: number) =>
             setPendingUploads((current) =>
@@ -491,23 +523,7 @@ function OwnedServiceOwnerPhotos({
             ),
         }))
       )
-      .then((uploaded) => {
-        const assetIdByLocalId = new Map<string, string>(
-          selected.map((item, index) => [item.id, uploaded[index]!.id])
-        )
-        setPendingUploads((current) =>
-          current.map((item) => {
-            const assetId = assetIdByLocalId.get(item.id)
-            return assetId
-              ? { ...item, assetId, progress: 100, status: "PROCESSING" }
-              : item
-          })
-        )
-        if (authoritativeMediaIdSet) {
-          setSessionMediaIds((current) => [
-            ...new Set([...current, ...uploaded.map((asset) => asset.id)]),
-          ])
-        }
+      .then(() => {
         toast.success(
           selected.length === 1
             ? "Медиафайл загружен"
@@ -515,16 +531,43 @@ function OwnedServiceOwnerPhotos({
         )
       })
       .catch((error) => {
-        const selectedIds = new Set<string>(selected.map((item) => item.id))
         setPendingUploads((current) =>
           current.map((item) =>
-            selectedIds.has(item.id) ? { ...item, status: "FAILED" } : item
+            selectedIds.has(item.id) && !item.assetId
+              ? { ...item, status: "FAILED" }
+              : item
           )
         )
         toast.error(
           error instanceof Error ? error.message : "Не удалось загрузить медиа"
         )
       })
+  }
+
+  function addFiles(files: File[]) {
+    if (readOnly || media.uploadPending || media.deletePending) return
+    const remaining = Math.max(0, maxItems - visibleLogicalMediaCount)
+    const folderId = crypto.randomUUID()
+    const selected = files.slice(0, remaining).map((file, index) => ({
+      id: crypto.randomUUID(),
+      file,
+      kind: file.type.startsWith("video/")
+        ? ("VIDEO" as const)
+        : ("IMAGE" as const),
+      previewUrl: URL.createObjectURL(file),
+      progress: 0,
+      status: "UPLOADING" as const,
+      assetId: null,
+      folderId,
+      sortOrder: visibleLogicalMediaCount + index,
+      commandKeys: {
+        createSession: crypto.randomUUID(),
+        uploadAndFinalize: crypto.randomUUID(),
+      },
+    }))
+    if (selected.length === 0) return
+    setPendingUploads((current) => [...current, ...selected])
+    uploadFiles(selected)
   }
 
   function assetFor(item: ServiceMediaManagerItem) {
@@ -667,11 +710,21 @@ function OwnedServiceOwnerPhotos({
           open={managerOpen}
           items={managerItems}
           maxItems={maxItems}
-          pending={media.deletePending}
+          pending={media.deletePending || media.uploadPending}
           coverMediaId={coverMediaId}
           requireCover={requireCover}
           onOpenChange={setManagerOpen}
           onAddFiles={addFiles}
+          onRetry={(item) => {
+            if (readOnly || media.uploadPending || media.deletePending) return
+            const failed = pendingUploads.find(
+              (candidate) =>
+                candidate.id === item.id &&
+                candidate.status === "FAILED" &&
+                !candidate.assetId
+            )
+            if (failed) uploadFiles([failed])
+          }}
           onRemove={(item) => {
             const pendingItem = activePendingUploads.find(
               (candidate) => candidate.id === item.id
@@ -726,6 +779,9 @@ type PendingOwnerMedia = Readonly<{
   kind: "IMAGE" | "VIDEO"
   previewUrl: string
   progress: number
+  folderId: string
+  sortOrder: number
+  asset: MediaAsset | null
   commandKeys: Readonly<{
     createSession: string
     uploadAndFinalize: string
@@ -738,8 +794,6 @@ async function uploadNewOwnerFile(
   accessToken: string,
   owner: ServiceMediaOwner,
   item: PendingOwnerMedia,
-  sortOrder: number,
-  folderId: string,
   onProgress: (percentage: number) => void
 ) {
   return retryOwnerProofOperation(async () => {
@@ -747,8 +801,8 @@ async function uploadNewOwnerFile(
       accessToken,
       owner,
       item.file,
-      sortOrder,
-      folderId,
+      item.sortOrder,
+      item.folderId,
       item.commandKeys,
       (progress) => onProgress(progress.percentage)
     )
@@ -765,6 +819,8 @@ function UnownedServiceOwnerPhotos({
   coverMediaId,
   requireCover,
   onCoverMediaIdChange,
+  onComplete,
+  onReadyStateChange,
 }: {
   accessToken: string | null
   readOnly: boolean
@@ -775,6 +831,8 @@ function UnownedServiceOwnerPhotos({
   coverMediaId: string | null
   requireCover: boolean
   onCoverMediaIdChange?: (mediaId: string | null) => void
+  onComplete: (result: CreatedOwnerMedia) => void
+  onReadyStateChange?: (ready: boolean) => void
 }) {
   const queryClient = useQueryClient()
   const [managerOpen, setManagerOpen] = useState(false)
@@ -783,6 +841,11 @@ function UnownedServiceOwnerPhotos({
   const [error, setError] = useState<string | null>(null)
   const [pendingCoverId, setPendingCoverId] = useState<string | null>(null)
   const pendingItemsRef = useRef(pendingItems)
+  const resolvedOwnerRef = useRef<ServiceMediaOwner | null>(null)
+
+  useEffect(() => {
+    onReadyStateChange?.(false)
+  }, [onReadyStateChange])
 
   useEffect(() => {
     pendingItemsRef.current = pendingItems
@@ -800,7 +863,8 @@ function UnownedServiceOwnerPhotos({
   function addFiles(files: File[]) {
     if (!accessToken || !ensureOwner || uploading) return
     const remaining = Math.max(0, maxItems - pendingItems.length)
-    const selected = files.slice(0, remaining).map((file) => ({
+    const folderId = crypto.randomUUID()
+    const selected = files.slice(0, remaining).map((file, index) => ({
       id: crypto.randomUUID(),
       file,
       kind: file.type.startsWith("video/")
@@ -808,6 +872,9 @@ function UnownedServiceOwnerPhotos({
         : ("IMAGE" as const),
       previewUrl: URL.createObjectURL(file),
       progress: 0,
+      folderId,
+      sortOrder: pendingItems.length + index,
+      asset: null,
       commandKeys: {
         createSession: crypto.randomUUID(),
         uploadAndFinalize: crypto.randomUUID(),
@@ -821,6 +888,7 @@ function UnownedServiceOwnerPhotos({
     if (
       !accessToken ||
       !ensureOwner ||
+      readOnly ||
       uploading ||
       pendingItems.length === 0 ||
       (requireCover &&
@@ -830,20 +898,23 @@ function UnownedServiceOwnerPhotos({
     ) {
       return
     }
-    const selected = [...pendingItems]
+    const selected = pendingItems.filter((item) => !item.asset)
     const selectedCoverId = pendingCoverId
+    const uploadedByLocalId = new Map(
+      pendingItems.flatMap((item) =>
+        item.asset ? [[item.id, item.asset] as const] : []
+      )
+    )
     setUploading(true)
     setError(null)
     try {
-      const resolvedOwner = await ensureOwner()
-      const folderId = crypto.randomUUID()
-      const uploaded = await runMediaUploadQueue(selected, (item, index) =>
-        uploadNewOwnerFile(
+      const resolvedOwner = resolvedOwnerRef.current ?? (await ensureOwner())
+      resolvedOwnerRef.current = resolvedOwner
+      await runMediaUploadQueue(selected, async (item) => {
+        const uploaded = await uploadNewOwnerFile(
           accessToken,
           resolvedOwner,
           item,
-          index,
-          folderId,
           (progress) =>
             setPendingItems((current) =>
               current.map((candidate) =>
@@ -853,20 +924,24 @@ function UnownedServiceOwnerPhotos({
               )
             )
         )
-      )
-      const coverIndex = selected.findIndex(
-        (item) => item.id === selectedCoverId
-      )
-      const resolvedCoverMediaId =
-        coverIndex >= 0 ? (uploaded[coverIndex]?.asset.id ?? null) : null
-      await queryClient.invalidateQueries({
-        queryKey: serviceOwnerMediaQueryKey(resolvedOwner),
+        uploadedByLocalId.set(item.id, uploaded.asset)
+        setPendingItems((current) =>
+          current.map((candidate) =>
+            candidate.id === item.id
+              ? { ...candidate, asset: uploaded.asset, progress: 100 }
+              : candidate
+          )
+        )
+        return uploaded
       })
-      selected.forEach((item) => URL.revokeObjectURL(item.previewUrl))
-      setPendingItems([])
-      setPendingCoverId(null)
-      setManagerOpen(false)
+      const resolvedCoverMediaId = selectedCoverId
+        ? (uploadedByLocalId.get(selectedCoverId)?.id ?? null)
+        : null
       onCoverMediaIdChange?.(resolvedCoverMediaId)
+      onComplete({
+        owner: resolvedOwner,
+        mediaIds: [...uploadedByLocalId.values()].map((asset) => asset.id),
+      })
       toast.success(
         selected.length === 1
           ? "Медиафайл загружен"
@@ -877,6 +952,11 @@ function UnownedServiceOwnerPhotos({
         cause instanceof Error ? cause.message : "Не удалось загрузить медиа"
       )
     } finally {
+      if (resolvedOwnerRef.current) {
+        await queryClient.invalidateQueries({
+          queryKey: serviceOwnerMediaQueryKey(resolvedOwnerRef.current),
+        })
+      }
       setUploading(false)
     }
   }
@@ -897,16 +977,23 @@ function UnownedServiceOwnerPhotos({
     fileName: item.file.name,
     kind: item.kind,
     previewUrl: item.previewUrl,
-    statusLabel: uploading ? "Загрузка" : "Не загружено",
+    statusLabel: item.asset
+      ? "Загружено"
+      : uploading
+        ? "Загрузка"
+        : "Не загружено",
     pending: uploading,
-    uploadProgress: uploading ? item.progress : undefined,
+    removable: !item.asset,
+    uploadProgress: uploading && !item.asset ? item.progress : undefined,
     coverEligible: !uploading,
   }))
 
   return (
     <section className="flex h-full min-h-0 flex-col gap-3" aria-label={title}>
       <div className="flex items-center justify-between gap-2">
-        <Badge variant="secondary">0 из {maxItems}</Badge>
+        <Badge variant="secondary">
+          {pendingItems.filter((item) => item.asset).length} из {maxItems}
+        </Badge>
         <div className="flex flex-wrap items-center justify-end gap-2">
           {toolbarAction}
           {!readOnly && ensureOwner ? (
@@ -930,7 +1017,11 @@ function UnownedServiceOwnerPhotos({
       ) : null}
 
       <div className="flex min-h-56 flex-1 items-center justify-center rounded-lg border bg-muted px-4 text-center text-sm text-muted-foreground">
-        {pendingItems.length > 0 ? "Медиафайлы загружаются" : "Нет медиа"}
+        {uploading
+          ? "Медиафайлы загружаются"
+          : pendingItems.length > 0
+            ? "Завершите загрузку в окне добавления медиа"
+            : "Нет медиа"}
       </div>
 
       {!readOnly && ensureOwner ? (

@@ -40,6 +40,8 @@ export type ServiceMediaManagerItem = Readonly<{
   pending: boolean
   uploadProgress?: number | null
   coverEligible?: boolean
+  retryable?: boolean
+  removable?: boolean
 }>
 
 const ACCEPTED_MEDIA_TYPES = new Set([
@@ -64,6 +66,7 @@ export function ServiceMediaManagerDialog({
   onRemove,
   onSelectCover,
   onConfirm,
+  onRetry,
 }: {
   open: boolean
   items: readonly ServiceMediaManagerItem[]
@@ -76,6 +79,7 @@ export function ServiceMediaManagerDialog({
   onRemove: (item: ServiceMediaManagerItem) => void
   onSelectCover?: (item: ServiceMediaManagerItem) => void
   onConfirm?: () => void
+  onRetry?: (item: ServiceMediaManagerItem) => void
 }) {
   const inputId = useId()
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -277,6 +281,18 @@ export function ServiceMediaManagerDialog({
                   </CardContent>
                   {!item.pending ? (
                     <CardFooter className="flex-wrap justify-between gap-2">
+                      {item.retryable && onRetry ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={pending}
+                          aria-label={`Повторить загрузку ${item.fileName}`}
+                          onClick={() => onRetry(item)}
+                        >
+                          Повторить загрузку
+                        </Button>
+                      ) : null}
                       {onSelectCover &&
                       item.kind === "IMAGE" &&
                       item.coverEligible !== false ? (
@@ -301,16 +317,18 @@ export function ServiceMediaManagerDialog({
                             : "Выбрать титульным"}
                         </Button>
                       ) : null}
-                      <Button
-                        type="button"
-                        size="icon-sm"
-                        variant="ghost"
-                        aria-label={`Удалить ${item.fileName}`}
-                        disabled={pending || item.pending}
-                        onClick={() => onRemove(item)}
-                      >
-                        <HugeiconsIcon icon={Delete02Icon} />
-                      </Button>
+                      {item.removable !== false ? (
+                        <Button
+                          type="button"
+                          size="icon-sm"
+                          variant="ghost"
+                          aria-label={`Удалить ${item.fileName}`}
+                          disabled={pending || item.pending}
+                          onClick={() => onRemove(item)}
+                        >
+                          <HugeiconsIcon icon={Delete02Icon} />
+                        </Button>
+                      ) : null}
                     </CardFooter>
                   ) : null}
                 </Card>

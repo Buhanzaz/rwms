@@ -714,9 +714,14 @@ Both native and cross-realm `AbortError` values are classified as
 `REQUEST_ABORTED`, and cancellation diagnostics never become UI copy.
 
 Media additions use a bounded four-worker upload queue with stable idempotency
-keys and ordered results. A first failure prevents new jobs from starting,
+keys and ordered results. Each successful upload immediately retains its server
+asset ID, including when a sibling fails. Owner media is refreshed after every
+settled batch; only failed or unstarted files are retried, preserving their original
+keys, folder, and sort order. A newly created owner keeps the same upload session
+through partial failure and transfers its successful selection and cover to the
+owner gallery. A first failure prevents new jobs from starting,
 waits for already-started transfers to settle, and reports that original
-failure instead of fabricating a partial success. Browser byte progress uses
+failure. Browser byte progress uses
 the same authenticated, same-origin content route and does not alter the media
 contract or make the local preview authoritative.
 
