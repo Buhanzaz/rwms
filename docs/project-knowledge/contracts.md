@@ -175,7 +175,7 @@ while a legal entity additionally requires a contact person. Client and order
 commands carry separate additional-contact lists. Order create/update carries
 only the client, primary phone and optional comment. `NORMAL` public
 presentation confirmation carries one to four distinct same-day
-`desiredDeliveryWindows[{startDate,endDate}]`, positive `rentalMonths`, required
+`desiredDeliveryWindows[{startDate,endDate}]`, rental duration of 1–120 months, required
 `deliveryAddress`, an optional complete latitude/longitude pair and nullable
 `additionalContacts` normalized to an empty list. The corresponding public
 presentation contains required `requestableDeliveryDates`: `NORMAL` advertises
@@ -198,7 +198,9 @@ order, and the order-filtered inquiry collection rediscovers both manual and
 assistant flows. A presentation declares `NORMAL` or `REPLACEMENT`, exact
 required selection count, per-cabin current contents, live equipment
 availability and maximum per cabin. Normal confirmation submits equipment
-quantities per selected cabin; replacement confirmation forbids furniture edits
+quantities per selected cabin. Its duration is either supplied for every selected cabin with
+global `rentalMonths` null, or supplied globally with every per-cabin duration omitted. Mixed
+partial durations are rejected, and exact replay preserves each accepted term. Replacement confirmation forbids furniture edits
 and preserves the mapped old-cabin requirements. The explicit direct command is
 `POST /api/logistics/v1/orders/{orderId}/units/{unitId}/replace`.
 [`assistant-service.yaml`](../../contracts/openapi/assistant-service.yaml)
@@ -302,6 +304,9 @@ the group, while started history is retained. The public logistics move command
 contains no audience or member replacement and moves the whole group under
 task/entry fences. Structured board/detail responses include contacts, client
 wishes, actual schedule and per-cabin desired/actual furniture readiness.
+`ShipmentFurnitureTaskStatus` requires `movementTaskCreated`, `movementTaskCompleted` and
+`contentReady`. Before creation, task IDs/state are null and `lineCount` is zero; no task is
+needed when the contents already match. Completed movement alone does not prove content readiness.
 
 The task-board private registration and movement boundary accepts the same
 audience for owner-driven reconciliation, but rejects a worker identity on a
@@ -541,6 +546,9 @@ entry identity. Active, pinned and shadow entries cannot move. Cross-queue movem
 maintenance daily-capacity scheduling and overdue rollover are absent. Dated driver and shipment
 planning remains on the logistics surface.
 
+Queue bindings define ordinary route access. `RouteStepRequest` and `BoardEntry` do not expose
+per-stage `audienceSelectors`; native `WorkerTaskDetail` retains its effective audience selectors.
+
 For maintenance-owned ordinary routes
 [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml) and
 [`task-board-service.yaml`](../../contracts/openapi/task-board-service.yaml) define the fixed phase
@@ -718,6 +726,13 @@ Evidence:
 [`DriverShiftController.java`](../../services/task-board-service/src/main/java/dev/buhanzaz/rwms/taskboard/api/DriverShiftController.java),
 and
 [`media driver-shift consumer`](../../services/media-service/internal/worker/driver_shift_owner_consumer.go).
+
+### Asset Outbox Requeue Receipt
+
+The reviewed requeue command in [`asset-service.yaml`](../../contracts/openapi/asset-service.yaml)
+returns immutable event/aggregate identity and version, `state=PENDING`, `reviewVersion` and
+`reviewedAt`. Exact replay preserves that accepted receipt even if delivery has since completed;
+it does not expose a replacement snapshot of the current outbox delivery state.
 
 ### Media Upload Session Recovery
 
