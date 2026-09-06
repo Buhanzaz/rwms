@@ -1,16 +1,33 @@
 package dev.buhanzaz.rwms.auth;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestBuilders.formLogin;
 import static org.springframework.security.test.web.servlet.response.SecurityMockMvcResultMatchers.authenticated;
+import static org.springframework.security.test.web.servlet.response.SecurityMockMvcResultMatchers.unauthenticated;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.jayway.jsonpath.JsonPath;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.crypto.RSASSASigner;
+import com.nimbusds.jose.jwk.JWKMatcher;
+import com.nimbusds.jose.jwk.JWKSelector;
+import com.nimbusds.jose.jwk.RSAKey;
+import com.nimbusds.jose.jwk.source.JWKSource;
+import com.nimbusds.jose.proc.SecurityContext;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.SignedJWT;
 import dev.buhanzaz.rwms.auth.api.UpdateUserRequest;
 import dev.buhanzaz.rwms.auth.domain.PrincipalType;
 import dev.buhanzaz.rwms.auth.domain.UserGlobalRole;
@@ -20,7 +37,9 @@ import jakarta.servlet.http.Cookie;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Base64;
+import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -32,12 +51,14 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultMatcher;
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers;
@@ -74,7 +95,7 @@ class CustomerRegistrationIntegrationTest {
     @Autowired
     AuthSubjectRepository subjects;
 
-    @Autowired
+    @MockitoSpyBean
     PasswordEncoder passwordEncoder;
 
     @Autowired
@@ -88,6 +109,9 @@ class CustomerRegistrationIntegrationTest {
 
     @Autowired
     UserAdministrationService users;
+
+    @Autowired
+    JWKSource<SecurityContext> jwkSource;
 
     @Test
     void registrationRequiresCsrfAndAtomicallyCreatesOnlyCustomerAuthorizationState() throws Exception {
@@ -242,6 +266,147 @@ class CustomerRegistrationIntegrationTest {
         refreshCustomer(rotatedRefreshToken, status().isBadRequest());
     }
 
+    @Test
+    void canonicalPasswordLengthsAreAcceptedAndOverlimitsAreRejectedAtHttpValidation()
+            throws Exception {
+        String customerMaximum = "я".repeat(128);
+        registerWithCsrf(
+                        registrationBody("customer.max.password", customerMaximum, customerMaximum),
+                        status().isCreated())
+                .andExpect(jsonPath("$.username").value("customer.max.password"));
+        assertThat(credentialHash("customer.max.password"))
+                .startsWith("{pbkdf2@SpringSecurity_v5_8}");
+
+        clearInvocations(passwordEncoder);
+        String customerOverlimit = "я".repeat(129);
+        registerWithCsrf(
+                registrationBody(
+                        "customer.overlimit.password", customerOverlimit, customerOverlimit),
+                status().isBadRequest());
+        verify(passwordEncoder, never()).encode(anyString());
+        assertThat(subjects.findByUsernameIgnoreCase("customer.overlimit.password")).isEmpty();
+
+        String adminCreateMaximum = "ю".repeat(200);
+        String createResponse = mvc.perform(post("/api/admin/users")
+                        .header("Authorization", "Bearer " + signedAdminJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(adminCreateBody("admin.password.target", adminCreateMaximum)))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        UUID targetId = UUID.fromString(JsonPath.read(createResponse, "$.id"));
+        int targetVersion = JsonPath.read(createResponse, "$.version");
+        assertThat(credentialHash("admin.password.target"))
+                .startsWith("{pbkdf2@SpringSecurity_v5_8}");
+
+        clearInvocations(passwordEncoder);
+        String adminCreateOverlimit = "ю".repeat(201);
+        mvc.perform(post("/api/admin/users")
+                        .header("Authorization", "Bearer " + signedAdminJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(adminCreateBody(
+                                "admin.password.overlimit", adminCreateOverlimit)))
+                .andExpect(status().isBadRequest());
+        verify(passwordEncoder, never()).encode(anyString());
+        assertThat(subjects.findByUsernameIgnoreCase("admin.password.overlimit")).isEmpty();
+
+        String adminMaximum = "ш".repeat(200);
+        mvc.perform(put("/api/admin/users/{id}/password", targetId)
+                        .header("Authorization", "Bearer " + signedAdminJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(passwordResetBody(adminMaximum, targetVersion)))
+                .andExpect(status().isNoContent());
+        var resetSubject = subjects.findById(targetId).orElseThrow();
+        String resetHash = credentialHash("admin.password.target");
+        assertThat(resetHash).startsWith("{pbkdf2@SpringSecurity_v5_8}");
+
+        clearInvocations(passwordEncoder);
+        String adminOverlimit = "ш".repeat(201);
+        mvc.perform(put("/api/admin/users/{id}/password", targetId)
+                        .header("Authorization", "Bearer " + signedAdminJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(passwordResetBody(adminOverlimit, resetSubject.getVersion())))
+                .andExpect(status().isBadRequest());
+        verify(passwordEncoder, never()).encode(anyString());
+        assertThat(subjects.findById(targetId).orElseThrow().getVersion())
+                .isEqualTo(resetSubject.getVersion());
+        assertThat(credentialHash("admin.password.target")).isEqualTo(resetHash);
+    }
+
+    @Test
+    void workerConfigureAndResetHonorPasswordMaximumBeforeEncoding() throws Exception {
+        String workerId = "password-boundary-worker";
+        String workerMaximum = "ш".repeat(200);
+        mvc.perform(put("/api/internal/worker-credentials/{workerId}", workerId)
+                        .header("Authorization", "Bearer " + signedWorkerServiceJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(workerCredentialBody("worker.password.boundary", workerMaximum)))
+                .andExpect(status().isOk());
+
+        String resetMaximum = "щ".repeat(200);
+        mvc.perform(post("/api/internal/worker-credentials/{workerId}/reset", workerId)
+                        .header("Authorization", "Bearer " + signedWorkerServiceJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(passwordResetBody(resetMaximum)))
+                .andExpect(status().isNoContent());
+        var resetWorker = subjects.findByUsernameIgnoreCase("worker.password.boundary")
+                .orElseThrow();
+        String resetHash = credentialHash("worker.password.boundary");
+        assertThat(resetHash).startsWith("{pbkdf2@SpringSecurity_v5_8}");
+
+        clearInvocations(passwordEncoder);
+        String overlimit = "ш".repeat(201);
+        mvc.perform(put("/api/internal/worker-credentials/{workerId}", "overlimit-worker")
+                        .header("Authorization", "Bearer " + signedWorkerServiceJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(workerCredentialBody("worker.password.overlimit", overlimit)))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(passwordEncoder);
+        assertThat(subjects.findByUsernameIgnoreCase("worker.password.overlimit")).isEmpty();
+
+        clearInvocations(passwordEncoder);
+        mvc.perform(post("/api/internal/worker-credentials/{workerId}/reset", workerId)
+                        .header("Authorization", "Bearer " + signedWorkerServiceJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(passwordResetBody(overlimit)))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(passwordEncoder);
+        assertThat(subjects.findById(resetWorker.getId()).orElseThrow().getVersion())
+                .isEqualTo(resetWorker.getVersion());
+        assertThat(credentialHash("worker.password.boundary")).isEqualTo(resetHash);
+    }
+
+    @Test
+    void legacyBcryptUserCanLoginAndChangeToPbkdf2Password() throws Exception {
+        String username = "customer.legacy.bcrypt";
+        String oldPassword = "legacy-bcrypt-password";
+        registerWithCsrf(
+                registrationBody(username, oldPassword, oldPassword), status().isCreated());
+        var subject = subjects.findByUsernameIgnoreCase(username).orElseThrow();
+        String bcryptHash = "{bcrypt}" + new BCryptPasswordEncoder().encode(oldPassword);
+        jdbc.update(
+                "update auth_subject_credential set password_hash=? where subject_id=?",
+                bcryptHash,
+                subject.getId());
+
+        login(username, oldPassword);
+
+        String newPassword = "я".repeat(37);
+        mvc.perform(put("/api/admin/users/{id}/password", subject.getId())
+                        .header("Authorization", "Bearer " + signedAdminJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"password":"%s","expectedVersion":%d}
+                                """.formatted(newPassword, subject.getVersion())))
+                .andExpect(status().isNoContent());
+
+        assertThat(credentialHash(username)).startsWith("{pbkdf2@SpringSecurity_v5_8}");
+        mvc.perform(formLogin().user(username).password(oldPassword))
+                .andExpect(unauthenticated());
+        login(username, newPassword);
+    }
+
     private org.springframework.test.web.servlet.ResultActions registerWithCsrf(
             String body, ResultMatcher expectedStatus) throws Exception {
         var bootstrap = mvc.perform(get("/api/auth/csrf"))
@@ -338,5 +503,89 @@ class CustomerRegistrationIntegrationTest {
                   "passwordConfirmation":"%s"
                 }
                 """.formatted(username, password, confirmation);
+    }
+
+    private String adminCreateBody(String username, String password) {
+        return """
+                {
+                  "username":"%s",
+                  "password":"%s",
+                  "globalRole":"VIEWER"
+                }
+                """.formatted(username, password);
+    }
+
+    private String workerCredentialBody(String username, String password) {
+        return """
+                {
+                  "warehouseId":"00000000-0000-0000-0000-000000000001",
+                  "appLogin":"%s",
+                  "password":"%s"
+                }
+                """.formatted(username, password);
+    }
+
+    private String passwordResetBody(String password) {
+        return "{\"password\":\"" + password + "\"}";
+    }
+
+    private String passwordResetBody(String password, int expectedVersion) {
+        return """
+                {"password":"%s","expectedVersion":%d}
+                """.formatted(password, expectedVersion);
+    }
+
+    private String credentialHash(String username) {
+        UUID subjectId = subjects.findByUsernameIgnoreCase(username).orElseThrow().getId();
+        return jdbc.queryForObject(
+                "select password_hash from auth_subject_credential where subject_id=?",
+                String.class,
+                subjectId);
+    }
+
+    private String signedAdminJwt() throws Exception {
+        return signedJwt(
+                "admin", "USER", "SYSTEM_ADMIN", "rwms-admin-web", "admin.manage");
+    }
+
+    private String signedWorkerServiceJwt() throws Exception {
+        return signedJwt(
+                "task-board-service",
+                "SERVICE",
+                null,
+                "task-board-service",
+                "worker-credentials.manage");
+    }
+
+    private String signedJwt(
+            String username,
+            String principalType,
+            String globalRole,
+            String clientId,
+            String scope)
+            throws Exception {
+        RSAKey signingKey = (RSAKey) jwkSource
+                .get(new JWKSelector(new JWKMatcher.Builder().privateOnly(true).build()), null)
+                .stream()
+                .findFirst()
+                .orElseThrow();
+        Instant now = Instant.now();
+        var claims = new JWTClaimsSet.Builder()
+                .issuer("http://localhost:9000")
+                .subject(username)
+                .claim("preferred_username", username)
+                .claim("principal_type", principalType)
+                .claim("global_role", globalRole)
+                .claim("client_id", clientId)
+                .claim("scope", scope)
+                .audience("rwms-services")
+                .issueTime(Date.from(now.minusSeconds(1)))
+                .expirationTime(Date.from(now.plusSeconds(60)))
+                .build();
+        var jwt = new SignedJWT(
+                new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(signingKey.getKeyID()).build(),
+                claims);
+        jwt.sign(new RSASSASigner(signingKey.toPrivateKey()));
+        return jwt.serialize();
     }
 }

@@ -172,6 +172,11 @@ warehouse accesses используют optimistic concurrency. `409` означ
 
 ## Свойства безопасности
 
+- Новые пароли пользователей и confidential clients используют версионированный
+  encoder `pbkdf2@SpringSecurity_v5_8`: HMAC-SHA256, 310 000 итераций,
+  случайная соль 16 байт и производный ключ 256 бит. Прежние factory formats, включая bcrypt,
+  продолжают проверяться. Канонический максимум пароля Customer остаётся 128 символов,
+  а команд администратора и worker — 200 символов, включая Unicode.
 - Пароли и password hashes никогда не возвращаются в public responses или
   events. Передача initial/reset worker credential физическому работнику —
   отдельный operational contract.

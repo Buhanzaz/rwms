@@ -53,7 +53,9 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
+import org.springframework.security.crypto.password.DelegatingPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.crypto.password.Pbkdf2PasswordEncoder;
 import org.springframework.security.jackson.SecurityJacksonModules;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
@@ -131,14 +133,22 @@ public class AuthorizationServerConfiguration {
     /**
      * Supplies the application's delegating password encoder.
      *
-     * <p>Stored credential hashes retain an algorithm identifier, allowing secure verification of
-     * existing hashes and controlled upgrades without persisting plaintext passwords.</p>
+     * <p>New credentials use Spring Security's versioned PBKDF2 parameters. The factory encoder
+     * remains the matching fallback so credentials stored with any previously supported algorithm
+     * identifier, including bcrypt, continue to authenticate.</p>
      *
      * @return password encoder used for human and confidential-client credentials
      */
     @Bean
     PasswordEncoder passwordEncoder() {
-        return PasswordEncoderFactories.createDelegatingPasswordEncoder();
+        var encoders = new LinkedHashMap<String, PasswordEncoder>();
+        encoders.put(
+                "pbkdf2@SpringSecurity_v5_8",
+                Pbkdf2PasswordEncoder.defaultsForSpringSecurity_v5_8());
+        var encoder = new DelegatingPasswordEncoder("pbkdf2@SpringSecurity_v5_8", encoders);
+        encoder.setDefaultPasswordEncoderForMatches(
+                PasswordEncoderFactories.createDelegatingPasswordEncoder());
+        return encoder;
     }
 
     /**

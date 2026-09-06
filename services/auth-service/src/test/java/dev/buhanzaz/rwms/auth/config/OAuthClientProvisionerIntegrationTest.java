@@ -24,7 +24,6 @@ import org.springframework.mock.env.MockEnvironment;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
 import org.springframework.security.oauth2.core.OAuth2AccessToken;
@@ -67,7 +66,7 @@ class OAuthClientProvisionerIntegrationTest {
                 .load()
                 .migrate();
         repository = new JdbcRegisteredClientRepository(jdbc);
-        passwordEncoder = PasswordEncoderFactories.createDelegatingPasswordEncoder();
+        passwordEncoder = new AuthorizationServerConfiguration().passwordEncoder();
         transactions = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
     }
 

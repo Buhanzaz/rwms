@@ -171,6 +171,11 @@ update preserves its current persisted value.
 
 ## Safety properties
 
+- New human and confidential-client credentials use the versioned
+  `pbkdf2@SpringSecurity_v5_8` encoding: HMAC-SHA256, 310,000 iterations,
+  a random 16-byte salt and a 256-bit derived key. Existing factory formats, including
+  bcrypt, remain verifiable. Customer passwords retain the canonical 128-character
+  maximum; administrator and worker commands retain 200 characters, including Unicode.
 - Passwords and password hashes are never returned in public responses or
   events. Delivering an initial or reset worker credential to a physical worker
   is a separate operational contract.
