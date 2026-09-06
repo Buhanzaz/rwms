@@ -1265,7 +1265,7 @@ Do not replace systemd with Docker, Docker with systemd, or existing Nginx routi
 
 A published artifact must contain the complete current source state of every runtime component
 and dependency affected by the requested behavior. A release is never a selection of task hunks,
-files copied from another checkout, or an artifact rebuilt from an earlier revision.
+files copied from another checkout, or an artifact whose build inputs omit completed changes.
 
 Before publishing confirm:
 
@@ -1276,7 +1276,7 @@ Before publishing confirm:
 * every changed deployable, runtime component and dependency in that full diff;
 * exact source revision represented by every built artifact.
 
-Build directly in the primary shared worktree at that completed revision. Do not build from
+When a build is necessary, build directly in the primary shared worktree at that completed revision. Do not build from
 another checkout, a temporary release worktree, an older
 `/var/lib/rwms/releases/*/source` directory, or a clean `HEAD` that omits completed changes.
 
@@ -1289,6 +1289,28 @@ requires matching changes elsewhere.
 Inspect the full release diff before publication. Do not selectively reconstruct or copy only
 task hunks into an artifact: that produces a truncated release. If the worktree is dirty, the
 release is blocked until the active work is completed, verified and committed.
+
+### 33.3.1 Reuse Ready Artifacts
+
+Before starting a build, inspect existing build outputs and their recorded provenance.
+Reuse an already built APK, binary, bundle or image when its relevant source and dependency
+inputs, build configuration, package, version, target architecture and signing identity match
+the requested release. Verify its checksum and identity; do not rebuild it to verify it.
+
+Publication, a new conversation turn, a documentation or release-metadata commit, and an
+unchanged runtime after repeated checks are not reasons to rebuild or repackage an artifact.
+A different Git revision alone does not require rebuilding: compare the actual build inputs.
+Do not increment the version again or sign the same artifact again merely to publish it.
+
+Rebuild only when a required artifact is missing, damaged, has unverified provenance, or its
+relevant inputs or required release identity have changed. State that concrete reason before
+starting. Build each affected artifact once per input state and reuse that result for all
+subsequent release steps. Retry a failed build only after identifying its actual blocker.
+
+Record the build revision, relevant input differences, build variant, package/version,
+signing identity where applicable, artifact path and checksum. This record must make reuse
+possible without repeating the build. Artifact reuse does not waive the clean-worktree gate
+or permission to publish.
 
 ---
 
