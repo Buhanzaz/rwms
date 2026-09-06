@@ -2301,7 +2301,7 @@ class HttpLogisticsDependencyGatewayTest {
   }
 
   @Test
-  void registersDriverTaskWithStructuredWorkerContentAndWithoutObsoleteDailyCapacity() {
+  void registersDriverTaskWithStructuredWorkerContentAndExactPlannerLineage() {
     UUID taskId = UUID.randomUUID();
     UUID externalTaskId = UUID.randomUUID();
     UUID sourceId = UUID.randomUUID();
@@ -2314,6 +2314,8 @@ class HttpLogisticsDependencyGatewayTest {
     UUID materialId = UUID.randomUUID();
     UUID commentId = UUID.randomUUID();
     UUID mediaId = UUID.randomUUID();
+    UUID sourcePlanId = UUID.randomUUID();
+    UUID sourcePlanWarehouseId = UUID.randomUUID();
     LocalDate scheduledDate = LocalDate.parse("2026-08-03");
     OffsetDateTime commentAt = OffsetDateTime.parse("2026-08-03T06:00:00Z");
     OffsetDateTime mediaRecordedAt = OffsetDateTime.parse("2026-08-03T05:55:00Z");
@@ -2368,6 +2370,12 @@ class HttpLogisticsDependencyGatewayTest {
         .andExpect(jsonPath("$.driverAudience.mode").value("ASSIGNED_DRIVER"))
         .andExpect(jsonPath("$.driverAudience.workerId").value(driverId.toString()))
         .andExpect(jsonPath("$.driverAudience.workerName").value("Петров Пётр"))
+        .andExpect(jsonPath("$.plannerLineage.sourcePlanId").value(sourcePlanId.toString()))
+        .andExpect(jsonPath("$.plannerLineage.sourcePlanVersion").value(4))
+        .andExpect(
+            jsonPath("$.plannerLineage.sourcePlanWarehouseId")
+                .value(sourcePlanWarehouseId.toString()))
+        .andExpect(jsonPath("$.plannerLineage.sourcePlanDate").value(scheduledDate.toString()))
         .andRespond(
             withSuccess(
                 """
@@ -2415,7 +2423,9 @@ class HttpLogisticsDependencyGatewayTest {
                 dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskAudienceMode.ASSIGNED_DRIVER,
                 driverId,
                 "Петров Пётр"),
-            workerContent);
+            workerContent,
+            new LogisticsDependencyGateway.DriverTaskPlannerLineage(
+                sourcePlanId, 4, sourcePlanWarehouseId, scheduledDate));
 
     assertThat(registered.externalTaskId()).isEqualTo(externalTaskId);
     assertThat(registered.scheduledDate()).isEqualTo(scheduledDate);

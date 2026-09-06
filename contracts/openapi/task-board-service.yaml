@@ -4199,6 +4199,20 @@ components:
           minItems: 1
           items: { $ref: '#/components/schemas/RouteStepRequest' }
       additionalProperties: false
+    PlannerTaskLineage:
+      type: object
+      description: >-
+        Immutable source-plan membership for a dated logistics driver task. sourcePlanDate must
+        equal the task scheduledDate. sourcePlanWarehouseId identifies the plan's root warehouse
+        and may differ from the task's operational warehouseId. An idempotent replay must match
+        all four fields exactly.
+      required: [sourcePlanId, sourcePlanVersion, sourcePlanWarehouseId, sourcePlanDate]
+      properties:
+        sourcePlanId: { type: string, format: uuid }
+        sourcePlanVersion: { type: integer, format: int64, minimum: 1 }
+        sourcePlanWarehouseId: { type: string, format: uuid }
+        sourcePlanDate: { type: string, format: date }
+      additionalProperties: false
     RegisterExternalTaskRequest:
       type: object
       required: [warehouseId, externalTaskId, title, route]
@@ -4227,6 +4241,12 @@ components:
             omitted for that source, defaults to WAREHOUSE_DRIVERS.
           oneOf:
             - { $ref: '#/components/schemas/DriverTaskAudience' }
+            - { type: 'null' }
+        plannerLineage:
+          description: >-
+            Allowed only for a logistics-service LOGISTICS_DRIVER_TASK with a scheduledDate.
+          oneOf:
+            - { $ref: '#/components/schemas/PlannerTaskLineage' }
             - { type: 'null' }
         priority: { oneOf: [{ type: integer, minimum: 1, maximum: 5 }, { type: 'null' }] }
         route:

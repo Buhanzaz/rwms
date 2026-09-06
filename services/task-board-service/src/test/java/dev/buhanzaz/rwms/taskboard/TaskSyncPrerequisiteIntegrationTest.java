@@ -3,6 +3,7 @@ import static dev.buhanzaz.rwms.taskboard.QueueFixtureModels.*;
 
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.CancelTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.PreStartUpdateTaskRequest;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.PlannerTaskLineageDto;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueBindingRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueDefinitionRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RegisterExternalTaskRequest;
@@ -17,6 +18,12 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.networknt.schema.JsonSchema;
+import com.networknt.schema.JsonSchemaFactory;
+import com.networknt.schema.SpecVersion;
+import dev.buhanzaz.rwms.taskboard.api.ApiModels.DriverTaskAudienceDto;
+import dev.buhanzaz.rwms.taskboard.domain.DriverTaskAudienceMode;
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
 import dev.buhanzaz.rwms.taskboard.domain.TaskLane;
 import dev.buhanzaz.rwms.taskboard.domain.TaskSourceType;
@@ -24,8 +31,13 @@ import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
 import dev.buhanzaz.rwms.taskboard.service.NotFoundException;
 import dev.buhanzaz.rwms.taskboard.service.RegistryService;
 import dev.buhanzaz.rwms.taskboard.service.TaskBoardService;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -37,6 +49,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.JwtRequestPostProcessor;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
+import org.yaml.snakeyaml.Yaml;
 import tools.jackson.databind.ObjectMapper;
 
 @SpringBootTest
@@ -45,6 +59,10 @@ import tools.jackson.databind.ObjectMapper;
 class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport {
   private static final UUID WAREHOUSE =
       UUID.fromString("00000000-0000-0000-0000-000000000601");
+  private static final com.fasterxml.jackson.databind.ObjectMapper SCHEMA_JSON =
+      new com.fasterxml.jackson.databind.ObjectMapper();
+  private static final JsonSchemaFactory SCHEMAS =
+      JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012);
 
   @Autowired RegistryService registry;
   @Autowired TaskBoardService board;
@@ -269,6 +287,170 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
                 .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync"))))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.status").value("CANCELLED"));
+  }
+
+  @Test
+  void plannerLineageHttpRegistrationMatchesCanonicalSchemaAndFencesEveryFieldOnReplay()
+      throws Exception {
+    var driverDefinition =
+        QueueRegistryTestFixtures.ensureDriverDefinition(
+            registry, jdbc, "Planner lineage drivers", QueueType.MOVEMENT);
+    QueueRegistryTestFixtures.create(
+        registry,
+        jdbc,
+        WAREHOUSE,
+        new QueueFixtureRequest(
+            0L,
+            driverDefinition.id(),
+            true,
+            false,
+            false,
+            null,
+            null,
+            false,
+            1,
+            List.of()));
+    UUID externalTaskId = UUID.randomUUID();
+    UUID sourceTaskId = UUID.randomUUID();
+    UUID sourcePlanId = UUID.randomUUID();
+    UUID sourcePlanWarehouseId = UUID.randomUUID();
+    LocalDate sourcePlanDate = LocalDate.of(2026, 9, 14);
+    RegisterExternalTaskRequest registration =
+        plannerRegistration(
+            externalTaskId,
+            sourceTaskId,
+            driverDefinition.id(),
+            sourcePlanDate,
+            sourcePlanId,
+            4,
+            sourcePlanWarehouseId,
+            sourcePlanDate);
+    String payload = objectMapper.writeValueAsString(registration);
+    JsonSchema schema = openApiSchema("RegisterExternalTaskRequest");
+    ObjectNode wire = (ObjectNode) SCHEMA_JSON.readTree(payload);
+
+    assertThat(sourcePlanWarehouseId).isNotEqualTo(WAREHOUSE);
+    assertThat(schema.validate(wire)).isEmpty();
+
+    ObjectNode withoutLineage = wire.deepCopy();
+    withoutLineage.remove("plannerLineage");
+    assertThat(schema.validate(withoutLineage)).isEmpty();
+    ObjectNode nullLineage = wire.deepCopy();
+    nullLineage.putNull("plannerLineage");
+    assertThat(schema.validate(nullLineage)).isEmpty();
+
+    for (String field :
+        List.of("sourcePlanId", "sourcePlanVersion", "sourcePlanWarehouseId", "sourcePlanDate")) {
+      ObjectNode missing = wire.deepCopy();
+      ((ObjectNode) missing.required("plannerLineage")).remove(field);
+      assertThat(schema.validate(missing)).as("missing plannerLineage.%s", field).isNotEmpty();
+      ObjectNode explicitNull = wire.deepCopy();
+      ((ObjectNode) explicitNull.required("plannerLineage")).putNull(field);
+      assertThat(schema.validate(explicitNull))
+          .as("null plannerLineage.%s", field)
+          .isNotEmpty();
+    }
+    ObjectNode zeroVersion = wire.deepCopy();
+    ((ObjectNode) zeroVersion.required("plannerLineage")).put("sourcePlanVersion", 0);
+    assertThat(schema.validate(zeroVersion)).isNotEmpty();
+    ObjectNode extraLineageField = wire.deepCopy();
+    ((ObjectNode) extraLineageField.required("plannerLineage")).put("legacyPlanKey", "legacy");
+    assertThat(schema.validate(extraLineageField)).isNotEmpty();
+
+    String first =
+        registerPlannerTask(registration)
+            .andExpect(status().isCreated())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    String replay =
+        registerPlannerTask(registration)
+            .andExpect(status().isCreated())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    assertThat(objectMapper.readTree(replay).required("taskId").textValue())
+        .isEqualTo(objectMapper.readTree(first).required("taskId").textValue());
+    assertThat(
+            jdbc.queryForObject(
+                "select source_plan_id from task_sync_source where external_task_id=?",
+                UUID.class,
+                externalTaskId))
+        .isEqualTo(sourcePlanId);
+    assertThat(
+            jdbc.queryForObject(
+                "select source_plan_version from task_sync_source where external_task_id=?",
+                Long.class,
+                externalTaskId))
+        .isEqualTo(4L);
+    assertThat(
+            jdbc.queryForObject(
+                "select source_plan_warehouse_id from task_sync_source where external_task_id=?",
+                UUID.class,
+                externalTaskId))
+        .isEqualTo(sourcePlanWarehouseId);
+    assertThat(
+            jdbc.queryForObject(
+                "select source_plan_date::text from task_sync_source where external_task_id=?",
+                String.class,
+                externalTaskId))
+        .isEqualTo(sourcePlanDate.toString());
+
+    registerPlannerTask(
+            plannerRegistration(
+                externalTaskId,
+                sourceTaskId,
+                driverDefinition.id(),
+                sourcePlanDate,
+                UUID.randomUUID(),
+                4,
+                sourcePlanWarehouseId,
+                sourcePlanDate))
+        .andExpect(status().isConflict());
+    registerPlannerTask(
+            plannerRegistration(
+                externalTaskId,
+                sourceTaskId,
+                driverDefinition.id(),
+                sourcePlanDate,
+                sourcePlanId,
+                5,
+                sourcePlanWarehouseId,
+                sourcePlanDate))
+        .andExpect(status().isConflict());
+    registerPlannerTask(
+            plannerRegistration(
+                externalTaskId,
+                sourceTaskId,
+                driverDefinition.id(),
+                sourcePlanDate,
+                sourcePlanId,
+                4,
+                UUID.randomUUID(),
+                sourcePlanDate))
+        .andExpect(status().isConflict());
+    registerPlannerTask(
+            plannerRegistration(
+                externalTaskId,
+                sourceTaskId,
+                driverDefinition.id(),
+                sourcePlanDate,
+                sourcePlanId,
+                4,
+                sourcePlanWarehouseId,
+                sourcePlanDate.plusDays(1)))
+        .andExpect(status().isBadRequest());
+    registerPlannerTask(
+            plannerRegistration(
+                externalTaskId,
+                sourceTaskId,
+                driverDefinition.id(),
+                sourcePlanDate.plusDays(1),
+                sourcePlanId,
+                4,
+                sourcePlanWarehouseId,
+                sourcePlanDate.plusDays(1)))
+        .andExpect(status().isConflict());
   }
 
   @Test
@@ -584,6 +766,55 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
             new RouteStepRequest(
                 verificationQueueDefinitionId, "Внутренние работы", 20),
             new RouteStepRequest(queueDefinitionId, returnStepText, 5)));
+  }
+
+  private RegisterExternalTaskRequest plannerRegistration(
+      UUID externalTaskId,
+      UUID sourceTaskId,
+      UUID driverQueueDefinitionId,
+      LocalDate scheduledDate,
+      UUID sourcePlanId,
+      long sourcePlanVersion,
+      UUID sourcePlanWarehouseId,
+      LocalDate sourcePlanDate) {
+    return new RegisterExternalTaskRequest(
+        WAREHOUSE,
+        externalTaskId,
+        "Planner shipment",
+        "CABIN-PLANNER",
+        null,
+        30,
+        null,
+        List.of(new RouteStepRequest(driverQueueDefinitionId, "Delivery", 30)),
+        scheduledDate,
+        3,
+        new TaskSourceReferenceDto(TaskSourceType.LOGISTICS_DRIVER_TASK, sourceTaskId),
+        TaskLane.SCHEDULED,
+        new DriverTaskAudienceDto(DriverTaskAudienceMode.WAREHOUSE_DRIVERS, null, null),
+        new PlannerTaskLineageDto(
+            sourcePlanId, sourcePlanVersion, sourcePlanWarehouseId, sourcePlanDate));
+  }
+
+  private ResultActions registerPlannerTask(RegisterExternalTaskRequest registration)
+      throws Exception {
+    return mvc.perform(
+        post("/api/internal/task-board/v1/tasks")
+            .with(taskSyncJwt("logistics-service", List.of("task-board.logistics")))
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(objectMapper.writeValueAsString(registration)));
+  }
+
+  private JsonSchema openApiSchema(String schemaName) throws Exception {
+    Map<String, Object> openApi;
+    Path contract =
+        Path.of(System.getProperty("rwms.contracts.dir"), "openapi/task-board-service.yaml");
+    try (InputStream input = Files.newInputStream(contract)) {
+      openApi = new Yaml().load(input);
+    }
+    ObjectNode document = SCHEMA_JSON.valueToTree(openApi);
+    document.put("$schema", "https://json-schema.org/draft/2020-12/schema");
+    document.put("$ref", "#/components/schemas/" + schemaName);
+    return SCHEMAS.getSchema(document);
   }
 
   private JwtRequestPostProcessor taskSyncJwt(String clientId, List<String> scopes) {
