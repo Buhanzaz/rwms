@@ -36,6 +36,10 @@ Russian version: [README.ru.md](README.ru.md).
   Reopening it reuses the server-owned conversation instead of creating a duplicate inquiry.
 - Order detail renders the authoritative selected cabins, requested equipment and rental terms from
   logistics-service with Russian status/date labels; transport UUIDs and enum values stay hidden.
+- Order command results are scoped to the initiating manager session and order selection. A late
+  response updates only the matching list entry and cannot replace another open order or navigate
+  away from it. Logout and session replacement cancel presentation jobs; an uncertain server result
+  retains its idempotency key.
 - An editable draft can be cancelled only after explicit confirmation. Android sends the current
   order version and a retained idempotency key; logistics-service releases the active cabin
   reservations, records history and returns the authoritative cancelled projection.

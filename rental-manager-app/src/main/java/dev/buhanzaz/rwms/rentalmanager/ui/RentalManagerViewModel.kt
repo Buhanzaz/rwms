@@ -25,9 +25,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -85,18 +88,30 @@ data class RentalManagerUiState(
 sealed interface RentalManagerNavigationEvent {
     data class OpenClient(val clientId: String) : RentalManagerNavigationEvent
     data class OpenOrder(val orderId: String) : RentalManagerNavigationEvent
-    data object OpenOrders : RentalManagerNavigationEvent
+    data class OpenOrders(val orderId: String) : RentalManagerNavigationEvent
 }
 
 /**
  * Coordinates only Android presentation state. Authorization and order transitions remain owned by
  * auth-service and logistics-service; every retriable command keeps its idempotency key in saved state.
  */
-class RentalManagerViewModel(
-    private val backend: RentalManagerBackend,
+class RentalManagerViewModel internal constructor(
+    private val repository: RentalManagerRepository,
+    private val authState: StateFlow<RentalManagerAuthState>,
+    private val loginAction: suspend (String, String) -> Unit,
+    private val logoutAction: suspend () -> Unit,
+    private val invalidateSession: suspend (String) -> Unit,
     private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
-    private val repository = RentalManagerRepository(backend)
+    constructor(backend: RentalManagerBackend, savedStateHandle: SavedStateHandle) : this(
+        repository = RentalManagerRepository(backend),
+        authState = backend.auth.state,
+        loginAction = backend.auth::login,
+        logoutAction = backend.auth::logout,
+        invalidateSession = backend.auth::invalidate,
+        savedStateHandle = savedStateHandle,
+    )
+
     private val mutableState = MutableStateFlow(RentalManagerUiState())
     private val mutableEvents = MutableSharedFlow<RentalManagerNavigationEvent>(extraBufferCapacity = 1)
     private var sessionJob: Job? = null
@@ -104,24 +119,28 @@ class RentalManagerViewModel(
     private var orderSearchJob: Job? = null
     private var clientDetailJob: Job? = null
     private var orderDetailJob: Job? = null
+    private var commandJob: Job? = null
+    private var sessionGeneration = 0L
+    private var orderSelectionGeneration = 0L
 
     val state = mutableState.asStateFlow()
     val events: SharedFlow<RentalManagerNavigationEvent> = mutableEvents.asSharedFlow()
 
     init {
         viewModelScope.launch {
-            backend.auth.state.collectLatest(::handleAuthState)
+            authState.collectLatest(::handleAuthState)
         }
     }
 
     fun login(username: String, password: String) {
-        viewModelScope.launch { backend.auth.login(username, password) }
+        viewModelScope.launch { loginAction(username, password) }
     }
 
     fun logout() {
+        cancelSessionJobs()
+        mutableState.value = RentalManagerUiState(phase = RentalManagerPhase.CONNECTING)
         viewModelScope.launch {
-            mutableState.update { it.copy(phase = RentalManagerPhase.CONNECTING, authMessage = null) }
-            backend.auth.logout()
+            logoutAction()
         }
     }
 
@@ -140,6 +159,7 @@ class RentalManagerViewModel(
         clientSearchJob = viewModelScope.launch {
             runCatching { repository.clients(normalized, page = 0) }
                 .onSuccess { page ->
+                    currentCoroutineContext().ensureActive()
                     if (mutableState.value.clientSearch.trim() == normalized) {
                         mutableState.update {
                             it.copy(
@@ -153,6 +173,7 @@ class RentalManagerViewModel(
                 }
                 .onFailure { failure ->
                     if (failure is CancellationException) throw failure
+                    currentCoroutineContext().ensureActive()
                     if (mutableState.value.clientSearch.trim() == normalized) {
                         mutableState.update {
                             it.copy(
@@ -175,6 +196,7 @@ class RentalManagerViewModel(
         clientSearchJob = viewModelScope.launch {
             runCatching { repository.clients(normalized, page = nextPage) }
                 .onSuccess { page ->
+                    currentCoroutineContext().ensureActive()
                     if (mutableState.value.clientSearch.trim() == normalized) {
                         mutableState.update {
                             it.copy(
@@ -188,6 +210,7 @@ class RentalManagerViewModel(
                 }
                 .onFailure { failure ->
                     if (failure is CancellationException) throw failure
+                    currentCoroutineContext().ensureActive()
                     if (mutableState.value.clientSearch.trim() == normalized) {
                         mutableState.update {
                             it.copy(
@@ -207,6 +230,7 @@ class RentalManagerViewModel(
         orderSearchJob = viewModelScope.launch {
             runCatching { repository.orders(normalized, page = 0) }
                 .onSuccess { page ->
+                    currentCoroutineContext().ensureActive()
                     if (mutableState.value.orderSearch.trim() == normalized) {
                         mutableState.update {
                             it.copy(
@@ -220,6 +244,7 @@ class RentalManagerViewModel(
                 }
                 .onFailure { failure ->
                     if (failure is CancellationException) throw failure
+                    currentCoroutineContext().ensureActive()
                     if (mutableState.value.orderSearch.trim() == normalized) {
                         mutableState.update {
                             it.copy(
@@ -242,6 +267,7 @@ class RentalManagerViewModel(
         orderSearchJob = viewModelScope.launch {
             runCatching { repository.orders(normalized, page = nextPage) }
                 .onSuccess { page ->
+                    currentCoroutineContext().ensureActive()
                     if (mutableState.value.orderSearch.trim() == normalized) {
                         mutableState.update {
                             it.copy(
@@ -255,6 +281,7 @@ class RentalManagerViewModel(
                 }
                 .onFailure { failure ->
                     if (failure is CancellationException) throw failure
+                    currentCoroutineContext().ensureActive()
                     if (mutableState.value.orderSearch.trim() == normalized) {
                         mutableState.update {
                             it.copy(
@@ -288,6 +315,7 @@ class RentalManagerViewModel(
                     client.await() to orders.await()
                 }
             }.onSuccess { (client, ordersPage) ->
+                currentCoroutineContext().ensureActive()
                 if (mutableState.value.selectedClientId == clientId) {
                     mutableState.update {
                         it.copy(
@@ -302,6 +330,7 @@ class RentalManagerViewModel(
                 }
             }.onFailure { failure ->
                 if (failure is CancellationException) throw failure
+                currentCoroutineContext().ensureActive()
                 if (mutableState.value.selectedClientId == clientId) {
                     mutableState.update {
                         it.copy(
@@ -323,6 +352,7 @@ class RentalManagerViewModel(
         clientDetailJob = viewModelScope.launch {
             runCatching { repository.clientOrders(clientId, page = nextPage) }
                 .onSuccess { page ->
+                    currentCoroutineContext().ensureActive()
                     if (mutableState.value.selectedClientId == clientId) {
                         mutableState.update {
                             it.copy(
@@ -337,6 +367,7 @@ class RentalManagerViewModel(
                 }
                 .onFailure { failure ->
                     if (failure is CancellationException) throw failure
+                    currentCoroutineContext().ensureActive()
                     if (mutableState.value.selectedClientId == clientId) {
                         mutableState.update {
                             it.copy(
@@ -350,6 +381,7 @@ class RentalManagerViewModel(
     }
 
     fun openOrder(orderId: String) {
+        orderSelectionGeneration += 1
         orderDetailJob?.cancel()
         mutableState.update {
             it.copy(
@@ -361,8 +393,24 @@ class RentalManagerViewModel(
             )
         }
         orderDetailJob = viewModelScope.launch {
-            loadOrderDetail(orderId, requireSelected = true)
+            loadOrderDetail(orderId)
             loadOrderPayment(orderId)
+        }
+    }
+
+    /** Invalidates pending detail results and command navigation when its route is left. */
+    fun closeOrder(orderId: String) {
+        if (mutableState.value.selectedOrderId != orderId) return
+        orderSelectionGeneration += 1
+        orderDetailJob?.cancel()
+        mutableState.update {
+            it.copy(
+                selectedOrderId = null,
+                selectedOrder = null,
+                selectedOrderPayment = null,
+                selectedOrderLoading = false,
+                notice = null,
+            )
         }
     }
 
@@ -371,7 +419,7 @@ class RentalManagerViewModel(
         val orderId = mutableState.value.selectedOrderId ?: return
         if (orderDetailJob?.isActive == true) return
         orderDetailJob = viewModelScope.launch {
-            loadOrderDetail(orderId, requireSelected = true)
+            loadOrderDetail(orderId)
             loadOrderPayment(orderId)
             searchOrders(mutableState.value.orderSearch)
         }
@@ -387,8 +435,11 @@ class RentalManagerViewModel(
             request.comment,
             request.source,
         ).joinToString("\u001f")
-        runCommand(CREATE_CLIENT_COMMAND, fingerprint) { key ->
-            val client = repository.createClient(key, request)
+        runCommand(
+            CREATE_CLIENT_COMMAND,
+            fingerprint,
+            operation = { key -> repository.createClient(key, request) },
+        ) { _, client ->
             searchClients(mutableState.value.clientSearch)
             mutableEvents.emit(RentalManagerNavigationEvent.OpenClient(client.id))
             "Клиент создан"
@@ -402,8 +453,11 @@ class RentalManagerViewModel(
             comment = comment.normalizedOrNull(),
         )
         val fingerprint = listOf(clientId, request.contactPhone, request.comment).joinToString("\u001f")
-        runCommand(CREATE_ORDER_COMMAND, fingerprint) { key ->
-            val order = repository.createOrder(key, request)
+        runCommand(
+            CREATE_ORDER_COMMAND,
+            fingerprint,
+            operation = { key -> repository.createOrder(key, request) },
+        ) { _, order ->
             searchOrders(mutableState.value.orderSearch)
             mutableEvents.emit(RentalManagerNavigationEvent.OpenOrder(order.id))
             "Заказ создан"
@@ -424,10 +478,13 @@ class RentalManagerViewModel(
             contactPhone.normalizedOrNull(),
             comment.normalizedOrNull(),
         ).joinToString("\u001f")
-        runCommand(UPDATE_ORDER_COMMAND, fingerprint, conflictOrderId = current.id) { key ->
-            val updated = repository.updateOrder(current, key, contactPhone, comment)
-            mutableState.update { it.copy(selectedOrder = updated) }
-            searchOrders(mutableState.value.orderSearch)
+        runCommand(
+            UPDATE_ORDER_COMMAND,
+            fingerprint,
+            conflictOrderId = current.id,
+            operation = { key -> repository.updateOrder(current, key, contactPhone, comment) },
+        ) { context, updated ->
+            publishOrder(updated, context)
             "Изменения сохранены"
         }
     }
@@ -446,11 +503,16 @@ class RentalManagerViewModel(
             return
         }
         val fingerprint = "${current.id}\u001f${current.version}"
-        runCommand(CANCEL_ORDER_COMMAND, fingerprint, conflictOrderId = current.id) { key ->
-            val cancelled = repository.cancelOrder(current, key)
-            mutableState.update { it.copy(selectedOrder = cancelled) }
-            searchOrders(mutableState.value.orderSearch)
-            mutableEvents.emit(RentalManagerNavigationEvent.OpenOrders)
+        runCommand(
+            CANCEL_ORDER_COMMAND,
+            fingerprint,
+            conflictOrderId = current.id,
+            operation = { key -> repository.cancelOrder(current, key) },
+        ) { context, cancelled ->
+            publishOrder(cancelled, context)
+            if (context.isCurrentSelection()) {
+                mutableEvents.emit(RentalManagerNavigationEvent.OpenOrders(current.id))
+            }
             "Черновик удалён: резервирования бытовок освобождены."
         }
     }
@@ -469,11 +531,14 @@ class RentalManagerViewModel(
             return
         }
         val fingerprint = "${current.id}\u001f${current.version}"
-        runCommand(SAVE_ORDER_COMMAND, fingerprint, conflictOrderId = current.id) { key ->
-            val saved = repository.saveOrder(current, key)
-            mutableState.update { it.copy(selectedOrder = saved) }
-            loadOrderPayment(saved.id)
-            searchOrders(mutableState.value.orderSearch)
+        runCommand(
+            SAVE_ORDER_COMMAND,
+            fingerprint,
+            conflictOrderId = current.id,
+            operation = { key -> repository.saveOrder(current, key) },
+        ) { context, saved ->
+            publishOrder(saved, context)
+            if (context.isCurrentSelection()) loadOrderPayment(saved.id)
             "Заказ сохранён. Счёт выставлен; подтвердите оплату до истечения срока."
         }
     }
@@ -487,18 +552,24 @@ class RentalManagerViewModel(
             return
         }
         val fingerprint = "${payment.orderId}\u001f${payment.orderVersion}"
-        runCommand(PAYMENT_CONFIRM_COMMAND, fingerprint, conflictOrderId = payment.orderId) { key ->
-            val confirmed = repository.confirmOrderPayment(payment, key)
-            mutableState.update {
-                it.copy(
-                    selectedOrderPayment = ObservedOrderPayment(
-                        payment = confirmed,
-                        observedElapsedRealtimeMillis = SystemClock.elapsedRealtime(),
-                    ),
-                )
+        runCommand(
+            PAYMENT_CONFIRM_COMMAND,
+            fingerprint,
+            conflictOrderId = payment.orderId,
+            operation = { key -> repository.confirmOrderPayment(payment, key) },
+        ) { context, confirmed ->
+            if (context.isCurrentSelection()) {
+                mutableState.update {
+                    it.copy(
+                        selectedOrderPayment = ObservedOrderPayment(
+                            payment = confirmed,
+                            observedElapsedRealtimeMillis = SystemClock.elapsedRealtime(),
+                        ),
+                    )
+                }
+                loadOrderDetail(confirmed.orderId)
             }
-            loadOrderDetail(confirmed.orderId, requireSelected = true)
-            searchOrders(mutableState.value.orderSearch)
+            if (context.isCurrentSession()) searchOrders(mutableState.value.orderSearch)
             "Подтверждение оплаты сохранено. Отгрузку можно планировать по статусу заказа."
         }
     }
@@ -508,11 +579,7 @@ class RentalManagerViewModel(
             RentalManagerAuthState.Loading ->
                 mutableState.update { it.copy(phase = RentalManagerPhase.LOADING, authMessage = null) }
             RentalManagerAuthState.SignedOut -> {
-                sessionJob?.cancel()
-                clientSearchJob?.cancel()
-                orderSearchJob?.cancel()
-                clientDetailJob?.cancel()
-                orderDetailJob?.cancel()
+                cancelSessionJobs()
                 mutableState.value = RentalManagerUiState(phase = RentalManagerPhase.SIGNED_OUT)
             }
             RentalManagerAuthState.Authenticating ->
@@ -521,11 +588,7 @@ class RentalManagerViewModel(
                 }
             RentalManagerAuthState.SignedIn -> loadSession(force = false)
             is RentalManagerAuthState.Failure -> {
-                sessionJob?.cancel()
-                clientSearchJob?.cancel()
-                orderSearchJob?.cancel()
-                clientDetailJob?.cancel()
-                orderDetailJob?.cancel()
+                cancelSessionJobs()
                 mutableState.value = RentalManagerUiState(
                     phase = RentalManagerPhase.SIGNED_OUT,
                     authMessage = authState.message,
@@ -538,7 +601,7 @@ class RentalManagerViewModel(
         if (!force && (sessionJob?.isActive == true || mutableState.value.phase == RentalManagerPhase.READY)) {
             return
         }
-        sessionJob?.cancel()
+        cancelSessionJobs()
         sessionJob = viewModelScope.launch {
             mutableState.update {
                 it.copy(phase = RentalManagerPhase.CONNECTING, authMessage = null, notice = null)
@@ -551,6 +614,7 @@ class RentalManagerViewModel(
                     Triple(session, clients.await(), orders.await())
                 }
             }.onSuccess { (session, clientsPage, ordersPage) ->
+                currentCoroutineContext().ensureActive()
                 mutableState.value = RentalManagerUiState(
                     phase = RentalManagerPhase.READY,
                     session = session,
@@ -563,6 +627,7 @@ class RentalManagerViewModel(
                 )
             }.onFailure { failure ->
                 if (failure is CancellationException) throw failure
+                currentCoroutineContext().ensureActive()
                 mutableState.update {
                     it.copy(
                         phase = RentalManagerPhase.CONNECTING,
@@ -573,22 +638,21 @@ class RentalManagerViewModel(
         }
     }
 
-    private suspend fun loadOrderDetail(orderId: String, requireSelected: Boolean) {
+    private suspend fun loadOrderDetail(orderId: String) {
+        currentCoroutineContext().ensureActive()
+        val context = currentCommandContext()
         runCatching { repository.order(orderId) }
             .onSuccess { order ->
-                if (!requireSelected || mutableState.value.selectedOrderId == orderId) {
-                    mutableState.update {
-                        it.copy(
-                            selectedOrderId = orderId,
-                            selectedOrder = order,
-                            selectedOrderLoading = false,
-                        )
-                    }
+                currentCoroutineContext().ensureActive()
+                if (context.isCurrentSelection() && mutableState.value.selectedOrderId == orderId) {
+                    publishOrder(order, context)
+                    mutableState.update { it.copy(selectedOrderLoading = false) }
                 }
             }
             .onFailure { failure ->
                 if (failure is CancellationException) throw failure
-                if (!requireSelected || mutableState.value.selectedOrderId == orderId) {
+                currentCoroutineContext().ensureActive()
+                if (context.isCurrentSelection() && mutableState.value.selectedOrderId == orderId) {
                     mutableState.update {
                         it.copy(
                             selectedOrderLoading = false,
@@ -600,9 +664,12 @@ class RentalManagerViewModel(
     }
 
     private suspend fun loadOrderPayment(orderId: String) {
+        currentCoroutineContext().ensureActive()
+        val context = currentCommandContext()
         runCatching { repository.orderPayment(orderId) }
             .onSuccess { payment ->
-                if (mutableState.value.selectedOrderId == orderId) {
+                currentCoroutineContext().ensureActive()
+                if (context.isCurrentSelection() && mutableState.value.selectedOrderId == orderId) {
                     mutableState.update {
                         it.copy(
                             selectedOrderPayment = ObservedOrderPayment(
@@ -615,7 +682,8 @@ class RentalManagerViewModel(
             }
             .onFailure { failure ->
                 if (failure is CancellationException) throw failure
-                if (mutableState.value.selectedOrderId == orderId) {
+                currentCoroutineContext().ensureActive()
+                if (context.isCurrentSelection() && mutableState.value.selectedOrderId == orderId) {
                     mutableState.update {
                         it.copy(
                             selectedOrderPayment = null,
@@ -626,47 +694,101 @@ class RentalManagerViewModel(
             }
     }
 
-    private fun runCommand(
+    /** Publishes a completed command only into the session and selection that initiated it. */
+    private fun <T> runCommand(
         commandName: String,
         fingerprint: String,
         conflictOrderId: String? = null,
-        operation: suspend (UUID) -> String,
+        operation: suspend (UUID) -> T,
+        onSuccess: suspend (CommandContext, T) -> String,
     ) {
         if (mutableState.value.commandRunning) return
         val actorId = mutableState.value.session?.user?.id
-        if (actorId == null) {
+        if (actorId == null || mutableState.value.phase != RentalManagerPhase.READY) {
             mutableState.update {
                 it.copy(notice = RentalManagerNotice("Сессия завершена. Войдите снова.", true))
             }
             return
         }
-        viewModelScope.launch {
-            mutableState.update { it.copy(commandRunning = true, notice = null) }
-            val key = commandKey(
-                commandName,
-                actorScopedCommandFingerprint(actorId, fingerprint),
-            )
-            runCatching { operation(key) }
-                .onSuccess { message ->
-                    clearCommandKey(commandName)
-                    mutableState.update {
-                        it.copy(commandRunning = false, notice = RentalManagerNotice(message, false))
-                    }
+        val context = currentCommandContext()
+        val key = commandKey(commandName, actorScopedCommandFingerprint(actorId, fingerprint))
+        mutableState.update { it.copy(commandRunning = true, notice = null) }
+        commandJob = viewModelScope.launch {
+            try {
+                val result = operation(key)
+                if (!context.isCurrentSession()) return@launch
+                clearCommandKey(commandName)
+                val message = onSuccess(context, result)
+                if (context.isCurrentSelection()) {
+                    mutableState.update { it.copy(notice = RentalManagerNotice(message, false)) }
                 }
-                .onFailure { failure ->
-                    if (failure is CancellationException) throw failure
-                    if (conflictOrderId != null) {
-                        loadOrderDetail(conflictOrderId, requireSelected = true)
-                        loadOrderPayment(conflictOrderId)
-                    }
-                    mutableState.update {
-                        it.copy(
-                            commandRunning = false,
-                            notice = RentalManagerNotice(handleFailure(failure), true),
-                        )
-                    }
+            } catch (failure: Throwable) {
+                if (failure is CancellationException) throw failure
+                currentCoroutineContext().ensureActive()
+                if (!context.isCurrentSession()) return@launch
+                val message = handleFailure(failure)
+                if (conflictOrderId != null && context.isCurrentSelection()) {
+                    loadOrderDetail(conflictOrderId)
+                    if (context.isCurrentSelection()) loadOrderPayment(conflictOrderId)
                 }
+                if (context.isCurrentSelection()) {
+                    mutableState.update { it.copy(notice = RentalManagerNotice(message, true)) }
+                }
+            } finally {
+                if (context.isCurrentSession()) {
+                    mutableState.update { it.copy(commandRunning = false) }
+                }
+            }
         }
+    }
+
+    private fun publishOrder(order: OrderDto, context: CommandContext) {
+        fun replace(existing: OrderDto): OrderDto =
+            if (existing.id == order.id && existing.version <= order.version) order else existing
+
+        mutableState.update {
+            it.copy(
+                selectedOrder = if (context.isCurrentSelection()) {
+                    it.selectedOrder?.let(::replace) ?: order
+                } else it.selectedOrder,
+                orders = it.orders.map(::replace),
+                selectedClientOrders = it.selectedClientOrders.map(::replace),
+            )
+        }
+    }
+
+    private fun cancelSessionJobs() {
+        sessionGeneration += 1
+        orderSelectionGeneration += 1
+        sessionJob?.cancel()
+        clientSearchJob?.cancel()
+        orderSearchJob?.cancel()
+        clientDetailJob?.cancel()
+        orderDetailJob?.cancel()
+        commandJob?.cancel()
+        mutableState.update { it.copy(commandRunning = false) }
+    }
+
+    private fun currentCommandContext() = CommandContext(
+        sessionGeneration,
+        mutableState.value.session?.user?.id,
+        orderSelectionGeneration,
+        mutableState.value.selectedOrderId,
+    )
+
+    /** A local presentation fence; it never cancels or rolls back an accepted server command. */
+    private inner class CommandContext(
+        private val session: Long,
+        private val actorId: String?,
+        private val selection: Long,
+        private val orderId: String?,
+    ) {
+        fun isCurrentSession(): Boolean = session == sessionGeneration &&
+            actorId == mutableState.value.session?.user?.id &&
+            mutableState.value.phase == RentalManagerPhase.READY
+
+        fun isCurrentSelection(): Boolean = isCurrentSession() &&
+            selection == orderSelectionGeneration && orderId == mutableState.value.selectedOrderId
     }
 
     private fun commandKey(commandName: String, fingerprint: String): UUID {
@@ -691,7 +813,7 @@ class RentalManagerViewModel(
         return handleRentalManagerFailure(
             failure = failure,
             messageFor = repository::userMessage,
-            invalidate = backend.auth::invalidate,
+            invalidate = invalidateSession,
         )
     }
 

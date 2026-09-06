@@ -17,6 +17,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -107,6 +108,11 @@ private fun ManagerNavigation(
 ) {
     val backStack = rememberNavBackStack(ChatRoute)
     val current = backStack.lastOrNull()
+    DisposableEffect(current, viewModel) {
+        onDispose {
+            if (current is OrderRoute) viewModel.closeOrder(current.orderId)
+        }
+    }
     val selectedTopLevel = when (current) {
         OrdersRoute, is OrderRoute, is CreateOrderRoute -> OrdersRoute
         ChatRoute, CreateChatRoute, is ChatConversationRoute -> ChatRoute
@@ -121,14 +127,22 @@ private fun ManagerNavigation(
     LaunchedEffect(viewModel) {
         viewModel.events.collectLatest { event ->
             when (event) {
-                RentalManagerNavigationEvent.OpenOrders -> showTopLevel(OrdersRoute)
+                is RentalManagerNavigationEvent.OpenOrders -> {
+                    if (backStack.lastOrNull() == OrderRoute(event.orderId)) {
+                        showTopLevel(OrdersRoute)
+                    }
+                }
                 is RentalManagerNavigationEvent.OpenClient -> {
-                    backStack.removeAll { it is CreateClientRoute || it is ClientRoute }
-                    backStack.add(ClientRoute(event.clientId))
+                    if (backStack.lastOrNull() == CreateClientRoute) {
+                        backStack.removeAll { it is CreateClientRoute || it is ClientRoute }
+                        backStack.add(ClientRoute(event.clientId))
+                    }
                 }
                 is RentalManagerNavigationEvent.OpenOrder -> {
-                    backStack.removeAll { it is CreateOrderRoute || it is OrderRoute }
-                    backStack.add(OrderRoute(event.orderId))
+                    if (backStack.lastOrNull() is CreateOrderRoute) {
+                        backStack.removeAll { it is CreateOrderRoute || it is OrderRoute }
+                        backStack.add(OrderRoute(event.orderId))
+                    }
                 }
             }
         }
@@ -258,7 +272,14 @@ private fun ManagerNavigation(
                     entry<OrderRoute> { route ->
                         LaunchedEffect(route.orderId) { viewModel.openOrder(route.orderId) }
                         OrderDetailScreen(
-                            state = state,
+                            state = state.copy(
+                                selectedOrder = state.selectedOrder?.takeIf { it.id == route.orderId },
+                                selectedOrderPayment = state.selectedOrderPayment?.takeIf {
+                                    it.payment.orderId == route.orderId
+                                },
+                                selectedOrderLoading = state.selectedOrderLoading ||
+                                    state.selectedOrderId != route.orderId,
+                            ),
                             onRetry = viewModel::refreshCurrentOrder,
                             onUpdate = viewModel::updateOrder,
                             onSave = viewModel::saveOrder,
