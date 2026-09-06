@@ -411,6 +411,13 @@ Transient Yandex и service dependency failures worker повторяет не �
 всего. Рекурсивное перечисление metadata ограничено 64 страницами на source, а
 каждый скачанный байт — `MEDIA_MAX_UPLOAD_BYTES`.
 
+Worker продлевает lease с проверкой token на протяжении preflight и activation,
+включая перечисление ресурсов, передачу архива и object storage. Потеря lease
+отменяет текущую фазу; завершение выполняется после остановки продления и всё ещё
+требует актуального lease. При повторном claim истёкшей третьей попытки фаза
+получает `FAILED` и `LEASE_LOST`, lease очищается, а job сохраняется для
+существующей явной операции retry.
+
 CABIN stream должен начинаться с `asset.rental-item.created.v1` версии 0.
 Passport, status, warehouse и logistics-effect facts несут полный
 санитизированный owner proof; comments и manual notes служат маркерами порядка.

@@ -40,6 +40,7 @@ type Worker struct {
 	maxBytes     int64
 	pollInterval time.Duration
 	lease        time.Duration
+	leaseTicker  func(time.Duration) (<-chan time.Time, func())
 	temporaryDir string
 	logger       *slog.Logger
 }
@@ -52,6 +53,10 @@ func NewWorker(repository Repository, yandex YandexPublicResources, store Object
 	return &Worker{
 		repository: repository, yandex: yandex, store: store, instanceID: instanceID,
 		maxBytes: maxBytes, pollInterval: defaultPollInterval, lease: defaultLease,
+		leaseTicker: func(interval time.Duration) (<-chan time.Time, func()) {
+			ticker := time.NewTicker(interval)
+			return ticker.C, ticker.Stop
+		},
 		temporaryDir: os.TempDir(), logger: logger,
 	}, nil
 }
@@ -90,9 +95,22 @@ func (worker *Worker) runOnce(ctx context.Context) error {
 	var runErr error
 	switch phase {
 	case PhasePreflight:
-		runErr = worker.preflight(ctx, work)
+		var entries []DiscoveredEntry
+		runErr = worker.runPhase(ctx, work, func(phaseCtx context.Context) error {
+			var err error
+			entries, err = worker.preflight(phaseCtx, work)
+			return err
+		})
+		if runErr == nil {
+			runErr = worker.repository.CompleteAssetImportPreflight(ctx, work.Job.ID, work.LeaseToken, entries)
+		}
 	case PhaseActivation:
-		runErr = worker.activate(ctx, work)
+		runErr = worker.runPhase(ctx, work, func(phaseCtx context.Context) error {
+			return worker.activate(phaseCtx, work)
+		})
+		if runErr == nil {
+			runErr = worker.repository.CompleteAssetImportActivation(ctx, work.Job.ID, work.LeaseToken)
+		}
 	}
 	if runErr == nil {
 		return nil
@@ -100,28 +118,25 @@ func (worker *Worker) runOnce(ctx context.Context) error {
 	return worker.handleFailure(ctx, work, phase, runErr)
 }
 
-func (worker *Worker) preflight(ctx context.Context, work Work) error {
+func (worker *Worker) preflight(ctx context.Context, work Work) ([]DiscoveredEntry, error) {
 	if len(work.Job.Sources) < 1 || len(work.Job.Sources) > MaxSourcesPerJob {
-		return ErrExternalRejected
+		return nil, ErrExternalRejected
 	}
 	entries := make([]DiscoveredEntry, 0)
 	seen := make(map[string]struct{})
 	for _, source := range work.Job.Sources {
-		if err := worker.renew(ctx, work); err != nil {
-			return err
-		}
 		discovered, err := worker.yandex.Enumerate(ctx, source.PublicKey)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if len(discovered) > MaxEntriesPerSource {
-			return ErrExternalRejected
+			return nil, ErrExternalRejected
 		}
 		sourceEntries := 0
 		for _, entry := range discovered {
 			if entry.ResourcePath == "" || len(entry.ResourcePath) > 4096 || sourceEntries >= MaxEntriesPerSource ||
 				len(entries) >= MaxEntriesPerJob {
-				return ErrExternalRejected
+				return nil, ErrExternalRejected
 			}
 			key := source.SourceRowID.String() + "\x00" + entry.ResourcePath
 			if _, duplicate := seen[key]; duplicate {
@@ -138,7 +153,7 @@ func (worker *Worker) preflight(ctx context.Context, work Work) error {
 			sourceEntries++
 		}
 	}
-	return worker.repository.CompleteAssetImportPreflight(ctx, work.Job.ID, work.LeaseToken, entries)
+	return entries, nil
 }
 
 func (worker *Worker) activate(ctx context.Context, work Work) error {
@@ -164,9 +179,6 @@ func (worker *Worker) activate(ctx context.Context, work Work) error {
 		}
 		ready := make([]Entry, 0, len(entries))
 		for _, entry := range entries {
-			if err := worker.renew(ctx, work); err != nil {
-				return err
-			}
 			if entry.SizeBytes != nil && (*entry.SizeBytes <= 0 || *entry.SizeBytes > worker.maxBytes) {
 				if err := worker.skip(ctx, work, entry.ID, "FILE_TOO_LARGE"); err != nil {
 					return err
@@ -185,7 +197,7 @@ func (worker *Worker) activate(ctx context.Context, work Work) error {
 			return err
 		}
 	}
-	return worker.repository.CompleteAssetImportActivation(ctx, work.Job.ID, work.LeaseToken)
+	return nil
 }
 
 // downloadArchiveAndIngest is deliberately source-scoped: one public Yandex
@@ -491,6 +503,48 @@ func commonArchiveRoot(members map[string]*zip.File) string {
 
 func (worker *Worker) renew(ctx context.Context, work Work) error {
 	return worker.repository.RenewAssetImportLease(ctx, work.Job.ID, work.LeaseToken, worker.instanceID, worker.lease)
+}
+
+// runPhase keeps the claim fenced while work may wait on remote I/O or object
+// storage. Completion is deliberately outside this scope, after the renewal
+// goroutine has stopped, so a lost lease cannot race a durable completion.
+func (worker *Worker) runPhase(ctx context.Context, work Work, run func(context.Context) error) error {
+	if err := worker.renew(ctx, work); err != nil {
+		return err
+	}
+	interval := worker.lease / 3
+	if interval <= 0 {
+		interval = time.Nanosecond
+	}
+	ticks, stopTicker := worker.leaseTicker(interval)
+	defer stopTicker()
+	phaseCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stopRenewal := make(chan struct{})
+	renewalStopped := make(chan struct{})
+	var renewalErr error
+	go func() {
+		defer close(renewalStopped)
+		for {
+			select {
+			case <-stopRenewal:
+				return
+			case <-ticks:
+				if err := worker.renew(phaseCtx, work); err != nil {
+					renewalErr = err
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	runErr := run(phaseCtx)
+	close(stopRenewal)
+	<-renewalStopped
+	if renewalErr != nil {
+		return renewalErr
+	}
+	return runErr
 }
 
 func (worker *Worker) skip(ctx context.Context, work Work, entryID uuid.UUID, code string) error {

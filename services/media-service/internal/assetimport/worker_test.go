@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,11 +65,12 @@ func TestWorkerPreflightEnforcesPerSourceAndGlobalEntryBounds(t *testing.T) {
 		repository := preflightRepository(MaxEntriesPerJob / MaxEntriesPerSource)
 		worker := newTestWorker(t, repository, &preflightYandexStub{entries: entriesAtSourceLimit}, &assetImportStoreStub{})
 
-		if err := worker.preflight(context.Background(), repository.work); err != nil {
+		entries, err := worker.preflight(context.Background(), repository.work)
+		if err != nil {
 			t.Fatalf("preflight(global limit) error = %v", err)
 		}
-		if len(repository.preflightEntries) != MaxEntriesPerJob {
-			t.Fatalf("preflight entries = %d, want %d", len(repository.preflightEntries), MaxEntriesPerJob)
+		if len(entries) != MaxEntriesPerJob {
+			t.Fatalf("preflight entries = %d, want %d", len(entries), MaxEntriesPerJob)
 		}
 	})
 
@@ -77,7 +79,7 @@ func TestWorkerPreflightEnforcesPerSourceAndGlobalEntryBounds(t *testing.T) {
 		worker := newTestWorker(t, repository,
 			&preflightYandexStub{entries: preflightFixtureEntries(MaxEntriesPerSource + 1)}, &assetImportStoreStub{})
 
-		if err := worker.preflight(context.Background(), repository.work); !errors.Is(err, ErrExternalRejected) {
+		if _, err := worker.preflight(context.Background(), repository.work); !errors.Is(err, ErrExternalRejected) {
 			t.Fatalf("preflight(source limit) error = %v, want ErrExternalRejected", err)
 		}
 		if len(repository.preflightEntries) != 0 {
@@ -89,13 +91,138 @@ func TestWorkerPreflightEnforcesPerSourceAndGlobalEntryBounds(t *testing.T) {
 		repository := preflightRepository(MaxEntriesPerJob/MaxEntriesPerSource + 1)
 		worker := newTestWorker(t, repository, &preflightYandexStub{entries: entriesAtSourceLimit}, &assetImportStoreStub{})
 
-		if err := worker.preflight(context.Background(), repository.work); !errors.Is(err, ErrExternalRejected) {
+		if _, err := worker.preflight(context.Background(), repository.work); !errors.Is(err, ErrExternalRejected) {
 			t.Fatalf("preflight(global limit) error = %v, want ErrExternalRejected", err)
 		}
 		if len(repository.preflightEntries) != 0 {
 			t.Fatalf("global-limit preflight persisted %d entries", len(repository.preflightEntries))
 		}
 	})
+}
+
+func TestWorkerRenewsLeaseDuringBlockedPreflight(t *testing.T) {
+	repository := preflightRepository(1)
+	repository.renewed = make(chan struct{})
+	yandex := &blockingPreflightYandex{started: make(chan struct{}), release: make(chan struct{}), canceled: make(chan struct{})}
+	worker := newTestWorker(t, repository, yandex, &assetImportStoreStub{})
+	ticks := make(chan time.Time)
+	worker.leaseTicker = func(time.Duration) (<-chan time.Time, func()) { return ticks, func() {} }
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- worker.runOnce(ctx) }()
+	select {
+	case <-yandex.started:
+	case <-ctx.Done():
+		t.Fatal("preflight never reached enumeration")
+	}
+	select {
+	case ticks <- time.Now():
+	case <-ctx.Done():
+		t.Fatal("preflight renewal did not start")
+	}
+	select {
+	case <-repository.renewed:
+	case <-ctx.Done():
+		t.Fatal("preflight renewal did not complete")
+	}
+	close(yandex.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runOnce() error = %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("worker did not complete preflight")
+	}
+	if repository.renewCalls != 2 || len(repository.preflightEntries) != 1 || repository.requeueCalls != 0 {
+		t.Fatalf("renewals=%d entries=%d requeues=%d", repository.renewCalls, len(repository.preflightEntries), repository.requeueCalls)
+	}
+}
+
+func TestWorkerLeaseLossCancelsPreflightWithoutCompletionOrRequeue(t *testing.T) {
+	repository := preflightRepository(1)
+	repository.renewErrAt = 2
+	yandex := &blockingPreflightYandex{started: make(chan struct{}), release: make(chan struct{}), canceled: make(chan struct{})}
+	worker := newTestWorker(t, repository, yandex, &assetImportStoreStub{})
+	ticks := make(chan time.Time)
+	worker.leaseTicker = func(time.Duration) (<-chan time.Time, func()) { return ticks, func() {} }
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- worker.runOnce(ctx) }()
+	select {
+	case <-yandex.started:
+	case <-ctx.Done():
+		t.Fatal("preflight never reached enumeration")
+	}
+	select {
+	case ticks <- time.Now():
+	case <-ctx.Done():
+		t.Fatal("preflight renewal did not start")
+	}
+	select {
+	case <-yandex.canceled:
+	case <-ctx.Done():
+		t.Fatal("lease loss did not cancel enumeration")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runOnce() error = %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("worker did not stop after preflight lease loss")
+	}
+	if len(repository.preflightEntries) != 0 || repository.requeueCalls != 0 || repository.renewCalls != 2 {
+		t.Fatalf("entries=%d requeues=%d renewals=%d", len(repository.preflightEntries), repository.requeueCalls, repository.renewCalls)
+	}
+}
+
+func TestWorkerLeaseLossCancelsStalledActivationStoreWithoutCompletionOrRequeue(t *testing.T) {
+	jobID, sourceRowID, entryID, cabinID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	repository := &assetImportRepositoryStub{work: Work{Job: Job{
+		ID: jobID, WarehouseID: uuid.New(), Status: StatusActivationRunning,
+		Sources: []Source{{SourceRowID: sourceRowID, PublicKey: "AbCdEfGhIjKlMn", CabinID: &cabinID}},
+		Entries: []Entry{{ID: entryID, SourceRowID: sourceRowID, ResourcePath: "disk:/photo.jpg", FileName: "photo.jpg", ContentType: "image/jpeg", Status: EntryPrepared}},
+	}, LeaseToken: uuid.New()}, renewErrAt: 2}
+	store := &blockingAssetImportStore{started: make(chan struct{}), canceled: make(chan struct{})}
+	worker := newTestWorker(t, repository, &archiveYandexStub{archive: testZip(t, []testZipFile{{name: "folder/photo.jpg", body: []byte{0xff, 0xd8, 0xff, 0xd9}}})}, store)
+	ticks := make(chan time.Time)
+	worker.leaseTicker = func(time.Duration) (<-chan time.Time, func()) { return ticks, func() {} }
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- worker.runOnce(ctx) }()
+	select {
+	case <-store.started:
+	case <-ctx.Done():
+		t.Fatal("activation never reached object storage")
+	}
+	select {
+	case ticks <- time.Now():
+	case <-ctx.Done():
+		t.Fatal("activation renewal did not start")
+	}
+	select {
+	case <-store.canceled:
+	case <-ctx.Done():
+		t.Fatal("lease loss did not cancel object storage")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runOnce() error = %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("worker did not stop after activation lease loss")
+	}
+	if repository.activationCompleted || repository.requeueCalls != 0 || repository.renewCalls != 2 {
+		t.Fatalf("completed=%v requeues=%d renewals=%d", repository.activationCompleted, repository.requeueCalls, repository.renewCalls)
+	}
 }
 
 func TestWorkerActivationDownloadsArchiveUnpacksOriginalsUsesNormalIngressAndCleansTemporaryFiles(t *testing.T) {
@@ -251,8 +378,8 @@ func TestWorkerActivationDownloadsRealYandexArchiveWhenConfigured(t *testing.T) 
 	temporaryRoot := t.TempDir()
 	worker.temporaryDir = temporaryRoot
 
-	if err := worker.activate(ctx, repository.work); err != nil {
-		t.Fatalf("activate(real Yandex ZIP) error = %v", err)
+	if err := worker.runOnce(ctx); err != nil {
+		t.Fatalf("runOnce(real Yandex ZIP) error = %v", err)
 	}
 	if !repository.activationCompleted || len(repository.importCommands) != len(entries) || store.puts != len(entries) {
 		t.Fatalf("real Yandex import completion=%v commands=%d entries=%d puts=%d", repository.activationCompleted, len(repository.importCommands), len(entries), store.puts)
@@ -299,6 +426,49 @@ type preflightYandexStub struct {
 	entries []DiscoveredEntry
 }
 
+type blockingPreflightYandex struct {
+	started  chan struct{}
+	release  chan struct{}
+	canceled chan struct{}
+	start    sync.Once
+	cancel   sync.Once
+}
+
+type archiveYandexStub struct {
+	archive []byte
+}
+
+func (*archiveYandexStub) Enumerate(context.Context, string) ([]DiscoveredEntry, error) {
+	return nil, ErrExternalRejected
+}
+
+func (*archiveYandexStub) Download(context.Context, string, string) (io.ReadCloser, DownloadMetadata, error) {
+	return nil, DownloadMetadata{}, ErrExternalRejected
+}
+
+func (stub *archiveYandexStub) DownloadArchive(context.Context, string) (io.ReadCloser, DownloadMetadata, error) {
+	return io.NopCloser(bytes.NewReader(stub.archive)), DownloadMetadata{ContentType: "application/zip", ContentLength: int64(len(stub.archive))}, nil
+}
+
+func (stub *blockingPreflightYandex) Enumerate(ctx context.Context, _ string) ([]DiscoveredEntry, error) {
+	stub.start.Do(func() { close(stub.started) })
+	select {
+	case <-stub.release:
+		return []DiscoveredEntry{{ResourcePath: "disk:/fixture/photo.jpg", FileName: "photo.jpg", ContentType: "image/jpeg", Status: EntryPrepared}}, nil
+	case <-ctx.Done():
+		stub.cancel.Do(func() { close(stub.canceled) })
+		return nil, ctx.Err()
+	}
+}
+
+func (*blockingPreflightYandex) Download(context.Context, string, string) (io.ReadCloser, DownloadMetadata, error) {
+	return nil, DownloadMetadata{}, ErrExternalRejected
+}
+
+func (*blockingPreflightYandex) DownloadArchive(context.Context, string) (io.ReadCloser, DownloadMetadata, error) {
+	return nil, DownloadMetadata{}, ErrExternalRejected
+}
+
 func (stub *preflightYandexStub) Enumerate(context.Context, string) ([]DiscoveredEntry, error) {
 	return append([]DiscoveredEntry(nil), stub.entries...), nil
 }
@@ -322,6 +492,10 @@ type assetImportRepositoryStub struct {
 	requeueCalls        int
 	requeuePhase        Phase
 	requeueCode         string
+	renewCalls          int
+	renewErrAt          int
+	renewed             chan struct{}
+	renewOnce           sync.Once
 }
 
 type assetImportEntryTransition struct {
@@ -358,6 +532,13 @@ func (stub *assetImportRepositoryStub) ClaimAssetImport(context.Context, string,
 }
 
 func (stub *assetImportRepositoryStub) RenewAssetImportLease(context.Context, uuid.UUID, uuid.UUID, string, time.Duration) error {
+	stub.renewCalls++
+	if stub.renewed != nil && stub.renewCalls == 2 {
+		stub.renewOnce.Do(func() { close(stub.renewed) })
+	}
+	if stub.renewErrAt > 0 && stub.renewCalls >= stub.renewErrAt {
+		return ErrLeaseLost
+	}
 	return nil
 }
 
@@ -398,6 +579,23 @@ type assetImportStoreStub struct {
 	bytes  []byte
 	bodies [][]byte
 	err    error
+}
+
+type blockingAssetImportStore struct {
+	started  chan struct{}
+	canceled chan struct{}
+	start    sync.Once
+	cancel   sync.Once
+}
+
+func (stub *blockingAssetImportStore) PutIngressVersion(ctx context.Context, _ string, source io.Reader, _ int64, _ string, _ string) (media.ObjectMetadata, error) {
+	if _, err := io.Copy(io.Discard, source); err != nil {
+		return media.ObjectMetadata{}, err
+	}
+	stub.start.Do(func() { close(stub.started) })
+	<-ctx.Done()
+	stub.cancel.Do(func() { close(stub.canceled) })
+	return media.ObjectMetadata{}, ctx.Err()
 }
 
 func (stub *assetImportStoreStub) PutIngressVersion(_ context.Context, _ string, source io.Reader, size int64, contentType, checksum string) (media.ObjectMetadata, error) {

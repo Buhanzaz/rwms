@@ -313,10 +313,11 @@ func (repository *Repository) ClaimAssetImport(ctx context.Context, owner string
 	now := repository.now().UTC()
 	var jobID uuid.UUID
 	var status assetimport.Status
-	err = tx.QueryRow(ctx, `select job_id,job_status from media_asset_import_job
+	var preflightAttempts, activationAttempts int
+	err = tx.QueryRow(ctx, `select job_id,job_status,preflight_attempt_count,activation_attempt_count from media_asset_import_job
 		where (job_status in ('PREFLIGHT_PENDING','ACTIVATION_PENDING') and next_attempt_at <= $1)
 		   or (job_status in ('PREFLIGHT_RUNNING','ACTIVATION_RUNNING') and lease_until <= $1)
-		order by next_attempt_at,created_at,job_id for update skip locked limit 1`, now).Scan(&jobID, &status)
+		order by next_attempt_at,created_at,job_id for update skip locked limit 1`, now).Scan(&jobID, &status, &preflightAttempts, &activationAttempts)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if commitErr := tx.Commit(ctx); commitErr != nil {
 			return assetimport.Work{}, false, commitErr
@@ -328,8 +329,22 @@ func (repository *Repository) ClaimAssetImport(ctx context.Context, owner string
 	}
 	running := assetimport.StatusPreflightRunning
 	attemptColumn := "preflight_attempt_count"
+	attempts := preflightAttempts
+	phase := assetimport.PhasePreflight
 	if status == assetimport.StatusActivationPending || status == assetimport.StatusActivationRunning {
 		running, attemptColumn = assetimport.StatusActivationRunning, "activation_attempt_count"
+		attempts, phase = activationAttempts, assetimport.PhaseActivation
+	}
+	if (status == assetimport.StatusPreflightRunning || status == assetimport.StatusActivationRunning) && attempts >= assetimport.MaxAttempts {
+		if _, err := tx.Exec(ctx, `update media_asset_import_job set job_status='FAILED',failed_phase=$2,
+			failure_code='LEASE_LOST',next_attempt_at=$3,lease_owner=null,lease_token=null,lease_until=null,updated_at=$3
+			where job_id=$1`, jobID, phase, now); err != nil {
+			return assetimport.Work{}, false, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return assetimport.Work{}, false, err
+		}
+		return assetimport.Work{}, false, nil
 	}
 	token := uuid.New()
 	until := now.Add(lease)

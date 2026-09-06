@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -234,5 +235,77 @@ func TestAssetImportReplacementRequeuesOnlyFailedPreflightIntegration(t *testing
 	if err != nil || !replayed || replayedJob.Status != assetimport.StatusPreflightPending ||
 		len(replayedJob.Sources) != 1 || replayedJob.Sources[0].PublicKey != "QrStUvWxYz0123" {
 		t.Fatalf("ReplaceAssetImportSources(replay) = %#v replayed=%v error=%v", replayedJob, replayed, err)
+	}
+}
+
+func TestClaimExpiredAssetImportTerminalizesExhaustedPhaseIntegration(t *testing.T) {
+	databaseURL := os.Getenv("MEDIA_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("MEDIA_TEST_DATABASE_URL is not configured")
+	}
+	for _, scenario := range []struct {
+		name  string
+		phase assetimport.Phase
+	}{
+		{name: "preflight", phase: assetimport.PhasePreflight},
+		{name: "activation", phase: assetimport.PhaseActivation},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			database := testsupport.NewMigratedMediaDatabase(t, databaseURL)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			connection, err := Open(ctx, database)
+			if err != nil {
+				t.Fatalf("Open() error = %v", err)
+			}
+			defer connection.Close()
+			repository := NewRepository(connection.Pool)
+			jobID, assetImportID, sourceRowID, warehouseID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+			if _, replayed, err := repository.CreateAssetImport(ctx, assetimport.CreateCommand{
+				JobID: jobID, AssetImportID: assetImportID, WarehouseID: warehouseID, IdempotencyKey: uuid.New(),
+				RequestSHA256: assetimport.CanonicalPreflightSHA(assetImportID, warehouseID, []assetimport.Source{{SourceRowID: sourceRowID, PublicKey: "AbCdEfGhIjKlMn"}}),
+				Sources:       []assetimport.Source{{SourceRowID: sourceRowID, PublicKey: "AbCdEfGhIjKlMn"}},
+			}); err != nil || replayed {
+				t.Fatalf("CreateAssetImport() replayed=%v error=%v", replayed, err)
+			}
+			if scenario.phase == assetimport.PhaseActivation {
+				if _, err := connection.Pool.Exec(ctx, `update media_asset_import_job set job_status='ACTIVATION_PENDING',next_attempt_at=clock_timestamp() where job_id=$1`, jobID); err != nil {
+					t.Fatalf("prepare activation job: %v", err)
+				}
+			}
+			now := time.Now().UTC().Add(time.Second)
+			repository.now = func() time.Time { return now }
+			var expired assetimport.Work
+			for attempt := 1; attempt <= assetimport.MaxAttempts; attempt++ {
+				work, claimed, err := repository.ClaimAssetImport(ctx, "asset-import-expiry", time.Minute)
+				if err != nil || !claimed || work.Job.ID != jobID {
+					t.Fatalf("ClaimAssetImport(attempt %d) = %#v claimed=%v error=%v", attempt, work, claimed, err)
+				}
+				expired = work
+				now = now.Add(time.Minute + time.Nanosecond)
+			}
+			if work, claimed, err := repository.ClaimAssetImport(ctx, "asset-import-expiry", time.Minute); err != nil || claimed || work.Job.ID != uuid.Nil {
+				t.Fatalf("ClaimAssetImport(exhausted reclaim) = %#v claimed=%v error=%v", work, claimed, err)
+			}
+			job, err := repository.GetAssetImport(ctx, jobID)
+			if err != nil || job.Status != assetimport.StatusFailed || job.FailurePhase != scenario.phase || job.FailureCode != "LEASE_LOST" {
+				t.Fatalf("GetAssetImport(exhausted reclaim) = %#v error=%v", job, err)
+			}
+			var owner *string
+			var token *uuid.UUID
+			var until *time.Time
+			if err := connection.Pool.QueryRow(ctx, `select lease_owner,lease_token,lease_until from media_asset_import_job where job_id=$1`, jobID).Scan(&owner, &token, &until); err != nil || owner != nil || token != nil || until != nil {
+				t.Fatalf("terminal reclaim lease owner=%v token=%v until=%v error=%v", owner, token, until, err)
+			}
+			var completionErr error
+			if scenario.phase == assetimport.PhasePreflight {
+				completionErr = repository.CompleteAssetImportPreflight(ctx, jobID, expired.LeaseToken, nil)
+			} else {
+				completionErr = repository.CompleteAssetImportActivation(ctx, jobID, expired.LeaseToken)
+			}
+			if !errors.Is(completionErr, assetimport.ErrLeaseLost) {
+				t.Fatalf("stale completion error = %v, want ErrLeaseLost", completionErr)
+			}
+		})
 	}
 }

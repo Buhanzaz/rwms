@@ -410,6 +410,13 @@ per source and 25,000 discovered files total. Recursive public-resource metadata
 enumeration is also capped at 64 pages per source; every downloaded byte is
 bounded by `MEDIA_MAX_UPLOAD_BYTES`.
 
+The worker renews the token-fenced lease throughout preflight enumeration and
+activation I/O, including archive transfer and object storage. Lease loss cancels
+the current phase; completion runs only after renewal has stopped and still
+requires the current lease. Reclaiming an expired third attempt marks that phase
+`FAILED` with `LEASE_LOST`, clears the lease and retains the job for the existing
+explicit retry operation.
+
 The CABIN stream must start with `asset.rental-item.created.v1` version 0.
 Passport, status, warehouse and logistics-effect facts carry the complete
 sanitized owner proof; comment and manual-note facts are ordering markers.
