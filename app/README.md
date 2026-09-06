@@ -36,8 +36,8 @@ Russian version: [README.ru.md](README.ru.md).
 ### Transport contract gate
 
 [`RwmsApiContractBoundaryTest.kt`](src/test/java/dev/buhanzaz/rwms/manager/network/RwmsApiContractBoundaryTest.kt)
-pins all 61 declared `RwmsApi` methods to their canonical public OpenAPI source:
-59 fixed gateway routes and exactly two allowlisted dynamic media routes. It
+pins all 64 declared `RwmsApi` methods to their canonical public OpenAPI source:
+62 fixed gateway routes and exactly two allowlisted dynamic media routes. It
 rejects internal/private namespaces and service origins, eagerly resolves every
 Retrofit/Moshi request and response converter, and checks representative
 decode/encode fixtures for all eight consumed contract owners: auth, warehouse,
@@ -54,6 +54,14 @@ source warehouse's canonical IANA timezone at the injected server clock
 instant. Submission validates against the same warehouse-local date, never
 `LocalDate.now()` from the Android device; an unavailable warehouse identity or
 invalid timezone fails explicitly.
+
+Before opening per-cabin transfer arrival, Manager reads the version-fenced
+arrival preflight. Missing destination repair queues or a failed preflight
+block arrival. A continuing repair requires an explicit priority from 1 to 5;
+without a repair the command sends `priority: null`. The selected priority,
+original document/line versions, media and command key survive background-upload
+recovery together. Closing arrival or changing the selected transfer invalidates
+late preflight/media responses; a changed version requires opening arrival again.
 
 ## Screens and ownership of local state
 

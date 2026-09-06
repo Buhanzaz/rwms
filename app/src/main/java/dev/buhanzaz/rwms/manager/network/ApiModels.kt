@@ -758,6 +758,16 @@ data class CreateTransferRequest(
  */
 data class ArriveTransferLineRequest(
     val references: List<MediaReferenceDto>,
+    @param:ExplicitNull val priority: Int?,
+)
+
+/** Server-owned repair continuation and destination queue requirements for one fenced arrival. */
+data class TransferArrivalPreflightDto(
+    val transferId: String,
+    val lineId: String,
+    val activeRepairId: String?,
+    val priorityRequired: Boolean,
+    val missingQueueDefinitionIds: List<String>,
 )
 
 /**

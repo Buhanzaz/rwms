@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.manager.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,6 +16,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -34,6 +36,7 @@ import dev.buhanzaz.rwms.manager.network.LogisticsLineDto
 import dev.buhanzaz.rwms.manager.network.RentalItemDto
 import dev.buhanzaz.rwms.manager.ui.ManagerUiState
 import dev.buhanzaz.rwms.manager.ui.TransferEditorState
+import dev.buhanzaz.rwms.manager.ui.TransferArrivalState
 import dev.buhanzaz.rwms.manager.ui.WarehouseAccessPolicy
 import dev.buhanzaz.rwms.manager.ui.WholeTransferCommand
 import dev.buhanzaz.rwms.manager.ui.shipmentFurnitureIsReady
@@ -497,6 +500,7 @@ fun TransferDetailScreen(
     onDepart: (String) -> Unit,
     onStartArrival: (String) -> Unit,
     onOpenArrivalPhotos: () -> Unit,
+    onArrivalPriority: (Int) -> Unit,
     onArrive: () -> Unit,
     onCloseArrival: () -> Unit,
     onCancel: () -> Unit,
@@ -574,12 +578,13 @@ fun TransferDetailScreen(
                     busy = uiState.busy,
                     canManage = canManage,
                     furnitureReady = furnitureReady,
-                    arrivalSelected = uiState.transferArrivalLineId == line.id,
+                    arrival = uiState.transferArrival?.takeIf { it.lineId == line.id },
                     arrivalPhotoCount =
                         uiState.transferPhotoUris.size + uiState.transferReadyMedia.size,
                     onDepart = { onDepart(line.id) },
                     onStartArrival = { onStartArrival(line.id) },
                     onOpenArrivalPhotos = onOpenArrivalPhotos,
+                    onArrivalPriority = onArrivalPriority,
                     onArrive = onArrive,
                     onCloseArrival = onCloseArrival,
                 )
@@ -647,14 +652,17 @@ private fun TransferLineCard(
     busy: Boolean,
     canManage: Boolean,
     furnitureReady: Boolean,
-    arrivalSelected: Boolean,
+    arrival: TransferArrivalState?,
     arrivalPhotoCount: Int,
     onDepart: () -> Unit,
     onStartArrival: () -> Unit,
     onOpenArrivalPhotos: () -> Unit,
+    onArrivalPriority: (Int) -> Unit,
     onArrive: () -> Unit,
     onCloseArrival: () -> Unit,
 ) {
+    val arrivalSelected = arrival != null
+    val arrivalCurrent = arrival?.isCurrentFor(document) == true
     val canDepart = canManage && line.state == "PENDING" &&
         (document.state == "DRAFT" || document.state == "DEPARTING")
     val canArrive = canManage && line.state == "DEPARTED" &&
@@ -693,18 +701,36 @@ private fun TransferLineCard(
                 Text("Принять")
             }
         }
-        if (arrivalSelected) {
+        if (arrival != null) {
+            if (!arrivalCurrent) {
+                Text("Перемещение изменилось. Закройте приёмку и откройте её заново.")
+            }
+            if (arrival.priorityRequired) {
+                Text("Приоритет продолжения ремонта", style = MaterialTheme.typography.titleSmall)
+                Text("Для работ на складе назначения: 1 — самый срочный, 5 — самый низкий.")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    (1..5).forEach { priority ->
+                        FilterChip(
+                            selected = arrival.priority == priority,
+                            onClick = { onArrivalPriority(priority) },
+                            enabled = !busy && canArrive && arrivalCurrent,
+                            label = { Text("$priority") },
+                        )
+                    }
+                }
+            }
             Text("Фотографий приёмки: $arrivalPhotoCount")
             FilledTonalButton(
                 onClick = onOpenArrivalPhotos,
-                enabled = !busy && arrivalPhotoCount < 20,
+                enabled = !busy && canArrive && arrivalCurrent && arrivalPhotoCount < 20,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text("Добавить фотографии")
             }
             Button(
                 onClick = onArrive,
-                enabled = !busy && arrivalPhotoCount in 1..20,
+                enabled = !busy && canArrive && arrivalCurrent && arrivalPhotoCount in 1..20 &&
+                    (!arrival.priorityRequired || arrival.priority in 1..5),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text("Подтвердить приёмку")

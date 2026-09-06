@@ -634,7 +634,8 @@ class BackgroundUploadWorker(
             expectedLineVersion = command.expectedLineVersion,
             idempotencyKey = command.idempotencyKey,
             request = ArriveTransferLineRequest(
-                operation.aggregateReferences(command.existingMedia),
+                references = operation.aggregateReferences(command.existingMedia),
+                priority = command.priority,
             ),
         )
     }

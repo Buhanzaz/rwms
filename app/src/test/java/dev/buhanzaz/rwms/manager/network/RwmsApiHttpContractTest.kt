@@ -1101,7 +1101,8 @@ class RwmsApiHttpContractTest {
                 expectedLineVersion = 3,
                 idempotencyKey = "transfer-arrive",
                 request = ArriveTransferLineRequest(
-                    listOf(MediaReferenceDto(mediaId, 2)),
+                    references = listOf(MediaReferenceDto(mediaId, 2)),
+                    priority = null,
                 ),
             )
         }
@@ -1165,7 +1166,7 @@ class RwmsApiHttpContractTest {
             method = "POST",
             path = "/api/logistics/v1/transfers/$documentId/lines/$lineId/arrive?expectedVersion=5&expectedLineVersion=3",
             idempotencyKey = "transfer-arrive",
-            body = """{"references":[{"mediaId":"$mediaId","generation":2}]}""",
+            body = """{"references":[{"mediaId":"$mediaId","generation":2}],"priority":null}""",
         )
         cancel.assertPublicSameOriginPath(
             "/api/logistics/v1/transfers/$documentId/cancel?expectedVersion=6",
@@ -1180,6 +1181,52 @@ class RwmsApiHttpContractTest {
         transferOriginal.assertPublicSameOriginPath(
             "/api/media/v1/assets/$mediaId/original?generation=2&ownerType=LOGISTICS_TRANSFER&documentId=$documentId&lineId=$lineId&warehouseId=$destinationId&context=TRANSFER",
         )
+    }
+
+    @Test
+    fun `arrival preflight is a fenced public read and parses repair requirements`() = runTest {
+        server.enqueue(
+            MockResponse().setHeader("Content-Type", "application/json").setBody(
+                """{"transferId":"transfer-1","lineId":"line-1","activeRepairId":"repair-1","priorityRequired":true,"missingQueueDefinitionIds":["queue-1"]}""",
+            ),
+        )
+        val result = api.transferArrivalPreflight("transfer-1", "line-1", 7, 4)
+
+        assertThat(result).isEqualTo(
+            TransferArrivalPreflightDto("transfer-1", "line-1", "repair-1", true, listOf("queue-1")),
+        )
+        val request = checkNotNull(server.takeRequest(5, TimeUnit.SECONDS))
+        request.assertPublicSameOriginPath(
+            "/api/logistics/v1/transfers/transfer-1/lines/line-1/arrival-preflight?expectedVersion=7&expectedLineVersion=4",
+        )
+        assertThat(request.method).isEqualTo("GET")
+        assertThat(request.getHeader("Idempotency-Key")).isNull()
+        assertThat(request.bodySize).isEqualTo(0L)
+    }
+
+    @Test
+    fun `arrival sends explicit null or the chosen repair priority without changing fences`() = runTest {
+        listOf(null, 3).forEach { priority ->
+            val request = captureRequest {
+                api.arriveTransferLine(
+                    documentId = "transfer-1",
+                    lineId = "line-1",
+                    expectedVersion = 7,
+                    expectedLineVersion = 4,
+                    idempotencyKey = "arrival-1",
+                    request = ArriveTransferLineRequest(
+                        references = listOf(MediaReferenceDto("photo-1", 2)),
+                        priority = priority,
+                    ),
+                )
+            }
+            request.assertJsonCommand(
+                method = "POST",
+                path = "/api/logistics/v1/transfers/transfer-1/lines/line-1/arrive?expectedVersion=7&expectedLineVersion=4",
+                idempotencyKey = "arrival-1",
+                body = """{"references":[{"mediaId":"photo-1","generation":2}],"priority":$priority}""",
+            )
+        }
     }
 
     @Test

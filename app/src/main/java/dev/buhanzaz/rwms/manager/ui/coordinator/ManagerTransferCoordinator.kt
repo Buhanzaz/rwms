@@ -9,12 +9,11 @@ import dev.buhanzaz.rwms.manager.network.LogisticsDocumentDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.network.ReconcileLogisticsRequest
 import dev.buhanzaz.rwms.manager.network.RentalItemDto
-import dev.buhanzaz.rwms.manager.network.RwmsBackend
+import dev.buhanzaz.rwms.manager.network.RwmsApi
 import dev.buhanzaz.rwms.manager.network.TransferFurnitureReplacementRequest
 import dev.buhanzaz.rwms.manager.network.TransferLineRequest
 import dev.buhanzaz.rwms.manager.network.WarehouseDto
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadArea
-import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadCoordinator
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadDraft
 import dev.buhanzaz.rwms.manager.uploads.PendingBackgroundPhoto
 import dev.buhanzaz.rwms.manager.uploads.TransferArrivalUploadCommand
@@ -23,7 +22,6 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.util.UUID
-import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.flow.update
 
 /** Resolves the calendar date owned by the supplied warehouse at an absolute instant. */
@@ -37,11 +35,17 @@ internal fun warehouseBusinessDate(warehouse: WarehouseDto, instant: Instant): L
  */
 internal class ManagerTransferCoordinator(
     private val runtime: ManagerCommandRuntime,
-    private val backend: RwmsBackend,
-    private val backgroundUploads: Deferred<BackgroundUploadCoordinator>,
+    private val apiProvider: () -> RwmsApi,
+    private val resolveAssetLabels: suspend (List<LogisticsDocumentDto>) -> Map<String, String>,
+    private val enqueueUpload: suspend (BackgroundUploadDraft) -> Unit,
     private val commandKeys: StableCommandKeys,
     private val clock: Clock = Clock.systemUTC(),
 ) {
+    private val api
+        get() = apiProvider()
+
+    private var arrivalGeneration = 0L
+
     private val mutableState
         get() = runtime.mutableState
 
@@ -68,14 +72,14 @@ internal class ManagerTransferCoordinator(
         require(destinations.isNotEmpty()) {
             "Нет другого активного склада с правом редактирования"
         }
-        val candidates = backend.api.rentalItems(
+        val candidates = api.rentalItems(
             warehouseId = warehouseId,
             page = 0,
             size = 200,
         ).content
             .filter { it.status == "FREE" }
             .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER, RentalItemDto::number))
-        val furnitureCatalog = backend.api.equipment(warehouseId)
+        val furnitureCatalog = api.equipment(warehouseId)
             .map { it.equipment }
             .filter { it.active && it.category == "FURNITURE" }
             .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER, EquipmentCatalogItemDto::name))
@@ -198,7 +202,7 @@ internal class ManagerTransferCoordinator(
         require((driver?.length ?: 0) <= 512) {
             "Имя водителя не может быть длиннее 512 символов"
         }
-        val created = backend.api.createTransfer(
+        val created = api.createTransfer(
             idempotencyKey = editor.idempotencyKey,
             request = CreateTransferRequest(
                 warehouseId = sourceWarehouseId,
@@ -233,15 +237,22 @@ internal class ManagerTransferCoordinator(
         onSaved()
     }
 
-    fun openTransfer(documentId: String, onReady: () -> Unit) = command {
-        val document = backend.api.transfer(documentId)
+    fun openTransfer(documentId: String, onReady: () -> Unit) {
+        closeTransferArrival()
+        command {
+            loadTransfer(documentId, onReady)
+        }
+    }
+
+    private suspend fun loadTransfer(documentId: String, onReady: () -> Unit) {
+        val document = api.transfer(documentId)
         require(document.documentType == "TRANSFER") {
             "Сервис вернул не документ перемещения"
         }
         val readinessFailure: Throwable?
         val readiness = if (document.needsTransferFurnitureReadiness()) {
             val result = runCatching {
-                backend.api.transferFurnitureReadiness(document.id)
+                api.transferFurnitureReadiness(document.id)
             }
             readinessFailure = result.exceptionOrNull()
             result.getOrNull()
@@ -249,12 +260,12 @@ internal class ManagerTransferCoordinator(
             readinessFailure = null
             null
         }
-        val labels = backend.resolveLogisticsAssetLabels(listOf(document))
+        val labels = resolveAssetLabels(listOf(document))
         mutableState.update {
             it.copy(
                 selectedTransfer = document,
                 transferFurnitureReadiness = readiness,
-                transferArrivalLineId = null,
+                transferArrival = null,
                 transferPhotoUris = emptyList(),
                 transferReadyMedia = emptyList(),
                 logisticsAssetLabels = it.logisticsAssetLabels + labels,
@@ -270,11 +281,12 @@ internal class ManagerTransferCoordinator(
     }
 
     fun closeTransfer() {
+        arrivalGeneration++
         mutableState.update {
             it.copy(
                 selectedTransfer = null,
                 transferFurnitureReadiness = null,
-                transferArrivalLineId = null,
+                transferArrival = null,
                 transferPhotoUris = emptyList(),
                 transferReadyMedia = emptyList(),
             )
@@ -294,7 +306,7 @@ internal class ManagerTransferCoordinator(
         }
         requireTransferFurnitureReady(document)
         val signature = "transfer-depart-document:${document.id}:${document.version}"
-        val updated = backend.api.departTransfer(
+        val updated = api.departTransfer(
             documentId = document.id,
             expectedVersion = document.version,
             idempotencyKey = commandKeys.logisticsCommandKey(signature),
@@ -317,7 +329,7 @@ internal class ManagerTransferCoordinator(
             "Прибытие этого перемещения сейчас нельзя подтвердить"
         }
         val signature = "transfer-arrive-document:${document.id}:${document.version}"
-        val updated = backend.api.arriveTransfer(
+        val updated = api.arriveTransfer(
             documentId = document.id,
             expectedVersion = document.version,
             idempotencyKey = commandKeys.logisticsCommandKey(signature),
@@ -344,7 +356,7 @@ internal class ManagerTransferCoordinator(
         requireTransferFurnitureReady(document)
         val signature =
             "transfer-depart:${document.id}:${document.version}:${line.id}:${line.version}"
-        val updated = backend.api.departTransferLine(
+        val updated = api.departTransferLine(
             documentId = document.id,
             lineId = line.id,
             expectedVersion = document.version,
@@ -357,45 +369,89 @@ internal class ManagerTransferCoordinator(
         message("Бытовка отправлена")
     }
 
-    fun startTransferArrival(lineId: String, onReady: () -> Unit) = command {
-        val document = requireNotNull(mutableState.value.selectedTransfer) {
-            "Откройте перемещение"
-        }
-        requireTransferManageAccess(document)
-        val line = document.lines.firstOrNull { it.id == lineId }
-            ?: throw IllegalArgumentException("Строка перемещения не найдена")
-        require(
-            line.state == "DEPARTED" &&
-                (document.state == "IN_TRANSIT" || document.state == "ARRIVING"),
-        ) {
-            "Эту бытовку сейчас нельзя принять"
-        }
-        val ready = retryMediaReadAfterOwnerProof {
-            backend.api.ownerMedia(
-                ownerType = "LOGISTICS_TRANSFER",
+    fun startTransferArrival(lineId: String, onReady: () -> Unit) {
+        closeTransferArrival()
+        val generation = arrivalGeneration
+        command {
+            val state = mutableState.value
+            val document = requireNotNull(state.selectedTransfer) {
+                "Откройте перемещение"
+            }
+            requireTransferManageAccess(document)
+            val line = document.lines.firstOrNull { it.id == lineId }
+                ?: throw IllegalArgumentException("Строка перемещения не найдена")
+            val candidate = TransferArrivalState(
+                documentId = document.id,
+                documentVersion = document.version,
+                lineId = line.id,
+                lineVersion = line.version,
+                priorityRequired = false,
+            )
+            require(candidate.isCurrentFor(document)) {
+                "Эту бытовку сейчас нельзя принять"
+            }
+            fun isCurrent(): Boolean = generation == arrivalGeneration &&
+                mutableState.value.currentUser?.id == state.currentUser?.id &&
+                mutableState.value.selectedWarehouseId == state.selectedWarehouseId &&
+                candidate.isCurrentFor(mutableState.value.selectedTransfer)
+
+            val preflight = api.transferArrivalPreflight(
                 documentId = document.id,
                 lineId = line.id,
-                warehouseId = requireNotNull(document.destinationWarehouseId),
-                context = "TRANSFER",
+                expectedVersion = document.version,
+                expectedLineVersion = line.version,
             )
-        }.items
-            .filter { media -> media.status == "READY" && media.generation > 0 }
-            .sortedBy { media -> media.sortOrder }
-            .map { media -> MediaReferenceDto(media.id, media.generation) }
-        mutableState.update {
-            it.copy(
-                transferArrivalLineId = line.id,
-                transferPhotoUris = emptyList(),
-                transferReadyMedia = ready,
-            )
+            if (!isCurrent()) return@command
+            require(preflight.transferId == document.id && preflight.lineId == line.id) {
+                "Сервис вернул условия приёмки другой бытовки"
+            }
+            require(preflight.missingQueueDefinitionIds.isEmpty()) {
+                "На складе назначения не настроены очереди ремонта. Обратитесь к администратору"
+            }
+            val ready = retryMediaReadAfterOwnerProof {
+                api.ownerMedia(
+                    ownerType = "LOGISTICS_TRANSFER",
+                    documentId = document.id,
+                    lineId = line.id,
+                    warehouseId = requireNotNull(document.destinationWarehouseId),
+                    context = "TRANSFER",
+                )
+            }.items
+                .filter { media -> media.status == "READY" && media.generation > 0 }
+                .sortedBy { media -> media.sortOrder }
+                .map { media -> MediaReferenceDto(media.id, media.generation) }
+            if (!isCurrent()) return@command
+            mutableState.update {
+                it.copy(
+                    transferArrival = candidate.copy(priorityRequired = preflight.priorityRequired),
+                    transferPhotoUris = emptyList(),
+                    transferReadyMedia = ready,
+                )
+            }
+            onReady()
         }
-        onReady()
+    }
+
+    fun selectTransferArrivalPriority(priority: Int) {
+        if (priority !in 1..5) return
+        mutableState.update { state ->
+            val arrival = state.transferArrival
+            if (
+                arrival == null || !arrival.priorityRequired ||
+                !arrival.isCurrentFor(state.selectedTransfer)
+            ) {
+                state
+            } else {
+                state.copy(transferArrival = arrival.copy(priority = priority))
+            }
+        }
     }
 
     fun closeTransferArrival() {
+        arrivalGeneration++
         mutableState.update {
             it.copy(
-                transferArrivalLineId = null,
+                transferArrival = null,
                 transferPhotoUris = emptyList(),
                 transferReadyMedia = emptyList(),
             )
@@ -421,10 +477,16 @@ internal class ManagerTransferCoordinator(
             "Откройте перемещение"
         }
         requireTransferManageAccess(document)
-        val lineId = requireNotNull(mutableState.value.transferArrivalLineId) {
+        val arrival = requireNotNull(mutableState.value.transferArrival) {
             "Выберите бытовку для приёмки"
         }
-        val line = document.lines.firstOrNull { it.id == lineId }
+        require(arrival.isCurrentFor(document)) {
+            "Перемещение изменилось. Откройте приёмку заново"
+        }
+        require(!arrival.priorityRequired || arrival.priority in 1..5) {
+            "Выберите приоритет продолжения ремонта"
+        }
+        val line = document.lines.firstOrNull { it.id == arrival.lineId }
             ?: throw IllegalArgumentException("Строка перемещения не найдена")
         val localUris = mutableState.value.transferPhotoUris
         val existingMedia = mutableState.value.transferReadyMedia
@@ -442,7 +504,7 @@ internal class ManagerTransferCoordinator(
             warehouseId = requireNotNull(document.destinationWarehouseId),
             context = "TRANSFER",
         )
-        backgroundUploads.await().enqueue(
+        enqueueUpload(
             BackgroundUploadDraft(
                 area = BackgroundUploadArea.LOGISTICS,
                 title = "Приёмка перемещения",
@@ -454,8 +516,9 @@ internal class ManagerTransferCoordinator(
                 transferArrival = TransferArrivalUploadCommand(
                     documentId = document.id,
                     lineId = line.id,
-                    expectedDocumentVersion = document.version,
-                    expectedLineVersion = line.version,
+                    expectedDocumentVersion = arrival.documentVersion,
+                    expectedLineVersion = arrival.lineVersion,
+                    priority = arrival.priority,
                     existingMedia = existingMedia,
                     idempotencyKey = UUID.randomUUID().toString(),
                 ),
@@ -473,7 +536,7 @@ internal class ManagerTransferCoordinator(
         requireTransferManageAccess(document)
         require(document.state == "DRAFT") { "Это перемещение больше нельзя отменить" }
         val signature = "transfer-cancel:${document.id}:${document.version}"
-        val updated = backend.api.cancelTransfer(
+        val updated = api.cancelTransfer(
             documentId = document.id,
             expectedVersion = document.version,
             idempotencyKey = commandKeys.logisticsCommandKey(signature),
@@ -501,7 +564,7 @@ internal class ManagerTransferCoordinator(
             "Причина сверки не может быть длиннее 500 символов"
         }
         val signature = "transfer-reconcile:${document.id}:${document.version}:$normalized"
-        val updated = backend.api.reconcileTransfer(
+        val updated = api.reconcileTransfer(
             documentId = document.id,
             expectedVersion = document.version,
             idempotencyKey = commandKeys.logisticsCommandKey(signature),
@@ -515,9 +578,9 @@ internal class ManagerTransferCoordinator(
 
     private suspend fun refreshTransfers() {
         val warehouseId = requireWarehouseId()
-        val documents = backend.api.transfers(warehouseId)
+        val documents = api.transfers(warehouseId)
             .filter { it.documentType == "TRANSFER" }
-        val labels = backend.resolveLogisticsAssetLabels(documents)
+        val labels = resolveAssetLabels(documents)
         if (mutableState.value.selectedWarehouseId != warehouseId) return
         mutableState.update {
             it.copy(
@@ -546,7 +609,7 @@ internal class ManagerTransferCoordinator(
             mutableState.update { it.copy(transferFurnitureReadiness = null) }
         }
         val readiness = if (document.needsTransferFurnitureReadiness()) {
-            backend.api.transferFurnitureReadiness(document.id)
+            api.transferFurnitureReadiness(document.id)
         } else {
             null
         }

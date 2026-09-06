@@ -74,7 +74,7 @@ data class ManagerUiState(
     val selectedTransfer: LogisticsDocumentDto? = null,
     val transferFurnitureReadiness: TransferFurnitureReadinessDto? = null,
     val transferEditor: TransferEditorState? = null,
-    val transferArrivalLineId: String? = null,
+    val transferArrival: TransferArrivalState? = null,
     val transferPhotoUris: List<String> = emptyList(),
     val transferReadyMedia: List<MediaReferenceDto> = emptyList(),
     val logisticsAssetLabels: Map<String, String> = emptyMap(),
@@ -97,7 +97,27 @@ data class ManagerUiState(
     val maintenanceReturnMetadata: Map<String, MaintenanceReturnMetadata> = emptyMap(),
     val maintenanceEditor: MaintenanceEditorState? = null,
     val maintenanceFurnitureEditor: MaintenanceFurnitureEditorState? = null,
-)
+) {
+    val transferArrivalLineId: String?
+        get() = transferArrival?.lineId
+}
+
+/** Keeps the preflight and chosen priority tied to the exact document and line versions. */
+data class TransferArrivalState(
+    val documentId: String,
+    val documentVersion: Long,
+    val lineId: String,
+    val lineVersion: Long,
+    val priorityRequired: Boolean,
+    val priority: Int? = null,
+) {
+    fun isCurrentFor(document: LogisticsDocumentDto?): Boolean =
+        document?.id == documentId && document.version == documentVersion &&
+            document.state in setOf("IN_TRANSIT", "ARRIVING") &&
+            document.lines.any { line ->
+                line.id == lineId && line.version == lineVersion && line.state == "DEPARTED"
+            }
+}
 
 /**
  * Defines manager UI state or presentation policy; server state and command authorization remain authoritative.
@@ -376,8 +396,9 @@ class ManagerViewModel(
     )
     private val transferCoordinator = ManagerTransferCoordinator(
         runtime = commandRuntime,
-        backend = backend,
-        backgroundUploads = backgroundUploads,
+        apiProvider = { backend.api },
+        resolveAssetLabels = backend::resolveLogisticsAssetLabels,
+        enqueueUpload = { backgroundUploads.await().enqueue(it) },
         commandKeys = commandKeys,
     )
     private val returnCoordinator = ManagerReturnCoordinator(
@@ -596,6 +617,9 @@ class ManagerViewModel(
         transferCoordinator.startTransferArrival(lineId, onReady)
 
     fun closeTransferArrival() = transferCoordinator.closeTransferArrival()
+
+    fun selectTransferArrivalPriority(priority: Int) =
+        transferCoordinator.selectTransferArrivalPriority(priority)
 
     fun addTransferPhoto(uri: String) = transferCoordinator.addTransferPhoto(uri)
 

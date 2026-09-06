@@ -197,7 +197,7 @@ internal class ManagerWorkspaceCoordinator(
                         selectedTransfer = null,
                         transferFurnitureReadiness = null,
                         transferEditor = null,
-                        transferArrivalLineId = null,
+                        transferArrival = null,
                         transferPhotoUris = emptyList(),
                         transferReadyMedia = emptyList(),
                         logisticsAssetLabels = emptyMap(),

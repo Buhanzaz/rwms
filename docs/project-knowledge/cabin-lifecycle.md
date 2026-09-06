@@ -507,6 +507,12 @@ the asset owner, and resumes any approved repair continuation. A multi-line
 transfer can therefore be partly in transit while other lines are already
 arrived.
 
+Manager checks the version-fenced arrival preflight before opening photos. Missing
+destination repair queues block admission; a continuing repair requires an explicit
+priority from 1 to 5, while a cabin without one sends `priority: null`. The durable
+upload command retains this choice with its original versions, media and idempotency
+key. Late responses after closing or changing the transfer are ignored.
+
 ## 11. Failure, concurrency, and recovery
 
 Every mutable step must retain the same safety shape:

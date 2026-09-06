@@ -222,6 +222,14 @@ interface RwmsApi {
         @Header("Idempotency-Key") idempotencyKey: String,
     ): LogisticsDocumentDto
 
+    @GET("api/logistics/v1/transfers/{documentId}/lines/{lineId}/arrival-preflight")
+    suspend fun transferArrivalPreflight(
+        @Path("documentId") documentId: String,
+        @Path("lineId") lineId: String,
+        @Query("expectedVersion") expectedVersion: Long,
+        @Query("expectedLineVersion") expectedLineVersion: Long,
+    ): TransferArrivalPreflightDto
+
     @POST("api/logistics/v1/transfers/{documentId}/lines/{lineId}/arrive")
     suspend fun arriveTransferLine(
         @Path("documentId") documentId: String,

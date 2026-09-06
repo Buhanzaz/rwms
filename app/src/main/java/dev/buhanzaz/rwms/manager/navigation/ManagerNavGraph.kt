@@ -386,6 +386,7 @@ private fun AuthenticatedManagerNavGraph(
                         }
                     }
                 },
+                onArrivalPriority = viewModel::selectTransferArrivalPriority,
                 onArrive = { viewModel.arriveTransferLine {} },
                 onCloseArrival = viewModel::closeTransferArrival,
                 onCancel = viewModel::cancelTransfer,

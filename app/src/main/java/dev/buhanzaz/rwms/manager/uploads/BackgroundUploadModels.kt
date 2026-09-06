@@ -282,6 +282,7 @@ data class TransferArrivalUploadCommand(
     val lineId: String,
     val expectedDocumentVersion: Long,
     val expectedLineVersion: Long,
+    val priority: Int?,
     val existingMedia: List<MediaReferenceDto> = emptyList(),
     val idempotencyKey: String,
 )

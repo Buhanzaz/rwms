@@ -90,6 +90,39 @@ class BackgroundUploadStoreTest {
     }
 
     @Test
+    fun `transfer priority and the original command survive a process-style reload`() = runBlocking {
+        listOf(null, 3).forEachIndexed { index, priority ->
+            val store = BackgroundUploadStore.get(context)
+            store.initialize()
+            store.activateScope(scopeA)
+            val command = TransferArrivalUploadCommand(
+                documentId = "transfer-1",
+                lineId = "line-1",
+                expectedDocumentVersion = 7,
+                expectedLineVersion = 4,
+                priority = priority,
+                existingMedia = listOf(MediaReferenceDto("photo-1", 2)),
+                idempotencyKey = "arrival-$index",
+            )
+            val operation = operation(id = "arrival-$index").copy(
+                area = BackgroundUploadArea.LOGISTICS,
+                acceptance = null,
+                transferArrival = command,
+            )
+            store.put(operation)
+
+            BackgroundUploadStore.resetForTests()
+            val reloaded = BackgroundUploadStore.get(context)
+            reloaded.initialize()
+            reloaded.activateScope(scopeA)
+            val restored = checkNotNull(reloaded.operation(scopeA, operation.id))
+            assertThat(restored.transferArrival).isEqualTo(command)
+            assertThat(restored.ownerAccountId).isEqualTo(scopeA.ownerAccountId)
+            assertThat(restored.warehouseId).isEqualTo(scopeA.warehouseId)
+        }
+    }
+
+    @Test
     fun `successful removal deletes both queue row and durable originals`() = runBlocking {
         val store = BackgroundUploadStore.get(context)
         store.initialize()
