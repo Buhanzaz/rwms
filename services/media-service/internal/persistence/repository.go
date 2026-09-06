@@ -3001,11 +3001,6 @@ func lockUploadSessionContentTransaction(ctx context.Context, tx pgx.Tx, session
 	return err
 }
 
-func appendInitialEvent(ctx context.Context, tx pgx.Tx, aggregateID uuid.UUID, eventType string, subjectID, correlationID uuid.UUID, recordedAt time.Time) error {
-	return appendInitialEventForActor(ctx, tx, aggregateID, eventType,
-		ActorReference{SubjectID: subjectID, PrincipalType: PrincipalTypeUser}, correlationID, recordedAt)
-}
-
 func appendInitialEventForActor(ctx context.Context, tx pgx.Tx, aggregateID uuid.UUID, eventType string, actor ActorReference, correlationID uuid.UUID, recordedAt time.Time) error {
 	return appendInitialEventWithIDForActor(ctx, tx, uuid.New(), aggregateID, eventType, &actor, correlationID, recordedAt)
 }
@@ -3021,10 +3016,6 @@ func appendInitialEventWithIDForActor(ctx context.Context, tx pgx.Tx, eventID, a
 		return translateConstraint(err)
 	}
 	return insertDomainEventForActor(ctx, tx, eventID, aggregateID, 1, eventType, actor, correlationID, recordedAt)
-}
-
-func appendEvent(ctx context.Context, tx pgx.Tx, aggregateID uuid.UUID, eventType string, subjectID, correlationID uuid.UUID, recordedAt time.Time) error {
-	return appendEventWithID(ctx, tx, uuid.New(), aggregateID, eventType, subjectID, correlationID, recordedAt)
 }
 
 func appendEventWithID(ctx context.Context, tx pgx.Tx, eventID, aggregateID uuid.UUID, eventType string, subjectID, correlationID uuid.UUID, recordedAt time.Time) error {
@@ -3060,14 +3051,6 @@ func fullAggregateState(ctx context.Context, database queryer, aggregateID uuid.
 	body := []byte(state)
 	sum := sha256.Sum256(body)
 	return body, hex.EncodeToString(sum[:]), nil
-}
-
-func insertDomainEvent(ctx context.Context, tx pgx.Tx, eventID, aggregateID uuid.UUID, version int64, eventType string, subjectID *uuid.UUID, correlationID uuid.UUID, recordedAt time.Time) error {
-	var actor *ActorReference
-	if subjectID != nil {
-		actor = &ActorReference{SubjectID: *subjectID, PrincipalType: PrincipalTypeUser}
-	}
-	return insertDomainEventForActor(ctx, tx, eventID, aggregateID, version, eventType, actor, correlationID, recordedAt)
 }
 
 func insertDomainEventForActor(ctx context.Context, tx pgx.Tx, eventID, aggregateID uuid.UUID, version int64, eventType string, actorReference *ActorReference, correlationID uuid.UUID, recordedAt time.Time) error {
