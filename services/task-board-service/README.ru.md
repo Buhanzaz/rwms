@@ -63,6 +63,9 @@ Source-owned task использует stable external identity, поэтому 
 contract-defined version и status. Route order, eligibility, assignment и
 terminal transitions остаются server-owned.
 
+Замена маршрута до начала работ сверяет назначение очередей с сохранённым источником задачи до
+изменения состояния. Очереди водителей обязательны и разрешены только для logistics driver tasks.
+
 Private pre-start replacement считает no-op только полностью идентичный по значению snapshot и
 возвращает его текущую регистрацию, даже если после потерянного ответа у caller осталась старая
 версия task. Любое изменение заголовка, metadata или route по-прежнему требует точную текущую
@@ -439,6 +442,9 @@ joined-worker или legacy одной бригады, задачи и physical 
 принадлежит task-board.
 
 ## Native streams и offline execution
+
+Регистрация и удаление последнего подписчика атомарны для одного ключа warehouse/surface/worker.
+Закрытие прежнего stream не удаляет одновременно подключённую замену.
 
 `GET /api/worker/v1/events` — SSE invalidation stream. Текущий producer
 отправляет `FEED_CHANGED` при подписке и последующих изменениях; worker app также

@@ -45,7 +45,14 @@ public class WorkerInvalidationHub {
       UUID warehouseId, MobileTaskSurface surface, UUID workerId, long revision) {
     SubscriptionKey key = new SubscriptionKey(warehouseId, surface, workerId);
     SseEmitter emitter = emitterFactory.get();
-    emitters.computeIfAbsent(key, ignored -> new CopyOnWriteArraySet<>()).add(emitter);
+    emitters.compute(
+        key,
+        (ignored, workerEmitters) -> {
+          Set<SseEmitter> resolved =
+              workerEmitters == null ? new CopyOnWriteArraySet<>() : workerEmitters;
+          resolved.add(emitter);
+          return resolved;
+        });
     emitter.onCompletion(() -> remove(key, emitter));
     emitter.onTimeout(() -> remove(key, emitter));
     emitter.onError(ignored -> remove(key, emitter));
@@ -171,10 +178,12 @@ public class WorkerInvalidationHub {
   }
 
   private void remove(SubscriptionKey key, SseEmitter emitter) {
-    Set<SseEmitter> workerEmitters = emitters.get(key);
-    if (workerEmitters == null) return;
-    workerEmitters.remove(emitter);
-    if (workerEmitters.isEmpty()) emitters.remove(key, workerEmitters);
+    emitters.computeIfPresent(
+        key,
+        (ignored, workerEmitters) -> {
+          workerEmitters.remove(emitter);
+          return workerEmitters.isEmpty() ? null : workerEmitters;
+        });
   }
 
   /** Exact warehouse, native capability and authenticated worker owning one SSE subscription set. */

@@ -23,6 +23,9 @@ operator-reviewed outbox recovery. Mutable commands use the contract-defined exp
 idempotency fields where applicable; callers must handle a canonical `409` conflict rather than
 send a changed retry.
 
+SSE subscriber registration and last-subscriber cleanup are atomic per warehouse. Reconnecting
+while the previous stream closes retains the new subscription for subsequent invalidations.
+
 Interactive panel and Android clients reach this namespace only through the public
 `api-gateway-service` `/api/asset/**` route. They must not call this module host or an
 `/api/internal/**` route directly.

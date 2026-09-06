@@ -62,6 +62,9 @@ task instead of creating a duplicate. Mutable entry operations are fenced by
 the contract-defined version and status. Route order, eligibility, assignment,
 and terminal transitions remain server-owned.
 
+Pre-start route replacement validates queue purpose against the stored task source before any
+mutation. Only logistics driver tasks may use driver queues, and they require driver queues.
+
 The private pre-start replacement treats only a value-identical complete snapshot as a no-op and
 returns its current registration even if the caller retained an older task version after a lost
 response. Any changed title, metadata or route still requires the exact current version and an
@@ -428,6 +431,9 @@ remain distinct, and a live interval has a null finish. The projection is
 read-only, warehouse-authorized and owned entirely by task-board.
 
 ## Native streams and offline execution
+
+Subscription registration and last-subscriber cleanup are atomic for each warehouse/surface/worker
+key. Closing an old stream cannot remove a concurrent replacement subscription.
 
 `GET /api/worker/v1/events` is an SSE invalidation stream. The current producer
 emits a `FEED_CHANGED` signal when a client subscribes and for subsequent

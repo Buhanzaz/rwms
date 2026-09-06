@@ -34,7 +34,14 @@ public class AssetInvalidationHub {
 
   public SseEmitter subscribe(UUID warehouseId) {
     SseEmitter emitter = emitterFactory.get();
-    emitters.computeIfAbsent(warehouseId, ignored -> ConcurrentHashMap.newKeySet()).add(emitter);
+    emitters.compute(
+        warehouseId,
+        (ignored, warehouseEmitters) -> {
+          Set<SseEmitter> resolved =
+              warehouseEmitters == null ? ConcurrentHashMap.newKeySet() : warehouseEmitters;
+          resolved.add(emitter);
+          return resolved;
+        });
     Runnable remove = () -> remove(warehouseId, emitter);
     emitter.onCompletion(remove);
     emitter.onTimeout(remove);
@@ -106,10 +113,12 @@ public class AssetInvalidationHub {
   }
 
   private void remove(UUID warehouseId, SseEmitter emitter) {
-    Set<SseEmitter> warehouseEmitters = emitters.get(warehouseId);
-    if (warehouseEmitters == null) return;
-    warehouseEmitters.remove(emitter);
-    if (warehouseEmitters.isEmpty()) emitters.remove(warehouseId, warehouseEmitters);
+    emitters.computeIfPresent(
+        warehouseId,
+        (ignored, warehouseEmitters) -> {
+          warehouseEmitters.remove(emitter);
+          return warehouseEmitters.isEmpty() ? null : warehouseEmitters;
+        });
   }
 
   private static AssetInvalidationEvent normalize(AssetInvalidationEvent event) {
