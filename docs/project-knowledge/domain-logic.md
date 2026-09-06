@@ -1626,6 +1626,9 @@ isochrone tariff ladder share one observed warehouse version. Exceptional map
 policies retain their own version fence and idempotent create receipts, and
 representatives keep their own settings. The existing planner owner handles
 capacity publication after commit and invalidation of mutable policy-stale plans.
+Capacity success refreshes the locked warehouse generation before advancing the monotone published
+cursor. Only completion of the current generation clears publication status, retry fields and
+lease; a late success preserves the newer generation's pending delivery obligation.
 Evidence: [`admin settings API`](../../logistics/backend/app/api/admin_settings.py)
 and [`canonical contract`](../../contracts/openapi/logistics-planner-service.yaml).
 

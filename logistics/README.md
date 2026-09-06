@@ -198,6 +198,8 @@ suggestions. Selecting one resolves its canonical address and coordinates;
 placing a point on the map reverse-geocodes and fills the address when the
 provider knows it. Editing the address, selecting another suggestion, moving the point or closing
 the panel cancels the previous lookup; a late result cannot replace the current address or point.
+Arrival, warehouse return and timeline timestamps use the selected warehouse's IANA timezone;
+already-local `HH:mm` values and the fixed slot labels keep their warehouse clock meaning.
 Manual address text remains available when reverse
 geocoding has no result. The view calls `POST /api/planning/slot-availability`
 only for a complete point. Cabin count accepts any positive integer;
@@ -815,7 +817,9 @@ transaction. An unavailable optional RWMS capacity projection becomes
 `FAILED` with a safe error code and operator warning; it never rolls back local
 work or converts test demand into an RWMS order. A leased worker automatically
 retries only the latest due generation with bounded backoff, while a delayed
-older success cannot hide newer pending work. `POST
+older success cannot hide newer pending work. Completion refreshes the locked generation before
+advancing its monotone delivery cursor; only a matching generation clears retry and lease fields.
+The newer generation retains its due time, attempts, error and lease. `POST
 /api/warehouses/{warehouse_id}/rwms/capacity` is an operational reconciliation
 endpoint, not a panel button.
 

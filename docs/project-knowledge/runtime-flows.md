@@ -972,6 +972,11 @@ and
    signed manager subject scopes every list, direct read and mutation; no
    request parameter can select another owner. Conversation ownership is
    immutable.
+   Each provider attempt bounds headers and body with the configured overall deadline and a
+   separate SSE-line idle timeout (defaults 60s and 15s). Timeout closes the raw provider stream
+   and cancels its reader; client SSE termination cancels unfinished turn work. Final persistence
+   and cancellation are fenced so a cancelled turn cannot commit a successful assistant message.
+   Already committed tool effects and history remain authoritative.
 8. Rental-manager Android consumes that same owner boundary for history,
    existing-client conversation creation, archive, text turns and the sole
    visible `PENDING` clarification. A create request keeps one actor-scoped
