@@ -595,17 +595,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-        '500':
-          description: A missing shadow checkpoint currently produces an unhandled recovery failure.
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
-                required: [status, error]
-                properties:
-                  status: {type: integer, const: 500}
-                  error: {type: string, const: Internal Server Error}
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /api/admin/eventing/shadow/rebuild:
     post:
       operationId: rebuildAuthShadow

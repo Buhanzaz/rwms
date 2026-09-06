@@ -152,10 +152,9 @@ Recovery operations require `SYSTEM_ADMIN`; they do not impose the dedicated
 admin client or scope. Reconciliation and rebuild also resolve the operator's
 username to a canonical auth subject. Both groups use stateless Bearer access
 without CSRF. Browser clients must not call the private worker routes.
-A missing stored shadow checkpoint currently returns HTTP `500` with JSON;
-this recovery error remains distinct from the ordinary Problem Details mapping.
-A missing shadow checkpoint currently returns an unhandled `500 application/json`
-response; the canonical reconciliation operation records that observed failure.
+Shadow reconciliation returns `404` Problem Details for a missing checkpoint and `409` for
+a stale or ineligible checkpoint. These typed recovery outcomes do not hide corrupt authoritative
+stream invariants, which remain server errors.
 
 The service returns shared Problem Details for invalid, unauthenticated,
 forbidden, not-found, conflict, and registration-rate-limit cases. A registration

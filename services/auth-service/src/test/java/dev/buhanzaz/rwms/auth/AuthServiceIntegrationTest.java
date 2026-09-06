@@ -61,6 +61,7 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -119,6 +120,9 @@ class AuthServiceIntegrationTest {
 
     @Autowired
     JWKSource<SecurityContext> jwkSource;
+
+    @Autowired
+    JdbcTemplate jdbc;
 
     @Test
     void bootstrapsAdminAndPkceClients() {
@@ -1289,7 +1293,7 @@ class AuthServiceIntegrationTest {
     }
 
     @Test
-    void missingShadowCheckpointHasAnObservedHttpRecoveryFailure() throws Exception {
+    void missingAndStaleShadowCheckpointsReturnTypedHttpRecoveryFailures() throws Exception {
         RSAKey signingKey = (RSAKey) jwkSource
                 .get(new JWKSelector(new JWKMatcher.Builder().privateOnly(true).build()), null)
                 .getFirst();
@@ -1313,17 +1317,54 @@ class AuthServiceIntegrationTest {
                             "{\"expectedCheckpointVersion\":0,\"reason\":\"Missing checkpoint HTTP contract probe\"}"))
                     .build();
             var response = client.send(request, HttpResponse.BodyHandlers.ofString());
-            System.out.println("R013 missing-checkpoint HTTP status=" + response.statusCode()
+            System.out.println("R137 missing-checkpoint HTTP status=" + response.statusCode()
                     + " content-type=" + response.headers().firstValue("Content-Type").orElse("absent"));
-            assertThat(response.statusCode()).isEqualTo(500);
-            assertThat(response.headers().firstValue("Content-Type")).contains("application/json");
-            assertThat((Integer) JsonPath.read(response.body(), "$.status")).isEqualTo(500);
-            assertThat((String) JsonPath.read(response.body(), "$.error")).isEqualTo("Internal Server Error");
+            assertThat(response.statusCode()).isEqualTo(404);
+            assertThat(response.headers().firstValue("Content-Type")).contains("application/problem+json");
+            assertThat((Integer) JsonPath.read(response.body(), "$.status")).isEqualTo(404);
+            assertThat((String) JsonPath.read(response.body(), "$.detail"))
+                    .isEqualTo("Контрольная точка теневой проекции авторизации не найдена");
             AuthOpenApiContractTest.assertHttpResponse(
                     "/api/admin/eventing/shadow/{aggregateType}/{aggregateId}/reconcile", "post",
                     response.statusCode(), response.headers().firstValue("Content-Type").orElseThrow(),
                     response.body());
             assertThat(response.body()).doesNotContain(token.serialize());
+
+            try {
+                jdbc.update(
+                        """
+                        insert into consumer_aggregate_checkpoint(
+                            consumer_group,aggregate_type,aggregate_id,last_event_id,
+                            last_aggregate_version,blocked,quarantine_reason,updated_at)
+                        values ('auth-shadow-v1','USER_AUTHORIZATION',?,?,0,true,
+                            'AGGREGATE_VERSION_GAP',clock_timestamp())
+                        """,
+                        missingAggregate,
+                        UUID.randomUUID());
+                var staleRequest = HttpRequest.newBuilder(URI.create("http://localhost:" + serverPort + path))
+                        .timeout(Duration.ofSeconds(20)).header("Authorization", "Bearer " + token.serialize())
+                        .header("Content-Type", "application/json").header("Accept", "application/problem+json")
+                        .POST(HttpRequest.BodyPublishers.ofString(
+                                "{\"expectedCheckpointVersion\":1,"
+                                        + "\"reason\":\"Stale checkpoint HTTP contract probe\"}"))
+                        .build();
+                var stale = client.send(staleRequest, HttpResponse.BodyHandlers.ofString());
+                assertThat(stale.statusCode()).isEqualTo(409);
+                assertThat(stale.headers().firstValue("Content-Type")).contains("application/problem+json");
+                assertThat((Integer) JsonPath.read(stale.body(), "$.status")).isEqualTo(409);
+                assertThat((String) JsonPath.read(stale.body(), "$.detail"))
+                        .isEqualTo("Контрольная точка теневой проекции авторизации изменилась "
+                                + "или недоступна для восстановления");
+                AuthOpenApiContractTest.assertHttpResponse(
+                        "/api/admin/eventing/shadow/{aggregateType}/{aggregateId}/reconcile", "post",
+                        stale.statusCode(), stale.headers().firstValue("Content-Type").orElseThrow(), stale.body());
+            } finally {
+                jdbc.update(
+                        "delete from consumer_aggregate_checkpoint "
+                                + "where consumer_group='auth-shadow-v1' and aggregate_type='USER_AUTHORIZATION' "
+                                + "and aggregate_id=?",
+                        missingAggregate);
+            }
         }
     }
 

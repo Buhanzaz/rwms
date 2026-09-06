@@ -111,7 +111,10 @@ class AuthEventDeliveryIntegrationTest {
                         1,
                         "stale operator command",
                         subjectId))
-                .isInstanceOf(org.springframework.dao.OptimisticLockingFailureException.class);
+                .isInstanceOfSatisfying(
+                        AuthShadowRecoveryException.class,
+                        exception -> assertThat(exception.kind())
+                                .isEqualTo(AuthShadowRecoveryException.Kind.STALE_OR_INELIGIBLE));
 
         AuthShadowReconciler.Result result = reconciler.reconcile(
                 AuthAggregateType.USER_AUTHORIZATION,

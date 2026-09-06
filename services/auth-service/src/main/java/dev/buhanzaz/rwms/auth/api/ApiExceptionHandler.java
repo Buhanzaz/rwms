@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.auth.api;
 
+import dev.buhanzaz.rwms.auth.eventing.AuthShadowRecoveryException;
 import dev.buhanzaz.rwms.auth.service.CustomerRegistrationRateLimitException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpHeaders;
@@ -14,6 +15,20 @@ import org.springframework.web.server.ResponseStatusException;
 /** Converts public API failures into sanitized RFC 9457 Problem Details responses. */
 @RestControllerAdvice
 public class ApiExceptionHandler {
+
+    /** Reports only typed auth-shadow recovery absence and fencing outcomes. */
+    @ExceptionHandler(AuthShadowRecoveryException.class)
+    ProblemDetail authShadowRecovery(AuthShadowRecoveryException exception) {
+        return switch (exception.kind()) {
+            case CHECKPOINT_NOT_FOUND -> ProblemDetail.forStatusAndDetail(
+                    HttpStatus.NOT_FOUND,
+                    "Контрольная точка теневой проекции авторизации не найдена");
+            case STALE_OR_INELIGIBLE -> ProblemDetail.forStatusAndDetail(
+                    HttpStatus.CONFLICT,
+                    "Контрольная точка теневой проекции авторизации изменилась "
+                            + "или недоступна для восстановления");
+        };
+    }
 
     /**
      * Reports a durable anonymous-registration budget rejection with an actionable retry delay.

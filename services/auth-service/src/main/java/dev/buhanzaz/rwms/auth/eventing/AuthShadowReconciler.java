@@ -2,7 +2,6 @@ package dev.buhanzaz.rwms.auth.eventing;
 
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
-import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,7 +33,7 @@ public class AuthShadowReconciler {
      * @param reason bounded operator explanation for the resolution
      * @param resolvedBySubjectId operator who approved the reconciliation
      * @return authoritative tail and number of resolved quarantine rows
-     * @throws OptimisticLockingFailureException when the checkpoint or quarantine changed
+     * @throws AuthShadowRecoveryException when the checkpoint is absent, stale, or ineligible
      */
     @Transactional
     public Result reconcile(
@@ -52,7 +51,8 @@ public class AuthShadowReconciler {
         if (!checkpoint.blocked()
                 || !"AGGREGATE_VERSION_GAP".equals(checkpoint.quarantineReason())
                 || checkpoint.version() != expectedCheckpointVersion) {
-            throw new OptimisticLockingFailureException(
+            throw new AuthShadowRecoveryException(
+                    AuthShadowRecoveryException.Kind.STALE_OR_INELIGIBLE,
                     "Auth shadow checkpoint is not the expected blocked version");
         }
 
@@ -78,7 +78,8 @@ public class AuthShadowReconciler {
                 aggregateId.toString(),
                 expectedCheckpointVersion + 1);
         if (resolved != 1) {
-            throw new OptimisticLockingFailureException(
+            throw new AuthShadowRecoveryException(
+                    AuthShadowRecoveryException.Kind.STALE_OR_INELIGIBLE,
                     "Auth version-gap quarantine is not eligible for reconciliation");
         }
 
@@ -113,7 +114,9 @@ public class AuthShadowReconciler {
                 aggregateId.toString(),
                 expectedCheckpointVersion);
         if (unblocked != 1) {
-            throw new OptimisticLockingFailureException("Auth shadow checkpoint changed during reconciliation");
+            throw new AuthShadowRecoveryException(
+                    AuthShadowRecoveryException.Kind.STALE_OR_INELIGIBLE,
+                    "Auth shadow checkpoint changed during reconciliation");
         }
         metrics.shadowReconciled();
         return new Result(aggregateType, aggregateId, tail.version(), tail.eventId(), resolved);
@@ -136,7 +139,8 @@ public class AuthShadowReconciler {
                         aggregateId.toString())
                 .stream()
                 .findFirst()
-                .orElseThrow(() -> new OptimisticLockingFailureException(
+                .orElseThrow(() -> new AuthShadowRecoveryException(
+                        AuthShadowRecoveryException.Kind.CHECKPOINT_NOT_FOUND,
                         "Auth shadow checkpoint does not exist"));
     }
 

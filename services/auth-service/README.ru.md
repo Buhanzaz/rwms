@@ -153,10 +153,9 @@ Recovery operations требуют `SYSTEM_ADMIN`, без ограничения
 client или scope. Reconciliation и rebuild дополнительно разрешают username
 оператора в канонический auth subject. Обе группы используют stateless Bearer
 доступ без CSRF. Browser clients не вызывают приватные worker routes.
-Отсутствующий сохранённый shadow checkpoint пока возвращает HTTP `500` с JSON;
-эта ошибка восстановления отличается от обычного Problem Details mapping.
-Отсутствующий shadow checkpoint сейчас возвращает необработанный `500 application/json`;
-каноническая reconciliation operation фиксирует этот наблюдаемый отказ.
+Shadow reconciliation возвращает Problem Details с `404` для отсутствующего checkpoint и `409`
+для устаревшего либо недоступного для восстановления checkpoint. Эти типизированные исходы
+не скрывают нарушение инвариантов авторитетного stream: оно остаётся серверной ошибкой.
 
 Сервис возвращает единые Problem Details для invalid, unauthenticated,
 forbidden, not-found, conflict и registration-rate-limit случаев. Ответ `429`
