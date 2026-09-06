@@ -43,14 +43,14 @@ const calculated: SlotAvailabilityResponse = {
   ],
 };
 
-function panel(calculate = vi.fn().mockResolvedValue(calculated), debounceMilliseconds = 0) {
+function panel(calculate = vi.fn().mockResolvedValue(calculated), debounceMilliseconds = 0, selectedWarehouse = warehouse) {
   const presentations: SlotPlanningMapPresentation[] = [];
   const suggestAddresses = vi.fn().mockResolvedValue([]);
   const resolveAddressSuggestion = vi.fn().mockResolvedValue({ address: 'СПб, адрес 1', latitude: 59.93428, longitude: 30.335099 });
   const reverseGeocode = vi.fn().mockResolvedValue({ address: 'СПб, адрес 1', latitude: 59.93428, longitude: 30.335099 });
   render(<SlotAvailabilityPanel
-    warehouseId="warehouse-spb"
-    warehouses={[warehouse]}
+    warehouseId={selectedWarehouse.id}
+    warehouses={[selectedWarehouse]}
     planningDate="2026-08-29"
     point={{ latitude: 59.93428, longitude: 30.335099 }}
     onPointChange={vi.fn()}
@@ -185,6 +185,36 @@ describe('dispatcher slot availability panel', () => {
     expect(within(timeline).getByText('ожидание 55 мин')).toBeInTheDocument();
   });
 
+  it.each([
+    { timezone: 'Asia/Yekaterinburg', arrival: '09:20', returned: '15:50', stop: '09:20–10:20' },
+    { timezone: 'America/Los_Angeles', arrival: '21:20', returned: '03:50', stop: '21:20–22:20' },
+  ])('formats arrival, return and stop timestamps in $timezone while retaining local clock values', async ({ timezone, arrival, returned, stop }) => {
+    const result: SlotAvailabilityResponse = {
+      ...calculated,
+      slots: calculated.slots.map((slot) => slot.best_candidate ? {
+        ...slot,
+        best_candidate: {
+          ...slot.best_candidate,
+          estimated_service_start: '2026-08-29T09:20:00+05:00',
+          warehouse_return_time: '2026-08-29T15:50:00+05:00',
+          timeline: [
+            { type: 'DELIVERY', label: 'Новый клиент', service_start: '2026-08-29T09:20:00+05:00', service_end: '2026-08-29T10:20:00+05:00' },
+            { type: 'WAIT', label: 'Локальное время', arrival_at: '08:00', departure_at: '08:30' },
+          ],
+        },
+      } : slot),
+    };
+    panel(vi.fn().mockResolvedValue(result), 0, warehouseFixture({ ...warehouse, timezone }));
+    fireEvent.change(screen.getByLabelText('Адрес нового клиента'), { target: { value: 'Адрес клиента' } });
+    const available = await screen.findByRole('button', { name: /09:00–12:00.*Доступен/s });
+    expect(within(available).getByText(arrival)).toBeVisible();
+    fireEvent.click(available);
+    expect(within(screen.getByRole('region', { name: 'Лучший вариант маршрута' })).getByText(returned)).toBeVisible();
+    const timeline = screen.getByRole('region', { name: 'Временная шкала маршрута' });
+    expect(within(timeline).getByText(stop)).toBeVisible();
+    expect(within(timeline).getByText('08:00–08:30')).toBeVisible();
+  });
+
   it('publishes independent map layer switches without making a feasibility decision in UI', async () => {
     const { presentations } = panel();
     fireEvent.click(screen.getByLabelText('Маршрут до добавления'));
@@ -302,6 +332,19 @@ describe('dispatcher slot availability panel', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Геокодер недоступен');
     expect(calculate).not.toHaveBeenCalled();
     expect(onPointChange).not.toHaveBeenCalled();
+  });
+
+  it('cancels a pending address selection when the already empty point is reset', async () => {
+    const { first, resolveAddressSuggestion, onPointChange, calculate } = addressRacePanel();
+    fireEvent.change(screen.getByLabelText('Адрес нового клиента'), { target: { value: 'Адрес' } });
+    fireEvent.click(await screen.findByRole('option', { name: 'Адрес A' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Сбросить точку' }));
+    expect(resolveAddressSuggestion.mock.calls[0]?.[1].aborted).toBe(true);
+    await act(async () => { first.resolve({ address: 'Адрес A', latitude: 59, longitude: 30 }); await first.promise; });
+    expect(screen.getByLabelText('Широта нового клиента')).toHaveValue(null);
+    expect(screen.queryByText('Определяем точку адреса…')).not.toBeInTheDocument();
+    expect(onPointChange).toHaveBeenCalledExactlyOnceWith(null);
+    expect(calculate).not.toHaveBeenCalled();
   });
 
   it('aborts address resolution on unmount and ignores its later success', async () => {

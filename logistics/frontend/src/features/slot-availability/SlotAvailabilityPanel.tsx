@@ -5,6 +5,7 @@ import type { Warehouse } from '../../domain/types';
 import { DatePicker } from '../../components/DatePicker';
 import { Button, CheckboxField, Spinner } from '../../components/ui';
 import { useUiStore } from '../../stores/ui-store';
+import { formatWarehouseLocalTime } from '../../utils/format';
 import { userFacingErrorDetail } from '../../utils/user-facing-error';
 import type {
   SlotAvailabilityInput,
@@ -63,10 +64,10 @@ function slotFailureLabel(code: string): string {
   return REASON_LABELS[code] ?? 'Слот недоступен из-за ограничений маршрута';
 }
 
-function timeLabel(value: string | undefined): string {
+function timeLabel(value: string | undefined, timeZone: string | undefined): string {
   if (!value) return '—';
   const date = new Date(value);
-  if (!Number.isNaN(date.getTime())) return date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  if (!Number.isNaN(date.getTime())) return timeZone ? formatWarehouseLocalTime(date, timeZone) : '—';
   return value.slice(0, 5);
 }
 
@@ -123,6 +124,7 @@ export function SlotAvailabilityPanel({
   debounceMilliseconds = 450,
 }: SlotAvailabilityPanelProps) {
   const [warehouseId, setWarehouseId] = useState(activeWarehouseId);
+  const timeZone = warehouses.find((warehouse) => warehouse.id === warehouseId)?.timezone;
   const [date, setDate] = useState(planningDate);
   const [address, setAddress] = useState('');
   const [cabinCount, setCabinCount] = useState(1);
@@ -373,7 +375,7 @@ export function SlotAvailabilityPanel({
             >
               <span className="slot-card__head"><strong>{slot.start.slice(0, 5)}–{slot.end.slice(0, 5)}</strong><b>{available ? 'Доступен' : 'Недоступен'}</b></span>
               <span className="slot-card__metrics">
-                <span>Прибытие <strong>{timeLabel(candidate?.estimated_service_start ?? candidate?.estimated_arrival)}</strong></span>
+                <span>Прибытие <strong>{timeLabel(candidate?.estimated_service_start ?? candidate?.estimated_arrival, timeZone)}</strong></span>
                 <span>Доп. дорога <strong>{candidate?.incremental_travel_minutes !== undefined ? `${Math.round(candidate.incremental_travel_minutes)} мин` : '—'}</strong></span>
                 <span>Запас <strong>{candidate?.minimum_slack_minutes !== undefined ? `${Math.round(candidate.minimum_slack_minutes)} мин` : '—'}</strong></span>
                 <span>Вариантов <strong>{available ? slot.candidate_count : 0}</strong></span>
@@ -395,7 +397,7 @@ export function SlotAvailabilityPanel({
         {selectedSlot?.best_candidate ? <section className="slot-candidate" aria-label="Лучший вариант маршрута">
           <h3>Лучший вариант · версия плана {response?.plan_version}</h3>
           <div className="slot-candidate__facts">
-            <span>Возврат на склад<strong>{timeLabel(selectedSlot.best_candidate.warehouse_return_time)}</strong></span>
+            <span>Возврат на склад<strong>{timeLabel(selectedSlot.best_candidate.warehouse_return_time, timeZone)}</strong></span>
             <span>Ожидание<strong>{selectedSlot.best_candidate.waiting_minutes ?? 0} мин</strong></span>
             <span>Вывозов<strong>{selectedSlot.best_candidate.pickup_count ?? 0}</strong></span>
             <span>Доп. расстояние<strong>{distanceLabel(selectedSlot.best_candidate.incremental_distance)}</strong></span>
@@ -403,7 +405,7 @@ export function SlotAvailabilityPanel({
           {selectedSlot.explanation.length ? <ul className="slot-candidate__explanation">{selectedSlot.explanation.map((item) => <li key={item}>{item}</li>)}</ul> : null}
           <div className="slot-timeline" role="region" aria-label="Временная шкала маршрута">
             {selectedSlot.best_candidate.timeline.length ? selectedSlot.best_candidate.timeline.map((stop, index) => <article className={`slot-timeline__stop slot-timeline__stop--${stop.type.toLowerCase()}`} key={stop.stop_id ?? `${stop.type}-${index}`}>
-              <span>{timeLabel(stop.arrival_at ?? stop.service_start)}–{timeLabel(stop.departure_at ?? stop.service_end)}</span>
+              <span>{timeLabel(stop.arrival_at ?? stop.service_start, timeZone)}–{timeLabel(stop.departure_at ?? stop.service_end, timeZone)}</span>
               <div><strong>{STOP_LABELS[stop.type] ?? stop.type}</strong><small>{stop.label}</small></div>
               <b>Груз {stop.load_before ?? '—'} → {stop.load_after ?? '—'}</b>
               {stop.waiting_minutes ? <em>ожидание {stop.waiting_minutes} мин</em> : null}
@@ -411,7 +413,12 @@ export function SlotAvailabilityPanel({
           </div>
         </section> : null}
       </div>
-      <footer><Button onClick={() => onPointChange(null)}>Сбросить точку</Button></footer>
+      <footer><Button onClick={() => {
+        cancelAddressResolution();
+        resolvedPointRef.current = null;
+        setAddressLookupStatus('idle');
+        onPointChange(null);
+      }}>Сбросить точку</Button></footer>
     </aside>
   );
 }
