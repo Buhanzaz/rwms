@@ -99,13 +99,3 @@ OSM_TRUCK_RESTRICTIONS: tuple[OsmTruckRestrictionCapability, ...] = (
         "No dedicated tag semantics; combination dimensions still constrain the route.",
     ),
 )
-
-
-def truck_restriction_capability(osm_tag: str) -> OsmTruckRestrictionCapability | None:
-    """Return an exact audited capability entry without guessing related tag semantics."""
-
-    normalized = osm_tag.strip().lower()
-    return next(
-        (item for item in OSM_TRUCK_RESTRICTIONS if item.osm_tag.lower() == normalized),
-        None,
-    )
