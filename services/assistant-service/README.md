@@ -15,6 +15,12 @@ response. The service persists the user message, provider/tool interaction and
 final assistant message so a later conversation read has server-authoritative
 history.
 
+By default each provider attempt has a 60-second overall deadline, including response-body reading, and
+a 15-second idle limit between SSE lines. Timeout or turn cancellation closes the provider body
+and cancels its reader. The existing retry is allowed only before provider output arrives.
+Client SSE timeout, error or completion cancels unfinished turn work; completed tool effects and
+stored history remain, and an interrupted turn does not persist a successful assistant reply.
+
 It deliberately does not:
 
 - decide cabin availability, publish a rental inquiry or mutate a logistics
@@ -235,6 +241,8 @@ the repository root launch. Environment variables override it in production.
 | AUTH_ISSUER, AUTH_AUDIENCE | Local JWT issuer and audience validation |
 | PANEL_ORIGIN | Explicit browser CORS origin |
 | LLM_BASE_URL, LLM_API_KEY, LLM_MODEL | OpenAI-compatible provider endpoint, credential and model |
+| LLM_REQUEST_TIMEOUT | Overall provider-attempt deadline, including headers and SSE body; default 60s |
+| LLM_STREAM_IDLE_TIMEOUT | Maximum wait between provider SSE lines; default 15s |
 | LOGISTICS_BASE_URL | Private logistics-service base address |
 | ASSISTANT_KAFKA_ENABLED, ASSISTANT_KAFKA_BROKERS | Booking event consumption |
 | ASSISTANT_SSE_TIMEOUT | Maximum server-sent-event turn lifetime |

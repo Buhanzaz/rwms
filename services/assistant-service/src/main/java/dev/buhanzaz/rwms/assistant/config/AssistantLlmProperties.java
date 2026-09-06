@@ -3,7 +3,12 @@ package dev.buhanzaz.rwms.assistant.config;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
-/** Binds and validates the configured OpenAI-compatible provider endpoint, model, timeouts and startup credential policy. */
+/**
+ * Binds the provider endpoint, model, timeouts and startup credential policy.
+ *
+ * @param requestTimeout overall deadline of one provider attempt, including its response body
+ * @param streamIdleTimeout maximum idle interval between complete provider SSE lines
+ */
 @ConfigurationProperties(prefix = "rwms.assistant.llm")
 public record AssistantLlmProperties(
     String baseUrl,
@@ -11,6 +16,7 @@ public record AssistantLlmProperties(
     String model,
     Duration connectTimeout,
     Duration requestTimeout,
+    Duration streamIdleTimeout,
     boolean requireApiKeyOnStartup) {
 
   public AssistantLlmProperties {
@@ -25,6 +31,11 @@ public record AssistantLlmProperties(
     }
     if (requestTimeout == null || requestTimeout.isNegative() || requestTimeout.isZero()) {
       throw new IllegalArgumentException("rwms.assistant.llm.request-timeout must be positive");
+    }
+    if (streamIdleTimeout == null
+        || streamIdleTimeout.isNegative()
+        || streamIdleTimeout.isZero()) {
+      throw new IllegalArgumentException("rwms.assistant.llm.stream-idle-timeout must be positive");
     }
   }
 

@@ -73,6 +73,7 @@ rwms:
       model: ${LLM_MODEL:mistral-large-latest}
       connect-timeout: ${LLM_CONNECT_TIMEOUT:5s}
       request-timeout: ${LLM_REQUEST_TIMEOUT:60s}
+      stream-idle-timeout: ${LLM_STREAM_IDLE_TIMEOUT:15s}
       require-api-key-on-startup: ${LLM_REQUIRE_API_KEY_ON_STARTUP:true}
     logistics:
       base-url: ${LOGISTICS_BASE_URL:http://logistics-service:8080}

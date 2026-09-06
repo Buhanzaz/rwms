@@ -10,6 +10,11 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
@@ -63,6 +68,7 @@ public class HttpChatCompletionClient implements ChatCompletionClient {
   }
 
   private void streamOnce(ChatCompletionRequest request, ChatCompletionListener listener) {
+    long deadline = System.nanoTime() + properties.requestTimeout().toNanos();
     try {
       HttpRequest httpRequest =
           HttpRequest.newBuilder(endpoint())
@@ -81,7 +87,7 @@ public class HttpChatCompletionClient implements ChatCompletionClient {
         }
         throw new AssistantProviderException("LLM provider request failed");
       }
-      consumeSse(response.body(), listener);
+      consumeSse(response.body(), listener, deadline);
     } catch (IOException exception) {
       throw new RetryableProviderException("LLM provider request failed", exception);
     } catch (InterruptedException exception) {
@@ -91,13 +97,29 @@ public class HttpChatCompletionClient implements ChatCompletionClient {
   }
 
   private void consumeSse(
-      java.io.InputStream stream, ChatCompletionListener listener) throws IOException {
+      java.io.InputStream stream, ChatCompletionListener listener, long deadline)
+      throws IOException {
+    AtomicLong lastActivity = new AtomicLong(System.nanoTime());
+    FutureTask<Void> readerTask =
+        new FutureTask<>(
+            () -> {
+              consumeSseBody(stream, listener, lastActivity);
+              return null;
+            });
+    Thread.ofVirtual().name("assistant-provider-sse-reader").start(readerTask);
+    awaitSse(readerTask, stream, lastActivity, deadline);
+  }
+
+  private void consumeSseBody(
+      java.io.InputStream stream, ChatCompletionListener listener, AtomicLong lastActivity)
+      throws IOException {
     boolean done = false;
     boolean finished = false;
     try (BufferedReader reader =
         new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
       String line;
       while ((line = reader.readLine()) != null) {
+        lastActivity.set(System.nanoTime());
         if (!line.startsWith("data:")) continue;
         String payload = line.substring("data:".length()).trim();
         if ("[DONE]".equals(payload)) {
@@ -110,6 +132,72 @@ public class HttpChatCompletionClient implements ChatCompletionClient {
     if (!done && !finished) {
       throw new RetryableProviderException("LLM provider ended an incomplete stream");
     }
+  }
+
+  private void awaitSse(
+      FutureTask<Void> readerTask,
+      java.io.InputStream stream,
+      AtomicLong lastActivity,
+      long deadline)
+      throws IOException {
+    while (true) {
+      if (readerTask.isDone()) {
+        completeRead(readerTask, stream);
+        return;
+      }
+      long now = System.nanoTime();
+      long overallRemaining = deadline - now;
+      long idleRemaining =
+          properties.streamIdleTimeout().toNanos() - (now - lastActivity.get());
+      long waitNanos = Math.min(overallRemaining, idleRemaining);
+      if (waitNanos <= 0) {
+        abortRead(stream, readerTask);
+        throw new RetryableProviderException("LLM provider stream timed out");
+      }
+      try {
+        readerTask.get(waitNanos, TimeUnit.NANOSECONDS);
+        return;
+      } catch (TimeoutException ignored) {
+        // Re-read both deadlines: a chunk may have arrived at the timeout boundary.
+      } catch (InterruptedException interrupted) {
+        abortRead(stream, readerTask);
+        Thread.currentThread().interrupt();
+        throw new AssistantProviderException("LLM provider request interrupted", interrupted);
+      } catch (ExecutionException failure) {
+        rethrowReadFailure(failure.getCause());
+      }
+    }
+  }
+
+  private static void completeRead(
+      FutureTask<Void> readerTask, java.io.InputStream stream) throws IOException {
+    try {
+      readerTask.get();
+    } catch (InterruptedException interrupted) {
+      abortRead(stream, readerTask);
+      Thread.currentThread().interrupt();
+      throw new AssistantProviderException("LLM provider request interrupted", interrupted);
+    } catch (ExecutionException failure) {
+      rethrowReadFailure(failure.getCause());
+    }
+  }
+
+  private static void rethrowReadFailure(Throwable failure) throws IOException {
+    if (failure instanceof IOException ioFailure) {
+      throw ioFailure;
+    }
+    if (failure instanceof RuntimeException runtimeFailure) {
+      throw runtimeFailure;
+    }
+    if (failure instanceof Error error) {
+      throw error;
+    }
+    throw new AssistantProviderException("LLM provider stream failed", failure);
+  }
+
+  private static void abortRead(java.io.InputStream stream, FutureTask<Void> readerTask) {
+    closeQuietly(stream);
+    readerTask.cancel(true);
   }
 
   private static boolean isRetryableStatus(int status) {
@@ -201,7 +289,7 @@ public class HttpChatCompletionClient implements ChatCompletionClient {
 
   private static final class TrackingListener implements ChatCompletionListener {
     private final ChatCompletionListener delegate;
-    private boolean receivedAnything;
+    private volatile boolean receivedAnything;
 
     private TrackingListener(ChatCompletionListener delegate) {
       this.delegate = delegate;

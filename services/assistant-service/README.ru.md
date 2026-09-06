@@ -8,6 +8,12 @@ assistant-service владеет stateful rental conversations, messages, tool-c
 
 Public assistant API позволяет пользователю отдельного web- или Android-приложения менеджера аренды начать или продолжить conversation и получить streamed tool-assisted response. Сервис сохраняет user message, provider/tool interaction и final assistant message, поэтому последующее чтение conversation использует server-authoritative history.
 
+По умолчанию каждая попытка запроса к провайдеру ограничена общим deadline 60 секунд, включая чтение тела,
+и паузой между SSE-строками до 15 секунд. Таймаут или отмена turn закрывает тело ответа и отменяет
+reader. Действующий повтор разрешён только до получения provider output. Timeout, error и completion
+клиентского SSE отменяют незавершённую работу; совершённые tool effects и сохранённая история
+остаются, а прерванный turn не сохраняет успешный ответ ассистента.
+
 Сервис намеренно не:
 
 - принимает решение о cabin availability, не публикует rental inquiry и не изменяет logistics aggregate локально;
@@ -224,6 +230,8 @@ Ignored local .env.local может быть загружен из service direc
 | AUTH_ISSUER, AUTH_AUDIENCE | Local JWT issuer и audience validation |
 | PANEL_ORIGIN | Явный browser CORS origin |
 | LLM_BASE_URL, LLM_API_KEY, LLM_MODEL | OpenAI-compatible provider endpoint, credential и model |
+| LLM_REQUEST_TIMEOUT | Общий deadline попытки запроса, включая headers и SSE body; по умолчанию 60s |
+| LLM_STREAM_IDLE_TIMEOUT | Максимальная пауза между SSE-строками провайдера; по умолчанию 15s |
 | LOGISTICS_BASE_URL | Private logistics-service base address |
 | ASSISTANT_KAFKA_ENABLED, ASSISTANT_KAFKA_BROKERS | Booking event consumption |
 | ASSISTANT_SSE_TIMEOUT | Maximum server-sent-event turn lifetime |

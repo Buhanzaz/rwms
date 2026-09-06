@@ -15,6 +15,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Executor;
+import java.util.concurrent.FutureTask;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
@@ -151,7 +153,10 @@ public class AssistantTurnService {
         emitter);
   }
 
-  /** Schedules either free text or one exact persisted clarification-button answer. */
+  /**
+   * Schedules free text or one exact persisted clarification answer. SSE termination cancels
+   * unfinished work; terminal persistence is fenced against cancellation and retains completed effects.
+   */
   public void stream(
       UUID ownerSubjectId,
       UUID conversationId,
@@ -162,7 +167,18 @@ public class AssistantTurnService {
         request.clarificationAnswer() == null
             ? conversations.beginTurn(ownerSubjectId, conversationId, request.message())
             : conversations.beginTurn(ownerSubjectId, conversationId, request);
-    executor.execute(() -> runTurn(ownerSubjectId, conversationId, started, bearerToken, emitter));
+    TurnLifecycle lifecycle = new TurnLifecycle();
+    FutureTask<Void> turn =
+        new FutureTask<>(
+            () -> {
+              runTurn(ownerSubjectId, conversationId, started, bearerToken, emitter, lifecycle);
+              return null;
+            });
+    Runnable cancel = () -> lifecycle.cancel(turn);
+    emitter.onTimeout(cancel);
+    emitter.onError(ignored -> cancel.run());
+    emitter.onCompletion(cancel);
+    executor.execute(turn);
   }
 
   private void runTurn(
@@ -170,7 +186,8 @@ public class AssistantTurnService {
       UUID conversationId,
       AssistantConversationService.TurnStart started,
       String bearerToken,
-      SseEmitter emitter) {
+      SseEmitter emitter,
+      TurnLifecycle lifecycle) {
     try {
       emit(
           emitter,
@@ -201,7 +218,7 @@ public class AssistantTurnService {
                 null,
                 null,
                 started.nextClarification()));
-        completeParkedClarificationTurn(conversationId, emitter);
+        completeParkedClarificationTurn(conversationId, emitter, lifecycle);
         return;
       }
 
@@ -218,6 +235,7 @@ public class AssistantTurnService {
       OutcomeToolGuard outcome = new OutcomeToolGuard();
       boolean suppressAvailabilityExplanations = false;
       for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        lifecycle.requireActive();
         ToolCallCollector calls = new ToolCallCollector();
         FinishTracker finish = new FinishTracker();
         StringBuilder roundText = new StringBuilder();
@@ -237,20 +255,23 @@ public class AssistantTurnService {
             new ChatCompletionClient.ChatCompletionListener() {
               @Override
               public void onContent(String delta) {
-                if (toolCallRequired) return;
+                if (toolCallRequired || lifecycle.cancelled()) return;
                 roundText.append(delta);
               }
 
               @Override
               public void onToolCallDelta(ToolCallDelta delta) {
+                if (lifecycle.cancelled()) return;
                 calls.append(delta);
               }
 
               @Override
               public void onFinish(String finishReason) {
+                if (lifecycle.cancelled()) return;
                 finish.reason = finishReason;
               }
             });
+        lifecycle.requireActive();
 
         if ("tool_calls".equals(finish.reason)) {
           List<ProviderToolCall> requested = calls.build();
@@ -259,6 +280,7 @@ public class AssistantTurnService {
           }
           history.add(ChatMessage.assistantToolCalls(requested));
           for (ProviderToolCall call : requested) {
+            lifecycle.requireActive();
             AssistantToolExecutor.ToolExecution execution =
                 tools.execute(
                     ownerSubjectId,
@@ -271,11 +293,11 @@ public class AssistantTurnService {
             suppressAvailabilityExplanations |= hasAvailabilityFeedback(execution.result());
             history.add(ChatMessage.tool(call.id(), serialize(execution.result())));
             if (isClarificationRequested(execution.result())) {
-              completeParkedClarificationTurn(conversationId, emitter);
+              completeParkedClarificationTurn(conversationId, emitter, lifecycle);
               return;
             }
             if (isInquiryArchived(execution.result())) {
-              completeArchivedInquiryTurn(ownerSubjectId, conversationId, emitter);
+              completeArchivedInquiryTurn(ownerSubjectId, conversationId, emitter, lifecycle);
               return;
             }
             outcome.record(call.name());
@@ -298,12 +320,15 @@ public class AssistantTurnService {
             suppressAvailabilityExplanations
                 ? withoutAvailabilityExplanations(completeText.toString())
                 : completeText.toString();
+        var assistant =
+            lifecycle.finish(
+                () ->
+                    conversations.completeAssistantTurn(
+                        ownerSubjectId, conversationId, assistantText));
         emit(
             emitter,
             new AssistantApiModels.TurnEvent(
                 "assistant.delta", conversationId, null, null, assistantText, null, null));
-        var assistant =
-            conversations.completeAssistantTurn(ownerSubjectId, conversationId, assistantText);
         emit(
             emitter,
             new AssistantApiModels.TurnEvent(
@@ -313,11 +338,11 @@ public class AssistantTurnService {
       }
       throw new AssistantProviderException("LLM provider exceeded the tool-call limit");
     } catch (AssistantNotFoundException failure) {
-      fail(emitter, conversationId, "CONVERSATION_UNAVAILABLE");
+      fail(emitter, conversationId, "CONVERSATION_UNAVAILABLE", lifecycle);
     } catch (AssistantProviderException failure) {
-      fail(emitter, conversationId, "PROVIDER_FAILED");
+      fail(emitter, conversationId, "PROVIDER_FAILED", lifecycle);
     } catch (RuntimeException failure) {
-      fail(emitter, conversationId, "TURN_FAILED");
+      fail(emitter, conversationId, "TURN_FAILED", lifecycle);
     }
   }
 
@@ -386,7 +411,9 @@ public class AssistantTurnService {
         && !result.path("data").path("questions").isEmpty();
   }
 
-  private static void completeParkedClarificationTurn(UUID conversationId, SseEmitter emitter) {
+  private static void completeParkedClarificationTurn(
+      UUID conversationId, SseEmitter emitter, TurnLifecycle lifecycle) {
+    lifecycle.finish(() -> null);
     emit(
         emitter,
         new AssistantApiModels.TurnEvent(
@@ -395,17 +422,25 @@ public class AssistantTurnService {
   }
 
   private void completeArchivedInquiryTurn(
-      UUID ownerSubjectId, UUID conversationId, SseEmitter emitter) {
+      UUID ownerSubjectId,
+      UUID conversationId,
+      SseEmitter emitter,
+      TurnLifecycle lifecycle) {
+    var assistant =
+        lifecycle.finish(
+            () -> {
+              var completed =
+                  conversations.completeAssistantTurn(
+                      ownerSubjectId, conversationId, ARCHIVED_INQUIRY_MESSAGE);
+              // Persist the final user-facing message before hiding the conversation from
+              // active lists; future turns then fail beginTurn's archived=false predicate.
+              conversations.archive(ownerSubjectId, conversationId);
+              return completed;
+            });
     emit(
         emitter,
         new AssistantApiModels.TurnEvent(
             "assistant.delta", conversationId, null, null, ARCHIVED_INQUIRY_MESSAGE, null, null));
-    var assistant =
-        conversations.completeAssistantTurn(
-            ownerSubjectId, conversationId, ARCHIVED_INQUIRY_MESSAGE);
-    // Persist the final user-facing message before hiding the conversation from
-    // active lists; future turns then fail beginTurn's archived=false predicate.
-    conversations.archive(ownerSubjectId, conversationId);
     emit(
         emitter,
         new AssistantApiModels.TurnEvent(
@@ -462,12 +497,51 @@ public class AssistantTurnService {
     }
   }
 
-  private static void fail(SseEmitter emitter, UUID conversationId, String code) {
+  private static void fail(
+      SseEmitter emitter, UUID conversationId, String code, TurnLifecycle lifecycle) {
+    if (!lifecycle.fail()) return;
     emit(
         emitter,
         new AssistantApiModels.TurnEvent(
             "turn.failed", conversationId, null, null, null, null, code));
     emitter.complete();
+  }
+
+  /** Fences cancellation against terminal persistence and emitter completion. */
+  private static final class TurnLifecycle {
+    private boolean cancelled;
+    private boolean terminal;
+
+    synchronized boolean cancelled() {
+      return cancelled;
+    }
+
+    synchronized void requireActive() {
+      if (cancelled) {
+        throw new AssistantProviderException("Assistant turn was cancelled");
+      }
+    }
+
+    synchronized <T> T finish(Supplier<T> completion) {
+      requireActive();
+      T result = completion.get();
+      terminal = true;
+      return result;
+    }
+
+    synchronized boolean fail() {
+      if (terminal) return false;
+      terminal = true;
+      return true;
+    }
+
+    void cancel(FutureTask<Void> turn) {
+      synchronized (this) {
+        if (terminal || cancelled) return;
+        cancelled = true;
+      }
+      turn.cancel(true);
+    }
   }
 
   /** Captures the provider finish reason for one streamed round. */

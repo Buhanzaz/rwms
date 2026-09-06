@@ -15,11 +15,21 @@ import dev.buhanzaz.rwms.assistant.domain.AssistantMessage;
 import dev.buhanzaz.rwms.assistant.integration.ChatCompletionClient;
 import dev.buhanzaz.rwms.assistant.integration.ChatCompletionClient.ChatCompletionRequest;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.InOrder;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import tools.jackson.databind.JsonNode;
@@ -301,6 +311,119 @@ class AssistantTurnServiceTest {
         .isEqualTo("В Санкт-Петербурге найдены 2 свободные бытовки с отделкой ДВП.");
     assertThat(AssistantTurnService.withoutAvailabilityExplanations("Не найдено."))
         .isEqualTo("Подбор обновлён.");
+  }
+
+  @ParameterizedTest
+  @EnumSource(CancellationSignal.class)
+  void emitterTerminationCancelsTheProviderAndReleasesTheWorkerForTheNextTurn(
+      CancellationSignal cancellationSignal) throws Exception {
+    UUID owner = UUID.randomUUID();
+    UUID firstConversationId = UUID.randomUUID();
+    UUID secondConversationId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID secondUserMessageId = UUID.randomUUID();
+    AssistantConversationService conversations = mock(AssistantConversationService.class);
+    when(conversations.beginTurn(owner, firstConversationId, "first"))
+        .thenReturn(
+            new AssistantConversationService.TurnStart(
+                firstConversationId, inquiryId, UUID.randomUUID(), "first"));
+    when(conversations.beginTurn(owner, secondConversationId, "second"))
+        .thenReturn(
+            new AssistantConversationService.TurnStart(
+                secondConversationId, inquiryId, secondUserMessageId, "second"));
+    when(conversations.promptMessages(owner, firstConversationId)).thenReturn(List.of());
+    when(conversations.promptMessages(owner, secondConversationId)).thenReturn(List.of());
+    AssistantMessage completed = mock(AssistantMessage.class);
+    when(completed.getId()).thenReturn(UUID.randomUUID());
+    when(conversations.completeAssistantTurn(owner, secondConversationId, "done"))
+        .thenReturn(completed);
+    AssistantToolExecutor tools = mock(AssistantToolExecutor.class);
+    when(tools.execute(
+            eq(owner),
+            eq(secondConversationId),
+            eq(inquiryId),
+            eq(secondUserMessageId),
+            any(),
+            eq("current-user-bearer"),
+            any()))
+        .thenAnswer(
+            invocation -> {
+              ChatCompletionClient.ProviderToolCall call = invocation.getArgument(4);
+              return new AssistantToolExecutor.ToolExecution(
+                  call,
+                  mapper.readTree(
+                      """
+                      {"tool":"search_available_cabins","data":{"groups":[{"cabins":[{"id":"current"}]}]}}
+                      """),
+                  UUID.randomUUID());
+            });
+    CountDownLatch firstProviderEntered = new CountDownLatch(1);
+    CountDownLatch firstProviderReleased = new CountDownLatch(1);
+    AtomicInteger providerCalls = new AtomicInteger();
+    ChatCompletionClient provider =
+        (ignoredRequest, listener) -> {
+          if (providerCalls.incrementAndGet() == 1) {
+            firstProviderEntered.countDown();
+            try {
+              new CountDownLatch(1).await();
+            } catch (InterruptedException interrupted) {
+              firstProviderReleased.countDown();
+              throw new AssistantProviderException("provider interrupted", interrupted);
+            }
+          }
+          if (providerCalls.get() == 2) {
+            toolCall(
+                listener,
+                "second-search",
+                AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS,
+                "{}");
+          } else {
+            listener.onContent("done");
+            listener.onFinish("stop");
+          }
+        };
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      AssistantTurnService service =
+          new AssistantTurnService(
+              conversations,
+              provider,
+              new AssistantToolDefinitions(),
+              tools,
+              mapper,
+              properties(),
+              executor);
+      CapturingEmitter firstEmitter = new CapturingEmitter();
+      CapturingEmitter secondEmitter = new CapturingEmitter();
+
+      service.stream(owner, firstConversationId, "first", "current-user-bearer", firstEmitter);
+      assertThat(firstProviderEntered.await(1, TimeUnit.SECONDS)).isTrue();
+      firstEmitter.cancel(cancellationSignal);
+      assertThat(firstProviderReleased.await(1, TimeUnit.SECONDS)).isTrue();
+      service.stream(owner, secondConversationId, "second", "current-user-bearer", secondEmitter);
+
+      awaitAtMost(Duration.ofSeconds(1), () -> providerCalls.get() == 3);
+      awaitAtMost(
+          Duration.ofSeconds(1),
+          () ->
+              secondEmitter.events.stream()
+                  .anyMatch(event -> event.event().startsWith("turn.") && !"turn.started".equals(event.event())));
+      assertThat(secondEmitter.events)
+          .withFailMessage("Second turn events: %s", secondEmitter.events)
+          .anyMatch(event -> "turn.completed".equals(event.event()));
+      assertThat(firstEmitter.events)
+          .anySatisfy(
+              event -> {
+                assertThat(event.event()).isEqualTo("turn.failed");
+                assertThat(event.code()).isEqualTo("PROVIDER_FAILED");
+              })
+          .noneMatch(event -> "turn.completed".equals(event.event()));
+      assertThat(providerCalls).hasValue(3);
+      verify(conversations, never())
+          .completeAssistantTurn(eq(owner), eq(firstConversationId), any());
+    } finally {
+      executor.shutdownNow();
+    }
   }
 
   @Test
@@ -705,7 +828,28 @@ class AssistantTurnServiceTest {
         "test-model",
         Duration.ofSeconds(1),
         Duration.ofSeconds(5),
+        Duration.ofSeconds(1),
         false);
+  }
+
+  private static void awaitAtMost(Duration timeout, CheckedCondition condition) throws Exception {
+    Instant deadline = Instant.now().plus(timeout);
+    while (Instant.now().isBefore(deadline)) {
+      if (condition.matches()) return;
+      Thread.sleep(10);
+    }
+    assertThat(condition.matches()).isTrue();
+  }
+
+  @FunctionalInterface
+  private interface CheckedCondition {
+    boolean matches() throws Exception;
+  }
+
+  private enum CancellationSignal {
+    TIMEOUT,
+    ERROR,
+    COMPLETION
   }
 
   private static AssistantApiModels.ClarificationQuestionResponse question(
@@ -866,7 +1010,25 @@ class AssistantTurnServiceTest {
 
   /** Captures structured event payloads without starting an HTTP response. */
   private static final class CapturingEmitter extends SseEmitter {
-    private final List<AssistantApiModels.TurnEvent> events = new ArrayList<>();
+    private final List<AssistantApiModels.TurnEvent> events = new CopyOnWriteArrayList<>();
+    private Runnable timeout;
+    private Consumer<Throwable> error;
+    private Runnable completion;
+
+    @Override
+    public void onTimeout(Runnable callback) {
+      this.timeout = callback;
+    }
+
+    @Override
+    public void onError(Consumer<Throwable> callback) {
+      this.error = callback;
+    }
+
+    @Override
+    public void onCompletion(Runnable callback) {
+      this.completion = callback;
+    }
 
     @Override
     public void send(SseEventBuilder builder) {
@@ -878,6 +1040,19 @@ class AssistantTurnServiceTest {
           .filter(AssistantApiModels.TurnEvent.class::isInstance)
           .map(AssistantApiModels.TurnEvent.class::cast)
           .forEach(events::add);
+    }
+
+    @Override
+    public void complete() {
+      if (completion != null) completion.run();
+    }
+
+    void cancel(CancellationSignal signal) {
+      switch (signal) {
+        case TIMEOUT -> timeout.run();
+        case ERROR -> error.accept(new IllegalStateException("client disconnected"));
+        case COMPLETION -> completion.run();
+      }
     }
   }
 }
