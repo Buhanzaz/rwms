@@ -282,6 +282,18 @@ policy-объекты остаются чистыми и покрыты unit-т�
       --no-daemon --max-workers=2 \
       -Pkotlin.compiler.execution.strategy=in-process
 
+Точечная проверка через native graphics рисует реальные Compose-экраны при ширине
+360 dp на тестовых данных. Экспорт PNG за пределы репозитория:
+
+    RWMS_CUSTOMER_VISUAL_OUTPUT=/tmp/rwms-customer-visuals \
+      ./gradlew :app:testDebugUnitTest --rerun --tests '*CustomerVisualReviewTest' \
+      --no-daemon --max-workers=2 \
+      -Pkotlin.compiler.execution.strategy=in-process
+
+Эти изображения проверяют компоновку и оформление; они не запускают установленный
+APK, реальные клиентские сценарии, системную клавиатуру, MapKit или приветственное
+видео. Проверка на устройстве остаётся отдельной; изображения обхода не коммитятся.
+
 Для каждой сборки нужен доступный только root файл properties вне репозитория:
 
     mapkitApiKey=<ключ Yandex MapKit>

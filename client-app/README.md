@@ -285,6 +285,18 @@ Use Gradle 9.1 and JDK 17. On the VPS, keep the build bounded:
       --no-daemon --max-workers=2 \
       -Pkotlin.compiler.execution.strategy=in-process
 
+The focused native-graphics review renders production Compose screens at 360 dp width
+with test-owned data. To export PNGs outside the repository:
+
+    RWMS_CUSTOMER_VISUAL_OUTPUT=/tmp/rwms-customer-visuals \
+      ./gradlew :app:testDebugUnitTest --rerun --tests '*CustomerVisualReviewTest' \
+      --no-daemon --max-workers=2 \
+      -Pkotlin.compiler.execution.strategy=in-process
+
+These renders check layout and appearance; they do not run the installed APK, live
+customer workflows, the system keyboard, MapKit or welcome video playback. Keep device
+verification separate and never commit generated review images.
+
 Every build requires a root-readable properties file outside the repository:
 
     mapkitApiKey=<Yandex MapKit key>
