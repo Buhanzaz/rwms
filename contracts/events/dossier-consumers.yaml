@@ -476,6 +476,7 @@ components:
             - logistics.transfer.arrival-started.v1
             - logistics.transfer.line-arrived.v1
             - logistics.transfer.completed.v1
+            - logistics.transfer.cancellation-started.v1
             - logistics.transfer.cancelled.v1
             - logistics.transfer.conflict.v1
             - logistics.transfer.reconciliation-required.v1

@@ -36,6 +36,12 @@ The authoritative boundaries are [dossier-service.yaml](../../contracts/openapi/
 
 The consumer begins at earliest, validates every accepted source topic and record key, deduplicates event identity, records source coordinates and quarantines version gaps instead of inventing a missing prefix. Source facts without a provable cabin subject are journaled as unlinked rather than fabricated into a cabin activity.
 
+`logistics.transfer.cancellation-started.v1` is accepted on `rwms.logistics.transfer.v1` as a
+`TRANSFER` document fact in `CANCELLING` state. Like the other document-level transfer facts, it
+advances the inbox and aggregate checkpoint and remains `SUBJECT_NOT_PROVIDED` evidence without a
+cabin activity. The strict producer schema, document/aggregate identity and Kafka key checks still
+reject malformed records through the existing sanitized validation DLT path.
+
 Inventory finding membership-departed, membership-refreshed and completed-observation-restored facts are validated and journaled as ordering evidence, but deliberately create no cabin activity. The additive `membershipActive` field is optional on historical added/inspection facts; lifecycle markers require the value matching their event type. Dossier therefore advances the finding checkpoint without inventing a cabin status or reopening any media owner proof.
 
 Maintenance repair transfer facts are projected as `REPAIR_TRANSFER_PREPARED` and `REPAIR_TRANSFERRED`. Each activity keeps the `rentalItemId` cabin and `warehouseId` snapshot from that committed maintenance event, so departure preparation remains attached to the source warehouse and completed transfer to the target warehouse without a synchronous producer lookup. The durable mapping is defined by the [consumer contract](../../contracts/events/dossier-consumers.yaml) and enforced by [DossierEnvelopeValidator](src/main/java/dev/buhanzaz/rwms/dossier/eventing/DossierEnvelopeValidator.java).

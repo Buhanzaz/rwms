@@ -1797,6 +1797,24 @@ class LogisticsContractFoundationTest {
   }
 
   @Test
+  void transferCancellationStartedHasTheCanonicalFamilySchemaAndAggregateKey() throws Exception {
+    JsonNode schema = objectMapper.readTree(Files.readString(eventSchemaPath()));
+    assertThat(strings(schema.at("/properties/eventType/enum")))
+        .contains("logistics.transfer.cancellation-started.v1");
+    Map<String, Object> contract = eventContract();
+    Map<String, Object> channel = child(child(contract, "channels"), "transferFacts");
+    assertThat(channel.get("address")).isEqualTo("rwms.logistics.transfer.v1");
+    assertThat(child(child(channel, "messages"), "transferCancellationStartedV1"))
+        .containsEntry("$ref", "#/components/messages/TransferCancellationStartedV1");
+    assertThat(
+            child(
+                child(child(contract, "components"), "messages"), "TransferCancellationStartedV1"))
+        .containsEntry("name", "logistics.transfer.cancellation-started.v1")
+        .containsEntry("payload", Map.of("$ref", "./logistics/logistics-events-v1.schema.json"))
+        .containsEntry("x-rwms-record-key", "aggregateId");
+  }
+
+  @Test
   void rentalInquiryBookingFactHasAnExactCanonicalV2ContractAndConversationKey() throws Exception {
     JsonNode schema = objectMapper.readTree(Files.readString(rentalInquiryEventSchemaPath()));
     assertThat(schema.path("additionalProperties").booleanValue()).isFalse();

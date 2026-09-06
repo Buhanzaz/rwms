@@ -145,6 +145,11 @@ public class LogisticsPayloadSafetyValidatorsConfiguration {
   }
 
   @Bean
+  RwmsKafkaPayloadSafetyValidator logisticsTransferCancellationStartedPayloadSafetyValidator() {
+    return new LogisticsPayloadSafetyValidator(LogisticsEventType.TRANSFER_CANCELLATION_STARTED);
+  }
+
+  @Bean
   RwmsKafkaPayloadSafetyValidator logisticsTransferCancelledPayloadSafetyValidator() {
     return new LogisticsPayloadSafetyValidator(LogisticsEventType.TRANSFER_CANCELLED);
   }

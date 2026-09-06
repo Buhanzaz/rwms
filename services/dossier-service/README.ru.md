@@ -36,6 +36,12 @@ dossier-service — read-only cross-domain проекция активности
 
 Consumer начинает с earliest, проверяет каждый accepted source topic и record key, дедуплицирует event identity, сохраняет source coordinates и quarantines version gaps вместо выдумывания missing prefix. Source facts без доказуемого cabin subject сохраняются как unlinked, а не фабрикуются в cabin activity.
 
+`logistics.transfer.cancellation-started.v1` принимается из `rwms.logistics.transfer.v1` как факт
+документа `TRANSFER` в состоянии `CANCELLING`. Как и остальные факты документов перемещения, он
+продвигает inbox и checkpoint агрегата и остаётся evidence `SUBJECT_NOT_PROVIDED` без activity
+бытовки. Строгая схема producer, проверки совпадения ID документа/агрегата и Kafka key по-прежнему
+направляют некорректные записи в существующий безопасный validation DLT.
+
 Факты inventory finding membership-departed, membership-refreshed и completed-observation-restored проходят validation и сохраняются в journal как evidence порядка, но намеренно не создают cabin activity. Additive-поле `membershipActive` необязательно в исторических added/inspection facts; lifecycle markers требуют значение, соответствующее типу event. Поэтому dossier продвигает checkpoint finding без выдуманного статуса бытовки или повторного открытия media owner proof.
 
 Maintenance repair transfer facts проецируются как `REPAIR_TRANSFER_PREPARED` и `REPAIR_TRANSFERRED`. Каждая activity сохраняет cabin из `rentalItemId` и snapshot склада из `warehouseId` зафиксированного maintenance event, поэтому подготовка отправления остаётся связана с исходным складом, а завершённая передача — с целевым без синхронного вызова producer. Durable mapping определён [consumer contract](../../contracts/events/dossier-consumers.yaml) и проверяется [DossierEnvelopeValidator](src/main/java/dev/buhanzaz/rwms/dossier/eventing/DossierEnvelopeValidator.java).

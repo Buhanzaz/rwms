@@ -369,7 +369,20 @@ public final class DossierEnvelopeValidator {
     return switch (family) {
       case "return" -> Set.of("logistics.return.created.v1", "logistics.return.registration-started.v1", "logistics.return.inspection-required.v1", "logistics.return.acceptance-started.v1", "logistics.return.accepted.v1", "logistics.return.estimate-started.v1", "logistics.return.estimate-requested.v1", "logistics.return.conflicted.v1", "logistics.return.conflict.v1", "logistics.return.reconciliation-required.v1");
       case "shipment" -> Set.of("logistics.shipment.created.v1", "logistics.shipment.draft-updated.v1", "logistics.shipment.preparation-started.v1", "logistics.shipment.planned.v1", "logistics.shipment.confirmation-started.v1", "logistics.shipment.preparation-confirmed.v1", "logistics.shipment.cancellation-started.v1", "logistics.shipment.cancelled.v1", "logistics.shipment.conflict.v1", "logistics.shipment.reconciliation-required.v1");
-      case "transfer" -> Set.of("logistics.transfer.created.v1", "logistics.transfer.plan-updated.v1", "logistics.transfer.confirmed.v1", "logistics.transfer.departure-started.v1", "logistics.transfer.departed.v1", "logistics.transfer.arrival-started.v1", "logistics.transfer.line-arrived.v1", "logistics.transfer.completed.v1", "logistics.transfer.cancelled.v1", "logistics.transfer.conflict.v1", "logistics.transfer.reconciliation-required.v1");
+      case "transfer" ->
+          Set.of(
+              "logistics.transfer.created.v1",
+              "logistics.transfer.plan-updated.v1",
+              "logistics.transfer.confirmed.v1",
+              "logistics.transfer.departure-started.v1",
+              "logistics.transfer.departed.v1",
+              "logistics.transfer.arrival-started.v1",
+              "logistics.transfer.line-arrived.v1",
+              "logistics.transfer.completed.v1",
+              "logistics.transfer.cancellation-started.v1",
+              "logistics.transfer.cancelled.v1",
+              "logistics.transfer.conflict.v1",
+              "logistics.transfer.reconciliation-required.v1");
       default -> throw new IllegalArgumentException("Unsupported family");
     };
   }

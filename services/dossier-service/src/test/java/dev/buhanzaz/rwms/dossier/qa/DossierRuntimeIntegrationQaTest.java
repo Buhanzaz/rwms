@@ -138,6 +138,88 @@ class DossierRuntimeIntegrationQaTest {
   @Autowired MockMvc mvc;
 
   @Test
+  void transferCancellationIsJournaledAndDeduplicatedWithoutCabinActivityOrDlt() {
+    UUID transferId = UUID.randomUUID();
+    String topic = "rwms.logistics.transfer.v1";
+    String payload =
+        """
+        {"documentId":"%s","documentType":"TRANSFER","state":"%s","warehouseId":"%s","destinationWarehouseId":"%s","lineCount":1,"resultCode":null}
+        """;
+    DossierValidatedEvent created =
+        validate(
+            topic,
+            20,
+            transferId,
+            envelope(
+                "logistics.transfer.created.v1",
+                "logistics-service",
+                "TRANSFER",
+                transferId,
+                0,
+                payload.formatted(transferId, "DRAFT", WAREHOUSE_A, WAREHOUSE_B),
+                true));
+    String cancellationEnvelope =
+        envelope(
+            "logistics.transfer.cancellation-started.v1",
+            "logistics-service",
+            "TRANSFER",
+            transferId,
+            1,
+            payload.formatted(transferId, "CANCELLING", WAREHOUSE_A, WAREHOUSE_B),
+            true);
+    DossierValidatedEvent cancelling = validate(topic, 21, transferId, cancellationEnvelope);
+    DossierValidatedEvent redelivery = validate(topic, 22, transferId, cancellationEnvelope);
+    long activityCount = activities.count();
+    long outboundCount = outbox.count();
+    long deadLetterCount = deadLetters.count();
+    long sourceFactCount = sourceFacts.count();
+
+    assertThat(processor.process(created)).isEqualTo(DossierInboxProcessor.Outcome.PROCESSED);
+    assertThat(processor.process(cancelling)).isEqualTo(DossierInboxProcessor.Outcome.PROCESSED);
+    assertThat(processor.process(redelivery)).isEqualTo(DossierInboxProcessor.Outcome.DUPLICATE);
+    entityManager.flush();
+    entityManager.clear();
+
+    assertThat(inboxes.findById(cancelling.eventId()).orElseThrow().getDecision())
+        .isEqualTo(DossierInboxDecision.PROCESSED);
+    assertThat(sourceFacts.count()).isEqualTo(sourceFactCount + 2);
+    DossierSourceFact source = sourceFacts.findByEventId(cancelling.eventId()).orElseThrow();
+    assertThat(source.getSourceTopic()).isEqualTo(topic);
+    assertThat(source.getEventType()).isEqualTo("logistics.transfer.cancellation-started.v1");
+    assertThat(source.getAggregateId()).isEqualTo(transferId);
+    assertThat(source.getAggregateVersion()).isEqualTo(1);
+    assertThat(source.getSourceOffset()).isEqualTo(21);
+    assertThat(source.getSubjectCabinId()).isNull();
+    assertThat(source.getSubjectWarehouseId()).isEqualTo(WAREHOUSE_A);
+    assertThat(activities.count()).isEqualTo(activityCount);
+    assertThat(outbox.count()).isEqualTo(outboundCount);
+    assertThat(deadLetters.count()).isEqualTo(deadLetterCount);
+    assertThat(
+            unlinked.findAll().stream()
+                .filter(value -> value.getSourceEventId().equals(cancelling.eventId())))
+        .singleElement()
+        .satisfies(
+            value -> {
+              assertThat(value.getReason()).isEqualTo(DossierUnlinkedReason.SUBJECT_NOT_PROVIDED);
+              assertThat(value.getSubjectCabinId()).isNull();
+            });
+    var checkpoint =
+        aggregates
+            .findByConsumerGroupAndProducerAndSourceTopicAndAggregateTypeAndAggregateId(
+                "dossier-projection-v1", DossierProducer.LOGISTICS, topic, "TRANSFER", transferId)
+            .orElseThrow();
+    assertThat(checkpoint.getAppliedVersion()).isEqualTo(1);
+    assertThat(checkpoint.isBlocked()).isFalse();
+    assertThat(
+            partitions
+                .findByConsumerGroupAndSourceTopicAndSourcePartition(
+                    "dossier-projection-v1", topic, 0)
+                .orElseThrow()
+                .getLastAcceptedOffset())
+        .isEqualTo(22);
+  }
+
+  @Test
   void gapRecoveryDrainsInOrderWhileUnrelatedAggregatesAndOldRedeliveryRemainSafe() {
     UUID cabin = UUID.fromString("30000000-0000-0000-0000-000000000001");
     UUID unrelated = UUID.fromString("30000000-0000-0000-0000-000000000002");

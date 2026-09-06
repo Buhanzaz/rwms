@@ -2,6 +2,16 @@
 
 Status: Confirmed repository layout as of 2026-08-12.
 
+The asset-owned internal maintenance rental-item snapshot requires the canonical
+`number` (a non-null string of 1–128 characters). Owner HTTP serialization and the
+maintenance consumer retain that same value.
+
+The transfer fact `logistics.transfer.cancellation-started.v1` is registered for
+publication and accepted by the canonical logistics schema/catalog and dossier
+routing. It carries `TRANSFER/CANCELLING` and destination identity, uses the
+aggregate ID as the Kafka key, and remains document-level journal evidence with
+ordering and deduplication; it does not identify a cabin for an activity entry.
+
 ## Canonical Locations
 
 - HTTP: [`contracts/openapi/`](../../contracts/openapi/)

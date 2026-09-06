@@ -1039,6 +1039,14 @@ Flyway migrations under `src/main/resources/db/migration/` own the logistics sch
 `ddl-auto=validate`; service databases remain isolated and cross-service foreign keys/JPA entities
 are forbidden.
 
+The committed transfer transition to `CANCELLING` publishes
+`logistics.transfer.cancellation-started.v1` through the existing transactional outbox on
+`rwms.logistics.transfer.v1`, keyed by the document aggregate ID. Its registered payload validator
+and [canonical event schema](../../contracts/events/logistics/logistics-events-v1.schema.json)
+require a `TRANSFER` document in `CANCELLING` state and the existing seven sanitized document
+fields. Dossier accepts the fact as document journal evidence with normal event deduplication and
+aggregate ordering; the payload does not identify a cabin and creates no cabin activity.
+
 Migration
 [`V42__clients_order_delivery_and_acceptable_dates.sql`](src/main/resources/db/migration/V42__clients_order_delivery_and_acceptable_dates.sql)
 adds contact/manager/comment/source client fields, initial order delivery facts, the predecessor

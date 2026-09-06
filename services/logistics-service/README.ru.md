@@ -1071,6 +1071,14 @@ Flyway migrations в `src/main/resources/db/migration/` владеют logistics
 `ddl-auto=validate`; service databases изолированы, а cross-service foreign keys/JPA entities
 запрещены.
 
+Зафиксированный переход перемещения в `CANCELLING` публикует
+`logistics.transfer.cancellation-started.v1` через существующий transactional outbox в
+`rwms.logistics.transfer.v1` с ID агрегата документа в качестве ключа. Зарегистрированный валидатор
+payload и [каноническая схема события](../../contracts/events/logistics/logistics-events-v1.schema.json)
+требуют документ `TRANSFER` в состоянии `CANCELLING` и существующие семь безопасных полей документа.
+Dossier принимает факт в журнал документов с обычной дедупликацией событий и порядком версий
+агрегата; payload не содержит идентификатор бытовки и не создаёт её activity.
+
 Migration
 [`V42__clients_order_delivery_and_acceptable_dates.sql`](src/main/resources/db/migration/V42__clients_order_delivery_and_acceptable_dates.sql)
 добавляет client fields contact/manager/comment/source, исходные order delivery facts, предшествующую

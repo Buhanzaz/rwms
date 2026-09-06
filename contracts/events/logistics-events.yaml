@@ -36,6 +36,7 @@ channels:
       transferConfirmedV1: { $ref: '#/components/messages/TransferConfirmedV1' }
       transferDepartedV1: { $ref: '#/components/messages/TransferDepartedV1' }
       transferLineArrivedV1: { $ref: '#/components/messages/TransferLineArrivedV1' }
+      transferCancellationStartedV1: { $ref: '#/components/messages/TransferCancellationStartedV1' }
       transferConflictedV1: { $ref: '#/components/messages/TransferConflictedV1' }
   rentalInquiryFacts:
     address: rwms.logistics.rental-inquiry.events.v1
@@ -160,6 +161,13 @@ components:
     TransferLineArrivedV1:
       name: logistics.transfer.line-arrived.v1
       payload: { $ref: './logistics/logistics-events-v1.schema.json' }
+    TransferCancellationStartedV1:
+      name: logistics.transfer.cancellation-started.v1
+      description: >-
+        Committed TRANSFER transition to CANCELLING. The document-level fact has no cabin
+        identity; dossier journals it without projecting a cabin activity.
+      payload: { $ref: './logistics/logistics-events-v1.schema.json' }
+      x-rwms-record-key: aggregateId
     TransferConflictedV1:
       name: logistics.transfer.conflicted.v1
       payload: { $ref: './logistics/logistics-events-v1.schema.json' }

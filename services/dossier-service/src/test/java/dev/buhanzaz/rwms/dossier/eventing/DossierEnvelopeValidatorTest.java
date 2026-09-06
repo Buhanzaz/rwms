@@ -7,13 +7,17 @@ import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 class DossierEnvelopeValidatorTest {
   private static final UUID EVENT_ID = UUID.fromString("10000000-0000-0000-0000-000000000001");
   private static final UUID CABIN_ID = UUID.fromString("20000000-0000-0000-0000-000000000001");
   private static final UUID WAREHOUSE_ID = UUID.fromString("30000000-0000-0000-0000-000000000001");
   private static final UUID REPAIR_ID = UUID.fromString("40000000-0000-0000-0000-000000000001");
+  private static final UUID TRANSFER_ID = UUID.fromString("40000000-0000-0000-0000-000000000016");
   private final DossierEnvelopeValidator validator =
       new DossierEnvelopeValidator(new ObjectMapper(), new DossierProducerSchemaValidator());
 
@@ -108,6 +112,63 @@ class DossierEnvelopeValidatorTest {
       assertThat(event.cabinId()).isNull();
       assertThat(event.aggregateId()).isEqualTo(transferId);
     }
+  }
+
+  @Test
+  void acceptsTransferCancellationStartedAsDocumentJournalEvidence() {
+    DossierValidatedEvent event =
+        validator.validate(
+            "rwms.logistics.transfer.v1",
+            0,
+            3,
+            TRANSFER_ID.toString().getBytes(StandardCharsets.UTF_8),
+            transferCancellationFact().getBytes(StandardCharsets.UTF_8));
+
+    assertThat(event.eventType()).isEqualTo("logistics.transfer.cancellation-started.v1");
+    assertThat(event.aggregateType()).isEqualTo("TRANSFER");
+    assertThat(event.aggregateId()).isEqualTo(TRANSFER_ID);
+    assertThat(event.payload().path("state").asText()).isEqualTo("CANCELLING");
+    assertThat(event.warehouseId()).isEqualTo(WAREHOUSE_ID);
+    assertThat(event.activityCode()).isNull();
+    assertThat(event.subjectCapable()).isFalse();
+    assertThat(event.cabinId()).isNull();
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "missingDocumentId",
+        "wrongDocumentId",
+        "wrongDocumentType",
+        "wrongAggregateType",
+        "wrongState",
+        "missingDestination",
+        "extraField",
+        "wrongKey"
+      })
+  void rejectsMalformedOrMismatchedTransferCancellationFacts(String mutation) {
+    ObjectMapper mapper = new ObjectMapper();
+    ObjectNode root = (ObjectNode) mapper.readTree(transferCancellationFact());
+    ObjectNode payload = (ObjectNode) root.get("payload");
+    switch (mutation) {
+      case "missingDocumentId" -> payload.remove("documentId");
+      case "wrongDocumentId" -> payload.put("documentId", UUID.randomUUID().toString());
+      case "wrongDocumentType" -> payload.put("documentType", "SHIPMENT");
+      case "wrongAggregateType" -> root.put("aggregateType", "SHIPMENT");
+      case "wrongState" -> payload.put("state", "CANCELLED");
+      case "missingDestination" -> payload.putNull("destinationWarehouseId");
+      case "extraField" -> payload.put("unexpectedDetail", "extra");
+      case "wrongKey" -> {}
+      default -> throw new IllegalArgumentException(mutation);
+    }
+    String key =
+        "wrongKey".equals(mutation) ? UUID.randomUUID().toString() : TRANSFER_ID.toString();
+
+    assertThatThrownBy(
+            () ->
+                validator.validate(
+                    "rwms.logistics.transfer.v1", 0, 3, key, mapper.writeValueAsBytes(root)))
+        .isInstanceOf(DossierValidationException.class);
   }
 
   @Test
@@ -453,6 +514,19 @@ class DossierEnvelopeValidatorTest {
         {"rentalItemId":"%s","warehouseId":"%s","status":"AVAILABLE","numberSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
         """
             .formatted(CABIN_ID, WAREHOUSE_ID));
+  }
+
+  private static String transferCancellationFact() {
+    return envelope(
+            "logistics.transfer.cancellation-started.v1",
+            "logistics-service",
+            "TRANSFER",
+            TRANSFER_ID,
+            """
+            {"documentId":"%s","documentType":"TRANSFER","state":"CANCELLING","warehouseId":"%s","destinationWarehouseId":"30000000-0000-0000-0000-000000000002","lineCount":1,"resultCode":null}
+            """
+                .formatted(TRANSFER_ID, WAREHOUSE_ID))
+        .replace("\"occurredAt\":null", "\"occurredAt\":\"2026-07-18T00:00:00Z\"");
   }
 
   private static String repairFact(String eventType) {
