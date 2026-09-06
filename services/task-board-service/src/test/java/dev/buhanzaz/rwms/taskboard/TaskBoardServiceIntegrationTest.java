@@ -4139,6 +4139,107 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
+  void preStartRouteReplacementRejectsQueuesWithAnIncompatibleSavedSourcePurpose() {
+    var maintenanceQueue =
+        QueueRegistryTestFixtures.create(
+            registry,
+            jdbc,
+            W2,
+            queue(
+                "Replacement maintenance route",
+                QueueType.REPAIR,
+                QueuePurpose.GENERAL,
+                List.of()));
+    var driverQueue =
+        QueueRegistryTestFixtures.create(
+            registry,
+            jdbc,
+            W2,
+            queue(
+                "Replacement driver route",
+                QueueType.MOVEMENT,
+                QueuePurpose.LOGISTICS_DRIVER,
+                List.of()));
+    UUID maintenanceExternalId = UUID.randomUUID();
+    UUID maintenanceSourceId = UUID.randomUUID();
+    BoardTaskRegistrationDto maintenance =
+        board.registerExternalTask(
+            "maintenance-service",
+            new RegisterExternalTaskRequest(
+                W2,
+                maintenanceExternalId,
+                "maintenance route",
+                null,
+                null,
+                null,
+                null,
+                List.of(new RouteStepRequest(maintenanceQueue.definitionId(), "repair", null)),
+                null,
+                null,
+                new TaskSourceReferenceDto(TaskSourceType.MAINTENANCE_REPAIR, maintenanceSourceId),
+                TaskLane.SCHEDULED));
+
+    long maintenanceOutboxBefore = kafkaOutboxCount(null);
+    assertThatThrownBy(
+            () ->
+                board.updateExternalTaskBeforeStart(
+                    "maintenance-service",
+                    maintenanceExternalId,
+                    new PreStartUpdateTaskRequest(
+                        maintenance.taskVersion(),
+                        "maintenance replacement",
+                        null,
+                        null,
+                        null,
+                        null,
+                        List.of(new RouteStepRequest(driverQueue.definitionId(), "driver", null)))))
+        .isInstanceOf(ConflictException.class);
+    assertThat(kafkaOutboxCount(null)).isEqualTo(maintenanceOutboxBefore);
+    BoardTaskRegistrationDto maintenanceReplay =
+        board.updateExternalTaskBeforeStart(
+            "maintenance-service",
+            maintenanceExternalId,
+            new PreStartUpdateTaskRequest(
+                maintenance.taskVersion(),
+                "maintenance route",
+                null,
+                null,
+                null,
+                null,
+                List.of(new RouteStepRequest(maintenanceQueue.definitionId(), "repair", null))));
+    assertThat(maintenanceReplay.taskVersion()).isEqualTo(maintenance.taskVersion());
+    assertThat(maintenanceReplay.route()).isEqualTo(maintenance.route());
+
+    UUID logisticsExternalId = UUID.randomUUID();
+    RegisterExternalTaskRequest logisticsRequest =
+        driverRegistration(W2, driverQueue.definitionId(), logisticsExternalId, null, null);
+    BoardTaskRegistrationDto logistics =
+        board.registerExternalTask("logistics-service", logisticsRequest);
+    long logisticsOutboxBefore = kafkaOutboxCount(null);
+    assertThatThrownBy(
+            () ->
+                board.updateExternalTaskBeforeStart(
+                    "logistics-service",
+                    logisticsExternalId,
+                    new PreStartUpdateTaskRequest(
+                        logistics.taskVersion(),
+                        "logistics replacement",
+                        null,
+                        null,
+                        null,
+                        null,
+                        List.of(
+                            new RouteStepRequest(
+                                maintenanceQueue.definitionId(), "repair", null)))))
+        .isInstanceOf(ConflictException.class);
+    assertThat(kafkaOutboxCount(null)).isEqualTo(logisticsOutboxBefore);
+    BoardTaskRegistrationDto logisticsUnchanged =
+        board.registerExternalTask("logistics-service", logisticsRequest);
+    assertThat(logisticsUnchanged.taskVersion()).isEqualTo(logistics.taskVersion());
+    assertThat(logisticsUnchanged.route()).isEqualTo(logistics.route());
+  }
+
+  @Test
   void maintenanceRegistrationAndPreStartUpdateCanonicalizePhasesAndKeepUnknownTailOrder() {
     var legacyBefore = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("legacy-before", QueueType.REPAIR, List.of()));
     var ses = QueueRegistryTestFixtures.create(registry, jdbc, W1, queue("сэс и санитария", QueueType.REPAIR, List.of()));

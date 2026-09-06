@@ -531,6 +531,15 @@ class TaskBoardExternalMutationService {
     List<QueueEntry> oldEntries = entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId());
     List<ResolvedRouteStep> routeSteps =
         resolveRoute(warehouseId, request.route(), true, sourceClientId);
+    TaskSyncSource source =
+        taskSyncSources
+            .findById(task.getId())
+            .orElseThrow(() -> new NotFoundException("Задача не найдена"));
+    requireRoutePurpose(
+        routeSteps,
+        source.getSourceType() == null
+            ? null
+            : new TaskSourceReferenceDto(source.getSourceType(), source.getSourceId()));
     CreateBoardTaskRequest replacement =
         new CreateBoardTaskRequest(
             externalTaskId,
