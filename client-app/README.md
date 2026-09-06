@@ -205,7 +205,14 @@ signs on a full-screen bounded vector canvas and accepts each cabin separately.
 An arrived cabin can be reported before or after acceptance with a category and
 description. CameraX captures sequential photos and silent MP4 video into
 app-private cache without a system confirmation screen; the document picker
-can import supported gallery images/videos, and a mini-gallery supports removal.
+imports supported gallery images/videos on a cancellable IO job with visible progress.
+The form opens fully and scrolls to keep controls reachable in small windows.
+It accepts at most 20 attachments of up to 200 MiB each and disables new
+capture, selection and submission during import. Cancellation retains completed
+drafts; closing the form removes its drafts and cancels the unfinished copy.
+A blocked provider read is cleaned up when that read returns. Removing a draft
+deletes its private file; a failed deletion stays visible for retry. Removal is
+disabled while the report uploads.
 Evidence is uploaded to the exact `LOGISTICS_SHIPMENT` line, finalized, polled
 until `READY`, and only then referenced by the immutable problem command.
 Acceptance and problem retries reuse their durable request identity after process death; an

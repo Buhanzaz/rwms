@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.CameraAlt
@@ -47,6 +48,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -56,6 +58,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -80,6 +83,14 @@ import dev.buhanzaz.rwms.client.data.CustomerSignaturePoint
 import dev.buhanzaz.rwms.client.data.CustomerSignatureStroke
 import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Full-screen bounded vector-signature surface for accepting one arrived cabin. */
 @Composable
@@ -200,19 +211,51 @@ fun CustomerProblemDialog(
     var description by remember { mutableStateOf("") }
     var showCamera by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    val importScope = rememberCoroutineScope()
+    var importJob by remember { mutableStateOf<Job?>(null) }
+    var importTotal by remember { mutableStateOf(0) }
+    var importCompleted by remember { mutableStateOf(0) }
+    var disposed by remember { mutableStateOf(false) }
+    val importing = importTotal > 0
     DisposableEffect(Unit) {
-        onDispose { evidence.forEach { draft -> draft.file.delete() } }
-    }
-    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        uris.take((20 - evidence.size).coerceAtLeast(0)).forEach { uri ->
-            runCatching { importEvidenceFile(context, uri) }
-                .onSuccess(evidence::add)
-                .onFailure { error = "Не удалось импортировать файл" }
+        onDispose {
+            disposed = true
+            importJob?.cancel()
+            evidence.forEach { draft -> draft.file.delete() }
         }
     }
-    ModalBottomSheet(onDismissRequest = { if (!busy) onDismiss() }) {
+    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (!busy && importTotal == 0 && !disposed) {
+            val selected = uris.take((20 - evidence.size).coerceAtLeast(0))
+            if (selected.isNotEmpty()) {
+                importTotal = selected.size
+                importCompleted = 0
+                error = null
+                importJob = importScope.launch {
+                    try {
+                        for (uri in selected) {
+                            try {
+                                evidence += importEvidenceFile(context, uri)
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                error = "Не удалось импортировать файл"
+                            }
+                            importCompleted += 1
+                        }
+                    } finally {
+                        importTotal = 0
+                    }
+                }
+            }
+        }
+    }
+    ModalBottomSheet(
+        onDismissRequest = { if (!busy) onDismiss() },
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
         Column(
-            Modifier.fillMaxWidth().imePadding().padding(20.dp),
+            Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState()).padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text("Проблема с бытовкой № $accountingNo", style = MaterialTheme.typography.headlineSmall)
@@ -231,11 +274,17 @@ fun CustomerProblemDialog(
                 singleLine = false,
                 modifier = Modifier.fillMaxWidth(),
             )
-            EvidenceMiniGallery(evidence) { evidence.remove(it) }
+            EvidenceMiniGallery(evidence, enabled = !busy) { draft ->
+                if (!draft.file.exists() || draft.file.delete()) {
+                    evidence.remove(draft)
+                } else {
+                    error = "Не удалось удалить файл. Повторите попытку"
+                }
+            }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = { showCamera = true },
-                    enabled = evidence.size < 20 && !busy,
+                    enabled = evidence.size < 20 && !busy && !importing,
                     modifier = Modifier.weight(1f),
                 ) {
                     Icon(Icons.Default.CameraAlt, contentDescription = null)
@@ -244,7 +293,7 @@ fun CustomerProblemDialog(
                 }
                 OutlinedButton(
                     onClick = { galleryLauncher.launch(arrayOf("image/*", "video/*")) },
-                    enabled = evidence.size < 20 && !busy,
+                    enabled = evidence.size < 20 && !busy && !importing,
                     modifier = Modifier.weight(1f),
                 ) {
                     Icon(Icons.Default.AddPhotoAlternate, contentDescription = null)
@@ -252,10 +301,17 @@ fun CustomerProblemDialog(
                     Text("Галерея")
                 }
             }
+            if (importing) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Text("Импорт $importCompleted из $importTotal")
+                    TextButton(onClick = { importJob?.cancel() }) { Text("Отменить импорт") }
+                }
+            }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             Button(
                 onClick = { onSubmit(category, description.trim(), evidence.toList()) },
-                enabled = description.isNotBlank() && !busy,
+                enabled = description.isNotBlank() && !busy && !importing,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) else Text("Отправить")
@@ -266,7 +322,7 @@ fun CustomerProblemDialog(
         CustomerEvidenceCamera(
             remaining = 20 - evidence.size,
             onClose = { showCamera = false },
-            onEvidence = { evidence += it },
+            onEvidence = { if (disposed) it.file.delete() else evidence += it },
             onError = { error = it },
         )
     }
@@ -283,6 +339,7 @@ private fun ProblemCategory(value: String, label: String, selected: String, onSe
 @Composable
 private fun EvidenceMiniGallery(
     evidence: List<CustomerEvidenceFile>,
+    enabled: Boolean,
     onRemove: (CustomerEvidenceFile) -> Unit,
 ) {
     if (evidence.isEmpty()) {
@@ -305,6 +362,7 @@ private fun EvidenceMiniGallery(
                     }
                     IconButton(
                         onClick = { onRemove(item) },
+                        enabled = enabled,
                         modifier = Modifier.align(Alignment.TopEnd).background(Color.White.copy(alpha = 0.8f)),
                     ) { Icon(Icons.Default.Delete, contentDescription = "Удалить ${item.fileName}") }
                 }
@@ -471,38 +529,45 @@ private fun newEvidenceFile(cacheDir: File, extension: String): File {
     return File(directory, "${UUID.randomUUID()}.$extension")
 }
 
-private fun importEvidenceFile(context: android.content.Context, uri: android.net.Uri): CustomerEvidenceFile {
-    val contentType = context.contentResolver.getType(uri)?.takeIf {
-        it in SUPPORTED_EVIDENCE_CONTENT_TYPES
-    } ?: throw IllegalArgumentException("Unsupported evidence content type")
-    val extension = when (contentType) {
-        "image/png" -> "png"
-        "image/webp" -> "webp"
-        "video/webm" -> "webm"
-        "video/mp4" -> "mp4"
-        else -> "jpg"
-    }
-    val file = newEvidenceFile(context.cacheDir, extension)
+private suspend fun importEvidenceFile(context: android.content.Context, uri: android.net.Uri): CustomerEvidenceFile {
+    var unfinishedFile: File? = null
     try {
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            file.outputStream().buffered().use { output ->
-                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                var total = 0L
-                while (true) {
-                    val count = input.read(buffer)
-                    if (count < 0) break
-                    total += count
-                    require(total <= MAX_EVIDENCE_BYTES) { "Evidence is too large" }
-                    output.write(buffer, 0, count)
-                }
+        return withContext(Dispatchers.IO) {
+            val contentType = context.contentResolver.getType(uri)?.takeIf {
+                it in SUPPORTED_EVIDENCE_CONTENT_TYPES
+            } ?: throw IllegalArgumentException("Unsupported evidence content type")
+            val extension = when (contentType) {
+                "image/png" -> "png"
+                "image/webp" -> "webp"
+                "video/webm" -> "webm"
+                "video/mp4" -> "mp4"
+                else -> "jpg"
             }
-        } ?: throw IllegalArgumentException("Cannot open evidence")
-        require(file.length() in 1..MAX_EVIDENCE_BYTES) { "Evidence is empty or too large" }
+            val file = newEvidenceFile(context.cacheDir, extension)
+            unfinishedFile = file
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                file.outputStream().buffered().use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    var total = 0L
+                    while (true) {
+                        currentCoroutineContext().ensureActive()
+                        val count = input.read(buffer)
+                        currentCoroutineContext().ensureActive()
+                        if (count < 0) break
+                        total += count
+                        require(total <= MAX_EVIDENCE_BYTES) { "Evidence is too large" }
+                        output.write(buffer, 0, count)
+                    }
+                }
+            } ?: throw IllegalArgumentException("Cannot open evidence")
+            require(file.length() in 1..MAX_EVIDENCE_BYTES) { "Evidence is empty or too large" }
+            CustomerEvidenceFile(UUID.randomUUID().toString(), file, file.name, contentType)
+        }
     } catch (failure: Throwable) {
-        file.delete()
+        // Also covers cancellation while dispatching an already copied file back to the UI.
+        withContext(NonCancellable + Dispatchers.IO) { unfinishedFile?.delete() }
         throw failure
     }
-    return CustomerEvidenceFile(UUID.randomUUID().toString(), file, file.name, contentType)
 }
 
 private const val MAX_EVIDENCE_BYTES = 200L * 1024L * 1024L
