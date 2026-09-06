@@ -19,13 +19,18 @@ stored registration and previously issued tokens cannot silently retain an
 older permission set.
 
 Customer self-registration is an auth-owned anonymous but CSRF-protected
-command. It serializes the normalized login before BCrypt and atomically creates
+command. It serializes the normalized login before password hashing and atomically creates
 one active `USER/CUSTOMER` identity plus its credential, projection, event and
 outbox fact, with no warehouse grant or manager entitlement. The public PKCE
 client `rwms-customer-android` can mint only `customer.rental`; a CUSTOMER token
 cannot be minted through panel/manager clients, and a non-customer cannot use
 the customer client. This identity is separate from the logistics customer
 profile created after login.
+
+New human and confidential-client credentials use `pbkdf2@SpringSecurity_v5_8`.
+Previously stored factory formats, including bcrypt, remain verifiable. This
+preserves the canonical password maxima of 128 customer characters and 200
+administrator/worker characters without rejecting valid Unicode by its UTF-8 byte length.
 
 CSRF protects that anonymous command from cross-site submission; it is not an
 abuse quota. Because the public gateway is stateless and owns no request-ledger
