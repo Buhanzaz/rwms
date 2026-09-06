@@ -956,7 +956,11 @@ class WarehouseWorkspaceRead(ApiModel):
 class RwmsApiModel(BaseModel):
     """Strict camel-case RWMS service contract model."""
 
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+        hide_input_in_errors=True,
+    )
 
 
 class RwmsPlanningDateOption(RwmsApiModel):

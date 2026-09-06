@@ -12,7 +12,7 @@ from time import monotonic
 from uuid import UUID
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.config import Settings
 from app.errors import ApiError
@@ -47,11 +47,35 @@ logger = logging.getLogger(__name__)
 class _TokenResponse(BaseModel):
     """Minimal OAuth client-credentials response retained only in memory."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
 
     access_token: str = Field(min_length=1)
     token_type: str = "Bearer"
     expires_in: float = Field(gt=0)
+
+
+def _safe_validation_diagnostics(error: ValidationError) -> dict[str, object]:
+    """Return bounded validation metadata without preserving upstream values or keys."""
+
+    diagnostics: list[dict[str, object]] = []
+    for item in error.errors(include_context=False, include_input=False, include_url=False)[:10]:
+        location = item.get("loc", ())
+        diagnostics.append(
+            {
+                "location": [
+                    "index" if isinstance(part, int) else "field" for part in location[:8]
+                ],
+                "type": item.get("type", "validation_error"),
+            }
+        )
+    return {"validation_errors": diagnostics}
+
+
+def _invalid_upstream_response(code: str, detail: str, error: ValueError) -> ApiError:
+    """Translate malformed upstream input without retaining its body or exception chain."""
+
+    extra = _safe_validation_diagnostics(error) if isinstance(error, ValidationError) else None
+    return ApiError(502, code, detail, extra=extra)
 
 
 class RwmsPlanningClient:
@@ -664,11 +688,11 @@ class RwmsPlanningClient:
         try:
             return _TokenResponse.model_validate(response.json())
         except ValueError as exc:
-            raise ApiError(
-                502,
+            raise _invalid_upstream_response(
                 "RWMS_TOKEN_RESPONSE_INVALID",
                 "RWMS OAuth token response is invalid",
-            ) from exc
+                exc,
+            ) from None
 
     @staticmethod
     def _validate_response[ResponseModel: BaseModel](
@@ -681,7 +705,11 @@ class RwmsPlanningClient:
         try:
             return model.model_validate(response.json())
         except ValueError as exc:
-            raise ApiError(502, code, "RWMS logistics-service response is invalid") from exc
+            raise _invalid_upstream_response(
+                code,
+                "RWMS logistics-service response is invalid",
+                exc,
+            ) from None
 
     @staticmethod
     def _validate_response_list[ResponseModel: BaseModel](
@@ -697,7 +725,11 @@ class RwmsPlanningClient:
                 raise ValueError("response must be a JSON array")
             return [model.model_validate(item) for item in payload]
         except ValueError as exc:
-            raise ApiError(502, code, "RWMS logistics-service response is invalid") from exc
+            raise _invalid_upstream_response(
+                code,
+                "RWMS logistics-service response is invalid",
+                exc,
+            ) from None
 
 
 @lru_cache(maxsize=8)

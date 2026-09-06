@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import traceback
 from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
@@ -292,6 +293,90 @@ def test_rwms_planning_request_rejects_contact_name_over_the_canonical_limit() -
     payload = _source_request().model_dump(mode="json", by_alias=True)
     with pytest.raises(ValueError, match="contactName"):
         RwmsPlanningRequest.model_validate({**payload, "contactName": "Ж" * 513})
+
+
+@pytest.mark.asyncio
+async def test_rwms_client_redacts_invalid_feed_values_from_formatted_error() -> None:
+    """Reject malformed upstream feed values without preserving customer input in diagnostics."""
+
+    contact_marker = "CONTACT_SECRET_MARKER"
+    address_marker = "ADDRESS_SECRET_MARKER"
+    warehouse_id = uuid4()
+    request_payload = _source_request().model_dump(mode="json", by_alias=True)
+    request_payload.update(
+        {
+            "contactName": contact_marker * 40,
+            "address": {"untrusted": address_marker},
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "auth.internal":
+            return httpx.Response(
+                200,
+                json={"access_token": "opaque-token", "expires_in": 300},
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            json={
+                "warehouseId": str(warehouse_id),
+                "timeZone": "Europe/Moscow",
+                "generatedAt": "2026-08-28T08:00:00Z",
+                "requests": [request_payload],
+            },
+            request=request,
+        )
+
+    client = RwmsPlanningClient(_enabled_settings(), transport=httpx.MockTransport(handler))
+    with pytest.raises(ApiError) as failure:
+        await client.get_planning_requests(
+            warehouse_id=warehouse_id,
+            date_from=date(2026, 8, 30),
+            date_to=date(2026, 8, 30),
+        )
+
+    error = failure.value
+    rendered = "".join(traceback.format_exception(error))
+    assert error.code == "RWMS_PLANNING_RESPONSE_INVALID"
+    assert error.__suppress_context__ is True
+    assert contact_marker not in rendered
+    assert address_marker not in rendered
+    assert contact_marker not in repr(error.extra)
+    assert address_marker not in repr(error.extra)
+    assert error.extra["validation_errors"] == [
+        {"location": ["field", "index", "field"], "type": "string_too_long"},
+        {"location": ["field", "index", "field"], "type": "string_type"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rwms_client_redacts_malformed_oauth_token_from_formatted_error() -> None:
+    """Reject malformed OAuth data without retaining a token-shaped value in the error chain."""
+
+    token_marker = "OAUTH_TOKEN_SECRET_MARKER"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "auth.internal"
+        return httpx.Response(
+            200,
+            json={"access_token": {"untrusted": token_marker}, "expires_in": 300},
+            request=request,
+        )
+
+    client = RwmsPlanningClient(_enabled_settings(), transport=httpx.MockTransport(handler))
+    with pytest.raises(ApiError) as failure:
+        await client.list_warehouses()
+
+    error = failure.value
+    rendered = "".join(traceback.format_exception(error))
+    assert error.code == "RWMS_TOKEN_RESPONSE_INVALID"
+    assert error.__suppress_context__ is True
+    assert token_marker not in rendered
+    assert token_marker not in repr(error.extra)
+    assert error.extra["validation_errors"] == [
+        {"location": ["field"], "type": "string_type"},
+    ]
 
 
 @pytest.mark.asyncio

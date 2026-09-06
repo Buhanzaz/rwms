@@ -292,6 +292,11 @@ client-credentials token with the registered `client_secret_basic` method and
 calls only the versioned planning API owned by `services/logistics-service`;
 the browser and token form body do not receive the service secret.
 
+Malformed upstream feeds and OAuth responses produce stable errors with bounded
+validation metadata and no rendered input values or chained validation traceback.
+Automatic ingestion logs expected API rejections with only the error code and
+warehouse ID, then rolls back that warehouse's transaction.
+
 ## Domain model
 
 The persisted model contains automatically reconciled canonical RWMS warehouses and their

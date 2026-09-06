@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from app.errors import ApiError
 from app.schemas.domain import RwmsSyncResult
 from app.services import demand_ingestion_worker as worker
 from app.services.plans import PlannerFacade
@@ -84,6 +86,76 @@ async def test_batch_skips_all_work_when_another_instance_holds_fence(
         fence_acquired=False,
     )
     session_factory.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_expected_upstream_rejection_logs_only_stable_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Expected upstream validation failures never render customer or OAuth-like values."""
+
+    @asynccontextmanager
+    async def acquired_fence(database_engine: AsyncEngine) -> Any:
+        del database_engine
+        yield True
+
+    contact_marker = "CONTACT_SECRET_MARKER"
+    token_marker = "OAUTH_TOKEN_SECRET_MARKER"
+    warehouse_id = uuid4()
+    warehouse = SimpleNamespace(
+        id=warehouse_id,
+        external_warehouse_id=uuid4(),
+        routing_ready=True,
+        timezone="Europe/Moscow",
+    )
+    directory_session = _session()
+    selection_session = _session()
+    ingestion_session = _session()
+    directory_session.commit = AsyncMock()
+    selection_session.scalars = AsyncMock(return_value=(warehouse_id,))
+    ingestion_session.get = AsyncMock(return_value=warehouse)
+    ingestion_session.rollback = AsyncMock()
+    sessions = _SessionFactory([directory_session, selection_session, ingestion_session])
+
+    monkeypatch.setattr(worker, "demand_ingestion_fence", acquired_fence)
+    monkeypatch.setattr(worker, "refresh_warehouse_directory", AsyncMock())
+    monkeypatch.setattr(
+        worker,
+        "sync_warehouse_requests",
+        AsyncMock(
+            side_effect=ApiError(
+                502,
+                "RWMS_PLANNING_RESPONSE_INVALID",
+                f"{contact_marker} {token_marker}",
+            )
+        ),
+    )
+    caplog.set_level(logging.WARNING, logger=worker.__name__)
+
+    result = await worker.run_demand_ingestion_batch(
+        cast(Any, MagicMock()),
+        cast(Any, SimpleNamespace(forward=AsyncMock())),
+        cast(PlannerFacade, MagicMock()),
+        cursor=None,
+        batch_size=1,
+        database_engine=cast(AsyncEngine, MagicMock()),
+        session_factory=cast(async_sessionmaker[AsyncSession], sessions),
+    )
+
+    assert result.processed == 0
+    ingestion_session.rollback.assert_awaited_once()
+    records = [
+        record
+        for record in caplog.records
+        if record.name == worker.__name__ and record.error_code == "RWMS_PLANNING_RESPONSE_INVALID"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.warehouse_id == str(warehouse_id)
+    assert record.exc_info is None
+    assert contact_marker not in caplog.text
+    assert token_marker not in caplog.text
 
 
 @pytest.mark.asyncio

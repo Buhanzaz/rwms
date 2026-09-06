@@ -17,6 +17,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.db import async_session_factory, engine
+from app.errors import ApiError
 from app.integrations.rwms import RwmsPlanningClient
 from app.integrations.rwms_sync import (
     refresh_warehouse_directory,
@@ -252,6 +253,16 @@ async def run_demand_ingestion_batch(
                     processed += 1
                 except asyncio.CancelledError:
                     raise
+                except ApiError as exc:
+                    await ingestion_session.rollback()
+                    logger.warning(
+                        "Automatic RWMS demand ingestion rejected upstream input code=%s",
+                        exc.code,
+                        extra={
+                            "warehouse_id": str(warehouse_id),
+                            "error_code": exc.code,
+                        },
+                    )
                 except Exception:
                     await ingestion_session.rollback()
                     logger.exception(
