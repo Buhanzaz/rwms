@@ -195,7 +195,8 @@ export type MaintenanceTaskSyncSnapshot = {
   externalTaskId: string
   taskBoardEntryId: string | null
   taskBoardRegistrationVersion: number | null
-  generationState: "PENDING_GENERATION" | "GENERATED" | "FAILED"
+  generationState:
+    "PENDING_GENERATION" | "GENERATED" | "NOT_REQUIRED" | "FAILED"
   delivery: MaintenanceDeliverySnapshot
 }
 

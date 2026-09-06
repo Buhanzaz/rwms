@@ -540,6 +540,42 @@ describe("maintenance repair tasks adapter", () => {
     )
   })
 
+  it("reads external capital work without requiring task-board generation", async () => {
+    const capitalRepair = repair()
+    capitalRepair.origin = "INVENTORY"
+    capitalRepair.executionState = "QUEUED"
+    capitalRepair.complexity.type = "CAPITAL"
+    capitalRepair.complexity.name = "Капитальный ремонт"
+    const stage = capitalRepair.plan.stages[0]
+    stage.state = "QUEUED"
+    stage.taskSync.generationState = "NOT_REQUIRED"
+    stage.taskSync.taskBoardEntryId = null
+    stage.taskSync.taskBoardRegistrationVersion = null
+    lifecycle.get.mockResolvedValue(capitalRepair)
+    getBoard.mockResolvedValue({
+      ...board,
+      queues: [],
+      totalEntries: 0,
+      realEntries: 0,
+    })
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    const task = await adapter.getById(repairId, warehouseId)
+
+    expect(task).toMatchObject({
+      id: repairId,
+      status: "QUEUED",
+      acceptanceStatus: "NOT_READY",
+      completedAt: null,
+    })
+    expect(task?.subtasks[0]?.completedAt).toBeNull()
+    expect(task?.subtasks[0]?.assignments).toEqual([])
+    expect(lifecycle.listAcceptance).not.toHaveBeenCalled()
+  })
+
   it("does not mark a pending repair actionable when the exact projection excludes it", async () => {
     lifecycle.get.mockResolvedValue(repair("PENDING"))
     lifecycle.listAcceptance.mockResolvedValue({
