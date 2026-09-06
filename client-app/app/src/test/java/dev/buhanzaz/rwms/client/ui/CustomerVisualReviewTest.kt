@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -14,6 +15,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.text.TextLayoutResult
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.client.data.CustomerCabin
 import dev.buhanzaz.rwms.client.data.CustomerCart
@@ -97,6 +100,13 @@ class CustomerVisualReviewTest {
 
         composeRule.onNodeWithTag("cart-screen").performScrollToNode(hasTestTag("cart-delivery-button"))
         composeRule.onNodeWithTag("cart-delivery-button").assertIsDisplayed()
+        composeRule.onNodeWithTag("cart-additional-${reviewCabin.unitId}").assertIsDisplayed()
+        composeRule.onNodeWithTag("cart-remove-${reviewCabin.unitId}").assertIsDisplayed()
+        val additionalTextLayouts = mutableListOf<TextLayoutResult>()
+        composeRule.onNodeWithText("+ Дополнительно", useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(additionalTextLayouts) }
+        assertThat(additionalTextLayouts).hasSize(1)
+        assertThat(additionalTextLayouts.single().lineCount).isEqualTo(1)
         captureRoot("cart-light")
     }
 

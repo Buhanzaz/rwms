@@ -250,18 +250,18 @@ private fun CartCabinCard(
                         onMonths = onMonths,
                     )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
                         onClick = onAdditional,
                         enabled = !busy,
-                        modifier = Modifier.weight(1f).testTag("cart-additional-${cabin.unitId}"),
+                        modifier = Modifier.fillMaxWidth().testTag("cart-additional-${cabin.unitId}"),
                     ) {
                         Text("+ Дополнительно")
                     }
                     OutlinedButton(
                         onClick = onRemove,
                         enabled = !busy,
-                        modifier = Modifier.weight(1f).testTag("cart-remove-${cabin.unitId}"),
+                        modifier = Modifier.fillMaxWidth().testTag("cart-remove-${cabin.unitId}"),
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
                     ) {
                         Text("Удалить", color = MaterialTheme.colorScheme.error)
