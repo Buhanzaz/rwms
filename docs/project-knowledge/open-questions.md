@@ -4,6 +4,38 @@ Use this file only for unresolved contradictions or product decisions that
 block a safe implementation. This is not a backlog and does not authorize
 work.
 
+## Resolved: Payment Before Inclusion In A Driver Route
+
+- Status: `Resolved — implementation verification pending`
+- Affected owner and consumers: logistics-service planner application,
+  task-board driver workday snapshots and the standalone planner.
+- Requested behavior: resolve audit R-006 so that a failed shift registration
+  cannot leave newly created shipments behind.
+- Conflicting contract or invariant: the canonical apply operation requires
+  every assigned-driver snapshot to register before shipment creation/replay and
+  retains valid parts when another part is rejected. Its route operations are
+  immutable and executable. Existing admission checks also reject unpaid or
+  near-date automatic assignments before driver effects. Registering a mixed
+  route before those checks publishes stops for rejected assignments, while
+  dropping its stops is not supported by the current identity contract:
+  `sourceTaskId` identifies a standalone planner task, and the assignment carries
+  only order/cabin identities.
+- Evidence: [canonical operation and route schemas](../../contracts/openapi/logistics-service.yaml),
+  [planner owner](../../services/logistics-service/src/main/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderPlanningIntegrationService.java)
+  and [admission regression tests](../../services/logistics-service/src/test/java/dev/buhanzaz/rwms/logistics/order/service/RentalOrderPlanningIntegrationServiceTest.java).
+- Resolution and date: on 2026-09-06 the user clarified that unpaid orders must
+  not enter the daily plan when request acceptance closes. Before payment, the
+  order may only hold a temporary delivery slot. Slot application and inclusion
+  of the order's delivery/transfer in a driver route require confirmed payment.
+  A mixed paid/unpaid route is therefore an admission defect, not a supported
+  partial-application workflow. Historical payment omissions do not justify an
+  exception to this rule. This decision defines the required behavior; feed,
+  closing and application boundaries still need source verification and fixes.
+- Verification record: the initial ordering-only change was removed after two
+  admission regressions; it is not a completed fix. No production data or runtime
+  was changed. Exact retries must preserve and truthfully report any already
+  committed shipment without creating a second effect.
+
 ## Dedicated Claim Chat And Orchestration Owner
 
 - Status: `Open`
