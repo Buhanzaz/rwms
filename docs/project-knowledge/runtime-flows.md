@@ -2807,12 +2807,17 @@ The gateway provides bounded transport for declared SSE routes. It limits
 concurrency, uses asynchronous I/O, forwards complete event/heartbeat items,
 and cancels upstream work when the client disconnects. It does not manufacture
 domain events, keep a replay log, or become the source projection.
+The header timeout completes a separate deadline future and cancels the original HTTP exchange;
+late response bodies are cancelled and the connection slot is released once.
 
 The producer owns heartbeat, cursor/replay, event identity, and resync meaning.
 Unless the contract explicitly says that an SSE payload is a complete
 projection, clients treat it as an invalidation signal and refresh only the
 affected query or local cache entry. Periodic pull may provide an additional
 recovery path, but it does not create replay semantics.
+Asset and task-board hubs serialize subscription registration and last-subscriber cleanup per
+warehouse or warehouse/surface/worker key. A concurrent reconnect remains registered for later
+events after the old stream closes.
 
 Task-board exposes separate WorkerApp and DriverApp SSE routes. A persisted
 `TASK_JOIN_AVAILABLE` FCM delivery is also only an invalidation for WorkerApp;

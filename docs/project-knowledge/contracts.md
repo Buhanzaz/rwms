@@ -565,6 +565,8 @@ does not absorb driver movement or external capital-repair ownership. Work-queue
 optional historical-compatible `availableTaskLimit` and `workerFeedEnabled`; new facts always emit
 both fields, while immutable earlier facts remain valid.
 
+Pre-start replacement checks queue purpose against the persisted task source before mutation:
+driver queues require `LOGISTICS_DRIVER_TASK`, and such tasks require driver queues.
 The private source-owned pre-start replacement keeps optimistic concurrency for every changed
 snapshot. Its one retry exception is an exact canonical fingerprint match across task metadata and
 the complete route: that value-identical request returns the current registration without changing
