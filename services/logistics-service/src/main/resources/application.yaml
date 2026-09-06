@@ -225,6 +225,8 @@ rwms:
       outbox-enabled: ${LOGISTICS_RENTAL_INQUIRY_OUTBOX_ENABLED:true}
       outbox-delay: ${LOGISTICS_RENTAL_INQUIRY_OUTBOX_DELAY:1s}
       outbox-initial-delay: ${LOGISTICS_RENTAL_INQUIRY_OUTBOX_INITIAL_DELAY:1s}
+      max-attempts: ${LOGISTICS_RENTAL_INQUIRY_MAX_ATTEMPTS:4}
+      max-per-run: ${LOGISTICS_RENTAL_INQUIRY_MAX_PER_RUN:50}
       booking-retry-delay: ${LOGISTICS_RENTAL_BOOKING_RETRY_DELAY:2s}
       booking-retry-initial-delay: ${LOGISTICS_RENTAL_BOOKING_RETRY_INITIAL_DELAY:2s}
   cors:

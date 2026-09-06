@@ -1270,15 +1270,26 @@ to a separate bounded remote-call executor. `LOGISTICS_EXTERNAL_ATTEMPT_LEASE_DU
 `*_WORKER_BUDGET` variables in `application.yaml` bound recovery capacity; each owner budget must
 remain lower than the worker pool to preserve another owner's remote-call slot. Fixed-name gauges
 expose backlog/oldest/terminal state for the main outbox, sanitized DLT and warehouse marks;
-backlog/oldest for the rental-inquiry outbox; open/oldest inbound gaps and blocked checkpoints; and
+backlog/oldest/terminal for the rental-inquiry outbox; open/oldest inbound gaps and blocked checkpoints; and
 backlog/oldest/quarantined for presentation-booking and customer-checkout recovery; and
 pending/quarantined for rental-order cancel/remove recovery; and
 active/oldest/max-retry/reconciliation-required external attempts plus executor active/queue state.
 Empty or future-age state is zero and a database access failure is `NaN`. Claim counters and latency
 timers use only the closed `owner` and `state` labels; no metric contains attempt IDs, topics,
-payloads or free-form exceptions. The rental-inquiry outbox currently has only `PENDING` and
-`PUBLISHED`: it still lacks a terminal/reviewed recovery state, which remains follow-up work rather
-than a fabricated terminal gauge.
+payloads or free-form exceptions. Rental-inquiry booking events use individual committed
+`IN_FLIGHT` claims and token-fenced completion; a broker rejection or exception cannot roll back an
+earlier row's success. The budget includes expired leases and defaults to four attempts
+(`LOGISTICS_RENTAL_INQUIRY_MAX_ATTEMPTS`), with at most 50 relay steps per run
+(`LOGISTICS_RENTAL_INQUIRY_MAX_PER_RUN`). The relay uses the existing validated main-outbox instance
+and lease settings. Exhausted or invalid envelopes remain `QUARANTINED`, outside automatic claims,
+and the terminal gauge exposes that state.
+
+`POST /api/logistics/v1/admin/rental-inquiry-outbox/{eventId}/recovery` requires a USER with
+`rwms.write` and `SYSTEM_ADMIN` or `WMS_ADMIN`, the observed `expectedRecoveryVersion`, and a reason.
+Recovery verifies the retained checksum, V2 envelope and booked-event payload, then requeues the
+same event ID and bytes with an immutable audit record. Repeating the exact accepted review returns
+its historical `PENDING` receipt even after publication; a changed or stale review conflicts.
+V107 adds the delivery lease, checksum and reviewed-recovery metadata without replacing events.
 
 The base configuration requires an explicit `LOGISTICS_KAFKA_ENABLED` value; only the `dev` profile
 keeps the explicit optional `false` default. Canonical primary outputs are ordered exactly as return,

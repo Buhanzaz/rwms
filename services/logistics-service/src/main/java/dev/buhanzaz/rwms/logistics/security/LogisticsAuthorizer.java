@@ -62,6 +62,11 @@ public class LogisticsAuthorizer {
     }
   }
 
+  /** Technical event recovery changes durable retry state and remains global-admin only. */
+  public void requireRentalInquiryOutboxRecoveryAdministrator(Jwt jwt) {
+    requireWarehouseOperationRecoveryAdministrator(jwt);
+  }
+
   public void requireMaintenanceDriverTaskIntake(Jwt jwt) {
     requireMaintenanceServiceIntake(jwt);
   }

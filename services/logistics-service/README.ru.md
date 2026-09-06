@@ -1304,15 +1304,27 @@ capability перед записью completion или failure, поэтому �
 переменных `*_WORKER_BUDGET` из `application.yaml` ограничивают recovery capacity; budget каждого
 owner должен оставаться меньше worker pool, чтобы сохранить remote-call slot другого owner.
 Fixed-name gauges показывают backlog/oldest/terminal для main outbox, sanitized DLT и warehouse
-marks; backlog/oldest для rental-inquiry outbox; open/oldest inbound gaps и blocked checkpoints; а
+marks; backlog/oldest/terminal для rental-inquiry outbox; open/oldest inbound gaps и blocked checkpoints; а
 также backlog/oldest/quarantined для recovery presentation-booking и customer-checkout;
 pending/quarantined для recovery отмены/удаления бытовки rental order;
 active/oldest/max-retry/reconciliation-required external attempts и active/queue состояние executor.
 Empty state и future age дают zero, а ошибка доступа к базе — `NaN`. Claim counters и
 latency timers используют только закрытые labels `owner` и `state`; ни одна метрика не содержит
-attempt IDs, topics, payloads или free-form exceptions. Rental-inquiry outbox сейчас имеет только
-`PENDING` и `PUBLISHED`: у него всё ещё нет terminal/reviewed recovery state, и это остаётся
-follow-up work, а не выдуманным terminal gauge.
+attempt IDs, topics, payloads или free-form exceptions. События бронирования rental-inquiry
+используют отдельные зафиксированные `IN_FLIGHT` claims и завершение по lease token; отказ брокера
+или исключение не откатывает успех предыдущей строки. Лимит учитывает истёкшие lease и по умолчанию
+равен четырём попыткам (`LOGISTICS_RENTAL_INQUIRY_MAX_ATTEMPTS`), максимум 50 шагов за запуск
+(`LOGISTICS_RENTAL_INQUIRY_MAX_PER_RUN`). Relay использует уже проверенные instance и lease
+настройки основного outbox. Исчерпанные или некорректные envelope остаются в `QUARANTINED`
+вне автоматического claim и учитываются terminal gauge.
+
+`POST /api/logistics/v1/admin/rental-inquiry-outbox/{eventId}/recovery` требует USER с `rwms.write`
+и ролью `SYSTEM_ADMIN` либо `WMS_ADMIN`, наблюдаемую `expectedRecoveryVersion` и причину.
+Восстановление проверяет сохранённый checksum, V2 envelope и payload события бронирования, затем
+повторно ставит тот же event ID и байты с неизменяемой записью аудита. Точный повтор принятой
+проверки возвращает историческую квитанцию `PENDING`, в том числе после публикации; изменённая
+или устаревшая проверка даёт конфликт. V107 добавляет lease, checksum и метаданные восстановления,
+не заменяя события.
 
 Base-конфигурация требует явное значение `LOGISTICS_KAFKA_ENABLED`; только профиль `dev` сохраняет
 явный optional default `false`. Canonical primary outputs упорядочены строго как return, shipment,

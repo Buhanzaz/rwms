@@ -72,6 +72,7 @@ class LogisticsRecoveryMetricsIntegrationTest {
           "rwms.logistics.sanitized_dlt.terminal",
           "rwms.logistics.rental_inquiry.outbox.backlog",
           "rwms.logistics.rental_inquiry.outbox.backlog.oldest.age.seconds",
+          "rwms.logistics.rental_inquiry.outbox.terminal",
           "rwms.logistics.presentation_booking.recovery.backlog",
           "rwms.logistics.presentation_booking.recovery.backlog.oldest.age.seconds",
           "rwms.logistics.presentation_booking.recovery.quarantined",
@@ -159,6 +160,7 @@ class LogisticsRecoveryMetricsIntegrationTest {
     assertThat(gauge("rwms.logistics.rental_inquiry.outbox.backlog")).isEqualTo(1.0);
     assertThat(gauge("rwms.logistics.rental_inquiry.outbox.backlog.oldest.age.seconds"))
         .isEqualTo(200.0);
+    assertThat(gauge("rwms.logistics.rental_inquiry.outbox.terminal")).isEqualTo(1.0);
     assertThat(gauge("rwms.logistics.presentation_booking.recovery.backlog")).isEqualTo(1.0);
     assertThat(
             gauge(
@@ -222,7 +224,8 @@ class LogisticsRecoveryMetricsIntegrationTest {
     insertMainOutbox("DLT", NOW.minusSeconds(275));
     insertSanitizedDlt("PENDING", NOW.minusSeconds(250), "c".repeat(64));
     insertSanitizedDlt("FAILED", NOW.minusSeconds(225), "d".repeat(64));
-    insertRentalInquiryOutbox(NOW.minusSeconds(200));
+    insertRentalInquiryOutbox("PENDING", NOW.minusSeconds(200));
+    insertRentalInquiryOutbox("QUARANTINED", NOW.minusSeconds(190));
     insertBookingRecoveryStates();
     // Rental-inquiry inserts legitimately emit first-operation marks through the V37 trigger.
     // This fixture observes that queue independently with exact timestamps below.
@@ -417,13 +420,14 @@ class LogisticsRecoveryMetricsIntegrationTest {
         createdAt);
   }
 
-  private void insertRentalInquiryOutbox(OffsetDateTime createdAt) {
+  private void insertRentalInquiryOutbox(String status, OffsetDateTime createdAt) {
     UUID clientId = UUID.randomUUID();
     UUID managerId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
     UUID inquiryId = UUID.randomUUID();
     UUID conversationId = UUID.randomUUID();
     UUID orderId = UUID.randomUUID();
+    String phone = "+7%010d".formatted(Math.floorMod(clientId.hashCode(), 10_000_000_000L));
     jdbc.update(
         """
         insert into order_client(
@@ -438,8 +442,8 @@ class LogisticsRecoveryMetricsIntegrationTest {
         "Metrics outbox customer " + clientId,
         "metrics outbox customer " + clientId,
         managerId,
-        "+79990000002",
-        "+79990000002",
+        phone,
+        phone,
         managerId,
         UUID.randomUUID(),
         REQUEST_DIGEST,
@@ -486,16 +490,20 @@ class LogisticsRecoveryMetricsIntegrationTest {
     jdbc.update(
         """
         insert into rental_inquiry_outbox(
-          event_id,event_type,inquiry_id,conversation_id,order_id,payload,status,attempt_count,
-          next_attempt_at,created_at)
-        values (?,'logistics.rental-inquiry.booked.v1',?,?,?,'{}'::jsonb,'PENDING',0,?,?)
+          event_id,event_type,inquiry_id,conversation_id,order_id,payload,payload_sha256,status,
+          attempt_count,next_attempt_at,created_at,last_error_code)
+        values (?,'logistics.rental-inquiry.booked.v1',?,?,?,'{}'::jsonb,
+          encode(sha256(convert_to('{}'::jsonb::text,'UTF8')),'hex'),?,4,?,?,
+          case when ?='QUARANTINED' then 'PUBLISH_FAILED' else null end)
         """,
         UUID.randomUUID(),
         inquiryId,
         conversationId,
         orderId,
+        status,
         createdAt,
-        createdAt);
+        createdAt,
+        status);
   }
 
   private void insertWarehouseMark(String state, OffsetDateTime createdAt) {

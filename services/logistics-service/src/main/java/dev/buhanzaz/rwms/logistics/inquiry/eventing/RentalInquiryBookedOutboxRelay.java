@@ -1,60 +1,85 @@
 package dev.buhanzaz.rwms.logistics.inquiry.eventing;
 
+import dev.buhanzaz.rwms.logistics.eventing.LogisticsOutboxProperties;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsTransportTopics;
 import java.nio.charset.StandardCharsets;
-import java.util.List;
-import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.cloud.stream.function.StreamBridge;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.messaging.MessageHeaders;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.MimeTypeUtils;
 
-/**
- * Relays committed rental-inquiry booking notifications from durable local outbox state after the
- * write transaction.
- */
+/** Publishes individually leased rental-inquiry booking events with finite durable retries. */
 @Component
-@RequiredArgsConstructor
+@EnableConfigurationProperties({
+  RentalInquiryOutboxProperties.class,
+  LogisticsOutboxProperties.class
+})
 public class RentalInquiryBookedOutboxRelay {
+  private static final Logger log = LoggerFactory.getLogger(RentalInquiryBookedOutboxRelay.class);
+
   private final RentalInquiryBookedOutboxStore outbox;
   private final StreamBridge streamBridge;
+  private final RentalInquiryOutboxProperties properties;
+  private final LogisticsOutboxProperties sharedOutboxProperties;
 
-  @Value("${rwms.logistics.rental-inquiry.outbox-enabled:true}")
-  private boolean enabled;
+  public RentalInquiryBookedOutboxRelay(
+      RentalInquiryBookedOutboxStore outbox,
+      StreamBridge streamBridge,
+      RentalInquiryOutboxProperties properties,
+      LogisticsOutboxProperties sharedOutboxProperties) {
+    this.outbox = outbox;
+    this.streamBridge = streamBridge;
+    this.properties = properties;
+    this.sharedOutboxProperties = sharedOutboxProperties;
+  }
 
-  /**
-   * Publishes each currently due committed row to the canonical rental-inquiry topic and advances
-   * it only after the synchronous transport reports success.
-   */
   @Scheduled(
       fixedDelayString = "${rwms.logistics.rental-inquiry.outbox-delay:1s}",
       initialDelayString = "${rwms.logistics.rental-inquiry.outbox-initial-delay:1s}")
-  @Transactional
   public void relay() {
-    if (!enabled) {
+    if (!properties.outboxEnabled()) return;
+    for (int index = 0; index < properties.maxPerRun(); index++) {
+      RentalInquiryBookedOutboxStore.ClaimOutcome outcome =
+          outbox.claim(
+              sharedOutboxProperties.instanceId(),
+              sharedOutboxProperties.leaseDuration(),
+              properties.maxAttempts());
+      if (!outcome.progressed()) return;
+      outcome.claim().ifPresent(this::deliver);
+    }
+  }
+
+  private void deliver(RentalInquiryBookedOutboxStore.Claim claim) {
+    if (!outbox.hasValidEnvelope(claim)) {
+      outbox.validationFailed(claim);
       return;
     }
-    List<RentalInquiryBookedOutboxStore.PendingEvent> rows = outbox.claimDueForRelay();
-    for (RentalInquiryBookedOutboxStore.PendingEvent row : rows) {
+    try {
       boolean sent =
           streamBridge.send(
               LogisticsTransportTopics.RENTAL_INQUIRY,
-              MessageBuilder.withPayload(row.payload().getBytes(StandardCharsets.UTF_8))
+              MessageBuilder.withPayload(claim.payload().getBytes(StandardCharsets.UTF_8))
                   .setHeader(
                       KafkaHeaders.KEY,
-                      row.conversationId().toString().getBytes(StandardCharsets.UTF_8))
+                      claim.conversationId().toString().getBytes(StandardCharsets.UTF_8))
                   .setHeader(MessageHeaders.CONTENT_TYPE, MimeTypeUtils.APPLICATION_JSON)
                   .build());
       if (sent) {
-        outbox.markPublished(row.eventId());
+        outbox.markPublished(claim);
       } else {
-        outbox.scheduleRetry(row.eventId());
+        outbox.deliveryFailed(claim, properties.maxAttempts(), "BROKER_REJECTED");
       }
+    } catch (RuntimeException exception) {
+      log.warn(
+          "Rental inquiry outbox publish failed safely [failureType={}]",
+          exception.getClass().getName());
+      outbox.deliveryFailed(claim, properties.maxAttempts(), "PUBLISH_FAILED");
     }
   }
 }

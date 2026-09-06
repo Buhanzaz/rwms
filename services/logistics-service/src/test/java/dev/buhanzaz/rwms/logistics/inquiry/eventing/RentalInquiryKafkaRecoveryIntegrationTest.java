@@ -103,13 +103,9 @@ class RentalInquiryKafkaRecoveryIntegrationTest {
     KAFKA.getDockerClient().pauseContainerCmd(KAFKA.getContainerId()).exec();
     try {
       await("Kafka broker unavailable", () -> !brokerHealthy());
-      try {
-        relay.relay();
-      } catch (RuntimeException unavailable) {
-        // The transactional relay deliberately leaves the committed row pending on broker failure.
-      }
+      relay.relay();
       assertThat(status(pending.eventId())).isEqualTo("PENDING");
-      assertThat(attempts(pending.eventId())).isBetween(0, 1);
+      assertThat(attempts(pending.eventId())).isEqualTo(1);
     } finally {
       KAFKA.getDockerClient().unpauseContainerCmd(KAFKA.getContainerId()).exec();
     }

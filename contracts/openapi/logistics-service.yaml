@@ -848,6 +848,41 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/logistics/v1/admin/rental-inquiry-outbox/{eventId}/recovery:
+    post:
+      operationId: recoverRentalInquiryOutboxEvent
+      description: >-
+        Requeues one intact QUARANTINED rental-inquiry booking event after a global administrator
+        reviews its finite delivery failure. The expected recovery version, authenticated reviewer,
+        and trimmed reason identify one idempotent review. The original event ID, canonical envelope,
+        and payload checksum remain unchanged. Requires a USER token with rwms.write and SYSTEM_ADMIN
+        or WMS_ADMIN global role.
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RentalInquiryOutboxRecoveryRequest" }
+      responses:
+        "200":
+          description: Requeued event or the historical PENDING receipt for the exact accepted review.
+          headers:
+            Idempotency-Replayed:
+              required: false
+              schema: { type: string, const: "true" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RentalInquiryOutboxRecoveryResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
   /api/internal/logistics/v1/planning/warehouses:
     get:
       operationId: listRoutePlanningWarehouses
@@ -9985,6 +10020,34 @@ components:
         recoveredBySubjectId: { type: string, format: uuid }
         recoveryReason: { type: string, minLength: 1, maxLength: 2000 }
         recoveredAt: { type: string, format: date-time }
+    RentalInquiryOutboxRecoveryRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRecoveryVersion, reason]
+      properties:
+        expectedRecoveryVersion: { type: integer, format: int64, minimum: 0 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+    RentalInquiryOutboxRecoveryResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - eventId
+        - status
+        - attemptCount
+        - recoveryVersion
+        - lastErrorCode
+        - reviewedBySubjectId
+        - reason
+        - reviewedAt
+      properties:
+        eventId: { type: string, format: uuid }
+        status: { type: string, const: PENDING }
+        attemptCount: { type: integer, minimum: 0, const: 0 }
+        recoveryVersion: { type: integer, format: int64, minimum: 1 }
+        lastErrorCode: { type: string, minLength: 1, maxLength: 64 }
+        reviewedBySubjectId: { type: string, format: uuid }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+        reviewedAt: { type: string, format: date-time }
     ApiProblem:
       type: object
       additionalProperties: true

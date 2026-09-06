@@ -59,13 +59,20 @@ public final class LogisticsRecoveryObservationStore {
 
   /** Returns rental-inquiry booking events that have not been acknowledged by Kafka. */
   long countRentalInquiryOutboxBacklog() {
-    return count("select count(*) from rental_inquiry_outbox where status = 'PENDING'");
+    return count(
+        "select count(*) from rental_inquiry_outbox where status in ('PENDING','IN_FLIGHT')");
   }
 
   /** Returns the oldest creation time in the pending rental-inquiry booking outbox. */
   Optional<OffsetDateTime> findOldestRentalInquiryOutboxBacklogCreatedAt() {
     return oldest(
-        "select min(created_at) from rental_inquiry_outbox where status = 'PENDING'");
+        "select min(created_at) from rental_inquiry_outbox "
+            + "where status in ('PENDING','IN_FLIGHT')");
+  }
+
+  /** Returns rental-inquiry booking events whose delivery budget is exhausted. */
+  long countTerminalRentalInquiryOutbox() {
+    return count("select count(*) from rental_inquiry_outbox where status = 'QUARANTINED'");
   }
 
   /** Returns nonquarantined presentation bookings retained for automatic recovery. */

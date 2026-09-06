@@ -646,6 +646,7 @@ class LogisticsFlywayMigrationIntegrationTest {
             "presentation_booking",
             "rental_inquiry",
             "rental_inquiry_outbox",
+            "rental_inquiry_outbox_recovery_audit",
             "rental_inquiry_search_attempt",
             "rental_inquiry_selection_receipt",
             "rental_order",
@@ -4801,6 +4802,67 @@ class LogisticsFlywayMigrationIntegrationTest {
                 "select count(*) from flyway_schema_history where version='93' and success",
                 Integer.class))
         .isZero();
+  }
+
+  @Test
+  void v107BackfillsStablePayloadHashesAndAddsFencedImmutableRecovery() {
+    Flyway beforeEnvelopeV2 = configuration(MIGRATIONS).target("40").load();
+    assertThat(beforeEnvelopeV2.migrate().migrationsExecuted).isEqualTo(40);
+    UUID[] pending = insertLegacyBookingOutbox("PENDING");
+    UUID[] published = insertLegacyBookingOutbox("PUBLISHED");
+    Flyway beforeV107 = configuration(MIGRATIONS).target("106").load();
+    assertThat(beforeV107.migrate().migrationsExecuted).isEqualTo(66);
+    String pendingPayload =
+        jdbc.queryForObject(
+            "select payload::text from rental_inquiry_outbox where event_id=?",
+            String.class,
+            pending[0]);
+
+    Flyway upgraded = configuration(MIGRATIONS).target("107").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForMap(
+                "select status,payload::text as payload,payload_sha256,recovery_version from rental_inquiry_outbox where event_id=?",
+                pending[0]))
+        .containsEntry("status", "PENDING")
+        .containsEntry("payload", pendingPayload)
+        .containsEntry("recovery_version", 0L);
+    assertThat(
+            jdbc.queryForObject(
+                "select payload_sha256=encode(sha256(convert_to(payload::text,'UTF8')),'hex') from rental_inquiry_outbox where event_id=?",
+                Boolean.class,
+                pending[0]))
+        .isTrue();
+    assertThat(
+            jdbc.queryForMap(
+                "select status,published_at,payload_sha256 from rental_inquiry_outbox where event_id=?",
+                published[0]))
+        .containsEntry("status", "PUBLISHED")
+        .doesNotContainEntry("published_at", null);
+    assertThat(toRegclass("rental_inquiry_outbox_recovery_audit")).isNotNull();
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update rental_inquiry_outbox set status='IN_FLIGHT',lease_owner=null,lease_token=?,lease_until=clock_timestamp() where event_id=?",
+                    UUID.randomUUID(),
+                    pending[0]))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update rental_inquiry_outbox set status='QUARANTINED',last_error_code=null where event_id=?",
+                    pending[0]))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update rental_inquiry_outbox set recovery_version=1,recovered_by_subject_id=?,recovery_reason=null,recovered_at=clock_timestamp() where event_id=?",
+                    UUID.randomUUID(),
+                    pending[0]))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertJpaValidationStarts();
   }
 
   @Test

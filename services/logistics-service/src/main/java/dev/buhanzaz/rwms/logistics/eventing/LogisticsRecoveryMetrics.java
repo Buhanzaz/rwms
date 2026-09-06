@@ -92,6 +92,11 @@ public final class LogisticsRecoveryMetrics {
         "rwms.logistics.rental_inquiry.outbox.backlog.oldest.age.seconds",
         observations::findOldestRentalInquiryOutboxBacklogCreatedAt,
         "Age of the oldest pending rental-inquiry booking event");
+    countGauge(
+        registry,
+        "rwms.logistics.rental_inquiry.outbox.terminal",
+        observations::countTerminalRentalInquiryOutbox,
+        "Rental-inquiry booking events requiring reviewed recovery");
 
     countGauge(
         registry,

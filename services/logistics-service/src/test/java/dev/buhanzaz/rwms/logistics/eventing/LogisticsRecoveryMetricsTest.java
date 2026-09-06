@@ -34,6 +34,7 @@ class LogisticsRecoveryMetricsTest {
           "rwms.logistics.sanitized_dlt.terminal",
           "rwms.logistics.rental_inquiry.outbox.backlog",
           "rwms.logistics.rental_inquiry.outbox.backlog.oldest.age.seconds",
+          "rwms.logistics.rental_inquiry.outbox.terminal",
           "rwms.logistics.presentation_booking.recovery.backlog",
           "rwms.logistics.presentation_booking.recovery.backlog.oldest.age.seconds",
           "rwms.logistics.presentation_booking.recovery.quarantined",
@@ -147,6 +148,7 @@ class LogisticsRecoveryMetricsTest {
     when(observations.countTerminalSanitizedDlt()).thenThrow(failure);
     when(observations.countRentalInquiryOutboxBacklog()).thenThrow(failure);
     when(observations.findOldestRentalInquiryOutboxBacklogCreatedAt()).thenThrow(failure);
+    when(observations.countTerminalRentalInquiryOutbox()).thenThrow(failure);
     when(observations.countPresentationBookingRecoveryBacklog()).thenThrow(failure);
     when(observations.findOldestPresentationBookingRecoveryCreatedAt()).thenThrow(failure);
     when(observations.countQuarantinedPresentationBookings()).thenThrow(failure);

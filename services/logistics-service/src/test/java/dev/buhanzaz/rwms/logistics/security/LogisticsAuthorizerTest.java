@@ -43,6 +43,8 @@ class LogisticsAuthorizerTest {
         .doesNotThrowAnyException();
     assertThatCode(() -> authorizer.requireWarehouseOperationRecoveryAdministrator(administrator))
         .doesNotThrowAnyException();
+    assertThatCode(() -> authorizer.requireRentalInquiryOutboxRecoveryAdministrator(administrator))
+        .doesNotThrowAnyException();
     assertThatThrownBy(() -> authorizer.requireRead(administrationJwt("WAREHOUSE_MANAGER"), WAREHOUSE))
         .isInstanceOf(AccessDeniedException.class)
         .hasMessageContaining("Required USER scope");
@@ -204,6 +206,9 @@ class LogisticsAuthorizerTest {
     assertThatCode(() -> authorizer.requireWarehouseOperationRecoveryAdministrator(administrator))
         .doesNotThrowAnyException();
     assertThatThrownBy(() -> authorizer.requireWarehouseOperationRecoveryAdministrator(manager))
+        .isInstanceOf(AccessDeniedException.class)
+        .hasMessageContaining("Global administrator");
+    assertThatThrownBy(() -> authorizer.requireRentalInquiryOutboxRecoveryAdministrator(manager))
         .isInstanceOf(AccessDeniedException.class)
         .hasMessageContaining("Global administrator");
   }
