@@ -849,6 +849,21 @@ the lease. A checksum or schema mismatch is quarantined instead of sent. A
 terminal record is recovered only through a reviewed, version-fenced owner
 operation when such an operation exists.
 
+Inventory applies a finite budget to outbox and sanitized DLT sends, including
+expired claims. Exhausted records retain their payload and terminal metadata;
+an unpublished outbox head still blocks later aggregate versions. Its two
+administrator recovery operations validate the stored body and review version,
+append immutable reviewer/failure evidence and reset only the same record's
+delivery budget. Exact replay returns the original recovery receipt after later
+publication, without another state transition. Corrupt data cannot be overridden
+by a review reason. The default budget is four attempts, configured with
+`INVENTORY_KAFKA_OUTBOX_MAX_ATTEMPTS`.
+
+Evidence:
+[`inventory delivery recovery`](../../services/inventory-service/src/main/java/dev/buhanzaz/rwms/inventory/eventing/InventoryEventingRecoveryService.java),
+[`inventory operations contract`](../../contracts/openapi/inventory-service.yaml),
+[`V29 terminal and review schema`](../../services/inventory-service/src/main/resources/db/migration/V29__finite_event_delivery_and_reviewed_recovery.sql).
+
 Evidence:
 [`RwmsKafkaOutboundEventPublisher.java`](../../platform/spring-boot-starter/src/main/java/dev/buhanzaz/rwms/platform/kafka/RwmsKafkaOutboundEventPublisher.java),
 [`WarehouseProductionSafetyValidator`](../../services/warehouse-service/src/main/java/dev/buhanzaz/rwms/warehouse/config/WarehouseProductionSafetyValidator.java),
@@ -2805,6 +2820,16 @@ Evidence:
 [`metrics_runtime.go`](../../services/media-service/cmd/media-service/metrics_runtime.go),
 [`V11__bounded_media_processing_recovery.sql`](../../services/media-service/db/migration/V11__bounded_media_processing_recovery.sql),
 [`services/media-service`](../../services/media-service/).
+
+Private asset-import work renews its token-fenced lease throughout resource
+enumeration and activation I/O. Lease loss cancels the phase, and renewal stops
+before the repository checks the final completion fence. Expired claims consume
+the same three-attempt phase budget: an exhausted claim becomes `FAILED` with
+`LEASE_LOST`, retaining the job for the existing explicit retry command.
+
+Evidence:
+[`asset-import worker`](../../services/media-service/internal/assetimport/worker.go),
+[`asset-import claim and completion`](../../services/media-service/internal/persistence/asset_import.go).
 
 ## SSE and client invalidation
 
