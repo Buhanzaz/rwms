@@ -86,6 +86,17 @@ class AuthTaskBoardServiceClientIntegrationTest {
                 .andExpect(jsonPath("$.error").value("invalid_request"));
     }
 
+    @Test
+    void retiredRepositoryCredentialCannotMintTokensWithTheExternalTestRegistration() throws Exception {
+        mvc.perform(post("/oauth2/token")
+                        .with(httpBasic("task-board-service", "task-board-dev-secret"))
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .param("grant_type", "client_credentials")
+                        .param("scope", "worker-credentials.manage"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("invalid_client"));
+    }
+
     private MockHttpServletRequestBuilder token(String scope) {
         MockHttpServletRequestBuilder request =
                 post("/oauth2/token")

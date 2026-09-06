@@ -3,11 +3,13 @@ package dev.buhanzaz.rwms.auth.config;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -47,6 +49,8 @@ public class OAuthClientProvisioner implements ApplicationRunner {
     static final String REVISION_SETTING = "rwms.client.revision";
     static final String FINGERPRINT_SETTING = "rwms.client.configuration-fingerprint";
     static final String REVOKED_REVISION_SETTING = "rwms.client.revoked-revision";
+    // The retired repository credential must not be reintroduced through external configuration.
+    private static final String RETIRED_TASK_BOARD_SECRET_SHA256 = "3a8630a2d33322005a12e4e5cd11521d5b11603835e70bb39abf899fa2fc12de";
 
     private final RegisteredClientRepository clients;
     private final PasswordEncoder passwordEncoder;
@@ -176,8 +180,14 @@ public class OAuthClientProvisioner implements ApplicationRunner {
             throw new IllegalStateException(
                     "OAuth authorization revocation requires a new client revision: " + configured.clientId());
         }
-        boolean revoke = configured.revokeAuthorizations()
-                && !Objects.equals(revokedRevision, configured.revision());
+        boolean taskBoardSecretRotation = configured.taskBoardServiceClient()
+                && configured.enabled()
+                && existing != null
+                && !Objects.equals(existing.getClientSecret(), encodedSecret);
+        // Retire persisted grants together with this exposed machine credential, exactly once.
+        boolean revoke = taskBoardSecretRotation
+                || (configured.revokeAuthorizations()
+                        && !Objects.equals(revokedRevision, configured.revision()));
         if (revoke && existing != null) {
             revoke(existing.getId());
             revokedRevision = configured.revision();
@@ -295,6 +305,15 @@ public class OAuthClientProvisioner implements ApplicationRunner {
         }
         if (client.inventoryServiceClient()) {
             validateInventoryClientContract(client, authenticationMethods, grantTypes);
+        }
+        if (client.taskBoardServiceClient()) {
+            validateExactServiceClientContract(
+                    client,
+                    authenticationMethods,
+                    grantTypes,
+                    OAuthClientProperties.TASK_BOARD_SCOPES,
+                    OAuthClientProperties.TASK_BOARD_AUDIENCE,
+                    OAuthClientProperties.TASK_BOARD_SECRET_ENVIRONMENT);
         }
         if (client.logisticsServiceClient()) {
             validateLogisticsClientContract(client, authenticationMethods, grantTypes);
@@ -665,12 +684,25 @@ public class OAuthClientProvisioner implements ApplicationRunner {
             throw new IllegalStateException(
                     "OAuth client secret environment is required for " + client.clientId());
         }
+        if (client.taskBoardServiceClient() && retiredTaskBoardSecret(secret)) {
+            throw new IllegalStateException(
+                    "TASK_BOARD_CLIENT_SECRET must replace the retired development credential");
+        }
         if (!authProperties.devDefaultCredentials()
                 && client.developmentSecret() != null
                 && !client.developmentSecret().isBlank()) {
             throw new IllegalStateException("Development OAuth secret is forbidden outside dev/test");
         }
         return secret;
+    }
+
+    private boolean retiredTaskBoardSecret(String secret) {
+        try {
+            return RETIRED_TASK_BOARD_SECRET_SHA256.equals(HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256").digest(secret.getBytes(StandardCharsets.UTF_8))));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is unavailable", exception);
+        }
     }
 
     private String fingerprint(OAuthClientProperties.Client client) {

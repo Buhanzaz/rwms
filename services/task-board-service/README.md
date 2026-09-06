@@ -599,10 +599,14 @@ and identity constraints, and leaves every existing plan compatible through null
   operational credential workflow state needed for reconciliation.
 - CORS uses explicit panel, worker, and driver origins. Browser/mobile clients use the
   gateway; services use private routes and client credentials.
-- The worker-credential, warehouse-lifecycle read/confirm, and warehouse-timezone
-  OAuth registrations all use `TASK_BOARD_CLIENT_SECRET`. The `dev` profile
-  supplies the same local fallback to every registration; the base/production
-  configuration has no fallback and still requires the deployment secret.
+- All six OAuth registrations (worker credentials, warehouse-lifecycle read/confirm,
+  warehouse timezone/identity and worker profile media) require the same external
+  `TASK_BOARD_CLIENT_SECRET` in every profile, including `dev`. There is no fallback;
+  startup rejects the retired repository credential even when supplied externally.
+  Configure the same new value in auth-service and task-board, and increase auth's
+  `TASK_BOARD_CLIENT_REVISION` above its stored revision when rotating a secret
+  (default revision `6`). Auth removes stored machine grants once during rotation;
+  already issued JWTs retain their own `exp` (the configured default is five minutes).
 - Dev auth bypass is allowed only with an explicit dev profile and is rejected
   outside local/test operation.
 

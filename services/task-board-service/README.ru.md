@@ -610,10 +610,14 @@ nullable полей.
   operational workflow state, нужный для reconciliation.
 - CORS использует explicit panel/worker/driver origins. Browser/mobile clients идут
   через gateway; сервисы — по private routes с client credentials.
-- OAuth registrations для worker credentials, warehouse lifecycle read/confirm
-  и warehouse timezone используют один `TASK_BOARD_CLIENT_SECRET`. Профиль
-  `dev` передаёт одинаковый local fallback во все registrations; в
-  base/production fallback отсутствует и обязателен deployment secret.
+- Все шесть OAuth registrations (worker credentials, warehouse lifecycle read/confirm,
+  warehouse timezone/identity и worker profile media) требуют один внешний
+  `TASK_BOARD_CLIENT_SECRET` в каждом профиле, включая `dev`. Fallback отсутствует;
+  прежний секрет из репозитория отклоняется даже при внешней передаче.
+  Задайте одинаковое новое значение в auth-service и task-board и при ротации
+  увеличьте `TASK_BOARD_CLIENT_REVISION` в auth выше сохранённой revision
+  (по умолчанию `6`). Auth один раз удаляет сохранённые machine grants при ротации;
+  уже выпущенные JWT сохраняют свой `exp` (по умолчанию срок составляет пять минут).
 - Dev auth bypass разрешён только в explicit dev profile и запрещён вне
   local/test.
 

@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.taskboard;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueReferenceDto;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueReferenceRequest;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -123,6 +124,28 @@ class TaskBoardSecurityPolicyTest {
                     .run(new DefaultApplicationArguments(new String[0])))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("TASK_BOARD_KAFKA_ENABLED");
+  }
+
+  @Test
+  void startupRejectsRetiredCredentialEvenWhenItIsSuppliedAsConfiguration() {
+    for (String profile : List.of("dev", "test", "production")) {
+      MockEnvironment environment = secureProductionEnvironment();
+      environment.setActiveProfiles(profile);
+      environment.setProperty(
+          "spring.security.oauth2.client.registration.auth-service.client-secret", "task-board-dev-secret");
+
+      assertThatThrownBy(() -> new TaskBoardProductionSafetyValidator(environment)
+          .run(new DefaultApplicationArguments(new String[0])))
+          .isInstanceOf(IllegalStateException.class)
+          .hasMessageContaining("retired development credential");
+    }
+  }
+
+  @Test
+  void startupAcceptsExternalCredentialsWithTheCompleteProductionConfiguration() {
+    assertThatCode(() -> new TaskBoardProductionSafetyValidator(secureProductionEnvironment())
+        .run(new DefaultApplicationArguments(new String[0])))
+        .doesNotThrowAnyException();
   }
 
   @Test

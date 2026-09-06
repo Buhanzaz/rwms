@@ -191,6 +191,17 @@ Security-relevant изменение конфигурации или секре�
 сохраняют корректное состояние, а осмысленная revision делает security change
 проверяемым и не позволяет случайно реактивировать client при rollback деплоя.
 
+Machine client `task-board-service` всегда требует внешний
+`TASK_BOARD_CLIENT_SECRET`, включая профили `dev` и `test`; прежний секрет из
+репозитория отклоняется даже при передаче через environment. Точный набор SERVICE
+scopes и audience проверяется до любых изменений provisioning.
+`TASK_BOARD_CLIENT_REVISION` по умолчанию равен `6`; при ротации ранее изменённого
+client задайте значение выше сохранённой revision. Смена секрета этого client
+атомарно удаляет его сохранённые authorizations и consents, сохраняя registered-client
+identity. Повторный запуск с той же revision и секретом сохраняет новые grants.
+Уже выпущенные JWT, проверяемые resource servers локально, действуют до своего
+собственного `exp`; настроенный по умолчанию срок составляет пять минут.
+
 Managed interactive inventory раздельно хранит существующий client руководителя
 склада, отдельные web/Android clients менеджера аренды, admin web client,
 CUSTOMER-only ClientApp client и два WORKER-only WorkerApp/DriverApp clients.
@@ -287,10 +298,17 @@ adopt только через документированный version-2 prefl
 workflow.
 
 Development profile включает локальное PostgreSQL-подключение `rwms_auth`,
-`admin` / `admin`, local task-board client secret и ephemeral RSA signing key.
-Эти defaults отключены в base configuration. Он также устанавливает direct
-local issuer `http://localhost:9000`; production использует gateway issuer с
-окончанием `/auth`.
+`admin` / `admin` и ephemeral RSA signing key. Development credentials требуют
+буквальный loopback issuer (`localhost`, `127.0.0.1` или IPv6 loopback);
+по умолчанию это `http://localhost:9000`. Base configuration отключает эти defaults.
+Даже перед локальным запуском задайте внешний `TASK_BOARD_CLIENT_SECRET`,
+а при включённом maintenance client — `MAINTENANCE_CLIENT_SECRET`.
+
+Для публичного issuer с профилем `dev` задайте `AUTH_DEV_DEFAULT_CREDENTIALS=false`
+и `AUTH_SESSION_COOKIE_SECURE=true`. Настройте внешние bootstrap credentials,
+persistent signing key, client secrets и public HTTPS issuer/origins/redirects
+из списка ниже. Профиль `dev` учитывает эти environment settings; один лишь
+публичный `AUTH_ISSUER` при сохранённых development credentials блокирует запуск.
 
 `processResources` запускает `npm ci` и `npm run build` в `ui/`, затем кладёт
 `ui/dist` в `BOOT-INF/classes/static`. Authorization server выдаёт сборку через

@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
@@ -25,10 +26,13 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
+import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
 import org.springframework.security.oauth2.core.OAuth2AccessToken;
 import org.springframework.security.oauth2.server.authorization.OAuth2Authorization;
 import org.springframework.security.oauth2.server.authorization.JdbcOAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.client.JdbcRegisteredClientRepository;
+import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
+import org.springframework.security.oauth2.server.authorization.settings.ClientSettings;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -122,6 +126,100 @@ class OAuthClientProvisionerIntegrationTest {
                 .getSetting(OAuthClientProvisioner.FINGERPRINT_SETTING);
         assertThat(storedFingerprint).isEqualTo(legacyFingerprint(client));
         provisioner(client).run(null);
+    }
+
+    @Test
+    void taskBoardRequiresItsExactExternalCredentialContractBeforeAnyMutation() {
+        for (OAuthClientProperties.Client invalid : List.of(
+                taskBoardClient(6, null, "fixture-fallback", OAuthClientProperties.TASK_BOARD_SCOPES),
+                taskBoardClient(6, "OTHER_SECRET", null, OAuthClientProperties.TASK_BOARD_SCOPES),
+                taskBoardClient(6, OAuthClientProperties.TASK_BOARD_SECRET_ENVIRONMENT,
+                        "fixture-fallback", OAuthClientProperties.TASK_BOARD_SCOPES),
+                taskBoardClient(6, OAuthClientProperties.TASK_BOARD_SECRET_ENVIRONMENT,
+                        null, Set.of("worker-credentials.manage", "warehouse.operation.mark")))) {
+            assertThatThrownBy(() -> taskBoardProvisioner(invalid, "external-fixture-secret").run(null))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("exact SERVICE scopes, audience, and external secret");
+        }
+        OAuthClientProperties.Client configured = taskBoardClient(
+                6, OAuthClientProperties.TASK_BOARD_SECRET_ENVIRONMENT, null, OAuthClientProperties.TASK_BOARD_SCOPES);
+        for (String missing : new String[] {null, "", "   "}) {
+            assertThatThrownBy(() -> taskBoardProvisioner(configured, missing).run(null))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("secret environment is required");
+        }
+        assertThatThrownBy(() -> taskBoardProvisioner(configured, "task-board-dev-secret").run(null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("retired development credential");
+        assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isZero();
+    }
+
+    @Test
+    void taskBoardRotationUpgradesLegacyRevisionAndRevokesOldGrantsExactlyOnce() throws Exception {
+        OAuthClientProperties.Client legacyDeclaration = taskBoardClient(
+                5, null, "task-board-dev-secret", OAuthClientProperties.TASK_BOARD_SCOPES);
+        RegisteredClient legacy = RegisteredClient.withId("task-board-legacy-id")
+                .clientId(OAuthClientProperties.TASK_BOARD_CLIENT_ID)
+                .clientName(legacyDeclaration.clientName())
+                .clientIdIssuedAt(Instant.now().truncatedTo(ChronoUnit.SECONDS))
+                .clientSecret(passwordEncoder.encode(legacyDeclaration.developmentSecret()))
+                .clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_BASIC)
+                .authorizationGrantType(AuthorizationGrantType.CLIENT_CREDENTIALS)
+                .scopes(scopes -> scopes.addAll(OAuthClientProperties.TASK_BOARD_SCOPES))
+                .clientSettings(ClientSettings.builder()
+                        .setting(OAuthClientProvisioner.MANAGED_SETTING, true)
+                        .setting(OAuthClientProvisioner.ENABLED_SETTING, true)
+                        .setting(OAuthClientProvisioner.REVISION_SETTING, "5")
+                        .setting(OAuthClientProvisioner.FINGERPRINT_SETTING, legacyFingerprint(legacyDeclaration))
+                        .build())
+                .build();
+        repository.save(legacy);
+        var authorizations = new JdbcOAuth2AuthorizationService(jdbc, repository);
+        var oldGrant = taskBoardAuthorization(legacy, "old-machine-token");
+        authorizations.save(oldGrant);
+
+        assertThatThrownBy(() -> taskBoardProvisioner(taskBoardClient(
+                                5, OAuthClientProperties.TASK_BOARD_SECRET_ENVIRONMENT,
+                                null, OAuthClientProperties.TASK_BOARD_SCOPES), "rotated-external-fixture-secret")
+                .run(null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("revision increment");
+        assertThat(authorizations.findById(oldGrant.getId())).isNotNull();
+
+        OAuthClientProperties.Client configured = taskBoardClient(
+                6, OAuthClientProperties.TASK_BOARD_SECRET_ENVIRONMENT, null, OAuthClientProperties.TASK_BOARD_SCOPES);
+        taskBoardProvisioner(configured, "rotated-external-fixture-secret").run(null);
+        RegisteredClient rotated = repository.findByClientId(OAuthClientProperties.TASK_BOARD_CLIENT_ID);
+        assertThat(rotated.getId()).isEqualTo(legacy.getId());
+        assertThat(rotated.getClientIdIssuedAt()).isEqualTo(legacy.getClientIdIssuedAt());
+        assertThat(passwordEncoder.matches("rotated-external-fixture-secret", rotated.getClientSecret())).isTrue();
+        assertThat(passwordEncoder.matches(legacyDeclaration.developmentSecret(), rotated.getClientSecret())).isFalse();
+        assertThat(authorizations.findById(oldGrant.getId())).isNull();
+        assertThat(rotated.getClientSettings().<String>getSetting(OAuthClientProvisioner.REVOKED_REVISION_SETTING))
+                .isEqualTo("6");
+
+        var newGrant = taskBoardAuthorization(rotated, "new-machine-token");
+        authorizations.save(newGrant);
+        taskBoardProvisioner(configured, "rotated-external-fixture-secret").run(null);
+        assertThat(authorizations.findById(newGrant.getId())).isNotNull();
+        assertThat(repository.findByClientId(rotated.getClientId()).getClientSecret())
+                .isEqualTo(rotated.getClientSecret());
+        assertThatThrownBy(() -> taskBoardProvisioner(configured, "another-external-fixture-secret").run(null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("secret changed without revision increment");
+        assertThat(authorizations.findById(newGrant.getId())).isNotNull();
+    }
+
+    private OAuth2Authorization taskBoardAuthorization(RegisteredClient client, String tokenValue) {
+        Instant issuedAt = Instant.now();
+        Set<String> scopes = Set.of("worker-credentials.manage");
+        return OAuth2Authorization.withRegisteredClient(client)
+                .principalName(client.getClientId())
+                .authorizationGrantType(AuthorizationGrantType.CLIENT_CREDENTIALS)
+                .authorizedScopes(scopes)
+                .accessToken(new OAuth2AccessToken(
+                        OAuth2AccessToken.TokenType.BEARER, tokenValue, issuedAt, issuedAt.plusSeconds(300), scopes))
+                .build();
     }
 
     @Test
@@ -624,6 +722,25 @@ class OAuthClientProvisionerIntegrationTest {
                 new MockEnvironment(),
                 authProperties(false),
                 new OAuthClientProperties(List.of(client)));
+    }
+
+    private OAuthClientProvisioner taskBoardProvisioner(OAuthClientProperties.Client client, String secret) {
+        MockEnvironment environment = new MockEnvironment();
+        if (secret != null) {
+            environment.setProperty(OAuthClientProperties.TASK_BOARD_SECRET_ENVIRONMENT, secret);
+        }
+        return new OAuthClientProvisioner(
+                repository, passwordEncoder, jdbc, transactions, environment, authProperties(false),
+                new OAuthClientProperties(List.of(client)));
+    }
+
+    private OAuthClientProperties.Client taskBoardClient(
+            long revision, String secretEnvironment, String developmentSecret, Set<String> scopes) {
+        return new OAuthClientProperties.Client(
+                OAuthClientProperties.TASK_BOARD_CLIENT_ID, "Task Board Service", true, revision,
+                Set.of("client_secret_basic"), Set.of("client_credentials"), Set.of(), Set.of(), scopes,
+                false, Set.of(), Set.of(OAuthClientProperties.TASK_BOARD_AUDIENCE), Set.of(),
+                Duration.ofMinutes(5), Duration.ofHours(1), true, secretEnvironment, developmentSecret, false);
     }
 
     private AuthProperties authProperties(boolean devDefaults) {

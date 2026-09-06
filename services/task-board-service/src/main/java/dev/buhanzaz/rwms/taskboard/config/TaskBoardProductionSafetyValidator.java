@@ -1,8 +1,12 @@
 package dev.buhanzaz.rwms.taskboard.config;
 
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
 
@@ -26,13 +30,16 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class TaskBoardProductionSafetyValidator implements ApplicationRunner {
+  // Reject the retired repository credential even when supplied through the environment.
+  private static final String RETIRED_CLIENT_SECRET_SHA256 = "3a8630a2d33322005a12e4e5cd11521d5b11603835e70bb39abf899fa2fc12de";
   private final Environment environment;
 
   @Override
   public void run(ApplicationArguments args) {
-    requireText(
+    String secret = requireText(
         "TASK_BOARD_CLIENT_SECRET",
         "spring.security.oauth2.client.registration.auth-service.client-secret");
+    requireRotatedClientSecret(secret);
     boolean productionProfile =
         Arrays.stream(environment.getActiveProfiles())
             .anyMatch(profile -> profile.equals("prod") || profile.equals("production"));
@@ -56,6 +63,19 @@ public class TaskBoardProductionSafetyValidator implements ApplicationRunner {
         requireText("PANEL_ORIGIN/WORKER_ORIGIN/DRIVER_ORIGIN", "rwms.cors.allowed-origins");
     for (String origin : origins.split(",")) {
       requireUri("CORS origin", origin.trim(), !localProfile, true);
+    }
+  }
+
+  private void requireRotatedClientSecret(String secret) {
+    try {
+      String fingerprint = HexFormat.of().formatHex(
+          MessageDigest.getInstance("SHA-256").digest(secret.getBytes(StandardCharsets.UTF_8)));
+      if (RETIRED_CLIENT_SECRET_SHA256.equals(fingerprint)) {
+        throw new IllegalStateException(
+            "TASK_BOARD_CLIENT_SECRET must replace the retired development credential");
+      }
+    } catch (NoSuchAlgorithmException exception) {
+      throw new IllegalStateException("SHA-256 is unavailable", exception);
     }
   }
 

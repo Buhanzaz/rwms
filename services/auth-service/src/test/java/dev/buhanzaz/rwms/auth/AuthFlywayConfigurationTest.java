@@ -99,10 +99,10 @@ class AuthFlywayConfigurationTest {
 
     @Test
     void taskBoardClientHasOnlyWorkerAndWarehouseIdentityScopes() throws IOException {
-        assertTaskBoardClient(load("application.yaml"), 5);
-        assertTaskBoardClient(load("application-dev.yaml"), 5);
-        assertTaskBoardClient(load("application-test.yaml"), 5);
-        assertTaskBoardClient(load("application-warehouse-client.yaml"), 5);
+        assertTaskBoardClient(load("application.yaml"), "${TASK_BOARD_CLIENT_REVISION:6}");
+        assertTaskBoardClient(load("application-dev.yaml"), "${TASK_BOARD_CLIENT_REVISION:6}");
+        assertTaskBoardClient(load("application-test.yaml"), "${TASK_BOARD_CLIENT_REVISION:6}");
+        assertTaskBoardClient(load("application-warehouse-client.yaml"), "${TASK_BOARD_CLIENT_REVISION:6}");
     }
 
     @Test
@@ -225,6 +225,8 @@ class AuthFlywayConfigurationTest {
         int index = clientIndex(source, "task-board-service");
         String prefix = "rwms.auth.oauth.clients[" + index + "]";
         assertThat(source.getProperty(prefix + ".client-id")).isEqualTo("task-board-service");
+        assertThat(source.getProperty(prefix + ".secret-environment")).isEqualTo("TASK_BOARD_CLIENT_SECRET");
+        assertThat(source.getProperty(prefix + ".development-secret")).isNull();
         assertThat(source.getProperty(prefix + ".revision")).isEqualTo(expectedRevision);
         assertThat(source.getProperty(prefix + ".authentication-methods[0]"))
                 .isEqualTo("client_secret_basic");

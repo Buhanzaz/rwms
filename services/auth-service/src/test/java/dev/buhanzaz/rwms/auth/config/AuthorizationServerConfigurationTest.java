@@ -191,6 +191,55 @@ class AuthorizationServerConfigurationTest {
     }
 
     @Test
+    void developmentDefaultsRejectPublicAndMalformedIssuersBeforeCredentialsCanBeUsed() {
+        for (String profile : List.of("dev", "test")) {
+            var environment = new MockEnvironment();
+            environment.setActiveProfiles(profile);
+            environment.setProperty("TASK_BOARD_CLIENT_SECRET", "external-test-credential");
+            for (String issuer : List.of(
+                    "https://auth.example.test/auth",
+                    "http://10.0.0.10:9000",
+                    "http://localhost.example.test:9000",
+                    "http://127.0.0.1.example.test:9000",
+                    "http://user@localhost:9000",
+                    "http://localhost:9000?issuer=public",
+                    "http://localhost:9000#issuer",
+                    "not a URI")) {
+                assertThatThrownBy(() -> new AuthProductionSafetyValidator(
+                                propertiesWithDevelopmentDefaults(issuer), environment, disabledKafkaProperties())
+                        .afterPropertiesSet())
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("AUTH_ISSUER");
+            }
+        }
+    }
+
+    @Test
+    void developmentDefaultsAcceptOnlyLiteralLoopbackIssuersWithoutNetworkResolution() {
+        var environment = new MockEnvironment();
+        environment.setActiveProfiles("dev");
+        for (String issuer : List.of(
+                "http://localhost:9000", "https://LOCALHOST:9000/auth",
+                "http://127.0.0.1:9000", "http://[::1]:9000", "http://[0:0:0:0:0:0:0:1]:9000")) {
+            assertThatCode(() -> new AuthProductionSafetyValidator(
+                            propertiesWithDevelopmentDefaults(issuer), environment, disabledKafkaProperties())
+                    .afterPropertiesSet())
+                    .doesNotThrowAnyException();
+        }
+    }
+
+    @Test
+    void publicIssuerCanUseTheDevelopmentProfileWithDefaultsDisabled() {
+        var environment = new MockEnvironment();
+        environment.setActiveProfiles("dev");
+
+        assertThatCode(() -> new AuthProductionSafetyValidator(
+                        productionProperties(), environment, disabledKafkaProperties())
+                .afterPropertiesSet())
+                .doesNotThrowAnyException();
+    }
+
+    @Test
     void productionProfileTakesPrecedenceOverMixedDevelopmentProfiles() {
         List.of(
                         new String[] {"production", "test"},
@@ -571,8 +620,12 @@ class AuthorizationServerConfigurationTest {
     }
 
     private AuthProperties propertiesWithDevelopmentDefaults() {
+        return propertiesWithDevelopmentDefaults("https://auth.example.test/auth");
+    }
+
+    private AuthProperties propertiesWithDevelopmentDefaults(String issuer) {
         return new AuthProperties(
-                "https://auth.example.test/auth",
+                issuer,
                 "https://panel.example.test",
                 "https://panel.example.test/auth/callback",
                 "https://panel.example.test/",

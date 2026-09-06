@@ -36,6 +36,15 @@ flowchart LR
     Media <--> Kafka
 ```
 
+Auth-service permits development credentials only with a literal loopback issuer
+and an explicit `dev`/`test` profile. A public issuer requires external bootstrap
+credentials and persistent signing keys even under those profiles. The task-board
+machine client always uses external credentials: both producer and consumer reject
+the retired repository secret. Auth owns revision-fenced rotation and atomically
+revokes stored machine grants on a secret change; locally validated JWTs retain
+their existing expiry. See [auth configuration and rotation](../../services/auth-service/README.md#oauth-client-lifecycle)
+and [task-board security](../../services/task-board-service/README.md).
+
 The gateway is a stateless transport edge. It does not aggregate business
 responses or own workflow state. Each downstream service validates its token
 and owns its commands. Anonymous customer registration is forwarded through

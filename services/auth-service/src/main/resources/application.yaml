@@ -265,7 +265,7 @@ rwms:
         - client-id: task-board-service
           client-name: Task Board Service
           enabled: true
-          revision: 5
+          revision: ${TASK_BOARD_CLIENT_REVISION:6}
           authentication-methods: [client_secret_basic]
           grant-types: [client_credentials]
           scopes: [worker-credentials.manage, media.task-board, warehouse.identity.read, warehouse.timezone.read, warehouse.lifecycle.read, warehouse.lifecycle.confirm]

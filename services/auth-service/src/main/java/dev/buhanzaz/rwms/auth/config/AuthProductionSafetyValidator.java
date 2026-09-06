@@ -4,6 +4,7 @@ import dev.buhanzaz.rwms.platform.kafka.RwmsKafkaProperties;
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.InitializingBean;
@@ -35,8 +36,9 @@ public class AuthProductionSafetyValidator implements InitializingBean {
     /**
      * Validates the active profile and all security-sensitive deployment invariants.
      *
-     * <p>Development defaults are permitted only for {@code dev} and {@code test}; every other
-     * profile must use HTTPS public endpoints and the declared production Kafka configuration.</p>
+     * <p>Development defaults require {@code dev} or {@code test} and a literal loopback issuer.
+     * Public issuers require external credentials and persistent signing keys even with these
+     * profiles; every other profile also requires the declared production Kafka configuration.</p>
      */
     @Override
     public void afterPropertiesSet() {
@@ -47,6 +49,7 @@ public class AuthProductionSafetyValidator implements InitializingBean {
                 throw new IllegalStateException(
                         "AUTH_DEV_DEFAULT_CREDENTIALS разрешён только с активным профилем dev или test");
             }
+            requireLoopbackDevelopmentIssuer();
             return;
         }
         if (productionProfile || !developmentProfile) {
@@ -66,6 +69,29 @@ public class AuthProductionSafetyValidator implements InitializingBean {
                 .forEach(this::requireHttps);
         requireWorkerAppLinks();
         requireDriverAppLinks();
+    }
+
+    private void requireLoopbackDevelopmentIssuer() {
+        URI issuer;
+        try {
+            issuer = URI.create(properties.issuer());
+        } catch (IllegalArgumentException | NullPointerException exception) {
+            throw new IllegalStateException("AUTH_ISSUER must be a loopback URI with development credentials");
+        }
+        String host = issuer.getHost();
+        boolean loopback = host != null && Set.of(
+                "localhost", "127.0.0.1", "[::1]", "[0:0:0:0:0:0:0:1]")
+                .contains(host.toLowerCase(Locale.ROOT));
+        if (!loopback
+                || !("http".equalsIgnoreCase(issuer.getScheme()) || "https".equalsIgnoreCase(issuer.getScheme()))
+                || issuer.getUserInfo() != null
+                || issuer.getQuery() != null
+                || issuer.getFragment() != null) {
+            throw new IllegalStateException(
+                    "AUTH_DEV_DEFAULT_CREDENTIALS requires a loopback AUTH_ISSUER; "
+                            + "set AUTH_DEV_DEFAULT_CREDENTIALS=false and configure external credentials "
+                            + "and a persistent signing key for a public issuer");
+        }
     }
 
     private void requireKafkaCutover() {

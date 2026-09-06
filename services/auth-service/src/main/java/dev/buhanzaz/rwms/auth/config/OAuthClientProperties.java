@@ -34,6 +34,7 @@ public record OAuthClientProperties(List<Client> clients) {
     static final String INVENTORY_CLIENT_ID = "inventory-service";
     static final String TASK_BOARD_CLIENT_ID = "task-board-service";
     static final String TASK_BOARD_AUDIENCE = "rwms-services";
+    static final String TASK_BOARD_SECRET_ENVIRONMENT = "TASK_BOARD_CLIENT_SECRET";
     static final Set<String> TASK_BOARD_SCOPES =
             Set.of(
                     "worker-credentials.manage",
@@ -204,6 +205,11 @@ public record OAuthClientProperties(List<Client> clients) {
          */
         boolean inventoryServiceClient() {
             return INVENTORY_CLIENT_ID.equals(clientId);
+        }
+
+        /** Identifies the task-board machine client whose credentials must always be external. */
+        boolean taskBoardServiceClient() {
+            return TASK_BOARD_CLIENT_ID.equals(clientId);
         }
 
         /**

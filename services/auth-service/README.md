@@ -192,6 +192,17 @@ This is preferable to recreating clients at every startup: stable client IDs
 preserve valid state, while a deliberate revision makes security changes
 reviewable and prevents accidental reactivation after a deployment rollback.
 
+The `task-board-service` machine client always requires an externally supplied
+`TASK_BOARD_CLIENT_SECRET`, including in `dev` and `test`; the retired repository
+credential is rejected even when supplied through the environment. Its exact
+SERVICE scopes and audience are validated before any provisioning mutation.
+`TASK_BOARD_CLIENT_REVISION` defaults to `6`; set a value above the stored revision
+when rotating a previously customized client. Changing this client's secret
+atomically removes its stored authorizations and consents while retaining its
+registered-client identity. Restarting with the same revision and secret preserves
+new grants. Already issued JWTs validated locally by resource servers remain valid
+until their own `exp`; the configured default lifetime is five minutes.
+
 The managed interactive inventory keeps the existing operations-manager client,
 the dedicated rental-manager web and Android clients, the administration web
 client, the CUSTOMER-only ClientApp client, and the two WORKER-only
@@ -291,10 +302,17 @@ adopt it only through the documented version-2 preflight and explicit baseline
 workflow.
 
 The development profile enables the local `rwms_auth` PostgreSQL connection,
-`admin` / `admin`, the local task-board client secret, and an ephemeral RSA
-signing key. These defaults are disabled in base configuration. It also sets the
-direct local issuer to `http://localhost:9000`; production uses the gateway
-issuer ending in `/auth`.
+`admin` / `admin`, and an ephemeral RSA signing key. Development credentials
+require a literal loopback issuer (`localhost`, `127.0.0.1` or IPv6 loopback),
+which defaults to `http://localhost:9000`. Base configuration disables these
+defaults. Supply `TASK_BOARD_CLIENT_SECRET` externally before starting even in
+local development, and supply `MAINTENANCE_CLIENT_SECRET` when that client is enabled.
+
+For a public issuer while using `dev`, set `AUTH_DEV_DEFAULT_CREDENTIALS=false`
+and `AUTH_SESSION_COOKIE_SECURE=true`. Configure the external bootstrap credentials,
+persistent signing key, client secrets and public HTTPS issuer/origins/redirects
+listed below. The `dev` profile honors these environment settings; merely setting
+a public `AUTH_ISSUER` while retaining development credentials fails startup.
 
 `processResources` runs `npm ci` and `npm run build` in `ui/`, then packages
 `ui/dist` under `BOOT-INF/classes/static`. The authorization server serves the
