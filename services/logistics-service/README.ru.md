@@ -744,9 +744,17 @@ object locators, service credentials и общий board никогда не п�
 
 Та же apply-команда может передавать `driverShiftPlans` для конкретного назначенного симулятором
 водителя и рабочей даты. Logistics проверяет уникальность source shift и пары водитель/рабочая
-дата и полную форму исполнимого маршрута. Сначала она независимо применяет или replay-ит все
-shipment assignments, затем публикует смену водителя, только если ни одно маршрутное назначение
-этого водителя/даты не отклонено. Публикация использует idempotent
+дата и полную форму маршрута. Read-only классификация точной квитанции использует прежние checksum
+и видимость заказа без replay-lock, построения ответа или записи lineage. Новая неоплаченная часть
+либо недопустимые дата/тип/аудитория/ETA отклоняют весь входной план до эффектов водителя; точные
+квитанции обходят повторный изменяемый допуск. Сначала регистрируются все используемые смены и
+смены с owner-enriched transfer; неиспользуемые смены без transfer пропускаются. Только затем
+каждая часть replay-ится либо проходит актуальные owner/version/cabin проверки и создаёт отгрузку.
+Поздний отказ отдельной части сохраняет успешные соседние результаты. В расписании может остаться
+остановка без новой отгрузки; исполнимая работа требует сохранённой logistics task identity.
+Регистрация выполняется вне локальной транзакции. Локальная дата склада переиспользуется только
+внутри запроса для одного generatedAt; ETA проверяется по собственному canonical instant часового
+пояса. Отказ регистрации не создаёт новых локальных shipment effects. Публикация использует idempotent
 `PUT /api/internal/task-board/v1/driver-shift-plans/{sourceShiftId}`. Snapshot содержит identity и
 версию плана, физический склад старта, exact evidence опорной связи, display snapshot водителя,
 назначенный автомобиль и необязательный прицеп, начальный одометр, число ходок, точное
@@ -973,7 +981,7 @@ port. Его неизменённый constructor собирает шесть ow
 | `RentalOrderService` | Стабильный order facade над reads, creation, lifecycle, reservations, terms и shipment hand-off |
 | `RentalOrderMutationRecoveryService`, `RentalOrderMutationLocalStore` | Durable intent отмены/удаления бытовки, per-step asset receipts, leasing по времени БД, bounded retry/quarantine и атомарное локальное завершение вне transactions удалённых вызовов |
 | `RentalOrderUnitReplacementService` | Direct и presentation replacement через ordered batch checkpoints, pre-start отмену driver task и сходимость order/document members |
-| `RentalOrderPlanningIntegrationService` | Versioned feed с подтверждённой ценой и физическим источником каждой бытовки; idempotent применение route plan или подрядчика проверяет точные source/support evidence и публикует смену только после успешных назначений без общего состояния БД |
+| `RentalOrderPlanningIntegrationService` | Versioned feed с подтверждённой ценой и физическим источником каждой бытовки; idempotent применение route plan или подрядчика проверяет точные source/support evidence и регистрирует все нужные смены до shipment effects после exact-receipt и hard-plan preflight без общего состояния БД |
 | `ContractorRouteShareService`, `ContractorRouteShareStore`, `ContractorRouteShareTokenService` | Явная warehouse-authorized, истекающая и отзывная capability точного маршрута подрядчика; неизменяемые local task identities, live task-board execution, локальное order enrichment, точный replay create/evidence, ограниченный task-board-first media ingestion и membership-checked no-store public proxy START/COMPLETE/media без второго route aggregate |
 | `PlanningResourceDirectoryService` | Проверенные least-privilege warehouse и active primary-driver resources от их exact domain owners без local projection |
 | `WarehouseCapacitySnapshotService`, `CustomerDeliveryPriceClassifier` | Per-warehouse idempotent замена capacity, monotonic generation fencing, часовые тарифы изохрон и детерминированная классификация исключительных политик цены/доступа |

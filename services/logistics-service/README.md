@@ -462,9 +462,9 @@ physical inventory-source warehouse and hashes that mapping into
 `sourceRevision`; `orderVersion` remains the independent command fence. Plan
 application preserves service warehouse, physical source, route origin and the
 exact calendar-eligible support link as separate facts. It rechecks every
-selected cabin's current reservation location and registers a driver shift only
-after all assignments for that driver/day have applied or replayed without a
-rejection.
+selected cabin's current reservation location. It registers every relevant driver snapshot before
+creating or replaying any shipment, after read-only exact-receipt classification and hard payment/
+schedule admission. A registration failure produces no new local shipment effects.
 
 `POST /api/logistics/v1/historical-rental-movements` records one past shipment or return directly
 from a cabin card. It accepts a visible logistics client, the current cabin version and a
@@ -724,9 +724,16 @@ general board access are never exposed.
 
 The same apply command may carry `driverShiftPlans` for the concrete
 simulator-assigned driver and work date. Logistics validates unique source-shift and
-driver/work-date identities and the complete executable route shape. It first applies or replays
-every shipment assignment independently, then publishes a driver's shift only when none of that
-driver/date's route assignments was rejected. Publication uses idempotent
+driver/work-date identities and the complete route shape. Read-only receipt classification uses the
+existing checksum and order visibility without replay locks, response projection or lineage writes.
+A new unpaid part or invalid route date/type/audience/ETA rejects the whole input before driver
+effects; exact committed receipts bypass mutable re-admission. All referenced snapshots and
+owner-enriched transfer snapshots register first; unused snapshots without transfers are skipped.
+Only then does each part replay or pass live owner/version/cabin checks and create its shipment.
+Later per-part conflicts retain successful siblings. A registered itinerary may retain a stop with
+no new shipment; executable work still needs its committed logistics task. Registration runs outside
+local transactions. Warehouse-local dates are reused only within this request at one generatedAt;
+ETA uses its own canonical timezone instant. Publication uses idempotent
 `PUT /api/internal/task-board/v1/driver-shift-plans/{sourceShiftId}`. The snapshot contains the
 planner identity/version, physical route-origin warehouse, exact support-link evidence, driver
 display snapshot, assigned vehicle and optional trailer, start odometer, trip count, exact
@@ -942,7 +949,7 @@ services and leaf clients.
 | `RentalOrderService` | Stable order facade over reads, creation, lifecycle, reservations, terms and shipment hand-off |
 | `RentalOrderMutationRecoveryService`, `RentalOrderMutationLocalStore` | Durable cancel/remove-unit intent, per-step asset receipts, database-time leasing, bounded retry/quarantine and atomic local completion outside remote-call transactions |
 | `RentalOrderUnitReplacementService` | Direct and presentation replacement over ordered batch checkpoints, pre-start driver-task cancellation and same-order document/member convergence |
-| `RentalOrderPlanningIntegrationService` | Versioned planner feed with confirmed price and per-cabin physical-source facts; idempotent route-plan or contractor application verifies exact source/support evidence and publishes a shift only after its assignments succeed; no cross-database state |
+| `RentalOrderPlanningIntegrationService` | Versioned planner feed with confirmed price and per-cabin physical-source facts; idempotent route-plan or contractor application verifies exact source/support evidence and registers every relevant shift before shipment effects after exact-receipt and hard-plan preflight; no cross-database state |
 | `ContractorRouteShareService`, `ContractorRouteShareStore`, `ContractorRouteShareTokenService` | Explicit warehouse-authorized, expiring and revocable exact-contractor route capability; immutable local task identities, live task-board execution, local order enrichment, exact create/evidence replay, bounded task-board-first media ingestion and membership-checked no-store public START/COMPLETE/media proxy without a second route aggregate |
 | `PlanningResourceDirectoryService` | Validated least-privilege warehouse and active primary-driver resources composed from their exact domain owners without a local projection |
 | `WarehouseCapacitySnapshotService`, `CustomerDeliveryPriceClassifier` | Per-warehouse idempotent capacity replacement, monotonic generation fencing, hourly isochrone tariffs and deterministic exceptional price/access policy classification |

@@ -6,7 +6,7 @@ work.
 
 ## Resolved: Payment Before Inclusion In A Driver Route
 
-- Status: `Resolved — payment admission verified`
+- Status: `Resolved — payment and registration verified`
 - Affected owner and consumers: logistics-service planner application,
   task-board driver workday snapshots and the standalone planner.
 - Requested behavior: resolve audit R-006 so that a failed shift registration
@@ -36,11 +36,16 @@ work.
   committed shipment replay are preserved.
   This payment change passed 216 owner, HTTP/PostgreSQL and contract checks without skips.
   The standalone planner consumes the owner's strict feed without another payment-state copy.
-  The original shift-registration ordering issue remains unfinished in R-006.
-- Verification record: the initial ordering-only change was removed after two
-  admission regressions; it is not a completed fix. No production data or runtime
-  was changed. Exact retries must preserve and truthfully report any already
-  committed shipment without creating a second effect.
+  The ordering change now classifies exact receipts read-only, rejects invalid new payment/schedule
+  facts before driver effects, registers all relevant snapshots, then performs actual replay/create
+  with independent late mutable conflicts. Registration failure produces no new local shipment
+  effects; it does not compensate already registered remote snapshots or trim their stops.
+- Verification record: 153 distinct owner, exact-receipt, HTTP and PostgreSQL scenarios passed
+  across eight classes with no skips. Targeted reruns fixed new test fixtures only; production
+  code remained unchanged. All four first/second registration × transient/permanent failure
+  cases proved zero additional local effects, same-key success and stable replay identities.
+  No production data or runtime was changed. Exact retries preserve already committed shipment
+  identities; the standalone planner's close/admission behavior remains under separate verification.
 
 ## Dedicated Claim Chat And Orchestration Owner
 

@@ -54,6 +54,7 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -311,9 +312,9 @@ public class RentalOrderPlanningIntegrationService {
   }
 
   /**
-   * Applies every valid assignment independently and reports domain rejections without hiding a
-   * successfully created shipment from the caller. A driver shift is published only after every
-   * route assignment for that driver and local work date was created or replayed successfully.
+   * Rejects invalid new-plan payment and schedule facts before registering driver snapshots. All
+   * relevant snapshots register before any shipment create/replay; later mutable assignment
+   * conflicts retain independent successful parts. No local transaction spans registration.
    */
   public ApplyPlanningAssignmentsResponse apply(
       UUID batchIdempotencyKey, ApplyPlanningAssignmentsRequest request) {
@@ -329,32 +330,18 @@ public class RentalOrderPlanningIntegrationService {
     request = transferRouteCargoEnricher.enrich(request);
     requireValidShiftPlans(request);
     OffsetDateTime generatedAt = now();
-    String timeZone =
-        dependencies.warehouseTimeZoneAt(request.warehouseId(), generatedAt).timeZone();
-    LocalDate today = generatedAt.toInstant().atZone(ZoneId.of(timeZone)).toLocalDate();
+    Map<UUID, LocalDate> warehouseDates = new HashMap<>();
+    warehouseDates.put(request.warehouseId(), warehouseToday(request.warehouseId(), generatedAt));
     requireAuthorizedShiftPlans(request);
+    requireAdmissiblePlan(batchIdempotencyKey, request, generatedAt, warehouseDates);
+    registerShiftPlans(request);
     List<AppliedPlanningAssignment> applied = new ArrayList<>();
     List<RejectedPlanningAssignment> rejected = new ArrayList<>();
-    Set<String> appliedDriverWorkdays = new HashSet<>();
-    request.driverShiftPlans().stream()
-        .filter(RentalOrderPlanningIntegrationService::hasTransferOperation)
-        .map(plan -> driverWorkdayKey(plan.driverId(), plan.workDate()))
-        .forEach(appliedDriverWorkdays::add);
-    Set<String> rejectedDriverWorkdays = new HashSet<>();
     for (PlanningAssignmentRequest assignment : request.assignments()) {
       UUID serviceWarehouseId = effectiveServiceWarehouse(request, assignment);
       UUID commandKey = commandKey(batchIdempotencyKey, request, assignment);
       OrderActor plannerActor = plannerActor();
-      String driverWorkday = routeAssignmentDriverWorkday(assignment);
-      CreateOrderRentalShipmentRequest shipmentRequest =
-          new CreateOrderRentalShipmentRequest(
-              assignment.expectedOrderVersion(),
-              assignment.driverName().trim(),
-              assignment.driverWorkerId(),
-              assignment.scheduledDate(),
-              List.copyOf(assignment.unitIds()),
-              assignment.driverAudienceMode() == PlanningDriverAudienceMode.WAREHOUSE_DRIVERS,
-              assignment.inventorySourceWarehouseId());
+      CreateOrderRentalShipmentRequest shipmentRequest = shipmentRequest(assignment);
       try {
         var replay =
             rentalOrders.replayRentalShipment(
@@ -370,10 +357,11 @@ public class RentalOrderPlanningIntegrationService {
                   taskIdentity.version(),
                   true,
                   currentOrderVersion(assignment.orderId())));
-          if (driverWorkday != null) appliedDriverWorkdays.add(driverWorkday);
           continue;
         }
-        LocalDate serviceToday = warehouseToday(serviceWarehouseId, generatedAt);
+        LocalDate serviceToday =
+            warehouseDates.computeIfAbsent(
+                serviceWarehouseId, id -> warehouseToday(id, generatedAt));
         RentalOrder order = validateAssignment(serviceWarehouseId, serviceToday, assignment);
         requireAuthorizedSupport(
             request.warehouseId(), serviceWarehouseId, assignment.scheduledDate());
@@ -409,22 +397,60 @@ public class RentalOrderPlanningIntegrationService {
                 taskIdentity.version(),
                 result.replayed(),
                 currentOrderVersion(order.getId())));
-        if (driverWorkday != null) appliedDriverWorkdays.add(driverWorkday);
       } catch (OrderProblemException exception) {
         if (exception.status().is5xxServerError()) throw exception;
-        if (driverWorkday != null) rejectedDriverWorkdays.add(driverWorkday);
         rejected.add(
             new RejectedPlanningAssignment(
                 assignment.orderId(), exception.code(), exception.getMessage()));
       } catch (LogisticsConflictException exception) {
-        if (driverWorkday != null) rejectedDriverWorkdays.add(driverWorkday);
         rejected.add(
             new RejectedPlanningAssignment(
                 assignment.orderId(), "LOGISTICS_CONFLICT", exception.getMessage()));
       }
     }
-    registerShiftPlans(request, appliedDriverWorkdays, rejectedDriverWorkdays);
     return new ApplyPlanningAssignmentsResponse(List.copyOf(applied), List.copyOf(rejected));
+  }
+
+  /** Hard plan admission is read-only; committed receipts bypass mutable payment and date checks. */
+  private void requireAdmissiblePlan(
+      UUID batchIdempotencyKey,
+      ApplyPlanningAssignmentsRequest request,
+      OffsetDateTime generatedAt,
+      Map<UUID, LocalDate> warehouseDates) {
+    for (PlanningAssignmentRequest assignment : request.assignments()) {
+      if (rentalOrders.hasRentalShipmentReceipt(
+          plannerActor(),
+          assignment.orderId(),
+          commandKey(batchIdempotencyKey, request, assignment),
+          shipmentRequest(assignment))) {
+        continue;
+      }
+      RentalOrder order =
+          orders
+              .findPlanningCandidateById(assignment.orderId())
+              .orElseThrow(
+                  () ->
+                      new OrderProblemException(
+                          HttpStatus.CONFLICT, "ORDER_NOT_FOUND", "Заказ не найден"));
+      requirePayment(order);
+      UUID serviceWarehouseId = effectiveServiceWarehouse(request, assignment);
+      requireAssignmentSchedule(
+          warehouseDates.computeIfAbsent(serviceWarehouseId, id -> warehouseToday(id, generatedAt)),
+          assignment);
+      requireProvisionalEta(serviceWarehouseId, assignment);
+    }
+  }
+
+  private static CreateOrderRentalShipmentRequest shipmentRequest(
+      PlanningAssignmentRequest assignment) {
+    return new CreateOrderRentalShipmentRequest(
+        assignment.expectedOrderVersion(),
+        assignment.driverName().trim(),
+        assignment.driverWorkerId(),
+        assignment.scheduledDate(),
+        List.copyOf(assignment.unitIds()),
+        assignment.driverAudienceMode() == PlanningDriverAudienceMode.WAREHOUSE_DRIVERS,
+        assignment.inventorySourceWarehouseId());
   }
 
   /**
@@ -508,23 +534,8 @@ public class RentalOrderPlanningIntegrationService {
           "ORDER_VERSION_CONFLICT",
           "Заказ изменился после синхронизации с планировщиком");
     }
-    if (!RentalOrderPaymentState.allowsFulfillment(order.getPaymentState())) {
-      throw new OrderProblemException(
-          HttpStatus.CONFLICT,
-          "ORDER_PAYMENT_REQUIRED",
-          "Сначала подтвердите оплату бытовок и мебели");
-    }
-    requireAssignmentType(assignment);
-    requireDriverAudience(today, assignment);
-    requireProvisionalEta(warehouseId, assignment);
-    if (assignment.assignmentType() == PlanningAssignmentType.ROUTE_PLAN
-        && assignment.driverAudienceMode() == PlanningDriverAudienceMode.ASSIGNED_DRIVER
-        && assignment.scheduledDate().isBefore(today.plusDays(2))) {
-      throw new OrderProblemException(
-          HttpStatus.CONFLICT,
-          "PLANNING_DATE_LOCKED",
-          "Автоплан не меняет готовую логистику на сегодня и завтра");
-    }
+    requirePayment(order);
+    requireAssignmentSchedule(today, assignment);
     boolean acceptedDate =
         order.getDesiredDeliveryWindows().stream()
             .anyMatch(
@@ -571,6 +582,29 @@ public class RentalOrderPlanningIntegrationService {
           "Одна из бытовок уже включена в другую отгрузку");
     }
     return order;
+  }
+
+  private static void requirePayment(RentalOrder order) {
+    if (!RentalOrderPaymentState.allowsFulfillment(order.getPaymentState())) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "ORDER_PAYMENT_REQUIRED",
+          "Сначала подтвердите оплату бытовок и мебели");
+    }
+  }
+
+  private static void requireAssignmentSchedule(
+      LocalDate today, PlanningAssignmentRequest assignment) {
+    requireAssignmentType(assignment);
+    requireDriverAudience(today, assignment);
+    if (assignment.assignmentType() == PlanningAssignmentType.ROUTE_PLAN
+        && assignment.driverAudienceMode() == PlanningDriverAudienceMode.ASSIGNED_DRIVER
+        && assignment.scheduledDate().isBefore(today.plusDays(2))) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT,
+          "PLANNING_DATE_LOCKED",
+          "Автоплан не меняет готовую логистику на сегодня и завтра");
+    }
   }
 
   private static void requireAssignmentType(PlanningAssignmentRequest assignment) {
@@ -890,14 +924,16 @@ public class RentalOrderPlanningIntegrationService {
     }
   }
 
-  private void registerShiftPlans(
-      ApplyPlanningAssignmentsRequest request,
-      Set<String> appliedDriverWorkdays,
-      Set<String> rejectedDriverWorkdays) {
+  private void registerShiftPlans(ApplyPlanningAssignmentsRequest request) {
+    Set<String> referencedDriverWorkdays =
+        request.assignments().stream()
+            .map(RentalOrderPlanningIntegrationService::routeAssignmentDriverWorkday)
+            .filter(java.util.Objects::nonNull)
+            .collect(java.util.stream.Collectors.toSet());
     for (PlanningDriverShiftPlanRequest plan : request.driverShiftPlans()) {
-      String driverWorkday = driverWorkdayKey(plan.driverId(), plan.workDate());
-      if (!appliedDriverWorkdays.contains(driverWorkday)
-          || rejectedDriverWorkdays.contains(driverWorkday)) {
+      if (!hasTransferOperation(plan)
+          && !referencedDriverWorkdays.contains(
+              driverWorkdayKey(plan.driverId(), plan.workDate()))) {
         continue;
       }
       dependencies.registerDriverShiftPlan(

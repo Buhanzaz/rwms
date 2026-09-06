@@ -300,6 +300,14 @@ public class LogisticsDocumentService {
             subjectId, idempotencyKey, checksum));
   }
 
+  /** Reads committed receipt ownership without taking a replay lock or materializing a document response. */
+  @Transactional(readOnly = true)
+  public UUID rentalOrderShipmentReceiptOrderId(
+      UUID subjectId, UUID idempotencyKey, String checksum) {
+    return rentalOrderShipmentCoordinator.rentalOrderShipmentReceiptOrderId(
+        subjectId, idempotencyKey, checksum);
+  }
+
   /**
    * Creates one date/driver-bearing draft for exactly the requested order cabins. The caller owns
    * the order row lock and has already validated the actor and expected order version. This command

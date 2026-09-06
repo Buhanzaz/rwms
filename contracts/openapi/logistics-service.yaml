@@ -1041,12 +1041,21 @@ paths:
         Applies a planner result as existing logistics-owned rental shipments for exact cabins,
         dates, and DriverApp worker identities. Requires the same exact logistics-planner token.
         The batch may contain several non-overlapping cabin parts of one order; every part has a
-        stable idempotent shipment command. Automatic application rejects today and tomorrow,
-        dates not approved by the client, stale order versions, and cabins already planned.
-        Assigned-driver vehicle/workday snapshots are registered with task-board before any
-        shipment part is created or replayed; a failed registration fails the whole request.
-        Valid parts are retained even when another part is rejected, and every rejection is
-        returned with a stable code.
+        stable idempotent shipment command. Before driver effects, read-only exact receipt
+        classification checks command checksum, order ownership and visibility. For new parts,
+        missing CONFIRMED payment or invalid route date/type/audience/provisional ETA rejects
+        the whole input plan with 409. Automatic routes reject today and tomorrow. Exact committed
+        receipts bypass these mutable admission checks.
+        Every referenced assigned-driver vehicle/workday snapshot and every authorized snapshot
+        carrying an owner-enriched transfer registers with task-board before any shipment part
+        is created or replayed; unused snapshots without transfers are skipped. A failed
+        registration fails the whole request before local shipment effects. Registration keys
+        and complete snapshots remain unchanged across retries.
+        After registration, exact shipment replay precedes live order, accepted-date, version and
+        cabin checks. Independent valid parts are retained when another part is rejected by these
+        mutable checks, with each rejection returned under its stable code. A registered itinerary
+        may therefore retain a stop without a newly created shipment; executable driver work still
+        requires its committed logistics task identity.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:

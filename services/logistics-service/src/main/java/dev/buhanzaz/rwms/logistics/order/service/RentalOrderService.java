@@ -307,6 +307,18 @@ public class RentalOrderService {
     return shipments.replayRentalShipment(actor, orderId, idempotencyKey, request);
   }
 
+  /**
+   * Classifies an exact committed shipment receipt without replay locks or response materialization.
+   * This read transaction ends before the planner registers any remote driver snapshot.
+   */
+  public boolean hasRentalShipmentReceipt(
+      OrderActor actor,
+      UUID orderId,
+      UUID idempotencyKey,
+      CreateOrderRentalShipmentRequest request) {
+    return shipments.hasRentalShipmentReceipt(actor, orderId, idempotencyKey, request);
+  }
+
   @Transactional
   public LogisticsDocumentService.CreateResult createRentalShipment(
       OrderActor actor,

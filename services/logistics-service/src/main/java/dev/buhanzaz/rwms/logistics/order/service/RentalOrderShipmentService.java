@@ -128,13 +128,34 @@ class RentalOrderShipmentService {
     LogisticsDocumentService.CreateResult replay =
         documents.replayRentalOrderShipment(actor.subjectId(), idempotencyKey, checksum);
     if (replay == null) return null;
-    if (!orderId.equals(replay.response().rentalOrderId())) {
+    requireReceiptVisible(actor, orderId, replay.response().rentalOrderId());
+    return replay;
+  }
+
+  /** Reads only exact receipt ownership; it neither replays nor applies mutable admission gates. */
+  boolean hasRentalShipmentReceipt(
+      OrderActor actor,
+      UUID orderId,
+      UUID idempotencyKey,
+      CreateOrderRentalShipmentRequest request) {
+    if (actor == null || orderId == null || idempotencyKey == null || request == null) {
+      throw new IllegalArgumentException("Rental shipment receipt identity is invalid");
+    }
+    UUID receiptOrderId =
+        documents.rentalOrderShipmentReceiptOrderId(
+            actor.subjectId(), idempotencyKey, rentalShipmentChecksum(orderId, request));
+    if (receiptOrderId == null) return false;
+    requireReceiptVisible(actor, orderId, receiptOrderId);
+    return true;
+  }
+
+  private void requireReceiptVisible(OrderActor actor, UUID orderId, UUID receiptOrderId) {
+    if (!orderId.equals(receiptOrderId)) {
       throw RentalOrderProblems.conflict(
           "IDEMPOTENCY_KEY_REUSED", "Idempotency-Key уже использован для другого заказа");
     }
-    RentalOrder replayedOrder = store.requiredOrder(replay.response().rentalOrderId());
+    RentalOrder replayedOrder = store.requiredOrder(receiptOrderId);
     access.requireVisible(actor, replayedOrder);
-    return replay;
   }
 
   private static String rentalShipmentChecksum(

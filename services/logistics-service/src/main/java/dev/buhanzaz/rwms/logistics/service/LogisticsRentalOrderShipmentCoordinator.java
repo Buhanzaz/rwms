@@ -62,6 +62,17 @@ class LogisticsRentalOrderShipmentCoordinator {
   private final CustomerRentalSessionRepository customerSessions;
   private final LogisticsDocumentAttemptWriter attemptWriter;
 
+  /** Reuses the exact command checksum fence without locking or materializing its current result. */
+  UUID rentalOrderShipmentReceiptOrderId(UUID subjectId, UUID idempotencyKey, String checksum) {
+    LogisticsDocument receipt =
+        idempotency.replay(subjectId, idempotencyKey, CREATE_RENTAL_ORDER_SHIPMENT, checksum);
+    if (receipt == null) return null;
+    if (receipt.getRentalOrderId() == null) {
+      throw new LogisticsConflictException("Shipment receipt has no owning rental order");
+    }
+    return receipt.getRentalOrderId();
+  }
+
   LogisticsDocumentCommandResult replayRentalOrderShipment(
       UUID subjectId, UUID idempotencyKey, String checksum) {
     idempotency.acquireLock(subjectId, CREATE_RENTAL_ORDER_SHIPMENT, idempotencyKey);

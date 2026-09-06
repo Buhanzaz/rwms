@@ -1711,12 +1711,15 @@ and
    `driverShiftPlans` snapshot per assigned driver/work date, including vehicle,
    optional trailer, start odometer, trip count and exact unrounded
    `routeDistanceMeters`. Logistics validates unique source-shift and driver/date
-   identities and idempotently registers every shift plan in task-board before
-   processing individual assignment outcomes. A failed plan registration fails
-   the apply instead of leaving assignments detached from their daily shift;
-   exact retry reuses the source plan/version-derived keys. Logistics rechecks warehouse, units, dates and drivers and
-   uses its existing shipment-owner transition. Automatic today/tomorrow
-   assignment is rejected; valid and rejected parts are returned explicitly.
+   identities and classifies exact committed shipment receipts through read-only checksum/ownership/
+   visibility checks, without replay locks, response projection or lineage writes. New parts require
+   CONFIRMED payment and valid route date/type/audience/ETA before any driver effects; failure rejects
+   the whole input plan with 409, while exact receipts bypass mutable re-admission. Logistics then
+   registers every referenced snapshot and authorized transfer-bearing snapshot before actual
+   shipment replay/create, skipping unused non-transfer snapshots. Registration runs outside local
+   transactions and any failure stops local shipment effects. Exact retry reuses the same keys.
+   Live warehouse, accepted-date, version and cabin checks still reject individual parts after
+   registration and retain successful siblings through the existing shipment owner.
    Only tasks sourced from `RWMS` may enter the command; generated/manual tasks,
    pickups and unassigned parts remain local. Repeating the exact explicit
    apply retries the same version-derived assignment command. If remote I/O
@@ -1876,8 +1879,8 @@ workflows; this resource incident does not collect a customer cancellation fee.
    positioning evidence: origin start, inbound positioning, warehouse/customer stops and return
    positioning. Times are aware instants, load changes form one continuous chain, and positioning
    distance contributes to the shift's exact meter total. It registers the driver shift and this
-   operation snapshot only after every assignment for that driver/date has applied or replayed
-   without rejection. Before registration, logistics-service matches only
+   operation snapshot before any shipment is created or replayed, after hard payment/schedule
+   admission of new parts. Before registration, logistics-service matches only
    `CONFIRMED`/`RESERVED`/`READY` transfers with the same source, destination, assigned driver,
    vehicle and departure/arrival instants. It appends paired owner-generated
    `TRANSFER_LOAD`/`TRANSFER_UNLOAD` operations with canonical `sourceTransferId` and the exact
@@ -2471,9 +2474,10 @@ and
    logistics' private, exact-scope adapter. Task-board stores the source plan
    idempotently and fences a worker to one plan/shift for one work date. Generated or manual
    simulator jobs never enter this boundary; only the concrete assigned resource snapshot and
-   RWMS task summary do. Logistics registers the snapshot only after every assignment for that
-   driver/date has applied or replayed without rejection; a partial batch cannot freeze an empty
-   authoritative shift.
+   RWMS task summary do. Logistics rejects invalid new-plan payment/schedule facts before driver
+   effects, then registers all relevant snapshots before shipment replay/create. Later mutable
+   conflicts can leave an itinerary stop without a new shipment; executable work separately requires
+   the committed logistics-owned driver task. This flow does not remove stops or create a cleanup saga.
    Closing request acceptance alone does not apply assignments. Every ordinary
    apply attempt revalidates current truck/trailer proofs, resources, warehouse
    restrictions and exact request states under the planner's NOWAIT local fence.

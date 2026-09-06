@@ -3,6 +3,38 @@ package dev.buhanzaz.rwms.logistics;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
+import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
+import dev.buhanzaz.rwms.logistics.order.domain.DesiredDeliveryWindow;
+import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderPaymentSource;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderQuotedPrice;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderUnitTerm;
+import dev.buhanzaz.rwms.logistics.order.repository.OrderClientRepository;
+import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
+import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderUnitTermRepository;
+import dev.buhanzaz.rwms.logistics.order.service.RentalOrderPlanningIntegrationService;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.ApplyPlanningAssignmentsRequest;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningAssignmentRequest;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftPlanRequest;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftVehicleConfiguration;
+import dev.buhanzaz.rwms.logistics.planning.api.PlanningIntegrationApiModels.PlanningDriverShiftVehicleRequest;
+import java.math.BigDecimal;
+import java.time.ZoneId;
+import java.util.LinkedHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateReturnRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateShipmentRequest;
@@ -88,6 +120,11 @@ class DocumentDriverTaskPlanningIntegrationTest {
   @Autowired LogisticsWarehouseLifecycle lifecycle;
   @Autowired DriverTaskService driverTaskService;
   @Autowired JdbcTemplate jdbc;
+  @Autowired RentalOrderPlanningIntegrationService planning;
+  @Autowired RentalOrderRepository rentalOrders;
+  @Autowired OrderClientRepository orderClients;
+  @Autowired RentalOrderUnitTermRepository rentalTerms;
+  @Autowired PlatformTransactionManager transactionManager;
 
   @MockitoBean LogisticsDependencyGateway dependencies;
 
@@ -96,6 +133,9 @@ class DocumentDriverTaskPlanningIntegrationTest {
     jdbc.execute(
         """
         truncate table
+          order_client,
+          logistics_warehouse_admission_intent,
+          warehouse_operation_mark_outbox,
           shipment_task_settings,
           driver_logistics_task,
           logistics_document,
@@ -538,6 +578,273 @@ class DocumentDriverTaskPlanningIntegrationTest {
         .isInstanceOf(LogisticsConflictException.class)
         .hasMessageContaining("активное задание возврата");
     assertThat(jdbc.queryForObject("select count(*) from logistics_document", Long.class)).isZero();
+  }
+
+  @ParameterizedTest
+  @CsvSource({"1, TRANSIENT", "2, TRANSIENT", "1, PERMANENT_REJECTION", "2, PERMANENT_REJECTION"})
+  void failedShiftRegistrationLeavesNoShipmentEffectsAndTheSameBatchCanRetry(
+      int failedRegistration, LogisticsDependencyException.FailureKind failureKind) {
+    LocalDate firstDate = LocalDate.now(ZoneId.of("Europe/Moscow")).plusDays(3);
+    RentalOrder order = paidPlanningOrder(firstDate);
+    UUID batchKey = UUID.randomUUID();
+    UUID planId = UUID.randomUUID();
+    ApplyPlanningAssignmentsRequest request =
+        new ApplyPlanningAssignmentsRequest(
+            WAREHOUSE,
+            planId,
+            1L,
+            List.of(
+                new PlanningAssignmentRequest(
+                    order.getId(),
+                    order.getVersion(),
+                    firstDate,
+                    DRIVER,
+                    "Driver",
+                    List.of(SHIPMENT_ASSET)),
+                new PlanningAssignmentRequest(
+                    order.getId(),
+                    order.getVersion(),
+                    firstDate.plusDays(1),
+                    DRIVER,
+                    "Driver",
+                    List.of(SECOND_SHIPMENT_ASSET))),
+            List.of(
+                planningShift(planId, firstDate), planningShift(planId, firstDate.plusDays(1))));
+    Map<String, Long> baselineEffects = planningEffects();
+    // V37 records the fixture order's first warehouse operation before planner apply begins.
+    assertThat(baselineEffects)
+        .containsExactlyInAnyOrderEntriesOf(
+            Map.of(
+                "logistics_document", 0L,
+                "logistics_document_line", 0L,
+                "driver_logistics_task", 0L,
+                "logistics_idempotency_record", 0L,
+                "logistics_warehouse_admission_intent", 0L,
+                "warehouse_operation_mark_outbox", 1L,
+                "logistics_external_attempt", 0L,
+                "domain_event", 0L,
+                "outbox_event", 0L));
+    List<Map<String, Object>> originalTerms = planningTerms(order.getId());
+    AtomicReference<Map<String, Long>> expectedEffects = new AtomicReference<>(baselineEffects);
+    AtomicInteger calls = new AtomicInteger();
+    AtomicBoolean fail = new AtomicBoolean(true);
+    Map<UUID, UUID> registrationKeys = new LinkedHashMap<>();
+    doAnswer(
+            invocation -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+              assertThat(planningEffects()).isEqualTo(expectedEffects.get());
+              UUID key = invocation.getArgument(0);
+              UUID shiftId = invocation.getArgument(1);
+              UUID previousKey = registrationKeys.putIfAbsent(shiftId, key);
+              if (previousKey != null) assertThat(key).isEqualTo(previousKey);
+              if (calls.incrementAndGet() == failedRegistration && fail.get()) {
+                throw new LogisticsDependencyException(failureKind, "registration failed");
+              }
+              return null;
+            })
+        .when(dependencies)
+        .registerDriverShiftPlan(any(), any(), any());
+
+    assertThatThrownBy(() -> planning.apply(batchKey, request))
+        .isInstanceOfSatisfying(
+            LogisticsDependencyException.class,
+            failure -> assertThat(failure.kind()).isEqualTo(failureKind));
+    assertThat(calls.get()).isEqualTo(failedRegistration);
+    assertThat(planningEffects()).isEqualTo(baselineEffects);
+    assertThat(planningTerms(order.getId())).isEqualTo(originalTerms);
+
+    fail.set(false);
+    var created = planning.apply(batchKey, request);
+    assertThat(created.rejected()).isEmpty();
+    assertThat(created.applied())
+        .hasSize(2)
+        .allSatisfy(part -> assertThat(part.replayed()).isFalse());
+    Map<String, Long> committedEffects = planningEffects();
+    assertThat(committedEffects)
+        .containsEntry("logistics_document", 2L)
+        .containsEntry("logistics_document_line", 2L)
+        .containsEntry("driver_logistics_task", 2L)
+        .containsEntry("logistics_idempotency_record", 2L);
+    assertThat(planningTerms(order.getId()))
+        .allSatisfy(term -> assertThat(term.get("rental_shipment_id")).isNotNull());
+
+    // A later real order transition must not invalidate an already committed exact shipment retry.
+    new TransactionTemplate(transactionManager)
+        .executeWithoutResult(
+            status -> {
+              RentalOrder cancelled = rentalOrders.findForUpdate(order.getId()).orElseThrow();
+              cancelled.cancelSavedCustomerBooking();
+              rentalOrders.saveAndFlush(cancelled);
+            });
+    expectedEffects.set(committedEffects);
+    var replay = planning.apply(batchKey, request);
+    assertThat(replay.rejected()).isEmpty();
+    assertThat(replay.applied())
+        .hasSize(2)
+        .allSatisfy(part -> assertThat(part.replayed()).isTrue());
+    assertThat(replay.applied())
+        .extracting(part -> part.documentId())
+        .containsExactlyElementsOf(
+            created.applied().stream().map(part -> part.documentId()).toList());
+    assertThat(replay.applied())
+        .extracting(part -> part.externalTaskId())
+        .containsExactlyElementsOf(
+            created.applied().stream().map(part -> part.externalTaskId()).toList());
+    assertThat(planningEffects()).isEqualTo(committedEffects);
+    assertThat(registrationKeys).hasSize(2);
+    assertThat(calls.get()).isEqualTo(failedRegistration + 4);
+  }
+
+  private RentalOrder paidPlanningOrder(LocalDate date) {
+    OrderClient client =
+        orderClients.saveAndFlush(
+            OrderClient.create(
+                ClientType.LEGAL_ENTITY,
+                "Planning client",
+                "planning client",
+                "+79990000001",
+                "+79990000001",
+                null,
+                null,
+                "Contact",
+                SUBJECT,
+                "Manager",
+                null,
+                null,
+                List.of(),
+                SUBJECT,
+                UUID.randomUUID(),
+                "a".repeat(64)));
+    RentalOrder order =
+        RentalOrder.create(
+            "ORD-990001",
+            client,
+            SUBJECT,
+            "Manager",
+            SUBJECT,
+            "Manager",
+            "RENTAL_MANAGER",
+            "+79990000001",
+            null,
+            UUID.randomUUID(),
+            "b".repeat(64));
+    order.selectWarehouse(WAREHOUSE);
+    order.replaceClientDeliveryDetails(
+        "Delivery address", new BigDecimal("55.75"), new BigDecimal("37.62"), List.of());
+    order.replaceClientDesiredDeliveryWindows(
+        List.of(
+            DesiredDeliveryWindow.create(date, date),
+            DesiredDeliveryWindow.create(date.plusDays(1), date.plusDays(1))));
+    order.saveForFulfillment();
+    OffsetDateTime timestamp =
+        jdbc.queryForObject("select clock_timestamp()", OffsetDateTime.class);
+    order.startPaymentReservation(timestamp);
+    order.confirmPayment(RentalOrderPaymentSource.MANAGER_CONFIRMATION, SUBJECT, timestamp);
+    RentalOrder saved = rentalOrders.saveAndFlush(order);
+    rentalTerms.saveAllAndFlush(
+        List.of(
+            RentalOrderUnitTerm.create(
+                saved, SHIPMENT_ASSET, 2, new RentalOrderQuotedPrice(0L, 1000L)),
+            RentalOrderUnitTerm.create(
+                saved, SECOND_SHIPMENT_ASSET, 2, new RentalOrderQuotedPrice(0L, 1000L))));
+    when(dependencies.readOrderUnits(saved.getId()))
+        .thenReturn(
+            List.of(
+                planningReservation(saved.getId(), SHIPMENT_ASSET),
+                planningReservation(saved.getId(), SECOND_SHIPMENT_ASSET)));
+    when(dependencies.productionReady()).thenReturn(true);
+    when(dependencies.warehouseAdmission(WAREHOUSE, WarehouseOperationDirection.OUTGOING))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseOperationAdmission(
+                WAREHOUSE,
+                1,
+                LogisticsDependencyGateway.WarehouseLifecycleState.ACTIVE,
+                WarehouseOperationDirection.OUTGOING,
+                true));
+    when(dependencies.warehouseTimeZoneAt(eq(WAREHOUSE), any()))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseTimeZone(
+                WAREHOUSE, "Europe/Moscow", timestamp.minusDays(1)));
+    return saved;
+  }
+
+  private static LogisticsDependencyGateway.OrderUnitReservation planningReservation(
+      UUID orderId, UUID unitId) {
+    OffsetDateTime timestamp = OffsetDateTime.now();
+    return new LogisticsDependencyGateway.OrderUnitReservation(
+        UUID.randomUUID(),
+        0,
+        orderId,
+        unitId,
+        WAREHOUSE,
+        "ACTIVE",
+        SUBJECT,
+        "RENTAL_MANAGER",
+        timestamp,
+        null,
+        false,
+        new LogisticsDependencyGateway.OrderRentalItem(
+            unitId,
+            7,
+            WAREHOUSE,
+            "CAB-" + unitId,
+            "FREE",
+            "RENT",
+            null,
+            null,
+            null,
+            null,
+            null,
+            List.of(),
+            List.of(),
+            timestamp,
+            timestamp));
+  }
+
+  private static PlanningDriverShiftPlanRequest planningShift(UUID planId, LocalDate date) {
+    return new PlanningDriverShiftPlanRequest(
+        UUID.randomUUID(),
+        planId,
+        1L,
+        WAREHOUSE,
+        DRIVER,
+        "Driver",
+        date,
+        new PlanningDriverShiftVehicleRequest(
+            UUID.randomUUID(),
+            "MAN",
+            "A123AA",
+            "FLATBED_CRANE",
+            "MAN",
+            "TGS",
+            PlanningDriverShiftVehicleConfiguration.TRUCK,
+            null),
+        null,
+        1,
+        1000L);
+  }
+
+  private List<Map<String, Object>> planningTerms(UUID orderId) {
+    return jdbc.queryForList(
+        "select * from rental_order_unit_term where order_id=? order by rental_item_id", orderId);
+  }
+
+  private Map<String, Long> planningEffects() {
+    Map<String, Long> counts = new LinkedHashMap<>();
+    for (String table :
+        List.of(
+            "logistics_document",
+            "logistics_document_line",
+            "driver_logistics_task",
+            "logistics_idempotency_record",
+            "logistics_warehouse_admission_intent",
+            "warehouse_operation_mark_outbox",
+            "logistics_external_attempt",
+            "domain_event",
+            "outbox_event")) {
+      counts.put(table, jdbc.queryForObject("select count(*) from " + table, Long.class));
+    }
+    return counts;
   }
 
   private LogisticsWarehouseLifecycle.AdmissionTicket confirmationAdmission(UUID key) {
