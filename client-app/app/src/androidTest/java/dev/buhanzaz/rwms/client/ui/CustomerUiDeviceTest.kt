@@ -64,7 +64,9 @@ class CustomerUiDeviceTest {
         composeRule.onNodeWithTag("menu-button").performClick()
         val drawer = composeRule.onNodeWithTag("customer-drawer").fetchSemanticsNode().boundsInRoot
         val logo = composeRule.onNodeWithTag("drawer-logo").fetchSemanticsNode().boundsInRoot
-        assertTrue("Logo should use most of the narrowed drawer", logo.width > drawer.width * 0.8f)
+        assertTrue("Compact logo should stay inside the drawer", logo.left >= drawer.left && logo.right <= drawer.right)
+        assertTrue("Brand header should leave room for navigation", logo.width < drawer.width * 0.65f)
+        composeRule.onNodeWithContentDescription("Закрыть меню").assertDoesNotExist()
         saveScreen("drawer-${mode.name.lowercase()}")
     }
 

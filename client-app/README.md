@@ -25,34 +25,24 @@ only during one native exchange and are never persisted. The callback
 not opened. Registration first obtains CSRF metadata, posts the confirmed
 password, and then runs the same PKCE login.
 
-Every process launch first renders the exact imported BLOCK BOX vector for
-three seconds. The start actions enter from opposite screen edges without a parent alpha
-layer clipping their travel. The logo spans the action width and moves above the form;
-the IME collapses its reserved space while the whole form remains scrollable. Login,
-registration, and recovery use short page transitions in one signed-out screen. Login has
-an explicit `Вход` heading and `Войти` action, and back navigation follows the same transition. Registration
-collects login, email, confirmed password, and phone; the auth boundary still
-receives only its contract fields, while email and phone prefill the mandatory
-individual logistics profile after sign-in. `Продолжить без аккаунта` remains
-visible but unavailable because the public contract has no guest catalog.
-Recovery remains an explicit unavailable result rather than fabricated success.
+Ready content opens without an artificial launch delay. The welcome screen introduces cabin rental
+and delivery beside the imported BLOCK BOX wordmark. Login and registration use a compact back/brand
+row; the logo is omitted while the keyboard is open, and the complete form remains scrollable.
+Registration collects login, email, confirmed password and phone; the auth boundary still receives
+only its contract fields, while email and phone prefill the mandatory individual logistics profile.
+Guest access and password recovery are explained as unavailable before asking for unsupported input.
 
-One silent Media3 player renders the exact imported `background_caustic.webm`
-behind every CustomerApp route. It uses crop/zoom, repeats the asset indefinitely,
-pauses decoding outside the active lifecycle, and is released with the root
-composition instead of being recreated between screens. Auth/profile fields and
-app actions reuse translucent 12 dp fields and gradient buttons, with a restrained press motion.
-Manrope headings and Golos Text body copy include Cyrillic glyphs and are packaged with their
-SIL Open Font Licenses under `app/src/main/assets/licenses/`. Operational screens use clearer translucent surfaces, a distinct outlined secondary
-action, and 48 dp action targets. Button shadows use Compose's cached shape-aware `dropShadow`, independently of the
-translucent fill; text fields use a light rim without an elevation layer. Date and time selection shows the address, available
-server offers and price without internal capacity counters or vehicle-profile dimensions; the
-confirmed site-access requirement remains visible at checkout. The motion foreground is in
-[`CustomerStoreWelcomeScreen.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerStoreWelcomeScreen.kt),
-the shared visual/player layer is in
-[`CustomerStoreDesign.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerStoreDesign.kt),
-and the conditional binding is in
-[`CustomerApp.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerApp.kt).
+The shared design uses opaque light surfaces and neutral graphite dark surfaces, Cyrillic Manrope
+headings and Golos Text body copy. Their SIL Open Font Licenses are packaged under
+`app/src/main/assets/licenses/`. The approved 12 dp gradient buttons keep their shadow and press
+states; secondary actions, focus borders and password visibility controls share the same type scale
+and accessible touch targets. The wordmark has a contrasting dark appearance. The launcher vector
+preserves the paths, gradient and proportions of the supplied [`Logo_App.svg`](../Logo_App.svg).
+The silent caustic Media3 loop is confined to the welcome artwork, pauses outside the foreground and
+is released when that artwork leaves composition. Forms, catalog content and dialogs use opaque
+surfaces. The visual system lives in
+[`CustomerStoreDesign.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerStoreDesign.kt) and
+[`CustomerTheme.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerTheme.kt).
 
 When `Запомнить` is selected, access/refresh tokens are stored as AES-GCM ciphertext in DataStore;
 otherwise the usable session remains process-memory only. The key is
@@ -103,7 +93,7 @@ encrypted remembered session. Logout cancels work, removes notifications and fen
 Jetpack Compose Material 3 and Navigation 3 provide mutually exclusive
 signed-out and signed-in graphs. Every newly registered customer completes an
 individual profile. Existing individual/legal profile kinds remain immutable;
-the drawer exposes `Доступ для юрлиц` as an intentionally non-functional future-access placeholder.
+`Доступ для юрлиц` is explained in profile settings, with no unsupported action in the drawer.
 The signed-in flow presents city selection with an optional `Remember selected city` checkbox before
 loading server-returned free cabins. Menu and profile remain available at this step. City labels come
 from the warehouse service's `city` field; warehouses in the same city retain separate identities and
@@ -242,11 +232,11 @@ the presentation policy is in
 [`CustomerPolicies.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerPolicies.kt).
 
 Navigation uses the drawer with the BLOCK BOX logo on all window sizes. A floating cart shortcut at
-the bottom right of catalog, orders and profile shows the selected cabin count when nonzero. The cart
-and delivery flow have no persistent shortcut. Forward, back and predictive-back transitions are
-synchronized full-width slides with no crossfade between translucent screens. Back from the cart or
+the bottom right of the cabin catalog shows the selected cabin count when nonzero. Other screens
+have no persistent cart shortcut. Forward, back and predictive-back transitions are
+synchronized full-width slides between opaque screens. Back from the cart or
 profile restores the preceding screen; drawer destinations retain the rental catalog (or city
-selection) as their root. The opaque, 296-dp-wide drawer has a wider logo and closes before changing
+selection) as their root. The opaque, 296-dp-wide drawer has a compact brand header and closes before changing
 destinations. It exposes a single one-tap explicit
 light/dark appearance toggle; system and battery appearance sources are not supported. Screens and full-screen dialogs are
 edge-to-edge and IME-aware. Customer commands are serialized, 409 reloads

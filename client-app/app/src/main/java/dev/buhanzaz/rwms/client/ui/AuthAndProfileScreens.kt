@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -22,8 +23,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.outlined.Apartment
+import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -39,7 +44,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -47,7 +51,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import dev.buhanzaz.rwms.client.BuildConfig
 import dev.buhanzaz.rwms.client.data.CustomerEntityType
@@ -123,8 +126,8 @@ fun ProfileFormScreen(
     ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()
-                .padding(horizontal = 20.dp).testTag("profile-screen"),
-            contentPadding = PaddingValues(top = 16.dp, bottom = 100.dp),
+                .padding(horizontal = 16.dp).testTag("profile-screen"),
+            contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             if (existing != null) {
@@ -141,17 +144,15 @@ fun ProfileFormScreen(
                 }
             }
             item {
-                Text(
-                    text = if (type == CustomerEntityType.INDIVIDUAL) {
-                        "Физическое лицо"
-                    } else {
-                        "Юридическое лицо"
-                    },
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.testTag("profile-entity-type"),
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Данные клиента", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        text = if (type == CustomerEntityType.INDIVIDUAL) "Физическое лицо" else "Юридическое лицо",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.testTag("profile-entity-type"),
+                    )
+                }
             }
             if (type == CustomerEntityType.INDIVIDUAL) {
                 item {
@@ -183,7 +184,13 @@ fun ProfileFormScreen(
                     )
                 }
             }
-            item { Text("Контакты", style = MaterialTheme.typography.titleMedium) }
+            item {
+                Text(
+                    "Контакты",
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
             item {
                 CustomerTextField(
                     phone,
@@ -232,6 +239,34 @@ fun ProfileFormScreen(
                     enabled = !busy && valid && (existing == null || draft != existing),
                 ) { Text(if (existing == null) "Продолжить" else "Сохранить") }
             }
+            if (existing != null) {
+                item {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().testTag("profile-legal-entity-access"),
+                        shape = RoundedCornerShape(20.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    ) {
+                        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Icon(
+                                Icons.Outlined.Apartment,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                            Text("Доступ для юрлиц", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                if (type == CustomerEntityType.LEGAL) {
+                                    "Вы используете профиль юридического лица. Данные компании и контакты можно изменить выше."
+                                } else {
+                                    "Регистрация юридических лиц пока недоступна. Сейчас вы используете личный профиль для аренды."
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -243,54 +278,66 @@ private fun ProfileAvatar(
     busy: Boolean,
     onPick: () -> Unit,
 ) {
-    Column(
+    Surface(
         modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        Box(Modifier.size(128.dp), contentAlignment = Alignment.Center) {
-            Surface(
-                modifier = Modifier.size(120.dp).figmaButtonShadow(CircleShape).testTag("profile-avatar-preview"),
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.primaryContainer,
-                border = BorderStroke(2.dp, Color.White),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        profile.avatarInitials(),
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    )
-                    profile.avatar?.thumbnailUrl?.takeIf(String::isNotBlank)?.let { path ->
-                        AsyncImage(
-                            model = customerProfileMediaUrl(path),
-                            contentDescription = "Фото профиля",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize(),
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Box(Modifier.size(104.dp), contentAlignment = Alignment.Center) {
+                Surface(
+                    modifier = Modifier.size(96.dp).testTag("profile-avatar-preview"),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    border = BorderStroke(2.dp, MaterialTheme.colorScheme.outlineVariant),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            profile.avatarInitials(),
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
                         )
+                        profile.avatar?.thumbnailUrl?.takeIf(String::isNotBlank)?.let { path ->
+                            AsyncImage(
+                                model = customerProfileMediaUrl(path),
+                                contentDescription = "Фото профиля",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
+                    }
+                }
+                Surface(
+                    onClick = onPick,
+                    enabled = !busy,
+                    modifier = Modifier.align(Alignment.BottomEnd).size(48.dp).testTag("profile-avatar-picker"),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    border = BorderStroke(2.dp, MaterialTheme.colorScheme.surface),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(Icons.Default.PhotoCamera, contentDescription = "Изменить фото профиля", modifier = Modifier.size(22.dp))
                     }
                 }
             }
-            Surface(
-                onClick = onPick,
-                enabled = !busy,
-                modifier = Modifier.align(Alignment.BottomEnd).size(48.dp).testTag("profile-avatar-picker"),
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-                border = BorderStroke(2.dp, Color.White),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(Icons.Default.PhotoCamera, contentDescription = "Изменить фото профиля", modifier = Modifier.size(22.dp))
-                }
-            }
+            Text(
+                if (profile.entityType == CustomerEntityType.LEGAL) profile.companyName.orEmpty()
+                else listOfNotNull(profile.firstName, profile.lastName).joinToString(" "),
+                style = MaterialTheme.typography.titleLarge,
+            )
+            Text(
+                "Данные для аренды и доставки",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
-        Text(
-            if (profile.entityType == CustomerEntityType.LEGAL) profile.companyName.orEmpty()
-            else listOfNotNull(profile.firstName, profile.lastName).joinToString(" "),
-            style = MaterialTheme.typography.headlineSmall,
-        )
     }
 }
 
@@ -310,48 +357,99 @@ fun WarehouseScreen(
         topBar = { CustomerTopBar("Выбор города", onMenu, onProfile, avatarUrl = avatarUrl) },
     ) { padding ->
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(20.dp).testTag("warehouse-screen"),
+            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp).testTag("warehouse-screen"),
+            contentPadding = PaddingValues(top = 20.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item { Text("Выберите город, чтобы увидеть доступные бытовки.") }
             item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .toggleable(
-                            value = rememberWarehouse,
-                            enabled = !busy,
-                            role = Role.Checkbox,
-                            onValueChange = { rememberWarehouse = it },
-                        )
-                        .padding(vertical = 4.dp)
-                        .testTag("remember-warehouse"),
-                    verticalAlignment = Alignment.CenterVertically,
+                Column(
+                    Modifier.padding(bottom = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Checkbox(
-                        checked = rememberWarehouse,
-                        onCheckedChange = null,
-                        enabled = !busy,
+                    Text("Начнём с города", style = MaterialTheme.typography.headlineSmall)
+                    Text(
+                        "Выберите город, чтобы увидеть доступные бытовки.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Text("Запомнить выбранный город")
                 }
             }
             items(warehouses, key = CustomerWarehouse::id) { warehouse ->
-                OutlinedButton(
+                Surface(
                     onClick = { onSelect(warehouse, rememberWarehouse) },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().testTag("warehouse-option-${warehouse.id}"),
                     enabled = !busy,
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 ) {
-                    Column(Modifier.fillMaxWidth()) {
-                        Text(warehouse.customerCityLabel(), fontWeight = FontWeight.SemiBold)
-                        if (warehouses.count { it.customerCityLabel() == warehouse.customerCityLabel() } > 1) {
-                            Text(warehouse.address ?: warehouse.name, style = MaterialTheme.typography.bodySmall)
+                    Row(
+                        Modifier.fillMaxWidth().heightIn(min = 80.dp).padding(16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                        ) {
+                            Icon(
+                                Icons.Outlined.LocationOn,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(10.dp).size(22.dp),
+                            )
                         }
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(warehouse.customerCityLabel(), style = MaterialTheme.typography.titleMedium)
+                            if (warehouses.count { it.customerCityLabel() == warehouse.customerCityLabel() } > 1) {
+                                Text(
+                                    warehouse.address ?: warehouse.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        Icon(
+                            Icons.AutoMirrored.Outlined.ArrowForward,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp),
+                        )
                     }
                 }
             }
             if (warehouses.isEmpty()) {
-                item { Text("Нет доступных городов", color = MaterialTheme.colorScheme.error) }
+                item {
+                    Text(
+                        if (busy) "Загружаем города…" else "Нет доступных городов",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else {
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 56.dp)
+                            .toggleable(
+                                value = rememberWarehouse,
+                                enabled = !busy,
+                                role = Role.Checkbox,
+                                onValueChange = { rememberWarehouse = it },
+                            )
+                            .padding(vertical = 8.dp)
+                            .testTag("remember-warehouse"),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(checked = rememberWarehouse, onCheckedChange = null, enabled = !busy)
+                        Text(
+                            "Запомнить выбранный город",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
         }
     }
@@ -373,10 +471,8 @@ private fun CustomerTextField(
     ) {
         Text(
             text = label,
-            color = CustomerStoreNavy,
-            fontSize = 12.sp,
-            lineHeight = 14.sp,
-            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.labelLarge,
         )
         CustomerStoreInputField(
             value = value,

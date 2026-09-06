@@ -1,10 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Native translation of /Logo_App.svg. Preserve the supplied geometry and gradient. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path android:fillColor="#156A8A" android:pathData="M0,0h108v108h-108z" />
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="141dp"
+    android:height="132dp"
+    android:viewportWidth="141"
+    android:viewportHeight="132">
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M22,34L54,18L86,34V74L54,90L22,74ZM29,39V69L50,79V50ZM58,50V79L79,69V39ZM34,34L54,44L74,34L54,24Z" />
+        android:pathData="M0 16C0 7.16344 7.16344 0 16 0H124C132.837 0 140 7.16344 140 16V116C140 124.837 132.837 132 124 132H16C7.16344 132 0 124.837 0 116V16Z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear"
+                android:startX="140.0000000000"
+                android:startY="0.0000000000"
+                android:endX="0.0000006403"
+                android:endY="132.0000000000">
+                <item android:offset="0" android:color="#FFFFFFFF" />
+                <item android:offset="1" android:color="#BF549AC5" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path
+        android:pathData="M16 0.5H124C132.56 0.5 139.5 7.43959 139.5 16V116C139.5 124.56 132.56 131.5 124 131.5H16C7.43959 131.5 0.5 124.56 0.5 116V16C0.5 7.43959 7.43959 0.5 16 0.5Z"
+        android:strokeColor="#204B79"
+        android:strokeWidth="1"
+        android:strokeAlpha="0.19" />
+    <path
+        android:pathData="M97.5139 35.563L119.582 14.4803H73.4368V35.5618L97.5139 35.563ZM73.4368 63.1176H95.533V42.0361H73.4368V63.1176ZM124.378 63.1176V19.0335L102.276 40.1443V63.1176H124.378ZM66.6841 69.5991H131.124V8H66.6841V69.5991Z"
+        android:fillType="evenOdd"
+        android:fillColor="#549AC5" />
+    <path
+        android:pathData="M130.624 8.5V69.0986H67.1841V8.5H130.624ZM72.937 63.6172H96.0327V41.5361H72.937V63.6172ZM124.033 18.6719L101.93 39.7822L101.776 39.9307V63.6172H124.878V17.8643L124.033 18.6719ZM72.937 36.0615H73.437L97.5142 36.0635H97.7144L97.8589 35.9248L119.927 14.8418L120.829 13.9805H72.937V36.0615Z"
+        android:strokeColor="#000000"
+        android:strokeWidth="1"
+        android:strokeAlpha="0.14" />
+    <path
+        android:pathData="M44.5893 90.6733H66.6917V69.5979H44.5893V90.6733ZM15.7441 113.683L37.8452 92.565V69.5991H15.7429V113.684L15.7441 113.683ZM66.6917 118.229V97.1463H42.6096L20.5418 118.229H66.6917ZM9.00123 124.709H73.437V63.1176H9L9.00123 124.709Z"
+        android:fillType="evenOdd"
+        android:fillColor="#204B79" />
+    <path
+        android:pathData="M72.9375 63.6176V124.209H9.50098L9.5 63.6176H72.9375ZM42.2646 96.7845L20.1963 117.868L19.2949 118.729H67.1914V96.6459H42.4092L42.2646 96.7845ZM15.2432 114.883L16.0898 114.044L38.1904 92.9261L38.3457 92.7787V69.099H15.2432V114.883ZM44.0889 91.1732H67.1914V69.098H44.0889V91.1732Z"
+        android:strokeColor="#000000"
+        android:strokeWidth="1"
+        android:strokeAlpha="0.14" />
 </vector>

@@ -4,7 +4,8 @@ import android.app.Application
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.assertIsEnabled
-import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertHasNoClickAction
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -20,7 +21,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/** Compose checks for the imported greeting and complete signed-out customer flow. */
+/** Compose checks for immediate entry and the complete signed-out customer flow. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
 class CustomerStoreWelcomeScreenTest {
@@ -28,7 +29,7 @@ class CustomerStoreWelcomeScreenTest {
     val composeRule = createComposeRule()
 
     @Test
-    fun `greeting remains for three seconds before app content is exposed`() {
+    fun `ready app content is exposed without an artificial greeting delay`() {
         composeRule.mainClock.autoAdvance = false
         composeRule.setContent {
             CompositionLocalProvider(LocalCustomerStoreVideoBackgroundEnabled provides false) {
@@ -38,46 +39,48 @@ class CustomerStoreWelcomeScreenTest {
             }
         }
 
-        composeRule.onNodeWithTag("customer-hello-screen").assertExists()
-        composeRule.onNodeWithText("Основной контент").assertDoesNotExist()
-        composeRule.mainClock.advanceTimeBy(CustomerStoreGreetingDurationMillis - 200)
-        composeRule.onNodeWithTag("customer-hello-screen").assertExists()
-        composeRule.mainClock.advanceTimeBy(200)
-        composeRule.mainClock.advanceTimeByFrame()
         composeRule.onNodeWithText("Основной контент").assertExists()
+        composeRule.onNodeWithTag("customer-hello-screen").assertDoesNotExist()
     }
 
     @Test
-    fun `start actions animate once while guest access stays unavailable`() {
+    fun `start explains rental and presents only supported account actions`() {
         setAuthContent()
 
         composeRule.onNodeWithTag("customer-auth-login").assertIsEnabled()
         composeRule.onNodeWithTag("customer-auth-register").assertIsEnabled()
-        composeRule.onNodeWithTag("customer-guest-access-unavailable").assertIsNotEnabled()
+        composeRule.onNodeWithTag("customer-guest-access-unavailable").assertHasNoClickAction()
+        composeRule.onNodeWithText("Бытовка под ваши задачи").assertExists()
+        composeRule.onNodeWithText("Продолжить без аккаунта").assertDoesNotExist()
     }
 
     @Test
-    fun `start logo spans the action width and login moves it clear of the form`() {
+    fun `logo stays within the welcome and the fixed login header`() {
         setAuthContent()
         val logo = composeRule.onNodeWithTag("customer-auth-logo").fetchSemanticsNode().boundsInRoot
-        val action = composeRule.onNodeWithTag("customer-auth-login").fetchSemanticsNode().boundsInRoot
-        assertThat(logo.width).isWithin(1f).of(action.width)
-        assertThat(logo.bottom).isLessThan(action.top)
+        val screen = composeRule.onNodeWithTag("customer-auth-screen").fetchSemanticsNode().boundsInRoot
+        assertThat(logo.width).isGreaterThan(0f)
+        assertThat(logo.top).isAtLeast(screen.top)
+        assertThat(logo.left).isAtLeast(screen.left)
+        assertThat(logo.right).isAtMost(screen.right)
 
-        composeRule.onNodeWithTag("customer-auth-login").performClick()
+        composeRule.onNodeWithTag("customer-auth-login").performScrollTo().performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithText("Вход").assertExists()
         composeRule.onNodeWithText("Войти").assertExists()
         val movedLogo = composeRule.onNodeWithTag("customer-auth-logo").fetchSemanticsNode().boundsInRoot
         val login = composeRule.onNodeWithTag("customer-login-username").fetchSemanticsNode().boundsInRoot
+        val back = composeRule.onNodeWithTag("customer-auth-back").fetchSemanticsNode().boundsInRoot
         assertThat(movedLogo.top).isLessThan(logo.top)
         assertThat(movedLogo.bottom).isAtMost(login.top)
+        assertThat(movedLogo.left).isAtLeast(back.right)
+        assertThat(back.bottom).isAtMost(login.top)
     }
 
     @Test
     fun `back from recovery returns to login and then to the start actions`() {
         setAuthContent()
-        composeRule.onNodeWithTag("customer-auth-login").performClick()
+        composeRule.onNodeWithTag("customer-auth-login").performScrollTo().performClick()
         composeRule.onNodeWithTag("customer-login-recovery").performClick()
         composeRule.onNodeWithTag("customer-password-recovery-screen").assertExists()
         composeRule.onNodeWithTag("customer-auth-back").performClick()
@@ -97,13 +100,14 @@ class CustomerStoreWelcomeScreenTest {
             },
         )
 
-        composeRule.onNodeWithTag("customer-auth-login").performClick()
+        composeRule.onNodeWithTag("customer-auth-login").performScrollTo().performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("customer-login-screen").assertExists()
         composeRule.onNodeWithTag("customer-registration-screen").assertDoesNotExist()
         composeRule.onNodeWithTag("customer-login-username").performTextInput("customer")
         composeRule.onNodeWithTag("customer-login-password").performTextInput("secret-pass")
         composeRule.onNodeWithTag("customer-login-remember").performClick()
+        composeRule.onNodeWithTag("customer-login-remember").assertIsOn()
         composeRule.onNodeWithTag("customer-login-submit").assertIsEnabled().performClick()
 
         composeRule.runOnIdle {
@@ -120,7 +124,7 @@ class CustomerStoreWelcomeScreenTest {
             },
         )
 
-        composeRule.onNodeWithTag("customer-auth-register").performClick()
+        composeRule.onNodeWithTag("customer-auth-register").performScrollTo().performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("customer-registration-login").performTextInput("client_01")
         composeRule.onNodeWithTag("customer-registration-email").performTextInput("client@example.test")
@@ -147,7 +151,7 @@ class CustomerStoreWelcomeScreenTest {
     fun `failed login message leaves entered form available for retry`() {
         setAuthContent(message = "Неверный логин или пароль")
 
-        composeRule.onNodeWithTag("customer-auth-login").performClick()
+        composeRule.onNodeWithTag("customer-auth-login").performScrollTo().performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("customer-login-username").performTextInput("customer")
         composeRule.onNodeWithTag("customer-login-password").performTextInput("secret-pass")
@@ -160,7 +164,7 @@ class CustomerStoreWelcomeScreenTest {
         val submissions = AtomicInteger()
         setAuthContent(onLogin = { _, _, _ -> submissions.incrementAndGet() })
 
-        composeRule.onNodeWithTag("customer-auth-login").performClick()
+        composeRule.onNodeWithTag("customer-auth-login").performScrollTo().performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("customer-login-username").performTextInput("customer")
         composeRule.onNodeWithTag("customer-login-password").performTextInput("secret-pass")
@@ -171,17 +175,19 @@ class CustomerStoreWelcomeScreenTest {
     }
 
     @Test
-    fun `password recovery reports unavailable contract without fake success`() {
+    fun `password recovery explains unavailability before asking for any input`() {
         setAuthContent()
 
-        composeRule.onNodeWithTag("customer-auth-login").performClick()
+        composeRule.onNodeWithTag("customer-auth-login").performScrollTo().performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("customer-login-recovery").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("customer-password-recovery-screen").assertExists()
-        composeRule.onNodeWithTag("customer-recovery-phone").performTextInput("+79990000000")
-        composeRule.onNodeWithTag("customer-recovery-submit").performClick()
+        composeRule.onNodeWithTag("customer-recovery-phone").assertDoesNotExist()
+        composeRule.onNodeWithTag("customer-recovery-submit").assertDoesNotExist()
         composeRule.onNodeWithText("Восстановление пароля пока недоступно").assertExists()
+        composeRule.onNodeWithText("Вернуться ко входу").performScrollTo().performClick()
+        composeRule.onNodeWithTag("customer-login-screen").assertExists()
     }
 
     @Test

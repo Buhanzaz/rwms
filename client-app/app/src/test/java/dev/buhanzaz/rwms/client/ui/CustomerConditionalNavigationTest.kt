@@ -13,8 +13,11 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.client.data.CustomerBooking
 import dev.buhanzaz.rwms.client.data.CustomerEntityType
@@ -166,7 +169,7 @@ class CustomerConditionalNavigationTest {
     }
 
     @Test
-    fun `legal entity access is a drawer placeholder and keeps the catalog open`() {
+    fun `legal entity availability is explained in profile without a drawer placeholder`() {
         composeRule.setContent {
             CustomerTheme {
                 CustomerAppContent(
@@ -176,9 +179,15 @@ class CustomerConditionalNavigationTest {
         }
 
         composeRule.onNodeWithTag("menu-button").performClick()
-        composeRule.onNodeWithTag("legal-entity-access-placeholder").performScrollTo().performClick()
-        composeRule.onNodeWithText("Доступ для юридических лиц появится позже").assertExists()
-        composeRule.onNodeWithTag("catalog-screen").assertExists()
+        composeRule.onNodeWithTag("legal-entity-access-placeholder").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Закрыть меню").assertDoesNotExist()
+        composeRule.onNodeWithText("Доступ для юрлиц").assertDoesNotExist()
+        composeRule.onNodeWithText("Профиль").performClick()
+        composeRule.onNodeWithTag("profile-screen").performScrollToNode(hasTestTag("profile-legal-entity-access"))
+        composeRule.onNodeWithText("Доступ для юрлиц").assertExists()
+        composeRule.onNodeWithText(
+            "Регистрация юридических лиц пока недоступна. Сейчас вы используете личный профиль для аренды.",
+        ).assertExists()
     }
 
     @Test
@@ -209,7 +218,7 @@ class CustomerConditionalNavigationTest {
     }
 
     @Test
-    fun `cart shortcut returns to the profile it was opened from`() {
+    fun `cart shortcut is hidden in profile and restored only in catalog`() {
         composeRule.setContent {
             CustomerTheme {
                 CustomerAppContent(
@@ -218,11 +227,14 @@ class CustomerConditionalNavigationTest {
             }
         }
         composeRule.onNodeWithTag("profile-avatar").performClick()
-        composeRule.onNodeWithTag("cart-fab").performClick()
-        composeRule.onNodeWithTag("header-back").performClick()
         composeRule.onNodeWithTag("profile-screen").assertExists()
+        composeRule.onNodeWithTag("cart-fab").assertDoesNotExist()
         composeRule.onNodeWithTag("header-back").performClick()
         composeRule.onNodeWithTag("catalog-screen").assertExists()
+        composeRule.onNodeWithTag("cart-fab").assertExists()
+        composeRule.onNodeWithTag("menu-button").performClick()
+        composeRule.onNodeWithText("Мои заказы").performClick()
+        composeRule.onNodeWithTag("cart-fab").assertDoesNotExist()
     }
 
     @Test

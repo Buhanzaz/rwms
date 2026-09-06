@@ -5,7 +5,9 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,31 +17,33 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Apartment
-import androidx.compose.material.icons.filled.Book
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DarkMode
-import androidx.compose.material.icons.filled.HomeWork
 import androidx.compose.material.icons.filled.LightMode
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material.icons.automirrored.outlined.Logout
+import androidx.compose.material.icons.outlined.HomeWork
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.ReceiptLong
+import androidx.compose.material.icons.outlined.ShoppingCart
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -56,6 +60,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
@@ -400,67 +406,56 @@ private fun SignedInNavigation(
         drawerContent = {
             ModalDrawerSheet(
                 modifier = Modifier.width(296.dp).fillMaxHeight().testTag("customer-drawer"),
-                drawerContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 1f),
-                drawerShape = RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp),
+                drawerContainerColor = MaterialTheme.colorScheme.surface,
+                drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 12.dp),
+                        .padding(horizontal = 12.dp, vertical = 16.dp),
                 ) {
-                    Box(Modifier.fillMaxWidth().padding(bottom = 20.dp)) {
+                    Column(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
                         CustomerStoreLogo(
-                            Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 48.dp)
-                                .testTag("drawer-logo"),
+                            Modifier.width(148.dp).height(61.dp).testTag("drawer-logo"),
                         )
-                        IconButton(
-                            onClick = { coroutineScope.launch { drawerState.close() } },
-                            modifier = Modifier.align(Alignment.TopEnd),
-                        ) {
-                            Icon(Icons.Default.Close, contentDescription = "Закрыть меню")
-                        }
+                        Text(
+                            "Аренда и доставка",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
+                    HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
                     NavigationDrawerItem(
                         shape = RoundedCornerShape(12.dp),
                         label = { Text("Аренда") },
                         selected = current is CatalogRoute,
                         onClick = { selectDrawerDestination(CatalogRoute) },
-                        icon = { Icon(Icons.Default.HomeWork, contentDescription = null) },
+                        icon = { Icon(Icons.Outlined.HomeWork, contentDescription = null) },
                     )
                     NavigationDrawerItem(
                         shape = RoundedCornerShape(12.dp),
                         label = { Text("Корзина (${state.selectedCabinIds.size})") },
                         selected = current is CartRoute || current.isDeliveryFlowRoute(),
                         onClick = { selectDrawerDestination(CartRoute) },
-                        icon = { Icon(Icons.Default.ShoppingCart, contentDescription = null) },
+                        icon = { Icon(Icons.Outlined.ShoppingCart, contentDescription = null) },
                     )
                     NavigationDrawerItem(
                         shape = RoundedCornerShape(12.dp),
                         label = { Text("Мои заказы") },
                         selected = current is BookingsRoute,
                         onClick = { selectDrawerDestination(BookingsRoute) },
-                        icon = { Icon(Icons.Default.Book, contentDescription = null) },
+                        icon = { Icon(Icons.Outlined.ReceiptLong, contentDescription = null) },
                     )
                     NavigationDrawerItem(
                         shape = RoundedCornerShape(12.dp),
                         label = { Text("Профиль") },
                         selected = current is ProfileRoute,
                         onClick = { selectDrawerDestination(ProfileRoute) },
-                        icon = { Icon(Icons.Default.Person, contentDescription = null) },
-                    )
-                    NavigationDrawerItem(
-                        shape = RoundedCornerShape(12.dp),
-                        label = { Text("Доступ для юрлиц") },
-                        selected = false,
-                        onClick = {
-                            coroutineScope.launch {
-                                drawerState.close()
-                                snackbar.showSnackbar("Доступ для юридических лиц появится позже")
-                            }
-                        },
-                        icon = { Icon(Icons.Default.Apartment, contentDescription = null) },
-                        modifier = Modifier.testTag("legal-entity-access-placeholder"),
+                        icon = { Icon(Icons.Outlined.Person, contentDescription = null) },
                     )
                     HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
                     val nextAppearanceMode = appearanceMode.toggle()
@@ -472,7 +467,13 @@ private fun SignedInNavigation(
                         icon = { Icon(nextAppearanceMode.appearanceIcon(), contentDescription = null) },
                         modifier = Modifier.testTag("appearance-toggle"),
                     )
-                    NavigationDrawerItem(label = { Text("Выйти") }, selected = false, onClick = onLogout, shape = RoundedCornerShape(12.dp))
+                    NavigationDrawerItem(
+                        label = { Text("Выйти") },
+                        selected = false,
+                        onClick = onLogout,
+                        shape = RoundedCornerShape(12.dp),
+                        icon = { Icon(Icons.AutoMirrored.Outlined.Logout, contentDescription = null) },
+                    )
                 }
             }
         },
@@ -650,7 +651,7 @@ private fun SignedInNavigation(
                 },
             )
             if (!editingAvatar && state.selectedCabinIds.isNotEmpty() &&
-                (current is CatalogRoute || current is BookingsRoute || current is ProfileRoute)
+                current is CatalogRoute
             ) {
                 CustomerCartButton(
                     count = state.selectedCabinIds.size,
@@ -660,18 +661,32 @@ private fun SignedInNavigation(
             }
             SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding())
             if (shouldShowGlobalBusyOverlay(state.busy, current)) {
-                Box(
-                    Modifier.fillMaxSize().testTag("global-busy-overlay"),
-                    contentAlignment = Alignment.Center,
+                Dialog(
+                    onDismissRequest = {},
+                    properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
                 ) {
-                    CircularProgressIndicator()
+                    Surface(
+                        modifier = Modifier.testTag("global-busy-overlay"),
+                        shape = RoundedCornerShape(20.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    ) {
+                        Row(
+                            Modifier.padding(24.dp),
+                            horizontalArrangement = Arrangement.spacedBy(20.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
+                            Text("Подождите…", style = MaterialTheme.typography.titleMedium)
+                        }
+                    }
                 }
             }
         }
     }
 }
 
-/** Floating cart is the only persistent shortcut; the count tracks selected server-backed cabins. */
+/** Catalog-only cart shortcut; the count tracks selected server-backed cabins. */
 @Composable
 private fun CustomerCartButton(count: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
     BadgedBox(
@@ -711,7 +726,12 @@ private fun LoadingCustomerScreen(message: String) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             CircularProgressIndicator()
-            Text(message, modifier = Modifier.padding(16.dp))
+            Text(
+                message,
+                modifier = Modifier.padding(16.dp),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
         }
     }
 }

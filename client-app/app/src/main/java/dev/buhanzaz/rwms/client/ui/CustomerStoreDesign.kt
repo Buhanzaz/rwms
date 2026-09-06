@@ -8,19 +8,18 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -31,12 +30,21 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -49,21 +57,22 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.Dp
@@ -120,25 +129,38 @@ internal fun CustomerStoreLogo(
         painter = painterResource(R.drawable.block_box_logo_svg),
         contentDescription = "Block Box",
         contentScale = ContentScale.Fit,
+        colorFilter = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) {
+            ColorFilter.tint(MaterialTheme.colorScheme.onSurface)
+        } else null,
         modifier = modifier
             .fillMaxWidth()
-            .aspectRatio(234f / 96f)
             .then(
                 if (horizontalPadding == 0.dp) Modifier else Modifier.paddingHorizontal(horizontalPadding),
             ),
     )
 }
 
-/** Production background selector shared by every CustomerApp route. */
+/** Calm, opaque backdrop shared by all reading and editing screens. */
 @Composable
 internal fun CustomerStoreBackground(modifier: Modifier = Modifier) {
-    if (LocalCustomerStoreVideoBackgroundEnabled.current) {
-        CustomerVideoBackground(
-            videoRes = R.raw.background_caustic,
-            modifier = modifier,
+    Box(modifier.background(MaterialTheme.colorScheme.background))
+}
+
+/** The moving water motif is confined to the welcome artwork, away from forms and product data. */
+@Composable
+internal fun CustomerWelcomeAtmosphere(modifier: Modifier = Modifier) {
+    val background = MaterialTheme.colorScheme.background
+    Box(modifier) {
+        if (LocalCustomerStoreVideoBackgroundEnabled.current) {
+            CustomerVideoBackground(R.raw.background_caustic, Modifier.matchParentSize())
+        } else {
+            Box(Modifier.matchParentSize().background(CustomerStoreWaterFallback))
+        }
+        Box(
+            Modifier.matchParentSize().background(
+                Brush.verticalGradient(listOf(background.copy(alpha = 0.76f), background)),
+            ),
         )
-    } else {
-        Box(modifier.background(CustomerStoreWaterFallback))
     }
 }
 
@@ -172,7 +194,7 @@ internal fun Button(
 }
 
 /**
- * Secondary app action uses the translucent field surface so the main gradient action remains
+ * Secondary app action uses a solid outlined surface so the main gradient action remains
  * visually distinct. The signed-out login and registration keep their supplied prototype styles.
  */
 @Composable
@@ -181,7 +203,7 @@ internal fun OutlinedButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     shape: Shape = RoundedCornerShape(12.dp),
-    border: BorderStroke? = BorderStroke(1.dp, Color.White.copy(alpha = 0.55f)),
+    border: BorderStroke? = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
     contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
     interactionSource: MutableInteractionSource? = null,
     content: @Composable RowScope.() -> Unit,
@@ -197,8 +219,8 @@ internal fun OutlinedButton(
         colors = ButtonDefaults.outlinedButtonColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant,
             contentColor = MaterialTheme.colorScheme.onSurface,
-            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f),
-            disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
         ),
         content = content,
     )
@@ -217,7 +239,7 @@ internal fun CustomerStyledButton(
 ) {
     CustomerStyledButton(
         onClick = onClick,
-        modifier = modifier.fillMaxWidth().height(height),
+        modifier = modifier.fillMaxWidth().heightIn(min = height),
         enabled = enabled,
         normalStyle = normalStyle,
         pressedStyle = pressedStyle,
@@ -266,7 +288,7 @@ private fun CustomerStyledButton(
         label = "customer-button-gradient-end",
     )
     val fillOpacity by animateFloatAsState(
-        targetValue = if (enabled) targetStyle.fillOpacity else targetStyle.fillOpacity * 0.48f,
+        targetValue = if (enabled) targetStyle.fillOpacity else targetStyle.fillOpacity * 0.64f,
         animationSpec = tween(280, easing = FastOutSlowInEasing),
         label = "customer-button-opacity",
     )
@@ -281,11 +303,12 @@ private fun CustomerStyledButton(
             containerColor = Color.Transparent,
             contentColor = Color.White,
             disabledContainerColor = Color.Transparent,
-            disabledContentColor = Color.White.copy(alpha = 0.62f),
+            disabledContentColor = Color.White.copy(alpha = 0.84f),
         ),
         contentPadding = contentPadding,
         interactionSource = source,
         modifier = modifier
+            .heightIn(min = 48.dp)
             .graphicsLayer {
                 scaleX = pressScale
                 scaleY = pressScale
@@ -306,7 +329,7 @@ private fun CustomerStyledButton(
     )
 }
 
-/** Borderless translucent input used by auth and profile forms. */
+/** Shared native text input with a stable focus border and an accessible label. */
 @Composable
 internal fun CustomerStoreInputField(
     value: String,
@@ -323,6 +346,10 @@ internal fun CustomerStoreInputField(
     singleLine: Boolean = true,
 ) {
     val shape = RoundedCornerShape(12.dp)
+    val interactionSource = remember { MutableInteractionSource() }
+    val focused by interactionSource.collectIsFocusedAsState()
+    val passwordField = visualTransformation is PasswordVisualTransformation
+    var passwordVisible by remember { mutableStateOf(false) }
     BasicTextField(
         value = value,
         onValueChange = onValueChange,
@@ -332,33 +359,50 @@ internal fun CustomerStoreInputField(
         textStyle = MaterialTheme.typography.bodyLarge.copy(
             color = MaterialTheme.colorScheme.onSurface,
         ),
-        cursorBrush = SolidColor(CustomerStoreNavy),
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        interactionSource = interactionSource,
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = imeAction),
         keyboardActions = keyboardActions,
-        visualTransformation = visualTransformation,
+        visualTransformation = if (passwordField && passwordVisible) VisualTransformation.None else visualTransformation,
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = height)
             .then(if (focusRequester == null) Modifier else Modifier.focusRequester(focusRequester))
             .clip(shape)
-            .background(MaterialTheme.colorScheme.surfaceVariant, shape)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape),
+            .background(MaterialTheme.colorScheme.surfaceContainerLow, shape)
+            .border(
+                if (focused) 2.dp else 1.dp,
+                if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                shape,
+            )
+            .semantics { contentDescription = placeholder },
         decorationBox = { innerTextField ->
-            Box(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = height)
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                contentAlignment = Alignment.CenterStart,
+                    .padding(start = 16.dp, end = if (passwordField) 4.dp else 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (value.isEmpty()) {
-                    Text(
-                        text = placeholder,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
+                Box(Modifier.weight(1f).padding(vertical = 14.dp)) {
+                    if (value.isEmpty()) {
+                        Text(
+                            text = placeholder,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                    }
+                    innerTextField()
                 }
-                innerTextField()
+                if (passwordField) {
+                    IconButton(onClick = { passwordVisible = !passwordVisible }, enabled = enabled) {
+                        Icon(
+                            if (passwordVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                            contentDescription = if (passwordVisible) "Скрыть пароль" else "Показать пароль",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
         },
     )
@@ -372,51 +416,23 @@ internal fun CustomerRememberMeOption(
     enabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val source = remember { MutableInteractionSource() }
     Row(
         modifier = modifier
-            .height(24.dp)
-            .clickable(
+            .heightIn(min = 48.dp)
+            .toggleable(
+                value = checked,
                 enabled = enabled,
-                interactionSource = source,
-                indication = null,
                 role = Role.Checkbox,
-                onClick = { onCheckedChange(!checked) },
+                onValueChange = onCheckedChange,
             ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val checkboxShape = RoundedCornerShape(5.dp)
-        Canvas(
-            modifier = Modifier
-                .size(18.dp)
-                .clip(checkboxShape)
-                .background(Color.White.copy(alpha = 0.60f))
-                .border(1.dp, Color.White.copy(alpha = 0.55f), checkboxShape),
-        ) {
-            if (checked) {
-                val check = Path().apply {
-                    moveTo(size.width * 0.18f, size.height * 0.52f)
-                    lineTo(size.width * 0.42f, size.height * 0.75f)
-                    lineTo(size.width * 0.83f, size.height * 0.25f)
-                }
-                drawPath(
-                    path = check,
-                    color = CustomerStoreNavy,
-                    style = Stroke(
-                        width = 2.5.dp.toPx(),
-                        cap = StrokeCap.Round,
-                        join = StrokeJoin.Round,
-                    ),
-                )
-            }
-        }
-        Spacer(Modifier.width(5.dp))
+        Checkbox(checked = checked, onCheckedChange = null, enabled = enabled)
+        Spacer(Modifier.width(8.dp))
         Text(
             text = "Запомнить",
-            color = CustomerStoreNavy,
-            fontSize = 12.sp,
-            lineHeight = 16.sp,
-            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.labelLarge,
         )
     }
 }
@@ -428,7 +444,7 @@ internal fun CustomerTextAction(
     enabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    color: Color = CustomerStoreNavy,
+    color: Color = MaterialTheme.colorScheme.primary,
 ) {
     val source = remember { MutableInteractionSource() }
     val isPressed by source.collectIsPressedAsState()
@@ -438,12 +454,13 @@ internal fun CustomerTextAction(
         label = "customer-text-action-scale",
     )
     val pressAlpha by animateFloatAsState(
-        targetValue = if (isPressed && enabled) 0.55f else 0.97f,
+        targetValue = if (isPressed && enabled) 0.78f else if (enabled) 1f else 0.58f,
         animationSpec = tween(150),
         label = "customer-text-action-alpha",
     )
     Box(
         modifier = modifier
+            .heightIn(min = 48.dp)
             .graphicsLayer {
                 scaleX = pressScale
                 scaleY = pressScale

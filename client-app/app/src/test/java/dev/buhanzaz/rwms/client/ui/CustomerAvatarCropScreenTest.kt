@@ -137,13 +137,13 @@ class CustomerAvatarCropScreenTest {
             }
         }
         compose.onNodeWithTag("profile-avatar").performClick()
-        compose.onNodeWithTag("cart-fab").assertExists()
+        compose.onNodeWithTag("cart-fab").assertDoesNotExist()
         compose.onNodeWithTag("profile-avatar-picker").performClick()
         awaitPreview()
         compose.onNodeWithTag("cart-fab").assertDoesNotExist()
         compose.onNodeWithTag("header-back").performClick()
         compose.onNodeWithTag("profile-screen").assertExists()
-        compose.onNodeWithTag("cart-fab").assertExists()
+        compose.onNodeWithTag("cart-fab").assertDoesNotExist()
         compose.runOnIdle { assertThat(uploads).isEqualTo(0) }
     }
 
