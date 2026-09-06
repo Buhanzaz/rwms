@@ -1,5 +1,5 @@
 import { MapPin, Route, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AddressSuggestion, GeocodedAddress } from '../../api/client';
 import type { Warehouse } from '../../domain/types';
 import { DatePicker } from '../../components/DatePicker';
@@ -137,9 +137,15 @@ export function SlotAvailabilityPanel({
   const [addressLookupStatus, setAddressLookupStatus] = useState<'idle' | 'suggesting' | 'resolving' | 'reversing' | 'error'>('idle');
   const [addressLookupError, setAddressLookupError] = useState<string | null>(null);
   const resolvedPointRef = useRef<string | null>(null);
+  const addressResolutionRef = useRef<AbortController | null>(null);
+  const cancelAddressResolution = useCallback(() => {
+    addressResolutionRef.current?.abort();
+    addressResolutionRef.current = null;
+  }, []);
   const mapLayers = useUiStore((state) => state.layers);
   const toggleMapLayer = useUiStore((state) => state.toggleLayer);
 
+  useEffect(() => cancelAddressResolution, [cancelAddressResolution]);
   useEffect(() => setDate(planningDate), [planningDate]);
   useEffect(() => setWarehouseId(activeWarehouseId), [activeWarehouseId]);
   useEffect(() => {
@@ -183,14 +189,17 @@ export function SlotAvailabilityPanel({
   }, [address, suggestionBias, suggestionQueryEnabled, suggestAddresses]);
 
   useEffect(() => {
-    if (!point) return;
-    const pointKey = `${point.latitude}:${point.longitude}`;
-    if (resolvedPointRef.current === pointKey) {
+    const pointKey = point ? `${point.latitude}:${point.longitude}` : null;
+    if (pointKey && resolvedPointRef.current === pointKey) {
       resolvedPointRef.current = null;
       return;
     }
+    cancelAddressResolution();
+    if (!point) return;
     const controller = new AbortController();
+    addressResolutionRef.current = controller;
     const timer = window.setTimeout(() => {
+      if (controller.signal.aborted) return;
       setAddressLookupStatus('reversing');
       setAddressLookupError(null);
       void reverseGeocode(point.latitude, point.longitude, controller.signal).then((value) => {
@@ -208,8 +217,9 @@ export function SlotAvailabilityPanel({
     return () => {
       window.clearTimeout(timer);
       controller.abort();
+      if (addressResolutionRef.current === controller) addressResolutionRef.current = null;
     };
-  }, [point, reverseGeocode]);
+  }, [cancelAddressResolution, point, reverseGeocode]);
 
   const validPoint = point && Number.isFinite(point.latitude) && Number.isFinite(point.longitude)
     && point.latitude >= -90 && point.latitude <= 90 && point.longitude >= -180 && point.longitude <= 180;
@@ -266,6 +276,8 @@ export function SlotAvailabilityPanel({
   const changePointCoordinate = (key: 'latitude' | 'longitude', raw: string) => {
     const value = Number(raw);
     if (!Number.isFinite(value)) return;
+    cancelAddressResolution();
+    resolvedPointRef.current = null;
     onPointChange({
       latitude: key === 'latitude' ? value : point?.latitude ?? 0,
       longitude: key === 'longitude' ? value : point?.longitude ?? 0,
@@ -273,18 +285,24 @@ export function SlotAvailabilityPanel({
   };
   const toggleLayer = (key: keyof SlotPlanningLayers) => setLayers((current) => ({ ...current, [key]: !current[key] }));
   const changeAddress = (value: string) => {
+    cancelAddressResolution();
+    resolvedPointRef.current = null;
     setAddress(value);
     setSuggestionQueryEnabled(true);
     setSuggestions([]);
+    setAddressLookupStatus('idle');
     setAddressLookupError(null);
     if (point) onPointChange(null);
   };
   const selectSuggestion = async (suggestion: AddressSuggestion) => {
+    cancelAddressResolution();
     const controller = new AbortController();
+    addressResolutionRef.current = controller;
     setAddressLookupStatus('resolving');
     setAddressLookupError(null);
     try {
       const value = await resolveAddressSuggestion(suggestion.uri, controller.signal);
+      if (controller.signal.aborted || addressResolutionRef.current !== controller) return;
       const pointKey = `${value.latitude}:${value.longitude}`;
       resolvedPointRef.current = pointKey;
       setAddress(value.address);
@@ -293,8 +311,11 @@ export function SlotAvailabilityPanel({
       setAddressLookupStatus('idle');
       onPointChange({ latitude: value.latitude, longitude: value.longitude });
     } catch (caught: unknown) {
+      if (controller.signal.aborted || addressResolutionRef.current !== controller) return;
       setAddressLookupStatus('error');
       setAddressLookupError(userFacingErrorDetail(caught, 'Не удалось определить координаты адреса'));
+    } finally {
+      if (addressResolutionRef.current === controller) addressResolutionRef.current = null;
     }
   };
 

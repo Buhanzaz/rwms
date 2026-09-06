@@ -196,7 +196,9 @@ the minimum inspector width.
 The **Check new order** view offers debounced navigator-style address
 suggestions. Selecting one resolves its canonical address and coordinates;
 placing a point on the map reverse-geocodes and fills the address when the
-provider knows it. Manual address text remains available when reverse
+provider knows it. Editing the address, selecting another suggestion, moving the point or closing
+the panel cancels the previous lookup; a late result cannot replace the current address or point.
+Manual address text remains available when reverse
 geocoding has no result. The view calls `POST /api/planning/slot-availability`
 only for a complete point. Cabin count accepts any positive integer;
 site receiving capacity remains an explicit `1|2` choice. For each of the three

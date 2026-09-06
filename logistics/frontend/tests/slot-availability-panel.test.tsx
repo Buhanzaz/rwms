@@ -1,5 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { GeocodedAddress } from '../src/api/client';
 import { SlotAvailabilityPanel } from '../src/features/slot-availability/SlotAvailabilityPanel';
 import type { SlotAvailabilityResponse, SlotPlanningMapPresentation } from '../src/features/slot-availability/types';
 import { useUiStore } from '../src/stores/ui-store';
@@ -61,6 +63,41 @@ function panel(calculate = vi.fn().mockResolvedValue(calculated), debounceMillis
     debounceMilliseconds={debounceMilliseconds}
   />);
   return { calculate, presentations, suggestAddresses, resolveAddressSuggestion, reverseGeocode };
+}
+
+function deferredAddress() {
+  let resolve!: (address: GeocodedAddress) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<GeocodedAddress>((complete, fail) => { resolve = complete; reject = fail; });
+  return { promise, resolve, reject };
+}
+
+function addressRacePanel() {
+  const first = deferredAddress();
+  const second = deferredAddress();
+  const resolveAddressSuggestion = vi.fn<(uri: string, signal: AbortSignal) => Promise<GeocodedAddress>>()
+    .mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+  const onPointChange = vi.fn();
+  const calculate = vi.fn().mockResolvedValue(calculated);
+  const suggestAddresses = vi.fn().mockResolvedValue([
+    { id: 'a', title: 'Адрес A', uri: 'address:a' },
+    { id: 'b', title: 'Адрес B', uri: 'address:b' },
+  ]);
+  const reverseGeocode = vi.fn().mockResolvedValue({ address: 'Точка на карте', latitude: 60, longitude: 31 });
+  function ControlledPanel() {
+    const [point, setPoint] = useState<{ latitude: number; longitude: number } | null>(null);
+    return <>
+      <button onClick={() => setPoint({ latitude: 60, longitude: 31 })}>Выбрать точку на карте</button>
+      <SlotAvailabilityPanel
+        warehouseId={warehouse.id} warehouses={[warehouse]} planningDate="2026-08-29" point={point}
+        onPointChange={(value) => { onPointChange(value); setPoint(value); }}
+        onClose={vi.fn()} onPresentationChange={vi.fn()} calculate={calculate}
+        suggestAddresses={suggestAddresses} resolveAddressSuggestion={resolveAddressSuggestion}
+        reverseGeocode={reverseGeocode} debounceMilliseconds={0}
+      />
+    </>;
+  }
+  return { ...render(<ControlledPanel />), first, second, onPointChange, calculate, resolveAddressSuggestion, reverseGeocode };
 }
 
 afterEach(() => {
@@ -205,5 +242,76 @@ describe('dispatcher slot availability panel', () => {
 
     await waitFor(() => expect(onPointChange).toHaveBeenCalledWith({ latitude: 59.935, longitude: 30.325 }));
     expect(screen.getByLabelText('Адрес нового клиента')).toHaveValue('Санкт-Петербург, Невский проспект, 1');
+  });
+
+  it('keeps the second selected address when the first resolution finishes last', async () => {
+    const { first, second, resolveAddressSuggestion, onPointChange, calculate } = addressRacePanel();
+    fireEvent.change(screen.getByLabelText('Адрес нового клиента'), { target: { value: 'Адрес' } });
+    fireEvent.click(await screen.findByRole('option', { name: 'Адрес A' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Адрес B' }));
+    expect(resolveAddressSuggestion.mock.calls[0]?.[1].aborted).toBe(true);
+
+    await act(async () => { second.resolve({ address: 'Адрес B', latitude: 60, longitude: 31 }); await second.promise; });
+    await waitFor(() => expect(calculate).toHaveBeenCalledWith(expect.objectContaining({ address: 'Адрес B', latitude: 60, longitude: 31 }), expect.any(AbortSignal)));
+    await act(async () => { first.resolve({ address: 'Адрес A', latitude: 59, longitude: 30 }); await first.promise; });
+
+    expect(screen.getByLabelText('Адрес нового клиента')).toHaveValue('Адрес B');
+    expect(onPointChange).toHaveBeenCalledExactlyOnceWith({ latitude: 60, longitude: 31 });
+    expect(calculate.mock.calls.every(([input]) => (input as { address: string }).address === 'Адрес B')).toBe(true);
+  });
+
+  it.each(['text', 'coordinates', 'map'] as const)('ignores a pending resolution after changing %s', async (change) => {
+    const { first, resolveAddressSuggestion, onPointChange, reverseGeocode } = addressRacePanel();
+    fireEvent.change(screen.getByLabelText('Адрес нового клиента'), { target: { value: 'Адрес' } });
+    fireEvent.click(await screen.findByRole('option', { name: 'Адрес A' }));
+    if (change === 'text') {
+      fireEvent.change(screen.getByLabelText('Адрес нового клиента'), { target: { value: 'Новый ручной адрес' } });
+    } else if (change === 'coordinates') {
+      fireEvent.change(screen.getByLabelText('Широта нового клиента'), { target: { value: '60' } });
+    } else {
+      fireEvent.click(screen.getByRole('button', { name: 'Выбрать точку на карте' }));
+    }
+    expect(resolveAddressSuggestion.mock.calls[0]?.[1].aborted).toBe(true);
+    await act(async () => { first.resolve({ address: 'Адрес A', latitude: 59, longitude: 30 }); await first.promise; });
+    expect(onPointChange).not.toHaveBeenCalledWith({ latitude: 59, longitude: 30 });
+    if (change === 'text') {
+      expect(screen.getByLabelText('Адрес нового клиента')).toHaveValue('Новый ручной адрес');
+      expect(reverseGeocode).not.toHaveBeenCalled();
+    } else {
+      await waitFor(() => expect(screen.getByLabelText('Адрес нового клиента')).toHaveValue('Точка на карте'));
+      expect(screen.getByLabelText('Широта нового клиента')).toHaveValue(60);
+    }
+  });
+
+  it('does not show a stale resolution error after a newer address succeeds', async () => {
+    const { first, second } = addressRacePanel();
+    fireEvent.change(screen.getByLabelText('Адрес нового клиента'), { target: { value: 'Адрес' } });
+    fireEvent.click(await screen.findByRole('option', { name: 'Адрес A' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Адрес B' }));
+    await act(async () => { second.resolve({ address: 'Адрес B', latitude: 60, longitude: 31 }); await second.promise; });
+    await act(async () => { first.reject(new Error('Запоздавшая ошибка адреса A')); await first.promise.catch(() => undefined); });
+    expect(screen.getByLabelText('Адрес нового клиента')).toHaveValue('Адрес B');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('shows a failure of the current address resolution without calculating a slot', async () => {
+    const { first, calculate, onPointChange } = addressRacePanel();
+    fireEvent.change(screen.getByLabelText('Адрес нового клиента'), { target: { value: 'Адрес' } });
+    fireEvent.click(await screen.findByRole('option', { name: 'Адрес A' }));
+    await act(async () => { first.reject(new Error('Геокодер недоступен')); await first.promise.catch(() => undefined); });
+    expect(screen.getByRole('alert')).toHaveTextContent('Геокодер недоступен');
+    expect(calculate).not.toHaveBeenCalled();
+    expect(onPointChange).not.toHaveBeenCalled();
+  });
+
+  it('aborts address resolution on unmount and ignores its later success', async () => {
+    const { first, unmount, resolveAddressSuggestion, onPointChange, calculate } = addressRacePanel();
+    fireEvent.change(screen.getByLabelText('Адрес нового клиента'), { target: { value: 'Адрес' } });
+    fireEvent.click(await screen.findByRole('option', { name: 'Адрес A' }));
+    unmount();
+    expect(resolveAddressSuggestion.mock.calls[0]?.[1].aborted).toBe(true);
+    await act(async () => { first.resolve({ address: 'Адрес A', latitude: 59, longitude: 30 }); await first.promise; });
+    expect(onPointChange).not.toHaveBeenCalled();
+    expect(calculate).not.toHaveBeenCalled();
   });
 });
