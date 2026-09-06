@@ -240,6 +240,7 @@ fun ProfileFormScreen(
                 ) { Text(if (existing == null) "Продолжить" else "Сохранить") }
             }
             if (existing != null) {
+                item { CustomerNotificationPermission() }
                 item {
                     Surface(
                         modifier = Modifier.fillMaxWidth().testTag("profile-legal-entity-access"),

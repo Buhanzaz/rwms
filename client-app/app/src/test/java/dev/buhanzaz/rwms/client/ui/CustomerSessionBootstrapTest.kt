@@ -7,9 +7,14 @@ import dev.buhanzaz.rwms.client.auth.CustomerAuthConfiguration
 import dev.buhanzaz.rwms.client.auth.CustomerAuthRepository
 import dev.buhanzaz.rwms.client.auth.CustomerAuthState
 import dev.buhanzaz.rwms.client.auth.EncryptedCustomerSessionStore
+import dev.buhanzaz.rwms.client.data.BookingChangeApplicationState
+import dev.buhanzaz.rwms.client.data.BookingChangeOperation
+import dev.buhanzaz.rwms.client.data.BookingChangeSettlement
 import dev.buhanzaz.rwms.client.data.CustomerApi
 import dev.buhanzaz.rwms.client.data.CustomerApiException
 import dev.buhanzaz.rwms.client.data.CustomerBooking
+import dev.buhanzaz.rwms.client.data.CustomerBookingChangeQuote
+import dev.buhanzaz.rwms.client.data.CustomerBookingChangeReference
 import dev.buhanzaz.rwms.client.data.CustomerCabin
 import dev.buhanzaz.rwms.client.data.CustomerCart
 import dev.buhanzaz.rwms.client.data.CustomerEntityType
@@ -85,6 +90,10 @@ class CustomerSessionBootstrapTest {
     private var checkoutFixture: CheckoutFixture? = null
     private val checkoutCalls = mutableListOf<CheckoutCall>()
     private var checkoutCompleted = false
+    private var restoredChange: CustomerBookingChangeQuote? = null
+    private var bookingChangeReadFailure: CustomerApiException? = null
+    private var bookingsReadFailure: CustomerApiException? = null
+    private val changeReads = mutableListOf<Pair<String, String>>()
 
     @Before
     fun setUp() = runBlocking {
@@ -259,6 +268,88 @@ class CustomerSessionBootstrapTest {
         assertThat(completed.busy).isFalse()
     }
 
+    @Test
+    fun `bootstrap keeps expired offered terms instead of creating a replacement quote`() = runTest(dispatcher) {
+        checkoutFixture()
+        restoredChange = changeQuote().copy(expiresAt = "2020-01-01T00:00:00Z")
+        val viewModel = signedInCheckoutViewModel()
+        val workflow = (viewModel.state.value as CustomerAppState.Ready).workflow
+        assertThat(workflow.bookingChangeQuote).isEqualTo(restoredChange)
+        assertThat(workflow.bookingChangeUnavailableReason).contains("Срок действия условий истёк")
+        assertThat(changeReads).containsExactly("booking" to "quote")
+        assertThat(workflow.error).isNull()
+    }
+
+    @Test
+    fun `closed pending change recovers through exact GET when the booking list fails`() = runTest(dispatcher) {
+        checkoutFixture()
+        restoredChange = changeQuote().copy(applicationState = BookingChangeApplicationState.APPLYING)
+        val viewModel = signedInCheckoutViewModel()
+        viewModel.dismissBookingChange()
+        advanceUntilIdle()
+        changeReads.clear()
+        restoredChange = requireNotNull(restoredChange).copy(
+            version = 2,
+            applicationState = BookingChangeApplicationState.APPLIED,
+            settlement = BookingChangeSettlement.TEST_PAID,
+        )
+        bookingsReadFailure = CustomerApiException(503, "Заказы временно недоступны")
+        viewModel.resumeAutomaticUpdates()
+        viewModel.refreshCustomerUpdates()
+        viewModel.state.first { state ->
+            state is CustomerAppState.Ready &&
+                state.workflow.bookingChangeQuote?.applicationState == BookingChangeApplicationState.APPLIED
+        }
+        runCurrent()
+        val workflow = (viewModel.state.value as CustomerAppState.Ready).workflow
+        assertThat(changeReads).containsExactly("booking" to "quote")
+        assertThat(workflow.bookingChangeDialogVisible).isFalse()
+        assertThat(workflow.bookingChangeQuote).isEqualTo(restoredChange)
+        assertThat(workflow.updatesError).isEqualTo("Заказы временно недоступны")
+    }
+
+    @Test
+    fun `automatic reads recover a saved reference after the first exact GET fails`() = runTest(dispatcher) {
+        checkoutFixture()
+        restoredChange = changeQuote().copy(applicationState = BookingChangeApplicationState.APPLYING)
+        bookingChangeReadFailure = CustomerApiException(503, "Статус временно недоступен")
+        val viewModel = signedInCheckoutViewModel()
+        val initial = (viewModel.state.value as CustomerAppState.Ready).workflow
+        assertThat(initial.bookingChangeQuote).isNull()
+        assertThat(initial.bookingChangeReferences).containsExactly("booking", "quote")
+        changeReads.clear()
+        bookingChangeReadFailure = null
+        viewModel.resumeAutomaticUpdates()
+        viewModel.refreshCustomerUpdates()
+        viewModel.state.first { it is CustomerAppState.Ready && it.workflow.bookingChangeQuote != null }
+        runCurrent()
+        val workflow = (viewModel.state.value as CustomerAppState.Ready).workflow
+        assertThat(changeReads).containsExactly("booking" to "quote")
+        assertThat(workflow.bookingChangeQuote).isEqualTo(restoredChange)
+        assertThat(workflow.bookingChangeDialogVisible).isFalse()
+        assertThat(workflow.updatesError).isNull()
+    }
+
+    @Test
+    fun `failed exact refresh preserves an already applied result without awaiting confirmation`() = runTest(dispatcher) {
+        checkoutFixture()
+        restoredChange = changeQuote().copy(
+            applicationState = BookingChangeApplicationState.APPLIED,
+            settlement = BookingChangeSettlement.TEST_PAID,
+        )
+        val viewModel = signedInCheckoutViewModel()
+        changeReads.clear()
+        bookingChangeReadFailure = CustomerApiException(503, "Статус временно недоступен")
+        viewModel.refreshBookingChange("booking")
+        viewModel.state.first { it is CustomerAppState.Ready && it.workflow.bookingChangeReadError != null }
+        runCurrent()
+        val workflow = (viewModel.state.value as CustomerAppState.Ready).workflow
+        assertThat(changeReads).containsExactly("booking" to "quote")
+        assertThat(workflow.bookingChangeQuote).isEqualTo(restoredChange)
+        assertThat(workflow.bookingChangeNeedsRefresh).isFalse()
+        assertThat(workflow.bookingChangeReadError).isEqualTo("Статус временно недоступен")
+    }
+
     private fun exerciseOldPollingCompletion(failed: Boolean) = runTest(dispatcher, timeout = 30.seconds) {
         val api = customerApi()
         val repository = CustomerRepository(context, api, json, workflowStore)
@@ -354,7 +445,15 @@ class CustomerSessionBootstrapTest {
                 checkoutCompleted = true
                 fixture.checkoutBooking
             }
-            "bookings" -> if (holdNextBookings) {
+            "bookingChangeQuote" -> {
+                val parameters = requireNotNull(args)
+                changeReads += (parameters[0] as String) to (parameters[1] as String)
+                bookingChangeReadFailure?.let { throw it }
+                requireNotNull(restoredChange)
+            }
+            "bookings" -> if (bookingsReadFailure != null) {
+                throw requireNotNull(bookingsReadFailure)
+            } else if (holdNextBookings) {
                 holdNextBookings = false
                 @Suppress("UNCHECKED_CAST")
                 val continuation = requireNotNull(args).last() as Continuation<List<CustomerBooking>>
@@ -386,11 +485,19 @@ class CustomerSessionBootstrapTest {
         currentWarehouse = warehouse(fixture.warehouseId)
         val reference = workflowStore.begin(fixture.warehouseId, rememberWarehouse = true)
         workflowStore.bind(reference, fixture.session)
+        restoredChange?.let { workflowStore.rememberBookingChange(CustomerBookingChangeReference(it.bookingId, it.quoteId)) }
         val repository = CustomerRepository(context, customerApi(), json, workflowStore)
         val viewModel = CustomerAppViewModel(auth, repository, workflowStore, CustomerNotifications(context, auth, repository))
         viewModels.put("checkout", viewModel)
         auth.login("checkout-customer", "test-password", rememberMe = false)
         completedBootstraps.receive()
+        if (restoredChange != null && bookingChangeReadFailure == null) {
+            viewModel.state.first { it is CustomerAppState.Ready && it.workflow.bookingChangeQuote != null }
+        } else if (bookingChangeReadFailure != null) {
+            viewModel.state.first {
+                it is CustomerAppState.Ready && it.workflow.updatesError == bookingChangeReadFailure?.message
+            }
+        }
         runCurrent()
         return viewModel
     }
@@ -438,4 +545,13 @@ class CustomerSessionBootstrapTest {
     )
 
     private data class CheckoutCall(val inquiryId: String, val cartVersion: Long, val slotId: String, val slotVersion: Long)
+
+    private fun changeQuote() = CustomerBookingChangeQuote(
+        quoteId = "quote", version = 1, bookingId = "booking", bookingVersion = 3,
+        operation = BookingChangeOperation.CANCEL, oldSlotId = "slot", slotId = null, slotVersion = null,
+        amountRubles = "12500", settlement = BookingChangeSettlement.PAYMENT_REQUIRED,
+        applicationState = BookingChangeApplicationState.OFFERED, testPaymentAvailable = true, supportPhone = null,
+        expiresAt = "2099-01-01T00:00:00Z", noticeDays = 2, deliveryDate = "2026-09-08",
+        warehouseTimeZone = "Europe/Moscow", targetDeliveryDate = null, targetWindowStart = null, targetWindowEnd = null,
+    )
 }

@@ -5,9 +5,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -61,8 +63,11 @@ class CustomerBookingLifecycleScreensTest {
 
         composeRule.onNodeWithText("Оформлен").assertExists()
         composeRule.onNodeWithText("Обновить статусы").assertDoesNotExist()
+        composeRule.onNodeWithText("Обновить заказы").assertDoesNotExist()
+        composeRule.onNodeWithTag("profile-notification-settings").assertDoesNotExist()
         composeRule.onNodeWithText("Стоимость отмены: 0 ₽").assertDoesNotExist()
         composeRule.onNodeWithText("Стоимость отмены", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithText("Отменить заказ").assertExists()
         composeRule.onNodeWithTag("booking-cancel-booking-a").performScrollTo().performClick()
         composeRule.onNodeWithTag("booking-change-dialog").assertDoesNotExist()
 
@@ -275,6 +280,43 @@ class CustomerBookingLifecycleScreensTest {
     }
 
     @Test
+    fun `reschedule dialog shows a uniform delivery price once`() {
+        composeRule.setContent {
+            CustomerTheme {
+                BookingsScreen(
+                    bookings = listOf(booking(id = "booking-a", status = "COMPLETED")), latest = null, busy = false,
+                    onMenu = {}, onProfile = {}, onAccept = { _, _, _ -> }, onReport = { _, _, _, _, _ -> },
+                    rescheduleBookingId = "booking-a", rescheduleSlots = listOf(slot("slot-a"), slot("slot-b")),
+                )
+            }
+        }
+
+        composeRule.onAllNodesWithText("Стоимость доставки: 10 000 ₽").assertCountEquals(1)
+    }
+
+    @Test
+    fun `reschedule dialog keeps delivery prices next to offers when they differ`() {
+        composeRule.setContent {
+            CustomerTheme {
+                BookingsScreen(
+                    bookings = listOf(booking(id = "booking-a", status = "COMPLETED")), latest = null, busy = false,
+                    onMenu = {}, onProfile = {}, onAccept = { _, _, _ -> }, onReport = { _, _, _, _, _ -> },
+                    rescheduleBookingId = "booking-a",
+                    rescheduleSlots = listOf(
+                        slot("slot-a"),
+                        slot("slot-b").copy(deliveryPriceRubles = 12_000),
+                        slot("slot-c").copy(deliveryPriceRubles = null),
+                    ),
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Стоимость доставки: 10 000 ₽").assertExists()
+        composeRule.onNodeWithText("Стоимость доставки: 12 000 ₽").assertExists()
+        composeRule.onNodeWithText("Стоимость доставки: Не рассчитана").assertExists()
+    }
+
+    @Test
     fun `pending cancellation is Russian and never exposes its backend code or edit actions`() {
         val pending = booking(
             id = "booking-pending",
@@ -296,7 +338,7 @@ class CustomerBookingLifecycleScreensTest {
         }
 
         composeRule.onNodeWithText("Отмена выполняется").assertExists()
-        composeRule.onNodeWithText("Отмена ещё выполняется. Обновите статус немного позже.").assertExists()
+        composeRule.onNodeWithText("Отмена ещё выполняется. Ожидаем подтверждение сервиса.").assertExists()
         composeRule.onNodeWithText("CUSTOMER_BOOKING_CANCELLATION_PENDING").assertDoesNotExist()
         composeRule.onNodeWithTag("booking-cancel-booking-pending").assertDoesNotExist()
         composeRule.onNodeWithTag("booking-reschedule-booking-pending").assertDoesNotExist()

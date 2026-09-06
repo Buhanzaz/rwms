@@ -253,9 +253,9 @@ internal object CustomerBookingLifecyclePolicy {
     fun recoveryMessage(errorCode: String?): String? = when (errorCode) {
         null -> null
         "CUSTOMER_BOOKING_CANCELLATION_PENDING" ->
-            "Отмена ещё выполняется. Обновите статус немного позже."
+            "Отмена ещё выполняется. Ожидаем подтверждение сервиса."
         "CUSTOMER_BOOKING_CANCELLATION_FAILED" ->
-            "Не удалось завершить отмену. Обновите статус или повторите попытку позже."
+            "Не удалось завершить отмену. Текущий статус сохранён."
         "CUSTOMER_BOOKING_RECONCILIATION_REQUIRED" ->
             "Отмена требует проверки сотрудником RWMS. Текущий статус сохранён."
         "ORDER_MUTATION_RECONCILIATION_REQUIRED",
@@ -263,7 +263,7 @@ internal object CustomerBookingLifecyclePolicy {
         "ORDER_MUTATION_RECOVERY_FAILED",
         "ORDER_MUTATION_LOCAL_RECONCILIATION_FAILED",
         -> "Изменение заказа требует проверки сотрудником RWMS. Текущий статус сохранён."
-        else -> "Статус операции уточняется. Обновите заказ немного позже."
+        else -> "Статус операции уточняется. Ожидаем ответ сервиса."
     }
 
     /** Formats a real server fee, while an absent policy remains absent rather than becoming zero. */

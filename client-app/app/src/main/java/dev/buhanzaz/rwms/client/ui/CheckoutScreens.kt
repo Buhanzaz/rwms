@@ -25,7 +25,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.PhotoLibrary
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -41,7 +40,6 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -407,7 +405,10 @@ private fun CartAdditionalSheet(
     onDismiss: () -> Unit,
 ) {
     val availableItems = items.filter { it.availableQuantity > 0 }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -494,7 +495,6 @@ fun BookingsScreen(
     changeError: String? = null,
     changeUnavailableReason: String? = null,
     onApplyChange: (Boolean) -> Unit = {},
-    onRefreshChange: () -> Unit = {},
     onDismissChange: () -> Unit = {},
     onCallChangeSupport: (String) -> Unit = {},
     pendingChangeBookingIds: Set<String> = emptySet(),
@@ -505,7 +505,6 @@ fun BookingsScreen(
     updatesError: String? = null,
     onConfirmInitialPayment: (String) -> Unit = {},
     onReadNotification: (String) -> Unit = {},
-    onRefreshUpdates: () -> Unit = {},
     avatarUrl: String? = null,
 ) {
     val visible = CustomerBookingPolicy.visible(latest, bookings)
@@ -538,18 +537,8 @@ fun BookingsScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = onRefreshUpdates, enabled = !busy) {
-                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(20.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Обновить заказы")
-                        }
-                    }
-                    updatesError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                    CustomerNotificationPermission()
-                }
+            updatesError?.let { error ->
+                item { Text(error, color = MaterialTheme.colorScheme.error) }
             }
             items(notifications, key = { "notification-${it.id}" }) { notification ->
                 OutlinedCard(
@@ -686,16 +675,17 @@ fun BookingsScreen(
                             OutlinedButton(
                                 onClick = { onCancel(bookingId) },
                                 enabled = !busy,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .testTag("booking-cancel-$bookingId"),
                             ) {
-                                Text("Отменить заказ")
+                                Text("Отменить заказ", color = MaterialTheme.colorScheme.error)
                             }
                         }
                         if (booking.bookingId in pendingChangeBookingIds && !changeDialogVisible) {
                             OutlinedButton(onClick = { booking.bookingId?.let(onResumeChange) }, enabled = !busy) {
-                                Text("Проверить изменение")
+                                Text("Подробности изменения")
                             }
                         }
                     }
@@ -746,7 +736,6 @@ fun BookingsScreen(
             onConfirm = { onApplyChange(false) },
             onCallSupport = onCallChangeSupport,
             onDismiss = onDismissChange,
-            onRefresh = onRefreshChange,
         )
     }
     if (rescheduleBookingId != null && !changeDialogVisible) {
@@ -771,45 +760,54 @@ private fun BookingRescheduleDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val deliveryPrices = slots.map(DeliverySlot::deliveryPriceRubles).distinct()
+    val pricesDiffer = deliveryPrices.size > 1
+    val sharedDeliveryPrice = deliveryPrices.singleOrNull()
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
+        containerColor = MaterialTheme.colorScheme.surface,
         title = { Text("Перенести доставку") },
         text = {
             if (slots.isEmpty()) {
-                Text("Сейчас нет доступных вариантов. Обновите заказ и попробуйте позже.")
+                Text("Сейчас нет доступных вариантов. Попробуйте позже.")
             } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(DeliverySlotPolicy.byDate(slots).flatMap { it.slots }, key = DeliverySlot::slotId) { slot ->
-                        OutlinedCard(
-                            onClick = { onSelect(slot.slotId) },
-                            enabled = !busy,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("booking-reschedule-slot-${slot.slotId}"),
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (!pricesDiffer) {
+                        Text("Стоимость доставки: ${CustomerMoneyFormatter.wholeRubles(sharedDeliveryPrice)}")
+                    }
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(DeliverySlotPolicy.byDate(slots).flatMap { it.slots }, key = DeliverySlot::slotId) { slot ->
+                            OutlinedCard(
+                                onClick = { onSelect(slot.slotId) },
+                                enabled = !busy,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("booking-reschedule-slot-${slot.slotId}"),
                             ) {
-                                RadioButton(
-                                    selected = slot.slotId == selectedSlotId,
-                                    onClick = null,
-                                    enabled = !busy,
-                                )
-                                Column(
-                                    modifier = Modifier.padding(start = 8.dp),
-                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Text(formatDeliveryDate(slot.date), fontWeight = FontWeight.SemiBold)
-                                    Text(deliverySlotTimeLabel(slot))
-                                    slot.deliveryPriceRubles?.let { price ->
-                                        Text(
-                                            "Стоимость доставки: ${CustomerMoneyFormatter.wholeRubles(price)}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                        )
+                                    RadioButton(
+                                        selected = slot.slotId == selectedSlotId,
+                                        onClick = null,
+                                        enabled = !busy,
+                                    )
+                                    Column(
+                                        modifier = Modifier.padding(start = 8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                                    ) {
+                                        Text(formatDeliveryDate(slot.date), fontWeight = FontWeight.SemiBold)
+                                        Text(deliverySlotTimeLabel(slot))
+                                        if (pricesDiffer) {
+                                            Text(
+                                                "Стоимость доставки: ${CustomerMoneyFormatter.wholeRubles(slot.deliveryPriceRubles)}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                            )
+                                        }
                                     }
                                 }
                             }

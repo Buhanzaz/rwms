@@ -79,6 +79,13 @@ payment window, the receipt explains that no payment deadline or automatic timed
 assigned. Cancelled bookings show cancelled delivery and expose no reception actions from stale arrival data.
 
 Foreground lifecycle polling reloads bookings, pending payment and the durable unread inbox.
+There are no manual refresh actions. Failed read cycles use bounded exponential backoff and pause
+after five consecutive failures; returning to the foreground, restoring a validated connection or
+finishing an explicit user action renews the read budget. Busy-lane skips consume no attempt.
+Exact pending change quotes are read independently when the booking list fails. Polling and process
+restoration never renew fee terms, search replacement slots or repeat a payment. Polling does not
+reopen a hidden dialog. Expired/stale offers remain unavailable; starting a fresh change requires a customer action,
+and a manager waiver is never replaced automatically.
 Changing the authentication session cancels and joins the previous UI mutation before admitting
 the new profile/warehouse bootstrap. Until cleanup completes the app stays loading; a late old
 result cannot finish or invalidate the replacement session.
@@ -87,7 +94,9 @@ an immutable explicit app intent with no order payload or credentials; a bounded
 cache prevents repeated alerts without becoming domain state. WorkManager schedules a connected
 check after the server deadline and periodic 15-minute catch-up, with at most eight attempts per
 execution. Android can delay background work; the server releases reservations independently.
-Notifications require OS permission, and background access after process death requires the user's
+Notification permission lives in profile settings, with a system-settings path after denial and
+permission status refreshed on return. The order list and server inbox remain available without it.
+Background access after process death requires the user's
 encrypted remembered session. Logout cancels work, removes notifications and fences late responses.
 
 Jetpack Compose Material 3 and Navigation 3 provide mutually exclusive

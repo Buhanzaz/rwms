@@ -7,6 +7,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.client.data.CabinFacetWarehouse
 import dev.buhanzaz.rwms.client.data.CabinFacets
@@ -198,13 +199,13 @@ class CatalogScreensTest {
 
         composeRule.onNodeWithTag("catalog-filter-button").performClick()
         composeRule.onNodeWithTag("filter-characteristics").assertExists()
-        composeRule.onNodeWithTag("filter-characteristic-Пластиковое окно").performClick()
+        composeRule.onNodeWithTag("filter-characteristic-Пластиковое окно").performScrollTo().performClick()
         composeRule.runOnIdle {
             assertThat(appliedFilters).isEqualTo(
                 CabinFilters(finish = "Графит", characteristics = setOf("Пластиковое окно")),
             )
         }
-        composeRule.onNodeWithTag("catalog-filter-reset").performClick()
+        composeRule.onNodeWithTag("catalog-filter-reset").performScrollTo().performClick()
         composeRule.runOnIdle { assertThat(appliedFilters).isEqualTo(CabinFilters()) }
     }
 
@@ -226,8 +227,8 @@ class CatalogScreensTest {
         composeRule.onNodeWithTag("cabin-cabin-1").assertExists()
         val filterHeader = composeRule.onNodeWithTag("customer-header").fetchSemanticsNode().boundsInRoot
         assertThat(filterHeader).isEqualTo(originalHeader)
-        composeRule.onNodeWithTag("filter-field-Пол").performClick()
-        composeRule.onNodeWithText("Линолеум").performClick()
+        composeRule.onNodeWithTag("filter-field-Пол").performScrollTo().performClick()
+        composeRule.onNodeWithText("Линолеум").performScrollTo().performClick()
         composeRule.onNodeWithText("Закрыть фильтры").performClick()
         composeRule.onNodeWithTag("cabin-cabin-1").assertExists()
         assertThat(appliedFilters).isEqualTo(CabinFilters(linoleum = true))

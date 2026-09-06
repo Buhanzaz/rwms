@@ -55,6 +55,9 @@ class ProfileAndWarehouseScreensTest {
             assertThat(saved?.entityType).isEqualTo(CustomerEntityType.INDIVIDUAL)
             assertThat(saved?.firstName).isEqualTo("Пётр")
         }
+        composeRule.onNodeWithTag("profile-screen").performScrollToNode(hasTestTag("profile-notification-settings"))
+        composeRule.onNodeWithTag("profile-notification-settings").assertExists()
+        composeRule.onNodeWithTag("profile-notification-action").assertIsEnabled()
     }
 
     @Test

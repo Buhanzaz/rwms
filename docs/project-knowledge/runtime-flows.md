@@ -1094,7 +1094,11 @@ Evidence:
    warehouse. The resulting inquiry owns a separate mutable cart.
 4. Logistics reads a least-privilege asset projection. Only currently `FREE`
    cabins or the same session's existing hold are listed, one card per row with
-   facet filters and current photos; there is no free-text cabin search.
+   facet filters and current photos; there is no free-text cabin search. The opaque
+   filter form expands above the same cabin list, applies each choice/reset immediately
+   and retains the latest intent while a previous request finishes. Options open downward;
+   characteristics remain visible checkboxes. Catalog and cart headers place type left and
+   accounting number right, with the same photo/card treatment.
    Null-valued legacy passport facts are omitted
    from a card instead of rejecting the complete page. The app can open/swipe
    those photos but has no dossier route. Selection PUT replaces the complete
@@ -1103,8 +1107,8 @@ Evidence:
    replaces the complete per-cabin quantity map; both physical balance and hold
    conversion remain asset-owned. The cart also replaces a complete,
    version-fenced initial rental duration for each selected cabin; a newly held
-   cabin receives one month, and the Android bulk checkbox is only a client
-   shortcut to that same per-cabin set. Changing
+   cabin receives one month. Android edits each cabin's term and provides a labelled
+   removal action without bulk checkboxes. Changing
    cabins, furniture or rental terms detaches any earlier delivery slot so
    stale cart intent cannot reach checkout. On confirmation, a temporarily
    absent local term entry is both displayed and validated as the same one-month
@@ -1116,7 +1120,10 @@ Evidence:
    Provider attribution stays above the address panel and keyboard.
    Pan/pinch plus explicit zoom remain native MapKit actions;
    satellite/hybrid, route, traffic, weather and layer toggles are absent. The
-   fixed bottom search panel stays above the IME. A retained Yandex suggest
+   fixed bottom search panel stays above the IME and matches the header's 60 dp
+   base height and 16 dp side gutters. The native editor retains caret/scroll state;
+   background order reads do not drop address edits. Suggestions form a separate
+   bounded downward panel below the field. A retained Yandex suggest
    session supplies live address choices; selecting one or submitting typed
    text forward-geocodes a marker, while a map tap reverse-geocodes the exact
    point and immediately renders a visible pin. The current-location arrow
@@ -1227,6 +1234,13 @@ Evidence:
    consent when needed. `TEST_PAID` is a simulation, recorded only with the completed
    owner mutation; pending cancellation is `APPLYING`. Exact quote GET, not booking
    status or local storage, proves the outcome after a lost response or process death.
+   CustomerApp reads pending exact quotes separately from booking-list failures, with no manual
+   refresh controls or automatic fee/slot/command replay. Foreground reads pause after five
+   consecutive failed cycles with increasing intervals; foreground return, validated network
+   restoration or completion of an explicit action renews the budget. Polling leaves a closed
+   dialog closed. Expired or source-stale terms block confirmation; a protected waiver cannot be
+   replaced with a newly charged quote by background recovery. Notification permission is an
+   optional profile setting; its denial does not prevent reading orders or the owned inbox.
    A staff waiver requires rental write access, warehouse EDIT, a reason, exact quote
    version and idempotency key; original fee facts are retained. The limited pending-fee
    feed exposes only the fee intent and does not widen full order visibility.

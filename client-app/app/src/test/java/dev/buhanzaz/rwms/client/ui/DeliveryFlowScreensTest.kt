@@ -12,6 +12,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextInputSelection
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -21,6 +22,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performScrollToIndex
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.client.data.CustomerRouteProfile
 import dev.buhanzaz.rwms.client.data.DeliverySlot
@@ -74,7 +76,8 @@ class DeliveryFlowScreensTest {
         field.performTextInput("Начало ")
         composeRule.runOnIdle { assertThat(changedAddress.get()).startsWith("Начало Санкт-Петербург") }
         val length = changedAddress.get().length
-        field.performTextInputSelection(TextRange(length)).performTextInput(" конец")
+        field.performTextInputSelection(TextRange(length))
+        field.performTextInput(" конец")
         composeRule.runOnIdle { assertThat(changedAddress.get()).endsWith("567 конец") }
     }
 
@@ -113,6 +116,7 @@ class DeliveryFlowScreensTest {
         }
         composeRule.onNodeWithText("Зависит от выбранного времени").assertExists()
         composeRule.onNodeWithText("12 500 ₽").assertExists()
+        composeRule.onNodeWithTag("delivery-slots-screen").performScrollToNode(hasText("16 000 ₽"))
         composeRule.onNodeWithText("16 000 ₽").assertExists()
     }
 
@@ -247,10 +251,19 @@ class DeliveryFlowScreensTest {
             }
         }
         composeRule.onNodeWithTag("delivery-date-expand-2026-09-01").performClick()
+        // Finish expansion before positioning the containing lazy item; the preview scrolls independently.
+        composeRule.mainClock.advanceTimeBy(1_000)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("delivery-dates-screen").performScrollToIndex(1)
+        composeRule.onNodeWithText("12:00–18:00").assertIsDisplayed()
+        composeRule.onNodeWithText("В течение дня. Точное время подтвердит логист").assertIsDisplayed()
         val fixed = composeRule.onNodeWithText("12:00–18:00").fetchSemanticsNode().boundsInRoot
         val flexible = composeRule.onNodeWithText("В течение дня. Точное время подтвердит логист").fetchSemanticsNode().boundsInRoot
         assertThat(flexible.top).isAtLeast(fixed.bottom)
         composeRule.onNodeWithTag("delivery-date-2026-09-01").performScrollTo().performClick()
+        composeRule.onNodeWithTag("delivery-slots-screen").performScrollToIndex(1)
+        composeRule.onNodeWithTag("delivery-slot-fixed").assertIsDisplayed()
+        composeRule.onNodeWithTag("delivery-slot-flexible").assertIsDisplayed()
         val fixedCard = composeRule.onNodeWithTag("delivery-slot-fixed").fetchSemanticsNode().boundsInRoot
         val flexibleCard = composeRule.onNodeWithTag("delivery-slot-flexible").fetchSemanticsNode().boundsInRoot
         assertThat(flexibleCard.top).isAtLeast(fixedCard.bottom)
@@ -279,9 +292,9 @@ class DeliveryFlowScreensTest {
         }
 
         composeRule.onNodeWithTag("confirm-delivery-responsibility").assertIsNotEnabled()
-        composeRule.onNodeWithTag("private-site-access-confirmation").performClick()
+        composeRule.onNodeWithTag("private-site-access-confirmation").performScrollTo().performClick()
         composeRule.onNodeWithTag("confirm-delivery-responsibility").assertIsNotEnabled()
-        composeRule.onNodeWithTag("failed-trip-charge-acknowledgement").performClick()
+        composeRule.onNodeWithTag("failed-trip-charge-acknowledgement").performScrollTo().performClick()
         composeRule.onNodeWithTag("confirm-delivery-responsibility").assertIsEnabled().performClick()
 
         composeRule.runOnIdle {
@@ -423,6 +436,7 @@ class DeliveryFlowScreensTest {
             .performScrollToNode(hasText("1 шт. · 1 мес."))
         composeRule.onNodeWithText("09:00–18:00").assertExists()
         composeRule.onNodeWithText("1 шт. · 1 мес.").assertExists()
+        composeRule.onNodeWithTag("delivery-confirmation-screen").performScrollToNode(hasTestTag("checkout-button"))
         composeRule.onNodeWithTag("checkout-button").assertIsEnabled()
     }
 

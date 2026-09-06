@@ -42,7 +42,7 @@ class CustomerRepository @Inject constructor(
     /** Updates mutable customer profile fields while preserving its immutable entity kind. */
     suspend fun updateProfile(profile: CustomerProfile): CustomerProfile {
         val expectedVersion = profile.version
-            ?: throw CustomerApiException(409, "Версия профиля неизвестна. Обновите экран")
+            ?: throw CustomerApiException(409, "Версия профиля неизвестна. Сохранение пока недоступно")
         return call {
             api.updateProfile(
                 UpdateCustomerProfileRequest(
@@ -74,7 +74,7 @@ class CustomerRepository @Inject constructor(
         }
         val source = jpegBytes.copyOf()
         val expectedVersion = profile.version
-            ?: throw CustomerApiException(409, "Версия профиля неизвестна. Обновите экран")
+            ?: throw CustomerApiException(409, "Версия профиля неизвестна. Сохранение пока недоступно")
         val profileId = profile.id
             ?: throw CustomerApiException(409, "Профиль ещё не создан")
         val scope = call {
@@ -223,7 +223,7 @@ class CustomerRepository @Inject constructor(
         val bookingId = requireNotNull(booking.bookingId)
         val orderId = requireNotNull(booking.orderId)
         payment.validated(orderId)
-        if (!payment.canConfirm) throw CustomerApiException(409, "Оплата недоступна. Обновите счёт")
+        if (!payment.canConfirm) throw CustomerApiException(409, "Оплата пока недоступна")
         return durableIdempotent(
             operation = "initial-payment:$bookingId:${payment.orderVersion}",
             reconcile = {
@@ -314,7 +314,7 @@ class CustomerRepository @Inject constructor(
         val booking = command(key)
         val confirmed = exactBookingChangeQuote(quote.bookingId, quote.quoteId)
         if (confirmed.applicationState == BookingChangeApplicationState.OFFERED) {
-            throw CustomerApiException(502, "Изменение ещё не подтверждено. Обновите его статус.")
+            throw CustomerApiException(502, "Изменение ещё не подтверждено. Ожидаем ответ сервиса.")
         }
         CustomerBookingChangeResult(booking, confirmed)
     }
@@ -322,7 +322,7 @@ class CustomerRepository @Inject constructor(
     private suspend fun exactBookingChangeQuote(bookingId: String, quoteId: String): CustomerBookingChangeQuote =
         api.bookingChangeQuote(bookingId, quoteId).validated().also { quote ->
             if (quote.bookingId != bookingId || quote.quoteId != quoteId) {
-                throw CustomerApiException(502, "Сервис вернул условия другого изменения. Обновите заказ.")
+                throw CustomerApiException(502, "Сервис вернул условия другого изменения.")
             }
         }
 
@@ -625,7 +625,7 @@ class CustomerRepository @Inject constructor(
 
     private fun requireBookingVersion(booking: CustomerBooking) {
         if (booking.version <= 0) {
-            throw CustomerApiException(409, "Версия заказа неизвестна. Обновите список заказов")
+            throw CustomerApiException(409, "Версия заказа пока недоступна")
         }
     }
 }

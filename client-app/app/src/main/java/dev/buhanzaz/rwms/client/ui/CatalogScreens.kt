@@ -685,6 +685,7 @@ private fun CabinFilterPanel(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .heightIn(min = 48.dp)
                                 .testTag("filter-characteristic-$value")
                                 .toggleable(
                                     value = value in draft.characteristics,

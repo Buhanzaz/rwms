@@ -29,7 +29,7 @@ import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.HomeWork
 import androidx.compose.material.icons.outlined.Person
-import androidx.compose.material.icons.outlined.ReceiptLong
+import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.ShoppingCart
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -126,6 +126,17 @@ fun CustomerApp(viewModel: CustomerAppViewModel = hiltViewModel()) {
     val signedIn = state is CustomerAppState.Ready
     LaunchedEffect(viewModel, lifecycle, signedIn) {
         if (signedIn) lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            viewModel.resumeAutomaticUpdates()
+            launch {
+                var connected: Boolean? = null
+                customerValidatedConnectivity(context.applicationContext).collect { available ->
+                    if (connected == false && available) {
+                        viewModel.resumeAutomaticUpdates()
+                        viewModel.refreshCustomerUpdates()
+                    }
+                    connected = available
+                }
+            }
             while (true) {
                 viewModel.refreshCustomerUpdates()
                 kotlinx.coroutines.delay(5_000)
@@ -160,14 +171,12 @@ fun CustomerApp(viewModel: CustomerAppViewModel = hiltViewModel()) {
                 onCheckout = viewModel::checkout,
                 onConfirmInitialPayment = viewModel::confirmInitialPayment,
                 onReadNotification = viewModel::readNotification,
-                onRefreshUpdates = viewModel::refreshCustomerUpdates,
                 onCancelBooking = viewModel::cancelBooking,
                 onOpenBookingReschedule = viewModel::openBookingReschedule,
                 onSelectBookingRescheduleSlot = viewModel::selectBookingRescheduleSlot,
                 onConfirmBookingReschedule = viewModel::confirmBookingReschedule,
                 onDismissBookingReschedule = viewModel::dismissBookingReschedule,
                 onApplyBookingChange = viewModel::applyBookingChange,
-                onRefreshBookingChange = { viewModel.refreshBookingChange() },
                 onResumeBookingChange = { viewModel.refreshBookingChange(it) },
                 onDismissBookingChange = viewModel::dismissBookingChange,
                 onCallBookingChangeSupport = { phone ->
@@ -220,14 +229,12 @@ fun CustomerAppContent(
     onCheckout: () -> Unit = {},
     onConfirmInitialPayment: (String) -> Unit = {},
     onReadNotification: (String) -> Unit = {},
-    onRefreshUpdates: () -> Unit = {},
     onCancelBooking: (String) -> Unit = {},
     onOpenBookingReschedule: (String) -> Unit = {},
     onSelectBookingRescheduleSlot: (String) -> Unit = {},
     onConfirmBookingReschedule: () -> Unit = {},
     onDismissBookingReschedule: () -> Unit = {},
     onApplyBookingChange: (Boolean) -> Unit = {},
-    onRefreshBookingChange: () -> Unit = {},
     onResumeBookingChange: (String) -> Unit = {},
     onDismissBookingChange: () -> Unit = {},
     onCallBookingChangeSupport: (String) -> Unit = {},
@@ -280,14 +287,12 @@ fun CustomerAppContent(
                     onCheckout = onCheckout,
                     onConfirmInitialPayment = onConfirmInitialPayment,
                     onReadNotification = onReadNotification,
-                    onRefreshUpdates = onRefreshUpdates,
                     onCancelBooking = onCancelBooking,
                     onOpenBookingReschedule = onOpenBookingReschedule,
                     onSelectBookingRescheduleSlot = onSelectBookingRescheduleSlot,
                     onConfirmBookingReschedule = onConfirmBookingReschedule,
                     onDismissBookingReschedule = onDismissBookingReschedule,
                     onApplyBookingChange = onApplyBookingChange,
-                    onRefreshBookingChange = onRefreshBookingChange,
                     onResumeBookingChange = onResumeBookingChange,
                     onDismissBookingChange = onDismissBookingChange,
                     onCallBookingChangeSupport = onCallBookingChangeSupport,
@@ -328,14 +333,12 @@ private fun SignedInNavigation(
     onCheckout: () -> Unit,
     onConfirmInitialPayment: (String) -> Unit,
     onReadNotification: (String) -> Unit,
-    onRefreshUpdates: () -> Unit,
     onCancelBooking: (String) -> Unit,
     onOpenBookingReschedule: (String) -> Unit,
     onSelectBookingRescheduleSlot: (String) -> Unit,
     onConfirmBookingReschedule: () -> Unit,
     onDismissBookingReschedule: () -> Unit,
     onApplyBookingChange: (Boolean) -> Unit,
-    onRefreshBookingChange: () -> Unit,
     onResumeBookingChange: (String) -> Unit,
     onDismissBookingChange: () -> Unit,
     onCallBookingChangeSupport: (String) -> Unit,
@@ -448,7 +451,7 @@ private fun SignedInNavigation(
                         label = { Text("Мои заказы") },
                         selected = current is BookingsRoute,
                         onClick = { selectDrawerDestination(BookingsRoute) },
-                        icon = { Icon(Icons.Outlined.ReceiptLong, contentDescription = null) },
+                        icon = { Icon(Icons.AutoMirrored.Outlined.ReceiptLong, contentDescription = null) },
                     )
                     NavigationDrawerItem(
                         shape = RoundedCornerShape(12.dp),
@@ -599,10 +602,12 @@ private fun SignedInNavigation(
                             avatarUrl = state.profile?.avatar?.thumbnailUrl,
                             paymentErrors = state.paymentErrors,
                             notifications = state.notifications,
-                            updatesError = state.updatesError,
+                            updatesError = listOfNotNull(
+                                state.updatesError,
+                                if (state.automaticUpdatesPaused) "Автоматическая проверка продолжится после восстановления связи или возвращения в приложение." else null,
+                            ).joinToString("\n").takeIf(String::isNotBlank),
                             onConfirmInitialPayment = onConfirmInitialPayment,
                             onReadNotification = onReadNotification,
-                            onRefreshUpdates = onRefreshUpdates,
                             latest = state.booking,
                             busy = state.busy,
                             onMenu = { coroutineScope.launch { drawerState.open() } },
@@ -618,10 +623,13 @@ private fun SignedInNavigation(
                             changeQuote = state.bookingChangeQuote,
                             changeDialogVisible = state.bookingChangeDialogVisible,
                             changeNeedsRefresh = state.bookingChangeNeedsRefresh,
-                            changeError = state.error,
+                            changeError = listOfNotNull(
+                                state.error ?: state.bookingChangeReadError
+                                    ?: state.updatesError.takeIf { state.bookingChangeNeedsRefresh },
+                                if (state.automaticUpdatesPaused) "Проверка статуса продолжится после восстановления связи или возвращения в приложение." else null,
+                            ).joinToString("\n").takeIf(String::isNotBlank),
                             changeUnavailableReason = state.bookingChangeUnavailableReason,
                             onApplyChange = onApplyBookingChange,
-                            onRefreshChange = onRefreshBookingChange,
                             pendingChangeBookingIds = state.bookingChangeReferences.keys,
                             onResumeChange = onResumeBookingChange,
                             onDismissChange = onDismissBookingChange,

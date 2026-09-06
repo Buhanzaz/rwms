@@ -66,7 +66,6 @@ internal fun CustomerBookingChangeDialog(
     onConfirm: () -> Unit,
     onCallSupport: (String) -> Unit,
     onDismiss: () -> Unit,
-    onRefresh: () -> Unit = {},
 ) {
     val amount = state.amountRubles?.takeIf { it >= 0 }
     val phone = customerSupportDialNumber(state.supportPhone)
@@ -74,7 +73,7 @@ internal fun CustomerBookingChangeDialog(
     val applied = state.applicationState == CustomerBookingChangeApplicationState.APPLIED
     val applying = state.applicationState == CustomerBookingChangeApplicationState.APPLYING
     val mustRefresh = applying || state.needsRefresh
-    val actionEnabled = !state.pending && (applied || mustRefresh ||
+    val actionEnabled = !state.pending && !mustRefresh && (applied ||
         (amount != null && state.unavailableReason == null &&
             state.settlement != CustomerBookingChangeSettlement.POLICY_UNCONFIGURED &&
             state.settlement != CustomerBookingChangeSettlement.TEST_PAID &&
@@ -85,6 +84,7 @@ internal fun CustomerBookingChangeDialog(
     }
     AlertDialog(
         onDismissRequest = { if (!state.pending) onDismiss() },
+        containerColor = MaterialTheme.colorScheme.surface,
         title = {
             Text(
                 when (state.operation) {
@@ -148,8 +148,8 @@ internal fun CustomerBookingChangeDialog(
                 }
                 if (state.pending || mustRefresh) {
                     Text(
-                        if (applying) "Изменение принято и выполняется. Проверьте статус позже."
-                        else "Ожидаем подтверждение сервиса…",
+                        if (applying) "Изменение принято и выполняется. Ожидаем подтверждение сервиса."
+                        else "Ожидаем подтверждение сервиса.",
                         modifier = Modifier
                             .testTag("booking-change-pending")
                             .semantics { liveRegion = LiveRegionMode.Polite },
@@ -177,7 +177,7 @@ internal fun CustomerBookingChangeDialog(
                     onClick = {
                         when {
                             applied -> onDismiss()
-                            mustRefresh -> onRefresh()
+                            state.pending || mustRefresh -> Unit
                             paymentRequired -> onPay()
                             else -> onConfirm()
                         }
@@ -188,7 +188,7 @@ internal fun CustomerBookingChangeDialog(
                     Text(
                         when {
                             applied -> "Готово"
-                            mustRefresh -> "Проверить статус"
+                            state.pending || mustRefresh -> "Ожидаем подтверждение"
                             paymentRequired -> when (state.operation) {
                                 CustomerBookingChangeOperation.CANCEL -> "Оплатить и отменить (тест)"
                                 CustomerBookingChangeOperation.RESCHEDULE -> "Оплатить и перенести (тест)"
@@ -196,13 +196,6 @@ internal fun CustomerBookingChangeDialog(
                             else -> "Подтвердить $operationLabel"
                         },
                     )
-                }
-                if (!applied && !mustRefresh) {
-                    OutlinedButton(
-                        onClick = onRefresh,
-                        enabled = !state.pending,
-                        modifier = Modifier.fillMaxWidth().testTag("booking-change-refresh"),
-                    ) { Text("Обновить условия") }
                 }
                 OutlinedButton(
                     onClick = { phone?.let(onCallSupport) },

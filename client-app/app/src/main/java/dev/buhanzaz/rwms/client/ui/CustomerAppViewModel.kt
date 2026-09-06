@@ -94,6 +94,7 @@ data class CustomerWorkflowState(
     val paymentErrors: Map<String, String> = emptyMap(),
     val notifications: List<CustomerNotification> = emptyList(),
     val updatesError: String? = null,
+    val automaticUpdatesPaused: Boolean = false,
     val bookingRescheduleId: String? = null,
     val bookingRescheduleVersion: Long? = null,
     val bookingRescheduleSourceSlotId: String? = null,
@@ -103,6 +104,7 @@ data class CustomerWorkflowState(
     val bookingChangeDialogVisible: Boolean = false,
     val bookingChangeNeedsRefresh: Boolean = false,
     val bookingChangeUnavailableReason: String? = null,
+    val bookingChangeReadError: String? = null,
     val bookingChangeReferences: Map<String, String> = emptyMap(),
 )
 
@@ -214,6 +216,49 @@ internal fun CustomerBookingChangeQuote.requiresFreshBookingChangeTerms(now: Ins
     applicationState == BookingChangeApplicationState.OFFERED && settlement != BookingChangeSettlement.WAIVED &&
         (settlement == BookingChangeSettlement.POLICY_UNCONFIGURED || !now.isBefore(Instant.parse(expiresAt)))
 
+/** Applies only exact owner observations; reading cannot reopen a dialog or replace protected terms. */
+internal fun CustomerWorkflowState.withObservedBookingChange(
+    quote: CustomerBookingChangeQuote,
+    bookingsReloaded: Boolean,
+    now: Instant,
+    reveal: Boolean = false,
+): CustomerWorkflowState {
+    val previous = bookingChangeQuote?.takeIf { it.quoteId == quote.quoteId && it.bookingId == quote.bookingId }
+    val restoringReference = bookingChangeQuote == null && bookingChangeReferences[quote.bookingId] == quote.quoteId
+    if (!reveal && previous == null && !restoringReference) return this
+    val offered = quote.applicationState == BookingChangeApplicationState.OFFERED
+    val waived = quote.settlement == BookingChangeSettlement.WAIVED
+    val source = CustomerBookingPolicy.visible(booking, bookings).firstOrNull { it.bookingId == quote.bookingId }
+    val sourceMatches = source != null && CustomerBookingLifecyclePolicy.canChange(source) &&
+        source.version == quote.bookingVersion && source.slotId == quote.oldSlotId
+    val unavailable = when {
+        !offered -> null
+        waived && previous?.settlement == BookingChangeSettlement.WAIVED && bookingChangeUnavailableReason != null ->
+            bookingChangeUnavailableReason
+        !now.isBefore(Instant.parse(quote.expiresAt)) -> if (waived) {
+            "Выбранное время устарело. Свяжитесь с менеджером, чтобы сохранить освобождение от неустойки."
+        } else {
+            "Срок действия условий истёк. Вернитесь к заказу и снова выберите отмену или перенос."
+        }
+        bookingsReloaded && !sourceMatches -> if (waived) {
+            "Заказ изменился. Свяжитесь с менеджером, чтобы сохранить освобождение от неустойки."
+        } else {
+            "Заказ изменился. Вернитесь к заказу и снова выберите отмену или перенос."
+        }
+        !bookingsReloaded && previous != null -> bookingChangeUnavailableReason
+        else -> null
+    }
+    return copy(
+        bookingChangeQuote = quote,
+        bookingChangeDialogVisible = bookingChangeDialogVisible || reveal,
+        bookingChangeNeedsRefresh = offered && !bookingsReloaded,
+        bookingChangeUnavailableReason = unavailable,
+        bookingChangeReadError = null,
+        bookingChangeReferences = bookingChangeReferences + (quote.bookingId to quote.quoteId),
+        error = error.takeUnless { previous != null && bookingChangeNeedsRefresh && !offered },
+    )
+}
+
 /** Only a newer exact waiver may replace a rejected payment consent with a fresh free confirmation. */
 internal fun CustomerWorkflowState.canConfirmRecoveredBookingChangeWaiver(
     previous: CustomerBookingChangeQuote?,
@@ -270,6 +315,7 @@ class CustomerAppViewModel @Inject constructor(
     private var sessionGeneration = 0L
     private var activeSessionMarker: String? = null
     private var pendingFilters: Pair<String, CabinFilters>? = null
+    private val automaticReadPolicy = CustomerAutomaticReadPolicy()
 
     /** Conditional signed-out/signed-in state. */
     val state: StateFlow<CustomerAppState> = mutableState.asStateFlow()
@@ -284,6 +330,7 @@ class CustomerAppViewModel @Inject constructor(
                     sessionGeneration += 1
                     activeSessionMarker = null
                     pendingFilters = null
+                    automaticReadPolicy.reset()
                     bootstrappedSession = false
                     mutableState.value = when (auth) {
                         is CustomerAuthState.SignedOut -> CustomerAppState.SignedOut(auth.message)
@@ -744,18 +791,51 @@ class CustomerAppViewModel @Inject constructor(
         refreshCustomerUpdatesOwned()
     }
 
-    /** Foreground lifecycle polling reconciles payment/expiry without replaying checkout. */
-    fun refreshCustomerUpdates() {
-        if (mutableWorkflow.value.bootstrapping || mutableWorkflow.value.profile == null) return
-        launchMutation(showBusy = false) { refreshCustomerUpdatesOwned() }
+    /** Foreground/connectivity restoration allows new reads, never another customer command. */
+    fun resumeAutomaticUpdates() {
+        val marker = activeSessionMarker ?: return
+        if (authRepository.state.value != CustomerAuthState.SignedIn || authRepository.notificationSession() != marker) return
+        automaticReadPolicy.reset()
+        mutableWorkflow.value = mutableWorkflow.value.copy(automaticUpdatesPaused = false)
     }
 
-    private suspend fun refreshCustomerUpdatesOwned() {
-        val marker = authRepository.notificationSession() ?: return
+    /** Admits bounded foreground reads; a busy command lane does not consume a failed attempt. */
+    fun refreshCustomerUpdates() {
+        if (mutableWorkflow.value.bootstrapping || mutableWorkflow.value.profile == null ||
+            !automaticReadPolicy.canAttempt(SystemClock.elapsedRealtime())
+        ) return
+        val marker = activeSessionMarker ?: return
+        val generation = sessionGeneration
+        launchMutation(showBusy = false) {
+            val outcome = refreshCustomerUpdatesOwned()
+            if (!isCurrentMutationSession(generation, marker)) return@launchMutation
+            automaticReadPolicy.record(outcome, SystemClock.elapsedRealtime())
+            mutableWorkflow.value = mutableWorkflow.value.copy(automaticUpdatesPaused = automaticReadPolicy.paused)
+        }
+    }
+
+    /** Independent exact-quote reads still recover an accepted effect when the booking list is unavailable. */
+    private suspend fun refreshCustomerUpdatesOwned(
+        changeToReveal: Pair<String, String>? = null,
+    ): CustomerReadOutcome {
+        val marker = activeSessionMarker ?: return CustomerReadOutcome.SKIPPED
+        val generation = sessionGeneration
+        if (!isCurrentMutationSession(generation, marker)) return CustomerReadOutcome.SKIPPED
+        val initial = mutableWorkflow.value
+        val observedChange = changeToReveal ?: initial.bookingChangeQuote?.takeIf { quote ->
+            quote.applicationState != BookingChangeApplicationState.APPLIED &&
+                (initial.bookingChangeDialogVisible || initial.bookingChangeNeedsRefresh ||
+                    quote.applicationState == BookingChangeApplicationState.APPLYING)
+        }?.let { it.bookingId to it.quoteId }
+            ?: initial.bookingChangeReferences.entries.firstOrNull()?.takeIf { initial.bookingChangeQuote == null }
+                ?.let { it.key to it.value }
+        var bookingsReloaded = false
+        var readError: String? = null
         try {
             val refreshed = repository.bookings()
-            if (authRepository.notificationSession() != marker) return
+            if (!isCurrentMutationSession(generation, marker)) return CustomerReadOutcome.SKIPPED
             reconcileBookings(refreshed)
+            bookingsReloaded = true
             val current = mutableWorkflow.value
             val payments = current.payments.toMutableMap()
             val errors = current.paymentErrors.toMutableMap()
@@ -769,6 +849,7 @@ class CustomerAppViewModel @Inject constructor(
                 try {
                     val started = SystemClock.elapsedRealtime()
                     val payment = repository.payment(booking)
+                    if (!isCurrentMutationSession(generation, marker)) return CustomerReadOutcome.SKIPPED
                     val observed = CustomerObservedPayment(payment, started)
                     payments[bookingId] = observed
                     errors.remove(bookingId)
@@ -778,24 +859,55 @@ class CustomerAppViewModel @Inject constructor(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (failure: Exception) {
-                    errors[bookingId] = (failure as? CustomerApiException)?.message ?: "Не удалось загрузить счёт"
+                    val message = (failure as? CustomerApiException)?.message ?: "Не удалось загрузить счёт"
+                    errors[bookingId] = message
+                    readError = readError ?: message
                 }
             }
-            if (authRepository.notificationSession() != marker) return
+            if (!isCurrentMutationSession(generation, marker)) return CustomerReadOutcome.SKIPPED
             mutableWorkflow.value = mutableWorkflow.value.copy(payments = payments, paymentErrors = errors)
             val inbox = notifications.fetchAndPublish()
-            if (authRepository.notificationSession() == marker) {
-                mutableWorkflow.value = mutableWorkflow.value.copy(notifications = inbox, updatesError = null)
-            }
+            if (!isCurrentMutationSession(generation, marker)) return CustomerReadOutcome.SKIPPED
+            mutableWorkflow.value = mutableWorkflow.value.copy(notifications = inbox)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            if (authRepository.notificationSession() == marker) {
-                mutableWorkflow.value = mutableWorkflow.value.copy(
-                    updatesError = (failure as? CustomerApiException)?.message ?: "Не удалось обновить заказы и уведомления",
+            readError = (failure as? CustomerApiException)?.message ?: "Не удалось обновить заказы и уведомления"
+        }
+        if (!isCurrentMutationSession(generation, marker)) return CustomerReadOutcome.SKIPPED
+        if (observedChange != null) {
+            val (bookingId, quoteId) = observedChange
+            try {
+                val quote = repository.bookingChangeQuote(bookingId, quoteId)
+                if (!isCurrentMutationSession(generation, marker)) return CustomerReadOutcome.SKIPPED
+                val previous = mutableWorkflow.value.bookingChangeQuote?.takeIf { it.quoteId == quoteId }
+                if (previous != null && quote.version < previous.version) {
+                    throw CustomerApiException(502, "Не удалось получить актуальные условия изменения заказа")
+                }
+                mutableWorkflow.value = mutableWorkflow.value.withObservedBookingChange(
+                    quote = quote,
+                    bookingsReloaded = bookingsReloaded,
+                    now = Instant.now(),
+                    reveal = changeToReveal != null,
                 )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                if (!isCurrentMutationSession(generation, marker)) return CustomerReadOutcome.SKIPPED
+                val message = (failure as? CustomerApiException)?.message ?: "Не удалось проверить результат изменения заказа"
+                readError = readError ?: message
+                if (mutableWorkflow.value.bookingChangeQuote?.quoteId == quoteId) {
+                    mutableWorkflow.value = mutableWorkflow.value.copy(
+                        bookingChangeNeedsRefresh = mutableWorkflow.value.bookingChangeQuote?.applicationState !=
+                            BookingChangeApplicationState.APPLIED,
+                        bookingChangeReadError = message,
+                    )
+                }
             }
         }
+        if (!isCurrentMutationSession(generation, marker)) return CustomerReadOutcome.SKIPPED
+        mutableWorkflow.value = mutableWorkflow.value.copy(updatesError = readError)
+        return if (readError == null) CustomerReadOutcome.SUCCESS else CustomerReadOutcome.FAILED
     }
 
     /** Explicit test payment uses the frozen displayed receipt/version and then reloads server facts. */
@@ -803,10 +915,10 @@ class CustomerAppViewModel @Inject constructor(
         val current = mutableWorkflow.value
         val booking = CustomerBookingPolicy.visible(current.booking, current.bookings)
             .firstOrNull { it.bookingId == bookingId }
-            ?: throw CustomerApiException(409, "Обновите список заказов")
-        val observed = current.payments[bookingId] ?: throw CustomerApiException(409, "Сначала загрузите счёт")
+            ?: throw CustomerApiException(409, "Данные заказа пока недоступны")
+        val observed = current.payments[bookingId] ?: throw CustomerApiException(409, "Счёт пока недоступен")
         if (current.paymentErrors[bookingId] != null || observed.remainingMillis(SystemClock.elapsedRealtime()) <= 0) {
-            throw CustomerApiException(409, "Срок оплаты истёк или счёт недоступен. Обновите заказ")
+            throw CustomerApiException(409, "Срок оплаты истёк или счёт недоступен")
         }
         try {
             val started = SystemClock.elapsedRealtime()
@@ -894,7 +1006,7 @@ class CustomerAppViewModel @Inject constructor(
         val quote = current.bookingChangeQuote
             ?: throw CustomerApiException(409, "Сначала рассчитайте условия изменения")
         if (current.bookingChangeNeedsRefresh || quote.applicationState != BookingChangeApplicationState.OFFERED) {
-            throw CustomerApiException(409, "Сначала проверьте статус изменения")
+            throw CustomerApiException(409, "Ожидаем подтверждение изменения от сервиса")
         }
         current.bookingChangeUnavailableReason?.let { throw CustomerApiException(409, it) }
         val paymentRequired = quote.settlement == BookingChangeSettlement.PAYMENT_REQUIRED
@@ -920,15 +1032,12 @@ class CustomerAppViewModel @Inject constructor(
         reconcileBookings(repository.bookings())
     }
 
-    /** Refreshes an exact pending/uncertain quote without issuing another mutation. */
+    /** Opens exact change details with GETs only; new terms require an explicit change action. */
     fun refreshBookingChange(bookingId: String? = null) = launchMutation {
         val current = mutableWorkflow.value
         val id = bookingId ?: current.bookingChangeQuote?.bookingId ?: return@launchMutation
         val quoteId = current.bookingChangeReferences[id] ?: return@launchMutation
-        val refreshed = repository.bookingChangeQuote(id, quoteId)
-        showBookingChangeQuote(refreshed)
-        reconcileBookings(repository.bookings())
-        presentRecoveredBookingChange(refreshed)
+        refreshCustomerUpdatesOwned(changeToReveal = id to quoteId)
     }
 
     /** Hides pending owner work without discarding its exact reference or implying a reversal. */
@@ -964,6 +1073,7 @@ class CustomerAppViewModel @Inject constructor(
             bookingChangeQuote = quote,
             bookingChangeDialogVisible = true,
             bookingChangeNeedsRefresh = false,
+            bookingChangeReadError = null,
             bookingChangeUnavailableReason = if (quote.applicationState == BookingChangeApplicationState.OFFERED &&
                 quote.settlement == BookingChangeSettlement.WAIVED && !Instant.now().isBefore(Instant.parse(quote.expiresAt))
             ) "Выбранное время устарело. Свяжитесь с менеджером, чтобы сохранить освобождение от неустойки."
@@ -1071,14 +1181,9 @@ class CustomerAppViewModel @Inject constructor(
         mutableWorkflow.value = mutableWorkflow.value.copy(
             bookingChangeReferences = changeReferences.associate { it.bookingId to it.quoteId },
         )
-        if (changeReferences.isNotEmpty()) {
-            reconcileBookings(repository.bookings())
-            val reference = changeReferences.first()
-            val quote = repository.bookingChangeQuote(reference.bookingId, reference.quoteId)
-            showBookingChangeQuote(quote)
-            presentRecoveredBookingChange(quote)
-        }
-        refreshCustomerUpdatesOwned()
+        refreshCustomerUpdatesOwned(
+            changeToReveal = changeReferences.firstOrNull()?.let { it.bookingId to it.quoteId },
+        )
     }
 
     private fun launchMutation(
@@ -1158,6 +1263,7 @@ class CustomerAppViewModel @Inject constructor(
             } finally {
                 if (isCurrentMutationSession(generation, marker)) {
                     mutableWorkflow.value = mutableWorkflow.value.copy(busy = false, bootstrapping = false)
+                    if (showBusy) resumeAutomaticUpdates()
                 }
                 mutationGate.leave()
                 if (pendingFilters != null && isCurrentMutationSession(generation, marker)) {
@@ -1386,7 +1492,7 @@ class CustomerAppViewModel @Inject constructor(
 
     private fun requireMutableCart(current: CustomerWorkflowState) {
         if (CustomerBookingPolicy.locksCart(current.booking, current.inquiryId)) {
-            throw CustomerApiException(409, "Оформление уже выполняется; обновите статус заказа")
+            throw CustomerApiException(409, "Оформление уже выполняется. Дождитесь результата")
         }
     }
 }
