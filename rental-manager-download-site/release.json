@@ -1,0 +1,17 @@
+{
+  "applicationName": "RWMS Rental Manager",
+  "channel": "INTERNAL_TEST",
+  "packageName": "dev.buhanzaz.rwms.rentalmanager.debug",
+  "versionCode": 2,
+  "versionName": "0.1.1-debug",
+  "status": "pending",
+  "minimumAndroidVersion": "Android 6.0",
+  "publicGateway": "https://77-90-158-90.sslip.io",
+  "artifactPath": "/downloads/rwms-rental-manager-0.1.1-debug.apk",
+  "downloadUrl": null,
+  "sha256": null,
+  "signerCertificateDn": null,
+  "signerCertificateSha256": null,
+  "publishedAt": null,
+  "sourceRevision": "b57184f78c09be7a26c7dc27094b66dccab394c2"
+}

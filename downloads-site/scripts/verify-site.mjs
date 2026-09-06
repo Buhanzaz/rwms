@@ -9,6 +9,7 @@ const page = await readFile(resolve(outputDirectory, "index.html"), "utf8");
 const releases = await Promise.all(
   [
     resolve(rootDirectory, "../manager-download-site/release.json"),
+    resolve(rootDirectory, "../rental-manager-download-site/release.json"),
     resolve(rootDirectory, "../driver-download-site/release.json"),
     resolve(rootDirectory, "../worker-download-site/release.json"),
     resolve(rootDirectory, "../client-download-site/release.json"),
@@ -28,8 +29,8 @@ for (const release of releases) {
 }
 
 assert(
-  (page.match(/class="app-card"/g) ?? []).length === 4,
-  "The Downloads page must contain exactly four application cards.",
+  (page.match(/class="app-card"/g) ?? []).length === 5,
+  "The Downloads page must contain exactly five application cards.",
 );
 assert(!page.includes('href="/downloads/rwms-manager-app-debug.apk"'), "The page must not link a mutable ManagerApp alias.");
 assert(!page.includes('href="/downloads/rwms-worker.apk"'), "The page must not link a mutable WorkerApp alias.");

@@ -7,6 +7,7 @@ const outputDirectory = resolve(
 );
 const releaseLocations = [
   ["manager", resolve(rootDirectory, "../manager-download-site/release.json")],
+  ["rental-manager", resolve(rootDirectory, "../rental-manager-download-site/release.json")],
   ["driver", resolve(rootDirectory, "../driver-download-site/release.json")],
   ["worker", resolve(rootDirectory, "../worker-download-site/release.json")],
   ["customer", resolve(rootDirectory, "../client-download-site/release.json")],
@@ -18,6 +19,14 @@ const expectedApps = {
     title: "Приложение руководителя",
     audience: "Для руководителя, администратора WMS и менеджера склада.",
     icon: "M",
+    testBuild: true,
+  },
+  "rental-manager": {
+    packageName: "dev.buhanzaz.rwms.rentalmanager.debug",
+    prefix: "rwms-rental-manager-",
+    title: "Приложение менеджера аренды",
+    audience: "Заявки на аренду, заказы и работа с клиентами.",
+    icon: "R",
     testBuild: true,
   },
   driver: {
