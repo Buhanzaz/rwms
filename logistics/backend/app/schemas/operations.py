@@ -546,26 +546,6 @@ class RequestRescheduleResultRead(ApiModel):
     confirmed_slot: RequestRescheduleSlotRead
 
 
-class RwmsProvisionalEtaUpdate(RwmsApiModel):
-    """Version-fenced refresh or invalidation of one shared-task ETA preview."""
-
-    expected_task_version: int = Field(alias="expectedTaskVersion", ge=0)
-    source_plan_id: UUID = Field(alias="sourcePlanId")
-    source_plan_version: int = Field(alias="sourcePlanVersion", ge=1)
-    provisional_eta: AwareDatetime | None = Field(alias="provisionalEta")
-
-
-class RwmsProvisionalEtaResult(RwmsApiModel):
-    """Current owner-held shared-task ETA projection and task fence."""
-
-    task_id: UUID = Field(alias="taskId")
-    task_version: int = Field(alias="taskVersion", ge=0)
-    external_task_id: UUID = Field(alias="externalTaskId")
-    provisional_eta: AwareDatetime | None = Field(alias="provisionalEta")
-    source_plan_id: UUID | None = Field(alias="sourcePlanId")
-    source_plan_version: int | None = Field(alias="sourcePlanVersion", ge=1)
-
-
 class RetentionDryRunRead(ApiModel):
     """Safe retention report that never deletes or archives rows by itself."""
 

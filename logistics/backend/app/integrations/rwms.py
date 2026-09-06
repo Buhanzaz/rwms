@@ -32,8 +32,6 @@ from app.schemas.domain import (
 )
 from app.schemas.operations import (
     RwmsPlanningBaseTask,
-    RwmsProvisionalEtaResult,
-    RwmsProvisionalEtaUpdate,
     RwmsPublishedAssignmentWithdrawal,
     RwmsPublishedAssignmentWithdrawalResult,
     RwmsRescheduleCommand,
@@ -373,32 +371,6 @@ class RwmsPlanningClient:
                 502,
                 "RWMS_RESCHEDULE_RESPONSE_INVALID",
                 "RWMS reschedule result belongs to another order",
-            )
-        return result
-
-    async def replace_provisional_eta(
-        self,
-        external_task_id: UUID,
-        command: RwmsProvisionalEtaUpdate,
-    ) -> RwmsProvisionalEtaResult:
-        """Refresh or invalidate one future shared-task ETA under its current task fence."""
-
-        self.ensure_enabled()
-        response = await self._authorized_request(
-            "PUT",
-            (f"/api/internal/logistics/v1/planning/assignments/{external_task_id}/provisional-eta"),
-            json_body=command.model_dump(mode="json", by_alias=True),
-        )
-        result = self._validate_response(
-            response,
-            RwmsProvisionalEtaResult,
-            "RWMS_PROVISIONAL_ETA_RESPONSE_INVALID",
-        )
-        if result.external_task_id != external_task_id:
-            raise ApiError(
-                502,
-                "RWMS_PROVISIONAL_ETA_RESPONSE_INVALID",
-                "RWMS provisional ETA result belongs to another task",
             )
         return result
 
