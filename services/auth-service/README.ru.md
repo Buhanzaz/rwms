@@ -111,8 +111,8 @@ README.
 
 Канонический контракт находится в
 [`contracts/openapi/auth-service.yaml`](../../contracts/openapi/auth-service.yaml).
-Он определяет публичный administration/current-user API; OAuth/OIDC
-authorization endpoints остаются standards-based.
+Он определяет administration/current-user API, приватные команды worker credentials
+и восстановление authorization events. OAuth/OIDC endpoints остаются standards-based.
 
 | Публичный endpoint | Назначение | Правило доступа |
 | --- | --- | --- |
@@ -123,6 +123,40 @@ authorization endpoints остаются standards-based.
 | `GET /api/admin/users/{id}` | Чтение administrative user projection | USER JWT с `SYSTEM_ADMIN` или `WMS_ADMIN`. |
 | `PUT /api/admin/users/{id}` | Version-fenced изменение профиля и авторизации | Та же роль; нужен `expectedVersion`, а `WMS_ADMIN` не управляет `SYSTEM_ADMIN`. |
 | `GET /api/users/me` | Текущая access projection активного пользователя | USER Bearer JWT. |
+
+Маршруты администрирования пользователей требуют USER bearer token от
+`rwms-admin-web` со scope `admin.manage` и текущую сохранённую роль
+`SYSTEM_ADMIN` или `WMS_ADMIN`. Эти stateless API не требуют CSRF token.
+
+| Дополнительный endpoint | Поведение и доступ |
+| --- | --- |
+| `PUT /api/admin/users/{id}/password` | Замена write-only пароля с expectedVersion, отзыв сохранённых authorizations; `204`. |
+| `PUT /api/admin/users/{id}/warehouse-accesses` | Полная замена `accesses` с expectedVersion; ответ `AdminUser`. Пустой массив удаляет все явные grants. |
+| `DELETE /api/admin/users/{id}` | Физическое удаление запрещено; существующий видимый пользователь возвращает `409`. |
+| `GET /api/users/actor-displays` | USER token и текущая сохранённая роль администратора; до 100 повторяющихся `subjectId`, порядок первого появления, неизвестные субъекты пропускаются. Семь полей projection не содержат credentials или grants. |
+| `PUT /api/internal/worker-credentials/{workerId}` | Создание или замена worker credential; ответ содержит безопасный статус и канонический UUID склада. |
+| `POST /api/internal/worker-credentials/{workerId}/reset` | Замена пароля существующей credential и отзыв сохранённых authorizations; `204`. |
+| `POST /api/internal/worker-credentials/{workerId}/disable` | Отключение credential; отсутствующая или уже отключённая также возвращает `204`. |
+| `POST /api/internal/worker-credentials/{workerId}/enable` | Включение существующей credential; `204`, при отсутствии `404`. |
+| `DELETE /api/internal/worker-credentials/{workerId}` | Идемпотентное удаление, включая отсутствующую credential; `204`. |
+| `GET /api/internal/worker-credentials/{workerId}/status` | `ACTIVE` или `DISABLED`; при отсутствии `404`. |
+| `POST /api/admin/eventing/outbox/{eventId}/requeue` | Повторная постановка подходящей outbox DLT row с `expectedAttemptCount`; `204`, при отсутствии или несовпадении условий `409`. |
+| `POST /api/admin/eventing/sanitized-dlt/{dltId}/requeue` | Повторная постановка FAILED sanitized DLT row с `expectedAttemptCount`; `204`, при отсутствии или несовпадении условий `409`. |
+| `POST /api/admin/eventing/shadow/{aggregateType}/{aggregateId}/reconcile` | Восстановление заблокированного checkpoint по ожидаемой версии и причине; ответ содержит восстановленный хвост stream. |
+| `POST /api/admin/eventing/shadow/rebuild` | Перестроение shadow с долговечным `operationId` и причиной; ответ содержит replay parity. Завершённый receipt используется повторно, неуспешный нельзя повторить с тем же ID. |
+
+Приватные worker operations требуют одновременно SERVICE principal, client
+`task-board-service` и scope `worker-credentials.manage`. `workerId` — внешняя
+непустая строка, не обязательно UUID. Ответы содержат только `workerId`,
+канонический `warehouseId`, `appLogin` и `status`.
+Recovery operations требуют `SYSTEM_ADMIN`, без ограничения на dedicated admin
+client или scope. Reconciliation и rebuild дополнительно разрешают username
+оператора в канонический auth subject. Обе группы используют stateless Bearer
+доступ без CSRF. Browser clients не вызывают приватные worker routes.
+Отсутствующий сохранённый shadow checkpoint пока возвращает HTTP `500` с JSON;
+эта ошибка восстановления отличается от обычного Problem Details mapping.
+Отсутствующий shadow checkpoint сейчас возвращает необработанный `500 application/json`;
+каноническая reconciliation operation фиксирует этот наблюдаемый отказ.
 
 Сервис возвращает единые Problem Details для invalid, unauthenticated,
 forbidden, not-found, conflict и registration-rate-limit случаев. Ответ `429`

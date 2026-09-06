@@ -3,8 +3,8 @@ info:
   title: RWMS Auth Service API
   version: 1.0.0
   description: >-
-    Canonical public administration and current-user projection API for
-    auth-service. OAuth2/OIDC authorization endpoints remain standards-based;
+    Canonical administration, current-user projection, internal worker credential,
+    and authorization-event recovery API for auth-service. OAuth2/OIDC authorization endpoints remain standards-based;
     user access tokens and ID tokens expose the UserTokenClaims projection.
 servers:
   - url: /
@@ -114,7 +114,8 @@ paths:
       operationId: listAdminUsers
       summary: List users for administration
       description: >-
-        Requires the dedicated rwms-admin-web SYSTEM_ADMIN session.
+        Requires a USER bearer JWT from rwms-admin-web with admin.manage and
+        SYSTEM_ADMIN or WMS_ADMIN; authorization also checks the current persisted user.
       responses:
         "200":
           description: Users ordered case-insensitively by username.
@@ -129,8 +130,8 @@ paths:
       operationId: createAdminUser
       summary: Create an administrable user
       description: >-
-        Requires the dedicated rwms-admin-web SYSTEM_ADMIN session and creates
-        a user. If rentalAccess is omitted, it defaults to true for SYSTEM_ADMIN,
+        Requires a USER bearer JWT from rwms-admin-web with admin.manage and
+        SYSTEM_ADMIN or WMS_ADMIN. Only SYSTEM_ADMIN may create a SYSTEM_ADMIN user. If rentalAccess is omitted, it defaults to true for SYSTEM_ADMIN,
         WMS_ADMIN, and RENTAL_MANAGER; it defaults to false for every other
         role. An explicit boolean is persisted as supplied.
       requestBody:
@@ -155,7 +156,8 @@ paths:
       operationId: getAdminUser
       summary: Get an administrable user
       description: >-
-        Requires the dedicated rwms-admin-web SYSTEM_ADMIN session.
+        Requires a USER bearer JWT from rwms-admin-web with admin.manage and
+        SYSTEM_ADMIN or WMS_ADMIN; authorization also checks the current persisted user.
       responses:
         "200":
           description: User administration projection.
@@ -169,7 +171,8 @@ paths:
       operationId: updateAdminUser
       summary: Update an administrable user
       description: >-
-        Requires the dedicated rwms-admin-web SYSTEM_ADMIN session.
+        Requires a USER bearer JWT from rwms-admin-web with admin.manage and
+        SYSTEM_ADMIN or WMS_ADMIN; authorization also checks the current persisted user.
         expectedVersion is required for optimistic concurrency. Omitted rentalAccess preserves
         the stored value.
       requestBody:
@@ -188,6 +191,25 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      operationId: deleteAdminUser
+      summary: Reject physical user deletion
+      description: Requires a USER bearer JWT from rwms-admin-web with admin.manage and SYSTEM_ADMIN or
+        WMS_ADMIN. The current persisted user must be an administrator; WMS_ADMIN cannot manage SYSTEM_ADMIN.
+        Stateless; no CSRF token is required. Physical deletion is currently prohibited because absence
+        of history and active sessions is not proven. Existing visible users return 409; disabling a user
+        is the supported reversible operation.
+      responses:
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /api/users/me:
     get:
       operationId: getCurrentUser
@@ -204,6 +226,414 @@ paths:
               schema: { $ref: "#/components/schemas/CurrentUser" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+  /api/admin/users/{id}/password:
+    parameters:
+    - $ref: '#/components/parameters/UserId'
+    put:
+      operationId: resetAdminUserPassword
+      summary: Replace a user password
+      description: Requires a USER bearer JWT from rwms-admin-web with admin.manage and SYSTEM_ADMIN
+        or WMS_ADMIN. The current persisted user must be an administrator; WMS_ADMIN cannot manage SYSTEM_ADMIN.
+        Stateless; no CSRF token is required. expectedVersion fences the mutation; stored authorizations
+        are revoked. Passwords are write-only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminPasswordResetRequest'
+      responses:
+        '204':
+          description: Completed without a response body.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/admin/users/{id}/warehouse-accesses:
+    parameters:
+    - $ref: '#/components/parameters/UserId'
+    put:
+      operationId: replaceAdminUserWarehouseAccesses
+      summary: Replace all explicit warehouse grants
+      description: Requires a USER bearer JWT from rwms-admin-web with admin.manage and SYSTEM_ADMIN
+        or WMS_ADMIN. The current persisted user must be an administrator; WMS_ADMIN cannot manage SYSTEM_ADMIN.
+        Stateless; no CSRF token is required. expectedVersion fences the complete replacement set. An
+        empty accesses array removes every explicit grant. A semantic no-op preserves the version.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WarehouseAccessesUpdateRequest'
+      responses:
+        '200':
+          description: Current non-secret result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminUser'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/users/actor-displays:
+    get:
+      operationId: listActorDisplays
+      summary: Resolve compact actor identities
+      description: Requires a USER bearer JWT and a current persisted SYSTEM_ADMIN or WMS_ADMIN user.
+        Accepts at most 100 subjectId values before deduplication. Results retain first-occurrence order
+        and omit unknown subjects. Stateless; no CSRF token is required.
+      responses:
+        '200':
+          description: Known subject identities in first-occurrence input order.
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 100
+                items:
+                  $ref: '#/components/schemas/ActorDisplay'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      parameters:
+      - name: subjectId
+        in: query
+        required: true
+        style: form
+        explode: true
+        schema:
+          type: array
+          maxItems: 100
+          items:
+            type: string
+            format: uuid
+  /api/internal/worker-credentials/{workerId}:
+    parameters:
+    - name: workerId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        pattern: \S
+      description: External worker identifier, trimmed by auth-service; not restricted to UUID syntax.
+    put:
+      operationId: configureWorkerCredential
+      summary: Create or replace a worker credential
+      description: Private service endpoint requiring SERVICE, client_id=task-board-service, and worker-credentials.manage.
+        Stateless Bearer authentication; no CSRF token is required. Resolves warehouseId through the
+        owning warehouse identifier policy and returns its canonical UUID. An exact retry preserves
+        the credential state.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkerCredentialRequest'
+      responses:
+        '200':
+          description: Current non-secret result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerCredential'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      operationId: deleteWorkerCredential
+      summary: Delete a worker credential
+      description: Private service endpoint requiring SERVICE, client_id=task-board-service, and worker-credentials.manage.
+        Stateless Bearer authentication; no CSRF token is required. Repeating deletion for an absent
+        credential succeeds. Existing authorizations are revoked when the credential exists.
+      responses:
+        '204':
+          description: Completed without a response body.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/internal/worker-credentials/{workerId}/reset:
+    parameters:
+    - name: workerId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        pattern: \S
+      description: External worker identifier, trimmed by auth-service; not restricted to UUID syntax.
+    post:
+      operationId: resetWorkerCredentialPassword
+      summary: Replace a worker password
+      description: Private service endpoint requiring SERVICE, client_id=task-board-service, and worker-credentials.manage.
+        Stateless Bearer authentication; no CSRF token is required. Requires an existing credential
+        and revokes its stored authorizations.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+      responses:
+        '204':
+          description: Completed without a response body.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/internal/worker-credentials/{workerId}/disable:
+    parameters:
+    - name: workerId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        pattern: \S
+      description: External worker identifier, trimmed by auth-service; not restricted to UUID syntax.
+    post:
+      operationId: disableWorkerCredential
+      summary: Disable a worker credential
+      description: Private service endpoint requiring SERVICE, client_id=task-board-service, and worker-credentials.manage.
+        Stateless Bearer authentication; no CSRF token is required. An absent or already disabled credential
+        is an idempotent success.
+      responses:
+        '204':
+          description: Completed without a response body.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/internal/worker-credentials/{workerId}/enable:
+    parameters:
+    - name: workerId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        pattern: \S
+      description: External worker identifier, trimmed by auth-service; not restricted to UUID syntax.
+    post:
+      operationId: enableWorkerCredential
+      summary: Enable an existing worker credential
+      description: Private service endpoint requiring SERVICE, client_id=task-board-service, and worker-credentials.manage.
+        Stateless Bearer authentication; no CSRF token is required. Requires an existing credential;
+        an already active credential is an idempotent success.
+      responses:
+        '204':
+          description: Completed without a response body.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/internal/worker-credentials/{workerId}/status:
+    parameters:
+    - name: workerId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        pattern: \S
+      description: External worker identifier, trimmed by auth-service; not restricted to UUID syntax.
+    get:
+      operationId: getWorkerCredentialStatus
+      summary: Read non-secret worker credential status
+      description: Private service endpoint requiring SERVICE, client_id=task-board-service, and worker-credentials.manage.
+        Stateless Bearer authentication; no CSRF token is required. An absent credential returns 404;
+        the response never contains a password or hash.
+      responses:
+        '200':
+          description: Current non-secret result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerCredential'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/admin/eventing/outbox/{eventId}/requeue:
+    parameters:
+    - name: eventId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    post:
+      operationId: requeueAuthOutbox
+      summary: Requeue an eligible auth outbox event
+      description: Requires a bearer JWT with SYSTEM_ADMIN. This recovery route does not require the
+        dedicated admin client or admin.manage scope. Stateless; no CSRF token is required. Requires
+        an unpublished DLT row with the matching expectedAttemptCount and no active lease. A missing
+        or ineligible row returns 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RequeueOutboxRequest'
+      responses:
+        '204':
+          description: Completed without a response body.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/admin/eventing/sanitized-dlt/{dltId}/requeue:
+    parameters:
+    - name: dltId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    post:
+      operationId: requeueAuthSanitizedDlt
+      summary: Requeue an eligible sanitized dead-letter record
+      description: Requires a bearer JWT with SYSTEM_ADMIN. This recovery route does not require the
+        dedicated admin client or admin.manage scope. Stateless; no CSRF token is required. Requires
+        FAILED status and the matching expectedAttemptCount. A missing or ineligible row returns 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RequeueOutboxRequest'
+      responses:
+        '204':
+          description: Completed without a response body.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/admin/eventing/shadow/{aggregateType}/{aggregateId}/reconcile:
+    parameters:
+    - name: aggregateType
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/AuthAggregateType'
+    - name: aggregateId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    post:
+      operationId: reconcileAuthShadow
+      summary: Reconcile one blocked authorization shadow
+      description: Requires a bearer JWT with SYSTEM_ADMIN. This recovery route does not require the
+        dedicated admin client or admin.manage scope. Stateless; no CSRF token is required. The operator
+        username must resolve to a canonical auth subject. Recovery uses the expected blocked checkpoint
+        and an audit reason to replay the authoritative aggregate stream and resolve its version-gap
+        quarantine.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReconcileAuthShadowRequest'
+      responses:
+        '200':
+          description: Current non-secret result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthShadowReconciliation'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          description: A missing shadow checkpoint currently produces an unhandled recovery failure.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                required: [status, error]
+                properties:
+                  status: {type: integer, const: 500}
+                  error: {type: string, const: Internal Server Error}
+  /api/admin/eventing/shadow/rebuild:
+    post:
+      operationId: rebuildAuthShadow
+      summary: Rebuild the authorization shadow with replay parity
+      description: Requires a bearer JWT with SYSTEM_ADMIN. This recovery route does not require the
+        dedicated admin client or admin.manage scope. Stateless; no CSRF token is required. The operator
+        username must resolve to a canonical auth subject. operationId identifies a durable replay receipt;
+        a repeated completed operation returns its recorded parity result. A failed receipt cannot be
+        retried under the same operationId.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplayAuthShadowRequest'
+      responses:
+        '200':
+          description: Current non-secret result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthShadowReplayParity'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 components:
   securitySchemes:
     bearerJwt:
@@ -395,6 +825,221 @@ components:
         warehouseAccesses:
           type: array
           items: { $ref: "#/components/schemas/EffectiveWarehouseAccess" }
+    AdminPasswordResetRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - password
+      - expectedVersion
+      properties:
+        password:
+          type: string
+          minLength: 8
+          maxLength: 200
+          writeOnly: true
+        expectedVersion:
+          type: integer
+          format: int32
+    WarehouseAccessesUpdateRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - expectedVersion
+      - accesses
+      properties:
+        expectedVersion:
+          type: integer
+          format: int32
+        accesses:
+          type: array
+          items:
+            $ref: '#/components/schemas/WarehouseAccessRequest'
+    ActorDisplay:
+      type: object
+      additionalProperties: false
+      required:
+      - subjectId
+      - principalType
+      - globalRole
+      - username
+      - firstName
+      - lastName
+      - email
+      properties:
+        subjectId:
+          type: string
+          format: uuid
+        principalType:
+          $ref: '#/components/schemas/PrincipalType'
+        globalRole:
+          anyOf:
+          - $ref: '#/components/schemas/UserGlobalRole'
+          - type: 'null'
+        username:
+          type: string
+        firstName:
+          type:
+          - string
+          - 'null'
+        lastName:
+          type:
+          - string
+          - 'null'
+        email:
+          type:
+          - string
+          - 'null'
+    WorkerCredentialRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - warehouseId
+      - appLogin
+      - password
+      properties:
+        warehouseId:
+          type: string
+          minLength: 1
+          pattern: \S
+          maxLength: 128
+        appLogin:
+          type: string
+          minLength: 1
+          pattern: \S
+          maxLength: 128
+        password:
+          type: string
+          minLength: 8
+          maxLength: 200
+          writeOnly: true
+    PasswordResetRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - password
+      properties:
+        password:
+          type: string
+          minLength: 8
+          maxLength: 200
+          writeOnly: true
+    WorkerCredential:
+      type: object
+      additionalProperties: false
+      required:
+      - workerId
+      - warehouseId
+      - appLogin
+      - status
+      properties:
+        workerId:
+          type: string
+          minLength: 1
+          pattern: \S
+        warehouseId:
+          type: string
+          format: uuid
+        appLogin:
+          type: string
+          minLength: 1
+          pattern: \S
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - DISABLED
+    RequeueOutboxRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - expectedAttemptCount
+      properties:
+        expectedAttemptCount:
+          type: integer
+          format: int32
+          minimum: 1
+    AuthAggregateType:
+      type: string
+      enum:
+      - USER_AUTHORIZATION
+      - WORKER_ACCESS
+    ReconcileAuthShadowRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - expectedCheckpointVersion
+      - reason
+      properties:
+        expectedCheckpointVersion:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Expected blocked checkpoint version; omission is rejected by HTTP request binding.
+        reason:
+          type: string
+          minLength: 1
+          pattern: \S
+          maxLength: 500
+    AuthShadowReconciliation:
+      type: object
+      additionalProperties: false
+      required:
+      - aggregateType
+      - aggregateId
+      - version
+      - lastEventId
+      - resolvedQuarantines
+      properties:
+        aggregateType:
+          $ref: '#/components/schemas/AuthAggregateType'
+        aggregateId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          format: int64
+          minimum: 0
+        lastEventId:
+          type: string
+          format: uuid
+        resolvedQuarantines:
+          type: integer
+          format: int32
+          minimum: 0
+    ReplayAuthShadowRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - operationId
+      - reason
+      properties:
+        operationId:
+          type: string
+          format: uuid
+        reason:
+          type: string
+          minLength: 1
+          pattern: \S
+          maxLength: 500
+    AuthShadowReplayParity:
+      type: object
+      additionalProperties: false
+      required:
+      - aggregateCount
+      - versionSum
+      - canonicalChecksum
+      properties:
+        aggregateCount:
+          type: integer
+          format: int32
+          minimum: 0
+        versionSum:
+          type: integer
+          format: int64
+          minimum: 0
+        canonicalChecksum:
+          type: string
+          pattern: ^[0-9a-f]{64}$
     ApiProblem:
       type: object
       additionalProperties: true

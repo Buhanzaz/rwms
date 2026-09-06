@@ -59,6 +59,8 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-webmvc-test")
     testImplementation("org.springframework.boot:spring-boot-testcontainers")
     testImplementation("org.springframework.security:spring-security-test")
+    testImplementation("org.yaml:snakeyaml")
+    testImplementation("com.networknt:json-schema-validator:1.5.9")
     testImplementation(libs.spring.cloud.stream.test.binder)
     testImplementation(libs.archunit.junit5)
     testImplementation(platform("org.testcontainers:testcontainers-bom:2.0.5"))
@@ -75,6 +77,10 @@ sourceSets {
         resources.srcDir("database/flyway")
         resources.srcDir("database/releases")
     }
+}
+
+tasks.withType<Test> {
+    systemProperty("rwms.contracts.dir", rootProject.file("contracts").absolutePath)
 }
 
 tasks.processResources {

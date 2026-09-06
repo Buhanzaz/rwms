@@ -110,8 +110,8 @@ shape.
 
 The canonical contract is
 [`contracts/openapi/auth-service.yaml`](../../contracts/openapi/auth-service.yaml).
-It defines the public administration and current-user projection API; OAuth/OIDC
-authorization endpoints are standards-based.
+It defines administration, current-user projections, private worker credential
+commands, and authorization-event recovery. OAuth/OIDC endpoints are standards-based.
 
 | Public endpoint | Purpose | Access rule |
 | --- | --- | --- |
@@ -122,6 +122,40 @@ authorization endpoints are standards-based.
 | `GET /api/admin/users/{id}` | Read one administrative user projection | USER JWT with `SYSTEM_ADMIN` or `WMS_ADMIN`. |
 | `PUT /api/admin/users/{id}` | Version-fenced profile and authorization update | Same role; `expectedVersion` is required and `WMS_ADMIN` cannot manage `SYSTEM_ADMIN`. |
 | `GET /api/users/me` | Read the active caller's current access projection | USER Bearer JWT. |
+
+Administrative user routes require a USER bearer token from `rwms-admin-web`
+with `admin.manage`, plus the current persisted `SYSTEM_ADMIN` or `WMS_ADMIN`
+role. These stateless API routes do not require a CSRF token.
+
+| Additional endpoint | Behavior and access |
+| --- | --- |
+| `PUT /api/admin/users/{id}/password` | Version-fenced, write-only password replacement; revokes stored authorizations and returns `204`. |
+| `PUT /api/admin/users/{id}/warehouse-accesses` | Version-fenced complete replacement of `accesses`; returns `AdminUser`. An empty array removes all explicit grants. |
+| `DELETE /api/admin/users/{id}` | Physical deletion remains prohibited; an existing visible user returns `409`. |
+| `GET /api/users/actor-displays` | USER token and current persisted administrator role; up to 100 repeated `subjectId` parameters, first-occurrence order, unknown subjects omitted. The seven-field projection contains no credentials or grants. |
+| `PUT /api/internal/worker-credentials/{workerId}` | Configure or replace a worker credential; returns non-secret status and the canonical warehouse UUID. |
+| `POST /api/internal/worker-credentials/{workerId}/reset` | Replace the password of an existing credential and revoke stored authorizations; `204`. |
+| `POST /api/internal/worker-credentials/{workerId}/disable` | Disable the credential; absent or already disabled credentials also return `204`. |
+| `POST /api/internal/worker-credentials/{workerId}/enable` | Enable an existing credential; `204`, or `404` when absent. |
+| `DELETE /api/internal/worker-credentials/{workerId}` | Idempotent deletion, including absent credentials; `204`. |
+| `GET /api/internal/worker-credentials/{workerId}/status` | `ACTIVE` or `DISABLED`; absent credentials return `404`. |
+| `POST /api/admin/eventing/outbox/{eventId}/requeue` | Requeue an eligible outbox DLT row at `expectedAttemptCount`; `204`, or `409` when missing/ineligible. |
+| `POST /api/admin/eventing/sanitized-dlt/{dltId}/requeue` | Requeue a FAILED sanitized DLT row at `expectedAttemptCount`; `204`, or `409` when missing/ineligible. |
+| `POST /api/admin/eventing/shadow/{aggregateType}/{aggregateId}/reconcile` | Reconcile a blocked checkpoint using an expected version and audit reason; returns the restored stream tail. |
+| `POST /api/admin/eventing/shadow/rebuild` | Rebuild the shadow under a durable `operationId` and audit reason; returns replay parity. A completed receipt is reusable; a failed receipt cannot be retried under the same ID. |
+
+Private worker operations require all three authorities: SERVICE principal,
+`task-board-service` client, and `worker-credentials.manage` scope. `workerId`
+is an external nonblank string, not necessarily a UUID. Responses contain only
+`workerId`, canonical `warehouseId`, `appLogin`, and `status`.
+Recovery operations require `SYSTEM_ADMIN`; they do not impose the dedicated
+admin client or scope. Reconciliation and rebuild also resolve the operator's
+username to a canonical auth subject. Both groups use stateless Bearer access
+without CSRF. Browser clients must not call the private worker routes.
+A missing stored shadow checkpoint currently returns HTTP `500` with JSON;
+this recovery error remains distinct from the ordinary Problem Details mapping.
+A missing shadow checkpoint currently returns an unhandled `500 application/json`
+response; the canonical reconciliation operation records that observed failure.
 
 The service returns shared Problem Details for invalid, unauthenticated,
 forbidden, not-found, conflict, and registration-rate-limit cases. A registration

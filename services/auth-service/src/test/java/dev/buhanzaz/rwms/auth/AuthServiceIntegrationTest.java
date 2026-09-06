@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.auth;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static dev.buhanzaz.rwms.auth.AuthOpenApiContractTest.matchesContract;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestBuilders.formLogin;
@@ -38,7 +39,12 @@ import dev.buhanzaz.rwms.auth.domain.UserGlobalRole;
 import dev.buhanzaz.rwms.auth.repository.AuthSubjectRepository;
 import dev.buhanzaz.rwms.auth.service.UserAdministrationService;
 import dev.buhanzaz.rwms.auth.service.WorkerCredentialService;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.Base64;
@@ -47,9 +53,12 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
@@ -70,7 +79,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
-@SpringBootTest
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @Testcontainers
@@ -80,6 +89,9 @@ class AuthServiceIntegrationTest {
     @Container
     @ServiceConnection
     static final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17-alpine");
+
+    @LocalServerPort
+    int serverPort;
 
     @Autowired
     MockMvc mvc;
@@ -752,37 +764,44 @@ class AuthServiceIntegrationTest {
                 .andExpect(jsonPath("$.warehouseId").value("00000000-0000-0000-0000-000000000001"))
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
                 .andExpect(jsonPath("$.password").doesNotExist())
-                .andExpect(jsonPath("$.passwordHash").doesNotExist());
+                .andExpect(jsonPath("$.passwordHash").doesNotExist())
+                .andExpect(matchesContract("/api/internal/worker-credentials/{workerId}"));
 
         mvc.perform(post("/api/internal/worker-credentials/worker-101/disable")
                         .header("Authorization", "Bearer " + accessToken))
-                .andExpect(status().isNoContent());
+                .andExpect(status().isNoContent())
+                .andExpect(matchesContract("/api/internal/worker-credentials/{workerId}/disable"));
         mvc.perform(get("/api/internal/worker-credentials/worker-101/status")
                         .header("Authorization", "Bearer " + accessToken))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("DISABLED"));
+                .andExpect(jsonPath("$.status").value("DISABLED"))
+                .andExpect(matchesContract("/api/internal/worker-credentials/{workerId}/status"));
         mvc.perform(post("/api/internal/worker-credentials/worker-101/reset")
                         .header("Authorization", "Bearer " + accessToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"password\":\"rotated-secret\"}"))
-                .andExpect(status().isNoContent());
+                .andExpect(status().isNoContent())
+                .andExpect(matchesContract("/api/internal/worker-credentials/{workerId}/reset"));
         assertThat(passwordEncoder.matches(
                         "rotated-secret",
                         subjects.findByExternalWorkerId("worker-101").orElseThrow().getPasswordHash()))
                 .isTrue();
         mvc.perform(post("/api/internal/worker-credentials/worker-101/enable")
                         .header("Authorization", "Bearer " + accessToken))
-                .andExpect(status().isNoContent());
+                .andExpect(status().isNoContent())
+                .andExpect(matchesContract("/api/internal/worker-credentials/{workerId}/enable"));
         mvc.perform(get("/api/internal/worker-credentials/worker-101/status")
                         .header("Authorization", "Bearer " + accessToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.appLogin").value("worker.101"))
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
                 .andExpect(jsonPath("$.password").doesNotExist())
-                .andExpect(jsonPath("$.passwordHash").doesNotExist());
+                .andExpect(jsonPath("$.passwordHash").doesNotExist())
+                .andExpect(matchesContract("/api/internal/worker-credentials/{workerId}/status"));
         mvc.perform(delete("/api/internal/worker-credentials/worker-101")
                         .header("Authorization", "Bearer " + accessToken))
-                .andExpect(status().isNoContent());
+                .andExpect(status().isNoContent())
+                .andExpect(matchesContract("/api/internal/worker-credentials/{workerId}"));
     }
 
     @Test
@@ -1205,6 +1224,107 @@ class AuthServiceIntegrationTest {
                 JsonPath.read(body, "$.access_token"),
                 JsonPath.read(body, "$.refresh_token"),
                 ((Number) JsonPath.read(body, "$.expires_in")).intValue());
+    }
+
+    @ParameterizedTest(name = "{0} {1}")
+    @MethodSource("dev.buhanzaz.rwms.auth.AuthOpenApiContractTest#omittedOperations")
+    void documentedOperationsRequireTheActualBearerAuthorizationBoundary(
+            String method, String template, String body, int successStatus) throws Exception {
+        String restrictedSubject = template.endsWith("actor-displays")
+                ? users.create(new CreateUserRequest(
+                        "contract.viewer." + UUID.randomUUID(), "test-password", null, null, null, null,
+                        UserGlobalRole.VIEWER, true, List.of()), adminAuthentication()).username()
+                : "unknown-r013-user";
+        for (boolean authenticated : List.of(false, true)) {
+            var request = org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request(
+                    org.springframework.http.HttpMethod.valueOf(method),
+                    AuthOpenApiContractTest.concretePath(template));
+            if (body != null) request.contentType(MediaType.APPLICATION_JSON).content(body);
+            if (template.endsWith("actor-displays")) {
+                request.queryParam("subjectId", AuthOpenApiContractTest.ID.toString());
+            }
+            if (authenticated) request.with(jwt()
+                    .jwt(token -> token.subject(restrictedSubject))
+                    .authorities(new SimpleGrantedAuthority("ROLE_USER")));
+            mvc.perform(request).andExpect(status().is(authenticated ? 403 : 401))
+                    .andExpect(matchesContract(template));
+        }
+    }
+
+    @Test
+    void administrativePasswordAccessesAndActorResponsesMatchCanonicalHttpSchemas() throws Exception {
+        var created = users.create(new CreateUserRequest(
+                "contract.admin.target", "initial-password", null, null, null, null,
+                UserGlobalRole.VIEWER, true, List.of()), adminAuthentication());
+        String passwordBody = "{\"password\":\"replaced-password\",\"expectedVersion\":"
+                + created.version() + "}";
+        mvc.perform(put("/api/admin/users/{id}/password", created.id())
+                        .with(adminAppJwt("admin", "SYSTEM_ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON).content(passwordBody))
+                .andExpect(status().isNoContent())
+                .andExpect(matchesContract("/api/admin/users/{id}/password"));
+        mvc.perform(put("/api/admin/users/{id}/password", created.id())
+                        .with(adminAppJwt("admin", "SYSTEM_ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON).content(passwordBody))
+                .andExpect(status().isConflict())
+                .andExpect(matchesContract("/api/admin/users/{id}/password"));
+        int version = subjects.findById(created.id()).orElseThrow().getVersion();
+        mvc.perform(put("/api/admin/users/{id}/warehouse-accesses", created.id())
+                        .with(adminAppJwt("admin", "SYSTEM_ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"expectedVersion\":" + version + ",\"accesses\":[]}"))
+                .andExpect(status().isOk())
+                .andExpect(matchesContract("/api/admin/users/{id}/warehouse-accesses"));
+        mvc.perform(get("/api/users/actor-displays")
+                        .with(adminAppJwt("admin", "SYSTEM_ADMIN"))
+                        .queryParam("subjectId", created.id().toString(), UUID.randomUUID().toString(),
+                                created.id().toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(matchesContract("/api/users/actor-displays"));
+        mvc.perform(delete("/api/admin/users/{id}", created.id())
+                        .with(adminAppJwt("admin", "SYSTEM_ADMIN")))
+                .andExpect(status().isConflict())
+                .andExpect(matchesContract("/api/admin/users/{id}"));
+    }
+
+    @Test
+    void missingShadowCheckpointHasAnObservedHttpRecoveryFailure() throws Exception {
+        RSAKey signingKey = (RSAKey) jwkSource
+                .get(new JWKSelector(new JWKMatcher.Builder().privateOnly(true).build()), null)
+                .getFirst();
+        Instant now = Instant.now();
+        var claims = new JWTClaimsSet.Builder().issuer("http://localhost:9000")
+                .subject(subjects.findByUsernameIgnoreCase("admin").orElseThrow().getId().toString())
+                .audience(List.of("rwms-services"))
+                .issueTime(Date.from(now.minusSeconds(1))).expirationTime(Date.from(now.plusSeconds(60)))
+                .claim("preferred_username", "admin").claim("principal_type", "USER")
+                .claim("global_role", "SYSTEM_ADMIN").build();
+        var token = new SignedJWT(
+                new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(signingKey.getKeyID()).build(), claims);
+        token.sign(new RSASSASigner(signingKey.toPrivateKey()));
+        String missingAggregate = UUID.randomUUID().toString();
+        String path = "/api/admin/eventing/shadow/USER_AUTHORIZATION/" + missingAggregate + "/reconcile";
+        try (HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()) {
+            var request = HttpRequest.newBuilder(URI.create("http://localhost:" + serverPort + path))
+                    .timeout(Duration.ofSeconds(20)).header("Authorization", "Bearer " + token.serialize())
+                    .header("Content-Type", "application/json").header("Accept", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(
+                            "{\"expectedCheckpointVersion\":0,\"reason\":\"Missing checkpoint HTTP contract probe\"}"))
+                    .build();
+            var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            System.out.println("R013 missing-checkpoint HTTP status=" + response.statusCode()
+                    + " content-type=" + response.headers().firstValue("Content-Type").orElse("absent"));
+            assertThat(response.statusCode()).isEqualTo(500);
+            assertThat(response.headers().firstValue("Content-Type")).contains("application/json");
+            assertThat((Integer) JsonPath.read(response.body(), "$.status")).isEqualTo(500);
+            assertThat((String) JsonPath.read(response.body(), "$.error")).isEqualTo("Internal Server Error");
+            AuthOpenApiContractTest.assertHttpResponse(
+                    "/api/admin/eventing/shadow/{aggregateType}/{aggregateId}/reconcile", "post",
+                    response.statusCode(), response.headers().firstValue("Content-Type").orElseThrow(),
+                    response.body());
+            assertThat(response.body()).doesNotContain(token.serialize());
+        }
     }
 
     private UsernamePasswordAuthenticationToken adminAuthentication() {
