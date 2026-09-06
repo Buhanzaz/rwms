@@ -50,11 +50,14 @@ responses or own workflow state. Each downstream service validates its token
 and owns its commands. Anonymous customer registration is forwarded through
 the same edge, but auth-service owns its cookie/header CSRF check. The gateway
 deliberately keeps no source-address rate-limit store: it removes untrusted
-forwarding headers and supplies the immediate TCP peer address. Auth-service
-owns durable per-source and global fixed-window registration budgets before
-password hashing, while production-ingress throttling remains an independent
-defence-in-depth control. A future reverse-proxy trust boundary must be explicit;
-otherwise callers behind that proxy share its immediate-peer budget.
+forwarding headers and supplies a verified numeric source address. Configured
+immediate proxies (loopback Nginx by default) overwrite `X-Real-IP` with their
+observed peer; gateway validates and canonicalizes that single literal before
+sending auth's `X-Forwarded-For`. Malformed/multiple trusted values return 400;
+missing values and untrusted peers use the TCP address. Equivalent IPv6 forms
+share one identity. Auth-service owns durable per-source and global fixed-window
+registration budgets before password hashing; production-ingress throttling
+remains an independent defence-in-depth control.
 
 Long-lived SSE routes remain transport-only. The gateway bounds their
 concurrency, relays the producer's bytes with Servlet asynchronous I/O, flushes
