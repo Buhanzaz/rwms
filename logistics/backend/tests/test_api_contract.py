@@ -518,18 +518,15 @@ def test_plain_compose_environment_aliases_are_supported(monkeypatch: pytest.Mon
         "LOGISTICS_DATABASE_URL",
         "LOGISTICS_ROUTING_PROVIDER",
         "LOGISTICS_DEFAULT_WAREHOUSE_TIMEZONE",
-        "LOGISTICS_PLANNER_DEFAULT_SEED",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://u:p@db:5432/test")
     monkeypatch.setenv("ROUTING_PROVIDER", "mock")
     monkeypatch.setenv("DEFAULT_WAREHOUSE_TIMEZONE", "Asia/Yekaterinburg")
-    monkeypatch.setenv("PLANNER_DEFAULT_SEED", "42")
     settings = Settings()
     assert settings.database_url.endswith("/test")
     assert settings.routing_provider == "mock"
     assert settings.default_warehouse_timezone == "Asia/Yekaterinburg"
-    assert settings.planner_default_seed == 42
 
 
 def test_workload_generator_contract_keeps_alternatives_inside_horizon() -> None:

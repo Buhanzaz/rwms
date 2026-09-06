@@ -303,7 +303,7 @@ geometry cannot be truthfully reconstructed.
 The main validated settings live in [`config.py`](../backend/app/config.py):
 
 - database: `DATABASE_URL`;
-- warehouse default: `DEFAULT_WAREHOUSE_TIMEZONE`, `PLANNER_DEFAULT_SEED`;
+- warehouse default: `DEFAULT_WAREHOUSE_TIMEZONE`;
 - routing: `ROUTING_PROVIDER`, Valhalla/OSRM URLs and timeouts,
   `OSM_DATA_VERSION`;
 - RWMS: sync/capacity flags, private service URL, token URL, client ID/secret and

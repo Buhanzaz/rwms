@@ -598,7 +598,6 @@ make openapi
 | `OSM_NORTHWESTERN_DATA_URL` | Northwestern Federal District extract | Second PBF covering Saint Petersburg; its checksum participates in the routing-source manifest |
 | `OSRM_BASE_URL`, `OSRM_PROFILE`, `OSRM_TIMEOUT_SECONDS` | legacy values | Used only with provider `osrm` and Compose profile `legacy-routing` |
 | `DEFAULT_WAREHOUSE_TIMEZONE` | `Europe/Moscow` | Fallback timezone when a canonical warehouse omits one |
-| `PLANNER_DEFAULT_SEED` | `20260822` | Default deterministic tie-break seed |
 | `VITE_MAP_STYLE_URL` | empty | Frontend build arg; optional MapLibre style, empty enables grid mode |
 | `VITE_API_BASE_URL` | `/api` | Frontend build arg for the same-origin browser API prefix |
 | `VITE_APP_BASE_PATH` | `/` | Vite base; use `/logistics-panel/` on the VPS with API `/logistics-panel/api` |

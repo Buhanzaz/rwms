@@ -605,7 +605,6 @@ make openapi
 | `OSM_NORTHWESTERN_DATA_URL` | выгрузка Северо-Западного ФО | Второй PBF с Санкт-Петербургом; его checksum входит в манифест routing-источников |
 | `OSRM_BASE_URL`, `OSRM_PROFILE`, `OSRM_TIMEOUT_SECONDS` | legacy-значения | Только для provider `osrm` с Compose-профилем `legacy-routing` |
 | `DEFAULT_WAREHOUSE_TIMEZONE` | `Europe/Moscow` | Резервный часовой пояс, если он отсутствует у канонического склада |
-| `PLANNER_DEFAULT_SEED` | `20260822` | Seed стабильных tie-break |
 | `VITE_MAP_STYLE_URL` | пусто | Build arg frontend; необязательный MapLibre style, пусто включает grid |
 | `VITE_API_BASE_URL` | `/api` | Build arg frontend для same-origin browser API prefix |
 | `VITE_APP_BASE_PATH` | `/` | Vite base; для VPS `/logistics-panel/` вместе с API `/logistics-panel/api` |

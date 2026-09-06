@@ -137,10 +137,6 @@ class Settings(BaseSettings):
             "auth_jwks_timeout_seconds",
         ),
     )
-    planner_default_seed: int = Field(
-        default=1,
-        validation_alias=AliasChoices("LOGISTICS_PLANNER_DEFAULT_SEED", "PLANNER_DEFAULT_SEED"),
-    )
     sse_poll_interval_seconds: float = 0.5
     sse_heartbeat_seconds: float = 15.0
     rwms_sync_enabled: bool = Field(
