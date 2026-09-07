@@ -117,11 +117,9 @@ fun CustomerTopBar(
     }
     val shape = RoundedCornerShape(16.dp)
     Box(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        Surface(
-            modifier = Modifier.fillMaxWidth().figmaButtonShadow(shape).testTag("customer-header"),
+        CustomerShellSurface(
+            modifier = Modifier.fillMaxWidth().testTag("customer-header"),
             shape = shape,
-            color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         ) {
             Column(Modifier.fillMaxWidth()) {
                 Box(Modifier.fillMaxWidth().height(60.dp)) {

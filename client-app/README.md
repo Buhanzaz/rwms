@@ -32,8 +32,10 @@ Registration collects login, email, confirmed password and phone; the auth bound
 only its contract fields, while email and phone prefill the mandatory individual logistics profile.
 Guest access and password recovery are explained as unavailable before asking for unsupported input.
 
-The shared design uses opaque light surfaces and neutral graphite dark surfaces, Cyrillic Manrope
-headings and Golos Text body copy. Their SIL Open Font Licenses are packaged under
+The shared design follows the active Panel and Logistics interfaces: cool white surfaces,
+restrained borders and shadows, and neutral graphite dark surfaces. Cyrillic Geist is used for
+headings and body copy; the approved gradient actions retain their Golos Text typography.
+The SIL Open Font Licenses are packaged under
 `app/src/main/assets/licenses/`. The approved 12 dp gradient buttons keep their shadow and press
 states; secondary actions, focus borders and password visibility controls share the same type scale
 and accessible touch targets. The wordmark has a contrasting dark appearance. The launcher vector

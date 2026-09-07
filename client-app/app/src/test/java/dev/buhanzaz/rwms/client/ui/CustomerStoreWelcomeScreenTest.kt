@@ -50,7 +50,7 @@ class CustomerStoreWelcomeScreenTest {
         composeRule.onNodeWithTag("customer-auth-login").assertIsEnabled()
         composeRule.onNodeWithTag("customer-auth-register").assertIsEnabled()
         composeRule.onNodeWithTag("customer-guest-access-unavailable").assertHasNoClickAction()
-        composeRule.onNodeWithText("Бытовка под ваши задачи").assertExists()
+        composeRule.onNodeWithText("Аренда бытовок").assertExists()
         composeRule.onNodeWithText("Продолжить без аккаунта").assertDoesNotExist()
     }
 

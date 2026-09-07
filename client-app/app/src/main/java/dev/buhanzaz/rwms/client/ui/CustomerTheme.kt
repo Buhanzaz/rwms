@@ -50,12 +50,12 @@ internal val CustomerLightColors = lightColorScheme(
     onTertiary = Color.White,
     tertiaryContainer = Color(0xFFDDEEE7),
     onTertiaryContainer = Color(0xFF234B3E),
-    background = Color(0xFFF3F5F7),
-    onBackground = Color(0xFF20262E),
+    background = Color(0xFFF5F8FB),
+    onBackground = Color(0xFF1C3247),
     surface = Color(0xFFFFFFFF),
-    onSurface = Color(0xFF20262E),
-    surfaceVariant = Color(0xFFEBEFF3),
-    onSurfaceVariant = Color(0xFF56616E),
+    onSurface = Color(0xFF1C3247),
+    surfaceVariant = Color(0xFFEEF3F7),
+    onSurfaceVariant = Color(0xFF586D80),
     surfaceDim = Color(0xFFE2E6EA),
     surfaceBright = Color(0xFFFFFFFF),
     surfaceContainerLowest = Color(0xFFFFFFFF),
@@ -64,7 +64,7 @@ internal val CustomerLightColors = lightColorScheme(
     surfaceContainerHigh = Color(0xFFE9EEF2),
     surfaceContainerHighest = Color(0xFFE1E7EC),
     outline = Color(0xFF7B8793),
-    outlineVariant = Color(0xFFD8DFE6),
+    outlineVariant = Color(0xFFD6E0E9),
     inverseSurface = Color(0xFF282D33),
     inverseOnSurface = Color(0xFFF4F6F8),
     inversePrimary = Color(0xFFA9D9F5),
@@ -124,12 +124,12 @@ private val CustomerShapes = Shapes(
 @OptIn(ExperimentalTextApi::class)
 private val CustomerHeadingFont = FontFamily(
     Font(
-        resId = R.font.manrope,
+        resId = R.font.geist,
         weight = FontWeight.SemiBold,
         variationSettings = FontVariation.Settings(FontVariation.weight(600)),
     ),
     Font(
-        resId = R.font.manrope,
+        resId = R.font.geist,
         weight = FontWeight.Bold,
         variationSettings = FontVariation.Settings(FontVariation.weight(700)),
     ),
@@ -137,10 +137,25 @@ private val CustomerHeadingFont = FontFamily(
 @OptIn(ExperimentalTextApi::class)
 private val CustomerBodyFont = FontFamily(
     Font(
-        resId = R.font.golos_text,
+        resId = R.font.geist,
         weight = FontWeight.Normal,
         variationSettings = FontVariation.Settings(FontVariation.weight(400)),
     ),
+    Font(
+        resId = R.font.geist,
+        weight = FontWeight.Medium,
+        variationSettings = FontVariation.Settings(FontVariation.weight(500)),
+    ),
+    Font(
+        resId = R.font.geist,
+        weight = FontWeight.SemiBold,
+        variationSettings = FontVariation.Settings(FontVariation.weight(600)),
+    ),
+)
+
+/** Retains the typography of the approved gradient actions while the interface uses Geist. */
+@OptIn(ExperimentalTextApi::class)
+internal val CustomerActionFont = FontFamily(
     Font(
         resId = R.font.golos_text,
         weight = FontWeight.Medium,
@@ -200,7 +215,7 @@ private val CustomerTypography = Typography(
         fontFamily = CustomerHeadingFont,
         fontWeight = FontWeight.SemiBold,
         fontSize = 18.sp,
-        lineHeight = 26.sp,
+        lineHeight = 24.sp,
     ),
     titleSmall = TextStyle(
         fontFamily = CustomerBodyFont,

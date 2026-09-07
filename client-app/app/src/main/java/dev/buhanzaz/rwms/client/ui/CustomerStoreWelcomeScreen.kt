@@ -36,6 +36,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -52,7 +53,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -134,6 +134,7 @@ internal fun CustomerAuthenticationScreen(
         contentAlignment = Alignment.TopCenter,
     ) {
         val isStart = currentPage == CustomerAuthenticationPage.START
+        if (isStart) CustomerWelcomeAtmosphere(Modifier.matchParentSize())
         Column(
             Modifier.widthIn(max = 520.dp).fillMaxSize().padding(horizontal = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -209,42 +210,43 @@ private fun CustomerAuthWelcome(
     onRegisterSelected: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier = modifier.verticalScroll(rememberScrollState()).padding(top = 16.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(24.dp),
-    ) {
-        Box(
-            Modifier.fillMaxWidth().height(188.dp).clip(RoundedCornerShape(24.dp)),
-            contentAlignment = Alignment.Center,
+    Box(modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                .padding(top = 24.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(32.dp),
         ) {
-            CustomerWelcomeAtmosphere(Modifier.matchParentSize())
-            CustomerStoreLogo(Modifier.width(234.dp).height(96.dp).testTag("customer-auth-logo"))
+            CustomerStoreLogo(
+                Modifier.width(164.dp).height(68.dp).testTag("customer-auth-logo"),
+            )
+            CustomerShellSurface(Modifier.fillMaxWidth()) {
+                Column(
+                    Modifier.padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(24.dp),
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            "Аренда бытовок",
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            "Выберите бытовку, комплектацию и срок. Доставку оформите следующим шагом.",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    CustomerAuthActions(onLoginSelected, onRegisterSelected)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Text(
+                        "Каталог и заказы доступны после входа.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth().testTag("customer-guest-access-unavailable"),
+                    )
+                }
+            }
         }
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(
-                "АРЕНДА БЫТОВОК",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary,
-            )
-            Text(
-                "Бытовка под ваши задачи",
-                style = MaterialTheme.typography.headlineLarge,
-                color = MaterialTheme.colorScheme.onBackground,
-            )
-            Text(
-                "Выберите бытовку, срок аренды и удобную доставку.",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        CustomerAuthActions(onLoginSelected, onRegisterSelected)
-        Text(
-            "Каталог и заказы доступны после входа.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.fillMaxWidth().testTag("customer-guest-access-unavailable"),
-            textAlign = TextAlign.Center,
-        )
     }
 }
 
@@ -536,12 +538,7 @@ private fun CustomerAnimatedAuthForm(
         keyboardController?.hide()
         onSubmit()
     }
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-    ) {
+    CustomerShellSurface(modifier = modifier) {
         Column(
             modifier = Modifier.verticalScroll(rememberScrollState()).padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,

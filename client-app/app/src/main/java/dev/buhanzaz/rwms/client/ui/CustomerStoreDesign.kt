@@ -39,6 +39,8 @@ import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ProvideTextStyle
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -146,6 +148,31 @@ internal fun CustomerStoreBackground(modifier: Modifier = Modifier) {
     Box(modifier.background(MaterialTheme.colorScheme.background))
 }
 
+/** Opaque reading surface with the restrained border and depth used by the RWMS web shells. */
+@Composable
+internal fun CustomerShellSurface(
+    modifier: Modifier = Modifier,
+    shape: Shape = RoundedCornerShape(16.dp),
+    content: @Composable () -> Unit,
+) {
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    Surface(
+        modifier = modifier.dropShadow(
+            shape,
+            Shadow(
+                radius = 16.dp,
+                spread = 0.dp,
+                color = if (dark) Color.Black.copy(alpha = 0.22f) else CustomerStoreNavy.copy(alpha = 0.08f),
+                offset = DpOffset(0.dp, 4.dp),
+            ),
+        ),
+        shape = shape,
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        content = content,
+    )
+}
+
 /** The moving water motif is confined to the welcome artwork, away from forms and product data. */
 @Composable
 internal fun CustomerWelcomeAtmosphere(modifier: Modifier = Modifier) {
@@ -222,7 +249,11 @@ internal fun OutlinedButton(
             disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
         ),
-        content = content,
+        content = {
+            ProvideTextStyle(MaterialTheme.typography.labelLarge.copy(fontFamily = CustomerActionFont)) {
+                content()
+            }
+        },
     )
 }
 
@@ -325,7 +356,11 @@ private fun CustomerStyledButton(
                     drawRect(brush = gradient, alpha = fillOpacity)
                 }
             },
-        content = content,
+        content = {
+            ProvideTextStyle(MaterialTheme.typography.labelLarge.copy(fontFamily = CustomerActionFont)) {
+                content()
+            }
+        },
     )
 }
 
