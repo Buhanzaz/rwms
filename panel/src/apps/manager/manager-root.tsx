@@ -5,21 +5,9 @@ import { AuthCallbackPage } from "@/features/auth/auth-callback-page"
 import { RENTAL_MANAGER_AUTH_CONFIG } from "@/features/auth/auth-config"
 import { AuthProvider } from "@/features/auth/auth-provider"
 import { AuthenticatedApplication } from "@/features/auth/authenticated-application"
-import type { CurrentUser } from "@/features/auth/auth-model"
+import { canUseManagerApplication } from "@/apps/manager/manager-access"
 
 const MANAGER_APPLICATION_BASE_PATH = "/manager"
-
-const RENTAL_STAFF_ROLES = new Set<CurrentUser["globalRole"]>([
-  "SYSTEM_ADMIN",
-  "WMS_ADMIN",
-  "WAREHOUSE_MANAGER",
-  "RENTAL_MANAGER",
-  "VIEWER",
-])
-
-export function canUseManagerApplication(user: CurrentUser) {
-  return user.rentalAccess && RENTAL_STAFF_ROLES.has(user.globalRole)
-}
 
 export function ManagerRoot() {
   return (

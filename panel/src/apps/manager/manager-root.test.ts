@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { canUseManagerApplication } from "@/apps/manager/manager-root"
+import { canUseManagerApplication } from "@/apps/manager/manager-access"
 import type { CurrentUser, UserGlobalRole } from "@/features/auth/auth-model"
 
 function currentUser(
