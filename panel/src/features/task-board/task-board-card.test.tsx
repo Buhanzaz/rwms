@@ -669,7 +669,8 @@ describe("TaskBoardCard KPI timer presentation", () => {
       expect(card.dataset.kpiColor).toBeUndefined()
       expect(card.style.borderColor).toBe("")
       expect(card.style.backgroundColor).toBe("")
-      expect(card.classList.contains("bg-muted/70")).toBe(true)
+      expect(card.classList.contains("bg-neutral-100")).toBe(true)
+      expect(card.classList.contains("dark:bg-neutral-800")).toBe(true)
       expect(card.classList.contains("border-primary")).toBe(false)
     }
   )

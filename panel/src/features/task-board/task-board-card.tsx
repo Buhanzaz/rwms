@@ -201,7 +201,7 @@ function RepairComplexityBadge({
 }
 
 const shadowEntryCardClassName =
-  "border-dashed bg-muted/70 opacity-65 transition-opacity"
+  "border-dashed border-neutral-300 bg-neutral-100 transition-opacity dark:border-neutral-600 dark:bg-neutral-800"
 
 function cardActionVisibility(
   entry: TaskBoardEntryDto,
