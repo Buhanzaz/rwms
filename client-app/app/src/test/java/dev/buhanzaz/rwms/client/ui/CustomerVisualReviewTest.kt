@@ -47,6 +47,7 @@ class CustomerVisualReviewTest {
     val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     @Test
+    @Config(qualifiers = "w404dp-h874dp-mdpi")
     fun `renders welcome in light appearance`() {
         setAuth(CustomerAppearanceMode.LIGHT)
 
@@ -55,6 +56,7 @@ class CustomerVisualReviewTest {
     }
 
     @Test
+    @Config(qualifiers = "w404dp-h874dp-mdpi")
     fun `renders welcome in dark appearance`() {
         setAuth(CustomerAppearanceMode.DARK)
 
@@ -63,6 +65,7 @@ class CustomerVisualReviewTest {
     }
 
     @Test
+    @Config(qualifiers = "w404dp-h874dp-mdpi")
     fun `renders login in light appearance`() {
         setAuth(CustomerAppearanceMode.LIGHT)
         composeRule.onNodeWithTag("customer-auth-login").performScrollTo().performClick()
@@ -74,6 +77,7 @@ class CustomerVisualReviewTest {
     }
 
     @Test
+    @Config(qualifiers = "w404dp-h874dp-mdpi")
     fun `renders registration in light appearance`() {
         setAuth(CustomerAppearanceMode.LIGHT)
         composeRule.onNodeWithTag("customer-auth-register").performScrollTo().performClick()
@@ -85,6 +89,7 @@ class CustomerVisualReviewTest {
     }
 
     @Test
+    @Config(qualifiers = "w404dp-h874dp-mdpi")
     fun `renders password recovery in light appearance`() {
         setAuth(CustomerAppearanceMode.LIGHT)
         composeRule.onNodeWithTag("customer-auth-login").performScrollTo().performClick()

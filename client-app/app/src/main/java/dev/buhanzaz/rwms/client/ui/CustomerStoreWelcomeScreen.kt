@@ -1,71 +1,58 @@
 package dev.buhanzaz.rwms.client.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import dev.buhanzaz.rwms.client.auth.RegistrationValidator
-private const val AuthActionAnimationDurationMillis = 420
 
 /** Keeps the route background stable without delaying already available application content. */
 @Composable
@@ -83,198 +70,124 @@ internal enum class CustomerAuthenticationPage {
     PASSWORD_RECOVERY,
 }
 
-/**
- * Owns the complete signed-out flow so selecting login cannot accidentally resolve to the
- * registration destination. Server errors keep the current form and its entered values intact.
- */
+/** Reproduces the supplied 404-wide auth canvases while retaining native input and PKCE callbacks. */
 @Composable
 internal fun CustomerAuthenticationScreen(
     message: String?,
     submitting: Boolean,
-    onLogin: (loginOrEmail: String, password: String, rememberMe: Boolean) -> Unit,
-    onRegister: (
-        login: String,
-        email: String,
-        password: String,
-        repeatedPassword: String,
-        phone: String,
-    ) -> Unit,
+    onLogin: (String, String, Boolean) -> Unit,
+    onRegister: (String, String, String, String, String) -> Unit,
+    onContinueAsGuest: () -> Unit = {},
+    initialPage: CustomerAuthenticationPage = CustomerAuthenticationPage.START,
 ) {
     CustomerTheme(CustomerAppearanceMode.LIGHT) {
-        CustomerAuthenticationContent(message, submitting, onLogin, onRegister)
+        var greetingFinished by rememberSaveable { mutableStateOf(initialPage != CustomerAuthenticationPage.START) }
+        Box(Modifier.fillMaxSize().testTag("customer-auth-screen"), contentAlignment = Alignment.TopCenter) {
+            CustomerWelcomeAtmosphere(Modifier.matchParentSize())
+            BoxWithConstraints(Modifier.widthIn(max = 520.dp).fillMaxSize()) {
+                val density = LocalDensity.current
+                val scale = maxWidth.value / 404f
+                CompositionLocalProvider(LocalDensity provides Density(density.density * scale, density.fontScale)) {
+                    CustomerAuthenticationContent(message, submitting, onLogin, onRegister, onContinueAsGuest, initialPage)
+                }
+            }
+            if (!greetingFinished && LocalCustomerStoreVideoBackgroundEnabled.current) {
+                CustomerGreeting(Modifier.matchParentSize()) { greetingFinished = true }
+            }
+        }
     }
 }
 
-/** Keeps the supplied light artwork and its controls independent of the catalog appearance. */
+/** One logo keeps its width; only the available canvas and the supplied page positions move it. */
 @Composable
 private fun CustomerAuthenticationContent(
     message: String?,
     submitting: Boolean,
     onLogin: (String, String, Boolean) -> Unit,
     onRegister: (String, String, String, String, String) -> Unit,
+    onContinueAsGuest: () -> Unit,
+    initialPage: CustomerAuthenticationPage,
 ) {
-    var currentPage by rememberSaveable { mutableStateOf(CustomerAuthenticationPage.START) }
-    val keyboardController = LocalSoftwareKeyboardController.current
+    var page by rememberSaveable(initialPage) { mutableStateOf(initialPage) }
+    var formHeightPx by remember { mutableIntStateOf(0) }
     val density = LocalDensity.current
-    val imeVisible = WindowInsets.ime.getBottom(density) > 0
-
-    val previousPage = when (currentPage) {
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focus = LocalFocusManager.current
+    val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
+    val previousPage = when (page) {
         CustomerAuthenticationPage.START -> null
-        CustomerAuthenticationPage.LOGIN -> CustomerAuthenticationPage.START
-        CustomerAuthenticationPage.REGISTRATION -> CustomerAuthenticationPage.START
         CustomerAuthenticationPage.PASSWORD_RECOVERY -> CustomerAuthenticationPage.LOGIN
+        else -> CustomerAuthenticationPage.START
     }
-
-    BackHandler(enabled = previousPage != null && !submitting) {
-        keyboardController?.hide()
-        previousPage?.let { currentPage = it }
+    fun navigate(destination: CustomerAuthenticationPage) {
+        focus.clearFocus(force = true)
+        keyboard?.hide()
+        page = destination
     }
+    BackHandler(previousPage != null && !submitting) { previousPage?.let(::navigate) }
 
-    val focusManager = LocalFocusManager.current
-    fun navigate(page: CustomerAuthenticationPage) {
-        focusManager.clearFocus(force = true)
-        keyboardController?.hide()
-        currentPage = page
-    }
-
-    Box(
-        modifier = Modifier.fillMaxSize().testTag("customer-auth-screen"),
-        contentAlignment = Alignment.TopCenter,
+    BoxWithConstraints(
+        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().clipToBounds(),
     ) {
-        val isStart = currentPage == CustomerAuthenticationPage.START
-        CustomerWelcomeAtmosphere(Modifier.matchParentSize())
-        Column(
-            Modifier.widthIn(max = 520.dp).fillMaxSize()
-                .statusBarsPadding().navigationBarsPadding().imePadding().padding(horizontal = 32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            if (!isStart) {
-                Row(
-                    Modifier.fillMaxWidth().height(64.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    IconButton(
-                        onClick = { previousPage?.let(::navigate) },
-                        enabled = !submitting,
-                        modifier = Modifier.testTag("customer-auth-back"),
-                    ) {
-                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Назад", tint = MaterialTheme.colorScheme.onSurface)
-                    }
-                    Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                        if (!imeVisible) {
-                            CustomerStoreLogo(
-                                Modifier.width(124.dp).height(51.dp).testTag("customer-auth-logo"),
-                            )
-                        }
-                    }
-                    Spacer(Modifier.width(48.dp))
-                }
-            }
-            AnimatedContent(
-                targetState = currentPage,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                transitionSpec = {
-                    (fadeIn(tween(240, delayMillis = 60)) + slideInVertically(tween(300)) { it / 12 })
-                        .togetherWith(fadeOut(tween(120)) + slideOutVertically(tween(180)) { -it / 16 })
-                        .using(SizeTransform(clip = true))
-                },
-                label = "customer-auth-page",
-            ) { page ->
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
-                    val formModifier = Modifier.fillMaxWidth()
-                    when (page) {
-                        CustomerAuthenticationPage.START -> CustomerAuthWelcome(
-                            onLoginSelected = { navigate(CustomerAuthenticationPage.LOGIN) },
-                            onRegisterSelected = { navigate(CustomerAuthenticationPage.REGISTRATION) },
-                            modifier = formModifier,
-                        )
-                        CustomerAuthenticationPage.LOGIN -> CustomerLoginForm(
-                            message = message,
-                            submitting = submitting,
-                            onLogin = onLogin,
-                            onForgotPasswordSelected = { navigate(CustomerAuthenticationPage.PASSWORD_RECOVERY) },
-                            modifier = formModifier,
-                        )
-                        CustomerAuthenticationPage.REGISTRATION -> CustomerRegistrationForm(
-                            message = message,
-                            submitting = submitting,
-                            onRegister = onRegister,
-                            modifier = formModifier,
-                        )
-                        CustomerAuthenticationPage.PASSWORD_RECOVERY -> CustomerPasswordRecoveryForm(
-                            onBackToLogin = { navigate(CustomerAuthenticationPage.LOGIN) },
-                            modifier = formModifier,
-                        )
-                    }
-                }
-            }
+        val logoHeight = (maxWidth - 76.dp) / (234f / 96f)
+        val formTop = maxHeight - with(density) { formHeightPx.toDp() }
+        val logoTarget = when {
+            keyboardVisible && page == CustomerAuthenticationPage.REGISTRATION -> -logoHeight - 24.dp
+            page == CustomerAuthenticationPage.REGISTRATION -> formTop + 12.dp - logoHeight
+            keyboardVisible && page == CustomerAuthenticationPage.LOGIN -> formTop - 40.dp - logoHeight
+            keyboardVisible && page == CustomerAuthenticationPage.PASSWORD_RECOVERY -> formTop - 18.dp - logoHeight
+            else -> minOf((maxHeight - logoHeight) / 2, formTop - 24.dp - logoHeight)
+        }
+        val logoTop by animateDpAsState(logoTarget, tween(300), label = "customer-auth-logo-position")
+        CustomerStoreLogo(
+            Modifier.fillMaxWidth().padding(horizontal = 38.dp).height(logoHeight)
+                .graphicsLayer { translationY = logoTop.toPx() }.testTag("customer-auth-logo"),
+        )
+        val formModifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+            .onSizeChanged { formHeightPx = it.height }
+        when (page) {
+            CustomerAuthenticationPage.START -> CustomerAuthActions(
+                onLoginSelected = { navigate(CustomerAuthenticationPage.LOGIN) },
+                onRegisterSelected = { navigate(CustomerAuthenticationPage.REGISTRATION) },
+                onContinueAsGuest = onContinueAsGuest,
+                modifier = formModifier,
+            )
+            CustomerAuthenticationPage.LOGIN -> CustomerLoginForm(
+                message, submitting, onLogin,
+                onForgotPasswordSelected = { navigate(CustomerAuthenticationPage.PASSWORD_RECOVERY) },
+                modifier = formModifier,
+            )
+            CustomerAuthenticationPage.REGISTRATION -> CustomerRegistrationForm(
+                message, submitting, onRegister, formModifier,
+            )
+            CustomerAuthenticationPage.PASSWORD_RECOVERY -> CustomerPasswordRecoveryForm(
+                keyboardVisible = keyboardVisible,
+                modifier = formModifier,
+            )
         }
     }
 }
 
-/** Preserves the supplied artwork, centered logo and bottom-aligned entry actions without added copy. */
-@Composable
-private fun CustomerAuthWelcome(
-    onLoginSelected: () -> Unit,
-    onRegisterSelected: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    BoxWithConstraints(modifier.fillMaxSize()) {
-        val viewportHeight = maxHeight
-        val logoHeight = minOf(maxWidth / (234f / 96f), 180.dp)
-        Column(
-            modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
-                .heightIn(min = viewportHeight).padding(bottom = 20.dp),
-            verticalArrangement = Arrangement.SpaceBetween,
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Column {
-                Spacer(Modifier.height(viewportHeight * 0.30f))
-                CustomerStoreLogo(
-                    Modifier.fillMaxWidth().height(logoHeight)
-                        .testTag("customer-auth-logo"),
-                )
-            }
-            CustomerAuthActions(onLoginSelected, onRegisterSelected, Modifier.padding(top = 24.dp))
-        }
-    }
-}
-
-/** Translation has no parent alpha layer, so actions enter from the actual screen edges. */
 @Composable
 private fun CustomerAuthActions(
     onLoginSelected: () -> Unit,
     onRegisterSelected: () -> Unit,
-    modifier: Modifier = Modifier,
+    onContinueAsGuest: () -> Unit,
+    modifier: Modifier,
 ) {
-    BoxWithConstraints(modifier.testTag("customer-auth-start")) {
-        val density = LocalDensity.current
-        val travel = with(density) { (maxWidth + 64.dp).toPx() }
-        val entrance = remember { Animatable(0f) }
-        LaunchedEffect(Unit) {
-            entrance.animateTo(1f, tween(AuthActionAnimationDurationMillis, easing = LinearOutSlowInEasing))
-        }
-        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-            CustomerStyledButton(
-                text = "Войти",
-                normalStyle = CustomerLoginButtonStyle,
-                pressedStyle = CustomerRegistrationButtonStyle,
-                enabled = entrance.value == 1f,
-                onClick = onLoginSelected,
-                modifier = Modifier.graphicsLayer { translationX = -travel * (1f - entrance.value) }
-                    .testTag("customer-auth-login"),
-            )
-            Spacer(Modifier.height(16.dp))
-            CustomerStyledButton(
-                text = "Регистрация",
-                normalStyle = CustomerRegistrationButtonStyle,
-                pressedStyle = CustomerLoginButtonStyle,
-                enabled = entrance.value == 1f,
-                onClick = onRegisterSelected,
-                modifier = Modifier.graphicsLayer { translationX = travel * (1f - entrance.value) }
-                    .testTag("customer-auth-register"),
-            )
-        }
+    Column(
+        modifier.verticalScroll(rememberScrollState()).padding(horizontal = 38.dp).padding(top = 24.dp, bottom = 48.dp)
+            .testTag("customer-auth-start"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        CustomerStyledButton("Вход", CustomerAuthLoginButtonStyle, CustomerAuthRegistrationButtonStyle, true,
+            onLoginSelected, Modifier.testTag("customer-auth-login"), authStyle = true)
+        Spacer(Modifier.height(16.dp))
+        CustomerStyledButton("Регистрация", CustomerAuthRegistrationButtonStyle, CustomerAuthLoginButtonStyle, true,
+            onRegisterSelected, Modifier.testTag("customer-auth-register"), authStyle = true)
+        Spacer(Modifier.height(14.dp))
+        CustomerTextAction("Продолжить без аккаунта", true, onContinueAsGuest,
+            Modifier.testTag("customer-auth-guest"), color = CustomerStoreGuestText, authStyle = true, textSize = 16.sp)
     }
 }
 
@@ -288,82 +201,41 @@ private data class CustomerAuthFieldSpec(
     val visualTransformation: VisualTransformation = VisualTransformation.None,
 )
 
-private interface CustomerAuthAuxiliaryContent {
-    @Composable
-    fun Content(
-        enabled: Boolean,
-        navigateAfterExit: (afterExit: () -> Unit) -> Unit,
-    )
-}
-
 @Composable
 private fun CustomerLoginForm(
     message: String?,
     submitting: Boolean,
     onLogin: (String, String, Boolean) -> Unit,
     onForgotPasswordSelected: () -> Unit,
-    modifier: Modifier = Modifier,
+    modifier: Modifier,
 ) {
     var login by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
     var rememberMe by rememberSaveable { mutableStateOf(false) }
-
-    CustomerAnimatedAuthForm(
-        title = "Вход",
+    CustomerAuthForm(
         fields = listOf(
-            CustomerAuthFieldSpec(
-                label = "Логин",
-                value = login,
-                onValueChange = { login = it },
-                placeholder = "Введите логин",
-                keyboardType = KeyboardType.Text,
-                testTag = "customer-login-username",
-            ),
-            CustomerAuthFieldSpec(
-                label = "Пароль",
-                value = password,
-                onValueChange = { password = it },
-                placeholder = "Введите пароль",
-                keyboardType = KeyboardType.Password,
-                testTag = "customer-login-password",
-                visualTransformation = PasswordVisualTransformation(),
-            ),
+            CustomerAuthFieldSpec("Логин / Email", login, { login = it }, "Введите Логин или Email",
+                KeyboardType.Text, "customer-login-username"),
+            CustomerAuthFieldSpec("Пароль", password, { password = it }, "Введите Пароль",
+                KeyboardType.Password, "customer-login-password", PasswordVisualTransformation()),
         ),
-        buttonText = "Войти",
-        buttonNormalStyle = CustomerLoginButtonStyle,
-        buttonPressedStyle = CustomerRegistrationButtonStyle,
         submitting = submitting,
         submitEnabled = login.isNotBlank() && password.isNotBlank(),
-        message = message,
+        submitTag = "customer-login-submit",
         onSubmit = { onLogin(login.trim(), password, rememberMe) },
-        auxiliaryContent = object : CustomerAuthAuxiliaryContent {
-            @OptIn(ExperimentalLayoutApi::class)
-            @Composable
-            override fun Content(
-                enabled: Boolean,
-                navigateAfterExit: (() -> Unit) -> Unit,
-            ) {
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    CustomerRememberMeOption(
-                        checked = rememberMe,
-                        onCheckedChange = { rememberMe = it },
-                        enabled = enabled,
-                        modifier = Modifier.testTag("customer-login-remember"),
-                    )
-                    CustomerTextAction(
-                        text = "Забыли пароль?",
-                        enabled = enabled,
-                        onClick = { navigateAfterExit(onForgotPasswordSelected) },
-                        modifier = Modifier.testTag("customer-login-recovery"),
-                    )
-                }
+        message = message,
+        fieldSpacing = 10.dp,
+        buttonSpacing = 8.dp,
+        bottomPadding = 37.dp,
+        modifier = modifier.testTag("customer-login-screen"),
+        auxiliaryContent = { enabled ->
+            Row(Modifier.fillMaxWidth().padding(top = 7.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                CustomerRememberMeOption(rememberMe, { rememberMe = it }, enabled,
+                    Modifier.testTag("customer-login-remember"))
+                CustomerTextAction("Забыли пароль?", enabled, onForgotPasswordSelected,
+                    Modifier.testTag("customer-login-recovery"), color = CustomerStoreNavy, authStyle = true)
             }
         },
-        modifier = modifier.testTag("customer-login-screen"),
     )
 }
 
@@ -372,255 +244,143 @@ private fun CustomerRegistrationForm(
     message: String?,
     submitting: Boolean,
     onRegister: (String, String, String, String, String) -> Unit,
-    modifier: Modifier = Modifier,
+    modifier: Modifier,
 ) {
     var login by rememberSaveable { mutableStateOf("") }
     var email by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
     var repeatedPassword by rememberSaveable { mutableStateOf("") }
     var phone by rememberSaveable { mutableStateOf("") }
-    val validationMessage = customerRegistrationValidationMessage(
-        login = login,
-        email = email,
-        password = password,
-        repeatedPassword = repeatedPassword,
-        phone = phone,
-    )
-
-    CustomerAnimatedAuthForm(
-        title = "Регистрация",
+    val validation = customerRegistrationValidationMessage(login, email, password, repeatedPassword, phone)
+    CustomerAuthForm(
         fields = listOf(
-            CustomerAuthFieldSpec(
-                "Логин",
-                login,
-                { login = it },
-                "Введите логин",
-                KeyboardType.Text,
-                "customer-registration-login",
-            ),
-            CustomerAuthFieldSpec(
-                "Email",
-                email,
-                { email = it },
-                "Введите email",
-                KeyboardType.Email,
-                "customer-registration-email",
-            ),
-            CustomerAuthFieldSpec(
-                "Пароль",
-                password,
-                { password = it },
-                "Введите пароль",
-                KeyboardType.Password,
-                "customer-registration-password",
-                PasswordVisualTransformation(),
-            ),
-            CustomerAuthFieldSpec(
-                "Повторите пароль",
-                repeatedPassword,
-                { repeatedPassword = it },
-                "Повторите пароль",
-                KeyboardType.Password,
-                "customer-registration-password-repeat",
-                PasswordVisualTransformation(),
-            ),
-            CustomerAuthFieldSpec(
-                "Номер телефона",
-                phone,
-                { phone = it },
-                "Введите номер телефона",
-                KeyboardType.Phone,
-                "customer-registration-phone",
-            ),
+            CustomerAuthFieldSpec("Логин", login, { login = it }, "Введите логин", KeyboardType.Text, "customer-registration-login"),
+            CustomerAuthFieldSpec("Email", email, { email = it }, "Введите email", KeyboardType.Email, "customer-registration-email"),
+            CustomerAuthFieldSpec("Пароль", password, { password = it }, "Введите пароль", KeyboardType.Password,
+                "customer-registration-password", PasswordVisualTransformation()),
+            CustomerAuthFieldSpec("Повторите пароль", repeatedPassword, { repeatedPassword = it }, "Повторите пароль",
+                KeyboardType.Password, "customer-registration-password-repeat", PasswordVisualTransformation()),
+            CustomerAuthFieldSpec("Номер телефона", phone, { phone = it }, "Введите номер телефона", KeyboardType.Phone,
+                "customer-registration-phone"),
         ),
-        buttonText = "Зарегистрироваться",
-        buttonNormalStyle = CustomerRegistrationButtonStyle,
-        buttonPressedStyle = CustomerLoginButtonStyle,
+        title = "Регистрация",
         submitting = submitting,
-        submitEnabled = validationMessage == null,
-        message = message,
-        validationMessage = validationMessage.takeIf {
-            login.isNotEmpty() || email.isNotEmpty() || password.isNotEmpty() ||
-                repeatedPassword.isNotEmpty() || phone.isNotEmpty()
+        submitEnabled = validation == null,
+        submitTag = "customer-registration-submit",
+        onSubmit = { onRegister(login.trim(), email.trim(), password, repeatedPassword, phone.trim()) },
+        message = message ?: validation.takeIf {
+            login.isNotEmpty() || email.isNotEmpty() || password.isNotEmpty() || repeatedPassword.isNotEmpty() || phone.isNotEmpty()
         },
-        onSubmit = {
-            onRegister(
-                login.trim(),
-                email.trim(),
-                password,
-                repeatedPassword,
-                phone.trim(),
-            )
-        },
-        fieldSpacing = 10.dp,
-        titleSpacing = 16.dp,
-        buttonSpacing = 20.dp,
+        fieldSpacing = 11.dp,
+        bottomPadding = 39.dp,
+        titleSpacing = 12.dp,
+        buttonSpacing = 36.dp,
         modifier = modifier.testTag("customer-registration-screen"),
     )
 }
 
+/** Matches the supplied recovery form and reports the real missing capability when submitted. */
 @Composable
-private fun CustomerPasswordRecoveryForm(
-    onBackToLogin: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
+private fun CustomerPasswordRecoveryForm(keyboardVisible: Boolean, modifier: Modifier) {
+    var contact by rememberSaveable { mutableStateOf("") }
+    var message by rememberSaveable { mutableStateOf<String?>(null) }
+    CustomerAuthForm(
+        fields = listOf(CustomerAuthFieldSpec("Номер телефона или email", contact, { contact = it },
+            "Введите номер телефона или email", KeyboardType.Email, "customer-recovery-phone")),
+        title = "Восстановление\nПароля",
+        submitting = false,
+        lockSubmit = false,
+        submitEnabled = contact.isNotBlank(),
+        submitTag = "customer-recovery-submit",
+        onSubmit = { message = "Восстановление пароля пока недоступно" },
+        message = message,
+        titleSpacing = 15.dp,
+        labelSpacing = 16.dp,
+        buttonSpacing = 28.dp,
+        bottomPadding = if (keyboardVisible) 16.dp else 36.dp,
         modifier = modifier.testTag("customer-password-recovery-screen"),
-        shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-    ) {
-        Column(
-            Modifier.verticalScroll(rememberScrollState()).padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
-        ) {
-            Text("Восстановление пароля", style = MaterialTheme.typography.headlineSmall)
-            Text(
-                "Восстановление пароля пока недоступно",
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                "В приложении пока нельзя получить код или ссылку для сброса пароля. " +
-                    "Если пароль сохранён на устройстве, его можно найти в менеджере паролей.",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            OutlinedButton(onClick = onBackToLogin, modifier = Modifier.fillMaxWidth()) {
-                Text("Вернуться ко входу")
-            }
-        }
-    }
+    )
 }
 
-/** One scroll container owns the whole form; navigation animates the page as a single unit. */
+/** The footer stays at the lower canvas edge; its one scroll owner keeps every native field reachable. */
 @Composable
-private fun CustomerAnimatedAuthForm(
+private fun CustomerAuthForm(
     fields: List<CustomerAuthFieldSpec>,
-    buttonText: String,
-    buttonNormalStyle: CustomerActionButtonStyle,
-    buttonPressedStyle: CustomerActionButtonStyle,
     submitting: Boolean,
     submitEnabled: Boolean,
+    submitTag: String,
     onSubmit: () -> Unit,
-    modifier: Modifier = Modifier,
+    modifier: Modifier,
     title: String? = null,
     message: String? = null,
-    validationMessage: String? = null,
     fieldSpacing: Dp = 14.dp,
-    labelSpacing: Dp = 6.dp,
-    titleSpacing: Dp = 24.dp,
-    auxiliarySpacing: Dp = 16.dp,
-    buttonSpacing: Dp = 20.dp,
-    auxiliaryContent: CustomerAuthAuxiliaryContent? = null,
+    labelSpacing: Dp = 11.dp,
+    titleSpacing: Dp = 8.dp,
+    buttonSpacing: Dp = 8.dp,
+    bottomPadding: Dp = 36.dp,
+    auxiliaryContent: (@Composable (Boolean) -> Unit)? = null,
+    lockSubmit: Boolean = true,
 ) {
-    val focusManager = LocalFocusManager.current
-    val keyboardController = LocalSoftwareKeyboardController.current
+    val focus = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
     val focusRequesters = remember(fields.size) { List(fields.size) { FocusRequester() } }
     var submitRequested by remember { mutableStateOf(false) }
-    LaunchedEffect(submitting, message) {
-        if (!submitting && message != null) submitRequested = false
-    }
+    LaunchedEffect(submitting, message) { if (!submitting && message != null) submitRequested = false }
     val enabled = !submitting && !submitRequested
     fun submitOnce() {
         if (!submitEnabled || !enabled) return
-        submitRequested = true
-        focusManager.clearFocus()
-        keyboardController?.hide()
+        submitRequested = lockSubmit
+        focus.clearFocus()
+        keyboard?.hide()
         onSubmit()
     }
     Column(
-        modifier = modifier.verticalScroll(rememberScrollState()).padding(top = 20.dp, bottom = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier.verticalScroll(rememberScrollState()).padding(horizontal = 38.dp)
+            .padding(top = 20.dp, bottom = bottomPadding),
     ) {
         if (title != null) {
-            Text(
-                text = title,
-                color = MaterialTheme.colorScheme.onSurface,
-                style = MaterialTheme.typography.headlineSmall,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth(),
-            )
+            Text(title, Modifier.fillMaxWidth(), color = CustomerStoreNavy.copy(alpha = 0.84f),
+                fontFamily = CustomerActionFont, fontWeight = FontWeight.SemiBold,
+                fontSize = 32.sp, lineHeight = 38.sp, textAlign = TextAlign.Center)
             Spacer(Modifier.height(titleSpacing))
         }
         fields.forEachIndexed { index, field ->
-            val lastField = index == fields.lastIndex
-            CustomerAuthFieldGroup(
-                field = field,
+            Text(field.label, color = CustomerStoreNavy, fontFamily = CustomerActionFont,
+                fontSize = 14.sp, lineHeight = 17.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.height(labelSpacing))
+            CustomerStoreInputField(
+                value = field.value,
+                onValueChange = field.onValueChange,
+                placeholder = field.placeholder,
                 enabled = enabled,
-                imeAction = if (lastField) ImeAction.Done else ImeAction.Next,
+                keyboardType = field.keyboardType,
+                imeAction = if (index == fields.lastIndex) ImeAction.Done else ImeAction.Next,
                 keyboardActions = androidx.compose.foundation.text.KeyboardActions(
                     onNext = { focusRequesters.getOrNull(index + 1)?.requestFocus() },
                     onDone = { submitOnce() },
                 ),
+                visualTransformation = field.visualTransformation,
                 focusRequester = focusRequesters[index],
-                labelSpacing = labelSpacing,
-                labelModifier = Modifier,
-                fieldModifier = Modifier,
+                authStyle = true,
+                modifier = Modifier.testTag(field.testTag),
             )
-            if (!lastField) Spacer(Modifier.height(fieldSpacing))
+            if (index != fields.lastIndex) Spacer(Modifier.height(fieldSpacing))
         }
-        if (auxiliaryContent != null) {
-            Spacer(Modifier.height(auxiliarySpacing))
-            auxiliaryContent.Content(enabled = enabled, navigateAfterExit = { next -> if (enabled) next() })
-        }
-        val visibleMessage = message ?: validationMessage
-        if (visibleMessage != null) {
+        auxiliaryContent?.invoke(enabled)
+        if (message != null) {
             Spacer(Modifier.height(12.dp))
-            Text(
-                text = visibleMessage,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.fillMaxWidth().testTag("customer-auth-message"),
-            )
+            Text(message, Modifier.testTag("customer-auth-message"), color = MaterialTheme.colorScheme.error,
+                fontFamily = CustomerActionFont, fontSize = 14.sp)
         }
         Spacer(Modifier.height(buttonSpacing))
         CustomerStyledButton(
-            text = if (submitting || submitRequested) "Подождите…" else buttonText,
-            normalStyle = buttonNormalStyle,
-            pressedStyle = buttonPressedStyle,
+            text = if (submitting || submitRequested) "Подождите…" else "Вход",
+            normalStyle = CustomerAuthLoginButtonStyle,
+            pressedStyle = CustomerAuthRegistrationButtonStyle,
             enabled = submitEnabled && enabled,
             onClick = ::submitOnce,
-            modifier = Modifier.testTag(
-                when (buttonText) {
-                    "Войти" -> "customer-login-submit"
-                    "Зарегистрироваться" -> "customer-registration-submit"
-                    else -> "customer-recovery-submit"
-                },
-            ),
-        )
-    }
-}
-
-@Composable
-private fun CustomerAuthFieldGroup(
-    field: CustomerAuthFieldSpec,
-    enabled: Boolean,
-    imeAction: ImeAction,
-    keyboardActions: androidx.compose.foundation.text.KeyboardActions,
-    focusRequester: FocusRequester,
-    labelSpacing: Dp,
-    labelModifier: Modifier,
-    fieldModifier: Modifier,
-) {
-    Column(Modifier.fillMaxWidth()) {
-        Text(
-            text = field.label,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.labelLarge,
-            modifier = labelModifier,
-        )
-        Spacer(Modifier.height(labelSpacing))
-        CustomerStoreInputField(
-            value = field.value,
-            onValueChange = field.onValueChange,
-            placeholder = field.placeholder,
-            enabled = enabled,
-            keyboardType = field.keyboardType,
-            imeAction = imeAction,
-            keyboardActions = keyboardActions,
-            visualTransformation = field.visualTransformation,
-            focusRequester = focusRequester,
-            modifier = fieldModifier.testTag(field.testTag),
+            authStyle = true,
+            modifier = Modifier.testTag(submitTag),
         )
     }
 }

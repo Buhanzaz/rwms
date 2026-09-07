@@ -46,7 +46,7 @@ class CustomerConditionalNavigationTest {
             }
         }
 
-        composeRule.onNodeWithText("Войти").assertExists()
+        composeRule.onNodeWithTag("customer-auth-login").assertExists()
         composeRule.onNodeWithTag("profile-screen").assertDoesNotExist()
     }
 

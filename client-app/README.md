@@ -25,13 +25,17 @@ only during one native exchange and are never persisted. The callback
 not opened. Registration first obtains CSRF metadata, posts the confirmed
 password, and then runs the same PKCE login.
 
-Ready content opens without an artificial launch delay. The welcome retains the supplied full-screen
-caustic artwork, centered BLOCK BOX wordmark and bottom entry actions, without marketing copy or
-an enclosing card. Login and registration retain bottom-aligned, scrollable forms and a compact
-back/brand row; the logo is omitted while the keyboard is open.
+Signed-in content opens immediately. Signed-out entry uses the first 1.2 seconds of the supplied
+`disign-rules/Примеры/Greetings.webm` for the original wave reveal, then exposes the native entry
+controls. Authentication follows the supplied 404 × 874 canvases: full-screen caustic artwork,
+a field-width BLOCK BOX wordmark, bottom-aligned forms, translucent borderless fields and soft
+shadows. The wordmark keeps its width across entry and login, moves above registration, and
+slides completely outside the registration canvas when the keyboard opens. System Back returns
+from recovery to login, and from login/registration to entry.
 Registration collects login, email, confirmed password and phone; the auth boundary still receives
 only its contract fields, while email and phone prefill the mandatory individual logistics profile.
-Password recovery is explained as unavailable before asking for unsupported input.
+The recovery form matches the supplied reference; submitting it reports that recovery is unavailable
+because the current auth contract has no recovery operation. It never reports a sent email or SMS.
 
 The shared design follows the active Panel and Logistics interfaces: cool white surfaces,
 restrained borders and shadows, and neutral graphite dark surfaces. Cyrillic Geist is used for
@@ -43,7 +47,7 @@ and accessible touch targets. The wordmark has a contrasting dark appearance. Th
 preserves the paths, gradient and proportions of the supplied [`Logo_App.svg`](../Logo_App.svg).
 The silent caustic Media3 loop fills the authentication screens, pauses outside the foreground and
 is released after leaving authentication. Its light palette is retained independently of the catalog
-appearance. A poster extracted at one second of the same video supports initial drawing and
+appearance. A poster extracted from the same video at the supplied form reference phase supports initial drawing and
 deterministic native rendering. Catalog content and dialogs use opaque surfaces. The visual system lives in
 [`CustomerStoreDesign.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerStoreDesign.kt) and
 [`CustomerTheme.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerTheme.kt).

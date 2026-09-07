@@ -32,8 +32,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Icon
@@ -59,6 +59,11 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ClipOp
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.shadow.DropShadowPainter
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.Shape
@@ -67,6 +72,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -79,6 +85,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -117,6 +124,10 @@ internal val CustomerRegistrationButtonStyle = CustomerActionButtonStyle(
     gradientEnd = CustomerStoreNavy,
     fillOpacity = 0.94f,
 )
+
+/** The two translucent fills measured against the supplied authentication canvases. */
+internal val CustomerAuthLoginButtonStyle = CustomerActionButtonStyle(CustomerStoreBlue, CustomerStoreNavy, 0.33f)
+internal val CustomerAuthRegistrationButtonStyle = CustomerActionButtonStyle(CustomerStoreBlue, CustomerStoreNavy, 0.86f)
 
 /** Lets JVM Compose tests use a frame from the supplied video without running Media3. */
 internal val LocalCustomerStoreVideoBackgroundEnabled = staticCompositionLocalOf { true }
@@ -186,6 +197,20 @@ internal fun CustomerWelcomeAtmosphere(modifier: Modifier = Modifier) {
         if (LocalCustomerStoreVideoBackgroundEnabled.current) {
             CustomerVideoBackground(R.raw.background_caustic, Modifier.matchParentSize())
         }
+    }
+}
+
+/** Plays the supplied wave deformation, then exposes the native entry controls. */
+@Composable
+internal fun CustomerGreeting(modifier: Modifier = Modifier, onFinished: () -> Unit) {
+    Box(modifier.testTag("customer-greeting")) {
+        Image(
+            painter = painterResource(R.drawable.customer_greeting_poster),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.matchParentSize(),
+        )
+        CustomerVideoBackground(R.raw.customer_greeting, Modifier.matchParentSize(), repeat = false, onFinished = onFinished)
     }
 }
 
@@ -265,19 +290,24 @@ internal fun CustomerStyledButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     height: Dp = 56.dp,
+    authStyle: Boolean = false,
 ) {
     CustomerStyledButton(
         onClick = onClick,
         modifier = modifier.fillMaxWidth().heightIn(min = height),
         enabled = enabled,
+        shape = RoundedCornerShape(if (authStyle) 16.dp else 12.dp),
+        border = if (authStyle) null else BorderStroke(1.dp, Color.White.copy(alpha = 0.22f)),
         normalStyle = normalStyle,
         pressedStyle = pressedStyle,
+        authStyle = authStyle,
     ) {
         Text(
             text = text,
             color = Color.White,
             fontSize = 16.sp,
             fontWeight = FontWeight.SemiBold,
+            fontFamily = CustomerActionFont,
         )
     }
 }
@@ -293,6 +323,7 @@ private fun CustomerStyledButton(
     interactionSource: MutableInteractionSource? = null,
     normalStyle: CustomerActionButtonStyle,
     pressedStyle: CustomerActionButtonStyle,
+    authStyle: Boolean = false,
     content: @Composable RowScope.() -> Unit,
 ) {
     val source = interactionSource ?: remember { MutableInteractionSource() }
@@ -317,7 +348,7 @@ private fun CustomerStyledButton(
         label = "customer-button-gradient-end",
     )
     val fillOpacity by animateFloatAsState(
-        targetValue = if (enabled) targetStyle.fillOpacity else targetStyle.fillOpacity * 0.64f,
+        targetValue = if (enabled || authStyle) targetStyle.fillOpacity else targetStyle.fillOpacity * 0.64f,
         animationSpec = tween(280, easing = FastOutSlowInEasing),
         label = "customer-button-opacity",
     )
@@ -342,7 +373,7 @@ private fun CustomerStyledButton(
                 scaleX = pressScale
                 scaleY = pressScale
             }
-            .figmaButtonShadow(shape)
+            .then(if (authStyle) Modifier.customerAuthShadow(shape) else Modifier.figmaButtonShadow(shape))
             .clip(shape)
             .drawWithCache {
                 val gradient = Brush.linearGradient(
@@ -377,8 +408,9 @@ internal fun CustomerStoreInputField(
     focusRequester: FocusRequester? = null,
     height: Dp = 56.dp,
     singleLine: Boolean = true,
+    authStyle: Boolean = false,
 ) {
-    val shape = RoundedCornerShape(12.dp)
+    val shape = RoundedCornerShape(if (authStyle) 16.dp else 12.dp)
     val interactionSource = remember { MutableInteractionSource() }
     val focused by interactionSource.collectIsFocusedAsState()
     val passwordField = visualTransformation is PasswordVisualTransformation
@@ -391,6 +423,8 @@ internal fun CustomerStoreInputField(
         minLines = if (singleLine) 1 else 3,
         textStyle = MaterialTheme.typography.bodyLarge.copy(
             color = MaterialTheme.colorScheme.onSurface,
+            fontFamily = if (authStyle) CustomerActionFont else MaterialTheme.typography.bodyLarge.fontFamily,
+            fontSize = if (authStyle) 16.sp else MaterialTheme.typography.bodyLarge.fontSize,
         ),
         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
         interactionSource = interactionSource,
@@ -401,33 +435,39 @@ internal fun CustomerStoreInputField(
             .fillMaxWidth()
             .heightIn(min = height)
             .then(if (focusRequester == null) Modifier else Modifier.focusRequester(focusRequester))
+            .then(if (authStyle) Modifier.customerAuthShadow(shape) else Modifier)
             .clip(shape)
-            .background(MaterialTheme.colorScheme.surfaceContainerLow, shape)
-            .border(
+            .background(if (authStyle) Color.White.copy(alpha = 0.60f) else MaterialTheme.colorScheme.surfaceContainerLow, shape)
+            .then(if (authStyle) Modifier else Modifier.border(
                 if (focused) 2.dp else 1.dp,
-                if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-                shape,
-            )
+                if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline, shape,
+            ))
             .semantics { contentDescription = placeholder },
         decorationBox = { innerTextField ->
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = height)
-                    .padding(start = 16.dp, end = if (passwordField) 4.dp else 16.dp),
+                    .padding(start = if (authStyle) 24.dp else 16.dp,
+                        end = if (authStyle) 12.dp else if (passwordField) 4.dp else 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(Modifier.weight(1f).padding(vertical = 14.dp)) {
                     if (value.isEmpty()) {
                         Text(
                             text = placeholder,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (authStyle) CustomerStoreFieldText.copy(alpha = 0.70f)
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyLarge.copy(
+                                fontFamily = if (authStyle) CustomerActionFont else MaterialTheme.typography.bodyLarge.fontFamily,
+                                fontWeight = if (authStyle) FontWeight.Bold else MaterialTheme.typography.bodyLarge.fontWeight,
+                                fontSize = if (authStyle) 16.sp else MaterialTheme.typography.bodyLarge.fontSize,
+                            ),
                         )
                     }
                     innerTextField()
                 }
-                if (passwordField) {
+                if (passwordField && !authStyle) {
                     IconButton(onClick = { passwordVisible = !passwordVisible }, enabled = enabled) {
                         Icon(
                             if (passwordVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
@@ -451,7 +491,7 @@ internal fun CustomerRememberMeOption(
 ) {
     Row(
         modifier = modifier
-            .heightIn(min = 48.dp)
+            .height(24.dp)
             .toggleable(
                 value = checked,
                 enabled = enabled,
@@ -460,12 +500,18 @@ internal fun CustomerRememberMeOption(
             ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Checkbox(checked = checked, onCheckedChange = null, enabled = enabled)
-        Spacer(Modifier.width(8.dp))
+        Box(Modifier.size(16.dp).clip(RoundedCornerShape(5.dp)).background(Color.White.copy(alpha = 0.70f)),
+            contentAlignment = Alignment.Center) {
+            if (checked) Icon(Icons.Default.Check, null, Modifier.size(14.dp), tint = CustomerStoreNavy)
+        }
+        Spacer(Modifier.width(4.dp))
         Text(
             text = "Запомнить",
-            color = MaterialTheme.colorScheme.onSurface,
-            style = MaterialTheme.typography.labelLarge,
+            color = CustomerStoreNavy,
+            fontFamily = CustomerActionFont,
+            fontSize = 14.sp,
+            lineHeight = 17.sp,
+            fontWeight = FontWeight.Medium,
         )
     }
 }
@@ -478,6 +524,8 @@ internal fun CustomerTextAction(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     color: Color = MaterialTheme.colorScheme.primary,
+    authStyle: Boolean = false,
+    textSize: TextUnit = 14.sp,
 ) {
     val source = remember { MutableInteractionSource() }
     val isPressed by source.collectIsPressedAsState()
@@ -493,7 +541,7 @@ internal fun CustomerTextAction(
     )
     Box(
         modifier = modifier
-            .heightIn(min = 48.dp)
+            .heightIn(min = if (authStyle) 24.dp else 48.dp)
             .graphicsLayer {
                 scaleX = pressScale
                 scaleY = pressScale
@@ -510,10 +558,31 @@ internal fun CustomerTextAction(
         Text(
             text = text,
             color = color.copy(alpha = pressAlpha),
-            fontSize = 14.sp,
+            fontSize = textSize,
             fontWeight = FontWeight.Medium,
+            fontFamily = if (authStyle) CustomerActionFont else MaterialTheme.typography.labelLarge.fontFamily,
             textDecoration = if (isPressed) TextDecoration.Underline else TextDecoration.None,
         )
+    }
+}
+
+/** An outer-only shadow leaves the supplied translucent fill and artwork colors intact. */
+private fun Modifier.customerAuthShadow(shape: Shape): Modifier = drawWithCache {
+    val interior = Path().apply {
+        when (val outline = shape.createOutline(size, layoutDirection, this@drawWithCache)) {
+            is Outline.Rectangle -> addRect(outline.rect)
+            is Outline.Rounded -> addRoundRect(outline.roundRect)
+            is Outline.Generic -> addPath(outline.path)
+        }
+    }
+    val painter = DropShadowPainter(
+        shape,
+        Shadow(radius = 20.dp, spread = 0.dp, color = Color.Black.copy(alpha = 0.24f), offset = DpOffset(0.dp, 12.dp)),
+    )
+    onDrawBehind {
+        clipPath(interior, ClipOp.Difference) {
+            with(painter) { draw(size) }
+        }
     }
 }
 
@@ -540,6 +609,8 @@ internal fun Modifier.figmaButtonShadow(
 private fun CustomerVideoBackground(
     @RawRes videoRes: Int,
     modifier: Modifier = Modifier,
+    repeat: Boolean = true,
+    onFinished: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -547,13 +618,24 @@ private fun CustomerVideoBackground(
         ExoPlayer.Builder(context.applicationContext).build().apply {
             val uri = "android.resource://${context.packageName}/$videoRes".toUri()
             setMediaItem(MediaItem.fromUri(uri))
-            repeatMode = Player.REPEAT_MODE_ONE
+            repeatMode = if (repeat) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
             volume = 0f
             playWhenReady = false
             prepare()
         }
     }
 
+    val finish = androidx.compose.runtime.rememberUpdatedState(onFinished)
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_ENDED) finish.value()
+            }
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) { finish.value() }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
+    }
     DisposableEffect(lifecycle, player) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {

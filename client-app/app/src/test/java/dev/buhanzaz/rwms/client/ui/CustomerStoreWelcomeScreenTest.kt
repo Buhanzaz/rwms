@@ -3,9 +3,14 @@ package dev.buhanzaz.rwms.client.ui
 import android.app.Application
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.test.assertIsNotDisplayed
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.graphics.Insets
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsOn
-import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -19,13 +24,14 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 /** Compose checks for immediate entry and the complete signed-out customer flow. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
 class CustomerStoreWelcomeScreenTest {
     @get:Rule
-    val composeRule = createComposeRule()
+    val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     @Test
     fun `ready app content is exposed without an artificial greeting delay`() {
@@ -57,26 +63,33 @@ class CustomerStoreWelcomeScreenTest {
     }
 
     @Test
-    fun `logo stays within the welcome and the fixed login header`() {
+    @Config(qualifiers = "w404dp-h874dp-mdpi")
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun `logo keeps the field width and centered position between entry and login`() {
         setAuthContent()
+        composeRule.mainClock.advanceTimeBy(1_000)
         val logo = composeRule.onNodeWithTag("customer-auth-logo").fetchSemanticsNode().boundsInRoot
-        val screen = composeRule.onNodeWithTag("customer-auth-screen").fetchSemanticsNode().boundsInRoot
-        assertThat(logo.width).isGreaterThan(0f)
-        assertThat(logo.top).isAtLeast(screen.top)
-        assertThat(logo.left).isAtLeast(screen.left)
-        assertThat(logo.right).isAtMost(screen.right)
-
         composeRule.onNodeWithTag("customer-auth-login").performScrollTo().performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithText("Вход").assertExists()
-        composeRule.onNodeWithText("Войти").assertExists()
-        val movedLogo = composeRule.onNodeWithTag("customer-auth-logo").fetchSemanticsNode().boundsInRoot
+        composeRule.mainClock.advanceTimeBy(1_000)
+        val loginLogo = composeRule.onNodeWithTag("customer-auth-logo").fetchSemanticsNode().boundsInRoot
         val login = composeRule.onNodeWithTag("customer-login-username").fetchSemanticsNode().boundsInRoot
-        val back = composeRule.onNodeWithTag("customer-auth-back").fetchSemanticsNode().boundsInRoot
-        assertThat(movedLogo.top).isLessThan(logo.top)
-        assertThat(movedLogo.bottom).isAtMost(login.top)
-        assertThat(movedLogo.left).isAtLeast(back.right)
-        assertThat(back.bottom).isAtMost(login.top)
+        assertThat(loginLogo.width).isEqualTo(logo.width)
+        assertThat(loginLogo.width).isWithin(1f).of(login.width)
+        assertThat(loginLogo.center.y).isWithin(1f).of(logo.center.y)
+        assertThat(loginLogo.bottom).isAtMost(login.top)
+        composeRule.onNodeWithText("Вход").assertExists()
+        composeRule.onNodeWithText("Войти").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w320dp-h470dp-mdpi")
+    fun `short login canvas keeps logo above its first field`() {
+        setAuthContent()
+        composeRule.onNodeWithTag("customer-auth-login").performScrollTo().performClick()
+        val logo = composeRule.onNodeWithTag("customer-auth-logo").fetchSemanticsNode().boundsInRoot
+        val field = composeRule.onNodeWithTag("customer-login-username").fetchSemanticsNode().boundsInRoot
+        assertThat(logo.bottom).isAtMost(field.top)
     }
 
     @Test
@@ -85,10 +98,10 @@ class CustomerStoreWelcomeScreenTest {
         composeRule.onNodeWithTag("customer-auth-login").performScrollTo().performClick()
         composeRule.onNodeWithTag("customer-login-recovery").performClick()
         composeRule.onNodeWithTag("customer-password-recovery-screen").assertExists()
-        composeRule.onNodeWithTag("customer-auth-back").performClick()
+        composeRule.runOnIdle { composeRule.activity.onBackPressedDispatcher.onBackPressed() }
         composeRule.onNodeWithTag("customer-login-screen").assertExists()
         composeRule.onNodeWithTag("customer-password-recovery-screen").assertDoesNotExist()
-        composeRule.onNodeWithTag("customer-auth-back").performClick()
+        composeRule.runOnIdle { composeRule.activity.onBackPressedDispatcher.onBackPressed() }
         composeRule.onNodeWithTag("customer-auth-login").assertIsEnabled()
         composeRule.onNodeWithTag("customer-login-screen").assertDoesNotExist()
     }
@@ -115,6 +128,36 @@ class CustomerStoreWelcomeScreenTest {
         composeRule.runOnIdle {
             assertThat(submission.get()).isEqualTo(Triple("customer", "secret-pass", true))
         }
+    }
+
+    @Test
+    @Config(qualifiers = "w404dp-h874dp-mdpi")
+    fun `registration logo leaves screen when keyboard opens and returns when it closes`() {
+        setAuthContent()
+        composeRule.onNodeWithTag("customer-auth-register").performScrollTo().performClick()
+        composeRule.mainClock.advanceTimeBy(500)
+        val initial = composeRule.onNodeWithTag("customer-auth-logo").fetchSemanticsNode().boundsInRoot
+        assertThat(initial.height).isGreaterThan(0f)
+        dispatchKeyboardInset(338)
+        composeRule.mainClock.advanceTimeBy(500)
+        composeRule.onNodeWithTag("customer-auth-logo").assertIsNotDisplayed()
+        composeRule.onNodeWithTag("customer-registration-phone").performScrollTo().performTextInput("+79990000000")
+        dispatchKeyboardInset(0)
+        composeRule.mainClock.advanceTimeBy(500)
+        val restored = composeRule.onNodeWithTag("customer-auth-logo").fetchSemanticsNode().boundsInRoot
+        assertThat(restored.height).isGreaterThan(0f)
+        assertThat(restored.width).isWithin(1f).of(initial.width)
+    }
+
+    private fun dispatchKeyboardInset(bottom: Int) {
+        composeRule.runOnIdle {
+            val insets = WindowInsetsCompat.Builder()
+                .setInsets(WindowInsetsCompat.Type.ime(), Insets.of(0, 0, 0, bottom))
+                .setVisible(WindowInsetsCompat.Type.ime(), bottom > 0)
+                .build()
+            ViewCompat.dispatchApplyWindowInsets(composeRule.activity.window.decorView, insets)
+        }
+        composeRule.waitForIdle()
     }
 
     @Test
@@ -177,18 +220,15 @@ class CustomerStoreWelcomeScreenTest {
     }
 
     @Test
-    fun `password recovery explains unavailability before asking for any input`() {
+    fun `recovery keeps supplied form and reports unavailable service without fake success`() {
         setAuthContent()
-
         composeRule.onNodeWithTag("customer-auth-login").performScrollTo().performClick()
-        composeRule.waitForIdle()
         composeRule.onNodeWithTag("customer-login-recovery").performClick()
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("customer-password-recovery-screen").assertExists()
-        composeRule.onNodeWithTag("customer-recovery-phone").assertDoesNotExist()
-        composeRule.onNodeWithTag("customer-recovery-submit").assertDoesNotExist()
+        composeRule.onNodeWithTag("customer-recovery-phone").performTextInput("client@example.test")
+        composeRule.onNodeWithTag("customer-recovery-submit").performScrollTo().performClick()
         composeRule.onNodeWithText("Восстановление пароля пока недоступно").assertExists()
-        composeRule.onNodeWithText("Вернуться ко входу").performScrollTo().performClick()
+        composeRule.onNodeWithTag("customer-recovery-submit").assertIsEnabled()
+        composeRule.runOnIdle { composeRule.activity.onBackPressedDispatcher.onBackPressed() }
         composeRule.onNodeWithTag("customer-login-screen").assertExists()
     }
 
