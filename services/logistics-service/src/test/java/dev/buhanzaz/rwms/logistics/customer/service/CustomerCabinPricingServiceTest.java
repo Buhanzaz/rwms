@@ -43,7 +43,11 @@ class CustomerCabinPricingServiceTest {
   private final RentalPricingStore priceStore = mock(RentalPricingStore.class);
   private final CustomerCabinCatalogService service =
       new CustomerCabinCatalogService(
-          sessions, dependencies, delivery, new RentalPricingService(dependencies, priceStore));
+          sessions,
+          dependencies,
+          delivery,
+          new RentalPricingService(dependencies, priceStore),
+          mock(CustomerWarehouseService.class));
 
   @BeforeEach
   void prepare() {

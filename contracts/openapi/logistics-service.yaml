@@ -3502,6 +3502,146 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/ApiProblem" }
+  /api/logistics/public/v1/catalog/warehouses:
+    get:
+      operationId: listPublicCustomerWarehouses
+      security: []
+      description: >-
+        Lists the current active routable customer-visible warehouses for anonymous browsing.
+        It creates no profile, inquiry, presentation, hold or booking. Customer commands and
+        private profile/order reads remain authenticated.
+      responses:
+        "200":
+          description: No-store customer-visible warehouses.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CustomerWarehouse" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/public/v1/catalog/warehouses/{warehouseId}/facets:
+    parameters:
+      - name: warehouseId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getPublicCustomerCabinFacets
+      security: []
+      description: >-
+        Returns exact asset-owned facets for one active customer-visible warehouse. Every live
+        presentation hold, active order reservation and operation lease is excluded. No customer
+        identity or inquiry is created; the response contains only the requested warehouse.
+      responses:
+        "200":
+          description: No-store available cabin facets.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CabinFacets" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/public/v1/catalog/warehouses/{warehouseId}/cabins:
+    parameters:
+      - name: warehouseId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: listPublicCustomerCabins
+      security: []
+      description: >-
+        Returns one bounded page of currently bookable FREE cabins from an active customer-visible
+        warehouse, with current informational monthly prices and scoped public gallery URLs.
+        All live presentation holds, active order reservations and operation leases are excluded.
+        No profile, inquiry, hold or booking is created. Typed product fields are exposed;
+        unrestricted passport data is omitted and each cabin's facts object is empty. Availability
+        is re-evaluated on each read and must be revalidated after authentication before ordering.
+      parameters:
+        - name: query
+          in: query
+          schema: { type: string, maxLength: 255 }
+        - name: cabinType
+          in: query
+          schema: { type: string, maxLength: 255 }
+        - name: finish
+          in: query
+          schema: { type: string, maxLength: 255 }
+        - name: dimensions
+          in: query
+          schema: { type: string, maxLength: 255 }
+        - name: category
+          in: query
+          schema: { type: string, maxLength: 255 }
+        - name: linoleum
+          in: query
+          schema: { type: boolean }
+        - name: characteristics
+          in: query
+          style: form
+          explode: true
+          schema:
+            type: array
+            maxItems: 20
+            uniqueItems: true
+            items: { type: string, minLength: 1, maxLength: 255 }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: size
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        "200":
+          description: No-store filtered cabin page; selection and checkout require authentication.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerCabinPage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/public/v1/catalog/warehouses/{warehouseId}/cabins/{cabinId}/photos/{mediaId}:
+    parameters:
+      - name: warehouseId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - $ref: "#/components/parameters/CabinId"
+      - $ref: "#/components/parameters/MediaId"
+    get:
+      operationId: getPublicCustomerCabinPhoto
+      security: []
+      description: >-
+        Streams only a current SMALL or LARGE gallery derivative. Every request re-proves the
+        warehouse's customer visibility, the cabin's current availability without any own hold,
+        and exact cabin/media/generation membership. Unavailable cabins, wrong membership, stale
+        generations and other variants return 404. Originals and private media locators are never
+        exposed. No profile, inquiry or booking is created.
+      parameters:
+        - name: generation
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: variant
+          in: query
+          required: true
+          schema: { type: string, enum: [SMALL, LARGE] }
+      responses:
+        "200":
+          description: Current no-store cabin gallery derivative.
+          headers:
+            X-Content-Type-Options:
+              required: true
+              schema: { type: string, const: nosniff }
+          content:
+            image/*:
+              schema: { type: string, format: binary }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/customer/v1/profile:
     get:
       operationId: getCustomerProfile

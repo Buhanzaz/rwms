@@ -88,7 +88,12 @@ class CustomerCabinCatalogServiceTest {
     when(deliveryEstimate.estimatedDates(WAREHOUSE))
         .thenReturn(List.of(java.time.LocalDate.of(2026, 8, 28)));
     CustomerCabinCatalogService service =
-        new CustomerCabinCatalogService(sessions, dependencies, deliveryEstimate, pricing);
+        new CustomerCabinCatalogService(
+            sessions,
+            dependencies,
+            deliveryEstimate,
+            pricing,
+            mock(CustomerWarehouseService.class));
 
     var result =
         service.page(

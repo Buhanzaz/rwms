@@ -200,6 +200,17 @@ their ordinary RWMS scopes.
 
 ### CustomerApp booking boundary
 
+Anonymous browsing exposes four exact GET routes under
+`/api/logistics/public/v1/catalog/warehouses`: the warehouse list, warehouse facets,
+cabin pages and cabin photo derivatives. Reads reuse the active, routable warehouse
+policy and current catalog/pricing pipeline without creating a customer identity,
+profile, inquiry or hold. An absent asset hold scope excludes all live presentation
+holds, order reservations and operation leases. Public cards omit arbitrary passport
+facts. Each photo read rechecks the visible warehouse, current cabin availability,
+gallery membership, exact generation and `SMALL`/`LARGE` variant; responses are
+`no-store`, and image responses include `nosniff`. Originals and all customer
+commands keep their existing authorization.
+
 The dedicated `/api/logistics/customer/v1/**` boundary accepts only a `USER` JWT with role
 `CUSTOMER`, scope `customer.rental` and client identity `rwms-customer-android`. A customer creates
 one individual or legal-entity profile, selects an available warehouse, and works with a

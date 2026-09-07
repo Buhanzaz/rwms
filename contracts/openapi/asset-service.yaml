@@ -1797,8 +1797,9 @@ paths:
       operationId: readCustomerCabinCatalog
       description: >-
         Requires SERVICE logistics-service with exactly asset.logistics. Returns a stable bounded
-        page of FREE cabins that are currently bookable for one customer inquiry. The inquiry's
-        own live presentation holds remain visible; active order reservations, operation leases
+        page of currently bookable FREE cabins. When holdScopeId is supplied, that inquiry's
+        own live presentation holds remain visible. Without a scope every live hold is excluded,
+        allowing logistics to serve anonymous browsing without creating an inquiry. Active order reservations, operation leases
         and holds belonging to other scopes are excluded. Structured filters use
         case-insensitive normalized exact matching and every supplied characteristic must be
         present. This read expires due holds but never creates, renews or releases a live hold.
@@ -1806,8 +1807,8 @@ paths:
         - { $ref: '#/components/parameters/WarehouseIdQuery' }
         - name: holdScopeId
           in: query
-          required: true
-          description: Customer rental-inquiry ID whose current live holds remain visible.
+          required: false
+          description: Optional customer rental-inquiry ID whose live holds remain visible; omission excludes every live hold.
           schema: { type: string, format: uuid }
         - name: query
           in: query

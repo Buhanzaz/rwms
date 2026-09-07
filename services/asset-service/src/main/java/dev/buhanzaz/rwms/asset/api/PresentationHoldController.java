@@ -58,12 +58,12 @@ public class PresentationHoldController {
     return service.catalog(warehouseId, query, page, size);
   }
 
-  /** Returns only cabins currently bookable by the specified customer inquiry scope. */
+  /** Returns bookable cabins, retaining own holds only when an inquiry scope is supplied. */
   @GetMapping("/customer-cabin-catalog")
   public CabinCatalogPage customerCatalog(
       @AuthenticationPrincipal Jwt jwt,
       @RequestParam UUID warehouseId,
-      @RequestParam UUID holdScopeId,
+      @RequestParam(required = false) UUID holdScopeId,
       @RequestParam(required = false) @Size(max = 255) String query,
       @RequestParam(required = false) @Size(max = 255) String cabinType,
       @RequestParam(required = false) @Size(max = 255) String finish,

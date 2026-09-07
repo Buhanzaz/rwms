@@ -143,7 +143,7 @@ interface LogisticsOrderPresentationDependencyPort {
     throw unavailable("Cabin catalog is not configured");
   }
 
-  /** Reads only cabins bookable by one inquiry, including that inquiry's own live holds. */
+  /** Reads bookable cabins; a null inquiry scope excludes all live presentation holds. */
   default CabinCatalogPage readCustomerCabinCatalog(
       UUID warehouseId,
       UUID holdScopeId,

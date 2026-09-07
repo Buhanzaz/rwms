@@ -75,6 +75,13 @@ public class GatewaySecurityConfiguration {
                 .denyAll()
                 .requestMatchers(
                     HttpMethod.GET,
+                    "/api/logistics/public/v1/catalog/warehouses",
+                    "/api/logistics/public/v1/catalog/warehouses/*/facets",
+                    "/api/logistics/public/v1/catalog/warehouses/*/cabins",
+                    "/api/logistics/public/v1/catalog/warehouses/*/cabins/*/photos/*")
+                .permitAll()
+                .requestMatchers(
+                    HttpMethod.GET,
                     "/api/logistics/public/v1/cabin-photo-presentations/**")
                 .permitAll()
                 .requestMatchers(

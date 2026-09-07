@@ -345,16 +345,13 @@ final class LogisticsAssetOrderPresentationDependencyClient {
   }
 
   CabinFacets readAvailableCabinFacets(UUID warehouseId, UUID holdScopeId) {
-    String uri =
+    UriComponentsBuilder uri =
         UriComponentsBuilder.fromUriString(assetBase + "/cabin-facets")
-            .queryParam("warehouseId", warehouseId)
-            .queryParam("holdScopeId", holdScopeId)
-            .build()
-            .encode()
-            .toUriString();
+            .queryParam("warehouseId", warehouseId);
+    if (holdScopeId != null) uri.queryParam("holdScopeId", holdScopeId);
     CabinFacetsResponse response =
         transport.get(
-            uri,
+            uri.build().encode().toUriString(),
             CabinFacetsResponse.class,
             ASSET_CLIENT,
             ASSET_SCOPE,
@@ -438,10 +435,10 @@ final class LogisticsAssetOrderPresentationDependencyClient {
     UriComponentsBuilder uri =
         UriComponentsBuilder.fromUriString(assetBase + "/customer-cabin-catalog")
             .queryParam("warehouseId", warehouseId)
-            .queryParam("holdScopeId", holdScopeId)
             .queryParam("query", query == null ? "" : query)
             .queryParam("page", page)
             .queryParam("size", size);
+    if (holdScopeId != null) uri.queryParam("holdScopeId", holdScopeId);
     if (cabinType != null) uri.queryParam("cabinType", cabinType);
     if (finish != null) uri.queryParam("finish", finish);
     if (dimensions != null) uri.queryParam("dimensions", dimensions);

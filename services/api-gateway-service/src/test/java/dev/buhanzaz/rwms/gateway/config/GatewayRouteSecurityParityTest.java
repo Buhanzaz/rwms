@@ -244,6 +244,39 @@ class GatewayRouteSecurityParityTest {
     }
   }
 
+  @Test
+  void anonymousCatalogDoesNotOpenWritesOrNeighboringPrivateReads() throws Exception {
+    String base = "/api/logistics/public/v1/catalog/warehouses";
+    List<String> catalogPaths =
+        List.of(
+            base,
+            base + "/" + CONCRETE_ID + "/facets",
+            base + "/" + CONCRETE_ID + "/cabins",
+            base + "/" + CONCRETE_ID + "/cabins/" + CONCRETE_ID + "/photos/" + CONCRETE_ID);
+    List<RouteKey> forbidden = new ArrayList<>();
+    for (String path : catalogPaths) {
+      for (HttpMethod method :
+          List.of(HttpMethod.POST, HttpMethod.PUT, HttpMethod.PATCH, HttpMethod.DELETE)) {
+        forbidden.add(new RouteKey(method, path));
+      }
+    }
+    forbidden.add(new RouteKey(HttpMethod.GET, base + "/" + CONCRETE_ID + "/cart"));
+    forbidden.add(new RouteKey(HttpMethod.GET, "/api/logistics/customer/v1/warehouses"));
+    forbidden.add(new RouteKey(HttpMethod.GET, "/api/logistics/customer/v1/profile"));
+    forbidden.add(new RouteKey(HttpMethod.GET, "/api/media/v1/assets/" + CONCRETE_ID));
+
+    try (AnnotationConfigWebApplicationContext context = securityContext()) {
+      FilterChainProxy security = context.getBean(FilterChainProxy.class);
+      for (RouteKey route : forbidden) {
+        AtomicBoolean dispatched = new AtomicBoolean();
+        assertThat(filter(security, route, false, dispatched))
+            .as("anonymous request %s", route)
+            .isEqualTo(401);
+        assertThat(dispatched.get()).as("dispatch for %s", route).isFalse();
+      }
+    }
+  }
+
   private static AnnotationConfigWebApplicationContext securityContext() {
     AnnotationConfigWebApplicationContext context =
         new AnnotationConfigWebApplicationContext();

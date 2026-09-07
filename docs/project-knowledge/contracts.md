@@ -95,6 +95,18 @@ contracted `429` Problem Details response with `Retry-After`; production ingress
 throttling remains an independent defence-in-depth layer.
 
 [`logistics-service.yaml`](../../contracts/openapi/logistics-service.yaml)
+also defines four anonymous GET operations under
+`/api/logistics/public/v1/catalog/warehouses`: the warehouse list, warehouse facets,
+filtered cabin pages and cabin photo derivatives. They reuse the current customer
+warehouse and catalog projections without creating a profile, inquiry or hold. The
+asset customer-catalog read accepts an absent `holdScopeId`, which excludes all live
+presentation holds as well as order reservations and operation leases. Public cards
+omit arbitrary passport facts. Each public photo read rechecks warehouse visibility,
+current cabin availability, gallery membership, generation and the `SMALL`/`LARGE`
+variant; originals and customer commands require their existing authorization.
+Gateway and logistics permit only these exact GET patterns anonymously.
+
+The same contract
 defines the public `/api/logistics/customer/v1/**` family for profile create/read/version-fenced
 contact updates and avatar prepare/bind,
 warehouses, inquiry/cart, facets, free cabin cards/photos, complete selection,

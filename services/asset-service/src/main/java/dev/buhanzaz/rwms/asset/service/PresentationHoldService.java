@@ -176,8 +176,9 @@ public class PresentationHoldService {
 
   /**
    * Returns one stable page of cabins that are currently rentable by a customer inquiry. The
-   * inquiry's own live presentation holds remain visible while order reservations, operation
-   * leases and every other presentation scope are excluded. Structured filters are exact after
+   * inquiry's own live presentation holds remain visible when its scope is supplied; an absent
+   * scope excludes every live presentation hold. Order reservations and operation leases are
+   * always excluded. Structured filters are exact after
    * whitespace/case normalization; every requested characteristic must be present.
    */
   @Transactional
@@ -194,14 +195,12 @@ public class PresentationHoldService {
       int page,
       int size) {
     UUID requiredWarehouseId = Objects.requireNonNull(warehouseId, "warehouseId");
-    UUID requiredHoldScopeId = Objects.requireNonNull(holdScopeId, "holdScopeId");
     validateCustomerCatalogRequest(
         query, cabinType, finish, dimensions, category, characteristics, page, size);
     List<String> requiredCharacteristics = normalizedCharacteristics(characteristics);
     OffsetDateTime timestamp = now();
     holds.expireDue(timestamp);
-    List<RentalItem> available =
-        availableItems(requiredWarehouseId, requiredHoldScopeId, timestamp, false);
+    List<RentalItem> available = availableItems(requiredWarehouseId, holdScopeId, timestamp, false);
     Map<UUID, CabinCompositionService.CabinComposition> compositions =
         cabinComposition.compositionsFor(available);
     List<RentalItem> matches =

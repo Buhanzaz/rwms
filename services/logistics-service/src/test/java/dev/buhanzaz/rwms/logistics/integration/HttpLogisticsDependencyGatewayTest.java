@@ -1181,6 +1181,51 @@ class HttpLogisticsDependencyGatewayTest {
   }
 
   @Test
+  void readsGuestCabinCatalogAndFacetsWithoutAnInquiryScope() {
+    UUID warehouseId = UUID.randomUUID();
+    server
+        .expect(
+            requestTo(
+                "http://asset.test/api/internal/asset/v1/logistics/customer-cabin-catalog?warehouseId="
+                    + warehouseId
+                    + "&query=&page=0&size=20"))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header("Authorization", "Bearer test-asset.logistics"))
+        .andRespond(
+            withSuccess(
+                """
+                {"warehouseId":"%s","content":[],"page":0,"size":20,"totalElements":0,"totalPages":0}
+                """
+                    .formatted(warehouseId),
+                MediaType.APPLICATION_JSON));
+    server
+        .expect(
+            requestTo(
+                "http://asset.test/api/internal/asset/v1/logistics/cabin-facets?warehouseId="
+                    + warehouseId))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header("Authorization", "Bearer test-asset.logistics"))
+        .andRespond(
+            withSuccess(
+                """
+                {"warehouseId":"%s","cabinTypes":[],"finishes":[],"dimensions":[],
+                 "categories":[],"characteristics":[],"typeDimensions":[]}
+                """
+                    .formatted(warehouseId),
+                MediaType.APPLICATION_JSON));
+
+    assertThat(
+            gateway
+                .readCustomerCabinCatalog(
+                    warehouseId, null, null, null, null, null, null, null, List.of(), 0, 20)
+                .content())
+        .isEmpty();
+    assertThat(gateway.readAvailableCabinFacets(warehouseId, null).warehouseId())
+        .isEqualTo(warehouseId);
+    server.verify();
+  }
+
+  @Test
   void readsBoundedCabinCatalogFactsWithoutAWriteOrIdempotencyHeader() {
     UUID warehouseId = UUID.randomUUID();
     UUID cabinId = UUID.randomUUID();

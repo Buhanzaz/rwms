@@ -39,6 +39,14 @@ public class SecurityConfiguration {
     http.authorizeHttpRequests(
         authorize -> {
           authorize.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll();
+          authorize
+              .requestMatchers(
+                  HttpMethod.GET,
+                  "/api/logistics/public/v1/catalog/warehouses",
+                  "/api/logistics/public/v1/catalog/warehouses/*/facets",
+                  "/api/logistics/public/v1/catalog/warehouses/*/cabins",
+                  "/api/logistics/public/v1/catalog/warehouses/*/cabins/*/photos/*")
+              .permitAll();
           authorize.requestMatchers("/api/logistics/public/v1/client-presentations/**").permitAll();
           authorize
               .requestMatchers(

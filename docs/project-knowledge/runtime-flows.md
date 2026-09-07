@@ -1045,6 +1045,16 @@ Evidence:
 
 ### CustomerApp registration, capacity and checkout
 
+Anonymous catalog browsing uses the public gateway's four GET routes under
+`/api/logistics/public/v1/catalog/warehouses`. Logistics lists the same active,
+routable customer warehouses and asks asset-service for available cabins without
+an inquiry hold scope. All live holds, order reservations and operation leases are
+excluded. Filtering, prices and gallery derivatives reuse the customer catalog
+pipeline; public cards omit arbitrary passport facts. Every photo read rechecks the
+warehouse, cabin availability, current gallery membership, generation and derivative
+variant. Browsing creates no customer profile, inquiry, selection or booking. Cart,
+delivery and order commands retain customer authentication and ownership checks.
+
 1. The Android client validates login/password confirmation locally, obtains
    an auth-service CSRF cookie/header pair through the delegated `/auth/**`
    route, and submits one registration command. Auth-service serializes the

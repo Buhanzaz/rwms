@@ -70,8 +70,9 @@ changes reservations, or owns the logistics rental-price policy.
 `/equipment-pricing-catalog` returns current FURNITURE identities and labels, including inactive
 and out-of-stock items, but excludes other equipment categories. The exact logistics service
 credential is required; monthly prices per one unit remain owned by logistics.
-`/customer-cabin-catalog` is the customer-booking read for one required
-`holdScopeId`. It returns only `FREE` cabins that have no active order
+`/customer-cabin-catalog` is the customer catalog read with an optional
+`holdScopeId`. An absent scope excludes every live presentation hold for guest browsing.
+It returns only `FREE` cabins that have no active order
 reservation or operation lease, excludes live holds of other scopes, and keeps
 the requesting inquiry's own live holds visible. Type, finish, dimensions,
 category and linoleum filters are normalized exact matches; all repeated

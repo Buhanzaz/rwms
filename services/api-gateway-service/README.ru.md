@@ -105,7 +105,7 @@ API gateway: проверка host/headers, CORS, JWT, route policy, observabili
 | `/api/maintenance/**` | `maintenance-service`, путь без изменений | Internal-пути запрещены. |
 | `/api/media/**` | `media-service`, путь без изменений | Internal- и private-пути запрещены. Source/variant upload content и SSE используют отдельные handlers. |
 | `/api/inventory/**` | `inventory-service`, путь без изменений | Internal- и private-пути запрещены. Пересчёт завершённого результата использует отдельный handler с тайм-аутом 60 секунд; все остальные inventory-запросы сохраняют обычный тайм-аут. |
-| `/api/logistics/**` | `logistics-service`, путь без изменений | Internal- и private-пути запрещены. Только точные подписанные операции client-presentation, cabin-photo-presentation и contractor-route capability являются анонимными исключениями; CustomerApp routes остаются аутентифицированными, а logistics проверяет точную комбинацию CUSTOMER/client/scope. |
+| `/api/logistics/**` | `logistics-service`, путь без изменений | Internal- и private-пути запрещены. Анонимно доступны точные операции client-presentation, cabin-photo-presentation и contractor-route capability, а также четыре GET-шаблона гостевого каталога ниже. Профиль, корзина и заказы клиента требуют аутентификации; logistics проверяет точную комбинацию CUSTOMER/client/scope. |
 | `/api/assistant/**` | `assistant-service`, путь без изменений | Internal- и private-пути запрещены. Turns диалога использует отдельный streaming handler. |
 | `/api/dossier/**` | `dossier-service`, путь без изменений | Только `GET`: dossier является read-проекцией и не имеет публичного command route. |
 | `/api/analytics/v1/**` | `analytics-service`; внешний префикс меняется на downstream `/api/v1/**` | Только аутентифицированный `GET`. |
@@ -126,6 +126,12 @@ submission, но не является abuse throttling.
 
 Специальные маршруты намеренно имеют приоритет над общими маршрутами сервиса:
 
+- Гостевой просмотр разрешает без входа только GET для
+  `/api/logistics/public/v1/catalog/warehouses`, `/{warehouseId}/facets`,
+  `/{warehouseId}/cabins` и `/{warehouseId}/cabins/{cabinId}/photos/{mediaId}`
+  под этим префиксом складов. Logistics проверяет видимость склада, доступность,
+  цены и доступ к производным фотографиям. Другие пути и методы каталога требуют
+  аутентификации; клиентские команды и namespace media не открываются.
 - `GET /api/task-board/worker/v1/events`, `GET /api/task-board/driver/v1/events`,
   `GET /api/asset/v1/events` и `GET /api/media/v1/events` проходят через
   ограниченный асинхронный SSE proxy.

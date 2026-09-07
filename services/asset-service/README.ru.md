@@ -71,8 +71,9 @@ dimension, category, characteristics и linoleum среди всех current sta
 `/equipment-pricing-catalog` возвращает актуальные UUID и названия FURNITURE, включая отключённые
 позиции и позиции без остатков, но исключая другие категории оборудования. Требуются точные
 credentials logistics-service; месячная цена одной единицы остаётся в ведении логистики.
-`/customer-cabin-catalog` — customer-booking read для одного обязательного
-`holdScopeId`. Он возвращает только бытовки `FREE` без active order reservation
+`/customer-cabin-catalog` — чтение клиентского каталога с необязательным
+`holdScopeId`. Без scope гостевой просмотр исключает все действующие presentation holds.
+Он возвращает только бытовки `FREE` без active order reservation
 или operation lease, исключает live holds других scopes и сохраняет видимыми
 собственные live holds запрашивающего inquiry. Фильтры type, finish, dimensions,
 category и linoleum используют normalized exact matching; все повторяющиеся

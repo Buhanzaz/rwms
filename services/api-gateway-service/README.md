@@ -107,7 +107,7 @@ replacement for the owning service's OpenAPI contract.
 | `/api/maintenance/**` | maintenance-service, unchanged | Internal paths are denied. |
 | `/api/media/**` | media-service, unchanged | Internal and private paths are denied. Source/variant upload content and SSE use dedicated handlers. |
 | `/api/inventory/**` | inventory-service, unchanged | Internal and private paths are denied. Completed-outcome recalculation uses a dedicated 60-second handler; every other inventory request keeps the ordinary timeout. |
-| `/api/logistics/**` | logistics-service, unchanged | Internal and private paths are denied. Exact signed client-presentation, cabin-photo-presentation, and contractor-route capability operations are the only anonymous exceptions; CustomerApp routes remain authenticated and logistics enforces their exact CUSTOMER/client/scope combination. |
+| `/api/logistics/**` | logistics-service, unchanged | Internal and private paths are denied. Anonymous access permits exact client-presentation, cabin-photo-presentation and contractor-route capability operations, plus the four guest-catalog GET patterns below. Customer profile, cart and booking routes remain authenticated; logistics enforces their exact CUSTOMER/client/scope combination. |
 | `/api/assistant/**` | assistant-service, unchanged | Internal and private paths are denied. Conversation turns use a dedicated streaming handler. |
 | `/api/dossier/**` | dossier-service, unchanged | `GET` only: dossier is a read projection and receives no public command route. |
 | `/api/analytics/v1/**` | analytics-service; external prefix becomes downstream `/api/v1/**` | Authenticated `GET` only. |
@@ -128,6 +128,12 @@ prevents cross-site submission but is not abuse throttling.
 The dedicated routes are intentionally more specific than their general service
 routes:
 
+- Anonymous guest browsing permits only GET for
+  `/api/logistics/public/v1/catalog/warehouses`, `/{warehouseId}/facets`,
+  `/{warehouseId}/cabins` and `/{warehouseId}/cabins/{cabinId}/photos/{mediaId}`
+  under that warehouse prefix. Logistics owns warehouse visibility, availability,
+  prices and scoped derivative access. Other catalog paths and methods still require
+  authentication; these reads do not open customer commands or the media namespace.
 - `GET /api/task-board/worker/v1/events`, `GET /api/task-board/driver/v1/events`,
   `GET /api/asset/v1/events`, and `GET /api/media/v1/events` use the bounded
   asynchronous SSE proxy.

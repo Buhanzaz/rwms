@@ -618,6 +618,30 @@ class PresentationHoldServiceIntegrationTest {
     assertThat(firstPage.totalPages()).isEqualTo(2);
     assertThat(firstPage.content()).extracting(cabin -> cabin.id()).containsExactly(available.id());
     assertThat(secondPage.content()).extracting(cabin -> cabin.id()).containsExactly(ownHold.id());
+    var guestPage =
+        presentationHolds.customerCatalog(
+            warehouseId, null, null, null, null, null, null, null, List.of(), 0, 100);
+    assertThat(guestPage.content())
+        .extracting(cabin -> cabin.id())
+        .containsExactly(available.id(), wrongCharacteristics.id());
+    assertThat(guestPage.totalElements()).isEqualTo(2);
+    assertThat(
+            presentationHolds
+                .customerCatalog(
+                    warehouseId,
+                    null,
+                    null,
+                    " бк-1 ",
+                    "двп",
+                    "2.4X6",
+                    " новая ",
+                    true,
+                    List.of(" ЭЛЕКТРИКА КК ", "пластиковое окно"),
+                    0,
+                    1)
+                .content())
+        .extracting(cabin -> cabin.id())
+        .containsExactly(available.id());
     assertThat(
             presentationHolds
                 .customerCatalog(
