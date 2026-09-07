@@ -413,6 +413,9 @@ class MaintenanceCorePostgresIntegrationTest {
     assertThat(service.catalogVersions(anotherWarehouseId))
         .extracting(CatalogVersionResponse::id)
         .containsExactly(spbCatalog.response().id());
+    assertThat(service.catalogVersions())
+        .extracting(CatalogVersionResponse::id)
+        .containsExactly(spbCatalog.response().id());
 
     UUID localQueueId = UUID.randomUUID();
     RoutingSnapshot localRouting =

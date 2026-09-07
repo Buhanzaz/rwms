@@ -67,6 +67,7 @@ public class MaintenanceApplicationService {
     return catalogs.catalogVersions(authorizationWarehouseId);
   }
 
+  @Transactional(readOnly = true)
   public List<CatalogVersionResponse> catalogVersions() {
     return catalogs.catalogVersions();
   }
