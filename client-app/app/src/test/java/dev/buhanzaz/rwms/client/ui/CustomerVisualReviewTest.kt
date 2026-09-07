@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.client.ui
 import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.drawable.AdaptiveIconDrawable
 import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
@@ -45,6 +46,36 @@ import org.robolectric.shadows.ShadowDialog
 class CustomerVisualReviewTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<ComponentActivity>()
+
+    @Test
+    fun `launcher artwork fills its mask and preserves both complete glyphs`() {
+        val context = composeRule.activity
+        val icon = context.applicationInfo.loadIcon(context.packageManager)
+        assertThat(icon).isInstanceOf(AdaptiveIconDrawable::class.java)
+        val adaptive = icon as AdaptiveIconDrawable
+        adaptive.setBounds(0, 0, 192, 192)
+        val bitmap = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888)
+        adaptive.draw(Canvas(bitmap))
+        listOf(4 to 96, 187 to 96, 96 to 4, 96 to 187).forEach { (x, y) ->
+            assertThat(android.graphics.Color.alpha(bitmap.getPixel(x, y))).isEqualTo(255)
+        }
+        val foreground = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888)
+        try {
+            adaptive.foreground.draw(Canvas(foreground))
+            val foregroundPixels = IntArray(192 * 192)
+            val maskedPixels = IntArray(192 * 192)
+            foreground.getPixels(foregroundPixels, 0, 192, 0, 0, 192, 192)
+            bitmap.getPixels(maskedPixels, 0, 192, 0, 0, 192, 192)
+            listOf(0xFF549AC5.toInt(), 0xFF204B79.toInt()).forEach { color ->
+                val completeGlyphPixels = foregroundPixels.count { it == color }
+                assertThat(completeGlyphPixels).isGreaterThan(500)
+                assertThat(maskedPixels.count { it == color }).isEqualTo(completeGlyphPixels)
+            }
+        } finally {
+            foreground.recycle()
+        }
+        saveReviewImage("launcher-icon", bitmap)
+    }
 
     @Test
     @Config(qualifiers = "w404dp-h874dp-mdpi")

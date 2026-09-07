@@ -43,8 +43,8 @@ headings and body copy; the approved gradient actions retain their Golos Text ty
 The SIL Open Font Licenses are packaged under
 `app/src/main/assets/licenses/`. The approved 12 dp gradient buttons keep their shadow and press
 states; secondary actions, focus borders and password visibility controls share the same type scale
-and accessible touch targets. The wordmark has a contrasting dark appearance. The launcher vector
-preserves the paths, gradient and proportions of the supplied [`Logo_App.svg`](../Logo_App.svg).
+and accessible touch targets. The wordmark has a contrasting dark appearance. The adaptive launcher
+icon fills the system mask with the supplied gradient and preserves both complete glyphs from [`Logo_App.svg`](../Logo_App.svg), without an inset card around the artwork.
 The silent caustic Media3 loop fills the authentication screens, pauses outside the foreground and
 is released after leaving authentication. Its light palette is retained independently of the catalog
 appearance. A poster extracted from the same video at the supplied form reference phase supports initial drawing and
