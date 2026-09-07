@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -40,6 +41,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -182,50 +184,26 @@ private fun CartCabinCard(
             .fillMaxWidth()
             .widthIn(max = 1_120.dp)
             .testTag("cart-cabin-${cabin.unitId}"),
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
         Column(Modifier.fillMaxWidth()) {
             CartCabinPhoto(
                 cabin = cabin,
-                modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                modifier = Modifier.fillMaxWidth().then(
+                    if (cabin.photos.isEmpty()) Modifier.height(80.dp) else Modifier.aspectRatio(16f / 9f),
+                ),
             )
             Column(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        cabin.type ?: "Тип не указан",
-                        modifier = Modifier.weight(1f).testTag("cart-cabin-type-${cabin.unitId}"),
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        "№ ${cabin.accountingNo}",
-                        modifier = Modifier.testTag("cart-cabin-number-${cabin.unitId}"),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                }
-                cabin.category?.let { category ->
-                    Text(
-                        category,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                CartCabinFacts(cabin)
-                Text(
-                    CustomerMoneyFormatter.monthlyRentalPrice(cabin.monthlyPriceRubles),
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.testTag("cart-rental-price-${cabin.unitId}"),
+                CustomerCabinDetails(
+                    cabin = cabin,
+                    identityTagPrefix = "cart-cabin",
+                    priceTagPrefix = "cart-rental-price",
                 )
                 if (additionalLines.isNotEmpty()) {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -241,28 +219,25 @@ private fun CartCabinCard(
                     }
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Срок аренды", style = MaterialTheme.typography.labelLarge)
-                    CartRentalTermControl(
-                        cabinUnitId = cabin.unitId,
-                        months = months,
-                        enabled = !busy,
-                        onMonths = onMonths,
-                    )
-                }
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
+                CartRentalTermRow(
+                    cabinUnitId = cabin.unitId,
+                    months = months,
+                    enabled = !busy,
+                    onMonths = onMonths,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(
                         onClick = onAdditional,
                         enabled = !busy,
-                        modifier = Modifier.fillMaxWidth().testTag("cart-additional-${cabin.unitId}"),
+                        modifier = Modifier.testTag("cart-additional-${cabin.unitId}"),
                     ) {
                         Text("+ Дополнительно")
                     }
-                    OutlinedButton(
+                    Spacer(Modifier.weight(1f))
+                    TextButton(
                         onClick = onRemove,
                         enabled = !busy,
-                        modifier = Modifier.fillMaxWidth().testTag("cart-remove-${cabin.unitId}"),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+                        modifier = Modifier.testTag("cart-remove-${cabin.unitId}"),
                     ) {
                         Text("Удалить", color = MaterialTheme.colorScheme.error)
                     }
@@ -272,52 +247,36 @@ private fun CartCabinCard(
     }
 }
 
-/** Lays out the cabin facts without turning the accounting number or finish into decorative badges. */
+/** Keeps the duration label and its native stepper together whenever the available width permits. */
 @Composable
-private fun CartCabinFacts(cabin: CustomerCabin) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            CartCabinFact(
-                label = "Отделка",
-                value = cabin.finish ?: "Не указана",
-                modifier = Modifier.weight(1f),
-            )
-            CartCabinFact(
-                label = "Габариты",
-                value = cabin.dimensions ?: "Не указаны",
-                modifier = Modifier.weight(1f),
-            )
+private fun CartRentalTermRow(
+    cabinUnitId: String,
+    months: Long,
+    enabled: Boolean,
+    onMonths: (Long) -> Unit,
+) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val control: @Composable (Modifier) -> Unit = { modifier ->
+            CartRentalTermControl(cabinUnitId, months, enabled, onMonths, modifier)
         }
-        cabin.linoleum?.let { linoleum ->
-            Text(
-                if (linoleum) "Линолеум" else "Без линолеума",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        if (maxWidth >= 340.dp) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    "Срок аренды",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.weight(1f),
+                )
+                control(Modifier.width(190.dp))
+            }
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Срок аренды", style = MaterialTheme.typography.labelLarge)
+                control(Modifier.fillMaxWidth())
+            }
         }
-        cabin.characteristics.forEach { characteristic ->
-            Text(
-                characteristic,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-/** Prints one compact factual label and value in a cabin cart card. */
-@Composable
-private fun CartCabinFact(label: String, value: String, modifier: Modifier = Modifier) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(value, style = MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -328,9 +287,10 @@ private fun CartRentalTermControl(
     months: Long,
     enabled: Boolean,
     onMonths: (Long) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Surface(
-        modifier = Modifier.fillMaxWidth().testTag("cart-rental-term-$cabinUnitId"),
+        modifier = modifier.testTag("cart-rental-term-$cabinUnitId"),
         shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
     ) {

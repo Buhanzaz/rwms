@@ -229,7 +229,7 @@ class CatalogScreensTest {
         assertThat(filterHeader).isEqualTo(originalHeader)
         composeRule.onNodeWithTag("filter-field-Пол").performScrollTo().performClick()
         composeRule.onNodeWithText("Линолеум").performScrollTo().performClick()
-        composeRule.onNodeWithText("Закрыть фильтры").performClick()
+        composeRule.onNodeWithTag("catalog-filter-button").performClick()
         composeRule.onNodeWithTag("cabin-cabin-1").assertExists()
         assertThat(appliedFilters).isEqualTo(CabinFilters(linoleum = true))
     }
@@ -269,8 +269,9 @@ class CatalogScreensTest {
         val filterBounds = composeRule.onNodeWithTag("catalog-filter-button").fetchSemanticsNode().boundsInRoot
         val cardBounds = composeRule.onNodeWithTag("cabin-cabin-1").fetchSemanticsNode().boundsInRoot
 
-        assertThat(stickyFilterBounds.top).isAtLeast(headerBounds.bottom)
-        assertThat(catalogBounds.top).isWithin(1f).of(stickyFilterBounds.bottom)
+        assertThat(stickyFilterBounds.top).isAtLeast(headerBounds.top)
+        assertThat(stickyFilterBounds.bottom).isAtMost(headerBounds.bottom)
+        assertThat(catalogBounds.top).isWithin(1f).of(headerBounds.bottom + 8f * composeRule.density.density)
         assertThat(filterBounds.width).isLessThan(cardBounds.width)
         composeRule.onNodeWithText("Пластиковое окно").assertExists()
         composeRule.onNodeWithText("Усиленная дверь").assertExists()
@@ -303,8 +304,10 @@ class CatalogScreensTest {
         composeRule.onNodeWithText("№ БК-1").assertExists()
         composeRule.onNodeWithText("Офисная бытовка").assertExists()
         composeRule.onNodeWithText("8 000 ₽/мес.").assertExists()
-        composeRule.onNodeWithText("Отделка: Графит").assertExists()
+        composeRule.onNodeWithText("Отделка").assertExists()
+        composeRule.onNodeWithText("Графит").assertExists()
         composeRule.onNodeWithText("+ Дополнительно").assertExists()
+        composeRule.onNodeWithText("В заказе").assertExists()
         composeRule.onNodeWithText("Мебель по выбору").assertDoesNotExist()
         composeRule.onNodeWithText("Настроить мебель").assertDoesNotExist()
         composeRule.onNodeWithText("В наличии").assertDoesNotExist()

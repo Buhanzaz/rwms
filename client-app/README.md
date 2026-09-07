@@ -116,8 +116,10 @@ current request finishes. Single-choice lists open downward with bounded interna
 characteristics remain visible as checkboxes. There is no text search or apply button. A selected
 type narrows dimensions to the server-returned `typeDimensions` relation and clears an incompatible
 size before the request. Catalog and cart cards share photo proportions, surfaces and a full-width
-header with type on the left and accounting number on the right. The cart has a labelled `Удалить`
-action. Full-screen photos use a black background and system areas with an unframed white close
+header with type on the left and accounting number on the right. They share labelled dimension/finish
+facts and monthly-price typography. The catalog title and filter action sit inside the fixed header;
+selection is marked locally instead of outlining the whole card. The cart has a labelled `Удалить`
+action alongside additional equipment. Full-screen photos use a black background and system areas with an unframed white close
 control; they never navigate to a passport. Available warehouse
 furniture can be assigned per cabin as `+ Additional`.
 
@@ -249,8 +251,9 @@ not rendered as zero. The transport and recovery behavior is owned by
 the presentation policy is in
 [`CustomerPolicies.kt`](app/src/main/java/dev/buhanzaz/rwms/client/ui/CustomerPolicies.kt).
 
-Navigation uses the drawer with the BLOCK BOX logo on all window sizes. A floating cart shortcut at
-the bottom right of the cabin catalog shows the selected cabin count when nonzero. Other screens
+Navigation uses the drawer with the BLOCK BOX logo on all window sizes. A full-width cart action
+below the cabin catalog shows the selected cabin count when nonzero and reserves its own space so
+that it cannot cover the list. Other screens
 have no persistent cart shortcut. Forward, back and predictive-back transitions are
 synchronized full-width slides between opaque screens. Back from the cart or
 profile restores the preceding screen; drawer destinations retain the rental catalog (or city

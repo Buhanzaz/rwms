@@ -207,7 +207,7 @@ class CustomerConditionalNavigationTest {
         composeRule.onNodeWithText("Аренда").assertIsNotDisplayed()
         composeRule.onAllNodesWithText("Заказы").assertCountEquals(0)
         composeRule.runOnIdle { workflow = workflow.copy(selectedCabinIds = setOf("a", "b")) }
-        composeRule.onNodeWithTag("cart-count").assertExists()
+        composeRule.onNodeWithTag("cart-count", useUnmergedTree = true).assertExists()
         composeRule.onNodeWithText("2").assertExists()
         composeRule.onNodeWithTag("cart-fab").performClick()
         composeRule.onNodeWithTag("cart-screen").assertExists()

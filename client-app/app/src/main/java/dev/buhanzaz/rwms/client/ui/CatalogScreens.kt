@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -48,7 +49,6 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.ShoppingCart
-import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -79,6 +79,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
@@ -110,6 +111,7 @@ fun CustomerTopBar(
     avatarUrl: String? = null,
     avatarInitials: String? = null,
     onBack: (() -> Unit)? = null,
+    bottomContent: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     var warehouseMenuExpanded by remember(selectedWarehouse?.id, warehouses) { mutableStateOf(false) }
     val alternativeWarehouses = remember(selectedWarehouse?.id, warehouses) {
@@ -241,6 +243,7 @@ fun CustomerTopBar(
                         }
                     }
                 }
+                bottomContent?.invoke(this)
             }
         }
     }
@@ -273,17 +276,16 @@ fun CabinCatalogScreen(
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            Column {
-                CustomerTopBar(
-                    title = state.selectedWarehouse?.customerCityLabel() ?: "Выберите город",
-                    onMenu = onMenu,
-                    onProfile = onProfile,
-                    selectedWarehouse = state.selectedWarehouse,
-                    warehouses = state.warehouses,
-                    onWarehouseSelected = onWarehouse,
-                    avatarUrl = avatarUrl,
-                    avatarInitials = avatarInitials ?: state.profileInitials(),
-                )
+            CustomerTopBar(
+                title = state.selectedWarehouse?.customerCityLabel() ?: "Выберите город",
+                onMenu = onMenu,
+                onProfile = onProfile,
+                selectedWarehouse = state.selectedWarehouse,
+                warehouses = state.warehouses,
+                onWarehouseSelected = onWarehouse,
+                avatarUrl = avatarUrl,
+                avatarInitials = avatarInitials ?: state.profileInitials(),
+            ) {
                 CatalogStickyFilter(
                     activeFilterCount = state.filters.activeCount,
                     expanded = showFilters,
@@ -299,7 +301,7 @@ fun CabinCatalogScreen(
                 .padding(padding)
                 .padding(horizontal = 16.dp)
                 .testTag("catalog-screen"),
-            contentPadding = PaddingValues(top = 8.dp, bottom = 100.dp),
+            contentPadding = PaddingValues(top = 8.dp, bottom = 20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -357,26 +359,34 @@ fun CabinCatalogScreen(
     }
 }
 
-/** Keeps the catalog's single filter entry point directly below the customer header while cards scroll. */
+/** Keeps the catalog title and filter action inside the fixed customer header. */
 @Composable
 private fun CatalogStickyFilter(
     activeFilterCount: Int,
     expanded: Boolean,
     onFilters: () -> Unit,
 ) {
-    Box(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).testTag("catalog-sticky-filter"),
-        contentAlignment = Alignment.CenterEnd,
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 2.dp)
+            .testTag("catalog-sticky-filter"),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
+        Text(
+            "Каталог",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f),
+        )
         TextButton(onClick = onFilters, modifier = Modifier.testTag("catalog-filter-button")) {
             Icon(if (expanded) Icons.Default.Close else Icons.Default.FilterList, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text(if (expanded) "Закрыть фильтры" else "Фильтры${if (activeFilterCount > 0) " · $activeFilterCount" else ""}")
+            Spacer(Modifier.width(6.dp))
+            Text(if (expanded) "Закрыть" else "Фильтры${if (activeFilterCount > 0) " · $activeFilterCount" else ""}")
         }
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CabinCard(
     cabin: CustomerCabin,
@@ -387,12 +397,9 @@ private fun CabinCard(
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().widthIn(max = 1120.dp).testTag("cabin-${cabin.unitId}"),
-        shape = RoundedCornerShape(20.dp),
-        border = BorderStroke(
-            width = if (selected) 2.dp else 1.dp,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
-        ),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
         BoxWithConstraints {
@@ -418,7 +425,9 @@ private fun CabinCard(
                     CabinPhotoPager(
                         cabin = cabin,
                         onPhoto = onPhoto,
-                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                        modifier = Modifier.fillMaxWidth().then(
+                            if (cabin.photos.isEmpty()) Modifier.height(80.dp) else Modifier.aspectRatio(16f / 9f),
+                        ),
                     )
                     CabinCardBody(
                         cabin = cabin,
@@ -434,7 +443,6 @@ private fun CabinCard(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CabinCardBody(
     cabin: CustomerCabin,
@@ -445,53 +453,11 @@ private fun CabinCardBody(
     modifier: Modifier,
 ) {
     val details: @Composable ColumnScope.() -> Unit = {
-        Text(
-            cabin.category?.uppercase() ?: "БЫТОВКА",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        CustomerCabinDetails(
+            cabin = cabin,
+            identityTagPrefix = "cabin",
+            priceTagPrefix = "cabin-rental-price",
         )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                cabin.type ?: "Тип не указан",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.weight(1f).testTag("cabin-type-${cabin.unitId}"),
-            )
-            Text(
-                "№ ${cabin.accountingNo}",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.testTag("cabin-number-${cabin.unitId}"),
-            )
-        }
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            cabin.dimensions?.let { CabinFact(Icons.Default.Straighten, it) }
-            cabin.finish?.let { CabinFact(text = "Отделка: $it") }
-            cabin.linoleum?.let { CabinFact(Icons.Default.CheckCircle, if (it) "Линолеум" else "Без линолеума") }
-            cabin.characteristics.forEach { CabinFact(Icons.Default.CheckCircle, it) }
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        Text(
-            CustomerMoneyFormatter.monthlyRentalPrice(cabin.monthlyPriceRubles),
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.testTag("cabin-rental-price-${cabin.unitId}"),
-        )
-        if (selected) {
-            OutlinedButton(
-                onClick = onFurniture,
-                modifier = Modifier.fillMaxWidth(),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            ) {
-                Text("+ Дополнительно")
-            }
-        }
     }
     if (wide) {
         Row(modifier.padding(20.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -503,6 +469,8 @@ private fun CabinCardBody(
             CabinCardAction(
                 selected = selected,
                 onToggle = onToggle,
+                onFurniture = onFurniture,
+                cabinUnitId = cabin.unitId,
                 modifier = Modifier.width(205.dp),
             )
         }
@@ -512,26 +480,38 @@ private fun CabinCardBody(
             CabinCardAction(
                 selected = selected,
                 onToggle = onToggle,
+                onFurniture = onFurniture,
+                cabinUnitId = cabin.unitId,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CabinCardAction(
     selected: Boolean,
     onToggle: () -> Unit,
+    onFurniture: () -> Unit,
+    cabinUnitId: String,
     modifier: Modifier,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (selected) {
-            OutlinedButton(
-                onClick = onToggle,
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Text("Убрать из заказа")
+                TextButton(onClick = onFurniture, modifier = Modifier.testTag("cabin-additional-$cabinUnitId")) {
+                    Text("+ Дополнительно")
+                }
+                TextButton(onClick = onToggle, modifier = Modifier.testTag("cabin-remove")) {
+                    Icon(Icons.Default.CheckCircle, contentDescription = "Убрать из заказа", modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("В заказе")
+                }
             }
         } else {
             Button(onClick = onToggle, modifier = Modifier.fillMaxWidth()) {
@@ -546,16 +526,21 @@ private fun CabinCardAction(
 @Composable
 private fun CabinPhotoPager(cabin: CustomerCabin, onPhoto: (Int) -> Unit, modifier: Modifier) {
     if (cabin.photos.isEmpty()) {
-        Box(
-            modifier.then(Modifier.testTag("cabin-photo-placeholder")),
-            contentAlignment = Alignment.Center,
+        Surface(
+            modifier.testTag("cabin-photo-placeholder"),
+            color = MaterialTheme.colorScheme.surfaceContainer,
         ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Row(
+                modifier = Modifier.padding(16.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Icon(
                     Icons.Default.PhotoLibrary,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Spacer(Modifier.width(8.dp))
                 Text(
                     "Фотографий пока нет",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -599,19 +584,75 @@ private fun CabinPhotoPager(cabin: CustomerCabin, onPhoto: (Int) -> Unit, modifi
     }
 }
 
+/** Shared, factual product identity used in catalog and cart cards. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun CabinFact(icon: androidx.compose.ui.graphics.vector.ImageVector? = null, text: String) {
-    Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
+internal fun CustomerCabinDetails(
+    cabin: CustomerCabin,
+    identityTagPrefix: String,
+    priceTagPrefix: String,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
-            modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.Top,
         ) {
-            icon?.let { factIcon ->
-                Icon(factIcon, contentDescription = null, modifier = Modifier.size(16.dp))
-            }
-            Text(text, style = MaterialTheme.typography.bodySmall)
+            Text(
+                cabin.type ?: "Тип не указан",
+                style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp, lineHeight = 24.sp),
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f).testTag("$identityTagPrefix-type-${cabin.unitId}"),
+            )
+            Text(
+                "№ ${cabin.accountingNo}",
+                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp, lineHeight = 20.sp),
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.End,
+                modifier = Modifier
+                    .widthIn(max = 148.dp)
+                    .wrapContentWidth(Alignment.End)
+                    .testTag("$identityTagPrefix-number-${cabin.unitId}"),
+            )
         }
+        cabin.category?.let {
+            Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            CustomerCabinFact("Габариты", cabin.dimensions ?: "Не указаны", Modifier.weight(1f))
+            CustomerCabinFact("Отделка", cabin.finish ?: "Не указана", Modifier.weight(1f))
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            cabin.linoleum?.let {
+                Text(
+                    if (it) "Линолеум" else "Без линолеума",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            cabin.characteristics.forEach {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Text(
+            CustomerMoneyFormatter.monthlyRentalPrice(cabin.monthlyPriceRubles),
+            style = MaterialTheme.typography.titleLarge.copy(fontSize = 22.sp, lineHeight = 28.sp),
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.testTag("$priceTagPrefix-${cabin.unitId}"),
+        )
+    }
+}
+
+@Composable
+internal fun CustomerCabinFact(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(value, style = MaterialTheme.typography.bodyMedium)
     }
 }
 

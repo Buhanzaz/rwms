@@ -79,6 +79,9 @@ class CustomerVisualReviewTest {
 
         composeRule.onNodeWithTag("cabin-review-cabin").assertIsDisplayed()
         composeRule.onNodeWithTag("cart-fab").assertIsDisplayed()
+        val catalogBounds = composeRule.onNodeWithTag("catalog-screen").fetchSemanticsNode().boundsInRoot
+        val cartBounds = composeRule.onNodeWithTag("cart-fab").fetchSemanticsNode().boundsInRoot
+        assertThat(catalogBounds.bottom).isAtMost(cartBounds.top)
         captureRoot("catalog-light")
     }
 

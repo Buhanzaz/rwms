@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -32,7 +33,6 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.ShoppingCart
 import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
@@ -514,18 +514,30 @@ private fun SignedInNavigation(
                         )
                     }
                     entry<CatalogRoute> {
-                        CabinCatalogScreen(
-                            state = state,
-                            onMenu = { coroutineScope.launch { drawerState.open() } },
-                            onProfile = ::openProfile,
-                            onWarehouse = { onWarehouse(it, state.rememberWarehouseChoice) },
-                            onFilters = onFilters,
-                            onLoadMore = onLoadMoreCabins,
-                            onToggleCabin = onToggleCabin,
-                            onEquipment = onEquipment,
-                            onPhoto = { unitId, page -> backStack.add(GalleryRoute(unitId, page)) },
-                            avatarUrl = state.profile?.avatar?.thumbnailUrl,
-                        )
+                        Column(Modifier.fillMaxSize()) {
+                            Box(Modifier.weight(1f)) {
+                                CabinCatalogScreen(
+                                    state = state,
+                                    onMenu = { coroutineScope.launch { drawerState.open() } },
+                                    onProfile = ::openProfile,
+                                    onWarehouse = { onWarehouse(it, state.rememberWarehouseChoice) },
+                                    onFilters = onFilters,
+                                    onLoadMore = onLoadMoreCabins,
+                                    onToggleCabin = onToggleCabin,
+                                    onEquipment = onEquipment,
+                                    onPhoto = { unitId, page -> backStack.add(GalleryRoute(unitId, page)) },
+                                    avatarUrl = state.profile?.avatar?.thumbnailUrl,
+                                )
+                            }
+                            if (state.selectedCabinIds.isNotEmpty()) {
+                                CustomerCartButton(
+                                    count = state.selectedCabinIds.size,
+                                    onClick = { if (backStack.lastOrNull() is CatalogRoute) backStack.add(CartRoute) },
+                                    modifier = Modifier.fillMaxWidth().navigationBarsPadding().imePadding()
+                                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                                )
+                            }
+                        }
                     }
                     entry<CartRoute> {
                         CartScreen(
@@ -658,15 +670,6 @@ private fun SignedInNavigation(
                     }
                 },
             )
-            if (!editingAvatar && state.selectedCabinIds.isNotEmpty() &&
-                current is CatalogRoute
-            ) {
-                CustomerCartButton(
-                    count = state.selectedCabinIds.size,
-                    onClick = { if (backStack.lastOrNull() !is CartRoute) backStack.add(CartRoute) },
-                    modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().imePadding().padding(20.dp),
-                )
-            }
             SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding())
             if (shouldShowGlobalBusyOverlay(state.busy, current)) {
                 Dialog(
@@ -697,20 +700,16 @@ private fun SignedInNavigation(
 /** Catalog-only cart shortcut; the count tracks selected server-backed cabins. */
 @Composable
 private fun CustomerCartButton(count: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    BadgedBox(
-        modifier = modifier,
-        badge = {
-            Badge(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary) {
-                Text(count.toString(), modifier = Modifier.testTag("cart-count"))
-            }
-        },
+    Button(
+        onClick = onClick,
+        modifier = modifier.testTag("cart-fab"),
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 14.dp),
     ) {
-        Button(
-            onClick = onClick,
-            modifier = Modifier.size(60.dp).testTag("cart-fab"),
-            contentPadding = PaddingValues(0.dp),
-        ) {
-            Icon(Icons.Default.ShoppingCart, contentDescription = "Корзина, бытовок: $count")
+        Icon(Icons.Default.ShoppingCart, contentDescription = null)
+        Spacer(Modifier.width(10.dp))
+        Text("Перейти в корзину", modifier = Modifier.weight(1f))
+        Badge(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary) {
+            Text(count.toString(), modifier = Modifier.testTag("cart-count"))
         }
     }
 }
