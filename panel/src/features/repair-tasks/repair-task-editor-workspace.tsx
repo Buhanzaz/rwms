@@ -862,6 +862,7 @@ function RepairTaskEditorContent({
             ensureOwner={ensureMediaOwner}
             readOnly={interactionDisabled}
             title="Фотографии ремонта"
+            shrinkToContainer
             toolbarAction={beforePhotosButton}
             authoritativeReadyReferences={draft.maintenanceMediaReferences}
             coverMediaId={draft.coverMediaId}

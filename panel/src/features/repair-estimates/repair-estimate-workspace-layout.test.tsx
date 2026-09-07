@@ -9,7 +9,7 @@ afterEach(() => {
 })
 
 describe("RepairEstimateWorkspaceLayout", () => {
-  it("keeps estimate lines and catalog controls in bounded scrollable cards", async () => {
+  it("keeps four equal desktop panels and their controls accessible within the workspace", async () => {
     const user = userEvent.setup()
     const chooseCatalogResult = vi.fn()
     const saveEstimate = vi.fn()
@@ -35,6 +35,22 @@ describe("RepairEstimateWorkspaceLayout", () => {
         }
       />
     )
+
+    const workspace = screen.getByRole("region", { name: "Редактор сметы" })
+    expect(workspace.dataset.slot).toBe("repair-estimate-workspace")
+    const grid = workspace.firstElementChild!
+    expect(grid.classList.contains("xl:grid-cols-2")).toBe(true)
+    expect(grid.classList.contains("xl:grid-rows-2")).toBe(true)
+    expect(grid.children).toHaveLength(4)
+    for (const panel of grid.children) {
+      expect(panel.classList.contains("h-full")).toBe(true)
+      expect(panel.classList.contains("min-h-0")).toBe(true)
+      expect(
+        panel
+          .querySelector('[data-slot="card-content"]')
+          ?.classList.contains("overflow-y-auto")
+      ).toBe(true)
+    }
 
     const estimateLines = screen.getByTestId("estimate-lines")
     const estimateContent = estimateLines.closest('[data-slot="card-content"]')

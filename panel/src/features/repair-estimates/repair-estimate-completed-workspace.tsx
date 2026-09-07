@@ -469,6 +469,7 @@ export function RepairEstimateCompletedWorkspace({
             owner={mediaOwner}
             readOnly={mutationPending}
             title="Фотографии сметы"
+            shrinkToContainer
             authoritativeReadyReferences={
               draft.maintenanceMediaReferences ?? []
             }

@@ -278,6 +278,7 @@ describe("ServiceOwnerPhotos upload recovery", () => {
         <ServiceOwnerPhotos
           accessToken="token"
           owner={currentOwner}
+          shrinkToContainer
           ensureOwner={async () => {
             ensure()
             setOwner(owner)
@@ -297,6 +298,9 @@ describe("ServiceOwnerPhotos upload recovery", () => {
       )
     }
     renderGallery(<Harness />)
+    expect(screen.getByText("Нет медиа").classList.contains("xl:min-h-0")).toBe(
+      true
+    )
     selectFiles(2)
     fireEvent.click(
       screen.getAllByRole("button", { name: "Выбрать титульным" })[1]!

@@ -402,7 +402,7 @@ export function RepairEstimatesPage() {
                   hidden={filteredEstimates.length === 0}
                 >
                   <OperationsListGrid
-                    className="min-h-full"
+                    className="min-h-full bg-card [&_[data-slot=table-body]]:bg-transparent"
                     items={filteredEstimates}
                     columns={[
                       {

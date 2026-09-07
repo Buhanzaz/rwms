@@ -120,6 +120,7 @@ export function ServiceOwnerPhotos({
         readOnly={readOnly}
         maxItems={maxItems}
         title={title}
+        shrinkToContainer={shrinkToContainer}
         ensureOwner={ensureOwner}
         toolbarAction={toolbarAction}
         coverMediaId={coverMediaId}
@@ -577,7 +578,10 @@ function OwnedServiceOwnerPhotos({
   if (!accessToken || (media.query.isError && media.assets.length === 0)) {
     return (
       <section
-        className="flex min-h-56 items-center justify-center rounded-lg border bg-muted px-4 text-center text-sm text-muted-foreground"
+        className={cn(
+          "flex min-h-56 items-center justify-center rounded-lg border bg-muted px-4 text-center text-sm text-muted-foreground",
+          shrinkToContainer && "xl:h-full xl:min-h-0"
+        )}
         aria-label={title}
       >
         {unavailableMessage(media.query.error)}
@@ -641,7 +645,12 @@ function OwnedServiceOwnerPhotos({
       {media.previewUnavailable &&
       selectedAssets.some((asset) => asset.status === "READY") &&
       visiblePhotos.length + visibleVideos.length === 0 ? (
-        <div className="flex min-h-56 flex-1 flex-col items-center justify-center gap-3 rounded-lg border bg-muted px-4 text-center text-sm text-muted-foreground">
+        <div
+          className={cn(
+            "flex min-h-56 flex-1 flex-col items-center justify-center gap-3 rounded-lg border bg-muted px-4 text-center text-sm text-muted-foreground",
+            shrinkToContainer && "xl:min-h-0"
+          )}
+        >
           <span>{unavailableMessage(media.previewError)}</span>
           <Button
             type="button"
@@ -814,6 +823,7 @@ function UnownedServiceOwnerPhotos({
   readOnly,
   maxItems,
   title,
+  shrinkToContainer,
   ensureOwner,
   toolbarAction,
   coverMediaId,
@@ -826,6 +836,7 @@ function UnownedServiceOwnerPhotos({
   readOnly: boolean
   maxItems: number
   title: string
+  shrinkToContainer: boolean
   ensureOwner?: () => Promise<ServiceMediaOwner>
   toolbarAction?: ReactNode
   coverMediaId: string | null
@@ -964,7 +975,10 @@ function UnownedServiceOwnerPhotos({
   if (!accessToken) {
     return (
       <section
-        className="flex min-h-56 items-center justify-center rounded-lg border bg-muted px-4 text-center text-sm text-muted-foreground"
+        className={cn(
+          "flex min-h-56 items-center justify-center rounded-lg border bg-muted px-4 text-center text-sm text-muted-foreground",
+          shrinkToContainer && "xl:h-full xl:min-h-0"
+        )}
         aria-label={title}
       >
         Сервис медиа недоступен
@@ -1016,7 +1030,12 @@ function UnownedServiceOwnerPhotos({
         </p>
       ) : null}
 
-      <div className="flex min-h-56 flex-1 items-center justify-center rounded-lg border bg-muted px-4 text-center text-sm text-muted-foreground">
+      <div
+        className={cn(
+          "flex min-h-56 flex-1 items-center justify-center rounded-lg border bg-muted px-4 text-center text-sm text-muted-foreground",
+          shrinkToContainer && "xl:min-h-0"
+        )}
+      >
         {uploading
           ? "Медиафайлы загружаются"
           : pendingItems.length > 0

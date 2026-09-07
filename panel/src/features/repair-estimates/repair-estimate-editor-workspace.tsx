@@ -595,6 +595,7 @@ function RepairEstimateEditorContent({
             ensureOwner={ensureMediaOwner}
             readOnly={interactionDisabled}
             title="Фотографии сметы"
+            shrinkToContainer
             toolbarAction={beforePhotosButton}
             authoritativeReadyReferences={
               draft.maintenanceMediaReferences ?? []

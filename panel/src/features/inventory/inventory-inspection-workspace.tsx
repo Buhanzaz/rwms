@@ -197,6 +197,7 @@ export function InventoryInspectionWorkspace({
           owner={inventoryFindingMediaOwner(findingId, warehouseId)}
           readOnly={readOnly}
           title="Фотографии осмотра"
+          shrinkToContainer
           maxItems={20}
           authoritativeReadyReferences={media}
           coverMediaId={coverMediaId}

@@ -329,7 +329,7 @@ function RepairsOverview() {
       ) : (
         <div className="min-h-0 flex-1 overflow-auto">
           <OperationsListGrid
-            className="min-h-full bg-card"
+            className="min-h-full bg-card [&_[data-slot=table-body]]:bg-transparent"
             items={rows}
             columns={[
               {

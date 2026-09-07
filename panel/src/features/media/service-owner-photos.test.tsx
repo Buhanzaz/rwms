@@ -92,8 +92,14 @@ describe("ServiceOwnerPhotos", () => {
         owner={owner}
         readOnly
         title="Фото ремонта"
+        shrinkToContainer
       />
     )
+    expect(
+      screen
+        .getByText("Сервис медиа недоступен")
+        .parentElement?.classList.contains("xl:min-h-0")
+    ).toBe(true)
     fireEvent.click(screen.getByRole("button", { name: "Повторить" }))
     expect(retryPreviews).toHaveBeenCalledOnce()
   })

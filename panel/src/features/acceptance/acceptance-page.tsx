@@ -269,7 +269,7 @@ export function AcceptancePage() {
               <>
                 <div className="hidden min-h-full min-w-0 flex-1 md:block">
                   <OperationsListGrid
-                    className="min-h-full bg-card"
+                    className="min-h-full bg-card [&_[data-slot=table-body]]:bg-transparent"
                     items={visibleTasks}
                     columns={[
                       {

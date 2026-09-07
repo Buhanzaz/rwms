@@ -28,12 +28,12 @@ function WorkspacePanel({
   contentClassName,
 }: WorkspacePanelProps) {
   return (
-    <Card className={cn("h-full min-h-0 ring-inset", className)}>
+    <Card className={cn("h-full min-h-0 text-sm ring-inset", className)}>
       {title ? (
         <CardHeader>
-          <CardTitle>{title}</CardTitle>
+          <CardTitle className="text-sm font-medium">{title}</CardTitle>
           {description ? (
-            <CardDescription>{description}</CardDescription>
+            <CardDescription className="text-xs">{description}</CardDescription>
           ) : null}
           {action ? <CardAction>{action}</CardAction> : null}
         </CardHeader>
@@ -70,15 +70,16 @@ export function RepairEstimateWorkspaceLayout({
 }: RepairEstimateWorkspaceLayoutProps) {
   return (
     <section
+      data-slot="repair-estimate-workspace"
       aria-label={ariaLabel}
       className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto xl:overflow-hidden"
     >
       {message}
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 p-px xl:grid-cols-[minmax(0,12fr)_minmax(0,8fr)] xl:grid-rows-[minmax(15rem,0.9fr)_minmax(18rem,1.1fr)]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 p-px xl:grid-cols-2 xl:grid-rows-2">
         <WorkspacePanel
           className="order-2 xl:col-start-1 xl:row-start-1"
-          contentClassName="overflow-hidden"
+          contentClassName="overflow-y-auto"
         >
           {photos}
         </WorkspacePanel>

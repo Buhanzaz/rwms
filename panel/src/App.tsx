@@ -220,7 +220,7 @@ function AppLayout() {
           <SiteHeader />
 
           <div className="min-h-0 flex-1 overflow-auto">
-            <div className="min-h-full w-full p-4 lg:p-5">
+            <div className="min-h-full w-full p-4 has-data-[slot=repair-estimate-workspace]:h-full lg:p-5">
               <BookingSelectionProvider>
                 <Routes>
                   <Route
