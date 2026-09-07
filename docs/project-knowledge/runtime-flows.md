@@ -241,6 +241,14 @@ Logout drains both running workers and permit waiters before replacing the sessi
 Bounded owner-proof retry exhaustion exposes a fixed recovery message and leaves
 the persisted upload available for an explicit retry.
 
+An inventory upload can lose its response after the server has committed the
+inspection. Before rejecting the newer finding fence, Manager compares the
+durable command with the active finding's saved observations, evidence, cover
+and complete selected plan. An equivalent result is checkpointed locally before
+continuing any separately idempotent furniture command. Changed or unprovable
+results remain queued with an explicit recovery message; retry never overwrites
+a newer inspection or acknowledges it merely from matching line counts.
+
 For a manager request rejected with `401`, the client submits the rejected
 access token to one mutex-serialized refresh. A valid newer token persisted by
 a concurrent request is reused; a transient refresh exception remains a

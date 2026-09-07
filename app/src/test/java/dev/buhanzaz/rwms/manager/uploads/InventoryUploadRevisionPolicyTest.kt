@@ -47,7 +47,7 @@ class InventoryUploadRevisionPolicyTest {
             )
         }.exceptionOrNull()
 
-        assertThat(failure).isInstanceOf(IllegalArgumentException::class.java)
+        assertThat(failure).isInstanceOf(InventoryUploadConflictException::class.java)
         assertThat(failure?.message).isEqualTo(INVENTORY_UPLOAD_INSPECTION_CHANGED_MESSAGE)
     }
 
@@ -59,7 +59,7 @@ class InventoryUploadRevisionPolicyTest {
             )
         }.exceptionOrNull()
 
-        assertThat(failure).isInstanceOf(IllegalArgumentException::class.java)
+        assertThat(failure).isInstanceOf(InventoryUploadConflictException::class.java)
         assertThat(failure?.message).isEqualTo(INVENTORY_UPLOAD_MUTATION_IN_PROGRESS_MESSAGE)
     }
 

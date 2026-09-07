@@ -15,14 +15,14 @@ internal fun InventoryUploadCommand.preparePendingInspectionFence(
     check(currentFinding.id == findingId) {
         "Сервис вернул другую бытовку при обновлении очереди инвентаризации"
     }
-    require(currentFinding.mutationState in INVENTORY_SAVE_READY_MUTATION_STATES) {
-        INVENTORY_UPLOAD_MUTATION_IN_PROGRESS_MESSAGE
+    if (currentFinding.mutationState !in INVENTORY_SAVE_READY_MUTATION_STATES) {
+        throw InventoryUploadConflictException(INVENTORY_UPLOAD_MUTATION_IN_PROGRESS_MESSAGE)
     }
     if (currentFinding.inspection == "NOT_INSPECTED") {
         return copy(expectedFindingRevision = currentFinding.findingRevision)
     }
-    require(currentFinding.findingRevision == expectedFindingRevision) {
-        INVENTORY_UPLOAD_INSPECTION_CHANGED_MESSAGE
+    if (currentFinding.findingRevision != expectedFindingRevision) {
+        throw InventoryUploadConflictException(INVENTORY_UPLOAD_INSPECTION_CHANGED_MESSAGE)
     }
     return this
 }
@@ -31,7 +31,7 @@ internal fun InventoryUploadCommand.preparePendingInspectionFence(
 internal fun requireActiveInventoryFindingForUpload(
     currentFinding: InventoryFindingDto?,
 ): InventoryFindingDto =
-    currentFinding ?: throw IllegalStateException(INVENTORY_UPLOAD_FINDING_NOT_ACTIVE_MESSAGE)
+    currentFinding ?: throw InventoryUploadConflictException(INVENTORY_UPLOAD_FINDING_NOT_ACTIVE_MESSAGE)
 
 /**
  * Permits one reconciliation only after inventory service reports its standard stale-revision

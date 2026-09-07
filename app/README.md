@@ -284,7 +284,12 @@ during media upload. If that preflight still receives the inventory service's
 performs one more read/rebase/save cycle. Both passes are allowed only for
 `NOT_INSPECTED` findings in `IDLE` or `SOURCE_CREATED`; a departed finding, in-flight source
 creation, or saved/repeated inspection stays fail-closed and cannot be
-overwritten by a queued retry.
+overwritten by a queued retry. Before rebasing retained media or checking that fence, the worker
+reconciles a possibly lost save response against the complete persisted inspection: observations,
+media generations and cover, all selected plan choices, ordered lines and frozen stage identities.
+An exact match durably completes only the inspection step; any pending idempotent furniture task
+still runs. Conflicting or unprovable results remain queued with an explicit recovery message,
+without overwriting server data. The same check also runs after a failed save or revision preflight.
 
 The manager processes up to three cabin upload operations concurrently. Retries
 of the same scoped operation remain serialized, and final domain command reads

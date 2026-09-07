@@ -330,19 +330,32 @@ class BackgroundUploadWorker(
         operation: BackgroundUploadOperation,
         command: InventoryUploadCommand,
     ) {
-        val mediaPrepared = prepareInventoryRetainedMedia(operation, command)
+        // Check the original durable payload before rebasing media generations or finding
+        // fences: a previous save may have committed even though its response was lost.
+        val recoveredCommand = if (!command.inspectionSaved &&
+            inventoryInspectionAlreadySaved(operation, command)
+        ) {
+            markInventoryInspectionSaved(operation.id)
+            command.copy(inspectionSaved = true)
+        } else {
+            command
+        }
+        val mediaPrepared = prepareInventoryRetainedMedia(
+            operation.copy(inventory = recoveredCommand),
+            recoveredCommand,
+        )
         var preparedOperation = mediaPrepared.operation
         var preparedCommand = mediaPrepared.command
         if (!preparedCommand.inspectionSaved) {
             var revisionConflictRetryCount = 0
             while (true) {
-                val revisionPrepared = prepareInventoryRevision(preparedOperation, preparedCommand)
-                preparedOperation = revisionPrepared.operation
-                preparedCommand = revisionPrepared.command
-                val media = preparedOperation.aggregateReferences(preparedCommand.existingMedia)
-                val coverMediaId = preparedOperation.coverMediaId() ?: preparedCommand.existingCoverMediaId
-                updateStage(operation.id, "Сохранение инвентаризации")
                 try {
+                    val revisionPrepared = prepareInventoryRevision(preparedOperation, preparedCommand)
+                    preparedOperation = revisionPrepared.operation
+                    preparedCommand = revisionPrepared.command
+                    val media = preparedOperation.aggregateReferences(preparedCommand.existingMedia)
+                    val coverMediaId = preparedOperation.coverMediaId() ?: preparedCommand.existingCoverMediaId
+                    updateStage(operation.id, "Сохранение инвентаризации")
                     retryInventoryCommitAfterMediaReady {
                         backend.api.saveInventoryInspection(
                             inventoryId = preparedCommand.inventoryId,
@@ -369,19 +382,14 @@ class BackgroundUploadWorker(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (failure: Throwable) {
-                    if (inventoryInspectionAlreadySaved(preparedCommand, media, coverMediaId)) break
+                    if (inventoryInspectionAlreadySaved(preparedOperation, preparedCommand)) break
                     if (!shouldRetryInventoryRevisionConflict(failure, revisionConflictRetryCount)) {
                         throw failure
                     }
                     revisionConflictRetryCount += 1
                 }
             }
-            store.update(requireExecutionScope(), operation.id) { current ->
-                current.copy(
-                    updatedAtEpochMillis = System.currentTimeMillis(),
-                    inventory = current.inventory?.copy(inspectionSaved = true),
-                )
-            }
+            markInventoryInspectionSaved(operation.id)
         }
         preparedCommand.furnitureMove?.let { furniture ->
             updateStage(operation.id, "Создание задания по мебели")
@@ -393,6 +401,15 @@ class BackgroundUploadWorker(
                     scheduledDate = furniture.scheduledDate,
                     contents = furniture.desiredContents,
                 ),
+            )
+        }
+    }
+
+    private fun markInventoryInspectionSaved(operationId: String) {
+        store.update(requireExecutionScope(), operationId) { current ->
+            current.copy(
+                updatedAtEpochMillis = System.currentTimeMillis(),
+                inventory = current.inventory?.copy(inspectionSaved = true),
             )
         }
     }
@@ -702,30 +719,23 @@ class BackgroundUploadWorker(
     }
 
     private suspend fun inventoryInspectionAlreadySaved(
+        operation: BackgroundUploadOperation,
         command: InventoryUploadCommand,
-        media: List<MediaReferenceDto>,
-        coverMediaId: String?,
-    ): Boolean = runCatching {
-        val finding = activeInventoryFinding(command.inventoryId, command.findingId)
-            ?: return@runCatching false
-        val expectedMedia = media.map { it.mediaId to it.generation }.toSet()
-        val actualMedia = finding.media.map { it.mediaId to it.generation }.toSet()
-        finding.findingRevision > command.expectedFindingRevision &&
-            finding.inspection == command.inspection &&
-            finding.comment == command.comment &&
-            actualMedia == expectedMedia &&
-            finding.coverMediaId == coverMediaId &&
-            if (command.planSelection == null) {
-                finding.frozenPlan == null
-            } else {
-                finding.frozenPlan?.let { plan ->
-                    plan.priority == command.planSelection.priority &&
-                        plan.movementToRepair == command.planSelection.movementToRepair &&
-                        plan.lines.size == command.planSelection.lines.size &&
-                        plan.stages.size == command.planSelection.stages.size
-                } == true
-            }
-    }.getOrDefault(false)
+    ): Boolean {
+        val coverMediaId = operation.coverMediaId() ?: command.existingCoverMediaId
+        return recoverSavedInventoryInspection(
+            command = command,
+            media = operation.aggregateReferences(command.existingMedia),
+            coverMediaId = coverMediaId,
+            planSelection = command.planSelection?.withUploadedMedia(
+                coverMediaId,
+                operation.lineReferences(),
+                command.planLineIds,
+                command.planWorkLineIds.toSet(),
+            ),
+            loadFinding = { activeInventoryFinding(command.inventoryId, command.findingId) },
+        )
+    }
 
     private fun BackgroundUploadOperation.aggregateReferences(
         existing: List<MediaReferenceDto>,
@@ -785,6 +795,8 @@ internal fun backgroundUploadFailureMessage(
     failure: Throwable,
     problemMessage: (HttpException) -> String,
 ): String = when (failure) {
+    is InventoryUploadConflictException ->
+        "${failure.userMessage} Данные и фотографии сохранены в очереди."
     is MediaOwnerRetryExhaustedException ->
         "${failure.userMessage}. Фотографии сохранены в очереди."
     is HttpException -> problemMessage(failure)
