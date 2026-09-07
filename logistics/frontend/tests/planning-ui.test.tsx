@@ -38,8 +38,8 @@ vi.mock('../src/api/client', async () => {
   };
 });
 
-vi.mock('../src/map/MapCanvas', () => ({
-  MapCanvas: () => <div data-testid="map-canvas" />,
+vi.mock('../src/map/ConfiguredMapCanvas', () => ({
+  ConfiguredMapCanvas: () => <div data-testid="map-canvas" />,
 }));
 
 vi.mock('../src/features/operations/OperationsPanel', () => ({

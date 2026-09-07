@@ -48,6 +48,9 @@ import {
 } from './TruckRestrictions';
 import { TruckRestrictionLayerMenuItem } from './TruckRestrictionsLayer';
 import { ROUTE_COLORS, routeFeatures } from './route-features';
+import type { MapDisplaySettings } from '../api/map-settings';
+import { YandexBaseMap } from './YandexBaseMap';
+import { YANDEX_CREDITS_HEIGHT } from './yandex-bridge';
 import {
   TRAVEL_TIME_CONTOUR_SOURCE_ID,
   travelTimeContourStyles,
@@ -190,7 +193,8 @@ export interface PendingWarehouseMapPoint {
   label: string;
 }
 
-interface MapCanvasProps {
+export interface MapCanvasProps {
+  mapSettings: MapDisplaySettings;
   warehouseKinds?: ReadonlyMap<string, WarehouseKindMetadata> | undefined;
   warehouseKindsFailed?: boolean;
   warehouseKindsLoading?: boolean;
@@ -478,6 +482,7 @@ function addOverlaySources(map: MapLibreMap): void {
 }
 
 export function MapCanvas({
+  mapSettings,
   workspace,
   plan,
   simulation,
@@ -505,8 +510,10 @@ export function MapCanvas({
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
+  const [mapInstance, setMapInstance] = useState<MapLibreMap | null>(null);
+  const providerRef = useRef(mapSettings.provider);
+  providerRef.current = mapSettings.provider;
   const cameraPaddingRef = useRef(cameraPadding);
-  cameraPaddingRef.current = cameraPadding;
   const markersRef = useRef<Marker[]>([]);
   const truckRestrictionPopupRef = useRef<Popup | null>(null);
   const truckRestrictionAbortRef = useRef<AbortController | null>(null);
@@ -531,6 +538,13 @@ export function MapCanvas({
   const mapTool = useUiStore((state) => state.mapTool);
   const setMapTool = useUiStore((state) => state.setMapTool);
   const layers = useUiStore((state) => state.layers);
+  const yandexVisible = mapSettings.provider === 'YANDEX' && layers.base;
+  const effectivePadding = useMemo(() => {
+    if (!yandexVisible) return cameraPadding;
+    const padding = cameraPadding ?? { top: 0, right: 0, bottom: 0, left: 0 };
+    return { ...padding, bottom: padding.bottom + YANDEX_CREDITS_HEIGHT };
+  }, [cameraPadding, yandexVisible]);
+  cameraPaddingRef.current = effectivePadding;
   const toggleLayer = useUiStore((state) => state.toggleLayer);
   const styleUrl = import.meta.env.VITE_MAP_STYLE_URL;
   const selectedTaskContourOrigin = useMemo<TravelTimeContourOrigin | null>(() => {
@@ -575,10 +589,16 @@ export function MapCanvas({
       canvasContextAttributes: { preserveDrawingBuffer: true },
     });
     mapRef.current = map;
+    setMapInstance(map);
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
 
     const prepare = () => {
       addOverlaySources(map);
+      if (providerRef.current === 'YANDEX') {
+        map.getStyle().layers.forEach((layer) => {
+          if (!layer.id.startsWith('rwms-') && !layer.id.startsWith('td-')) map.setLayoutProperty(layer.id, 'visibility', 'none');
+        });
+      }
       setMapReady(true);
     };
     map.on('style.load', prepare);
@@ -588,7 +608,9 @@ export function MapCanvas({
       if (styleUrl && !map.isStyleLoaded() && !fellBack) {
         fellBack = true;
         setMapReady(false);
-        onMapError('Стиль карты не загрузился — включён автономный координатный фон. Рисование и маршруты доступны.');
+        onMapError(providerRef.current === 'YANDEX'
+          ? 'Не загрузилось оформление объектов логистики. Часть подписей может быть недоступна.'
+          : 'Стиль карты не загрузился — включён автономный координатный фон. Рисование и маршруты доступны.');
         map.setStyle(BLANK_STYLE);
       } else if (!message.includes('Failed to fetch')) {
         onMapError(`Ошибка карты: ${message}`);
@@ -610,8 +632,21 @@ export function MapCanvas({
   }, [onMapError, styleUrl]);
 
   useEffect(() => {
-    if (mapReady && cameraPadding) mapRef.current?.setPadding(cameraPadding);
-  }, [mapReady, cameraPadding]);
+    if (mapReady) mapRef.current?.setPadding(effectivePadding ?? { top: 0, right: 0, bottom: 0, left: 0 });
+  }, [mapReady, effectivePadding]);
+
+  useEffect(() => {
+    if (!mapInstance || !yandexVisible) return;
+    // Flat Web Mercator keeps operational geometry aligned with the Yandex scheme.
+    const previousMaxPitch = mapInstance.getMaxPitch();
+    const previousPitch = mapInstance.getPitch();
+    mapInstance.setPitch(0);
+    mapInstance.setMaxPitch(0);
+    return () => {
+      mapInstance.setMaxPitch(previousMaxPitch);
+      mapInstance.setPitch(previousPitch);
+    };
+  }, [mapInstance, yandexVisible]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1116,15 +1151,16 @@ export function MapCanvas({
     visibility.forEach(([id, visible]) => map.getLayer(id) && map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none'));
     const overlayIds = new Set(visibility.map(([id]) => id));
     map.getStyle().layers.forEach((layer) => {
-      if (!overlayIds.has(layer.id) && !layer.id.startsWith('td-')) map.setLayoutProperty(layer.id, 'visibility', layers.base ? 'visible' : 'none');
+      if (!overlayIds.has(layer.id) && !layer.id.startsWith('td-')) map.setLayoutProperty(layer.id, 'visibility', layers.base && mapSettings.provider === 'STANDARD' ? 'visible' : 'none');
     });
-  }, [layers, mapReady, planningCheck?.active, planningCheck?.layers, selectedTaskContourOrigin]);
+  }, [layers, mapReady, mapSettings.provider, planningCheck?.active, planningCheck?.layers, selectedTaskContourOrigin]);
 
   const toolButton = useCallback((tool: MapTool, label: string, icon: React.ReactNode) => (
     <button type="button" aria-label={label} title={label} aria-pressed={mapTool === tool} onClick={() => setMapTool(tool)}>{icon}</button>
   ), [mapTool, setMapTool]);
   return (
-    <main className="map-stage" data-testid="map-stage">
+    <main className={`map-stage${yandexVisible ? ' map-stage--yandex' : ''}`} data-testid="map-stage">
+      {yandexVisible && mapInstance ? <YandexBaseMap key={mapSettings.version} map={mapInstance} apiKey={mapSettings.yandex_api_key!} /> : null}
       <div className="map-container" ref={containerRef} aria-label="Интерактивная логистическая карта" />
       <div className="map-overlay map-toolbar" role="toolbar" aria-label="Инструменты карты">
         {toolButton('SELECT', 'Выбрать объект', <MousePointer2 size={17} aria-hidden="true" />)}

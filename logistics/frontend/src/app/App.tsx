@@ -41,7 +41,7 @@ import {
   SimulationOverrideDialog,
   WarehouseDialog,
 } from '../components/EntityDialogs';
-import { MapCanvas } from '../map/MapCanvas';
+import { ConfiguredMapCanvas as MapCanvas } from '../map/ConfiguredMapCanvas';
 import { useUiStore } from '../stores/ui-store';
 import { dateInTimeZone, formatDate } from '../utils/format';
 import { deriveSimulationState, planTimeBounds } from '../simulation/deriveSimulationState';

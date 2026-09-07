@@ -19,6 +19,11 @@ const mapState = vi.hoisted(() => ({
   constructorOptions: null as null | { center?: [number, number]; zoom?: number },
   center: [37.6176, 55.7558] as [number, number],
   zoom: 8.6,
+  layout: new globalThis.Map<string, unknown>(),
+}));
+
+vi.mock('../src/map/YandexBaseMap', () => ({
+  YandexBaseMap: ({ apiKey }: { apiKey: string }) => <div data-testid="yandex-base">{apiKey}</div>,
 }));
 
 vi.mock('maplibre-gl', () => {
@@ -28,6 +33,7 @@ vi.mock('maplibre-gl', () => {
     private sources = new globalThis.Map<string, { setData: ReturnType<typeof vi.fn> }>();
 
     constructor(options: { center?: [number, number]; zoom?: number }) {
+      this.layers.add('standard-background');
       mapState.constructorOptions = options;
       if (options.center) mapState.center = options.center;
       if (options.zoom !== undefined) mapState.zoom = options.zoom;
@@ -67,13 +73,17 @@ vi.mock('maplibre-gl', () => {
     addLayer(layer: { id: string }) { this.layers.add(layer.id); }
     getLayer(id: string) { return this.layers.has(id) ? { id } : undefined; }
     getStyle() { return { layers: Array.from(this.layers, (id) => ({ id })) }; }
-    setLayoutProperty() { return this; }
+    setLayoutProperty(id: string, property: string, value: unknown) { mapState.layout.set(`${id}:${property}`, value); return this; }
     setPaintProperty() { return this; }
     addImage() { return this; }
     hasImage() { return false; }
     getCanvas() { return { style: { cursor: '' } }; }
     dragPan = { disable: vi.fn(), enable: vi.fn() };
     getZoom() { return mapState.zoom; }
+    getPitch() { return 0; }
+    getMaxPitch() { return 60; }
+    setPitch() { return this; }
+    setMaxPitch() { return this; }
     getCenter() { return { lng: mapState.center[0], lat: mapState.center[1] }; }
     getBounds() { return { getWest: () => 29, getSouth: () => 58, getEast: () => 32, getNorth: () => 60 }; }
     easeTo(options: { center?: [number, number]; zoom?: number }) {
@@ -137,6 +147,7 @@ describe('warehouse selection on the shared map', () => {
     mapState.constructorOptions = null;
     mapState.center = [37.6176, 55.7558];
     mapState.zoom = 8.6;
+    mapState.layout.clear();
     mapState.easeTo.mockReset();
     mapState.setPadding.mockReset();
     mapState.fitBounds.mockReset();
@@ -172,6 +183,7 @@ describe('warehouse selection on the shared map', () => {
     const onSelect = vi.fn();
     const onWarehouseActivate = vi.fn();
     const commonProps = {
+      mapSettings: { version: 1, provider: 'STANDARD' as const, yandex_api_key: null },
       workspace,
       plan: null,
       simulation: null,
@@ -235,6 +247,7 @@ describe('warehouse selection on the shared map', () => {
       zoom: 13.25,
     }));
     render(<MapCanvas
+      mapSettings={{ version: 1, provider: 'STANDARD', yandex_api_key: null }}
       workspace={workspaceFixture({ warehouse, warehouses: [warehouse] })}
       plan={null}
       simulation={null}
@@ -326,6 +339,7 @@ describe('warehouse selection on the shared map', () => {
       }],
     });
     const commonProps = {
+      mapSettings: { version: 1, provider: 'STANDARD' as const, yandex_api_key: null },
       plan: null,
       simulation: null,
       traceEvents: [],
@@ -367,6 +381,7 @@ describe('warehouse selection on the shared map', () => {
     const request = requestFixture({ id: 'request-unassigned', latitude: 58.5234, longitude: 31.2812, status: 'UNASSIGNED' });
     const workspace = workspaceFixture({ warehouse, warehouses: [warehouse], requests: [request] });
     const commonProps = {
+      mapSettings: { version: 1, provider: 'STANDARD' as const, yandex_api_key: null },
       workspace,
       plan: null,
       simulation: null,
@@ -412,6 +427,7 @@ describe('warehouse selection on the shared map', () => {
     const onSelect = vi.fn();
 
     render(<MapCanvas
+      mapSettings={{ version: 1, provider: 'STANDARD', yandex_api_key: null }}
       workspace={workspace}
       plan={null}
       simulation={null}
@@ -450,5 +466,51 @@ describe('warehouse selection on the shared map', () => {
     expect(stopPropagation).toHaveBeenCalledOnce();
     expect(onSelect).toHaveBeenCalledOnce();
     expect(onSelect).toHaveBeenCalledWith({ kind: 'request', id: requests[7]?.id });
+  });
+
+  it('switches the base and browser key while retaining the live map, requests and viewport', async () => {
+    const warehouse = warehouseFixture();
+    const request = requestFixture();
+    const onSelect = vi.fn();
+    const props = {
+      workspace: workspaceFixture({ warehouse, warehouses: [warehouse], requests: [request] }),
+      plan: null, simulation: null, traceEvents: [], selected: null,
+      onSelect, onPlacePoint: vi.fn(), onWarehouseActivate: vi.fn(), onMapError: vi.fn(),
+      optimizationRun: null, onRequestMoveDraft: vi.fn(), planningDate: '2026-08-30', busy: false,
+      onScheduleRequestDate: vi.fn(), onUnscheduleRequest: vi.fn(), onMoveTask: vi.fn(),
+      planningCheck: null, onPlanningCheckPoint: vi.fn(), pendingWarehousePoint: null,
+    };
+    const standard = { version: 1, provider: 'STANDARD' as const, yandex_api_key: null };
+    const view = render(<MapCanvas {...props} mapSettings={standard} />);
+    await waitFor(() => expect(mapState.layout.get('standard-background:visibility')).toBe('visible'));
+    const map = mapState.activeMap;
+    const requests = mapState.sourceData.get('rwms-requests');
+    const center = [...mapState.center];
+    view.rerender(<MapCanvas {...props} mapSettings={{ version: 2, provider: 'YANDEX', yandex_api_key: 'first-key' }} />);
+    expect(screen.getByTestId('yandex-base')).toHaveTextContent('first-key');
+    expect(mapState.layout.get('standard-background:visibility')).toBe('none');
+    expect(mapState.layout.get('rwms-request-points:visibility')).toBe('visible');
+    const firstBase = screen.getByTestId('yandex-base');
+    view.rerender(<MapCanvas {...props} mapSettings={{ version: 3, provider: 'YANDEX', yandex_api_key: 'new-key' }} />);
+    expect(screen.getByTestId('yandex-base')).not.toBe(firstBase);
+    expect(screen.getByTestId('yandex-base')).toHaveTextContent('new-key');
+    expect(mapState.activeMap).toBe(map);
+    expect(mapState.sourceData.get('rwms-requests')).toBe(requests);
+    expect(mapState.center).toEqual(center);
+    const event = {
+      features: [{ properties: { requestId: request.id } }],
+      originalEvent: { stopPropagation: vi.fn() },
+      preventDefault: vi.fn(),
+    };
+    map?.emitLayer('click', 'rwms-request-points', event);
+    expect(onSelect).toHaveBeenCalledWith({ kind: 'request', id: request.id });
+    act(() => useUiStore.getState().toggleLayer('base'));
+    expect(screen.queryByTestId('yandex-base')).not.toBeInTheDocument();
+    act(() => useUiStore.getState().toggleLayer('base'));
+    view.rerender(<MapCanvas {...props} mapSettings={{ ...standard, version: 4 }} />);
+    expect(screen.queryByTestId('yandex-base')).not.toBeInTheDocument();
+    expect(mapState.layout.get('standard-background:visibility')).toBe('visible');
+    expect(mapState.activeMap).toBe(map);
+    expect(mapState.setPadding).toHaveBeenLastCalledWith({ top: 0, right: 0, bottom: 0, left: 0 });
   });
 });

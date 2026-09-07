@@ -10,8 +10,8 @@ import { useUiStore } from '../src/stores/ui-store';
 import { dateInTimeZone, formatDate, nextDate } from '../src/utils/format';
 import { requestFixture, warehouseFixture, workspaceFixture } from './fixtures';
 
-vi.mock('../src/map/MapCanvas', () => ({
-  MapCanvas: () => <div data-testid="logistics-map" />,
+vi.mock('../src/map/ConfiguredMapCanvas', () => ({
+  ConfiguredMapCanvas: () => <div data-testid="logistics-map" />,
 }));
 
 function renderApp() {

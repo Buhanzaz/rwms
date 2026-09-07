@@ -7,8 +7,8 @@ import { useUiStore } from '../src/stores/ui-store';
 import { dateInTimeZone } from '../src/utils/format';
 import { requestFixture, warehouseFixture, workspaceFixture } from './fixtures';
 
-vi.mock('../src/map/MapCanvas', () => ({
-  MapCanvas: () => <div data-testid="common-map">common map</div>,
+vi.mock('../src/map/ConfiguredMapCanvas', () => ({
+  ConfiguredMapCanvas: () => <div data-testid="common-map">common map</div>,
 }));
 
 const TEST_PLANNING_DATE = dateInTimeZone(new Date(), 'Europe/Moscow');

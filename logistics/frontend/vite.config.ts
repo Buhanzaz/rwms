@@ -7,6 +7,7 @@ const basePath = process.env.VITE_APP_BASE_PATH ?? '/';
 export default defineConfig({
   base: basePath.endsWith('/') ? basePath : `${basePath}/`,
   plugins: [react(), tailwindcss()],
+  build: { rollupOptions: { input: { main: 'index.html', yandex: 'yandex-map.html' } } },
   server: {
     port: 5173,
     proxy: {

@@ -15,11 +15,11 @@ inside the simulator.
 The default deployment uses a private Valhalla 3.8.3 service built from
 OpenStreetMap data and always requests `costing=truck`. Every road leg is
 calculated for the vehicle, attached trailer and cargo remaining on that exact
-leg. There is no silent car-route fallback. No API key is needed; internet is
-needed only to download the Central and Northwestern Federal District extracts
-and the optional map style. A source manifest rebuilds the derived admin,
+leg. There is no silent car-route fallback. Routing needs no API key; internet is
+needed to download the Central and Northwestern Federal District extracts
+and display online maps. A source manifest rebuilds the derived admin,
 routing-tile and tile-extract files whenever either PBF changes.
-If the MapLibre style cannot load, the editor falls back to its coordinate grid
+For STANDARD, if the MapLibre style cannot load, the editor falls back to its coordinate grid
 while warehouse selection and saved-route simulation remain available.
 The workspace keeps one full-screen map underneath floating navigation and a
 collapsible inspector. Slot checking replaces that inspector, and camera insets
@@ -72,6 +72,17 @@ switching back to STANDARD. Authenticated logistics readers obtain the key only 
 YANDEX is selected through `/logistics-panel/api/map-settings`; responses use `no-store`.
 Alembic revision `20260907_0037` seeds STANDARD without a credential. A missing setting
 is an explicit error, and changing the map never changes Valhalla routing or saved plans.
+
+The global selector and key field are on `/admin/logistics`. Saving invalidates open
+same-origin logistics tabs immediately; other browsers poll every five seconds and
+refresh on focus/reconnect. Failed reads stop polling after bounded retries and offer
+an explicit retry. Configuration and keys are not persisted in browser storage.
+Yandex JavaScript API v3 uses Reactify in a disposable same-origin frame; changing the
+key replaces only that frame. MapLibre retains all operational layers, selections,
+markers and controls over a flat Web Mercator base, with synchronized center, zoom
+and rotation. The SDK's native logo and copyright links remain visible in a reserved
+48-pixel bottom strip. SDK load errors stay visible and never select a different map
+silently. Both `index.html` and `yandex-map.html` must be included in a frontend release.
 
 Planner, warehouse-directory, contractor and transfer requests share one HTTP response decoder.
 Failures retain the HTTP status and Problem Details code and produce a safe user message; a 204 response
