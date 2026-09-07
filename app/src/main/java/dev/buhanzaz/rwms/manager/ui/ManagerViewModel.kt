@@ -62,6 +62,7 @@ data class ManagerUiState(
     val inventoryEditor: InventoryEditorState? = null,
     /** One-shot process-death navigation target restored with the durable inventory draft. */
     val inventoryResumeRoute: String? = null,
+    val inventoryReturnConfirmations: List<InventoryReturnConfirmation> = emptyList(),
     val returns: List<LogisticsDocumentDto> = emptyList(),
     val selectedReturn: LogisticsDocumentDto? = null,
     val returnPhotoUris: Map<String, List<String>> = emptyMap(),
@@ -101,6 +102,22 @@ data class ManagerUiState(
     val transferArrivalLineId: String?
         get() = transferArrival?.lineId
 }
+
+/** One-shot acknowledgement shown for a confirmed return-estimate inventory import. */
+data class InventoryReturnConfirmation(
+    val operationId: String,
+    val estimateId: String,
+    val cabinNumber: String,
+    val ownerAccountId: String,
+    val warehouseId: String,
+)
+
+private fun ManagerUiState.matchesReturnInspectionScope(
+    operation: BackgroundUploadOperation,
+): Boolean =
+    authState == ManagerAuthState.SignedIn &&
+        currentUser?.id == operation.ownerAccountId &&
+        selectedWarehouseId == operation.warehouseId
 
 /** Keeps the preflight and chosen priority tied to the exact document and line versions. */
 data class TransferArrivalState(
@@ -344,6 +361,7 @@ class ManagerViewModel(
     val uploadOperations: StateFlow<List<BackgroundUploadOperation>> =
         mutableUploadOperations.asStateFlow()
     private val commandKeys = StableCommandKeys()
+    private val observedReturnInspectionOperations = mutableSetOf<String>()
     private val commandRuntime = ManagerCommandRuntime(
         mutableState = mutableState,
         scope = viewModelScope,
@@ -429,6 +447,9 @@ class ManagerViewModel(
                 previousOperations = operations
                 mutableUploadOperations.value = operations
                 inventoryCoordinator.onBackgroundUploadOperationsChanged(previous, operations)
+                removedEstimateCompletions(previous, operations)
+                    .filter { observedReturnInspectionOperations.add(it.id) }
+                    .forEach(::observeReturnEstimateInspection)
             }
         }
         viewModelScope.launch {
@@ -450,7 +471,19 @@ class ManagerViewModel(
                 } else {
                     null
                 }
-            }.distinctUntilChanged().collectLatest(inventoryCoordinator::activateDraftScope)
+            }.distinctUntilChanged().collectLatest { scope ->
+                mutableState.update { current ->
+                    current.copy(
+                        inventoryReturnConfirmations =
+                            retainReturnConfirmationsForScope(
+                                current.inventoryReturnConfirmations,
+                                scope?.ownerAccountId,
+                                scope?.warehouseId,
+                            ),
+                    )
+                }
+                inventoryCoordinator.activateDraftScope(scope)
+            }
         }
     }
 
@@ -460,6 +493,106 @@ class ManagerViewModel(
     fun logout() = workspaceCoordinator.logout()
 
     fun dismissMessage() = workspaceCoordinator.dismissMessage()
+
+    fun dismissInventoryReturnConfirmation() {
+        mutableState.update { current ->
+            current.copy(
+                inventoryReturnConfirmations = current.inventoryReturnConfirmations.drop(1),
+            )
+        }
+    }
+
+    private fun observeReturnEstimateInspection(operation: BackgroundUploadOperation) {
+        val maintenance = requireNotNull(operation.maintenance)
+        viewModelScope.launch {
+            val inspection = try {
+                awaitCompletedReturnEstimateInspection(
+                    readEstimateLifecycle = {
+                        if (!returnInspectionScopeIsCurrent(operation)) {
+                            throw kotlinx.coroutines.CancellationException(
+                                "Return inspection scope changed",
+                            )
+                        }
+                        backend.api.estimate(
+                            estimateId = maintenance.entityId,
+                            warehouseId = maintenance.warehouseId,
+                        ).lifecycle
+                    },
+                    readInspection = {
+                        if (!returnInspectionScopeIsCurrent(operation)) {
+                            throw kotlinx.coroutines.CancellationException(
+                                "Return inspection scope changed",
+                            )
+                        }
+                        backend.api.returnEstimateInspection(
+                            estimateId = maintenance.entityId,
+                            warehouseId = maintenance.warehouseId,
+                        )
+                    },
+                )
+            } catch (failure: Throwable) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                mutableState.update { current ->
+                    if (current.matchesReturnInspectionScope(operation)) {
+                        current.copy(
+                            message = "Смета завершена, но подтверждение добавления бытовки " +
+                                "в инвентаризацию пока не получено.",
+                        )
+                    } else {
+                        current
+                    }
+                }
+                return@launch
+            }
+            if (inspection == null) return@launch
+            val current = mutableState.value
+            if (
+                current.authState != ManagerAuthState.SignedIn ||
+                current.currentUser?.id != operation.ownerAccountId ||
+                current.selectedWarehouseId != operation.warehouseId
+            ) {
+                return@launch
+            }
+            when {
+                inspection.state == "CONFIRMED" && !inspection.cabinNumber.isNullOrBlank() -> {
+                    mutableState.update { latest ->
+                        if (!latest.matchesReturnInspectionScope(operation)) {
+                            latest
+                        } else {
+                            val confirmation = InventoryReturnConfirmation(
+                                operationId = operation.id,
+                                estimateId = maintenance.entityId,
+                                cabinNumber = inspection.cabinNumber,
+                                ownerAccountId = operation.ownerAccountId,
+                                warehouseId = operation.warehouseId,
+                            )
+                            latest.copy(
+                                inventoryReturnConfirmations =
+                                    enqueueReturnConfirmation(
+                                        latest.inventoryReturnConfirmations,
+                                        confirmation,
+                                    ),
+                            )
+                        }
+                    }
+                }
+                inspection.state == "PENDING" -> mutableState.update { latest ->
+                    if (latest.matchesReturnInspectionScope(operation)) {
+                        latest.copy(
+                            message = "Смета завершена, но подтверждение добавления бытовки " +
+                                "в инвентаризацию пока не получено.",
+                        )
+                    } else {
+                        latest
+                    }
+                }
+            }
+        }
+    }
+
+    private fun returnInspectionScopeIsCurrent(operation: BackgroundUploadOperation): Boolean {
+        return mutableState.value.matchesReturnInspectionScope(operation)
+    }
 
     fun retryBackgroundUpload(operationId: String) =
         workspaceCoordinator.retryBackgroundUpload(operationId)

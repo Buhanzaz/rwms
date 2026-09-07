@@ -296,6 +296,11 @@ contexts and screens are usable.
   Their driver-board cards load the authoritative repair plan only when
   expanded and render its ordered queues as separate work and material columns
   with exact quantities and units.
+- After an estimate completion, the editor reads the inventory service's return-import
+  receipt. Only a confirmed receipt opens `Бытовка №… добавлена в инвентаризацию`,
+  with `Окей` as its sole action. Pending evidence is retried for a bounded interval;
+  an unavailable or still-pending confirmation is reported separately and never repeats
+  the already successful maintenance command.
 - Warehouse cards retain authenticated SMALL preview Blob URLs in a bounded
   session cache (up to 4096 entries / 128 MiB, excluding currently leased
   overflow). Scrolling virtual rows back into view reuses these bytes and

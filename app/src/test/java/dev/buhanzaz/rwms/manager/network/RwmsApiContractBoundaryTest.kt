@@ -41,7 +41,7 @@ class RwmsApiContractBoundaryTest {
             .filterNot(Method::isSynthetic)
             .associateBy(Method::getName)
 
-        assertThat(expected).hasSize(64)
+        assertThat(expected).hasSize(65)
         assertWithMessage("RwmsApi method inventory must stay synchronized with canonical public OpenAPI")
             .that(methods.keys)
             .containsExactlyElementsIn(expected.keys)
@@ -525,6 +525,7 @@ private fun expectedManagerRoutes(): Map<String, ManagerContractRoute> {
         "activeInventory" to route("GET", "api/inventory/v1/sessions/active", "$inventory /api/inventory/v1/sessions/active"),
         "inventory" to route("GET", "api/inventory/v1/sessions/{inventoryId}", "$inventory /api/inventory/v1/sessions/{inventoryId}"),
         "inventoryFindings" to route("GET", "api/inventory/v1/sessions/{inventoryId}/findings", "$inventory /api/inventory/v1/sessions/{inventoryId}/findings"),
+        "returnEstimateInspection" to route("GET", "api/inventory/v1/return-estimates/{estimateId}/inspection", "$inventory /api/inventory/v1/return-estimates/{estimateId}/inspection"),
         "resolveInventoryNumber" to route("POST", "api/inventory/v1/sessions/{inventoryId}/number-resolutions", "$inventory /api/inventory/v1/sessions/{inventoryId}/number-resolutions"),
         "createInventoryAsset" to route("POST", "api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/assets", "$inventory /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/assets"),
         "saveInventoryInspection" to route("PUT", "api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/inspection", "$inventory /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/inspection"),

@@ -64,6 +64,14 @@ data class InventorySessionDto(
     val publicationState: String,
 )
 
+/** Read-after-completion evidence that a returned cabin was imported into inventory. */
+data class ReturnEstimateInspectionDto(
+    val state: String,
+    val inventoryId: String? = null,
+    val findingId: String? = null,
+    val cabinNumber: String? = null,
+)
+
 /**
  * Public-manager-gateway response/read payload for InventoryFindingDto. It is a transport boundary model, not persisted domain state.
  */

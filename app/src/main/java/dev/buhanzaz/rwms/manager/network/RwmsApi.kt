@@ -42,6 +42,12 @@ interface RwmsApi {
         @Query("sort") sort: String = "createdAt,asc",
     ): InventoryFindingPageDto
 
+    @GET("api/inventory/v1/return-estimates/{estimateId}/inspection")
+    suspend fun returnEstimateInspection(
+        @Path("estimateId") estimateId: String,
+        @Query("warehouseId") warehouseId: String,
+    ): ReturnEstimateInspectionDto
+
     @POST("api/inventory/v1/sessions/{inventoryId}/number-resolutions")
     suspend fun resolveInventoryNumber(
         @Path("inventoryId") inventoryId: String,

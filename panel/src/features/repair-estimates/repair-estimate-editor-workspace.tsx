@@ -24,6 +24,7 @@ import {
   repairEstimateDetailQueryKey,
   saveRepairEstimateDraft,
 } from "@/features/repair-estimates/api/repair-estimates-api"
+import { awaitReturnEstimateInspection } from "@/features/repair-estimates/api/return-estimate-inspection-api"
 import {
   requiresUnaccountedFurnitureConfirmation,
   UnaccountedFurnitureConfirmationRequiredError,
@@ -178,6 +179,10 @@ function RepairEstimateEditorContent({
   const [catalogPager, setCatalogPager] =
     useState<RepairEstimateCatalogPager | null>(null)
   const [completionOpen, setCompletionOpen] = useState(false)
+  const [inventoryCompletionNotice, setInventoryCompletionNotice] = useState<{
+    saved: RepairEstimateDto
+    message: string
+  } | null>(null)
   const [
     unaccountedFurnitureConfirmation,
     setUnaccountedFurnitureConfirmation,
@@ -280,29 +285,31 @@ function RepairEstimateEditorContent({
         throw new Error("Для завершения сметы нужен доступ EDIT")
       }
 
-      return completeRepairEstimate({
+      const saved = await completeRepairEstimate({
         draft,
         warehouseId,
         ...params,
       })
+      try {
+        const inspection = accessToken
+          ? await awaitReturnEstimateInspection(
+              accessToken,
+              warehouseId,
+              saved.id
+            )
+          : null
+        return { saved, inspection, inspectionReadFailed: !accessToken }
+      } catch {
+        return { saved, inspection: null, inspectionReadFailed: true }
+      }
     },
-    onSuccess: async (saved) => {
+    onSuccess: async ({ saved, inspection, inspectionReadFailed }) => {
       setCompletionOpen(false)
       setUnaccountedFurnitureConfirmation(null)
       queryClient.setQueryData(
         repairEstimateDetailQueryKey(warehouseId, saved.id),
         saved
       )
-      try {
-        await onSaved(saved)
-      } catch (cause) {
-        setError(
-          cause instanceof Error
-            ? `Смета завершена, но редактор не закрыт: ${cause.message}`
-            : "Смета завершена, но редактор не закрыт"
-        )
-        return
-      }
       void queryClient.invalidateQueries({
         queryKey: [...REPAIR_ESTIMATES_QUERY_KEY, "list"],
       })
@@ -312,6 +319,30 @@ function RepairEstimateEditorContent({
         queryKey: ["rental-item-filter-options"],
       })
       void queryClient.invalidateQueries({ queryKey: ["rental-item"] })
+      if (inspection?.state === "CONFIRMED" && inspection.cabinNumber) {
+        setInventoryCompletionNotice({
+          saved,
+          message: `Бытовка №${inspection.cabinNumber} добавлена в инвентаризацию`,
+        })
+        return
+      }
+      if (inspectionReadFailed || inspection?.state === "PENDING") {
+        setInventoryCompletionNotice({
+          saved,
+          message:
+            "Смета завершена, но подтверждение добавления бытовки в инвентаризацию пока не получено.",
+        })
+        return
+      }
+      try {
+        await onSaved(saved)
+      } catch (cause) {
+        setError(
+          cause instanceof Error
+            ? `Смета завершена, но редактор не закрыт: ${cause.message}`
+            : "Смета завершена, но редактор не закрыт"
+        )
+      }
     },
     onError: (unknownError, params) => {
       if (
@@ -660,6 +691,38 @@ function RepairEstimateEditorContent({
         }}
         onConfirm={confirmUnaccountedFurnitureCompletion}
       />
+      <Dialog open={inventoryCompletionNotice !== null}>
+        <DialogContent
+          showCloseButton={false}
+          onEscapeKeyDown={(event) => event.preventDefault()}
+          onInteractOutside={(event) => event.preventDefault()}
+        >
+          <DialogHeader>
+            <DialogTitle>{inventoryCompletionNotice?.message}</DialogTitle>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              onClick={async () => {
+                const notice = inventoryCompletionNotice
+                if (!notice) return
+                setInventoryCompletionNotice(null)
+                try {
+                  await onSaved(notice.saved)
+                } catch (cause) {
+                  setError(
+                    cause instanceof Error
+                      ? `Смета завершена, но редактор не закрыт: ${cause.message}`
+                      : "Смета завершена, но редактор не закрыт"
+                  )
+                }
+              }}
+            >
+              Окей
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

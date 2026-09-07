@@ -96,6 +96,30 @@ class RwmsApiHttpContractTest {
     }
 
     @Test
+    fun `return estimate inspection uses the public inventory proof endpoint`() = runTest {
+        val estimateId = "11111111-1111-1111-1111-111111111111"
+        val warehouseId = "22222222-2222-2222-2222-222222222222"
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody(
+                    """{"state":"CONFIRMED","inventoryId":"inventory-1","findingId":"finding-1","cabinNumber":"CAB-17"}""",
+                ),
+        )
+
+        val inspection = api.returnEstimateInspection(estimateId, warehouseId)
+
+        assertThat(inspection.state).isEqualTo("CONFIRMED")
+        assertThat(inspection.cabinNumber).isEqualTo("CAB-17")
+        val request = checkNotNull(server.takeRequest(5, TimeUnit.SECONDS))
+        assertThat(request.method).isEqualTo("GET")
+        assertThat(request.path).isEqualTo(
+            "/api/inventory/v1/return-estimates/$estimateId/inspection?warehouseId=$warehouseId",
+        )
+    }
+
+    @Test
     fun `inventory field commands use public paths and preserve canonical request fields`() = runTest {
         val inventoryId = "11111111-1111-1111-1111-111111111111"
         val findingId = "22222222-2222-2222-2222-222222222222"

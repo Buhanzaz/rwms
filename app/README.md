@@ -102,6 +102,14 @@ classification and its existing logistics/acceptance cycle. See
 and
 [`ManagerNavGraph.kt`](src/main/java/dev/buhanzaz/rwms/manager/navigation/ManagerNavGraph.kt).
 
+After a queued estimate completion leaves the durable outbox, Manager first verifies that
+the exact maintenance estimate is completed and then reads the inventory return-import
+receipt. Only a confirmed receipt queues `Бытовка №… добавлена в инвентаризацию`, with
+`Окей` as the sole action. Pending evidence is retried for a bounded interval; an
+unavailable or still-pending confirmation is reported separately without repeating the
+successful completion command. A changed account or warehouse cancels these reads and
+clears unacknowledged notices.
+
 The repair-cycle menu places “Capital repairs” immediately after “Repairs”. It
 reads the maintenance-owned active-capital endpoint; calculated CAPITAL rows
 are excluded from the ordinary repair table. Each capital card can expand the
