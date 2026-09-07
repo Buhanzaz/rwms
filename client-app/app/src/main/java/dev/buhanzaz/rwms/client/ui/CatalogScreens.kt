@@ -349,7 +349,7 @@ private fun CustomerCatalogContent(
     val catalogScroll = rememberLazyListState()
     BackHandler(enabled = showFilters) { showFilters = false }
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = Color.Transparent,
         topBar = {
             CustomerTopBar(
                 title = state.selectedWarehouse?.customerCityLabel() ?: "Выберите город",
@@ -705,23 +705,17 @@ internal fun CustomerCabinDetails(
                     .testTag("$identityTagPrefix-number-${cabin.unitId}"),
             )
         }
-        cabin.category?.let {
-            Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        cabin.category?.let { CustomerCabinAttributeChip(it, emphasized = true) }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             CustomerCabinFact("Габариты", cabin.dimensions ?: "Не указаны", Modifier.weight(1f))
             CustomerCabinFact("Отделка", cabin.finish ?: "Не указана", Modifier.weight(1f))
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             cabin.linoleum?.let {
-                Text(
-                    if (it) "Линолеум" else "Без линолеума",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                CustomerCabinAttributeChip(if (it) "Линолеум" else "Без линолеума")
             }
             cabin.characteristics.forEach {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                CustomerCabinAttributeChip(it)
             }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -730,6 +724,32 @@ internal fun CustomerCabinDetails(
             style = MaterialTheme.typography.titleLarge.copy(fontSize = 22.sp, lineHeight = 28.sp),
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.testTag("$priceTagPrefix-${cabin.unitId}"),
+        )
+    }
+}
+
+@Composable
+private fun CustomerCabinAttributeChip(label: String, emphasized: Boolean = false) {
+    val chipColor = if (emphasized) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.secondaryContainer
+    }
+    Surface(
+        modifier = Modifier.testTag("cabin-attribute-$label"),
+        shape = RoundedCornerShape(50),
+        color = chipColor,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.34f)),
+    ) {
+        Text(
+            label,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = if (emphasized) {
+                MaterialTheme.colorScheme.onPrimaryContainer
+            } else {
+                MaterialTheme.colorScheme.onSecondaryContainer
+            },
         )
     }
 }
@@ -757,6 +777,7 @@ private fun CabinFilterPanel(
     onApply: (CabinFilters) -> Unit,
 ) {
     var draft by remember(current, warehouseId) { mutableStateOf(current) }
+    var expandedFacet by remember(warehouseId) { mutableStateOf<String?>(null) }
     val available = facets.warehouses.firstOrNull { it.warehouseId == warehouseId } ?: facets.selected
     val dimensions = remember(available, draft.cabinType) { available.compatibleDimensionsFor(draft.cabinType) }
     fun apply(next: CabinFilters) {
@@ -778,31 +799,60 @@ private fun CabinFilterPanel(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                CatalogFacetField("Тип", available.cabinTypes, listOfNotNull(draft.cabinType), Modifier.weight(1f)) {
-                    apply(draft.withCabinType(it, available))
-                }
-                CatalogFacetField("Отделка", available.finishes, listOfNotNull(draft.finish), Modifier.weight(1f)) {
-                    apply(draft.copy(finish = it))
-                }
+            CatalogFacetField(
+                title = "Тип",
+                options = available.cabinTypes,
+                selected = listOfNotNull(draft.cabinType),
+                expanded = expandedFacet == "Тип",
+                onExpandedChange = { expandedFacet = if (it) "Тип" else null },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                apply(draft.withCabinType(it, available))
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                CatalogFacetField("Размер", dimensions, listOfNotNull(draft.dimensions), Modifier.weight(1f)) {
-                    apply(draft.copy(dimensions = it))
-                }
-                CatalogFacetField("Категория", available.categories, listOfNotNull(draft.category), Modifier.weight(1f)) {
-                    apply(draft.copy(category = it))
-                }
+            CatalogFacetField(
+                title = "Отделка",
+                options = available.finishes,
+                selected = listOfNotNull(draft.finish),
+                expanded = expandedFacet == "Отделка",
+                onExpandedChange = { expandedFacet = if (it) "Отделка" else null },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                apply(draft.copy(finish = it))
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                val floor = when (draft.linoleum) {
-                    true -> "Линолеум"
-                    false -> "Без линолеума"
-                    null -> null
-                }
-                CatalogFacetField("Пол", listOf("Линолеум", "Без линолеума"), listOfNotNull(floor), Modifier.weight(1f)) {
-                    apply(draft.copy(linoleum = it?.let { value -> value == "Линолеум" }))
-                }
+            CatalogFacetField(
+                title = "Размер",
+                options = dimensions,
+                selected = listOfNotNull(draft.dimensions),
+                expanded = expandedFacet == "Размер",
+                onExpandedChange = { expandedFacet = if (it) "Размер" else null },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                apply(draft.copy(dimensions = it))
+            }
+            CatalogFacetField(
+                title = "Категория",
+                options = available.categories,
+                selected = listOfNotNull(draft.category),
+                expanded = expandedFacet == "Категория",
+                onExpandedChange = { expandedFacet = if (it) "Категория" else null },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                apply(draft.copy(category = it))
+            }
+            val floor = when (draft.linoleum) {
+                true -> "Линолеум"
+                false -> "Без линолеума"
+                null -> null
+            }
+            CatalogFacetField(
+                title = "Пол",
+                options = listOf("Линолеум", "Без линолеума"),
+                selected = listOfNotNull(floor),
+                expanded = expandedFacet == "Пол",
+                onExpandedChange = { expandedFacet = if (it) "Пол" else null },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                apply(draft.copy(linoleum = it?.let { value -> value == "Линолеум" }))
             }
             if (available.characteristics.isNotEmpty()) {
                 Column(
@@ -852,19 +902,22 @@ private fun CatalogFacetField(
     title: String,
     options: List<String>,
     selected: List<String>,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
     modifier: Modifier,
     onSelect: (String?) -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    Column(modifier) {
-        Surface(
-            onClick = { expanded = !expanded },
-            modifier = Modifier.fillMaxWidth().testTag("filter-field-$title"),
-            shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 1f),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        ) {
-            Row(Modifier.heightIn(min = 68.dp).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+    Surface(
+        modifier = modifier.testTag("filter-field-$title"),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column {
+            Row(
+                Modifier.fillMaxWidth().clickable { onExpandedChange(!expanded) }.heightIn(min = 68.dp).padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(title, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
@@ -876,24 +929,19 @@ private fun CatalogFacetField(
                 }
                 Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(20.dp))
             }
-        }
-        if (expanded) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 240.dp)
-                    .testTag("filter-options-$title"),
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            ) {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
+            if (expanded) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("filter-options-$title"),
+                ) {
                     TextButton(
                         onClick = {
                             onSelect(null)
-                            expanded = false
+                            onExpandedChange(false)
                         },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().testTag("filter-option-$title-any"),
                     ) { Text("Любой") }
                     if (options.isEmpty()) {
                         Text(
@@ -906,9 +954,9 @@ private fun CatalogFacetField(
                         TextButton(
                             onClick = {
                                 onSelect(if (selected.any { facetValuesMatch(it, value) }) null else value)
-                                expanded = false
+                                onExpandedChange(false)
                             },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth().testTag("filter-option-$title-$value"),
                         ) {
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Text(value, modifier = Modifier.weight(1f), textAlign = TextAlign.Start)

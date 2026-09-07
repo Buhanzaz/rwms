@@ -460,6 +460,7 @@ fun DeliveryDatesScreen(
     val dates = remember(state.slots) { DeliverySlotPolicy.byDate(state.slots) }
     var expandedDate by rememberSaveable { mutableStateOf<String?>(null) }
     Scaffold(
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
         topBar = {
             CustomerTopBar(
                 "Дата доставки",
@@ -554,6 +555,7 @@ fun DeliverySlotsScreen(
     }
 
     Scaffold(
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
         topBar = {
             CustomerTopBar(
                 "Время доставки",
@@ -675,6 +677,7 @@ fun DeliveryConfirmationScreen(
 ) {
     val held = state.heldSlot?.slot
     Scaffold(
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
         topBar = {
             CustomerTopBar(
                 "Подтверждение",

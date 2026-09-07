@@ -82,6 +82,7 @@ fun CartScreen(
         state.cabins.filter { it.unitId in state.selectedCabinIds }
     }
     Scaffold(
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
         topBar = {
             CustomerTopBar("Корзина", onBack = onBack, onProfile = onProfile, avatarUrl = state.profile?.avatar?.thumbnailUrl)
         },
@@ -489,6 +490,7 @@ fun BookingsScreen(
         if (!busy && problemCount > target.problems.size) problemTarget = null
     }
     Scaffold(
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
         topBar = { CustomerTopBar("Мои заказы", onMenu, onProfile, avatarUrl = avatarUrl) },
     ) { padding ->
         LazyColumn(

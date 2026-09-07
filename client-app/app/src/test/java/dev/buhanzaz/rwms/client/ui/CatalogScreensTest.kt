@@ -2,12 +2,15 @@ package dev.buhanzaz.rwms.client.ui
 
 import android.app.Application
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.client.data.CabinFacetWarehouse
 import dev.buhanzaz.rwms.client.data.CabinFacets
@@ -126,16 +129,19 @@ class CatalogScreensTest {
         val sizeBounds = composeRule.onNodeWithTag("filter-field-Размер").fetchSemanticsNode().boundsInRoot
         assertThat(typeBounds.width).isWithin(1f).of(finishBounds.width)
         assertThat(typeBounds.width).isWithin(1f).of(sizeBounds.width)
-        assertThat(typeBounds.top).isWithin(1f).of(finishBounds.top)
+        assertThat(typeBounds.bottom).isAtMost(finishBounds.top)
+        assertThat(finishBounds.bottom).isAtMost(sizeBounds.top)
         composeRule.onNodeWithTag("filter-field-Тип").performClick()
         composeRule.onNodeWithText("Нет доступных вариантов в этом городе").assertExists()
         val optionsBounds = composeRule.onNodeWithTag("filter-options-Тип").fetchSemanticsNode().boundsInRoot
         assertThat(optionsBounds.top).isAtLeast(typeBounds.bottom)
+        val displacedFinish = composeRule.onNodeWithTag("filter-field-Отделка").fetchSemanticsNode().boundsInRoot
+        assertThat(displacedFinish.top).isGreaterThan(finishBounds.top)
     }
 
     @Test
     fun `type filter limits dimensions and clears an incompatible previous dimension`() {
-        var appliedFilters: CabinFilters? = null
+        val appliedFilters = mutableListOf<CabinFilters>()
         val compatibleDimension = "6,0 × 2,4 × 2,6 м"
         val incompatibleDimension = "7,0 × 2,4 × 2,6 м"
 
@@ -148,7 +154,7 @@ class CatalogScreensTest {
                     ),
                     onMenu = {},
                     onProfile = {},
-                    onFilters = { appliedFilters = it },
+                    onFilters = { appliedFilters += it },
                     onLoadMore = {},
                     onToggleCabin = {},
                     onEquipment = { _, _, _ -> },
@@ -162,13 +168,18 @@ class CatalogScreensTest {
         composeRule.onNodeWithTag("filter-field-Тип").performClick()
         composeRule.onNodeWithText("БК-1").performClick()
         composeRule.onNodeWithText(incompatibleDimension).assertDoesNotExist()
-        composeRule.onNodeWithTag("filter-field-Размер").performClick()
+        composeRule.onNodeWithTag("filter-field-Размер").performScrollTo().performClick()
         composeRule.onNodeWithText(compatibleDimension).assertExists()
         composeRule.onNodeWithText(incompatibleDimension).assertDoesNotExist()
-        composeRule.onNodeWithText(compatibleDimension).performClick()
+        val dimensionOptionTag = "filter-option-Размер-$compatibleDimension"
+        composeRule.onNodeWithTag("catalog-screen").performScrollToNode(hasTestTag(dimensionOptionTag))
+        composeRule.onNodeWithTag(dimensionOptionTag).assertIsDisplayed().performClick()
 
         composeRule.runOnIdle {
-            assertThat(appliedFilters).isEqualTo(CabinFilters(cabinType = "БК-1", dimensions = compatibleDimension))
+            assertThat(appliedFilters).containsExactly(
+                CabinFilters(cabinType = "БК-1"),
+                CabinFilters(cabinType = "БК-1", dimensions = compatibleDimension),
+            ).inOrder()
         }
     }
 
@@ -275,6 +286,8 @@ class CatalogScreensTest {
         assertThat(filterBounds.width).isLessThan(cardBounds.width)
         composeRule.onNodeWithText("Пластиковое окно").assertExists()
         composeRule.onNodeWithText("Усиленная дверь").assertExists()
+        composeRule.onNodeWithTag("cabin-attribute-Пластиковое окно").assertExists()
+        composeRule.onNodeWithTag("cabin-attribute-Усиленная дверь").assertExists()
     }
 
     @Test

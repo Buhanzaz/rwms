@@ -37,7 +37,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
@@ -149,16 +148,16 @@ private fun CustomerAuthenticationContent(
     BackHandler(previousPage != null && !submitting) { previousPage?.let(::navigate) }
 
     BoxWithConstraints(
-        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().clipToBounds(),
+        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding(),
     ) {
         val logoHeight = (maxWidth - 76.dp) / (234f / 96f)
         val formTop = maxHeight - with(density) { formHeightPx.toDp() }
-        val logoTarget = when {
-            keyboardVisible && page == CustomerAuthenticationPage.REGISTRATION -> -logoHeight - 24.dp
-            page == CustomerAuthenticationPage.REGISTRATION -> formTop + 12.dp - logoHeight
-            keyboardVisible && page == CustomerAuthenticationPage.LOGIN -> formTop - 40.dp - logoHeight
-            keyboardVisible && page == CustomerAuthenticationPage.PASSWORD_RECOVERY -> formTop - 18.dp - logoHeight
-            else -> minOf((maxHeight - logoHeight) / 2, formTop - 24.dp - logoHeight)
+        val logoTarget = when (page) {
+            CustomerAuthenticationPage.START -> maxOf(
+                8.dp,
+                minOf((maxHeight - logoHeight) / 2, formTop - 24.dp - logoHeight),
+            )
+            else -> 8.dp
         }
         val logoTop by animateDpAsState(logoTarget, tween(300), label = "customer-auth-logo-position")
         CustomerStoreLogo(
@@ -166,8 +165,11 @@ private fun CustomerAuthenticationContent(
                 .graphicsLayer { translationY = logoTop.toPx() }
                 .customerGreetingWave(greetingProgress).testTag("customer-auth-logo"),
         )
-        val formModifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-            .onSizeChanged { formHeightPx = it.height }
+        val formModifier = if (page == CustomerAuthenticationPage.START) {
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().onSizeChanged { formHeightPx = it.height }
+        } else {
+            Modifier.fillMaxSize().padding(top = logoHeight + 16.dp)
+        }
         when (page) {
             CustomerAuthenticationPage.START -> CustomerAuthActions(
                 onLoginSelected = { navigate(CustomerAuthenticationPage.LOGIN) },
@@ -305,6 +307,7 @@ private fun CustomerRegistrationForm(
         ),
         title = "Регистрация",
         submitting = submitting,
+        submitLabel = "Зарегистрироваться",
         submitEnabled = validation == null,
         submitTag = "customer-registration-submit",
         onSubmit = { onRegister(login.trim(), email.trim(), password, repeatedPassword, phone.trim()) },
@@ -329,6 +332,7 @@ private fun CustomerPasswordRecoveryForm(keyboardVisible: Boolean, modifier: Mod
             "Введите номер телефона или email", KeyboardType.Email, "customer-recovery-phone")),
         title = "Восстановление\nПароля",
         submitting = false,
+        submitLabel = "Отправить",
         lockSubmit = false,
         submitEnabled = contact.isNotBlank(),
         submitTag = "customer-recovery-submit",
@@ -347,6 +351,7 @@ private fun CustomerPasswordRecoveryForm(keyboardVisible: Boolean, modifier: Mod
 private fun CustomerAuthForm(
     fields: List<CustomerAuthFieldSpec>,
     submitting: Boolean,
+    submitLabel: String = "Вход",
     submitEnabled: Boolean,
     submitTag: String,
     onSubmit: () -> Unit,
@@ -414,7 +419,7 @@ private fun CustomerAuthForm(
         }
         Spacer(Modifier.height(buttonSpacing))
         CustomerStyledButton(
-            text = if (submitting || submitRequested) "Подождите…" else "Вход",
+            text = if (submitting || submitRequested) "Подождите…" else submitLabel,
             normalStyle = CustomerAuthLoginButtonStyle,
             pressedStyle = CustomerAuthRegistrationButtonStyle,
             enabled = submitEnabled && enabled,

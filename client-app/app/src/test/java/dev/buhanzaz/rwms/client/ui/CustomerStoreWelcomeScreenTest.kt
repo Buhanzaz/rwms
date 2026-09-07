@@ -3,7 +3,7 @@ package dev.buhanzaz.rwms.client.ui
 import android.app.Application
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.ui.test.assertIsNotDisplayed
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.graphics.Insets
@@ -76,7 +76,8 @@ class CustomerStoreWelcomeScreenTest {
         val login = composeRule.onNodeWithTag("customer-login-username").fetchSemanticsNode().boundsInRoot
         assertThat(loginLogo.width).isEqualTo(logo.width)
         assertThat(loginLogo.width).isWithin(1f).of(login.width)
-        assertThat(loginLogo.center.y).isWithin(1f).of(logo.center.y)
+        assertThat(loginLogo.top).isAtLeast(0f)
+        assertThat(loginLogo.center.y).isLessThan(logo.center.y)
         assertThat(loginLogo.bottom).isAtMost(login.top)
         composeRule.onNodeWithText("Вход").assertExists()
         composeRule.onNodeWithText("Войти").assertDoesNotExist()
@@ -132,7 +133,7 @@ class CustomerStoreWelcomeScreenTest {
 
     @Test
     @Config(qualifiers = "w404dp-h874dp-mdpi")
-    fun `registration logo leaves screen when keyboard opens and returns when it closes`() {
+    fun `registration logo stays fully visible above the scrollable form with keyboard open`() {
         setAuthContent()
         composeRule.onNodeWithTag("customer-auth-register").performScrollTo().performClick()
         composeRule.mainClock.advanceTimeBy(500)
@@ -140,7 +141,9 @@ class CustomerStoreWelcomeScreenTest {
         assertThat(initial.height).isGreaterThan(0f)
         dispatchKeyboardInset(338)
         composeRule.mainClock.advanceTimeBy(500)
-        composeRule.onNodeWithTag("customer-auth-logo").assertIsNotDisplayed()
+        composeRule.onNodeWithTag("customer-auth-logo").assertIsDisplayed()
+        val keyboardLogo = composeRule.onNodeWithTag("customer-auth-logo").fetchSemanticsNode().boundsInRoot
+        assertThat(keyboardLogo.top).isAtLeast(0f)
         composeRule.onNodeWithTag("customer-registration-phone").performScrollTo().performTextInput("+79990000000")
         dispatchKeyboardInset(0)
         composeRule.mainClock.advanceTimeBy(500)
@@ -176,6 +179,7 @@ class CustomerStoreWelcomeScreenTest {
         composeRule.onNodeWithTag("customer-registration-password").performTextInput("password-123")
         composeRule.onNodeWithTag("customer-registration-password-repeat").performTextInput("password-123")
         composeRule.onNodeWithTag("customer-registration-phone").performTextInput("+79990000000")
+        composeRule.onNodeWithText("Зарегистрироваться").assertExists()
         composeRule.onNodeWithTag("customer-registration-submit")
             .performScrollTo()
             .assertIsEnabled()
@@ -225,6 +229,7 @@ class CustomerStoreWelcomeScreenTest {
         composeRule.onNodeWithTag("customer-auth-login").performScrollTo().performClick()
         composeRule.onNodeWithTag("customer-login-recovery").performClick()
         composeRule.onNodeWithTag("customer-recovery-phone").performTextInput("client@example.test")
+        composeRule.onNodeWithText("Отправить").assertExists()
         composeRule.onNodeWithTag("customer-recovery-submit").performScrollTo().performClick()
         composeRule.onNodeWithText("Восстановление пароля пока недоступно").assertExists()
         composeRule.onNodeWithTag("customer-recovery-submit").assertIsEnabled()

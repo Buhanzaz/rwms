@@ -33,3 +33,27 @@ internal fun CustomerLoginFieldsPreview() {
         initialPage = CustomerAuthenticationPage.LOGIN,
     )
 }
+
+@Preview(name = "Fields · registration", widthDp = 404, heightDp = 874, showBackground = true)
+@Composable
+internal fun CustomerRegistrationFieldsPreview() {
+    CustomerAuthenticationScreen(
+        message = null,
+        submitting = false,
+        onLogin = { _, _, _ -> },
+        onRegister = { _, _, _, _, _ -> },
+        initialPage = CustomerAuthenticationPage.REGISTRATION,
+    )
+}
+
+@Preview(name = "Fields · recovery", widthDp = 404, heightDp = 874, showBackground = true)
+@Composable
+internal fun CustomerRecoveryFieldsPreview() {
+    CustomerAuthenticationScreen(
+        message = null,
+        submitting = false,
+        onLogin = { _, _, _ -> },
+        onRegister = { _, _, _, _, _ -> },
+        initialPage = CustomerAuthenticationPage.PASSWORD_RECOVERY,
+    )
+}

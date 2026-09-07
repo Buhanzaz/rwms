@@ -165,6 +165,7 @@ internal fun CustomerAvatarCropScreen(
     BackHandler(onBack = onCancel)
     Scaffold(
         modifier = Modifier.testTag("avatar-crop-screen"),
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
         topBar = { CustomerTopBar("Фото профиля", onBack = onCancel) },
     ) { padding ->
         Column(

@@ -153,10 +153,18 @@ internal fun CustomerStoreLogo(
     )
 }
 
-/** Calm, opaque backdrop shared by all reading and editing screens. */
+/** Keeps a restrained trace of the supplied water artwork behind every application screen. */
 @Composable
 internal fun CustomerStoreBackground(modifier: Modifier = Modifier) {
-    Box(modifier.background(MaterialTheme.colorScheme.background))
+    Box(modifier.background(MaterialTheme.colorScheme.background)) {
+        Image(
+            painter = painterResource(R.drawable.background_caustic_poster),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            alpha = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) 0.08f else 0.2f,
+            modifier = Modifier.matchParentSize(),
+        )
+    }
 }
 
 /** Opaque reading surface with the restrained border and depth used by the RWMS web shells. */

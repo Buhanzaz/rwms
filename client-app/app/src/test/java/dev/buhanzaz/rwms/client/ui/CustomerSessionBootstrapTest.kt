@@ -100,6 +100,7 @@ class CustomerSessionBootstrapTest {
     private var holdNextPublicCabins = false
     private var heldPublicCabins: Continuation<CabinPage>? = null
     private var publicCabinFailure: CustomerApiException? = null
+    private var registrationRequest: RecordedRequest? = null
 
     @Before
     fun setUp() = runBlocking {
@@ -110,10 +111,16 @@ class CustomerSessionBootstrapTest {
         checkoutFixture = null
         checkoutCalls.clear()
         checkoutCompleted = false
+        registrationRequest = null
         val configuration = CustomerAuthConfiguration()
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse = when (request.requestUrl?.encodedPath) {
                 "/auth/api/auth/csrf" -> jsonResponse("""{"parameterName":"_csrf","token":"test-csrf"}""")
+                "/auth/api/customer/v1/registrations" -> {
+                    registrationRequest = request
+                    jsonResponse("""{"subjectId":"11111111-1111-4111-8111-111111111111","username":"client_01"}""")
+                        .setResponseCode(201)
+                }
                 "/auth/login" -> MockResponse().setResponseCode(302)
                     .setHeader("Location", configuration.publicOrigin.toString())
                 "/auth/oauth2/authorize" -> {
@@ -163,6 +170,19 @@ class CustomerSessionBootstrapTest {
     @Test
     fun `old polling failure cannot invalidate or finish the replacement session bootstrap`() =
         exerciseOldPollingCompletion(failed = true)
+
+    @Test
+    fun `registration sends the CSRF protected contract and continues through PKCE login`() = runBlocking {
+        auth.register("client_01", "password-123", "password-123")
+
+        val request = requireNotNull(registrationRequest)
+        assertThat(request.method).isEqualTo("POST")
+        assertThat(request.getHeader("X-CSRF-TOKEN")).isEqualTo("test-csrf")
+        assertThat(request.body.readUtf8()).isEqualTo(
+            """{"username":"client_01","password":"password-123","passwordConfirmation":"password-123"}""",
+        )
+        assertThat(server.requestCount).isEqualTo(6)
+    }
 
     @Test
     fun `checkout requires a held slot before it calls the repository`() = runTest(dispatcher) {

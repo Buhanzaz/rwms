@@ -117,6 +117,7 @@ fun ProfileFormScreen(
         CustomerEntityType.LEGAL -> !draft.companyName.isNullOrBlank()
     }
     Scaffold(
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
         topBar = {
             CustomerTopBar(
                 title = if (existing == null) "Данные клиента" else "Профиль",
@@ -358,6 +359,7 @@ fun WarehouseScreen(
 ) {
     var rememberWarehouse by rememberSaveable { mutableStateOf(false) }
     Scaffold(
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
         topBar = { CustomerTopBar("Выбор города", onMenu, onProfile, avatarUrl = avatarUrl, onBack = onBack) },
     ) { padding ->
         LazyColumn(
@@ -382,15 +384,12 @@ fun WarehouseScreen(
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                        ) {
+                        Box(Modifier.size(42.dp), contentAlignment = Alignment.Center) {
                             Icon(
                                 Icons.Outlined.LocationOn,
                                 contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.padding(10.dp).size(22.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp).testTag("warehouse-location-icon"),
                             )
                         }
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {

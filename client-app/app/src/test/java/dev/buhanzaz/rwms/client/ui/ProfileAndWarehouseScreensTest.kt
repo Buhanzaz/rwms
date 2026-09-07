@@ -167,6 +167,7 @@ class ProfileAndWarehouseScreensTest {
             }
         }
 
+        composeRule.onNodeWithTag("warehouse-location-icon", useUnmergedTree = true).assertExists()
         composeRule.onNodeWithTag("remember-warehouse").performClick()
         composeRule.onNodeWithText("Санкт-Петербург").performClick()
 
