@@ -9,6 +9,7 @@ import javax.inject.Named
 import javax.inject.Singleton
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
+import okhttp3.Call
 import retrofit2.HttpException
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
@@ -31,7 +32,7 @@ object CustomerNetworkModule {
         encodeDefaults = true
     }
 
-    /** Credential-free client used only by OAuth, CSRF, and registration exchanges. */
+    /** Credential-free client for OAuth exchanges and the explicitly public rental catalog. */
     @Provides
     @Singleton
     @Named("raw")
@@ -68,7 +69,35 @@ object CustomerNetworkModule {
         .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
         .build()
         .create(CustomerApi::class.java)
+
+    /** Public catalog requests never carry or refresh a customer credential. */
+    @Provides
+    @Singleton
+    fun publicCatalogApi(
+        @Named("raw") client: OkHttpClient,
+        json: Json,
+    ): PublicCustomerCatalogApi = Retrofit.Builder()
+        .baseUrl("${BuildConfig.PUBLIC_BASE_URL}/")
+        .client(client)
+        .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+        .build()
+        .create(PublicCustomerCatalogApi::class.java)
 }
+
+private val PUBLIC_CATALOG_PHOTO_PATH = Regex(
+    "^/api/logistics/public/v1/catalog/warehouses/[^/]+/cabins/[^/]+/photos/[^/]+$",
+)
+
+/** A stale public photo must not refresh credentials or invalidate a newly signed-in session. */
+internal fun customerImageCallFactory(authenticated: Call.Factory, publicCatalog: Call.Factory): Call.Factory =
+    Call.Factory { request ->
+        val client = if (request.method == "GET" && PUBLIC_CATALOG_PHOTO_PATH.matches(request.url.encodedPath)) {
+            publicCatalog
+        } else {
+            authenticated
+        }
+        client.newCall(request)
+    }
 
 /** Normalized API failure used by ViewModels to distinguish conflicts and unavailable services. */
 class CustomerApiException(

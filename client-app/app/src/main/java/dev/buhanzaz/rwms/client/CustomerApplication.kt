@@ -10,6 +10,7 @@ import com.yandex.mapkit.MapKitFactory
 import javax.inject.Inject
 import javax.inject.Named
 import okhttp3.OkHttpClient
+import dev.buhanzaz.rwms.client.data.customerImageCallFactory
 
 /** Initializes the customer graph, protected Yandex MapKit key, and authenticated media loader. */
 @HiltAndroidApp
@@ -18,6 +19,11 @@ class CustomerApplication : Application(), SingletonImageLoader.Factory {
     @Inject
     @Named("customer")
     lateinit var customerHttpClient: OkHttpClient
+
+    /** Public catalog photos remain credential-free even after a login begins. */
+    @Inject
+    @Named("raw")
+    lateinit var publicCatalogHttpClient: OkHttpClient
 
     /** Server inbox delivery is available even when the booking screen is not open. */
     @Inject
@@ -29,10 +35,12 @@ class CustomerApplication : Application(), SingletonImageLoader.Factory {
         notifications.start()
     }
 
-    /** Builds the process image loader on the same authenticated, refresh-capable HTTP boundary. */
+    /** Uses the public photo boundary for guest URLs and the authenticated client for other media. */
     override fun newImageLoader(context: Context): ImageLoader = ImageLoader.Builder(context)
         .components {
-            add(OkHttpNetworkFetcherFactory(callFactory = { customerHttpClient }))
+            add(OkHttpNetworkFetcherFactory(callFactory = {
+                customerImageCallFactory(customerHttpClient, publicCatalogHttpClient)
+            }))
         }
         .build()
 }
