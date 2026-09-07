@@ -72,7 +72,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -194,23 +194,9 @@ internal fun CustomerWelcomeAtmosphere(modifier: Modifier = Modifier) {
             contentScale = ContentScale.Crop,
             modifier = Modifier.matchParentSize(),
         )
-        if (LocalCustomerStoreVideoBackgroundEnabled.current) {
+        if (LocalCustomerStoreVideoBackgroundEnabled.current && !LocalInspectionMode.current) {
             CustomerVideoBackground(R.raw.background_caustic, Modifier.matchParentSize())
         }
-    }
-}
-
-/** Plays the supplied wave deformation, then exposes the native entry controls. */
-@Composable
-internal fun CustomerGreeting(modifier: Modifier = Modifier, onFinished: () -> Unit) {
-    Box(modifier.testTag("customer-greeting")) {
-        Image(
-            painter = painterResource(R.drawable.customer_greeting_poster),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.matchParentSize(),
-        )
-        CustomerVideoBackground(R.raw.customer_greeting, Modifier.matchParentSize(), repeat = false, onFinished = onFinished)
     }
 }
 
@@ -609,8 +595,6 @@ internal fun Modifier.figmaButtonShadow(
 private fun CustomerVideoBackground(
     @RawRes videoRes: Int,
     modifier: Modifier = Modifier,
-    repeat: Boolean = true,
-    onFinished: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -618,24 +602,13 @@ private fun CustomerVideoBackground(
         ExoPlayer.Builder(context.applicationContext).build().apply {
             val uri = "android.resource://${context.packageName}/$videoRes".toUri()
             setMediaItem(MediaItem.fromUri(uri))
-            repeatMode = if (repeat) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+            repeatMode = Player.REPEAT_MODE_ONE
             volume = 0f
             playWhenReady = false
             prepare()
         }
     }
 
-    val finish = androidx.compose.runtime.rememberUpdatedState(onFinished)
-    DisposableEffect(player) {
-        val listener = object : Player.Listener {
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_ENDED) finish.value()
-            }
-            override fun onPlayerError(error: androidx.media3.common.PlaybackException) { finish.value() }
-        }
-        player.addListener(listener)
-        onDispose { player.removeListener(listener) }
-    }
     DisposableEffect(lifecycle, player) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {

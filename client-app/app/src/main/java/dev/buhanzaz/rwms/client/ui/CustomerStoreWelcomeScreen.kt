@@ -1,6 +1,8 @@
 package dev.buhanzaz.rwms.client.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -36,12 +39,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.hideFromAccessibility
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -70,7 +77,10 @@ internal enum class CustomerAuthenticationPage {
     PASSWORD_RECOVERY,
 }
 
-/** Reproduces the supplied 404-wide auth canvases while retaining native input and PKCE callbacks. */
+/**
+ * Reproduces the supplied 404-wide auth canvases while retaining native input and PKCE callbacks.
+ * [greetingPreviewProgress] freezes the production greeting for Compose Preview.
+ */
 @Composable
 internal fun CustomerAuthenticationScreen(
     message: String?,
@@ -79,20 +89,31 @@ internal fun CustomerAuthenticationScreen(
     onRegister: (String, String, String, String, String) -> Unit,
     onContinueAsGuest: () -> Unit = {},
     initialPage: CustomerAuthenticationPage = CustomerAuthenticationPage.START,
+    greetingPreviewProgress: Float? = null,
 ) {
     CustomerTheme(CustomerAppearanceMode.LIGHT) {
         var greetingFinished by rememberSaveable { mutableStateOf(initialPage != CustomerAuthenticationPage.START) }
+        val greeting = remember { Animatable(if (greetingFinished) 1f else 0f) }
+        val inspecting = LocalInspectionMode.current
+        LaunchedEffect(greetingPreviewProgress, inspecting) {
+            if (greetingPreviewProgress == null && !inspecting && !greetingFinished) {
+                greeting.animateTo(1f, tween(1_500, easing = LinearEasing))
+                greetingFinished = true
+            }
+        }
+        val greetingProgress = {
+            greetingPreviewProgress?.coerceIn(0f, 1f) ?: if (inspecting) 1f else greeting.value
+        }
         Box(Modifier.fillMaxSize().testTag("customer-auth-screen"), contentAlignment = Alignment.TopCenter) {
             CustomerWelcomeAtmosphere(Modifier.matchParentSize())
             BoxWithConstraints(Modifier.widthIn(max = 520.dp).fillMaxSize()) {
                 val density = LocalDensity.current
                 val scale = maxWidth.value / 404f
                 CompositionLocalProvider(LocalDensity provides Density(density.density * scale, density.fontScale)) {
-                    CustomerAuthenticationContent(message, submitting, onLogin, onRegister, onContinueAsGuest, initialPage)
+                    CustomerAuthenticationContent(
+                        message, submitting, onLogin, onRegister, onContinueAsGuest, initialPage, greetingProgress,
+                    )
                 }
-            }
-            if (!greetingFinished && LocalCustomerStoreVideoBackgroundEnabled.current) {
-                CustomerGreeting(Modifier.matchParentSize()) { greetingFinished = true }
             }
         }
     }
@@ -107,6 +128,7 @@ private fun CustomerAuthenticationContent(
     onRegister: (String, String, String, String, String) -> Unit,
     onContinueAsGuest: () -> Unit,
     initialPage: CustomerAuthenticationPage,
+    greetingProgress: () -> Float,
 ) {
     var page by rememberSaveable(initialPage) { mutableStateOf(initialPage) }
     var formHeightPx by remember { mutableIntStateOf(0) }
@@ -141,7 +163,8 @@ private fun CustomerAuthenticationContent(
         val logoTop by animateDpAsState(logoTarget, tween(300), label = "customer-auth-logo-position")
         CustomerStoreLogo(
             Modifier.fillMaxWidth().padding(horizontal = 38.dp).height(logoHeight)
-                .graphicsLayer { translationY = logoTop.toPx() }.testTag("customer-auth-logo"),
+                .graphicsLayer { translationY = logoTop.toPx() }
+                .customerGreetingWave(greetingProgress).testTag("customer-auth-logo"),
         )
         val formModifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
             .onSizeChanged { formHeightPx = it.height }
@@ -150,6 +173,7 @@ private fun CustomerAuthenticationContent(
                 onLoginSelected = { navigate(CustomerAuthenticationPage.LOGIN) },
                 onRegisterSelected = { navigate(CustomerAuthenticationPage.REGISTRATION) },
                 onContinueAsGuest = onContinueAsGuest,
+                greetingProgress = greetingProgress,
                 modifier = formModifier,
             )
             CustomerAuthenticationPage.LOGIN -> CustomerLoginForm(
@@ -173,23 +197,39 @@ private fun CustomerAuthActions(
     onLoginSelected: () -> Unit,
     onRegisterSelected: () -> Unit,
     onContinueAsGuest: () -> Unit,
+    greetingProgress: () -> Float,
     modifier: Modifier,
 ) {
+    val loginEnabled by remember(greetingProgress) { derivedStateOf { greetingProgress() > 0.72f } }
+    val registrationEnabled by remember(greetingProgress) { derivedStateOf { greetingProgress() > 0.78f } }
+    val guestEnabled by remember(greetingProgress) { derivedStateOf { greetingProgress() > 0.84f } }
     Column(
         modifier.verticalScroll(rememberScrollState()).padding(horizontal = 38.dp).padding(top = 24.dp, bottom = 48.dp)
             .testTag("customer-auth-start"),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        CustomerStyledButton("Вход", CustomerAuthLoginButtonStyle, CustomerAuthRegistrationButtonStyle, true,
-            onLoginSelected, Modifier.testTag("customer-auth-login"), authStyle = true)
+        CustomerStyledButton("Вход", CustomerAuthLoginButtonStyle, CustomerAuthRegistrationButtonStyle, loginEnabled,
+            onLoginSelected, Modifier.greetingActionReveal(greetingProgress, 0.72f, 0.91f, loginEnabled)
+                .testTag("customer-auth-login"), authStyle = true)
         Spacer(Modifier.height(16.dp))
-        CustomerStyledButton("Регистрация", CustomerAuthRegistrationButtonStyle, CustomerAuthLoginButtonStyle, true,
-            onRegisterSelected, Modifier.testTag("customer-auth-register"), authStyle = true)
+        CustomerStyledButton("Регистрация", CustomerAuthRegistrationButtonStyle, CustomerAuthLoginButtonStyle, registrationEnabled,
+            onRegisterSelected, Modifier.greetingActionReveal(greetingProgress, 0.78f, 0.96f, registrationEnabled)
+                .testTag("customer-auth-register"), authStyle = true)
         Spacer(Modifier.height(14.dp))
-        CustomerTextAction("Продолжить без аккаунта", true, onContinueAsGuest,
-            Modifier.testTag("customer-auth-guest"), color = CustomerStoreGuestText, authStyle = true, textSize = 16.sp)
+        CustomerTextAction("Продолжить без аккаунта", guestEnabled, onContinueAsGuest,
+            Modifier.greetingActionReveal(greetingProgress, 0.84f, 1f, guestEnabled)
+                .testTag("customer-auth-guest"), color = CustomerStoreGuestText, authStyle = true, textSize = 16.sp)
     }
 }
+
+private fun Modifier.greetingActionReveal(progress: () -> Float, start: Float, end: Float, enabled: Boolean): Modifier =
+    graphicsLayer {
+        val reveal = customerGreetingReveal(progress(), start, end)
+        // Preserve the buttons' outer shadows while their opacity is below one.
+        compositingStrategy = CompositingStrategy.ModulateAlpha
+        alpha = reveal
+        translationY = 18.dp.toPx() * (1f - reveal)
+    }.semantics { if (!enabled) hideFromAccessibility() }
 
 private data class CustomerAuthFieldSpec(
     val label: String,

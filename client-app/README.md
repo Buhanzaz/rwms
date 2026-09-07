@@ -25,9 +25,13 @@ only during one native exchange and are never persisted. The callback
 not opened. Registration first obtains CSRF metadata, posts the confirmed
 password, and then runs the same PKCE login.
 
-Signed-in content opens immediately. Signed-out entry uses the first 1.2 seconds of the supplied
-`disign-rules/Примеры/Greetings.webm` for the original wave reveal, then exposes the native entry
-controls. Authentication follows the supplied 404 × 874 canvases: full-screen caustic artwork,
+Signed-in content opens immediately. Signed-out entry uses a 1.5-second procedural Compose reveal:
+crossing waves refract the SVG contours, its two parts settle together and a soft light sweeps across
+them, followed by staggered fading and sliding of the native entry controls.
+The same logo remains in its measured layout throughout: refraction settles to zero before the
+controls appear, with no greeting video or separate overlaid logo. System animation duration settings
+apply, and a completed greeting is not replayed on configuration changes.
+Authentication follows the supplied 404 × 874 canvases: full-screen caustic artwork,
 a field-width BLOCK BOX wordmark, bottom-aligned forms, translucent borderless fields and soft
 shadows. The wordmark keeps its width across entry and login, moves above registration, and
 slides completely outside the registration canvas when the keyboard opens. System Back returns
@@ -312,8 +316,13 @@ with test-owned data. To export PNGs outside the repository:
       -Pkotlin.compiler.execution.strategy=in-process
 
 These renders check layout and appearance; they do not run the installed APK, live
-customer workflows, the system keyboard, MapKit or welcome video playback. Keep device
+customer workflows, the system keyboard, MapKit or live animation playback. Keep device
 verification separate and never commit generated review images.
+
+`CustomerGreetingPreview` in the debug source set renders six fixed phases of the production
+Compose greeting, from empty artwork through SVG refraction to the settled logo and entry controls.
+Compose Preview uses the existing caustic poster without starting Media3; rendering these previews
+does not require running the test suite.
 
 Every build requires a root-readable properties file outside the repository:
 
