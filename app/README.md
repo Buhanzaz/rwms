@@ -276,6 +276,18 @@ does not. A `409 Conflict` requires the screen to refresh/rebase the server
 version before retrying. Streamed preview and original response bodies are
 copied into the app-private cache on the IO dispatcher before a local URI is
 exposed to Compose; the UI dispatcher never reads a streaming network body.
+Before confirming a new inventory cabin, Manager durably saves the complete form and
+original photos, then reads the current session directly from the gateway without replacing
+the editor. One recognized stale-revision conflict permits one fresh read and one retry only
+if the session revision changed. Account, warehouse, session and editor identity are rechecked;
+terminal sessions and other conflicts fail without clearing the draft. The original finding ID
+remains the source-creation identity across retries and process restarts, including a lost
+create response; a revised request gets its own idempotency key. During confirmation, failure
+retains the draft and successful durable upload enqueue clears it; explicit editor closure
+still discards the draft.
+Repeated confirmation taps are coalesced while the first save is in flight, so one confirmation
+cannot create multiple upload operations. The upload and draft cleanup retain their original
+account-and-warehouse scope even if navigation changes during a suspended request.
 Before a durable first inventory inspection is sent, the worker rereads its
 active finding, then its session fence, and persists a
 newer finding revision when a live asset-status/snapshot update advanced it

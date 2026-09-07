@@ -241,6 +241,17 @@ Logout drains both running workers and permit waiters before replacing the sessi
 Bounded owner-proof retry exhaustion exposes a fixed recovery message and leaves
 the persisted upload available for an explicit retry.
 
+Before the new-cabin confirmation command, Manager commits the entire scoped inspection
+draft and original files, then rereads the session without replacing the form. A recognized
+stale-revision conflict permits one additional attempt only after the revision changes;
+account, warehouse, session and editor identity stay fenced. The durable finding ID is
+unchanged even after process restart or a lost create response, allowing the inventory
+service's existing source attachment to recover the same effect. A changed revision gets
+a distinct request idempotency key. During confirmation, failure retains the draft and
+successful durable enqueue clears it; explicit editor closure still discards it.
+In-flight confirmation taps are coalesced before launching
+another command, and both queue admission and draft cleanup retain the original scope.
+
 An inventory upload can lose its response after the server has committed the
 inspection. Before rejecting the newer finding fence, Manager compares the
 durable command with the active finding's saved observations, evidence, cover

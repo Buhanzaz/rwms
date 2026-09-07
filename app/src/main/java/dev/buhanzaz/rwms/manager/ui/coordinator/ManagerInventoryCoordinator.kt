@@ -15,14 +15,17 @@ import dev.buhanzaz.rwms.manager.network.RwmsApi
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadArea
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadCoordinator
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadDraft
+import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadDraftScopeRegistry
 import dev.buhanzaz.rwms.manager.uploads.InventoryUploadCommand
 import dev.buhanzaz.rwms.manager.uploads.PendingBackgroundPhoto
 import dev.buhanzaz.rwms.manager.uploads.readyOwnerMediaReferencesById
 import dev.buhanzaz.rwms.manager.uploads.rebaseRetainedInventoryMediaReferences
 import dev.buhanzaz.rwms.manager.uploads.rebaseRetainedWorkLineMedia
+import dev.buhanzaz.rwms.manager.uploads.shouldRetryInventoryRevisionConflict
 import dev.buhanzaz.rwms.manager.ui.components.isManagerVideoUri
 import java.math.BigDecimal
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.update
@@ -66,6 +69,7 @@ internal class ManagerInventoryCoordinator(
 
     private val inventoryReadMutex = Mutex()
     private val draftWriteMutex = Mutex()
+    private val inventorySaveInProgress = AtomicBoolean(false)
     private var activeDraftScope: InventoryDraftScope? = null
     private var activeDraftRoute: String = inventoryDraftRouteOrDefault("")
 
@@ -621,11 +625,39 @@ internal class ManagerInventoryCoordinator(
         }
     }
 
-    fun saveInventoryInspection(onSaved: () -> Unit) = command {
-        val initialSession = mutableState.value.inventorySession
+    fun saveInventoryInspection(onSaved: () -> Unit) {
+        // Coalesce duplicate taps before launching a second busy/error/queue lifecycle.
+        if (!inventorySaveInProgress.compareAndSet(false, true)) return
+        command {
+            try {
+                saveInventoryInspectionDraft(onSaved)
+            } finally {
+                inventorySaveInProgress.set(false)
+            }
+        }
+    }
+
+    private suspend fun saveInventoryInspectionDraft(onSaved: () -> Unit) {
+        val initialState = mutableState.value
+        val initialSession = initialState.inventorySession
             ?: throw IllegalStateException("Активная инвентаризация не найдена")
-        val editor = mutableState.value.inventoryEditor
+        val initialEditor = initialState.inventoryEditor
             ?: throw IllegalStateException("Бытовка не выбрана")
+        val ownerAccountId = initialState.currentUser?.id
+        val completedDraftScope = activeDraftScope
+        val uploadScope = BackgroundUploadDraftScopeRegistry.snapshot()
+        fun requireSameEditorScope() {
+            val current = mutableState.value
+            check(current.currentUser?.id == ownerAccountId &&
+                current.selectedWarehouseId == initialSession.warehouseId &&
+                current.inventorySession?.id == initialSession.id &&
+                current.inventoryEditor?.findingId == initialEditor.findingId
+            ) { "Склад или осмотр изменился. Добавление остановлено" }
+        }
+        // Commit the complete form and original photos before a create can have a remote effect.
+        val durable = draftWriteMutex.withLock { writeCurrentDraftLocked() }
+        requireSameEditorScope()
+        val editor = durable?.editor ?: initialEditor
         if (!editor.canInspect) {
             throw IllegalStateException(
                 editor.finding?.conflicts?.joinToString { it.message }
@@ -649,27 +681,57 @@ internal class ManagerInventoryCoordinator(
                 ?.let { throw IllegalArgumentException(it) }
             val origin = editor.creationOrigin
                 ?: throw IllegalArgumentException("Выберите: новая или б/у")
-            val signature = buildString {
-                append(
-                    "inventory-create:${session.id}:${session.sessionRevision}:" +
-                        "${editor.findingId}:$origin:${editor.number}:",
-                )
-                append(passport.toSortedMap().entries.joinToString())
+            suspend fun refreshCreationSession() {
+                val refreshed = api.inventory(initialSession.id)
+                check(refreshed.id == initialSession.id &&
+                    refreshed.warehouseId == initialSession.warehouseId
+                ) { "RWMS вернул другую инвентаризацию. Черновик сохранён" }
+                check(refreshed.lifecycle == "ACTIVE") {
+                    "Инвентаризация уже завершена. Черновик осмотра сохранён"
+                }
+                requireSameEditorScope()
+                mutableState.update { current -> current.copy(inventorySession = refreshed) }
+                session = refreshed
+                draftWriteMutex.withLock { writeCurrentDraftLocked() }
+                requireSameEditorScope()
             }
-            createSignature = signature
-            finding = api.createInventoryAsset(
-                inventoryId = session.id,
-                findingId = editor.findingId,
-                idempotencyKey = commandKeys.key(signature),
-                request = CreateFindingAssetRequest(
-                    expectedSessionRevision = session.sessionRevision,
-                    expectedFindingRevision = 0,
-                    origin = origin,
-                    displayCanonicalNumber = editor.number,
-                    safePassport = passport,
-                ),
-            )
-            session = api.inventory(session.id)
+            suspend fun createAsset(): InventoryFindingDto {
+                val signature = buildString {
+                    append(
+                        "inventory-create:${session.id}:${session.sessionRevision}:" +
+                            "${editor.findingId}:$origin:${editor.number}:",
+                    )
+                    append(passport.toSortedMap().entries.joinToString())
+                }
+                createSignature = signature
+                // The finding ID remains the durable source identity even after a lost response
+                // or process restart. A new revision changes the request/key, not that identity.
+                return api.createInventoryAsset(
+                    inventoryId = session.id,
+                    findingId = editor.findingId,
+                    idempotencyKey = commandKeys.key(signature),
+                    request = CreateFindingAssetRequest(
+                        expectedSessionRevision = session.sessionRevision,
+                        expectedFindingRevision = 0,
+                        origin = origin,
+                        displayCanonicalNumber = editor.number,
+                        safePassport = passport,
+                    ),
+                )
+            }
+            refreshCreationSession()
+            finding = try {
+                createAsset()
+            } catch (conflict: HttpException) {
+                if (!shouldRetryInventoryRevisionConflict(conflict, retryCount = 0)) throw conflict
+                val attemptedRevision = session.sessionRevision
+                refreshCreationSession()
+                if (session.sessionRevision == attemptedRevision) throw conflict
+                // A concurrent cabin can advance the shared session fence. Retry once only;
+                // finding/identity conflicts and a second race remain explicit errors.
+                createAsset()
+            }
+            refreshCreationSession()
         }
         val attached = requireNotNull(finding) { "Сервис не вернул найденную бытовку" }
         val orderedPhotoUris = editor.inventoryPhotoUrisForUpload()
@@ -745,11 +807,16 @@ internal class ManagerInventoryCoordinator(
             lineIds = planLineIds,
             workLineIds = planWorkLineIds.toSet(),
         )
-        backgroundUploads.await().enqueue(
+        val uploads = backgroundUploads.await()
+        requireSameEditorScope()
+        uploads.enqueue(
             BackgroundUploadDraft(
                 area = BackgroundUploadArea.INVENTORY,
                 title = "Проверка бытовки ${editor.number}",
                 subtitle = "Инвентаризация",
+                scope = requireNotNull(uploadScope) {
+                    "Черновик недоступен до проверки учётной записи и склада"
+                },
                 photos = pendingPhotoUris.map { uri ->
                     PendingBackgroundPhoto(
                         uri = uri,
@@ -800,7 +867,6 @@ internal class ManagerInventoryCoordinator(
                 inventoryResumeRoute = null,
             )
         }
-        val completedDraftScope = activeDraftScope
         if (completedDraftScope != null) {
             withContext(NonCancellable) {
                 draftWriteMutex.withLock {

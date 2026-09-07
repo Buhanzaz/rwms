@@ -35,9 +35,9 @@ internal fun requireActiveInventoryFindingForUpload(
 
 /**
  * Permits one reconciliation only after inventory service reports its standard stale-revision
- * conflict. The caller must still reread the active finding and apply
- * [preparePendingInspectionFence] before issuing the next command, so this never authorizes
- * overwriting a changed inspection.
+ * conflict. The caller must still revalidate the active session and command identity before
+ * issuing the next command. Queued inspections must also reread the active finding and apply
+ * [preparePendingInspectionFence], so this never authorizes overwriting a changed inspection.
  */
 internal fun shouldRetryInventoryRevisionConflict(
     failure: Throwable,
