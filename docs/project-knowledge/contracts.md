@@ -10,6 +10,11 @@ under `/logistics-panel/api/map-settings` return the key only for the active YAN
 provider, with `Cache-Control: no-store`. The map setting does not alter warehouse
 planning, geocoding, truck routing or saved routes. Alembic `20260907_0037` owns the
 singleton's initial STANDARD state; no credential is seeded into the repository.
+Saving on `/admin/logistics` broadcasts only version invalidation to same-origin
+logistics tabs. Other browsers refresh every five seconds and on focus/reconnect;
+read failures use bounded retries and an explicit retry action. The operator reads
+the authoritative configuration before drawing a base map. Yandex v3 Reactify
+replaces only the base frame, preserving the operational map and its selections.
 
 The asset-owned internal maintenance rental-item snapshot requires the canonical
 `number` (a non-null string of 1–128 characters). Owner HTTP serialization and the
