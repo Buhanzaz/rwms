@@ -7,14 +7,22 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
 
 /**
  * Spring Data repository for service-local cabin catalog item persistence.
  */
 public interface CabinCatalogItemRepository extends JpaRepository<CabinCatalogItem, UUID> {
-  List<CabinCatalogItem> findAllByKindOrderByNameAscIdAsc(CabinCatalogKind kind);
+  List<CabinCatalogItem> findAllByKindOrderBySortOrderAscIdAsc(CabinCatalogKind kind);
+
+  List<CabinCatalogItem> findAllByKindAndActiveTrueOrderBySortOrderAscIdAsc(CabinCatalogKind kind);
 
   List<CabinCatalogItem> findAllByKindAndActiveTrueOrderByNameAscIdAsc(CabinCatalogKind kind);
+
+  Optional<CabinCatalogItem> findFirstByKindOrderBySortOrderDescIdDesc(CabinCatalogKind kind);
+
+  @Query("select item.kind from CabinCatalogItem item where item.id=?1")
+  Optional<CabinCatalogKind> findKindById(UUID id);
 
   List<CabinCatalogItem> findAllByIdIn(Collection<UUID> ids);
 

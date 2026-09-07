@@ -854,8 +854,7 @@ function NodeEditorDialogContent({
         )
         .sort(
           (left, right) =>
-            left.name.localeCompare(right.name, "ru") ||
-            left.id.localeCompare(right.id)
+            left.sortOrder - right.sortOrder || left.id.localeCompare(right.id)
         ),
     [characteristicsQuery.data, draft.characteristicId]
   )

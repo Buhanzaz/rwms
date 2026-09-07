@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.core.JdbcTemplate;
 import tools.jackson.databind.ObjectMapper;
 
 class CabinCompositionServiceTypeDimensionsTest {
@@ -35,7 +36,8 @@ class CabinCompositionServiceTypeDimensionsTest {
           mock(RentalItemCharacteristicRepository.class),
           mock(CabinCatalogItemMapper.class),
           mock(AssetIdempotencyStore.class),
-          new ObjectMapper());
+          new ObjectMapper(),
+          mock(JdbcTemplate.class));
 
   @Test
   void allowsClearingAllDimensionsWhenTheTypeHasNoCabins() {

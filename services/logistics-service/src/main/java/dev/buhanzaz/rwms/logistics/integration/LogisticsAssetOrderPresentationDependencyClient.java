@@ -344,11 +344,13 @@ final class LogisticsAssetOrderPresentationDependencyClient {
     return cabinFurnitureMovementPlan(response);
   }
 
-  CabinFacets readAvailableCabinFacets(UUID warehouseId, UUID holdScopeId) {
+  CabinFacets readAvailableCabinFacets(
+      UUID warehouseId, UUID holdScopeId, boolean customerVisibleOnly) {
     UriComponentsBuilder uri =
         UriComponentsBuilder.fromUriString(assetBase + "/cabin-facets")
             .queryParam("warehouseId", warehouseId);
     if (holdScopeId != null) uri.queryParam("holdScopeId", holdScopeId);
+    if (customerVisibleOnly) uri.queryParam("customerVisibleOnly", true);
     CabinFacetsResponse response =
         transport.get(
             uri.build().encode().toUriString(),

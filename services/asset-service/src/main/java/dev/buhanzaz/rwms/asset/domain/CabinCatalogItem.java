@@ -44,6 +44,12 @@ public class CabinCatalogItem {
   @Column(name = "active", nullable = false)
   private boolean active = true;
 
+  @Column(name = "sort_order", nullable = false)
+  private int sortOrder;
+
+  @Column(name = "customer_visible", nullable = false)
+  private boolean customerVisible = true;
+
   @Column(name = "created_at", nullable = false)
   private OffsetDateTime createdAt;
 
@@ -52,23 +58,39 @@ public class CabinCatalogItem {
 
   protected CabinCatalogItem() {}
 
-  public static CabinCatalogItem create(CabinCatalogKind kind, String name) {
+  public static CabinCatalogItem create(CabinCatalogKind kind, String name, int sortOrder) {
     CabinCatalogItem item = new CabinCatalogItem();
-    item.assign(kind, name, true);
+    item.assign(kind, name, true, sortOrder, true);
     return item;
   }
 
-  public boolean change(String name, boolean active) {
+  public boolean change(String name, boolean active, Boolean customerVisible) {
     String nextName = requiredName(name);
     String nextNormalized = normalizedName(nextName);
+    if (customerVisible != null && kind != CabinCatalogKind.CHARACTERISTIC) {
+      throw new IllegalArgumentException(
+          "Customer visibility can only be changed for cabin characteristics");
+    }
+    boolean nextCustomerVisible =
+        customerVisible == null ? this.customerVisible : customerVisible.booleanValue();
     if (Objects.equals(this.name, nextName)
         && Objects.equals(this.nameNormalized, nextNormalized)
-        && this.active == active) {
+        && this.active == active
+        && this.customerVisible == nextCustomerVisible) {
       return false;
     }
     this.name = nextName;
     this.nameNormalized = nextNormalized;
     this.active = active;
+    this.customerVisible = nextCustomerVisible;
+    return true;
+  }
+
+  /** Applies one non-negative global position within this catalog kind. */
+  public boolean reorder(int sortOrder) {
+    if (sortOrder < 0) throw new IllegalArgumentException("Cabin catalog sort order is invalid");
+    if (this.sortOrder == sortOrder) return false;
+    this.sortOrder = sortOrder;
     return true;
   }
 
@@ -77,13 +99,22 @@ public class CabinCatalogItem {
     updatedAt = OffsetDateTime.now(ZoneOffset.UTC);
   }
 
-  private void assign(CabinCatalogKind kind, String name, boolean active) {
-    if (kind == null) throw new IllegalArgumentException("Cabin catalog kind is required");
+  private void assign(
+      CabinCatalogKind kind,
+      String name,
+      boolean active,
+      int sortOrder,
+      boolean customerVisible) {
+    if (kind == null || sortOrder < 0) {
+      throw new IllegalArgumentException("Cabin catalog item is incomplete");
+    }
     String normalizedName = requiredName(name);
     this.kind = kind;
     this.name = normalizedName;
     this.nameNormalized = normalizedName(normalizedName);
     this.active = active;
+    this.sortOrder = sortOrder;
+    this.customerVisible = customerVisible;
   }
 
   @PrePersist
@@ -131,6 +162,14 @@ public class CabinCatalogItem {
 
   public boolean isActive() {
     return active;
+  }
+
+  public int getSortOrder() {
+    return sortOrder;
+  }
+
+  public boolean isCustomerVisible() {
+    return customerVisible;
   }
 
   public OffsetDateTime getCreatedAt() {

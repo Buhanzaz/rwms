@@ -3560,6 +3560,8 @@ paths:
         Returns exact asset-owned facets for one active customer-visible warehouse. Every live
         presentation hold, active order reservation and operation lease is excluded. No customer
         identity or inquiry is created; the response contains only the requested warehouse.
+        Values retain the global asset catalog order, and CHARACTERISTIC values disabled for
+        customers are omitted.
       responses:
         "200":
           description: No-store available cabin facets.
@@ -3584,8 +3586,10 @@ paths:
         warehouse, with current informational monthly prices and scoped public gallery URLs.
         All live presentation holds, active order reservations and operation leases are excluded.
         No profile, inquiry, hold or booking is created. Typed product fields are exposed;
-        unrestricted passport data is omitted and each cabin's facts object is empty. Availability
-        is re-evaluated on each read and must be revalidated after authentication before ordering.
+        unrestricted passport data is omitted and each cabin's facts object is empty. Characteristic
+        labels retain the global asset catalog order and omit values disabled for customers.
+        Availability is re-evaluated on each read and must be revalidated after authentication
+        before ordering.
       parameters:
         - name: query
           in: query
@@ -3881,7 +3885,9 @@ paths:
       - $ref: "#/components/parameters/InquiryId"
     get:
       operationId: getCustomerCabinFacets
-      description: Returns exact asset-owned facet values for the inquiry warehouse.
+      description: >-
+        Returns exact asset-owned facet values for the inquiry warehouse in global catalog order.
+        CHARACTERISTIC values disabled for customers are omitted.
       responses:
         "200":
           description: Exact currently available cabin facets.
@@ -3901,6 +3907,8 @@ paths:
       description: >-
         Returns one bounded page of currently bookable cabin cards. The result contains only FREE
         cabins or cabins held by this inquiry and exposes no dossier/passport navigation route.
+        Characteristic labels retain the global asset catalog order and omit values disabled for
+        customers.
       parameters:
         - name: query
           in: query
@@ -4869,6 +4877,7 @@ components:
         linoleum: { type: [boolean, "null"] }
         characteristics:
           type: array
+          description: Customer-visible characteristic labels in the asset-owned global order.
           items: { type: string }
         facts:
           type: object
@@ -9105,6 +9114,7 @@ components:
           items: { type: string }
         characteristics:
           type: array
+          description: Customer-visible characteristic labels in the asset-owned global order.
           items: { type: string }
         typeDimensions:
           type: array

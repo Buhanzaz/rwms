@@ -222,8 +222,11 @@ registry entry. Warehouse-service coordinates are authoritative for both the Cus
 and route origin, so the initial map camera and slot routing start at the warehouse selected by that
 session. Cabin availability,
 holds, photos and positive equipment balances remain asset-owned; the customer catalog exposes only
-`FREE` cabins or the same session's existing hold and never exposes the cabin dossier. The profile's
-individual/legal kind and auth/client bindings are immutable; contact/display fields update under
+`FREE` cabins or the same session's existing hold and never exposes the cabin dossier. Customer
+catalog facets and card characteristics preserve the global asset catalog order and omit
+CHARACTERISTIC values disabled for customers; rental-manager and assistant facets retain the full
+ordered composition. The profile's individual/legal kind and auth/client bindings are immutable;
+contact/display fields update under
 its version fence and synchronize the logistics rental-client projection in the same transaction.
 The first validated warehouse used for an avatar becomes an immutable media authorization scope,
 not profile identity or warehouse access. Logistics publishes a deterministic subject-bound

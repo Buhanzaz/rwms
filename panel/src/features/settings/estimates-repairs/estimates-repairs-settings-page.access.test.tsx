@@ -141,6 +141,7 @@ const REPAIR_QUEUE_ID = "00000000-0000-4000-8000-000000000020"
 const FOREIGN_REPAIR_QUEUE_ID = "00000000-0000-4000-8000-000000000120"
 const FURNITURE_QUEUE_ID = "00000000-0000-4000-8000-000000000023"
 const CHARACTERISTIC_ID = "00000000-0000-4000-8000-000000000024"
+const SECOND_CHARACTERISTIC_ID = "00000000-0000-4000-8000-000000000025"
 
 function LocationSearchProbe() {
   const location = useLocation()
@@ -461,6 +462,8 @@ beforeEach(() => {
         kind: "CHARACTERISTIC",
         name: "Железная дверь",
         active: true,
+        sortOrder: 0,
+        customerVisible: true,
         createdAt: "2026-07-30T10:00:00Z",
         updatedAt: "2026-07-30T10:00:00Z",
       },
@@ -1054,6 +1057,36 @@ describe("maintenance catalog settings", () => {
 
   it("links a material to the canonical cabin characteristic", async () => {
     const user = userEvent.setup()
+    mocks.getCabinSettings.mockResolvedValue({
+      types: [],
+      dimensions: [],
+      finishings: [],
+      characteristics: [
+        {
+          id: CHARACTERISTIC_ID,
+          version: 1,
+          kind: "CHARACTERISTIC",
+          name: "Железная дверь",
+          active: true,
+          sortOrder: 2,
+          customerVisible: true,
+          createdAt: "2026-07-30T10:00:00Z",
+          updatedAt: "2026-07-30T10:00:00Z",
+        },
+        {
+          id: SECOND_CHARACTERISTIC_ID,
+          version: 1,
+          kind: "CHARACTERISTIC",
+          name: "Алюминиевая дверь",
+          active: true,
+          sortOrder: 1,
+          customerVisible: true,
+          createdAt: "2026-07-30T10:00:00Z",
+          updatedAt: "2026-07-30T10:00:00Z",
+        },
+      ],
+      typeDimensions: [],
+    })
     renderPage("EDIT", catalog, metadataCanvasFixture())
 
     await user.click(await findCatalogSection("Конструктор каталога смет"))
@@ -1092,7 +1125,7 @@ describe("maintenance catalog settings", () => {
         expect.objectContaining({
           id: MATERIAL_ID,
           forcesCapitalRepair: false,
-          characteristicId: CHARACTERISTIC_ID,
+          characteristicId: SECOND_CHARACTERISTIC_ID,
           comment: null,
         })
       )

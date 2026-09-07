@@ -32,10 +32,10 @@ public class CabinPricingReferenceService {
   @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
   public CabinPricingCatalogResponse catalog() {
     return new CabinPricingCatalogResponse(
-        catalog.findAllByKindOrderByNameAscIdAsc(CabinCatalogKind.TYPE).stream()
+        catalog.findAllByKindOrderBySortOrderAscIdAsc(CabinCatalogKind.TYPE).stream()
             .map(mapper::toValue)
             .toList(),
-        catalog.findAllByKindOrderByNameAscIdAsc(CabinCatalogKind.CATEGORY).stream()
+        catalog.findAllByKindOrderBySortOrderAscIdAsc(CabinCatalogKind.CATEGORY).stream()
             .map(mapper::toValue)
             .toList());
   }

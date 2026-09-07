@@ -118,7 +118,9 @@ interface LogisticsOrderPresentationDependencyPort {
   CabinFurnitureMovementPlan planCabinFurnitureMovements(
       UUID warehouseId, UUID rentalItemId, List<CabinFurnitureRequirement> requirements);
 
-  default CabinFacets readAvailableCabinFacets(UUID warehouseId, UUID holdScopeId) {
+  /** Reads ordered availability facets, optionally applying the asset-owned customer visibility. */
+  default CabinFacets readAvailableCabinFacets(
+      UUID warehouseId, UUID holdScopeId, boolean customerVisibleOnly) {
     throw unavailable("Cabin facets are not configured");
   }
 

@@ -28,6 +28,7 @@ import {
   listAssetRentalItemManualNotes,
   listAssetRentalItems,
   listPendingRentalItemCreationIntents,
+  replaceCabinCatalogOrder,
   replaceCabinTypeDimensions,
   replaceHtmlImportMedia,
   retryHtmlImportMedia,
@@ -142,6 +143,8 @@ function cabinCatalogItem(
     kind,
     name,
     active: true,
+    sortOrder: 0,
+    customerVisible: true,
     createdAt: "2026-07-18T10:00:00Z",
     updatedAt: "2026-07-18T11:00:00Z",
     ...overrides,
@@ -709,6 +712,7 @@ describe("asset rental-items HTTP adapter", () => {
         )
       )
       .mockResolvedValueOnce(jsonResponse(settings))
+      .mockResolvedValueOnce(jsonResponse(settings))
       .mockResolvedValueOnce(emptyResponse())
 
     await expect(
@@ -738,6 +742,11 @@ describe("asset rental-items HTTP adapter", () => {
       typeId: RENTAL_TYPE_ID,
       expectedVersion: 3,
       dimensionIds: [DIMENSION_ID],
+    })
+    await replaceCabinCatalogOrder({
+      accessToken: "access-token",
+      kind: "CHARACTERISTIC",
+      items: [{ id: CHARACTERISTIC_ID, expectedVersion: 3 }],
     })
     await expect(
       deleteCabinCatalogItem({
@@ -771,9 +780,42 @@ describe("asset rental-items HTTP adapter", () => {
       dimensionIds: [DIMENSION_ID],
     })
     expect(String(fetchMock.mock.calls[5]?.[0])).toBe(
+      "https://gateway.example.test/api/asset/v1/cabin-settings/CHARACTERISTIC/order"
+    )
+    expect((fetchMock.mock.calls[5]?.[1] as RequestInit).method).toBe("PUT")
+    expect(JSON.parse(String(fetchMock.mock.calls[5]?.[1]?.body))).toEqual({
+      items: [{ id: CHARACTERISTIC_ID, expectedVersion: 3 }],
+    })
+    expect(String(fetchMock.mock.calls[6]?.[0])).toBe(
       `https://gateway.example.test/api/asset/v1/cabin-settings/items/${CHARACTERISTIC_ID}?expectedVersion=3`
     )
-    expect((fetchMock.mock.calls[5]?.[1] as RequestInit).method).toBe("DELETE")
+    expect((fetchMock.mock.calls[6]?.[1] as RequestInit).method).toBe("DELETE")
+  })
+
+  it("sends characteristic visibility only when the caller changes it", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        cabinCatalogItem(CHARACTERISTIC_ID, "CHARACTERISTIC", "Окно", {
+          customerVisible: false,
+        })
+      )
+    )
+
+    await updateCabinCatalogItem({
+      accessToken: "access-token",
+      id: CHARACTERISTIC_ID,
+      expectedVersion: 3,
+      name: "Окно",
+      active: true,
+      customerVisible: false,
+    })
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      expectedVersion: 3,
+      name: "Окно",
+      active: true,
+      customerVisible: false,
+    })
   })
 
   it("preserves the backend reason when a catalog value cannot be deleted", async () => {

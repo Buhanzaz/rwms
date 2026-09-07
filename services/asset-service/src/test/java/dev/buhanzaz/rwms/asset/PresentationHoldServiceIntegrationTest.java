@@ -13,11 +13,13 @@ import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.TYPE_BK_1;
 import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.plasticWindow;
 
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireLogisticsEquipmentMovementReservationRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateCabinCatalogItemRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateRentalItemRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsEquipmentMovementPurpose;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.TransferEquipmentRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateCabinCatalogItemRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateStatusRequest;
 import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.ReserveOrderUnitRequest;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.ActorInput;
@@ -29,6 +31,7 @@ import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.ConvertPresentation
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.PresentationHoldView;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.ReplacePresentationHoldsRequest;
 import dev.buhanzaz.rwms.asset.domain.BalanceLocationKind;
+import dev.buhanzaz.rwms.asset.domain.CabinCatalogKind;
 import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
 import dev.buhanzaz.rwms.asset.domain.OperationLease;
 import dev.buhanzaz.rwms.asset.domain.OrderUnitReservation;
@@ -42,6 +45,7 @@ import dev.buhanzaz.rwms.asset.service.AssetService;
 import dev.buhanzaz.rwms.asset.service.AssetConflictException;
 import dev.buhanzaz.rwms.asset.service.AssetInvalidationHub;
 import dev.buhanzaz.rwms.asset.service.AssetNotFoundException;
+import dev.buhanzaz.rwms.asset.service.CabinCompositionService;
 import dev.buhanzaz.rwms.asset.service.OrderUnitReservationConflictException;
 import dev.buhanzaz.rwms.asset.service.PresentationHoldService;
 import dev.buhanzaz.rwms.asset.service.RentalAvailabilityInvalidationPublisher;
@@ -88,6 +92,7 @@ class PresentationHoldServiceIntegrationTest {
   }
 
   @Autowired PresentationHoldService presentationHolds;
+  @Autowired CabinCompositionService cabinComposition;
   @Autowired RentalItemReserveReadService reserveReads;
   @Autowired AssetService assets;
   @MockitoSpyBean AssetInvalidationHub invalidations;
@@ -709,6 +714,115 @@ class PresentationHoldServiceIntegrationTest {
                     20))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("characteristics");
+  }
+
+  @Test
+  void customerViewsHideConfiguredCharacteristicsWhileInternalViewsRetainThem() {
+    UUID actorSubjectId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID holdScopeId = UUID.randomUUID();
+    String suffix = UUID.randomUUID().toString();
+    var visible =
+        cabinComposition
+            .createCatalogItem(
+                actorSubjectId,
+                UUID.randomUUID(),
+                new CreateCabinCatalogItemRequest(
+                    CabinCatalogKind.CHARACTERISTIC, "Видимая клиенту " + suffix))
+            .response();
+    var hidden =
+        cabinComposition
+            .createCatalogItem(
+                actorSubjectId,
+                UUID.randomUUID(),
+                new CreateCabinCatalogItemRequest(
+                    CabinCatalogKind.CHARACTERISTIC, "Скрытая клиенту " + suffix))
+            .response();
+    cabinComposition.updateCatalogItem(
+        hidden.id(),
+        new UpdateCabinCatalogItemRequest(hidden.version(), hidden.name(), true, false));
+    RentalItemResponse cabin =
+        freeRental(
+            actorSubjectId,
+            warehouseId,
+            "CUSTOMER-VISIBILITY",
+            CATEGORY_NEW,
+            List.of(hidden.id(), visible.id()),
+            false);
+
+    assertThat(presentationHolds.facets(warehouseId, null, true).characteristics())
+        .contains(visible.name())
+        .doesNotContain(hidden.name());
+    assertThat(presentationHolds.facets(warehouseId, null, false).characteristics())
+        .contains(visible.name(), hidden.name());
+    assertThat(
+            presentationHolds
+                .customerCatalog(
+                    warehouseId,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    List.of(),
+                    0,
+                    20)
+                .content())
+        .filteredOn(value -> value.id().equals(cabin.id()))
+        .singleElement()
+        .extracting(value -> value.characteristics())
+        .isEqualTo(visible.name());
+    assertThat(
+            presentationHolds
+                .customerCatalog(
+                    warehouseId,
+                    null,
+                    hidden.name(),
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    List.of(),
+                    0,
+                    20)
+                .content())
+        .extracting(value -> value.id())
+        .doesNotContain(cabin.id());
+    assertThat(
+            presentationHolds
+                .snapshots(new CabinAvailabilityRequest(warehouseId, List.of(cabin.id())))
+                .items())
+        .singleElement()
+        .extracting(value -> value.characteristics())
+        .isEqualTo(visible.name() + ", " + hidden.name());
+
+    var replacement =
+        presentationHolds.replace(
+            UUID.randomUUID(),
+            holdScopeId,
+            new ReplacePresentationHoldsRequest(
+                warehouseId,
+                List.of(cabin.id()),
+                OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(30),
+                actorSubjectId,
+                "CUSTOMER",
+                null));
+
+    assertThat(replacement.response().cabins())
+        .singleElement()
+        .extracting(value -> value.characteristics())
+        .isEqualTo(visible.name());
+    assertThat(presentationHolds.holds(holdScopeId, actorSubjectId, "CUSTOMER").cabins())
+        .singleElement()
+        .extracting(value -> value.characteristics())
+        .isEqualTo(visible.name());
+    assertThat(presentationHolds.holds(holdScopeId, actorSubjectId, "RENTAL_MANAGER").cabins())
+        .singleElement()
+        .extracting(value -> value.characteristics())
+        .isEqualTo(visible.name() + ", " + hidden.name());
   }
 
   @Test

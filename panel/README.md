@@ -82,6 +82,10 @@ Russian version: [README.ru.md](README.ru.md).
   nullable documented dimensions and weights, vehicle route margins and speeds,
   measured axle-load profiles, and a same-object default trailer as one
   version-fenced configuration; an empty physical field means unknown, not zero.
+- `/admin/cabins` renders cabin types, dimensions, finishings and characteristics as sortable
+  grids. Pointer or keyboard drag replaces one kind's complete asset-owned order with every item
+  version-fenced. Characteristic editing alone exposes `Display to customer`; hidden values stay
+  available to internal operators but are omitted from CustomerApp cards and filters.
 - `/admin/estimates-repairs?catalog=maintenance-settings` contains the global estimate
   creation window and repair-complexity boundaries under «Сроки и сложность». They apply to
   every warehouse, load independently of the catalog and require no object selection.

@@ -589,6 +589,32 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /api/asset/v1/cabin-settings/{kind}/order:
+    parameters:
+      - name: kind
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/CabinCatalogKind' }
+    put:
+      operationId: replaceCabinSettingsOrder
+      description: >-
+        Replaces the complete ordered set for one cabin catalog kind. The request must contain
+        every current item of that kind exactly once with its current version; a stale item or an
+        incomplete set is rejected without changing any position.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReplaceCabinCatalogOrderRequest' }
+      responses:
+        '200':
+          description: Full settings after the atomic order replacement.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CabinSettings' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/asset/v1/cabin-settings/types/{typeId}/dimensions:
     parameters: [ { name: typeId, in: path, required: true, schema: { type: string, format: uuid } } ]
     put:
@@ -1758,6 +1784,13 @@ paths:
           required: false
           description: Inquiry ID whose current presentation holds remain visible in the facets.
           schema: { type: string, format: uuid }
+        - name: customerVisibleOnly
+          in: query
+          required: false
+          description: >-
+            When true, hides CHARACTERISTIC values marked not customer-visible. Internal and
+            manager callers omit this flag and receive the complete composition.
+          schema: { type: boolean, default: false }
       responses:
         '200':
           description: Available cabin facet values for the warehouse.
@@ -2642,13 +2675,15 @@ components:
     CabinCatalogItem:
       type: object
       additionalProperties: false
-      required: [id, version, kind, name, active, createdAt, updatedAt]
+      required: [id, version, kind, name, active, sortOrder, customerVisible, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
         version: { $ref: '#/components/schemas/ExpectedVersion' }
         kind: { $ref: '#/components/schemas/CabinCatalogKind' }
         name: { type: string, minLength: 1, maxLength: 255 }
         active: { type: boolean }
+        sortOrder: { type: integer, minimum: 0 }
+        customerVisible: { type: boolean }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
     CabinTypeDimension:
@@ -2707,6 +2742,28 @@ components:
         expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }
         name: { type: string, minLength: 1, maxLength: 255 }
         active: { type: boolean }
+        customerVisible:
+          type: boolean
+          description: >-
+            Optional customer visibility setting. It controls whether CHARACTERISTIC values appear
+            in customer-facing catalog, facets and customer hold snapshots; omission preserves the
+            current value. A supplied value for another kind is rejected.
+    CabinCatalogOrderItem:
+      type: object
+      additionalProperties: false
+      required: [id, expectedVersion]
+      properties:
+        id: { type: string, format: uuid }
+        expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+    ReplaceCabinCatalogOrderRequest:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 1000
+          items: { $ref: '#/components/schemas/CabinCatalogOrderItem' }
     ReplaceCabinTypeDimensionsRequest:
       type: object
       additionalProperties: false

@@ -1140,7 +1140,7 @@ class RentalInquiryPresentationIntegrationTest {
   @Test
   void cabinFacetsUsesTheInquiryAsTheAssetHoldScope() {
     RentalInquiryResponse inquiry = createInquiry();
-    when(dependencies.readAvailableCabinFacets(WAREHOUSE, inquiry.id()))
+    when(dependencies.readAvailableCabinFacets(WAREHOUSE, inquiry.id(), false))
         .thenAnswer(
             invocation -> {
               assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
@@ -1168,7 +1168,41 @@ class RentalInquiryPresentationIntegrationTest {
               assertThat(warehouse.typeDimensions())
                   .containsExactly(new CabinTypeDimensionRelation("БК-1", List.of("6x2.4")));
             });
-    verify(dependencies).readAvailableCabinFacets(WAREHOUSE, inquiry.id());
+    verify(dependencies).readAvailableCabinFacets(WAREHOUSE, inquiry.id(), false);
+  }
+
+  @Test
+  void customerCabinFacetsRequestOnlyCustomerVisibleCharacteristics() {
+    RentalInquiryResponse inquiry = createInquiry();
+    OrderActor customer =
+        new OrderActor(
+            MANAGER,
+            "CUSTOMER",
+            "Клиент",
+            Set.of(WAREHOUSE),
+            Set.of(WAREHOUSE),
+            false,
+            false,
+            true,
+            true);
+    when(dependencies.readAvailableCabinFacets(WAREHOUSE, inquiry.id(), true))
+        .thenReturn(
+            new LogisticsDependencyGateway.CabinFacets(
+                WAREHOUSE,
+                List.of("БК-1"),
+                List.of("ДВП"),
+                List.of("6x2.4"),
+                List.of("Новая"),
+                List.of("Публичная"),
+                List.of(
+                    new LogisticsDependencyGateway.CabinTypeDimensionRelation(
+                        "БК-1", List.of("6x2.4")))));
+
+    CabinFacetsResponse result = inquiries.facets(customer, inquiry.id());
+
+    assertThat(result.warehouses().getFirst().characteristics())
+        .containsExactly("Публичная");
+    verify(dependencies).readAvailableCabinFacets(WAREHOUSE, inquiry.id(), true);
   }
 
   @Test

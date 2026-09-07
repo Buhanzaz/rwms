@@ -48,6 +48,8 @@ public final class AssetApiModels {
       CabinCatalogKind kind,
       String name,
       boolean active,
+      int sortOrder,
+      boolean customerVisible,
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt) {}
 
@@ -77,7 +79,16 @@ public final class AssetApiModels {
   public record UpdateCabinCatalogItemRequest(
       @NotNull @Min(0) Long expectedVersion,
       @NotBlank @Size(max = 255) String name,
-      boolean active) {}
+      boolean active,
+      Boolean customerVisible) {}
+
+  /** One globally ordered cabin catalog item fenced by its current revision. */
+  public record CabinCatalogOrderItemRequest(
+      @NotNull UUID id, @NotNull @Min(0) Long expectedVersion) {}
+
+  /** Full exact replacement of one catalog kind's order. */
+  public record ReplaceCabinCatalogOrderRequest(
+      @NotNull @Size(max = 1000) List<@NotNull @Valid CabinCatalogOrderItemRequest> items) {}
 
   public record ReplaceCabinTypeDimensionsRequest(
       @NotNull @Min(0) Long expectedVersion,

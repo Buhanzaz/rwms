@@ -1036,6 +1036,20 @@ plus SYSTEM_ADMIN/WMS_ADMIN and `expectedVersion`. Flyway V48 seeds the singleto
 JPA optimistic locking prevents concurrent overwrites. There is no domain event
 or changed cabin state for a palette update.
 
+### Global Cabin Catalog Order And Customer Visibility
+
+The asset-owned cabin catalog assigns every TYPE, DIMENSION, FINISHING, CATEGORY and
+CHARACTERISTIC a stable non-negative position within its kind. Administrator reads and all
+creation-option consumers preserve that order. `PUT /api/asset/v1/cabin-settings/{kind}/order`
+replaces one kind's complete exact set; every ID carries its current version, and a missing,
+duplicate or stale item rejects the whole transaction. New items append to their kind.
+
+`customerVisible` is meaningful only for CHARACTERISTIC values and defaults to true. CustomerApp
+catalog pages, filters and CUSTOMER-owned hold snapshots omit disabled values while retaining the
+same global relative order. Internal rental-manager and assistant reads retain the complete ordered
+composition. Logistics explicitly requests the customer-filtered facet projection; clients never
+decide visibility themselves.
+
 ### Inventory-Created Assets
 
 The private source-asset operation in

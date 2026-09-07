@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.asset.api;
 
 import static dev.buhanzaz.rwms.asset.api.AssetApiModels.*;
 
+import dev.buhanzaz.rwms.asset.domain.CabinCatalogKind;
 import dev.buhanzaz.rwms.asset.security.AssetAuthorizer;
 import dev.buhanzaz.rwms.asset.service.CabinCompositionService;
 import jakarta.validation.Valid;
@@ -59,6 +60,15 @@ public class CabinSettingsController {
       @Valid @RequestBody UpdateCabinCatalogItemRequest request) {
     access.requireGlobalCatalogManagement(jwt);
     return service.updateCatalogItem(id, request);
+  }
+
+  @PutMapping("/{kind}/order")
+  public CabinSettingsResponse replaceOrder(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable CabinCatalogKind kind,
+      @Valid @RequestBody ReplaceCabinCatalogOrderRequest request) {
+    access.requireGlobalCatalogManagement(jwt);
+    return service.replaceCatalogOrder(kind, request);
   }
 
   @DeleteMapping("/items/{id}")

@@ -1257,6 +1257,12 @@ Order read permissions expose the server-derived extension affordance separately
 from ordinary editability so `FULFILLED` orders can still show the supported
 extension action.
 
+Cabin composition display order is asset-owned per catalog kind and is replaced only as one
+complete version-fenced set. The order is reused by panel and Android creation options, internal
+facets and customer facets instead of being re-sorted by each consumer. A characteristic's
+customer-visibility bit affects only CustomerApp catalog/filter/hold projections; operational,
+manager and assistant composition reads keep the full set.
+
 A cabin photo presentation is a logistics-owned public capability, not a new
 media owner or a mutable cabin projection. Creation requires warehouse EDIT,
 the current asset-owned cabin version and a subject-scoped idempotency key.

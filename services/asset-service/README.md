@@ -90,6 +90,16 @@ logistics-owned public photo snapshot. It returns identity/version/warehouse fen
 dimensions, finishing, category, ordered characteristic names and nullable linoleum; status,
 rental type, passport JSON, comments, tags and equipment are excluded.
 
+Cabin catalog values have one explicit global order within each kind. Operators replace a kind's
+complete order through `PUT /api/asset/v1/cabin-settings/{kind}/order`; every current item and its
+version must be supplied exactly once, so stale or incomplete requests leave positions unchanged.
+Per-kind transaction locks serialize creates, reorders and deletes, the database enforces a unique
+position per kind, and new values append after the current last position. `customerVisible` is mutable only for
+`CHARACTERISTIC` values and defaults to `true`; all other kinds are permanently customer-visible.
+The internal composition and ordinary logistics reads retain every characteristic. Customer catalog
+and customer hold snapshots omit hidden characteristics, and customer facet callers use
+`customerVisibleOnly=true`; manager facet callers retain the full list.
+
 ## Global cabin status colors
 
 `GET/PUT /api/asset/v1/cabin-settings/status-colors` owns one presentation palette

@@ -115,7 +115,7 @@ class AssetFlywayMigrationIntegrationTest {
         "select to_jsonb(source)::text from inventory_asset_source source order by inventory_id,finding_id",
         String.class);
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(4);
     latest.validate();
     assertThat(jdbc.queryForList(
         "select (to_jsonb(item)-'inventory_isolation_id')::text from rental_item item order by id",
@@ -156,7 +156,7 @@ class AssetFlywayMigrationIntegrationTest {
         jdbc.queryForMap("select * from order_unit_reservation where id=?", reservationId);
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(6);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(7);
     latest.validate();
     assertThat(jdbc.queryForMap("select * from order_unit_reservation where id=?", reservationId))
         .isEqualTo(before);
@@ -295,9 +295,91 @@ class AssetFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void versionFiftyFiveBackfillsCatalogOrderVisibilityAndLiveCreateReplays() {
+    Flyway versionFiftyFour = configuration(MIGRATIONS).target("54").load();
+    assertThat(versionFiftyFour.migrate().migrationsExecuted).isEqualTo(54);
+    UUID retainedCatalogItemId = UUID.randomUUID();
+    UUID deletedCatalogItemId = UUID.randomUUID();
+    String retainedName = "V55 retained " + retainedCatalogItemId;
+    String deletedName = "V55 deleted " + deletedCatalogItemId;
+    insertLegacyCatalogItem(retainedCatalogItemId, retainedName);
+    insertLegacyCatalogItem(deletedCatalogItemId, deletedName);
+    insertLegacyCatalogCreateReplay(retainedCatalogItemId, retainedName);
+    insertLegacyCatalogCreateReplay(deletedCatalogItemId, deletedName);
+    jdbc.update("delete from cabin_catalog_item where id=?", deletedCatalogItemId);
+
+    Flyway versionFiftyFive = configuration(MIGRATIONS).target("55").load();
+    assertThat(versionFiftyFive.migrate().migrationsExecuted).isOne();
+    versionFiftyFive.validate();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select (response_body->>'sortOrder')::integer from asset_idempotency_record"
+                    + " where command_scope='cabin-catalog.create' and response_body->>'id'=?",
+                Integer.class,
+                retainedCatalogItemId.toString()))
+        .isEqualTo(
+            jdbc.queryForObject(
+                "select sort_order from cabin_catalog_item where id=?",
+                Integer.class,
+                retainedCatalogItemId));
+    assertThat(
+            jdbc.queryForObject(
+                "select response_body->>'customerVisible' from asset_idempotency_record"
+                    + " where command_scope='cabin-catalog.create' and response_body->>'id'=?",
+                String.class,
+                retainedCatalogItemId.toString()))
+        .isEqualTo("true");
+    assertThat(
+            jdbc.queryForMap(
+                "select response_body->>'sortOrder' as sort_order,"
+                    + " response_body->>'customerVisible' as customer_visible"
+                    + " from asset_idempotency_record"
+                    + " where command_scope='cabin-catalog.create' and response_body->>'id'=?",
+                deletedCatalogItemId.toString()))
+        .containsEntry("sort_order", "0")
+        .containsEntry("customer_visible", "true");
+    assertThat(columnCount("cabin_catalog_item", "sort_order")).isOne();
+    assertThat(columnCount("cabin_catalog_item", "customer_visible")).isOne();
+    assertThat(
+            constraintDefinition(
+                "cabin_catalog_item", "ck_cabin_catalog_item_customer_visibility"))
+        .contains("CHARACTERISTIC", "customer_visible");
+    assertThat(
+            constraintDefinition(
+                "cabin_catalog_item", "uq_cabin_catalog_item_kind_sort_order"))
+        .contains("UNIQUE (kind, sort_order)", "DEFERRABLE INITIALLY DEFERRED");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update cabin_catalog_item set customer_visible=false where id=?",
+                    retainedCatalogItemId))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    UUID duplicateCatalogItemId = UUID.randomUUID();
+    String duplicateName = "V55 duplicate " + duplicateCatalogItemId;
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    insert into cabin_catalog_item(
+                      id,version,kind,name,name_normalized,active,sort_order,customer_visible,
+                      created_at,updated_at)
+                    values (?,0,'TYPE',?,lower(?),true,
+                      (select sort_order from cabin_catalog_item where id=?),true,
+                      clock_timestamp(),clock_timestamp())
+                    """,
+                    duplicateCatalogItemId,
+                    duplicateName,
+                    duplicateName,
+                    retainedCatalogItemId))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThat(versionFiftyFive.migrate().migrationsExecuted).isZero();
+  }
+
+  @Test
   void freshInstallIncludesConstrainedInventorySourceProposalColumns() {
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(54);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(55);
     latest.validate();
 
     assertThat(columnCount("inventory_asset_source_operation", "reserved_rental_item_id"))
@@ -336,7 +418,7 @@ class AssetFlywayMigrationIntegrationTest {
     configuration(MIGRATIONS).target("47").load().migrate();
     Long cabinsBefore = jdbc.queryForObject("select count(*) from rental_item", Long.class);
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(7);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(8);
     latest.validate();
     assertThat(jdbc.queryForObject("select count(*) from rental_item", Long.class))
         .isEqualTo(cabinsBefore);
@@ -356,7 +438,7 @@ class AssetFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsTransferredWarehouseData() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(54);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(55);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
@@ -566,12 +648,12 @@ class AssetFlywayMigrationIntegrationTest {
         """, existingId, UUID.randomUUID());
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(52);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(53);
     latest.validate();
 
     assertThat(appliedVersions())
         .containsExactly(
-            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46", "47", "48", "49", "50", "51", "52", "53", "54");
+            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46", "47", "48", "49", "50", "51", "52", "53", "54", "55");
     assertThat(columnCount("rental_item", "number")).isZero();
     assertThat(columnCount("rental_item", "display_canonical_number")).isEqualTo(1);
     assertThat(columnCount("rental_item", "identity_match_key")).isEqualTo(1);
@@ -607,7 +689,7 @@ class AssetFlywayMigrationIntegrationTest {
         "a".repeat(64));
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(16);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(17);
     latest.validate();
 
     assertThat(columnCount("inventory_asset_outcome_watermark", "passport_observation_sha256"))
@@ -643,7 +725,7 @@ class AssetFlywayMigrationIntegrationTest {
         .doesNotContain("CUSTOMER");
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(14);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(15);
     latest.validate();
     assertThat(
             constraintDefinition(
@@ -1002,11 +1084,11 @@ class AssetFlywayMigrationIntegrationTest {
     int outboxCount = integer("select count(*) from outbox_event");
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(47);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(48);
     latest.validate();
     assertThat(appliedVersions())
         .containsExactly(
-            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46", "47", "48", "49", "50", "51", "52", "53", "54");
+            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46", "47", "48", "49", "50", "51", "52", "53", "54", "55");
     assertOldPanelTechnicalMetadataRemoved();
     assertLegacyIdentityMetadataRemoved();
     JsonNode unrelated = json(jdbc.queryForObject(
@@ -1094,7 +1176,7 @@ class AssetFlywayMigrationIntegrationTest {
         order by snapshot.aggregate_version desc limit 1
         """, correctedAggregateId);
     latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(46);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(47);
     latest.validate();
 
     assertThat(integer("select count(*) from rental_item")).isEqualTo(195);
@@ -2054,6 +2136,38 @@ class AssetFlywayMigrationIntegrationTest {
         table,
         column);
     return count == null ? 0 : count;
+  }
+
+  private void insertLegacyCatalogItem(UUID id, String name) {
+    jdbc.update(
+        """
+        insert into cabin_catalog_item(
+          id,version,kind,name,name_normalized,active,created_at,updated_at)
+        values (?,0,'TYPE',?,lower(?),true,clock_timestamp(),clock_timestamp())
+        """,
+        id,
+        name,
+        name);
+  }
+
+  private void insertLegacyCatalogCreateReplay(UUID catalogItemId, String name) {
+    jdbc.update(
+        """
+        insert into asset_idempotency_record(
+          subject_id,command_scope,idempotency_key,request_sha256,response_status,response_body,
+          created_at,expires_at)
+        values (
+          ?,'cabin-catalog.create',?, ?,201,
+          jsonb_build_object(
+            'id',?::text,'version',0,'kind','TYPE','name',?,'active',true,
+            'createdAt','2026-01-01T00:00:00Z','updatedAt','2026-01-01T00:00:00Z'),
+          clock_timestamp(),clock_timestamp()+interval '1 day')
+        """,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "a".repeat(64),
+        catalogItemId,
+        name);
   }
 
   private String indexDefinition(String index) {

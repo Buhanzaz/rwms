@@ -1120,7 +1120,9 @@ Anonymous catalog browsing uses the public gateway's four GET routes under
 routable customer warehouses and asks asset-service for available cabins without
 an inquiry hold scope. All live holds, order reservations and operation leases are
 excluded. Filtering, prices and gallery derivatives reuse the customer catalog
-pipeline; public cards omit arbitrary passport facts. Every photo read rechecks the
+pipeline; public cards omit arbitrary passport facts. Facets and card characteristics follow the
+asset-owned global catalog order and omit characteristics disabled for customers, including after
+a signed-in customer moves a cabin into the held selection. Every photo read rechecks the
 warehouse, cabin availability, current gallery membership, generation and derivative
 variant. Browsing creates no customer profile, inquiry, selection or booking. Cart,
 delivery and order commands retain customer authentication and ownership checks.

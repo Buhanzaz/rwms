@@ -7,12 +7,24 @@ import {
   within,
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import type { ReactNode } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const TYPE_ID = "11111111-1111-4111-8111-111111111111"
+const SECOND_TYPE_ID = "12111111-1111-4111-8111-111111111111"
 const DIMENSION_ID = "22222222-2222-4222-8222-222222222222"
+const SECOND_DIMENSION_ID = "23222222-2222-4222-8222-222222222222"
 const FINISHING_ID = "33333333-3333-4333-8333-333333333333"
 const CHARACTERISTIC_ID = "44444444-4444-4444-8444-444444444444"
+
+const dnd = vi.hoisted(() => ({
+  onDragEnd: null as
+    | null
+    | ((event: {
+        active: { id: string }
+        over: { id: string } | null
+      }) => void),
+}))
 
 const cabinApi = vi.hoisted(() => ({
   getCabinSettings: vi.fn(),
@@ -20,8 +32,48 @@ const cabinApi = vi.hoisted(() => ({
   createIdempotencyKey: vi.fn(() => "55555555-5555-4555-8555-555555555555"),
   updateCabinCatalogItem: vi.fn(),
   deleteCabinCatalogItem: vi.fn(),
+  replaceCabinCatalogOrder: vi.fn(),
   replaceCabinTypeDimensions: vi.fn(),
 }))
+
+vi.mock("@dnd-kit/core", async () => {
+  const actual =
+    await vi.importActual<typeof import("@dnd-kit/core")>("@dnd-kit/core")
+  return {
+    ...actual,
+    DndContext: ({
+      children,
+      onDragEnd,
+    }: {
+      children: ReactNode
+      onDragEnd: typeof dnd.onDragEnd
+    }) => {
+      dnd.onDragEnd = onDragEnd
+      return children
+    },
+    useSensor: () => ({}),
+    useSensors: () => [],
+  }
+})
+
+vi.mock("@dnd-kit/sortable", async () => {
+  const actual =
+    await vi.importActual<typeof import("@dnd-kit/sortable")>(
+      "@dnd-kit/sortable"
+    )
+  return {
+    ...actual,
+    SortableContext: ({ children }: { children: ReactNode }) => children,
+    useSortable: () => ({
+      attributes: {},
+      isDragging: false,
+      listeners: {},
+      setNodeRef: vi.fn(),
+      transform: null,
+      transition: null,
+    }),
+  }
+})
 
 vi.mock("@/features/auth/use-auth", () => ({
   useAuth: () => ({
@@ -62,7 +114,8 @@ import { ApiError } from "@/lib/api-client"
 function catalogItem(
   id: string,
   kind: "TYPE" | "DIMENSION" | "FINISHING" | "CHARACTERISTIC",
-  name: string
+  name: string,
+  overrides: Record<string, unknown> = {}
 ) {
   return {
     id,
@@ -70,8 +123,11 @@ function catalogItem(
     kind,
     name,
     active: true,
+    sortOrder: 0,
+    customerVisible: true,
     createdAt: "2026-07-28T10:00:00Z",
     updatedAt: "2026-07-28T10:00:00Z",
+    ...overrides,
   }
 }
 
@@ -109,7 +165,9 @@ beforeEach(() => {
     }
   )
   cabinApi.getCabinSettings.mockResolvedValue(settings)
+  cabinApi.replaceCabinCatalogOrder.mockResolvedValue(settings)
   cabinApi.replaceCabinTypeDimensions.mockResolvedValue(settings)
+  dnd.onDragEnd = null
 })
 
 afterEach(() => {
@@ -162,6 +220,161 @@ describe("CabinCompositionSettingsPage", () => {
       expectedVersion: 2,
       dimensionIds: [DIMENSION_ID],
     })
+  })
+
+  it("persists the complete kind order after a catalog card is moved", async () => {
+    const secondType = catalogItem(SECOND_TYPE_ID, "TYPE", "БК-3", {
+      version: 3,
+      sortOrder: 0,
+    })
+    const firstType = catalogItem(TYPE_ID, "TYPE", "БК-2", {
+      sortOrder: 1,
+    })
+    cabinApi.getCabinSettings.mockResolvedValue({
+      ...settings,
+      types: [firstType, secondType],
+    })
+    renderPage()
+
+    await screen.findByRole("tab", { name: "Типы" })
+    expect(
+      screen
+        .getByText("БК-3")
+        .compareDocumentPosition(screen.getByText("БК-2")) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+
+    dnd.onDragEnd?.({
+      active: { id: TYPE_ID },
+      over: { id: SECOND_TYPE_ID },
+    })
+
+    await waitFor(() =>
+      expect(cabinApi.replaceCabinCatalogOrder).toHaveBeenCalledWith({
+        accessToken: "settings-token",
+        kind: "TYPE",
+        items: [
+          { id: TYPE_ID, expectedVersion: 2 },
+          { id: SECOND_TYPE_ID, expectedVersion: 3 },
+        ],
+      })
+    )
+    await waitFor(() =>
+      expect(
+        screen
+          .getByText("БК-2")
+          .compareDocumentPosition(screen.getByText("БК-3")) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+    )
+  })
+
+  it("shows linked type dimensions in their global catalog order", async () => {
+    cabinApi.getCabinSettings.mockResolvedValue({
+      ...settings,
+      dimensions: [
+        catalogItem(DIMENSION_ID, "DIMENSION", "6 × 2,4", { sortOrder: 2 }),
+        catalogItem(SECOND_DIMENSION_ID, "DIMENSION", "4 × 2,4", {
+          sortOrder: 1,
+        }),
+      ],
+      typeDimensions: [
+        { typeId: TYPE_ID, dimensionId: DIMENSION_ID, sortOrder: 0 },
+        { typeId: TYPE_ID, dimensionId: SECOND_DIMENSION_ID, sortOrder: 1 },
+      ],
+    })
+
+    renderPage()
+
+    expect(await screen.findByText("Габариты: 4 × 2,4, 6 × 2,4")).toBeTruthy()
+  })
+
+  it("restores the server order when saving a moved catalog card fails", async () => {
+    const secondType = catalogItem(SECOND_TYPE_ID, "TYPE", "БК-3", {
+      version: 3,
+      sortOrder: 0,
+    })
+    const firstType = catalogItem(TYPE_ID, "TYPE", "БК-2", {
+      sortOrder: 1,
+    })
+    cabinApi.getCabinSettings.mockResolvedValue({
+      ...settings,
+      types: [firstType, secondType],
+    })
+    cabinApi.replaceCabinCatalogOrder.mockRejectedValue(
+      new ApiError("Не удалось сохранить порядок.", 400)
+    )
+    renderPage()
+
+    await screen.findByRole("tab", { name: "Типы" })
+    dnd.onDragEnd?.({
+      active: { id: TYPE_ID },
+      over: { id: SECOND_TYPE_ID },
+    })
+
+    await waitFor(() =>
+      expect(cabinApi.replaceCabinCatalogOrder).toHaveBeenCalledTimes(1)
+    )
+    await waitFor(() =>
+      expect(
+        screen
+          .getByText("БК-3")
+          .compareDocumentPosition(screen.getByText("БК-2")) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+    )
+    await waitFor(() =>
+      expect(
+        cabinApi.getCabinSettings.mock.calls.length
+      ).toBeGreaterThanOrEqual(2)
+    )
+  })
+
+  it("uses the catalog-specific editor title and saves characteristic visibility", async () => {
+    const user = userEvent.setup()
+    cabinApi.updateCabinCatalogItem.mockResolvedValue(
+      settings.characteristics[0]
+    )
+    renderPage()
+
+    await screen.findByRole("tab", { name: "Типы" })
+    await user.click(screen.getByRole("button", { name: "Изменить БК-2" }))
+    const typeEditor = await screen.findByRole("dialog", {
+      name: "Настройка типа бытовки",
+    })
+    expect(
+      within(typeEditor).queryByRole("checkbox", {
+        name: "Отображать клиенту",
+      })
+    ).toBeNull()
+    await user.click(within(typeEditor).getByRole("button", { name: "Отмена" }))
+
+    await user.click(await screen.findByRole("tab", { name: "Характеристики" }))
+    await user.click(
+      screen.getByRole("button", { name: "Изменить Металлическая дверь" })
+    )
+    const characteristicEditor = await screen.findByRole("dialog", {
+      name: "Настройка характеристики",
+    })
+    const customerVisible = within(characteristicEditor).getByRole("checkbox", {
+      name: "Отображать клиенту",
+    })
+    expect((customerVisible as HTMLButtonElement).dataset.state).toBe("checked")
+    await user.click(customerVisible)
+    await user.click(
+      within(characteristicEditor).getByRole("button", { name: "Сохранить" })
+    )
+
+    await waitFor(() =>
+      expect(cabinApi.updateCabinCatalogItem).toHaveBeenCalledWith({
+        accessToken: "settings-token",
+        id: CHARACTERISTIC_ID,
+        expectedVersion: 2,
+        name: "Металлическая дверь",
+        active: true,
+        customerVisible: false,
+      })
+    )
   })
 
   it("allows saving no dimensions for a type without cabins", async () => {
@@ -241,7 +454,7 @@ describe("CabinCompositionSettingsPage", () => {
       screen.getByRole("button", { name: "Изменить Металлическая дверь" })
     )
     const editor = await screen.findByRole("dialog", {
-      name: "Настройка бытовки",
+      name: "Настройка характеристики",
     })
     await user.click(within(editor).getByRole("button", { name: "Удалить" }))
 
@@ -279,7 +492,7 @@ describe("CabinCompositionSettingsPage", () => {
       screen.getByRole("button", { name: "Изменить Металлическая дверь" })
     )
     const editor = await screen.findByRole("dialog", {
-      name: "Настройка бытовки",
+      name: "Настройка характеристики",
     })
     await user.click(within(editor).getByRole("button", { name: "Удалить" }))
 

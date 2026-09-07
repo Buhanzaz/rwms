@@ -34,7 +34,8 @@ apply, and a completed greeting is not replayed on configuration changes.
 Authentication follows the supplied 404 × 874 canvases: full-screen caustic artwork,
 a field-width BLOCK BOX wordmark, bottom-aligned forms, translucent borderless fields and soft
 shadows. The wordmark keeps its width across entry and login, moves above registration, and
-slides completely outside the registration canvas when the keyboard opens. System Back returns
+stays fully visible above each scrollable form when the keyboard opens. Registration submits with
+`Зарегистрироваться`, recovery uses `Отправить`, and login keeps `Вход`. System Back returns
 from recovery to login, and from login/registration to entry.
 Registration collects login, email, confirmed password and phone; the auth boundary still receives
 only its contract fields, while email and phone prefill the mandatory individual logistics profile.
@@ -42,7 +43,8 @@ The recovery form matches the supplied reference; submitting it reports that rec
 because the current auth contract has no recovery operation. It never reports a sent email or SMS.
 
 The shared design follows the active Panel and Logistics interfaces: cool white surfaces,
-restrained borders and shadows, and neutral graphite dark surfaces. Cyrillic Geist is used for
+restrained borders and shadows, and neutral graphite dark surfaces. The caustic artwork remains a
+subtle shared background behind signed-in screens. Cyrillic Geist is used for
 headings and body copy; the approved gradient actions retain their Golos Text typography.
 The SIL Open Font Licenses are packaged under
 `app/src/main/assets/licenses/`. The approved 12 dp gradient buttons keep their shadow and press
@@ -129,13 +131,17 @@ show an address/name to distinguish them. The inset header centers the city betw
 profile actions. Tapping it expands the alternatives below the fixed row, then creates or resumes the
 selected warehouse's inquiry. A filter action expands an opaque facet panel in the same scrollable list as the cabins. Each change
 and reset immediately requests server results; rapid changes retain the latest choice until the
-current request finishes. Single-choice lists open downward with bounded internal scrolling, and
-characteristics remain visible as checkboxes. There is no text search or apply button. A selected
+current request finishes. Each single-choice filter occupies one full row; its options open
+downward as one attached surface, push the following filters down and close after selection.
+Characteristics remain visible as checkboxes. Facet values and card characteristics retain the
+asset-owned global order, and values disabled for customers never enter either surface. There is
+no text search or apply button. A selected
 type narrows dimensions to the server-returned `typeDimensions` relation and clears an incompatible
 size before the request. Catalog and cart cards share photo proportions, surfaces and a full-width
 header with type on the left and accounting number on the right. They share labelled dimension/finish
 facts and monthly-price typography. The catalog title and filter action sit inside the fixed header;
-selection is marked locally instead of outlining the whole card. The cart has a labelled `Удалить`
+category and characteristic values use rounded colored pills, while selection is marked locally
+instead of outlining the whole card. The cart has a labelled `Удалить`
 action alongside additional equipment. Full-screen photos use a black background and system areas with an unframed white close
 control; they never navigate to a passport. Available warehouse
 furniture can be assigned per cabin as `+ Additional`.

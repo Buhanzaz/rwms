@@ -25,6 +25,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
@@ -47,6 +48,7 @@ public class CabinCompositionService {
   private final CabinCatalogItemMapper mapper;
   private final AssetIdempotencyStore idempotency;
   private final ObjectMapper objectMapper;
+  private final JdbcTemplate jdbc;
 
   public CabinCompositionService(
       CabinCatalogItemRepository catalog,
@@ -55,7 +57,8 @@ public class CabinCompositionService {
       RentalItemCharacteristicRepository rentalItemCharacteristics,
       CabinCatalogItemMapper mapper,
       AssetIdempotencyStore idempotency,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      JdbcTemplate jdbc) {
     this.catalog = catalog;
     this.typeDimensions = typeDimensions;
     this.rentalItems = rentalItems;
@@ -63,6 +66,7 @@ public class CabinCompositionService {
     this.mapper = mapper;
     this.idempotency = idempotency;
     this.objectMapper = objectMapper;
+    this.jdbc = jdbc;
   }
 
   @Transactional(readOnly = true)
@@ -83,12 +87,25 @@ public class CabinCompositionService {
     List<CabinCatalogItem> finishings = active(CabinCatalogKind.FINISHING);
     List<CabinCatalogItem> categories = active(CabinCatalogKind.CATEGORY);
     List<CabinCatalogItem> characteristics = active(CabinCatalogKind.CHARACTERISTIC);
-    Set<UUID> activeTypeIds = types.stream().map(CabinCatalogItem::getId).collect(Collectors.toSet());
-    Set<UUID> activeDimensionIds =
-        dimensions.stream().map(CabinCatalogItem::getId).collect(Collectors.toSet());
+    Map<UUID, Integer> activeTypeSortOrders = catalogSortOrders(types);
+    Map<UUID, Integer> activeDimensionSortOrders = catalogSortOrders(dimensions);
+    Set<UUID> activeTypeIds = activeTypeSortOrders.keySet();
+    Set<UUID> activeDimensionIds = activeDimensionSortOrders.keySet();
     List<CabinTypeDimensionResponse> links =
         typeDimensionResponses(activeTypeIds).stream()
             .filter(link -> activeDimensionIds.contains(link.dimensionId()))
+            .map(
+                link ->
+                    new CabinTypeDimensionResponse(
+                        link.typeId(),
+                        link.dimensionId(),
+                        activeDimensionSortOrders.get(link.dimensionId())))
+            .sorted(
+                Comparator.comparingInt(
+                        (CabinTypeDimensionResponse link) ->
+                            activeTypeSortOrders.get(link.typeId()))
+                    .thenComparingInt(CabinTypeDimensionResponse::sortOrder)
+                    .thenComparing(CabinTypeDimensionResponse::dimensionId))
             .toList();
     return new RentalItemCreationOptionsResponse(
         NEW_CATEGORY,
@@ -130,7 +147,15 @@ public class CabinCompositionService {
       return new CreateResult<>(read(replay.get(), CabinCatalogItemResponse.class), true);
     }
     try {
-      CabinCatalogItem created = catalog.saveAndFlush(CabinCatalogItem.create(request.kind(), request.name()));
+      lockCatalogKind(request.kind());
+      int nextSortOrder =
+          catalog
+                  .findFirstByKindOrderBySortOrderDescIdDesc(request.kind())
+                  .map(CabinCatalogItem::getSortOrder)
+                  .orElse(-1)
+              + 1;
+      CabinCatalogItem created =
+          catalog.saveAndFlush(CabinCatalogItem.create(request.kind(), request.name(), nextSortOrder));
       CabinCatalogItemResponse response = mapper.toResponse(created);
       idempotency.store(
           subjectId, "cabin-catalog.create", idempotencyKey, requestHash, 201, response);
@@ -144,7 +169,11 @@ public class CabinCompositionService {
   public CabinCatalogItemResponse updateCatalogItem(UUID id, UpdateCabinCatalogItemRequest request) {
     CabinCatalogItem item = requireCatalogItem(id);
     assertVersion(item.getVersion(), request.expectedVersion());
-    if (!item.change(request.name(), request.active())) {
+    if (request.customerVisible() != null && item.getKind() != CabinCatalogKind.CHARACTERISTIC) {
+      throw new IllegalArgumentException(
+          "Customer visibility can only be changed for cabin characteristics");
+    }
+    if (!item.change(request.name(), request.active(), request.customerVisible())) {
       return mapper.toResponse(item);
     }
     try {
@@ -155,11 +184,53 @@ public class CabinCompositionService {
   }
 
   /**
+   * Replaces one catalog kind's complete order after fencing every item in the submitted set.
+   * Missing, duplicate, foreign-kind, or stale values reject the whole command before any order is
+   * changed.
+   */
+  @Transactional
+  public CabinSettingsResponse replaceCatalogOrder(
+      CabinCatalogKind kind, ReplaceCabinCatalogOrderRequest request) {
+    if (kind == null) throw new IllegalArgumentException("Cabin catalog kind is required");
+    List<CabinCatalogOrderItemRequest> requested =
+        orderedCatalogOrderItems(request == null ? null : request.items());
+    lockCatalogKind(kind);
+    List<CabinCatalogItem> existing = catalog.findAllByKindOrderBySortOrderAscIdAsc(kind);
+    Map<UUID, CabinCatalogItem> existingById =
+        existing.stream()
+            .collect(Collectors.toMap(CabinCatalogItem::getId, item -> item));
+    Set<UUID> requestedIds =
+        requested.stream()
+            .map(CabinCatalogOrderItemRequest::id)
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+    if (!existingById.keySet().equals(requestedIds)) {
+      throw new IllegalArgumentException(
+          "Cabin catalog order must contain every item of the selected kind exactly once");
+    }
+
+    List<CabinCatalogItem> ordered =
+        requested.stream().map(item -> existingById.get(item.id())).toList();
+    for (int index = 0; index < requested.size(); index += 1) {
+      assertVersion(ordered.get(index).getVersion(), requested.get(index).expectedVersion());
+    }
+    for (int index = 0; index < ordered.size(); index += 1) {
+      ordered.get(index).reorder(index);
+    }
+    catalog.saveAllAndFlush(ordered);
+    return settings();
+  }
+
+  /**
    * Deletes a catalog value only when no cabin or composition relation still refers to it. The
    * database foreign keys enforce the same invariant if a concurrent command wins the race.
    */
   @Transactional
   public void deleteCatalogItem(UUID id, long expectedVersion) {
+    CabinCatalogKind kind =
+        catalog
+            .findKindById(id)
+            .orElseThrow(() -> new AssetNotFoundException("Cabin setting was not found"));
+    lockCatalogKind(kind);
     CabinCatalogItem item = requireCatalogItem(id);
     assertVersion(item.getVersion(), expectedVersion);
     assertUnused(item);
@@ -334,6 +405,17 @@ public class CabinCompositionService {
 
   @Transactional(readOnly = true)
   public Map<UUID, CabinComposition> compositionsFor(Collection<RentalItem> rentalItems) {
+    return compositionsFor(rentalItems, false);
+  }
+
+  /** Returns the customer-safe composition with hidden characteristic values omitted. */
+  @Transactional(readOnly = true)
+  public Map<UUID, CabinComposition> customerCompositionsFor(Collection<RentalItem> rentalItems) {
+    return compositionsFor(rentalItems, true);
+  }
+
+  private Map<UUID, CabinComposition> compositionsFor(
+      Collection<RentalItem> rentalItems, boolean customerVisibleCharacteristicsOnly) {
     if (rentalItems == null || rentalItems.isEmpty()) return Map.of();
     List<RentalItem> values = List.copyOf(rentalItems);
     List<UUID> rentalItemIds = values.stream().map(RentalItem::getId).toList();
@@ -363,7 +445,14 @@ public class CabinCompositionService {
     for (RentalItem item : values) {
       List<CabinCatalogValueResponse> characteristics =
           characteristicLinks.getOrDefault(item.getId(), List.of()).stream()
-              .map(link -> value(catalogItems, link.getCharacteristicId()))
+              .map(link -> catalogItem(catalogItems, link.getCharacteristicId()))
+              .filter(
+                  characteristic ->
+                      !customerVisibleCharacteristicsOnly || characteristic.isCustomerVisible())
+              .sorted(
+                  Comparator.comparingInt(CabinCatalogItem::getSortOrder)
+                      .thenComparing(CabinCatalogItem::getId))
+              .map(mapper::toValue)
               .toList();
       result.put(
           item.getId(),
@@ -393,19 +482,49 @@ public class CabinCompositionService {
         value(items, selection.rentalTypeId()),
         value(items, selection.dimensionId()),
         value(items, selection.finishingId()),
-        selection.characteristicIds().stream().map(id -> value(items, id)).toList());
+        selection.characteristicIds().stream()
+            .map(id -> catalogItem(items, id))
+            .sorted(
+                Comparator.comparingInt(CabinCatalogItem::getSortOrder)
+                    .thenComparing(CabinCatalogItem::getId))
+            .map(mapper::toValue)
+            .toList());
+  }
+
+  /** Captures the stable per-kind catalog order for an availability/facet projection. */
+  @Transactional(readOnly = true)
+  public CatalogOrder catalogOrder() {
+    Map<UUID, Integer> sortOrders = new LinkedHashMap<>();
+    for (CabinCatalogKind kind : CabinCatalogKind.values()) {
+      catalog
+          .findAllByKindOrderBySortOrderAscIdAsc(kind)
+          .forEach(item -> sortOrders.put(item.getId(), item.getSortOrder()));
+    }
+    return new CatalogOrder(sortOrders);
   }
 
   private List<CabinCatalogItemResponse> responses(CabinCatalogKind kind) {
-    return catalog.findAllByKindOrderByNameAscIdAsc(kind).stream().map(mapper::toResponse).toList();
+    return catalog.findAllByKindOrderBySortOrderAscIdAsc(kind).stream()
+        .map(mapper::toResponse)
+        .toList();
   }
 
   private List<CabinCatalogItem> active(CabinCatalogKind kind) {
-    return catalog.findAllByKindAndActiveTrueOrderByNameAscIdAsc(kind);
+    return catalog.findAllByKindAndActiveTrueOrderBySortOrderAscIdAsc(kind);
+  }
+
+  private static Map<UUID, Integer> catalogSortOrders(Collection<CabinCatalogItem> items) {
+    return items.stream()
+        .collect(
+            Collectors.toMap(
+                CabinCatalogItem::getId,
+                CabinCatalogItem::getSortOrder,
+                (left, right) -> left,
+                LinkedHashMap::new));
   }
 
   private Set<UUID> allTypeIds() {
-    return catalog.findAllByKindOrderByNameAscIdAsc(CabinCatalogKind.TYPE).stream()
+    return catalog.findAllByKindOrderBySortOrderAscIdAsc(CabinCatalogKind.TYPE).stream()
         .map(CabinCatalogItem::getId)
         .collect(Collectors.toSet());
   }
@@ -630,6 +749,26 @@ public class CabinCompositionService {
     return List.copyOf(result);
   }
 
+  private static List<CabinCatalogOrderItemRequest> orderedCatalogOrderItems(
+      List<CabinCatalogOrderItemRequest> values) {
+    if (values == null) throw new IllegalArgumentException("items is required");
+    List<CabinCatalogOrderItemRequest> result = new ArrayList<>(values.size());
+    Set<UUID> seen = new LinkedHashSet<>();
+    for (CabinCatalogOrderItemRequest value : values) {
+      if (value == null || value.id() == null) {
+        throw new IllegalArgumentException("items must not contain null");
+      }
+      if (!seen.add(value.id())) {
+        throw new IllegalArgumentException("items must not contain duplicate ids");
+      }
+      if (value.expectedVersion() == null || value.expectedVersion() < 0) {
+        throw new IllegalArgumentException("expectedVersion is required");
+      }
+      result.add(value);
+    }
+    return List.copyOf(result);
+  }
+
   private static void addIfPresent(Set<UUID> target, UUID value) {
     if (value != null) target.add(value);
   }
@@ -637,11 +776,14 @@ public class CabinCompositionService {
   private CabinCatalogValueResponse value(
       Map<UUID, CabinCatalogItem> catalogItems, UUID id) {
     if (id == null) return null;
+    return mapper.toValue(catalogItem(catalogItems, id));
+  }
+
+  private static CabinCatalogItem catalogItem(
+      Map<UUID, CabinCatalogItem> catalogItems, UUID id) {
     CabinCatalogItem item = catalogItems.get(id);
-    if (item == null) {
-      throw new IllegalStateException("Cabin catalog reference is missing");
-    }
-    return mapper.toValue(item);
+    if (item == null) throw new IllegalStateException("Cabin catalog reference is missing");
+    return item;
   }
 
   private static void assertVersion(long actual, Long expected) {
@@ -651,6 +793,13 @@ public class CabinCompositionService {
     if (actual != expected) {
       throw new AssetConflictException("Cabin setting changed concurrently");
     }
+  }
+
+  private void lockCatalogKind(CabinCatalogKind kind) {
+    jdbc.query(
+        "select pg_advisory_xact_lock(hashtextextended(?, 0))",
+        rs -> {},
+        "cabin-catalog:" + kind.name());
   }
 
   private String hash(Object value) {
@@ -682,6 +831,54 @@ public class CabinCompositionService {
       CabinCatalogValueResponse dimensions,
       CabinCatalogValueResponse finishing,
       List<CabinCatalogValueResponse> characteristics) {}
+
+  /** Stable catalog ordering with deterministic legacy-value fallback for facet projections. */
+  public record CatalogOrder(Map<UUID, Integer> sortOrders) {
+    public CatalogOrder {
+      sortOrders = Map.copyOf(sortOrders);
+    }
+
+    public List<String> orderedFacetNames(Collection<CabinCatalogValueResponse> values) {
+      if (values == null || values.isEmpty()) return List.of();
+      Map<UUID, CabinCatalogValueResponse> catalogValues = new LinkedHashMap<>();
+      List<CabinCatalogValueResponse> fallback = new ArrayList<>();
+      for (CabinCatalogValueResponse value : values) {
+        if (value == null || validFacetName(value.name()) == null) continue;
+        if (value.id() != null && sortOrders.containsKey(value.id())) {
+          catalogValues.putIfAbsent(value.id(), value);
+        } else {
+          fallback.add(value);
+        }
+      }
+      List<String> result = new ArrayList<>();
+      Set<String> seenNames = new LinkedHashSet<>();
+      catalogValues.values().stream()
+          .sorted(
+              Comparator.comparingInt(
+                      (CabinCatalogValueResponse value) -> sortOrders.get(value.id()))
+                  .thenComparing(CabinCatalogValueResponse::id))
+          .forEach(value -> addFacetName(result, seenNames, value.name()));
+      fallback.stream()
+          .sorted(
+              Comparator.comparing(
+                      (CabinCatalogValueResponse value) -> validFacetName(value.name()),
+                      String.CASE_INSENSITIVE_ORDER)
+                  .thenComparing(value -> value.id() == null ? "" : value.id().toString()))
+          .forEach(value -> addFacetName(result, seenNames, value.name()));
+      return List.copyOf(result);
+    }
+
+    private static void addFacetName(List<String> target, Set<String> seen, String value) {
+      String name = validFacetName(value);
+      if (name != null && seen.add(name.toLowerCase(Locale.ROOT))) target.add(name);
+    }
+
+    private static String validFacetName(String value) {
+      if (value == null) return null;
+      String trimmed = value.trim();
+      return trimmed.isEmpty() ? null : trimmed;
+    }
+  }
 
   public record CreateResult<T>(T response, boolean replayed) {}
 }

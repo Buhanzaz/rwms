@@ -82,9 +82,9 @@ class MaintenanceCharacteristicApplicationIntegrationTest {
     jdbc.update(
         """
         insert into cabin_catalog_item(
-          id,version,kind,name,name_normalized,active,created_at,updated_at)
+          id,version,kind,name,name_normalized,active,sort_order,created_at,updated_at)
         values (?,0,'CHARACTERISTIC','Неактивная тестовая характеристика',
-          'неактивная тестовая характеристика',false,clock_timestamp(),clock_timestamp())
+          'неактивная тестовая характеристика',false,10000,clock_timestamp(),clock_timestamp())
         """,
         inactiveId);
 
@@ -239,9 +239,9 @@ class MaintenanceCharacteristicApplicationIntegrationTest {
     jdbc.update(
         """
         insert into cabin_catalog_item(
-          id,version,kind,name,name_normalized,active,created_at,updated_at)
+          id,version,kind,name,name_normalized,active,sort_order,created_at,updated_at)
         values (?,0,'CHARACTERISTIC','Неактивная применяемая характеристика',
-          'неактивная применяемая характеристика',false,clock_timestamp(),clock_timestamp())
+          'неактивная применяемая характеристика',false,10001,clock_timestamp(),clock_timestamp())
         """,
         inactiveId);
 

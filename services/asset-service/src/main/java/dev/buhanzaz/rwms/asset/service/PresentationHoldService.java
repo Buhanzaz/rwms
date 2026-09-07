@@ -80,53 +80,84 @@ public class PresentationHoldService {
 
   @Transactional
   public CabinFacetResponse facets(UUID warehouseId) {
-    return facets(warehouseId, null);
+    return facets(warehouseId, null, false);
   }
 
   @Transactional
   public CabinFacetResponse facets(UUID warehouseId, UUID holdScopeId) {
+    return facets(warehouseId, holdScopeId, false);
+  }
+
+  /**
+   * Returns availability-backed facets, filtering only hidden characteristics for the customer
+   * surface. Internal logistics and manager reads retain the complete composition.
+   */
+  @Transactional
+  public CabinFacetResponse facets(
+      UUID warehouseId, UUID holdScopeId, boolean customerVisibleCharacteristicsOnly) {
     UUID requiredWarehouseId = Objects.requireNonNull(warehouseId, "warehouseId");
     OffsetDateTime timestamp = now();
     holds.expireDue(timestamp);
     List<RentalItem> available = availableItems(requiredWarehouseId, holdScopeId, timestamp);
     Map<UUID, CabinCompositionService.CabinComposition> compositions =
-        cabinComposition.compositionsFor(available);
-    List<String> cabinTypes =
-        distinct(available, item -> name(compositions.get(item.getId()).rentalType()));
-    Map<String, Set<String>> dimensionsByType = new LinkedHashMap<>();
+        customerVisibleCharacteristicsOnly
+            ? cabinComposition.customerCompositionsFor(available)
+            : cabinComposition.compositionsFor(available);
+    CabinCompositionService.CatalogOrder catalogOrder = cabinComposition.catalogOrder();
+    List<CabinCatalogValueResponse> typeValues =
+        available.stream()
+            .map(item -> compositions.get(item.getId()).rentalType())
+            .toList();
+    List<String> cabinTypes = catalogOrder.orderedFacetNames(typeValues);
+    Map<String, List<CabinCatalogValueResponse>> dimensionsByType = new LinkedHashMap<>();
     for (String cabinType : cabinTypes) {
-      dimensionsByType.put(cabinType, new LinkedHashSet<>());
+      dimensionsByType.put(cabinType, new ArrayList<>());
     }
     for (RentalItem item : available) {
       CabinCompositionService.CabinComposition composition = compositions.get(item.getId());
       String cabinType = trimmedName(composition.rentalType());
-      String dimension = trimmedName(composition.dimensions());
-      if (cabinType != null && dimension != null) {
-        dimensionsByType.computeIfAbsent(cabinType, ignored -> new LinkedHashSet<>()).add(dimension);
+      CabinCatalogValueResponse dimension = composition.dimensions();
+      if (cabinType != null && trimmedName(dimension) != null) {
+        dimensionsByType.computeIfAbsent(cabinType, ignored -> new ArrayList<>()).add(dimension);
       }
     }
+    List<String> finishes =
+        catalogOrder.orderedFacetNames(
+            available.stream()
+                .map(item -> compositions.get(item.getId()).finishing())
+                .toList());
+    List<String> dimensions =
+        catalogOrder.orderedFacetNames(
+            available.stream()
+                .map(item -> compositions.get(item.getId()).dimensions())
+                .toList());
+    List<String> categories =
+        catalogOrder.orderedFacetNames(
+            available.stream()
+                .map(
+                    item ->
+                        new CabinCatalogValueResponse(item.getCategoryId(), item.getCategory()))
+                .toList());
+    List<String> characteristics =
+        catalogOrder.orderedFacetNames(
+            compositions.values().stream()
+                .flatMap(composition -> composition.characteristics().stream())
+                .toList());
     return new CabinFacetResponse(
         requiredWarehouseId,
         cabinTypes,
-        distinct(available, item -> name(compositions.get(item.getId()).finishing())),
-        distinct(available, item -> name(compositions.get(item.getId()).dimensions())),
-        distinct(available, RentalItem::getCategory),
-        compositions.values().stream()
-            .flatMap(composition -> composition.characteristics().stream())
-            .map(PresentationHoldService::trimmedName)
-            .filter(Objects::nonNull)
-            .distinct()
-            .sorted(String.CASE_INSENSITIVE_ORDER)
-            .toList(),
-        dimensionsByType.entrySet().stream()
-            .filter(entry -> !entry.getValue().isEmpty())
+        finishes,
+        dimensions,
+        categories,
+        characteristics,
+        cabinTypes.stream()
             .map(
-                entry ->
+                cabinType ->
                     new CabinTypeDimensions(
-                        entry.getKey(),
-                        entry.getValue().stream()
-                            .sorted(String.CASE_INSENSITIVE_ORDER)
-                            .toList()))
+                        cabinType,
+                        catalogOrder.orderedFacetNames(
+                            dimensionsByType.getOrDefault(cabinType, List.of()))))
+            .filter(entry -> !entry.dimensions().isEmpty())
             .toList());
   }
 
@@ -202,7 +233,7 @@ public class PresentationHoldService {
     holds.expireDue(timestamp);
     List<RentalItem> available = availableItems(requiredWarehouseId, holdScopeId, timestamp, false);
     Map<UUID, CabinCompositionService.CabinComposition> compositions =
-        cabinComposition.compositionsFor(available);
+        cabinComposition.customerCompositionsFor(available);
     List<RentalItem> matches =
         available.stream()
             .filter(
@@ -236,7 +267,9 @@ public class PresentationHoldService {
         matches.isEmpty() ? 0 : (matches.size() + (long) size - 1) / size;
     return new CabinCatalogPage(
         requiredWarehouseId,
-        matches.subList(from, to).stream().map(this::snapshot).toList(),
+        matches.subList(from, to).stream()
+            .map(item -> snapshot(item, compositions.get(item.getId())))
+            .toList(),
         page,
         size,
         matches.size(),
@@ -535,6 +568,7 @@ public class PresentationHoldService {
             .map(PresentationUnitHold::getExpiresAt)
             .max(Comparator.naturalOrder())
             .orElse(null);
+    boolean customerVisibleCharacteristicsOnly = "CUSTOMER".equals(actorRole);
     return new ReplacePresentationHoldsResponse(
         presentationId,
         expiry,
@@ -546,7 +580,8 @@ public class PresentationHoldService {
                 item ->
                     snapshot(
                         item.orElseThrow(
-                            () -> new AssetNotFoundException("Rental item was not found"))))
+                            () -> new AssetNotFoundException("Rental item was not found")),
+                        customerVisibleCharacteristicsOnly))
             .toList());
   }
 
@@ -712,7 +747,10 @@ public class PresentationHoldService {
             presentationId,
             request.expiresAt(),
             active.stream().map(PresentationHoldService::view).toList(),
-            requestedIds.stream().map(items::get).map(this::snapshot).toList());
+            requestedIds.stream()
+                .map(items::get)
+                .map(item -> snapshot(item, "CUSTOMER".equals(request.actorRole())))
+                .toList());
     idempotency.store(
         request.actorSubjectId(),
         "presentation-holds.replace",
@@ -982,6 +1020,20 @@ public class PresentationHoldService {
   }
 
   private AvailableCabin snapshot(RentalItem item) {
+    return snapshot(
+        item, cabinComposition.compositionsFor(List.of(item)).get(item.getId()));
+  }
+
+  private AvailableCabin snapshot(RentalItem item, boolean customerVisibleCharacteristicsOnly) {
+    Map<UUID, CabinCompositionService.CabinComposition> compositions =
+        customerVisibleCharacteristicsOnly
+            ? cabinComposition.customerCompositionsFor(List.of(item))
+            : cabinComposition.compositionsFor(List.of(item));
+    return snapshot(item, compositions.get(item.getId()));
+  }
+
+  private AvailableCabin snapshot(
+      RentalItem item, CabinCompositionService.CabinComposition composition) {
     RentalItemResponse source = assets.rentalItem(item.getId());
     return new AvailableCabin(
         source.id(),
@@ -993,7 +1045,7 @@ public class PresentationHoldService {
         source.dimensions(),
         source.finishing(),
         source.category(),
-        source.characteristics().stream()
+        composition.characteristics().stream()
             .map(CabinCatalogValueResponse::name)
             .collect(Collectors.joining(", ")),
         source.linoleum(),

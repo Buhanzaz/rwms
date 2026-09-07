@@ -109,7 +109,7 @@ public class CustomerCabinCatalogService {
   public CabinFacetsResponse publicFacets(UUID warehouseId) {
     var warehouse = warehouses.required(warehouseId);
     try {
-      var facets = dependencies.readAvailableCabinFacets(warehouseId, null);
+      var facets = dependencies.readAvailableCabinFacets(warehouseId, null, true);
       return new CabinFacetsResponse(
           List.of(
               new CabinFacetWarehouse(

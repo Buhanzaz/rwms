@@ -138,7 +138,7 @@ class PublicCustomerCatalogServiceTest {
 
   @Test
   void facetsUseOnlyTheSelectedVisibleWarehouseWithoutAnInquiry() {
-    when(dependencies.readAvailableCabinFacets(WAREHOUSE, null))
+    when(dependencies.readAvailableCabinFacets(WAREHOUSE, null, true))
         .thenReturn(
             new LogisticsDependencyGateway.CabinFacets(
                 WAREHOUSE,
@@ -164,7 +164,7 @@ class PublicCustomerCatalogServiceTest {
                   .satisfies(
                       relation -> assertThat(relation.dimensions()).containsExactly("6x2.4"));
             });
-    verify(dependencies).readAvailableCabinFacets(WAREHOUSE, null);
+    verify(dependencies).readAvailableCabinFacets(WAREHOUSE, null, true);
     verifyNoInteractions(sessions);
   }
 

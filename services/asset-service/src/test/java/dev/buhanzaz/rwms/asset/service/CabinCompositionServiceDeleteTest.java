@@ -16,6 +16,8 @@ import dev.buhanzaz.rwms.asset.repository.RentalItemRepository;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import tools.jackson.databind.ObjectMapper;
 
 class CabinCompositionServiceDeleteTest {
@@ -24,6 +26,7 @@ class CabinCompositionServiceDeleteTest {
   private final RentalItemRepository rentalItems = mock(RentalItemRepository.class);
   private final RentalItemCharacteristicRepository rentalItemCharacteristics =
       mock(RentalItemCharacteristicRepository.class);
+  private final JdbcTemplate jdbc = mock(JdbcTemplate.class);
   private final CabinCompositionService service =
       new CabinCompositionService(
           catalog,
@@ -32,7 +35,8 @@ class CabinCompositionServiceDeleteTest {
           rentalItemCharacteristics,
           mock(CabinCatalogItemMapper.class),
           mock(AssetIdempotencyStore.class),
-          new ObjectMapper());
+          new ObjectMapper(),
+          jdbc);
 
   @Test
   void deletesAnUnreferencedType() {
@@ -45,6 +49,26 @@ class CabinCompositionServiceDeleteTest {
     verify(rentalItems).existsByRentalTypeId(id);
     verify(catalog).delete(item);
     verify(catalog).flush();
+  }
+
+  @Test
+  void locksTheKindBeforeLoadingAndDeletingTheCatalogItem() {
+    UUID id = UUID.randomUUID();
+    CabinCatalogItem item = catalogItem(id, CabinCatalogKind.TYPE, "Прорабская", 3);
+
+    service.deleteCatalogItem(id, 3);
+
+    org.mockito.InOrder calls = org.mockito.Mockito.inOrder(catalog, jdbc);
+    calls.verify(catalog).findKindById(id);
+    calls
+        .verify(jdbc)
+        .query(
+            org.mockito.ArgumentMatchers.eq(
+                "select pg_advisory_xact_lock(hashtextextended(?, 0))"),
+            org.mockito.ArgumentMatchers.any(RowCallbackHandler.class),
+            org.mockito.ArgumentMatchers.eq("cabin-catalog:TYPE"));
+    calls.verify(catalog).findById(id);
+    calls.verify(catalog).delete(item);
   }
 
   @Test
@@ -119,6 +143,7 @@ class CabinCompositionServiceDeleteTest {
     when(item.getKind()).thenReturn(kind);
     when(item.getName()).thenReturn(name);
     when(item.getVersion()).thenReturn(version);
+    when(catalog.findKindById(id)).thenReturn(Optional.of(kind));
     when(catalog.findById(id)).thenReturn(Optional.of(item));
     return item;
   }

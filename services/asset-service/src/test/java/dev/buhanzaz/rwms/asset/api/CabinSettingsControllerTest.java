@@ -5,10 +5,16 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.CabinCatalogOrderItemRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.CabinSettingsResponse;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.ReplaceCabinCatalogOrderRequest;
+import dev.buhanzaz.rwms.asset.domain.CabinCatalogKind;
 import dev.buhanzaz.rwms.asset.security.AssetAuthorizer;
 import dev.buhanzaz.rwms.asset.service.CabinCompositionService;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -35,6 +41,32 @@ class CabinSettingsControllerTest {
   @Test
   void rejectsDeleteForAUserWithoutGlobalCatalogManagement() {
     assertThatThrownBy(() -> controller.deleteItem(warehouseManager(), UUID.randomUUID(), 0))
+        .isInstanceOf(AccessDeniedException.class)
+        .hasMessageContaining("Global catalog management");
+
+    verifyNoInteractions(service);
+  }
+
+  @Test
+  void replacesOneCatalogKindOrderWithGlobalCatalogManagement() {
+    UUID itemId = UUID.randomUUID();
+    var request =
+        new ReplaceCabinCatalogOrderRequest(List.of(new CabinCatalogOrderItemRequest(itemId, 7L)));
+    var expected =
+        new CabinSettingsResponse(List.of(), List.of(), List.of(), List.of(), List.of(), List.of());
+    when(service.replaceCatalogOrder(CabinCatalogKind.CHARACTERISTIC, request)).thenReturn(expected);
+
+    assertThat(controller.replaceOrder(globalCatalogManager(), CabinCatalogKind.CHARACTERISTIC, request))
+        .isSameAs(expected);
+    verify(service).replaceCatalogOrder(CabinCatalogKind.CHARACTERISTIC, request);
+  }
+
+  @Test
+  void rejectsOrderReplacementForAUserWithoutGlobalCatalogManagement() {
+    var request = new ReplaceCabinCatalogOrderRequest(List.of());
+
+    assertThatThrownBy(
+            () -> controller.replaceOrder(warehouseManager(), CabinCatalogKind.TYPE, request))
         .isInstanceOf(AccessDeniedException.class)
         .hasMessageContaining("Global catalog management");
 

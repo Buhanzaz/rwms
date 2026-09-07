@@ -112,7 +112,7 @@ class CabinPricingReferenceIntegrationTest {
         composition.updateCatalogItem(
             type.id(),
             new UpdateCabinCatalogItemRequest(
-                type.version(), "Переименованный тип " + actor, false));
+                type.version(), "Переименованный тип " + actor, false, null));
     assertThat(readCatalog().types())
         .filteredOn(value -> value.id().equals(type.id()))
         .singleElement()

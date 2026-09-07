@@ -96,6 +96,33 @@ class AssetOpenApiParityTest {
   }
 
   @Test
+  void cabinCatalogOrderAndCustomerVisibilityContractsStayExplicit() throws Exception {
+    Map<String, Object> document = openApi();
+    Map<String, Object> paths = child(document, "paths");
+    Map<String, Object> schemas = child(child(document, "components"), "schemas");
+    Map<String, Object> catalogItem = child(schemas, "CabinCatalogItem");
+    assertThat(list(catalogItem.get("required")))
+        .contains("sortOrder", "customerVisible");
+    Map<String, Object> update = child(schemas, "UpdateCabinCatalogItemRequest");
+    assertThat(list(update.get("required"))).containsExactly("expectedVersion", "name", "active");
+    assertThat(child(update, "properties")).containsKey("customerVisible");
+    Map<String, Object> orderItem = child(schemas, "CabinCatalogOrderItem");
+    assertThat(list(orderItem.get("required"))).containsExactly("id", "expectedVersion");
+    assertThat(list(child(schemas, "ReplaceCabinCatalogOrderRequest").get("required")))
+        .containsExactly("items");
+
+    Map<String, Object> orderPath =
+        child(paths, "/api/asset/v1/cabin-settings/{kind}/order");
+    Map<String, Object> orderPut = child(orderPath, "put");
+    assertThat(orderPut.get("operationId")).isEqualTo("replaceCabinSettingsOrder");
+    assertThat(child(child(child(orderPut, "requestBody"), "content"), "application/json"))
+        .containsEntry(
+            "schema", Map.of("$ref", "#/components/schemas/ReplaceCabinCatalogOrderRequest"));
+    assertThat(child(orderPut, "responses").keySet())
+        .containsExactlyInAnyOrder("200", "400", "403", "409");
+  }
+
+  @Test
   void openApiInventoryExactlyMatchesAssetControllers() throws Exception {
     assertThat(openApiEndpoints(openApi()))
         .containsExactlyInAnyOrderElementsOf(controllerEndpoints());
@@ -365,7 +392,7 @@ class AssetOpenApiParityTest {
     Map<String, Object> cabinFacets =
         child(paths, "/api/internal/asset/v1/logistics/cabin-facets");
     List<Object> cabinFacetParameters = list(child(cabinFacets, "get").get("parameters"));
-    assertThat(cabinFacetParameters).hasSize(2);
+    assertThat(cabinFacetParameters).hasSize(3);
     Map<String, Object> holdScopeParameter = map(cabinFacetParameters.get(1));
     assertThat(holdScopeParameter)
         .containsEntry("name", "holdScopeId")
@@ -374,6 +401,14 @@ class AssetOpenApiParityTest {
     assertThat(child(holdScopeParameter, "schema"))
         .containsEntry("type", "string")
         .containsEntry("format", "uuid");
+    Map<String, Object> customerVisibleOnlyParameter = map(cabinFacetParameters.get(2));
+    assertThat(customerVisibleOnlyParameter)
+        .containsEntry("name", "customerVisibleOnly")
+        .containsEntry("in", "query")
+        .containsEntry("required", false);
+    assertThat(child(customerVisibleOnlyParameter, "schema"))
+        .containsEntry("type", "boolean")
+        .containsEntry("default", false);
     assertThat(list(child(schemas, "CabinFacetResponse").get("required")))
         .contains("categories", "characteristics", "typeDimensions");
     assertThat(child(schemas, "CabinTypeDimensions").toString())
@@ -411,7 +446,7 @@ class AssetOpenApiParityTest {
             "size");
     assertThat(map(customerCatalogParameters.get(1)))
         .containsEntry("name", "holdScopeId")
-        .containsEntry("required", true);
+        .containsEntry("required", false);
     Map<String, Object> characteristicsParameter = map(customerCatalogParameters.get(8));
     assertThat(characteristicsParameter)
         .containsEntry("style", "form")

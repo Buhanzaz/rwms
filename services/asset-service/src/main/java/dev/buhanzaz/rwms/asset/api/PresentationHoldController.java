@@ -41,9 +41,10 @@ public class PresentationHoldController {
   public CabinFacetResponse facets(
       @AuthenticationPrincipal Jwt jwt,
       @RequestParam UUID warehouseId,
-      @RequestParam(required = false) UUID holdScopeId) {
+      @RequestParam(required = false) UUID holdScopeId,
+      @RequestParam(defaultValue = "false") boolean customerVisibleOnly) {
     access.requireLogisticsAssetAccess(jwt);
-    return service.facets(warehouseId, holdScopeId);
+    return service.facets(warehouseId, holdScopeId, customerVisibleOnly);
   }
 
   /** Returns warehouse cabin facts without checking availability or creating a hold. */

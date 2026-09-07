@@ -1169,7 +1169,7 @@ class HttpLogisticsDependencyGatewayTest {
                 MediaType.APPLICATION_JSON));
 
     LogisticsDependencyGateway.CabinFacets facets =
-        gateway.readAvailableCabinFacets(warehouseId, holdScopeId);
+        gateway.readAvailableCabinFacets(warehouseId, holdScopeId, false);
 
     assertThat(facets.warehouseId()).isEqualTo(warehouseId);
     assertThat(facets.cabinTypes()).containsExactly("БК-1");
@@ -1202,7 +1202,8 @@ class HttpLogisticsDependencyGatewayTest {
         .expect(
             requestTo(
                 "http://asset.test/api/internal/asset/v1/logistics/cabin-facets?warehouseId="
-                    + warehouseId))
+                    + warehouseId
+                    + "&customerVisibleOnly=true"))
         .andExpect(method(HttpMethod.GET))
         .andExpect(header("Authorization", "Bearer test-asset.logistics"))
         .andRespond(
@@ -1220,7 +1221,7 @@ class HttpLogisticsDependencyGatewayTest {
                     warehouseId, null, null, null, null, null, null, null, List.of(), 0, 20)
                 .content())
         .isEmpty();
-    assertThat(gateway.readAvailableCabinFacets(warehouseId, null).warehouseId())
+    assertThat(gateway.readAvailableCabinFacets(warehouseId, null, true).warehouseId())
         .isEqualTo(warehouseId);
     server.verify();
   }

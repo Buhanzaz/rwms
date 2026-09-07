@@ -1,22 +1,37 @@
-import { useMemo, useState, type FormEvent } from "react"
+import { useMemo, useState, type CSSProperties, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core"
+import {
+  arrayMove,
+  rectSortingStrategy,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+} from "@dnd-kit/sortable"
+import { CSS } from "@dnd-kit/utilities"
 import {
   Add01Icon,
   Delete02Icon,
+  DragDropVerticalIcon,
   PencilEdit01Icon,
 } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { toast } from "sonner"
 
 import {
-  OperationsListGrid,
-  type OperationsListGridColumn,
-} from "@/components/operations-list-grid"
-import {
   createCabinCatalogItem,
   createIdempotencyKey,
   deleteCabinCatalogItem,
   getCabinSettings,
+  replaceCabinCatalogOrder,
   replaceCabinTypeDimensions,
   updateCabinCatalogItem,
   type CabinCatalogItem,
@@ -27,7 +42,13 @@ import { isGlobalAdministrator } from "@/features/auth/auth-model"
 import { useAuth } from "@/features/auth/use-auth"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Card,
+  CardContent,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
@@ -75,6 +96,13 @@ const catalogKindSingularLabels: Record<CabinCatalogKind, string> = {
   CHARACTERISTIC: "характеристику",
 }
 
+const catalogKindEditorLabels: Record<CabinCatalogKind, string> = {
+  TYPE: "типа бытовки",
+  DIMENSION: "габарита",
+  FINISHING: "отделки",
+  CHARACTERISTIC: "характеристики",
+}
+
 type CatalogEditorState =
   | { mode: "create"; kind: CabinCatalogKind }
   | { mode: "edit"; item: CabinCatalogItem }
@@ -84,6 +112,8 @@ type SettingsMutation = {
   success: string
   close: () => void
   keepOpenOnConflict?: boolean
+  refreshOnError?: boolean
+  onError?: () => void
 }
 
 function errorMessage(error: unknown, stale = false) {
@@ -117,12 +147,19 @@ function CatalogItemDialog({
   pending: boolean
   serverError: string | null
   onOpenChange: (open: boolean) => void
-  onSave: (input: { name: string; active: boolean }) => void
+  onSave: (input: {
+    name: string
+    active: boolean
+    customerVisible?: boolean
+  }) => void
   onDelete?: () => void
 }) {
   const item = editor.mode === "edit" ? editor.item : null
   const [name, setName] = useState(item?.name ?? "")
   const [active, setActive] = useState(item?.active ?? true)
+  const [customerVisible, setCustomerVisible] = useState(
+    item?.customerVisible ?? true
+  )
   const [validationError, setValidationError] = useState<string | null>(null)
   const kind = editor.mode === "create" ? editor.kind : editor.item.kind
   const formError = validationError ?? serverError
@@ -136,7 +173,7 @@ function CatalogItemDialog({
     }
 
     setValidationError(null)
-    onSave({ name: value, active })
+    onSave({ name: value, active, customerVisible })
   }
 
   return (
@@ -145,7 +182,7 @@ function CatalogItemDialog({
         <DialogHeader>
           <DialogTitle>
             {item
-              ? "Настройка бытовки"
+              ? `Настройка ${catalogKindEditorLabels[kind]}`
               : `Новая запись: ${catalogKindLabels[kind]}`}
           </DialogTitle>
           <DialogDescription>
@@ -176,6 +213,23 @@ function CatalogItemDialog({
               />
               <FieldContent>
                 <FieldLabel htmlFor="cabin-catalog-active">Активна</FieldLabel>
+              </FieldContent>
+            </Field>
+          ) : null}
+
+          {item?.kind === "CHARACTERISTIC" ? (
+            <Field orientation="horizontal">
+              <Checkbox
+                id="cabin-catalog-customer-visible"
+                checked={customerVisible}
+                onCheckedChange={(checked) =>
+                  setCustomerVisible(checked === true)
+                }
+              />
+              <FieldContent>
+                <FieldLabel htmlFor="cabin-catalog-customer-visible">
+                  Отображать клиенту
+                </FieldLabel>
               </FieldContent>
             </Field>
           ) : null}
@@ -378,6 +432,110 @@ function CabinCatalogDeleteDialog({
   )
 }
 
+function orderCatalogItems(items: CabinCatalogItem[]) {
+  return items
+    .slice()
+    .sort(
+      (left, right) =>
+        left.sortOrder - right.sortOrder || left.id.localeCompare(right.id)
+    )
+}
+
+function SortableCatalogCard({
+  kind,
+  item,
+  linkedDimensions,
+  pending,
+  onEdit,
+  onEditDimensions,
+}: {
+  kind: CabinCatalogKind
+  item: CabinCatalogItem
+  linkedDimensions: (item: CabinCatalogItem) => string[]
+  pending: boolean
+  onEdit: (item: CabinCatalogItem) => void
+  onEditDimensions: (type: CabinCatalogItem) => void
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: item.id, disabled: pending })
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  }
+  const dimensions = linkedDimensions(item)
+
+  return (
+    <Card
+      ref={setNodeRef}
+      style={style}
+      size="sm"
+      className={isDragging ? "relative z-10 opacity-70 shadow-lg" : undefined}
+    >
+      <CardHeader className="flex items-start gap-2">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`Изменить порядок ${item.name}`}
+          disabled={pending}
+          {...attributes}
+          {...listeners}
+        >
+          <HugeiconsIcon icon={DragDropVerticalIcon} aria-hidden="true" />
+        </Button>
+        <CardTitle className="min-w-0 flex-1 pt-2 text-sm break-words">
+          {item.name}
+        </CardTitle>
+      </CardHeader>
+
+      <CardContent className="flex min-h-12 flex-wrap items-start gap-2">
+        <StatusBadge active={item.active} />
+        {kind === "CHARACTERISTIC" ? (
+          <Badge variant={item.customerVisible ? "secondary" : "outline"}>
+            {item.customerVisible ? "Клиенту" : "Скрыта от клиента"}
+          </Badge>
+        ) : null}
+        {kind === "TYPE" ? (
+          <p className="w-full text-sm text-muted-foreground">
+            Габариты: {dimensions.length > 0 ? dimensions.join(", ") : "—"}
+          </p>
+        ) : null}
+      </CardContent>
+
+      <CardFooter className="mt-auto justify-end gap-2 border-t">
+        {kind === "TYPE" ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={pending}
+            aria-label={`Настроить габариты ${item.name}`}
+            onClick={() => onEditDimensions(item)}
+          >
+            Габариты
+          </Button>
+        ) : null}
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="outline"
+          disabled={pending}
+          aria-label={`Изменить ${item.name}`}
+          onClick={() => onEdit(item)}
+        >
+          <HugeiconsIcon icon={PencilEdit01Icon} aria-hidden="true" />
+        </Button>
+      </CardFooter>
+    </Card>
+  )
+}
+
 function CatalogSection({
   kind,
   items,
@@ -385,6 +543,7 @@ function CatalogSection({
   pending,
   onEdit,
   onEditDimensions,
+  onReorder,
 }: {
   kind: CabinCatalogKind
   items: CabinCatalogItem[]
@@ -392,96 +551,81 @@ function CatalogSection({
   pending: boolean
   onEdit: (item: CabinCatalogItem) => void
   onEditDimensions: (type: CabinCatalogItem) => void
+  onReorder: (items: CabinCatalogItem[]) => void
 }) {
+  const [orderedItems, setOrderedItems] = useState(() =>
+    orderCatalogItems(items)
+  )
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  )
   const dimensionsById = new Map(
-    settings.dimensions.map((dimension) => [dimension.id, dimension.name])
+    settings.dimensions.map((dimension) => [dimension.id, dimension])
   )
   const linkedDimensions = (item: CabinCatalogItem) =>
     kind === "TYPE"
       ? settings.typeDimensions
           .filter((link) => link.typeId === item.id)
+          .flatMap((link) => {
+            const dimension = dimensionsById.get(link.dimensionId)
+            return dimension ? [dimension] : []
+          })
           .sort(
             (left, right) =>
               left.sortOrder - right.sortOrder ||
-              left.dimensionId.localeCompare(right.dimensionId)
+              left.id.localeCompare(right.id)
           )
-          .flatMap((link) => {
-            const name = dimensionsById.get(link.dimensionId)
-            return name ? [name] : []
-          })
+          .map((dimension) => dimension.name)
       : []
-  const columns: OperationsListGridColumn<CabinCatalogItem>[] = [
-    {
-      id: "name",
-      label: "Название",
-      getSortValue: (item) => item.name,
-      render: (item) => <span className="font-medium">{item.name}</span>,
-    },
-    {
-      id: "status",
-      label: "Доступность",
-      getSortValue: (item) => (item.active ? 1 : 0),
-      render: (item) => <StatusBadge active={item.active} />,
-    },
-    ...(kind === "TYPE"
-      ? [
-          {
-            id: "dimensions",
-            label: "Габариты",
-            getSortValue: (item) => linkedDimensions(item).join(", "),
-            render: (item) => {
-              const names = linkedDimensions(item)
-              return names.length > 0 ? names.join(", ") : "—"
-            },
-          } satisfies OperationsListGridColumn<CabinCatalogItem>,
-        ]
-      : []),
-    {
-      id: "actions",
-      label: "Действия",
-      getSortValue: () => null,
-      className: "w-0",
-      cellClassName: "w-0",
-      render: (item) => (
-        <div className="flex justify-end gap-2">
-          {kind === "TYPE" ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={pending}
-              aria-label={`Настроить габариты ${item.name}`}
-              onClick={() => onEditDimensions(item)}
-            >
-              Габариты
-            </Button>
-          ) : null}
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="outline"
-            disabled={pending}
-            aria-label={`Изменить ${item.name}`}
-            onClick={() => onEdit(item)}
-          >
-            <HugeiconsIcon icon={PencilEdit01Icon} aria-hidden="true" />
-          </Button>
-        </div>
-      ),
-    },
-  ]
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event
+
+    if (!over || active.id === over.id) return
+
+    const sourceIndex = orderedItems.findIndex((item) => item.id === active.id)
+    const targetIndex = orderedItems.findIndex((item) => item.id === over.id)
+
+    if (sourceIndex < 0 || targetIndex < 0) return
+
+    const reordered = arrayMove(orderedItems, sourceIndex, targetIndex)
+    setOrderedItems(reordered)
+    onReorder(reordered)
+  }
 
   return (
     <section
-      className="flex min-h-0 flex-col gap-3"
+      className="flex min-h-0 flex-1 flex-col gap-3"
       aria-label={catalogKindLabels[kind]}
     >
-      {items.length > 0 ? (
-        <OperationsListGrid
-          className="min-h-0 flex-1 overflow-auto bg-muted/70"
-          items={items}
-          columns={columns}
-        />
+      {orderedItems.length > 0 ? (
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext
+            items={orderedItems.map((item) => item.id)}
+            strategy={rectSortingStrategy}
+          >
+            <div className="grid min-h-0 flex-1 grid-cols-[repeat(auto-fit,minmax(17rem,1fr))] gap-3 overflow-auto rounded-lg bg-muted/70 p-3">
+              {orderedItems.map((item) => (
+                <SortableCatalogCard
+                  key={item.id}
+                  kind={kind}
+                  item={item}
+                  linkedDimensions={linkedDimensions}
+                  pending={pending}
+                  onEdit={onEdit}
+                  onEditDimensions={onEditDimensions}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
       ) : (
         <div className="flex min-h-36 items-center justify-center rounded-lg border bg-muted/55 px-4 text-center text-sm text-muted-foreground">
           Записей пока нет.
@@ -505,6 +649,7 @@ export function CabinCompositionSettingsPage() {
   )
   const [actionError, setActionError] = useState<string | null>(null)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [orderResetVersion, setOrderResetVersion] = useState(0)
   const canManage = Boolean(
     currentUser && isGlobalAdministrator(currentUser.globalRole)
   )
@@ -531,9 +676,12 @@ export function CabinCompositionSettingsPage() {
       const message = errorMessage(error, stale)
       setActionError(message)
       toast.error(message)
+      command.onError?.()
       if (stale) {
         setEditor(null)
         setDimensionsEditor(null)
+      }
+      if (stale || command.refreshOnError) {
         await refresh()
       }
     },
@@ -667,12 +815,32 @@ export function CabinCompositionSettingsPage() {
         <CabinStatusColorsSettings />
       ) : (
         <CatalogSection
+          key={`${activeKind}-${orderResetVersion}-${itemsByKind[activeKind]
+            .map((item) => `${item.id}:${item.version}:${item.sortOrder}`)
+            .join("|")}`}
           kind={activeKind}
           items={itemsByKind[activeKind]}
           settings={settings}
           pending={mutation.isPending || deleteMutation.isPending}
           onEdit={(item) => setEditor({ mode: "edit", item })}
           onEditDimensions={setDimensionsEditor}
+          onReorder={(items) =>
+            run({
+              execute: () =>
+                replaceCabinCatalogOrder({
+                  accessToken,
+                  kind: activeKind,
+                  items: items.map((item) => ({
+                    id: item.id,
+                    expectedVersion: item.version,
+                  })),
+                }),
+              success: "Порядок настроек сохранён.",
+              close: () => {},
+              refreshOnError: true,
+              onError: () => setOrderResetVersion((current) => current + 1),
+            })
+          }
         />
       )}
 
@@ -715,6 +883,10 @@ export function CabinCompositionSettingsPage() {
                   expectedVersion: editor.item.version,
                   name: input.name,
                   active: input.active,
+                  customerVisible:
+                    editor.item.kind === "CHARACTERISTIC"
+                      ? input.customerVisible
+                      : undefined,
                 }),
               success: "Настройка сохранена.",
               close: () => setEditor(null),

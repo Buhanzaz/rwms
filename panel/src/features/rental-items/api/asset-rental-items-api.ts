@@ -168,8 +168,15 @@ export type CabinCatalogItem = CabinCatalogValue & {
   version: number
   kind: CabinCatalogKind
   active: boolean
+  sortOrder: number
+  customerVisible: boolean
   createdAt: string
   updatedAt: string
+}
+
+export type CabinCatalogOrderItem = {
+  id: string
+  expectedVersion: number
 }
 
 export type CabinTypeDimension = {
@@ -324,7 +331,17 @@ function parseCabinCatalogItem(value: unknown): CabinCatalogItem {
     throw new Error(INVALID_RESPONSE_MESSAGE)
   }
 
-  const { id, version, kind, name, active, createdAt, updatedAt } = value
+  const {
+    id,
+    version,
+    kind,
+    name,
+    active,
+    sortOrder,
+    customerVisible,
+    createdAt,
+    updatedAt,
+  } = value
   if (
     !isUuid(id) ||
     !isNonNegativeSafeInteger(version) ||
@@ -332,13 +349,25 @@ function parseCabinCatalogItem(value: unknown): CabinCatalogItem {
     typeof name !== "string" ||
     name.trim() === "" ||
     typeof active !== "boolean" ||
+    !isNonNegativeSafeInteger(sortOrder) ||
+    typeof customerVisible !== "boolean" ||
     !isIsoDateTime(createdAt) ||
     !isIsoDateTime(updatedAt)
   ) {
     throw new Error(INVALID_RESPONSE_MESSAGE)
   }
 
-  return { id, version, kind, name, active, createdAt, updatedAt }
+  return {
+    id,
+    version,
+    kind,
+    name,
+    active,
+    sortOrder,
+    customerVisible,
+    createdAt,
+    updatedAt,
+  }
 }
 
 function parseCabinTypeDimension(value: unknown): CabinTypeDimension {
@@ -935,6 +964,7 @@ export async function updateCabinCatalogItem(params: {
   expectedVersion: number
   name: string
   active: boolean
+  customerVisible?: boolean
 }): Promise<CabinCatalogItem> {
   try {
     const response = await bearerRequest<unknown>(
@@ -946,10 +976,33 @@ export async function updateCabinCatalogItem(params: {
           expectedVersion: params.expectedVersion,
           name: params.name,
           active: params.active,
+          ...(params.customerVisible === undefined
+            ? {}
+            : { customerVisible: params.customerVisible }),
         }),
       }
     )
     return parseCabinCatalogItem(response)
+  } catch (error) {
+    return mapConflict(error)
+  }
+}
+
+export async function replaceCabinCatalogOrder(params: {
+  accessToken: string | null
+  kind: CabinCatalogKind
+  items: CabinCatalogOrderItem[]
+}): Promise<CabinSettings> {
+  try {
+    const response = await bearerRequest<unknown>(
+      requireAccessToken(params.accessToken),
+      `${cabinSettingsEndpoint()}/${params.kind}/order`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ items: params.items }),
+      }
+    )
+    return parseCabinSettings(response)
   } catch (error) {
     return mapConflict(error)
   }

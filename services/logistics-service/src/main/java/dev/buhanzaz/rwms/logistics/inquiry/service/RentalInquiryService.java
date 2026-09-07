@@ -187,7 +187,8 @@ public class RentalInquiryService {
             dependencies.readWarehouseIdentity(warehouseId);
         if (!warehouse.active()) continue;
         LogisticsDependencyGateway.CabinFacets facets =
-            dependencies.readAvailableCabinFacets(warehouseId, inquiry.getId());
+            dependencies.readAvailableCabinFacets(
+                warehouseId, inquiry.getId(), "CUSTOMER".equals(actor.role()));
         response.add(
             new CabinFacetWarehouse(
                 warehouseId,
