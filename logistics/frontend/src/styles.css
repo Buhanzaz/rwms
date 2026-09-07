@@ -171,7 +171,7 @@ html[data-theme="light"] .sidebar__brand-copy strong { color: #204b79; }
 .app-shell--map:has(.map-stage--yandex) .slot-planner { bottom: calc(var(--workspace-bottom, 12px) + 48px); }
 .app-shell--map:has(.map-stage--yandex) .simulation-dock { bottom: 60px; }
 .app-shell--map .map-stage--yandex .maplibregl-ctrl-bottom-right { bottom: calc(var(--map-controls-bottom, 12px) + 48px); }
-.map-overlay.map-settings-error { z-index: 40; pointer-events: auto; top: var(--workspace-top, 12px); left: var(--map-controls-left, 12px); max-width: min(380px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--panel); color: var(--text); }
+.map-overlay.map-settings-error { z-index: 40; pointer-events: auto; top: calc(var(--workspace-top, 12px) + 54px); left: var(--map-controls-left, 12px); max-width: min(380px, calc(100% - var(--map-controls-left, 12px) - var(--map-controls-right, 12px) - 12px)); display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--panel); color: var(--text); }
 .map-overlay { position: absolute; z-index: 12; pointer-events: none; }
 .map-toolbar { top: var(--workspace-top, 12px); left: var(--map-controls-left, 12px); display: flex; gap: 5px; padding: 5px; pointer-events: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--glass); box-shadow: 0 10px 30px var(--shadow); }
 .map-toolbar button { width: 34px; height: 34px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 8px; background: transparent; cursor: pointer; }
