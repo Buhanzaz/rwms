@@ -118,7 +118,7 @@ internal val CustomerRegistrationButtonStyle = CustomerActionButtonStyle(
     fillOpacity = 0.94f,
 )
 
-/** Lets JVM Compose tests replace Media3 with the deterministic water base color. */
+/** Lets JVM Compose tests use a frame from the supplied video without running Media3. */
 internal val LocalCustomerStoreVideoBackgroundEnabled = staticCompositionLocalOf { true }
 
 /** Draws the exact imported BLOCK BOX vector without raster scaling. */
@@ -173,21 +173,19 @@ internal fun CustomerShellSurface(
     )
 }
 
-/** The moving water motif is confined to the welcome artwork, away from forms and product data. */
+/** Shows the supplied authentication artwork without a wash, scrim or opaque overlay. */
 @Composable
 internal fun CustomerWelcomeAtmosphere(modifier: Modifier = Modifier) {
-    val background = MaterialTheme.colorScheme.background
     Box(modifier) {
+        Image(
+            painter = painterResource(R.drawable.background_caustic_poster),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.matchParentSize(),
+        )
         if (LocalCustomerStoreVideoBackgroundEnabled.current) {
             CustomerVideoBackground(R.raw.background_caustic, Modifier.matchParentSize())
-        } else {
-            Box(Modifier.matchParentSize().background(CustomerStoreWaterFallback))
         }
-        Box(
-            Modifier.matchParentSize().background(
-                Brush.verticalGradient(listOf(background.copy(alpha = 0.76f), background)),
-            ),
-        )
     }
 }
 

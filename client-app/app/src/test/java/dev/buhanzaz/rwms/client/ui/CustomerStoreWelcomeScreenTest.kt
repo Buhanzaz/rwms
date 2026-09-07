@@ -4,7 +4,6 @@ import android.app.Application
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.assertIsEnabled
-import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -44,14 +43,17 @@ class CustomerStoreWelcomeScreenTest {
     }
 
     @Test
-    fun `start explains rental and presents only supported account actions`() {
+    fun `start keeps the supplied composition without marketing copy`() {
         setAuthContent()
 
         composeRule.onNodeWithTag("customer-auth-login").assertIsEnabled()
         composeRule.onNodeWithTag("customer-auth-register").assertIsEnabled()
-        composeRule.onNodeWithTag("customer-guest-access-unavailable").assertHasNoClickAction()
-        composeRule.onNodeWithText("Аренда бытовок").assertExists()
-        composeRule.onNodeWithText("Продолжить без аккаунта").assertDoesNotExist()
+        composeRule.onNodeWithText("Аренда бытовок").assertDoesNotExist()
+        composeRule.onNodeWithText("Бытовка под ваши задачи").assertDoesNotExist()
+        composeRule.onNodeWithText("Каталог и заказы доступны после входа.").assertDoesNotExist()
+        val screen = composeRule.onNodeWithTag("customer-auth-screen").fetchSemanticsNode().boundsInRoot
+        val login = composeRule.onNodeWithTag("customer-auth-login").fetchSemanticsNode().boundsInRoot
+        assertThat(login.top).isGreaterThan(screen.center.y)
     }
 
     @Test

@@ -50,7 +50,7 @@ class CustomerVisualReviewTest {
     fun `renders welcome in light appearance`() {
         setAuth(CustomerAppearanceMode.LIGHT)
 
-        composeRule.onNodeWithText("Аренда бытовок").assertIsDisplayed()
+        composeRule.onNodeWithTag("customer-auth-login").assertIsDisplayed()
         captureRoot("welcome-light")
     }
 
@@ -58,7 +58,7 @@ class CustomerVisualReviewTest {
     fun `renders welcome in dark appearance`() {
         setAuth(CustomerAppearanceMode.DARK)
 
-        composeRule.onNodeWithText("Аренда бытовок").assertIsDisplayed()
+        composeRule.onNodeWithTag("customer-auth-login").assertIsDisplayed()
         captureRoot("welcome-dark")
     }
 
