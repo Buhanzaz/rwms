@@ -2,13 +2,10 @@ import { bearerRequest } from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 
 export type RepairComplexitySetting = {
-  warehouseId: string
   version: number
   lightBoundaryMinutes: number
   mediumBoundaryMinutes: number
   complexBoundaryMinutes: number
-  importedFromTaskBoardVersion: number | null
-  importedAt: string | null
   createdAt: string | null
   updatedAt: string | null
 }
@@ -22,23 +19,14 @@ export type RepairComplexityUpdate = {
 
 export const repairComplexityKeys = {
   all: ["maintenance", "repair-complexity"] as const,
-  warehouse: (warehouseId: string) =>
-    [...repairComplexityKeys.all, warehouseId] as const,
 }
 
-function endpoint(warehouseId: string) {
-  if (!warehouseId.trim()) {
-    throw new Error("Не выбран склад для настройки сложности ремонта.")
-  }
-  return `${getGatewayRuntimeConfig().maintenanceApiBaseUrl}/v1/settings/repair-complexity/${encodeURIComponent(warehouseId)}`
+function endpoint() {
+  return `${getGatewayRuntimeConfig().maintenanceApiBaseUrl}/v1/settings/repair-complexity`
 }
 
 function isVersion(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0
-}
-
-function isNullableVersion(value: unknown): value is number | null {
-  return value === null || isVersion(value)
 }
 
 function isNullableString(value: unknown): value is string | null {
@@ -54,8 +42,7 @@ function parseSetting(value: unknown): RepairComplexitySetting {
 
   const response = value as Record<string, unknown>
   if (
-    typeof response.warehouseId !== "string" ||
-    !response.warehouseId.trim() ||
+    "warehouseId" in response ||
     !isVersion(response.version) ||
     !isVersion(response.lightBoundaryMinutes) ||
     !isVersion(response.mediumBoundaryMinutes) ||
@@ -63,8 +50,6 @@ function parseSetting(value: unknown): RepairComplexitySetting {
     response.lightBoundaryMinutes < 1 ||
     response.lightBoundaryMinutes >= response.mediumBoundaryMinutes ||
     response.mediumBoundaryMinutes >= response.complexBoundaryMinutes ||
-    !isNullableVersion(response.importedFromTaskBoardVersion) ||
-    !isNullableString(response.importedAt) ||
     !isNullableString(response.createdAt) ||
     !isNullableString(response.updatedAt)
   ) {
@@ -74,26 +59,13 @@ function parseSetting(value: unknown): RepairComplexitySetting {
   }
 
   return {
-    warehouseId: response.warehouseId,
     version: response.version,
     lightBoundaryMinutes: response.lightBoundaryMinutes,
     mediumBoundaryMinutes: response.mediumBoundaryMinutes,
     complexBoundaryMinutes: response.complexBoundaryMinutes,
-    importedFromTaskBoardVersion: response.importedFromTaskBoardVersion,
-    importedAt: response.importedAt,
     createdAt: response.createdAt,
     updatedAt: response.updatedAt,
   }
-}
-
-function parseForWarehouse(value: unknown, warehouseId: string) {
-  const setting = parseSetting(value)
-  if (setting.warehouseId !== warehouseId) {
-    throw new Error(
-      "Сервис ремонтов вернул границы сложности ремонта другого склада."
-    )
-  }
-  return setting
 }
 
 function validateUpdate(input: RepairComplexityUpdate) {
@@ -113,26 +85,22 @@ function validateUpdate(input: RepairComplexityUpdate) {
 }
 
 export async function getRepairComplexity(
-  accessToken: string,
-  warehouseId: string
+  accessToken: string
 ) {
-  return parseForWarehouse(
-    await bearerRequest<unknown>(accessToken, endpoint(warehouseId)),
-    warehouseId
+  return parseSetting(
+    await bearerRequest<unknown>(accessToken, endpoint())
   )
 }
 
 export async function updateRepairComplexity(
   accessToken: string,
-  warehouseId: string,
   input: RepairComplexityUpdate
 ) {
   validateUpdate(input)
-  return parseForWarehouse(
-    await bearerRequest<unknown>(accessToken, endpoint(warehouseId), {
+  return parseSetting(
+    await bearerRequest<unknown>(accessToken, endpoint(), {
       method: "PUT",
       body: JSON.stringify(input),
-    }),
-    warehouseId
+    })
   )
 }

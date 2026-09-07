@@ -6,97 +6,55 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
-import dev.buhanzaz.rwms.maintenance.api.EstimateCreationWindowSettingsResponse;
 import dev.buhanzaz.rwms.maintenance.api.ReplaceEstimateCreationWindowSettingsRequest;
 import dev.buhanzaz.rwms.maintenance.domain.EstimateCreationWindowSettings;
-import dev.buhanzaz.rwms.maintenance.mapper.EstimateCreationWindowSettingsResponseMapper;
 import dev.buhanzaz.rwms.maintenance.mapper.EstimateCreationWindowSettingsResponseMapperImpl;
 import dev.buhanzaz.rwms.maintenance.repository.EstimateCreationWindowSettingsRepository;
 import java.util.Optional;
-import java.util.UUID;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 class EstimateCreationWindowSettingsServiceTest {
   private final EstimateCreationWindowSettingsRepository repository =
       mock(EstimateCreationWindowSettingsRepository.class);
-  private final EstimateCreationWindowSettingsResponseMapper mapper =
-      new EstimateCreationWindowSettingsResponseMapperImpl();
-  private EstimateCreationWindowSettingsService service;
-
-  @BeforeEach
-  void setUp() {
-    service = new EstimateCreationWindowSettingsService(repository, mapper);
-  }
+  private final EstimateCreationWindowSettingsService service = new EstimateCreationWindowSettingsService(repository, new EstimateCreationWindowSettingsResponseMapperImpl());
 
   @Test
-  void absentSettingReturnsSevenDayDefaultWithoutWriting() {
-    UUID warehouseId = UUID.randomUUID();
-    when(repository.findById(warehouseId)).thenReturn(Optional.empty());
-
-    assertThat(service.get(warehouseId))
-        .isEqualTo(new EstimateCreationWindowSettingsResponse(warehouseId, 0, 7, null, null));
-    assertThat(service.effectiveDays(warehouseId)).isEqualTo(7);
-    verify(repository, org.mockito.Mockito.times(2)).findById(warehouseId);
-    verifyNoMoreInteractions(repository);
-  }
-
-  @Test
-  void versionZeroCreatesWarehouseSettingAndExistingValueUsesStrictCas() {
-    UUID warehouseId = UUID.randomUUID();
-    when(repository.findById(warehouseId)).thenReturn(Optional.empty());
-    when(repository.saveAndFlush(any(EstimateCreationWindowSettings.class)))
-        .thenAnswer(invocation -> invocation.getArgument(0));
-
-    assertThat(
-            service.replace(
-                warehouseId, new ReplaceEstimateCreationWindowSettingsRequest(0L, 14)))
-        .extracting(EstimateCreationWindowSettingsResponse::days)
-        .isEqualTo(14);
-
-    EstimateCreationWindowSettings existing =
-        EstimateCreationWindowSettings.create(warehouseId, 14);
-    when(repository.findById(warehouseId)).thenReturn(Optional.of(existing));
+  void globalReplacementUsesStrictCasAndPolicyReadsTheSameValue() {
+    EstimateCreationWindowSettings existing = EstimateCreationWindowSettings.create(7);
+    when(repository.findById(EstimateCreationWindowSettings.SINGLETON_ID))
+        .thenReturn(Optional.of(existing));
     when(repository.saveAndFlush(existing)).thenReturn(existing);
 
-    assertThat(
-            service.replace(
-                warehouseId, new ReplaceEstimateCreationWindowSettingsRequest(0L, 30))
-                .days())
-        .isEqualTo(30);
+    assertThat(service.get().days()).isEqualTo(7);
+    assertThat(service.replace(new ReplaceEstimateCreationWindowSettingsRequest(0L, 14)).days())
+        .isEqualTo(14);
+    assertThat(service.effectiveDays()).isEqualTo(14);
     assertThatThrownBy(
-            () ->
-                service.replace(
-                    warehouseId, new ReplaceEstimateCreationWindowSettingsRequest(1L, 31)))
-        .isInstanceOf(MaintenanceConflictException.class)
-        .extracting(exception -> ((MaintenanceConflictException) exception).code())
-        .isEqualTo("MAINTENANCE_VERSION_CONFLICT");
+            () -> service.replace(new ReplaceEstimateCreationWindowSettingsRequest(1L, 31)))
+        .isInstanceOf(MaintenanceConflictException.class);
+    assertThat(service.effectiveDays()).isEqualTo(14);
   }
 
   @Test
-  void absentSettingRejectsNonzeroExpectedVersion() {
-    UUID warehouseId = UUID.randomUUID();
-    when(repository.findById(warehouseId)).thenReturn(Optional.empty());
-
+  void missingSeedIsAnErrorAndNeverBecomesAnImplicitDefault() {
+    when(repository.findById(EstimateCreationWindowSettings.SINGLETON_ID)).thenReturn(Optional.empty());
+    assertThatThrownBy(service::get).isInstanceOf(IllegalStateException.class);
+    assertThatThrownBy(service::effectiveDays).isInstanceOf(IllegalStateException.class);
     assertThatThrownBy(
-            () ->
-                service.replace(
-                    warehouseId, new ReplaceEstimateCreationWindowSettingsRequest(2L, 7)))
-        .isInstanceOf(MaintenanceConflictException.class);
+            () -> service.replace(new ReplaceEstimateCreationWindowSettingsRequest(0L, 14)))
+        .isInstanceOf(IllegalStateException.class);
     verify(repository, never()).saveAndFlush(any());
   }
 
   @Test
   void domainEnforcesOneThroughThreeThousandSixHundredFiftyDays() {
-    UUID warehouseId = UUID.randomUUID();
-    assertThatThrownBy(() -> EstimateCreationWindowSettings.create(warehouseId, 0))
+    assertThatThrownBy(() -> EstimateCreationWindowSettings.create(0))
         .isInstanceOf(IllegalArgumentException.class);
-    assertThatThrownBy(() -> EstimateCreationWindowSettings.create(warehouseId, 3651))
+    assertThatThrownBy(() -> EstimateCreationWindowSettings.create(3651))
         .isInstanceOf(IllegalArgumentException.class);
-    assertThat(EstimateCreationWindowSettings.create(warehouseId, 3650).getDays())
+    assertThat(EstimateCreationWindowSettings.create(3650).getDays())
         .isEqualTo(3650);
   }
 }

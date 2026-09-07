@@ -27,6 +27,9 @@ import type { QueueDefinitionDto } from "@/features/settings/task-board/model/ta
 
 const mocks = vi.hoisted(() => ({
   level: "VIEW" as WarehouseAccessLevel,
+  noWarehouses: false,
+  windowCard: vi.fn(),
+  complexityCard: vi.fn(),
   getCatalog: vi.fn(),
   getCatalogCanvas: vi.fn(),
   getCatalogSnapshot: vi.fn(),
@@ -54,8 +57,18 @@ vi.mock("@/features/auth/use-auth", () => ({
 
 vi.mock(
   "@/features/settings/estimates-repairs/estimate-creation-window-settings-card",
-  () => ({ EstimateCreationWindowSettingsCard: () => null })
+  () => ({ EstimateCreationWindowSettingsCard: (props: { accessToken: string; readOnly: boolean }) => {
+    mocks.windowCard(props)
+    return <div>Общий срок сметы</div>
+  } })
 )
+
+vi.mock("@/features/settings/kpi/repair-complexity-settings-card", () => ({
+  GlobalRepairComplexitySettingsCard: (props: { accessToken: string; readOnly: boolean }) => {
+    mocks.complexityCard(props)
+    return <div>Общие границы сложности</div>
+  },
+}))
 
 vi.mock("@/features/settings/task-board/api/task-board-settings-api", () => ({
   taskBoardSettingsClient: {
@@ -359,7 +372,7 @@ function currentUser(level: WarehouseAccessLevel): CurrentUser {
     globalRole: level === "VIEW" ? "WAREHOUSE_MANAGER" : "WMS_ADMIN",
     rentalAccess: false,
     warehouseAccessAll: false,
-    warehouseAccesses: [{ warehouseId: WAREHOUSE_ID, level }],
+    warehouseAccesses: mocks.noWarehouses ? [] : [{ warehouseId: WAREHOUSE_ID, level }],
   }
 }
 
@@ -409,6 +422,7 @@ function getCanvasMetric(node: HTMLElement, label: string) {
 }
 
 beforeEach(() => {
+  mocks.noWarehouses = false
   vi.stubGlobal("ResizeObserver", ResizeObserverMock)
   Object.defineProperties(HTMLElement.prototype, {
     hasPointerCapture: {
@@ -651,6 +665,7 @@ describe("maintenance catalog settings", () => {
     const user = userEvent.setup()
     renderPage("MANAGE")
 
+    await findCatalogSection("Конструктор каталога смет")
     const navigation = await screen.findByRole("navigation", {
       name: "Разделы каталога смет",
     })
@@ -661,6 +676,7 @@ describe("maintenance catalog settings", () => {
       "Материалы",
       "Мебель",
       "Общее",
+      "Сроки и сложность",
     ]
 
     const tabsList = within(navigation).getByRole("tablist")
@@ -1309,4 +1325,35 @@ describe("maintenance catalog settings", () => {
       screen.queryByRole("button", { name: "Отменить стрелку" })
     ).toBeNull()
   })
+  it("opens the common settings without a warehouse or an initialized catalog", async () => {
+    const user = userEvent.setup()
+    mocks.noWarehouses = true
+    renderPage("MANAGE", null)
+    await user.click(await screen.findByRole("tab", { name: "Сроки и сложность" }))
+    expect(await screen.findByText("Общий срок сметы")).toBeTruthy()
+    expect(screen.getByText("Общие границы сложности")).toBeTruthy()
+    expect(mocks.windowCard).toHaveBeenLastCalledWith({ accessToken: "maintenance-token", readOnly: false })
+    expect(mocks.complexityCard).toHaveBeenLastCalledWith({ accessToken: "maintenance-token", readOnly: false })
+    expect(screen.getByTestId("location-search").textContent).toBe("?catalog=maintenance-settings")
+    expect(screen.queryByRole("combobox", { name: "Объект" })).toBeNull()
+  })
+
+  it("opens global settings from a deep link with read-only access for warehouse managers", async () => {
+    renderPage("VIEW", new Error("catalog unavailable"), canvasFixture(), ["/settings/estimates-repairs?catalog=maintenance-settings"])
+    expect(await screen.findByText("Общий срок сметы")).toBeTruthy()
+    expect(mocks.windowCard).toHaveBeenLastCalledWith({ accessToken: "maintenance-token", readOnly: true })
+    expect(mocks.complexityCard).toHaveBeenLastCalledWith({ accessToken: "maintenance-token", readOnly: true })
+  })
+
+  it("returns from common settings to the selected catalog section", async () => {
+    const user = userEvent.setup()
+    renderPage("MANAGE")
+    await findCatalogSection("Конструктор каталога смет")
+    await user.click(screen.getByRole("tab", { name: "Сроки и сложность" }))
+    expect(await screen.findByText("Общий срок сметы")).toBeTruthy()
+    await user.click(screen.getByRole("tab", { name: "Конструктор каталога смет" }))
+    expect(await screen.findByRole("button", { name: /^Окна/ })).toBeTruthy()
+    expect(screen.queryByText("Общий срок сметы")).toBeNull()
+  })
+
 })

@@ -406,8 +406,9 @@ rework and write-off decisions. Materials and works are maintenance catalog
 concepts; their effects on assets, inventory or tasks cross explicit service
 boundaries.
 
-The versioned repair catalog and repair-complexity display colors are global
-installation settings. Their browser/API boundary has no warehouse selector;
+The versioned repair catalog, repair-complexity boundaries and display colors are global
+installation settings. Replacing the boundaries atomically enqueues active repairs across all
+warehouses for durable recalculation; warehouse readiness fences remain authoritative. Their browser/API boundary has no warehouse selector;
 catalog reads are available to authenticated RWMS users and mutations are
 restricted to global administrators. The catalog row's retained `warehouseId`
 is internal audit/routing context only and never partitions catalog content.
@@ -425,7 +426,7 @@ and become effective without an asset-service custody or warehouse-balance
 effect. If contents appear before queuing the repair, the unaccounted path
 fails closed rather than bypassing normal accounting.
 
-Each warehouse has a version-fenced estimate-creation window setting, default
+All warehouses share one version-fenced estimate-creation window, default
 `7` days and bounded to `1..3650`. Maintenance evaluates the inclusive deadline
 from logistics-owned physical return time in the warehouse timezone; with an
 arrival on 1 August and a seven-day setting, 8 August is the last creation day

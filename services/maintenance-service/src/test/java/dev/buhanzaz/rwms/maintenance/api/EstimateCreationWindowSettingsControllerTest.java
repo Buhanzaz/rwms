@@ -10,7 +10,6 @@ import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
 import dev.buhanzaz.rwms.maintenance.service.EstimateCreationWindowSettingsService;
-import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 import org.springframework.security.access.AccessDeniedException;
@@ -25,33 +24,31 @@ class EstimateCreationWindowSettingsControllerTest {
   private final Jwt jwt = mock(Jwt.class);
 
   @Test
-  void getAndPutRequireManageBeforeDelegating() {
-    UUID warehouseId = UUID.randomUUID();
+  void getRequiresGlobalReadAndPutRequiresGlobalManageBeforeDelegating() {
     ReplaceEstimateCreationWindowSettingsRequest request =
         new ReplaceEstimateCreationWindowSettingsRequest(0L, 7);
     EstimateCreationWindowSettingsResponse response =
-        new EstimateCreationWindowSettingsResponse(warehouseId, 0, 7, null, null);
-    when(service.get(warehouseId)).thenReturn(response);
-    when(service.replace(warehouseId, request)).thenReturn(response);
+        new EstimateCreationWindowSettingsResponse(0, 7, null, null);
+    when(service.get()).thenReturn(response);
+    when(service.replace(request)).thenReturn(response);
 
-    assertThat(controller.get(jwt, warehouseId)).isSameAs(response);
-    assertThat(controller.replace(jwt, warehouseId, request)).isSameAs(response);
+    assertThat(controller.get(jwt)).isSameAs(response);
+    assertThat(controller.replace(jwt, request)).isSameAs(response);
 
     InOrder calls = inOrder(authorizer, service);
-    calls.verify(authorizer).requireManage(jwt, warehouseId);
-    calls.verify(service).get(warehouseId);
-    calls.verify(authorizer).requireManage(jwt, warehouseId);
-    calls.verify(service).replace(warehouseId, request);
+    calls.verify(authorizer).requireGlobalRead(jwt);
+    calls.verify(service).get();
+    calls.verify(authorizer).requireGlobalManage(jwt);
+    calls.verify(service).replace(request);
   }
 
   @Test
-  void deniedManageAccessStopsRead() {
-    UUID warehouseId = UUID.randomUUID();
+  void deniedGlobalAccessStopsRead() {
     doThrow(new AccessDeniedException("denied"))
         .when(authorizer)
-        .requireManage(jwt, warehouseId);
+        .requireGlobalRead(jwt);
 
-    assertThatThrownBy(() -> controller.get(jwt, warehouseId))
+    assertThatThrownBy(() -> controller.get(jwt))
         .isInstanceOf(AccessDeniedException.class);
     verifyNoInteractions(service);
   }

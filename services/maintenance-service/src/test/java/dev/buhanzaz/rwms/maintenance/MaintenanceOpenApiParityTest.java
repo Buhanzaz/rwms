@@ -59,7 +59,6 @@ import dev.buhanzaz.rwms.maintenance.api.LogisticsRepairPlaceProjectionAllocatio
 import dev.buhanzaz.rwms.maintenance.api.LogisticsRepairPlaceProjectionResponse;
 import dev.buhanzaz.rwms.maintenance.api.RepairComplexitySettingsController;
 import dev.buhanzaz.rwms.maintenance.api.RepairComplexitySettingsResponse;
-import dev.buhanzaz.rwms.maintenance.api.ImportRepairComplexitySettingsRequest;
 import dev.buhanzaz.rwms.maintenance.api.ReplaceRepairComplexitySettingsRequest;
 import dev.buhanzaz.rwms.maintenance.api.RepairComplexityColorsController;
 import dev.buhanzaz.rwms.maintenance.api.RepairComplexityColorsResponse;
@@ -159,12 +158,12 @@ class MaintenanceOpenApiParityTest {
   private static final List<OperationSpec> OPERATIONS = canonicalOperations();
 
   @Test
-  void allFiftyNinePathsAndSeventyOneOperationsExactlyMatchTheApprovedAcceptanceMatrix()
+  void allFiftyEightPathsAndSeventyOperationsExactlyMatchTheApprovedAcceptanceMatrix()
       throws Exception {
     Map<String, Object> document = openApi();
-    assertThat(child(document, "paths")).hasSize(59);
-    assertThat(openApiOperationCount(document)).isEqualTo(71);
-    assertThat(controllerOperations()).hasSize(71);
+    assertThat(child(document, "paths")).hasSize(58);
+    assertThat(openApiOperationCount(document)).isEqualTo(70);
+    assertThat(controllerOperations()).hasSize(70);
 
     for (OperationSpec expected : OPERATIONS) {
       assertOpenApiOperation(document, expected);
@@ -1087,38 +1086,30 @@ class MaintenanceOpenApiParityTest {
         "200", "RepairCapacitySettings", false,
         "400", "401", "403", "409"));
     result.add(op("GET",
-        "/api/maintenance/v1/settings/estimate-creation-window/{warehouseId}",
+            "/api/maintenance/v1/settings/estimate-creation-window",
         "getEstimateCreationWindowSettings", EstimateCreationWindowSettingsController.class, "get",
-        repairCapacityWarehouse, null, null, "200", "EstimateCreationWindowSettings", false,
+            List.of(), null, null, "200", "EstimateCreationWindowSettings", false,
         "401", "403"));
     result.add(op("PUT",
-        "/api/maintenance/v1/settings/estimate-creation-window/{warehouseId}",
+            "/api/maintenance/v1/settings/estimate-creation-window",
         "replaceEstimateCreationWindowSettings",
         EstimateCreationWindowSettingsController.class, "replace",
-        repairCapacityWarehouse,
+            List.of(),
         ReplaceEstimateCreationWindowSettingsRequest.class,
         "ReplaceEstimateCreationWindowSettingsRequest",
         "200", "EstimateCreationWindowSettings", false,
         "400", "401", "403", "409"));
     result.add(op("GET",
-        "/api/maintenance/v1/settings/repair-complexity/{warehouseId}",
+            "/api/maintenance/v1/settings/repair-complexity",
         "getRepairComplexitySettings", RepairComplexitySettingsController.class, "get",
-        repairCapacityWarehouse, null, null, "200", "RepairComplexitySettings", false,
+            List.of(), null, null, "200", "RepairComplexitySettings", false,
         "401", "403"));
     result.add(op("PUT",
-        "/api/maintenance/v1/settings/repair-complexity/{warehouseId}",
+            "/api/maintenance/v1/settings/repair-complexity",
         "replaceRepairComplexitySettings", RepairComplexitySettingsController.class, "replace",
-        repairCapacityWarehouse,
+            List.of(),
         ReplaceRepairComplexitySettingsRequest.class,
         "ReplaceRepairComplexitySettingsRequest",
-        "200", "RepairComplexitySettings", false,
-        "400", "401", "403", "409"));
-    result.add(op("POST",
-        "/api/maintenance/v1/settings/repair-complexity/{warehouseId}/task-board-import",
-        "importRepairComplexitySettings", RepairComplexitySettingsController.class, "importOnce",
-        repairCapacityWarehouse,
-        ImportRepairComplexitySettingsRequest.class,
-        "ImportRepairComplexitySettingsRequest",
         "200", "RepairComplexitySettings", false,
         "400", "401", "403", "409"));
     result.add(op("GET",
@@ -1767,9 +1758,8 @@ class MaintenanceOpenApiParityTest {
     EstimateCreationWindowSettingsResponse response =
         (EstimateCreationWindowSettingsResponse)
             sample(EstimateCreationWindowSettingsResponse.class, "estimateCreationWindowSettings");
-    when(settings.get(org.mockito.ArgumentMatchers.any())).thenReturn(response);
-    when(settings.replace(
-            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+    when(settings.get()).thenReturn(response);
+    when(settings.replace(org.mockito.ArgumentMatchers.any()))
         .thenReturn(response);
     return settings;
   }
@@ -1788,12 +1778,8 @@ class MaintenanceOpenApiParityTest {
     RepairComplexitySettingsResponse response =
         (RepairComplexitySettingsResponse)
             sample(RepairComplexitySettingsResponse.class, "repairComplexitySettings");
-    when(settings.get(org.mockito.ArgumentMatchers.any())).thenReturn(response);
-    when(settings.replace(
-            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
-        .thenReturn(response);
-    when(settings.importOnce(
-            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+    when(settings.get()).thenReturn(response);
+    when(settings.replace(org.mockito.ArgumentMatchers.any()))
         .thenReturn(response);
     return settings;
   }
@@ -1931,8 +1917,7 @@ class MaintenanceOpenApiParityTest {
           arguments[index] = "45.000";
         }
       }
-      if (recordType == ReplaceRepairComplexitySettingsRequest.class
-          || recordType == ImportRepairComplexitySettingsRequest.class) {
+      if (recordType == ReplaceRepairComplexitySettingsRequest.class) {
         if ("lightBoundaryMinutes".equals(components[index].getName())) {
           arguments[index] = 60;
         }
@@ -2073,9 +2058,6 @@ class MaintenanceOpenApiParityTest {
     values.put(
         ReplaceRepairComplexitySettingsRequest.class,
         "ReplaceRepairComplexitySettingsRequest");
-    values.put(
-        ImportRepairComplexitySettingsRequest.class,
-        "ImportRepairComplexitySettingsRequest");
     values.put(RepairComplexitySettingsResponse.class, "RepairComplexitySettings");
     values.put(RepairPlaceTransitionRequest.class, "RepairPlaceTransitionRequest");
     values.put(
@@ -2250,9 +2232,6 @@ class MaintenanceOpenApiParityTest {
     values.put(
         ReplaceRepairComplexitySettingsRequest.class,
         "ReplaceRepairComplexitySettingsRequest");
-    values.put(
-        ImportRepairComplexitySettingsRequest.class,
-        "ImportRepairComplexitySettingsRequest");
     values.put(RepairPlaceTransitionRequest.class, "RepairPlaceTransitionRequest");
     values.put(
         ReplaceRepairComplexityColorsRequest.class, "ReplaceRepairComplexityColorsRequest");

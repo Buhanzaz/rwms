@@ -56,7 +56,8 @@ import org.springframework.test.web.servlet.MockMvc;
       MaintenanceRepairController.class,
       MaintenanceRepairPlaceLogisticsController.class,
       MaintenanceSettingsController.class,
-      EstimateCreationWindowSettingsController.class
+      EstimateCreationWindowSettingsController.class,
+      dev.buhanzaz.rwms.maintenance.api.RepairComplexitySettingsController.class
     },
     properties = {
       "rwms.cors.allowed-origins=http://localhost:5173",
@@ -83,8 +84,66 @@ class MaintenanceBearerSecurityMockMvcTest {
   @MockitoBean PropertyDispositionApplicationService propertyDispositionService;
   @MockitoBean RepairCapacitySettingsService repairCapacitySettingsService;
   @MockitoBean EstimateCreationWindowSettingsService estimateCreationWindowSettingsService;
+  @MockitoBean
+  dev.buhanzaz.rwms.maintenance.service.RepairComplexitySettingsService
+      repairComplexitySettingsService;
+
   @MockitoBean RepairPlaceService repairPlaceService;
   @MockitoBean JwtDecoder jwtDecoder;
+
+  @Test
+  void globalSettingsPermitAdminWritesWithoutWarehouseAndRejectWarehouseManagerWrites()
+      throws Exception {
+    for (String setting : java.util.List.of("estimate-creation-window", "repair-complexity")) {
+      String body =
+          setting.equals("estimate-creation-window")
+              ? "{\"expectedVersion\":0,\"days\":14}"
+              : "{\"expectedVersion\":0,\"lightBoundaryMinutes\":120,\"mediumBoundaryMinutes\":300,\"complexBoundaryMinutes\":600}";
+      for (String role : java.util.List.of("WMS_ADMIN", "SYSTEM_ADMIN", "WAREHOUSE_MANAGER")) {
+        mvc.perform(
+                request(HttpMethod.PUT, "/api/maintenance/v1/settings/" + setting)
+                    .with(
+                        jwt()
+                            .jwt(
+                                token ->
+                                    token
+                                        .subject(ID.toString())
+                                        .claim("principal_type", "USER")
+                                        .claim("scope", "rwms.write")
+                                        .claim("global_role", role)))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(body))
+            .andExpect(role.equals("WAREHOUSE_MANAGER") ? status().isForbidden() : status().isOk());
+      }
+      mvc.perform(
+              request(HttpMethod.PUT, "/api/maintenance/v1/settings/" + setting)
+                  .with(
+                      jwt()
+                          .jwt(
+                              token ->
+                                  token
+                                      .subject(ID.toString())
+                                      .claim("principal_type", "USER")
+                                      .claim("client_id", "rwms-admin-web")
+                                      .claim("scope", "openid admin.manage")
+                                      .claim("global_role", "WMS_ADMIN")))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(body))
+          .andExpect(status().isOk());
+      mvc.perform(
+              request(HttpMethod.GET, "/api/maintenance/v1/settings/" + setting)
+                  .with(
+                      jwt()
+                          .jwt(
+                              token ->
+                                  token
+                                      .subject(ID.toString())
+                                      .claim("principal_type", "USER")
+                                      .claim("scope", "rwms.read")
+                                      .claim("global_role", "WAREHOUSE_MANAGER"))))
+          .andExpect(status().isOk());
+    }
+  }
 
   @Test
   void everyCanonicalOperationFailsClosedWithoutABearerToken() throws Exception {

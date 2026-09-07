@@ -77,25 +77,6 @@ vi.mock("@/features/settings/logistics/repair-capacity-settings-card", () => ({
   RepairCapacitySettingsCard: () => <div>Ремонтные места: сервер</div>,
 }))
 
-vi.mock(
-  "@/features/settings/estimates-repairs/estimate-creation-window-settings-card",
-  () => ({
-    EstimateCreationWindowSettingsCard: ({
-      warehouseId,
-    }: {
-      warehouseId: string
-    }) => <div>Срок сметы: {warehouseId}</div>,
-  })
-)
-
-vi.mock("@/features/settings/kpi/repair-complexity-settings-card", () => ({
-  WarehouseRepairComplexitySettingsCard: ({
-    warehouseId,
-  }: {
-    warehouseId: string
-  }) => <div>Сложность ремонта: {warehouseId}</div>,
-}))
-
 vi.mock("@/features/settings/task-board/task-board-settings-page", () => ({
   TaskBoardSettingsPage: ({ section }: { section: string }) => (
     <div>Доска: {section}</div>
@@ -108,6 +89,7 @@ function renderSection(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <Routes>
+        <Route path="/admin/estimates-repairs" element={<div>Общие настройки смет и ремонта</div>} />
         <Route path="/admin/object-settings" element={<ObjectSettingsPage />} />
         <Route
           path="/admin/object-settings/:section"
@@ -128,7 +110,6 @@ describe("ObjectSettingsPage", () => {
     ["brigades", "Доска: groups"],
     ["workers", "Доска: workers"],
     ["repair-places", "Ремонтные места: сервер"],
-    ["maintenance", `Срок сметы: ${source.id}`],
   ])("routes %s to its moved object setting", (section, expected) => {
     renderSection(`/admin/object-settings/${section}`)
 
@@ -146,11 +127,6 @@ describe("ObjectSettingsPage", () => {
     ).toBeNull()
     expect(screen.queryByText("Основной склад")).toBeNull()
 
-    if (section === "maintenance") {
-      expect(
-        screen.getByText(`Сложность ремонта: ${source.id}`)
-      ).toBeTruthy()
-    }
   })
 
   it("redirects the object-settings root to drivers", async () => {
@@ -158,4 +134,10 @@ describe("ObjectSettingsPage", () => {
 
     expect(await screen.findByText("Логистика: drivers")).toBeTruthy()
   })
+  it("redirects the former warehouse maintenance settings to the global section", async () => {
+    renderSection("/admin/object-settings/maintenance")
+    expect(await screen.findByText("Общие настройки смет и ремонта")).toBeTruthy()
+    expect(screen.queryByRole("combobox", { name: "Объект" })).toBeNull()
+  })
+
 })

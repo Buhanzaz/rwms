@@ -3,12 +3,9 @@ package dev.buhanzaz.rwms.maintenance.api;
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
 import dev.buhanzaz.rwms.maintenance.service.RepairComplexitySettingsService;
 import jakarta.validation.Valid;
-import java.util.UUID;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -27,28 +24,18 @@ public class RepairComplexitySettingsController {
     this.access = access;
   }
 
-  @GetMapping("/{warehouseId}")
+  @GetMapping
   public RepairComplexitySettingsResponse get(
-      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID warehouseId) {
-    access.requireManage(jwt, warehouseId);
-    return service.get(warehouseId);
+      @AuthenticationPrincipal Jwt jwt) {
+    access.requireGlobalRead(jwt);
+    return service.get();
   }
 
-  @PutMapping("/{warehouseId}")
+  @PutMapping
   public RepairComplexitySettingsResponse replace(
       @AuthenticationPrincipal Jwt jwt,
-      @PathVariable UUID warehouseId,
       @Valid @RequestBody ReplaceRepairComplexitySettingsRequest request) {
-    access.requireManage(jwt, warehouseId);
-    return service.replace(warehouseId, request);
-  }
-
-  @PostMapping("/{warehouseId}/task-board-import")
-  public RepairComplexitySettingsResponse importOnce(
-      @AuthenticationPrincipal Jwt jwt,
-      @PathVariable UUID warehouseId,
-      @Valid @RequestBody ImportRepairComplexitySettingsRequest request) {
-    access.requireManage(jwt, warehouseId);
-    return service.importOnce(warehouseId, request);
+    access.requireGlobalManage(jwt);
+    return service.replace(request);
   }
 }

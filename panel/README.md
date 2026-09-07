@@ -80,6 +80,12 @@ Russian version: [README.ru.md](README.ru.md).
   nullable documented dimensions and weights, vehicle route margins and speeds,
   measured axle-load profiles, and a same-object default trailer as one
   version-fenced configuration; an empty physical field means unknown, not zero.
+- `/admin/estimates-repairs?catalog=maintenance-settings` contains the global estimate
+  creation window and repair-complexity boundaries under «Сроки и сложность». They apply to
+  every warehouse, load independently of the catalog and require no object selection.
+  Writes use the maintenance service's version fence and global administrator access;
+  a conflict reloads the current global value before another save. The former object
+  maintenance route redirects here.
 - Repair-place settings are count-only and refill becomes eligible immediately.
   The object work schedule combines task-board work time with inventory holiday
   days; drivers set their own shifts, and inventory has no per-day cabin quota

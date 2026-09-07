@@ -37,7 +37,7 @@ import { ApiError } from "@/lib/api-client"
 
 type Props = {
   accessToken: string
-  warehouseId: string
+  readOnly?: boolean
 }
 
 function message(error: unknown, fallback: string) {
@@ -49,11 +49,13 @@ function message(error: unknown, fallback: string) {
 function WindowForm({
   setting,
   saving,
+  readOnly,
   actionError,
   onSave,
 }: {
   setting: EstimateCreationWindowSetting
   saving: boolean
+  readOnly: boolean
   actionError: string | null
   onSave: (days: number) => void
 }) {
@@ -62,6 +64,7 @@ function WindowForm({
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (readOnly) return
     const parsed = Number(days)
     if (!Number.isInteger(parsed) || parsed < 1 || parsed > 3650) {
       setValidationError("Укажите целое количество дней от 1 до 3650.")
@@ -77,7 +80,7 @@ function WindowForm({
         <CardHeader>
           <CardTitle>Срок создания сметы после возврата</CardTitle>
           <CardDescription>
-            Смету можно создать до конца дня прибытия плюс указанное число дней.
+            Единый срок для всех складов. Смету можно создать до конца дня прибытия плюс указанное число дней.
             После срока для бытовки остаётся доступно прямое создание работы.
           </CardDescription>
           <CardAction>
@@ -99,7 +102,7 @@ function WindowForm({
               step={1}
               inputMode="numeric"
               value={days}
-              disabled={saving}
+              disabled={saving || readOnly}
               aria-invalid={Boolean(validationError ?? actionError)}
               onChange={(event) => {
                 setDays(event.target.value)
@@ -115,11 +118,9 @@ function WindowForm({
         </CardContent>
         <CardFooter className="justify-between gap-4 border-t">
           <p className="text-sm text-muted-foreground">
-            {setting.createdAt === null
-              ? "Используется стандартный срок 7 дней."
-              : "Настройка сохранена в сервисе ремонтов."}
+            {readOnly ? "Только просмотр" : "Применяется ко всем складам."}
           </p>
-          <Button type="submit" disabled={saving}>
+          <Button type="submit" disabled={saving || readOnly}>
             <HugeiconsIcon
               icon={saving ? Loading03Icon : FloppyDiskIcon}
               data-icon="inline-start"
@@ -135,18 +136,18 @@ function WindowForm({
 
 export function EstimateCreationWindowSettingsCard({
   accessToken,
-  warehouseId,
+  readOnly = false,
 }: Props) {
   const queryClient = useQueryClient()
-  const queryKey = estimateCreationWindowKeys.warehouse(warehouseId)
+  const queryKey = estimateCreationWindowKeys.all
   const [actionError, setActionError] = useState<string | null>(null)
   const query = useQuery({
     queryKey,
-    queryFn: () => getEstimateCreationWindow(accessToken, warehouseId),
+    queryFn: () => getEstimateCreationWindow(accessToken),
   })
   const mutation = useMutation({
     mutationFn: (days: number) =>
-      updateEstimateCreationWindow(accessToken, warehouseId, {
+      updateEstimateCreationWindow(accessToken, {
         expectedVersion: query.data?.version ?? 0,
         days,
       }),
@@ -218,9 +219,10 @@ export function EstimateCreationWindowSettingsCard({
   }
   return (
     <WindowForm
-      key={`${warehouseId}:${query.data.version}:${query.data.days}`}
+      key={`${query.data.version}:${query.data.days}`}
       setting={query.data}
       saving={mutation.isPending}
+      readOnly={readOnly}
       actionError={actionError}
       onSave={(days) => {
         setActionError(null)

@@ -39,10 +39,85 @@ class MaintenanceFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void globalSettingsPreserveMatchingWarehouseValuesAndKeepSourceRows() {
+    Flyway.configure()
+        .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+        .locations(MIGRATIONS)
+        .target("50")
+        .load()
+        .migrate();
+    for (int index = 0; index < 2; index++) {
+      UUID warehouse = UUID.randomUUID();
+      jdbc.update(
+          "insert into estimate_creation_window_settings (warehouse_id, days, version, created_at,"
+              + " updated_at) values (?, 14, 3, now(), now())",
+          warehouse);
+      jdbc.update(
+          "insert into repair_complexity_settings (warehouse_id, light_boundary_minutes,"
+              + " medium_boundary_minutes, complex_boundary_minutes, version, created_at,"
+              + " updated_at) values (?, 120, 300, 600, 4, now(), now())",
+          warehouse);
+    }
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select days from global_estimate_creation_window_settings", Integer.class))
+        .isEqualTo(14);
+    assertThat(
+            jdbc.queryForMap(
+                "select light_boundary_minutes, medium_boundary_minutes, complex_boundary_minutes"
+                    + " from global_repair_complexity_settings"))
+        .containsEntry("light_boundary_minutes", 120)
+        .containsEntry("medium_boundary_minutes", 300)
+        .containsEntry("complex_boundary_minutes", 600);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from estimate_creation_window_settings where version=3",
+                Integer.class))
+        .isEqualTo(2);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from repair_complexity_settings where version=4", Integer.class))
+        .isEqualTo(2);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "insert into global_estimate_creation_window_settings values (?, 0, 7, now(),"
+                        + " now())",
+                    UUID.randomUUID()))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+  }
+
+  @Test
+  void globalSettingsRejectConflictingWarehouseValuesWithoutChangingThem() {
+    Flyway.configure()
+        .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+        .locations(MIGRATIONS)
+        .target("50")
+        .load()
+        .migrate();
+    jdbc.update(
+        "insert into estimate_creation_window_settings (warehouse_id, days, version, created_at,"
+            + " updated_at) values (?, 7, 0, now(), now()), (?, 14, 0, now(), now())",
+        UUID.randomUUID(),
+        UUID.randomUUID());
+    assertThatThrownBy(() -> flyway(MIGRATIONS).migrate())
+        .isInstanceOf(FlywayException.class)
+        .hasStackTraceContaining("warehouse values differ");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from estimate_creation_window_settings", Integer.class))
+        .isEqualTo(2);
+    assertThat(tableNames())
+        .doesNotContain(
+            "global_estimate_creation_window_settings", "global_repair_complexity_settings");
+  }
+
+  @Test
   void cleanInstallIsRepeatSafeAndContainsTheAuthoritativeMaintenanceSchema() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(50);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(51);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
@@ -60,7 +135,9 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "inventory_authoritative_outcome", "inventory_authoritative_outcome_receipt",
         "inventory_authoritative_outcome_watermark", "inventory_authoritative_outcome_target",
         "logistics_return_shortage", "repair_capacity_settings",
-        "estimate_creation_window_settings", "repair_task_evidence",
+        "estimate_creation_window_settings",
+            "global_estimate_creation_window_settings",
+            "global_repair_complexity_settings", "repair_task_evidence",
         "repair_complexity_colors", "repair_complexity_settings", "repair_place_allocation",
         "property_disposition_decision", "property_disposition_contents_snapshot_line",
         "property_disposition_processing_attempt", "property_disposition_processing_claim",
@@ -417,7 +494,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         .hasMessageContaining("readiness fence");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(2);
     upgraded.validate();
     assertThat(triggerExists("catalog_version_readiness_guard")).isFalse();
     assertThat(triggerExists("furniture_equipment_link_readiness_guard")).isFalse();
@@ -484,7 +561,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         .doesNotContain("rwms.task-board.task-evidence.v1");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(4);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(5);
     upgraded.validate();
     assertThat(
             constraintDefinition(
@@ -528,7 +605,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
     throughV34.validate();
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(16);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(17);
     upgraded.validate();
     assertThat(constraintDefinition("event_stream_head", "ck_maintenance_stream_type"))
         .contains("PROPERTY_DISPOSITION");
@@ -616,7 +693,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         activeCatalogId);
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(8);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(9);
     upgraded.validate();
 
     assertThat(
@@ -861,7 +938,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         catalogId.toString(),
         "0".repeat(64));
 
-    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(26);
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(27);
 
     assertThat(jdbc.queryForObject(
         "select count(*) from catalog_node where catalog_version_id=? and node_type='WORK'",
@@ -1242,7 +1319,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "0".repeat(64));
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(27);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(28);
     upgraded.validate();
 
     assertThat(
@@ -1405,7 +1482,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
     insertLegacyEstimateStage(estimateId, UUID.randomUUID(), 2, "MOVE_FROM_REPAIR");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(24);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(25);
     upgraded.validate();
 
     assertThat(jdbc.queryForMap(
@@ -1427,7 +1504,8 @@ class MaintenanceFlywayMigrationIntegrationTest {
             .containsEntry("stage_no", 1)
             .containsEntry("stage_kind", "REPAIR_WORK"));
     assertThat(jdbc.queryForList(
-        "select stage_id,stage_no,stage_kind from estimate_plan_stage where estimate_id=? order by stage_no",
+                "select stage_id,stage_no,stage_kind from estimate_plan_stage where estimate_id=?"
+                    + " order by stage_no",
         estimateId))
         .singleElement()
         .satisfies(row -> assertThat(row)
@@ -1587,7 +1665,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         repairStageId);
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(23);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(24);
     upgraded.validate();
 
     assertThat(
@@ -1700,7 +1778,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "0".repeat(64));
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(22);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(23);
     upgraded.validate();
 
     assertThat(jdbc.queryForMap(
@@ -1800,7 +1878,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
     insertV20CatalogStreamArtifacts(otherCatalogId, otherNodeId, "ACTIVE");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(30);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(31);
     upgraded.validate();
 
     assertThat(jdbc.queryForObject(
@@ -1849,7 +1927,8 @@ class MaintenanceFlywayMigrationIntegrationTest {
           and encode(sha256(convert_to(outbox.envelope_body::text, 'UTF8')),'hex')=outbox.envelope_sha256
         """, Integer.class, otherCatalogId.toString())).isOne();
     assertThat(jdbc.queryForObject(
-        "select current_version from event_stream_head where aggregate_type='CATALOG_VERSION' and aggregate_id=?",
+                "select current_version from event_stream_head where"
+                    + " aggregate_type='CATALOG_VERSION' and aggregate_id=?",
         Long.class,
         otherCatalogId.toString())).isEqualTo(1L);
     assertThat(jdbc.queryForObject(
@@ -2429,11 +2508,13 @@ class MaintenanceFlywayMigrationIntegrationTest {
 
     assertThat(constraintDefinition("estimate_line", "fk_estimate_line_revision"))
         .contains(
-            "FOREIGN KEY (estimate_id, estimate_revision) REFERENCES estimate_revision(estimate_id, revision)")
+            "FOREIGN KEY (estimate_id, estimate_revision) REFERENCES estimate_revision(estimate_id,"
+                + " revision)")
         .contains("DEFERRABLE INITIALLY DEFERRED");
     assertThat(constraintDefinition("estimate_plan_stage", "fk_estimate_plan_revision"))
         .contains(
-            "FOREIGN KEY (estimate_id, estimate_revision) REFERENCES estimate_revision(estimate_id, revision)")
+            "FOREIGN KEY (estimate_id, estimate_revision) REFERENCES estimate_revision(estimate_id,"
+                + " revision)")
         .contains("DEFERRABLE INITIALLY DEFERRED");
     assertThat(constraintDefinition("maintenance_repair", "ck_repair_hierarchy"))
         .contains("root_repair_id IS NULL", "source_repair_id <> id", "root_repair_id <> id");

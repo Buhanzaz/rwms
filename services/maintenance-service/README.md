@@ -302,12 +302,20 @@ task-board, media, logistics and warehouse-service. Do not make a remote call wh
 transaction holds maintenance locks. The application flow commits local preparation before remote
 preflight/effects, then continues local fenced state through durable recovery records.
 
-Each warehouse also owns a version-fenced estimate-creation window setting (`1..3650` days,
+The estimate-creation window is one global version-fenced setting (`1..3650` days,
 default `7`). A new manual estimate reads the latest physical return arrival from logistics; the
 automatic return source carries the same immutable arrival evidence. Maintenance evaluates an
 inclusive deadline in the warehouse timezone. Arrival on 1 August with seven days is allowed
 through 8 August and fails from 9 August with `ESTIMATE_CREATION_WINDOW_EXPIRED`; the independent
 direct-repair command remains available.
+
+Repair-complexity boundaries are also global (initially `60/180/360` integer minutes).
+Both settings use GET/PUT under `/api/maintenance/v1/settings/` without a warehouse ID;
+reads require an authenticated user and writes require a global administrator. A threshold
+replacement atomically schedules active repairs in every warehouse for recalculation using
+the existing durable reconciliation and readiness fences. A conflict rolls back the whole change.
+Flyway V51 preserves former warehouse rows as archive, seeds the common value or the defaults,
+and rejects conflicting warehouse values rather than choosing one silently.
 
 ## Explicit capital-repair choice
 

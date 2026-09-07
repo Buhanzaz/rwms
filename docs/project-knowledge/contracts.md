@@ -1068,9 +1068,14 @@ public driver-board response.
 ### Estimate Creation Window
 
 [`maintenance-service.yaml`](../../contracts/openapi/maintenance-service.yaml) exposes
-warehouse-MANAGE GET/PUT settings at
-`/api/maintenance/v1/settings/estimate-creation-window/{warehouseId}`. The version-fenced `days`
-value is bounded to `1..3650`; a missing row is the non-persisted version-0 default of seven days.
+global GET/PUT settings at
+`/api/maintenance/v1/settings/estimate-creation-window` and `/api/maintenance/v1/settings/repair-complexity`.
+Reads require an authenticated user; writes require SYSTEM_ADMIN/WMS_ADMIN with the appropriate
+application scope and strict `expectedVersion` CAS. The shared `days` value is bounded to `1..3650`
+and initialized to seven days. Global complexity boundaries start at `60/180/360` integer minutes;
+updates schedule active repairs in all warehouses in the same transaction. V51 seeds singleton rows
+without deleting warehouse history; conflicting old values stop migration for an explicit decision.
+The former warehouse import endpoint is removed.
 For manual creation, maintenance obtains the latest physical return arrival from the private
 logistics boundary. Both manual and logistics-origin automatic estimate creation evaluate an
 inclusive warehouse-local deadline; expiration returns the exact Problem Details code

@@ -1276,33 +1276,24 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /api/maintenance/v1/settings/estimate-creation-window/{warehouseId}:
-    parameters:
-      - name: warehouseId
-        in: path
-        required: true
-        schema: { type: string, format: uuid }
+  /api/maintenance/v1/settings/estimate-creation-window:
     get:
       tags: [Settings]
       operationId: getEstimateCreationWindowSettings
       description: >-
-        Returns the warehouse-local window for opening a new estimate after physical return.
-        An absent row is represented as version 0, days 7, and null timestamps. Requires USER,
-        rwms.write and warehouse MANAGE access, or USER from the dedicated rwms-admin-web client
-        with SYSTEM_ADMIN/WMS_ADMIN and exactly one application scope admin.manage after protocol
-        scopes.
+        Returns the global estimate-creation window, initialized to seven days. The same days
+        apply to every warehouse, evaluated in each warehouse\'s timezone. Requires USER with
+        rwms.read, or the dedicated rwms-admin-web administrator with admin.manage.
       responses:
-        '200': { description: Estimate-creation window or its non-persisted default., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/EstimateCreationWindowSettings' } } } }
+        '200': { description: Global estimate-creation window., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/EstimateCreationWindowSettings' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
     put:
       tags: [Settings]
       operationId: replaceEstimateCreationWindowSettings
       description: >-
-        Creates or replaces the setting with strict optimistic CAS. Creation requires
-        expectedVersion 0. Requires either USER with rwms.write and warehouse MANAGE access, or
-        USER from the dedicated rwms-admin-web client with SYSTEM_ADMIN/WMS_ADMIN and exactly one
-        application scope admin.manage after protocol scopes.
+        Replaces the global setting with strict optimistic CAS. Requires USER with rwms.write
+        and SYSTEM_ADMIN/WMS_ADMIN, or the dedicated rwms-admin-web administrator with admin.manage.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceEstimateCreationWindowSettingsRequest' } } } }
       responses:
         '200': { description: Persisted estimate-creation window., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/EstimateCreationWindowSettings' } } } }
@@ -1310,54 +1301,28 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /api/maintenance/v1/settings/repair-complexity/{warehouseId}:
-    parameters:
-      - name: warehouseId
-        in: path
-        required: true
-        schema: { type: string, format: uuid }
+  /api/maintenance/v1/settings/repair-complexity:
     get:
       tags: [Settings]
       operationId: getRepairComplexitySettings
       description: >-
-        Returns canonical per-warehouse integer-minute boundaries. Requires either USER with
-        rwms.write and warehouse MANAGE access, or USER from the dedicated rwms-admin-web client
-        with SYSTEM_ADMIN/WMS_ADMIN and exactly one application scope admin.manage after protocol
-        scopes.
+        Returns global integer-minute boundaries, initialized to 60/180/360. Requires USER with
+        rwms.read, or the dedicated rwms-admin-web administrator with admin.manage.
       responses:
-        '200': { description: Repair-complexity settings or defaults 60/180/360., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairComplexitySettings' } } } }
+        '200': { description: Global repair-complexity settings., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairComplexitySettings' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
     put:
       tags: [Settings]
       operationId: replaceRepairComplexitySettings
       description: >-
-        Replaces strictly increasing boundaries with optimistic CAS and recalculates active
-        repairs. Requires either USER with rwms.write and warehouse MANAGE access, or USER from
-        the dedicated rwms-admin-web client with SYSTEM_ADMIN/WMS_ADMIN and exactly one
-        application scope admin.manage after protocol scopes.
+        Replaces global strictly increasing boundaries with optimistic CAS and durably schedules
+        recalculation of active repairs in every warehouse in the same transaction. Requires USER
+        with rwms.write and SYSTEM_ADMIN/WMS_ADMIN, or the dedicated rwms-admin-web administrator
+        with admin.manage. A readiness fence rejects the complete transaction.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceRepairComplexitySettingsRequest' } } } }
       responses:
         '200': { description: Persisted repair-complexity settings., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairComplexitySettings' } } } }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '409': { $ref: '#/components/responses/Conflict' }
-  /api/maintenance/v1/settings/repair-complexity/{warehouseId}/task-board-import:
-    parameters:
-      - name: warehouseId
-        in: path
-        required: true
-        schema: { type: string, format: uuid }
-    post:
-      tags: [Settings]
-      operationId: importRepairComplexitySettings
-      description: >-
-        One-time cutover command. It records the source task-board version and never becomes a
-        runtime fallback. An identical completed import is idempotent; another import returns 409.
-      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ImportRepairComplexitySettingsRequest' } } } }
-      responses:
-        '200': { description: Imported canonical settings., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairComplexitySettings' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1408,10 +1373,10 @@ components:
       bearerFormat: JWT
       description: >-
         Warehouse-scoped public reads require a USER token with rwms.read and warehouse VIEW;
-        warehouse-scoped writes require rwms.write and EDIT. Global catalog and repair-color reads
-        require USER with rwms.read and accept no warehouse selector; their writes require
-        SYSTEM_ADMIN/WMS_ADMIN with rwms.write. Maintenance write-off, repair-capacity and
-        estimate-creation-window settings additionally require warehouse MANAGE.
+        warehouse-scoped writes require rwms.write and EDIT. Global catalog, repair-color,
+        estimate-creation-window and repair-complexity reads require USER with rwms.read and
+        accept no warehouse selector; their writes require SYSTEM_ADMIN/WMS_ADMIN with rwms.write.
+        Maintenance write-off and repair-capacity settings require warehouse MANAGE.
   parameters:
     WarehouseIdQuery:
       name: warehouseId
@@ -1688,9 +1653,8 @@ components:
     EstimateCreationWindowSettings:
       type: object
       additionalProperties: false
-      required: [warehouseId, version, days, createdAt, updatedAt]
+      required: [version, days, createdAt, updatedAt]
       properties:
-        warehouseId: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         days: { type: integer, minimum: 1, maximum: 3650 }
         createdAt:
@@ -1706,30 +1670,15 @@ components:
         lightBoundaryMinutes: { type: integer, minimum: 1 }
         mediumBoundaryMinutes: { type: integer, minimum: 2 }
         complexBoundaryMinutes: { type: integer, minimum: 3 }
-    ImportRepairComplexitySettingsRequest:
-      type: object
-      additionalProperties: false
-      required: [expectedVersion, taskBoardVersion, lightBoundaryMinutes, mediumBoundaryMinutes, complexBoundaryMinutes]
-      properties:
-        expectedVersion: { type: integer, format: int64, minimum: 0 }
-        taskBoardVersion: { type: integer, format: int64, minimum: 0 }
-        lightBoundaryMinutes: { type: integer, minimum: 1 }
-        mediumBoundaryMinutes: { type: integer, minimum: 2 }
-        complexBoundaryMinutes: { type: integer, minimum: 3 }
     RepairComplexitySettings:
       type: object
       additionalProperties: false
-      required: [warehouseId, version, lightBoundaryMinutes, mediumBoundaryMinutes, complexBoundaryMinutes, importedFromTaskBoardVersion, importedAt, createdAt, updatedAt]
+      required: [version, lightBoundaryMinutes, mediumBoundaryMinutes, complexBoundaryMinutes, createdAt, updatedAt]
       properties:
-        warehouseId: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         lightBoundaryMinutes: { type: integer, minimum: 1 }
         mediumBoundaryMinutes: { type: integer, minimum: 2 }
         complexBoundaryMinutes: { type: integer, minimum: 3 }
-        importedFromTaskBoardVersion:
-          oneOf: [ { type: integer, format: int64, minimum: 0 }, { type: 'null' } ]
-        importedAt:
-          oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
         createdAt:
           oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
         updatedAt:

@@ -12,17 +12,18 @@ import jakarta.validation.constraints.Min;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
-/** Warehouse-scoped limit for opening a new maintenance estimate after physical return. */
+/** Global limit for opening a new maintenance estimate after physical return. */
 @Entity
-@Table(name = "estimate_creation_window_settings")
+@Table(name = "global_estimate_creation_window_settings")
 public class EstimateCreationWindowSettings {
+  public static final UUID SINGLETON_ID = UUID.fromString("00000000-0000-0000-0000-000000000001");
   public static final int DEFAULT_DAYS = 7;
   public static final int MIN_DAYS = 1;
   public static final int MAX_DAYS = 3650;
 
   @Id
-  @Column(name = "warehouse_id", nullable = false)
-  private UUID warehouseId;
+  @Column(name = "id", nullable = false)
+  private UUID id;
 
   @Version
   @Column(name = "version", nullable = false)
@@ -41,18 +42,15 @@ public class EstimateCreationWindowSettings {
 
   protected EstimateCreationWindowSettings() {}
 
-  /** Creates the first persisted setting for one warehouse. */
-  public static EstimateCreationWindowSettings create(UUID warehouseId, int days) {
-    if (warehouseId == null) {
-      throw new IllegalArgumentException("warehouseId is required");
-    }
+  /** Creates the first persisted setting for all warehouses. */
+  public static EstimateCreationWindowSettings create(int days) {
     EstimateCreationWindowSettings value = new EstimateCreationWindowSettings();
-    value.warehouseId = warehouseId;
+    value.id = SINGLETON_ID;
     value.days = requireDays(days);
     return value;
   }
 
-  /** Replaces the creation window while retaining the warehouse identity and version fence. */
+  /** Replaces the creation window while retaining the singleton identity and version fence. */
   public void replace(int days) {
     this.days = requireDays(days);
   }
@@ -77,8 +75,8 @@ public class EstimateCreationWindowSettings {
     return days;
   }
 
-  public UUID getWarehouseId() {
-    return warehouseId;
+  public UUID getId() {
+    return id;
   }
 
   public long getVersion() {

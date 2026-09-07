@@ -179,6 +179,10 @@ class MaintenanceCorePostgresIntegrationTest {
           event_stream_head
         cascade
         """);
+    jdbc.update(
+        "update global_repair_complexity_settings set version=0, light_boundary_minutes=60,"
+            + " medium_boundary_minutes=180, complex_boundary_minutes=360");
+    jdbc.update("update global_estimate_creation_window_settings set version=0, days=7");
     reset(dependencies);
     when(dependencies.returnArrival(any(UUID.class), any(UUID.class)))
         .thenAnswer(
@@ -222,6 +226,62 @@ class MaintenanceCorePostgresIntegrationTest {
                   .toList());
         });
     clearInvocations(eventFacts);
+  }
+
+  @Test
+  void globalComplexityChangeSchedulesActiveRepairsAcrossWarehousesAndRejectsStaleVersion() {
+    RepairFixture first = createRegisteredPrimaryRepair().repair();
+    RepairFixture second = createRegisteredPrimaryRepair().repair();
+    RepairFixture draft = createDirectRepair();
+    var saved =
+        repairComplexitySettings.replace(
+            new dev.buhanzaz.rwms.maintenance.api.ReplaceRepairComplexitySettingsRequest(
+                0L, 1, 2, 10000));
+    assertThat(saved.version()).isEqualTo(1);
+    assertThat(first.warehouseId()).isNotEqualTo(second.warehouseId());
+    for (RepairFixture fixture : List.of(first, second, draft)) {
+      assertThat(service.repair(fixture.repairId(), fixture.warehouseId()).complexity().type())
+          .isEqualTo(RepairComplexity.COMPLEX);
+      assertThat(
+              jdbc.queryForObject(
+                  "select count(*) from integration_reconciliation where repair_id=? and"
+                      + " operation_type='SYNC_REPAIR_COMPLEXITY_STATUS'",
+                  Integer.class,
+                  fixture.repairId()))
+          .isEqualTo(fixture == draft ? 0 : 1);
+    }
+    assertThatThrownBy(
+            () ->
+                repairComplexitySettings.replace(
+                    new dev.buhanzaz.rwms.maintenance.api.ReplaceRepairComplexitySettingsRequest(
+                        0L, 60, 180, 360)))
+        .isInstanceOf(MaintenanceConflictException.class);
+    assertThat(repairComplexitySettings.get().lightBoundaryMinutes()).isEqualTo(1);
+  }
+
+  @Test
+  void globalComplexityChangeRollsBackEveryWarehouseWhenReadinessRejectsOne() {
+    RepairFixture first = createRegisteredPrimaryRepair().repair();
+    RepairFixture second = createRegisteredPrimaryRepair().repair();
+    jdbc.update(
+        "insert into warehouse_readiness_fence (id, warehouse_id, warehouse_version, state,"
+            + " fenced_at, updated_at) values (?, ?, 1, 'FENCED', now(), now())",
+        UUID.randomUUID(),
+        second.warehouseId());
+    assertThatThrownBy(
+            () ->
+                repairComplexitySettings.replace(
+                    new dev.buhanzaz.rwms.maintenance.api.ReplaceRepairComplexitySettingsRequest(
+                        0L, 1, 2, 10000)))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThat(repairComplexitySettings.get().version()).isZero();
+    assertThat(repairComplexitySettings.get().lightBoundaryMinutes()).isEqualTo(60);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from integration_reconciliation where"
+                    + " operation_type='SYNC_REPAIR_COMPLEXITY_STATUS'",
+                Integer.class))
+        .isZero();
   }
 
   @Test
@@ -1238,7 +1298,6 @@ class MaintenanceCorePostgresIntegrationTest {
     assertThat(created.complexity().type()).isEqualTo(RepairComplexity.MEDIUM);
 
     repairComplexitySettings.replace(
-        warehouseId,
         new dev.buhanzaz.rwms.maintenance.api.ReplaceRepairComplexitySettingsRequest(
             0L, 30, 60, 90));
 
@@ -1713,7 +1772,7 @@ class MaintenanceCorePostgresIntegrationTest {
   }
 
   @Test
-  void transferArrivalWithdrawsOrdinaryTaskWhenTargetThresholdMakesRepairCapital() {
+  void transferArrivalWithdrawsOrdinaryTaskWhenGlobalThresholdMakesRepairCapital() {
     RegisteredRepairFixture registered = createRegisteredPrimaryRepair();
     RepairFixture fixture = registered.repair();
     UUID transferId = UUID.randomUUID();
@@ -1725,7 +1784,6 @@ class MaintenanceCorePostgresIntegrationTest {
             fixture.warehouseId(),
             targetWarehouseId);
     repairComplexitySettings.replace(
-        targetWarehouseId,
         new dev.buhanzaz.rwms.maintenance.api.ReplaceRepairComplexitySettingsRequest(
             0L, 1, 2, 3));
     when(dependencies.queueCapabilities(targetWarehouseId))
@@ -1862,7 +1920,6 @@ class MaintenanceCorePostgresIntegrationTest {
     UUID lineId = UUID.randomUUID();
     UUID targetWarehouseId = UUID.randomUUID();
     repairComplexitySettings.replace(
-        targetWarehouseId,
         new dev.buhanzaz.rwms.maintenance.api.ReplaceRepairComplexitySettingsRequest(
             0L, 1, 2, 3));
     when(dependencies.queueCapabilities(targetWarehouseId))
@@ -4836,7 +4893,8 @@ class MaintenanceCorePostgresIntegrationTest {
         .extracting(FurnitureEquipmentLinkStore.LinkSnapshot::warehouseId)
         .isEqualTo(auditWarehouseId);
     assertThat(jdbc.queryForObject(
-        "select count(*) from integration_reconciliation where catalog_version_id=? and state='PENDING'",
+                "select count(*) from integration_reconciliation where catalog_version_id=? and"
+                    + " state='PENDING'",
         Integer.class,
         activated.id())).isPositive();
 

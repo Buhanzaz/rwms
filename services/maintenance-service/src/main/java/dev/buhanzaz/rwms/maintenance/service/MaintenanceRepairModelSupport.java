@@ -266,8 +266,8 @@ final class MaintenanceRepairModelSupport {
   }
 
   /**
-   * Rebuilds complexity from immutable stage evidence while retaining the repair's explicit
-   * capital override; {@code warehouseId} may differ during a prepared warehouse transfer.
+   * Rebuilds complexity from immutable stage evidence while retaining the repair's explicit capital
+   * override and the same global boundaries across warehouse transfers.
    */
   protected RepairComplexitySnapshot repairComplexityFromStoredStages(
       UUID warehouseId, MaintenanceRepair repair) {
@@ -304,7 +304,7 @@ final class MaintenanceRepairModelSupport {
     }
     RepairComplexity type =
         repairComplexitySettings
-            .requireSettings(warehouseId)
+            .requireSettings()
             .classify(plannedMinutes, forcedCapital);
     RepairComplexityColors colors = repairComplexityColors.requireColors();
     String canonicalMinutes =

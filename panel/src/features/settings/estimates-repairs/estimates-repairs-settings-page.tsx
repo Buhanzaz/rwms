@@ -25,6 +25,7 @@ import {
   Refresh01Icon,
   Sofa01Icon,
   WorkIcon,
+  Wrench01Icon,
 } from "@hugeicons/core-free-icons"
 
 import {
@@ -140,6 +141,11 @@ import {
   repairEstimateCatalogLinkTypeLabel,
   repairEstimateCatalogNodeTypeLabel,
 } from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
+
+import { EstimateCreationWindowSettingsCard } from "@/features/settings/estimates-repairs/estimate-creation-window-settings-card"
+import { GlobalRepairComplexitySettingsCard } from "@/features/settings/kpi/repair-complexity-settings-card"
+
+const MAINTENANCE_SETTINGS_ACTION = "maintenance-settings"
 
 type EstimateScreen =
   | { level: "root" }
@@ -324,17 +330,23 @@ function EstimateActionNavigation({
   actions,
   activeActionId,
   onSelect,
+  settingsSelected,
+  onOpenSettings,
 }: {
   actions: EstimateCatalogSettingsActionDto[]
   activeActionId: EstimateCatalogSettingsActionDto["id"] | null
   onSelect: (action: EstimateCatalogSettingsActionDto) => void
+  settingsSelected: boolean
+  onOpenSettings: () => void
 }) {
   return (
     <nav aria-label="Разделы каталога смет">
       <Tabs
-        value={activeActionId ?? ""}
+        value={settingsSelected ? MAINTENANCE_SETTINGS_ACTION : activeActionId ?? ""}
         onValueChange={(actionId) => {
-          if (!actionId) {
+          if (!actionId) return
+          if (actionId === MAINTENANCE_SETTINGS_ACTION) {
+            onOpenSettings()
             return
           }
 
@@ -356,6 +368,10 @@ function EstimateActionNavigation({
                 </TabsTrigger>
               )
             })}
+            <TabsTrigger value={MAINTENANCE_SETTINGS_ACTION}>
+              <HugeiconsIcon icon={Wrench01Icon} data-icon="inline-start" />
+              Сроки и сложность
+            </TabsTrigger>
           </TabsList>
         </div>
       </Tabs>
@@ -4163,6 +4179,8 @@ function EstimateDrilldownView({
 export function EstimatesRepairsSettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const { accessToken, currentUser } = useAuth()
+  const settingsSelected =
+    searchParams.get("catalog") === MAINTENANCE_SETTINGS_ACTION
   const queryClient = useQueryClient()
   const [estimateScreen, setEstimateScreen] = useState<EstimateScreen>({
     level: "root",
@@ -4173,6 +4191,7 @@ export function EstimatesRepairsSettingsPage() {
   const hasSelectedInitialEstimateAction = useRef(false)
 
   useEffect(() => {
+    if (settingsSelected) return
     if (
       estimateScreen.level === "root" &&
       !hasSelectedInitialEstimateAction.current
@@ -4193,7 +4212,7 @@ export function EstimatesRepairsSettingsPage() {
       nextSearchParams.set("catalog", activeCatalogAction)
     }
     setSearchParams(nextSearchParams, { replace: true })
-  }, [estimateScreen, searchParams, setSearchParams])
+  }, [estimateScreen, searchParams, setSearchParams, settingsSelected])
 
   function commandIdempotencyKey(signature: string) {
     const existing = commandIdempotencyKeys.current.get(signature)
@@ -4298,6 +4317,7 @@ export function EstimatesRepairsSettingsPage() {
 
   useEffect(() => {
     if (
+      settingsSelected ||
       hasSelectedInitialEstimateAction.current ||
       estimateScreen.level !== "root" ||
       !catalogRequest ||
@@ -4320,7 +4340,7 @@ export function EstimatesRepairsSettingsPage() {
 
     hasSelectedInitialEstimateAction.current = true
     setEstimateScreen({ level: "action", action })
-  }, [catalogRequest, currentCatalog, estimateActions, estimateScreen.level])
+  }, [catalogRequest, currentCatalog, estimateActions, estimateScreen.level, settingsSelected])
 
   const estimateLoading =
     catalogCanvasQuery.isLoading ||
@@ -4347,21 +4367,53 @@ export function EstimatesRepairsSettingsPage() {
   const openEstimateAction = (action: EstimateCatalogSettingsActionDto) => {
     hasSelectedInitialEstimateAction.current = true
     setEstimateScreen({ level: "action", action })
+    const next = new URLSearchParams(searchParams)
+    next.set("catalog", action.id)
+    setSearchParams(next, { replace: true })
   }
-  const estimateActionNavigation =
-    estimateActions.length === 6 ? (
-      <EstimateActionNavigation
-        actions={estimateActions}
-        activeActionId={activeEstimateActionId}
-        onSelect={openEstimateAction}
-      />
-    ) : null
+  const estimateActionNavigation = (
+    <EstimateActionNavigation
+      actions={estimateActions.length === 6 ? estimateActions : []}
+      activeActionId={activeEstimateActionId}
+      onSelect={openEstimateAction}
+      settingsSelected={settingsSelected}
+      onOpenSettings={() => {
+        const next = new URLSearchParams(searchParams)
+        next.set("catalog", MAINTENANCE_SETTINGS_ACTION)
+        setSearchParams(next, { replace: true })
+      }}
+    />
+  )
+  if (settingsSelected) {
+    return (
+      <div className="flex h-full min-h-0 flex-col gap-3">
+        {estimateActionNavigation}
+        {accessToken ? (
+          <div className="min-h-0 flex-1 overflow-auto">
+            <div className="grid items-start gap-4 xl:grid-cols-2">
+              <EstimateCreationWindowSettingsCard
+                accessToken={accessToken}
+                readOnly={!canManage}
+              />
+              <GlobalRepairComplexitySettingsCard
+                accessToken={accessToken}
+                readOnly={!canManage}
+              />
+            </div>
+          </div>
+        ) : (
+          <ErrorBox>Не получен токен доступа к настройкам смет и ремонта.</ErrorBox>
+        )}
+      </div>
+    )
+  }
   if (estimateScreen.level !== "root") {
     if (!catalogRequest || !currentCatalog) {
       return (
-        <ErrorBox>
-          Единый каталог смет временно недоступен.
-        </ErrorBox>
+        <div className="flex h-full min-h-0 flex-col gap-3">
+          {estimateActionNavigation}
+          <ErrorBox>Единый каталог смет временно недоступен.</ErrorBox>
+        </div>
       )
     }
     return (
@@ -4389,6 +4441,7 @@ export function EstimatesRepairsSettingsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
+      {estimateActionNavigation}
       {!accessToken ? (
         <CatalogNavigationState
           kind="error"
@@ -4470,9 +4523,7 @@ export function EstimatesRepairsSettingsPage() {
             Повторить загрузку
           </Button>
         </CatalogNavigationState>
-      ) : (
-        estimateActionNavigation
-      )}
+      ) : null}
     </div>
   )
 }

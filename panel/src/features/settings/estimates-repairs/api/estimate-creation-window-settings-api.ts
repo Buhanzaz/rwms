@@ -2,7 +2,6 @@ import { bearerRequest } from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 
 export type EstimateCreationWindowSetting = {
-  warehouseId: string
   version: number
   days: number
   createdAt: string | null
@@ -16,15 +15,10 @@ export type EstimateCreationWindowUpdate = {
 
 export const estimateCreationWindowKeys = {
   all: ["maintenance", "estimate-creation-window"] as const,
-  warehouse: (warehouseId: string) =>
-    [...estimateCreationWindowKeys.all, warehouseId] as const,
 }
 
-function endpoint(warehouseId: string) {
-  if (!warehouseId.trim()) {
-    throw new Error("Не выбран склад для настройки срока создания сметы.")
-  }
-  return `${getGatewayRuntimeConfig().maintenanceApiBaseUrl}/v1/settings/estimate-creation-window/${encodeURIComponent(warehouseId)}`
+function endpoint() {
+  return `${getGatewayRuntimeConfig().maintenanceApiBaseUrl}/v1/settings/estimate-creation-window`
 }
 
 function nullableString(value: unknown): value is string | null {
@@ -37,8 +31,7 @@ function parse(value: unknown): EstimateCreationWindowSetting {
   }
   const response = value as Record<string, unknown>
   if (
-    typeof response.warehouseId !== "string" ||
-    !response.warehouseId.trim() ||
+    "warehouseId" in response ||
     typeof response.version !== "number" ||
     !Number.isInteger(response.version) ||
     response.version < 0 ||
@@ -52,22 +45,11 @@ function parse(value: unknown): EstimateCreationWindowSetting {
     throw new Error("Сервис ремонтов вернул некорректный срок создания сметы.")
   }
   return {
-    warehouseId: response.warehouseId,
     version: response.version,
     days: response.days,
     createdAt: response.createdAt,
     updatedAt: response.updatedAt,
   }
-}
-
-function parseForWarehouse(value: unknown, warehouseId: string) {
-  const setting = parse(value)
-  if (setting.warehouseId !== warehouseId) {
-    throw new Error(
-      "Сервис ремонтов вернул срок создания сметы другого склада."
-    )
-  }
-  return setting
 }
 
 function validate(input: EstimateCreationWindowUpdate) {
@@ -83,26 +65,22 @@ function validate(input: EstimateCreationWindowUpdate) {
 }
 
 export async function getEstimateCreationWindow(
-  accessToken: string,
-  warehouseId: string
+  accessToken: string
 ): Promise<EstimateCreationWindowSetting> {
-  return parseForWarehouse(
-    await bearerRequest<unknown>(accessToken, endpoint(warehouseId)),
-    warehouseId
+  return parse(
+    await bearerRequest<unknown>(accessToken, endpoint())
   )
 }
 
 export async function updateEstimateCreationWindow(
   accessToken: string,
-  warehouseId: string,
   input: EstimateCreationWindowUpdate
 ): Promise<EstimateCreationWindowSetting> {
   validate(input)
-  return parseForWarehouse(
-    await bearerRequest<unknown>(accessToken, endpoint(warehouseId), {
+  return parse(
+    await bearerRequest<unknown>(accessToken, endpoint(), {
       method: "PUT",
       body: JSON.stringify(input),
-    }),
-    warehouseId
+    })
   )
 }

@@ -10,17 +10,18 @@ import jakarta.persistence.Version;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
-/** JPA warehouse-level thresholds that map repair complexity to planned duration. */
+/** Global thresholds that map repair complexity to planned duration. */
 @Entity
-@Table(name = "repair_complexity_settings")
+@Table(name = "global_repair_complexity_settings")
 public class RepairComplexitySettings {
+  public static final UUID SINGLETON_ID = UUID.fromString("00000000-0000-0000-0000-000000000001");
   public static final int DEFAULT_LIGHT_BOUNDARY_MINUTES = 60;
   public static final int DEFAULT_MEDIUM_BOUNDARY_MINUTES = 180;
   public static final int DEFAULT_COMPLEX_BOUNDARY_MINUTES = 360;
 
   @Id
-  @Column(name = "warehouse_id", nullable = false)
-  private UUID warehouseId;
+  @Column(name = "id", nullable = false)
+  private UUID id;
 
   @Version
   @Column(name = "version", nullable = false)
@@ -35,12 +36,6 @@ public class RepairComplexitySettings {
   @Column(name = "complex_boundary_minutes", nullable = false)
   private int complexBoundaryMinutes;
 
-  @Column(name = "imported_from_task_board_version")
-  private Long importedFromTaskBoardVersion;
-
-  @Column(name = "imported_at")
-  private OffsetDateTime importedAt;
-
   @Column(name = "created_at", nullable = false)
   private OffsetDateTime createdAt;
 
@@ -49,53 +44,15 @@ public class RepairComplexitySettings {
 
   protected RepairComplexitySettings() {}
 
+  /** Creates the singleton thresholds; production initialization belongs to Flyway. */
   public static RepairComplexitySettings create(
-      UUID warehouseId,
-      int lightBoundaryMinutes,
-      int mediumBoundaryMinutes,
-      int complexBoundaryMinutes) {
-    return create(
-        warehouseId,
-        lightBoundaryMinutes,
-        mediumBoundaryMinutes,
-        complexBoundaryMinutes,
-        null);
-  }
-
-  public static RepairComplexitySettings imported(
-      UUID warehouseId,
-      int lightBoundaryMinutes,
-      int mediumBoundaryMinutes,
-      int complexBoundaryMinutes,
-      long taskBoardVersion) {
-    if (taskBoardVersion < 0) {
-      throw new IllegalArgumentException("taskBoardVersion must not be negative");
-    }
-    return create(
-        warehouseId,
-        lightBoundaryMinutes,
-        mediumBoundaryMinutes,
-        complexBoundaryMinutes,
-        taskBoardVersion);
-  }
-
-  private static RepairComplexitySettings create(
-      UUID warehouseId,
-      int lightBoundaryMinutes,
-      int mediumBoundaryMinutes,
-      int complexBoundaryMinutes,
-      Long importedFromTaskBoardVersion) {
-    if (warehouseId == null) {
-      throw new IllegalArgumentException("warehouseId is required");
-    }
+      int lightBoundaryMinutes, int mediumBoundaryMinutes, int complexBoundaryMinutes) {
     validate(lightBoundaryMinutes, mediumBoundaryMinutes, complexBoundaryMinutes);
     RepairComplexitySettings value = new RepairComplexitySettings();
-    value.warehouseId = warehouseId;
+    value.id = SINGLETON_ID;
     value.lightBoundaryMinutes = lightBoundaryMinutes;
     value.mediumBoundaryMinutes = mediumBoundaryMinutes;
     value.complexBoundaryMinutes = complexBoundaryMinutes;
-    value.importedFromTaskBoardVersion = importedFromTaskBoardVersion;
-    value.importedAt = importedFromTaskBoardVersion == null ? null : MaintenanceTime.now();
     return value;
   }
 
@@ -147,13 +104,12 @@ public class RepairComplexitySettings {
     }
   }
 
-  public UUID getWarehouseId() { return warehouseId; }
+  public UUID getId() {
+    return id; }
   public long getVersion() { return version; }
   public int getLightBoundaryMinutes() { return lightBoundaryMinutes; }
   public int getMediumBoundaryMinutes() { return mediumBoundaryMinutes; }
   public int getComplexBoundaryMinutes() { return complexBoundaryMinutes; }
-  public Long getImportedFromTaskBoardVersion() { return importedFromTaskBoardVersion; }
-  public OffsetDateTime getImportedAt() { return importedAt; }
   public OffsetDateTime getCreatedAt() { return createdAt; }
   public OffsetDateTime getUpdatedAt() { return updatedAt; }
 }

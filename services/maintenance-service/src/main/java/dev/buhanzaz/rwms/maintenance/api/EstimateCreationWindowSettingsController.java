@@ -3,17 +3,15 @@ package dev.buhanzaz.rwms.maintenance.api;
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
 import dev.buhanzaz.rwms.maintenance.service.EstimateCreationWindowSettingsService;
 import jakarta.validation.Valid;
-import java.util.UUID;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/** Public management boundary for the warehouse estimate creation window. */
+/** Public management boundary for the global estimate creation window. */
 @RestController
 @RequestMapping("/api/maintenance/v1/settings/estimate-creation-window")
 public class EstimateCreationWindowSettingsController {
@@ -26,19 +24,18 @@ public class EstimateCreationWindowSettingsController {
     this.access = access;
   }
 
-  @GetMapping("/{warehouseId}")
+  @GetMapping
   public EstimateCreationWindowSettingsResponse get(
-      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID warehouseId) {
-    access.requireManage(jwt, warehouseId);
-    return service.get(warehouseId);
+      @AuthenticationPrincipal Jwt jwt) {
+    access.requireGlobalRead(jwt);
+    return service.get();
   }
 
-  @PutMapping("/{warehouseId}")
+  @PutMapping
   public EstimateCreationWindowSettingsResponse replace(
       @AuthenticationPrincipal Jwt jwt,
-      @PathVariable UUID warehouseId,
       @Valid @RequestBody ReplaceEstimateCreationWindowSettingsRequest request) {
-    access.requireManage(jwt, warehouseId);
-    return service.replace(warehouseId, request);
+    access.requireGlobalManage(jwt);
+    return service.replace(request);
   }
 }

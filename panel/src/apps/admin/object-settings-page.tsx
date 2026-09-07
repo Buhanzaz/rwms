@@ -17,8 +17,6 @@ import { AdminCatalogSettingsPage } from "@/features/settings/fleet/admin-catalo
 import { LogisticsSettingsPage } from "@/features/settings/logistics"
 import { RepairCapacitySettingsCard } from "@/features/settings/logistics/repair-capacity-settings-card"
 import { TaskBoardSettingsPage } from "@/features/settings/task-board/task-board-settings-page"
-import { EstimateCreationWindowSettingsCard } from "@/features/settings/estimates-repairs/estimate-creation-window-settings-card"
-import { WarehouseRepairComplexitySettingsCard } from "@/features/settings/kpi/repair-complexity-settings-card"
 
 const sections = [
   { value: "drivers", label: "Водители", icon: UserIcon },
@@ -27,7 +25,6 @@ const sections = [
   { value: "brigades", label: "Бригады", icon: UserGroupIcon },
   { value: "workers", label: "Рабочие", icon: UserIcon },
   { value: "repair-places", label: "Ремонтные места", icon: Wrench01Icon },
-  { value: "maintenance", label: "Сметы и ремонт", icon: Wrench01Icon },
 ] as const
 
 export type ObjectSettingsSection = (typeof sections)[number]["value"]
@@ -61,34 +58,6 @@ function RepairPlacesSettings({ warehouse }: { warehouse: WarehouseInfo }) {
   )
 }
 
-function ObjectMaintenanceSettings({ warehouse }: { warehouse: WarehouseInfo }) {
-  const { accessToken } = useAuth()
-
-  if (!accessToken) {
-    return (
-      <Alert variant="destructive">
-        <AlertTitle>Нет токена доступа</AlertTitle>
-        <AlertDescription>
-          Повторите вход, чтобы загрузить настройки смет и ремонта.
-        </AlertDescription>
-      </Alert>
-    )
-  }
-
-  return (
-    <div className="grid gap-4 xl:grid-cols-2">
-      <EstimateCreationWindowSettingsCard
-        accessToken={accessToken}
-        warehouseId={warehouse.id}
-      />
-      <WarehouseRepairComplexitySettingsCard
-        accessToken={accessToken}
-        warehouseId={warehouse.id}
-      />
-    </div>
-  )
-}
-
 function SectionContent({
   section,
   warehouse,
@@ -109,8 +78,6 @@ function SectionContent({
       return <TaskBoardSettingsPage section="workers" />
     case "repair-places":
       return <RepairPlacesSettings warehouse={warehouse} />
-    case "maintenance":
-      return <ObjectMaintenanceSettings warehouse={warehouse} />
   }
 }
 
@@ -118,6 +85,9 @@ export function ObjectSettingsPage() {
   const { section } = useParams<{ section?: string }>()
   const navigate = useNavigate()
 
+  if (section === "maintenance") {
+    return <Navigate to="/admin/estimates-repairs?catalog=maintenance-settings" replace />
+  }
   if (section === undefined) {
     return <Navigate to="/admin/object-settings/drivers" replace />
   }

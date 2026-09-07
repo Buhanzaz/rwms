@@ -4,12 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.math.BigDecimal;
-import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class RepairComplexitySettingsTest {
   private final RepairComplexitySettings settings =
-      RepairComplexitySettings.create(UUID.randomUUID(), 120, 300, 500);
+      RepairComplexitySettings.create(120, 300, 500);
 
   @Test
   void classifiesContinuousInclusiveMinuteBoundaries() {
@@ -39,7 +38,7 @@ class RepairComplexitySettingsTest {
   @Test
   void rejectsOverlappingOrNegativeBoundariesAndTime() {
     assertThatThrownBy(
-            () -> RepairComplexitySettings.create(UUID.randomUUID(), 120, 120, 500))
+            () -> RepairComplexitySettings.create(120, 120, 500))
         .isInstanceOf(IllegalArgumentException.class);
     assertThatThrownBy(() -> settings.classify(BigDecimal.valueOf(-1), false))
         .isInstanceOf(IllegalArgumentException.class);

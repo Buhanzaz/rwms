@@ -28,7 +28,7 @@ class EstimateCreationWindowPolicyTest {
 
   @Test
   void sevenDayWindowIsInclusiveThroughAugustEighthAndExpiresAugustNinth() {
-    when(settings.effectiveDays(WAREHOUSE)).thenReturn(7);
+    when(settings.effectiveDays()).thenReturn(7);
     when(warehouseLifecycle.localDateAt(WAREHOUSE, ARRIVED_AT))
         .thenReturn(LocalDate.of(2026, 8, 1));
     OffsetDateTime augustEighth = OffsetDateTime.parse("2026-08-08T20:59:00Z");
@@ -47,6 +47,32 @@ class EstimateCreationWindowPolicyTest {
   }
 
   @Test
+  void globalWindowUsesEachWarehouseCalendarAndChangesForBothTogether() {
+    UUID easternWarehouse = UUID.randomUUID();
+    OffsetDateTime evaluatedAt = OffsetDateTime.parse("2026-08-08T22:00:00Z");
+    when(settings.effectiveDays()).thenReturn(7);
+    when(warehouseLifecycle.localDateAt(WAREHOUSE, ARRIVED_AT))
+        .thenReturn(LocalDate.of(2026, 8, 1));
+    when(warehouseLifecycle.localDateAt(WAREHOUSE, evaluatedAt))
+        .thenReturn(LocalDate.of(2026, 8, 9));
+    when(warehouseLifecycle.localDateAt(easternWarehouse, ARRIVED_AT))
+        .thenReturn(LocalDate.of(2026, 8, 2));
+    when(warehouseLifecycle.localDateAt(easternWarehouse, evaluatedAt))
+        .thenReturn(LocalDate.of(2026, 8, 9));
+
+    assertThatThrownBy(() -> policy.requireCreationOpen(WAREHOUSE, ARRIVED_AT, evaluatedAt))
+        .isInstanceOf(MaintenanceValidationException.class);
+    assertThatCode(() -> policy.requireCreationOpen(easternWarehouse, ARRIVED_AT, evaluatedAt))
+        .doesNotThrowAnyException();
+
+    when(settings.effectiveDays()).thenReturn(14);
+    assertThatCode(() -> policy.requireCreationOpen(WAREHOUSE, ARRIVED_AT, evaluatedAt))
+        .doesNotThrowAnyException();
+    assertThatCode(() -> policy.requireCreationOpen(easternWarehouse, ARRIVED_AT, evaluatedAt))
+        .doesNotThrowAnyException();
+  }
+
+  @Test
   void manualCreationLoadsAndValidatesLogisticsOwnedArrivalIdentity() {
     UUID returnId = UUID.randomUUID();
     OffsetDateTime now = OffsetDateTime.now();
@@ -54,7 +80,7 @@ class EstimateCreationWindowPolicyTest {
         .thenReturn(
             new MaintenanceDependencyGateway.ReturnArrival(
                 WAREHOUSE, RENTAL_ITEM, returnId, now.minusHours(1)));
-    when(settings.effectiveDays(WAREHOUSE)).thenReturn(7);
+    when(settings.effectiveDays()).thenReturn(7);
     when(warehouseLifecycle.localDateAt(
             org.mockito.ArgumentMatchers.eq(WAREHOUSE),
             org.mockito.ArgumentMatchers.any(OffsetDateTime.class)))

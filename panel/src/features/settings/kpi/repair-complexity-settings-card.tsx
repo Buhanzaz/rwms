@@ -139,7 +139,7 @@ export function RepairComplexitySettingsCard({
         <CardHeader>
           <CardTitle>Сложность ремонта</CardTitle>
           <CardDescription>
-            Три границы выбранного склада разделяют лёгкий, средний, тяжёлый и
+            Общие для всех складов границы разделяют лёгкий, средний, тяжёлый и
             капитальный ремонт. Ровно граничное значение относится к предыдущему
             диапазону.
           </CardDescription>
@@ -295,24 +295,24 @@ function errorMessage(error: unknown, fallback: string) {
     : fallback
 }
 
-/** Loads and saves the repair-complexity boundaries owned by one object. */
-export function WarehouseRepairComplexitySettingsCard({
+/** Loads and saves the global repair-complexity boundaries. */
+export function GlobalRepairComplexitySettingsCard({
   accessToken,
-  warehouseId,
+  readOnly = false,
 }: {
   accessToken: string
-  warehouseId: string
+  readOnly?: boolean
 }) {
   const queryClient = useQueryClient()
-  const queryKey = repairComplexityKeys.warehouse(warehouseId)
+  const queryKey = repairComplexityKeys.all
   const [actionError, setActionError] = useState<string | null>(null)
   const settingsQuery = useQuery({
     queryKey,
-    queryFn: () => getRepairComplexity(accessToken, warehouseId),
+    queryFn: () => getRepairComplexity(accessToken),
   })
   const saveMutation = useMutation({
     mutationFn: (input: RepairComplexityUpdate) =>
-      updateRepairComplexity(accessToken, warehouseId, input),
+      updateRepairComplexity(accessToken, input),
     onSuccess: (saved) => {
       queryClient.setQueryData(queryKey, saved)
       setActionError(null)
@@ -342,7 +342,7 @@ export function WarehouseRepairComplexitySettingsCard({
       <Card aria-label="Загрузка границ сложности ремонта">
         <CardHeader>
           <CardTitle>Сложность ремонта</CardTitle>
-          <CardDescription>Загружаем настройки объекта…</CardDescription>
+          <CardDescription>Загружаем общие настройки…</CardDescription>
         </CardHeader>
       </Card>
     )
@@ -381,12 +381,13 @@ export function WarehouseRepairComplexitySettingsCard({
 
   return (
     <RepairComplexitySettingsCard
-      key={`${warehouseId}:${settingsQuery.data.version}:${settingsQuery.data.updatedAt}`}
+      key={`${settingsQuery.data.version}:${settingsQuery.data.updatedAt}`}
       setting={settingsQuery.data}
       saving={saveMutation.isPending}
-      blocked={saveMutation.isPending}
+      blocked={saveMutation.isPending || readOnly}
       actionError={actionError}
       onSave={(input) => {
+        if (readOnly) return
         setActionError(null)
         saveMutation.mutate(input)
       }}

@@ -1,3 +1,4 @@
+import { ApiError } from "@/lib/api-client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import {
   cleanup,
@@ -24,12 +25,7 @@ vi.mock(
   () => ({
     estimateCreationWindowKeys: {
       all: ["maintenance", "estimate-creation-window"],
-      warehouse: (warehouseId: string) => [
-        "maintenance",
-        "estimate-creation-window",
-        warehouseId,
-      ],
-    },
+      },
     getEstimateCreationWindow: mocks.get,
     updateEstimateCreationWindow: mocks.update,
   })
@@ -37,7 +33,7 @@ vi.mock(
 
 import { EstimateCreationWindowSettingsCard } from "@/features/settings/estimates-repairs/estimate-creation-window-settings-card"
 
-function renderCard() {
+function renderCard(readOnly = false) {
   render(
     <QueryClientProvider
       client={
@@ -51,7 +47,7 @@ function renderCard() {
     >
       <EstimateCreationWindowSettingsCard
         accessToken="token"
-        warehouseId="warehouse-1"
+        readOnly={readOnly}
       />
     </QueryClientProvider>
   )
@@ -60,14 +56,12 @@ function renderCard() {
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.get.mockResolvedValue({
-    warehouseId: "warehouse-1",
     version: 0,
     days: 7,
     createdAt: null,
     updatedAt: null,
   })
   mocks.update.mockResolvedValue({
-    warehouseId: "warehouse-1",
     version: 1,
     days: 10,
     createdAt: "2026-08-21T08:00:00Z",
@@ -85,14 +79,14 @@ describe("EstimateCreationWindowSettingsCard", () => {
     const input = await screen.findByLabelText("Количество дней")
     expect((input as HTMLInputElement).value).toBe("7")
     expect(
-      screen.getByText("Используется стандартный срок 7 дней.")
+      screen.getByText("Применяется ко всем складам.")
     ).toBeTruthy()
 
     fireEvent.change(input, { target: { value: "10" } })
     await user.click(screen.getByRole("button", { name: "Сохранить" }))
 
     await waitFor(() =>
-      expect(mocks.update).toHaveBeenCalledWith("token", "warehouse-1", {
+      expect(mocks.update).toHaveBeenCalledWith("token", {
         expectedVersion: 0,
         days: 10,
       })
@@ -124,4 +118,25 @@ describe("EstimateCreationWindowSettingsCard", () => {
       screen.getByText("Настройка не подменяется локальным значением.")
     ).toBeTruthy()
   })
+  it("keeps global settings read-only for non-administrators", async () => {
+    const user = userEvent.setup()
+    renderCard(true)
+    const input = await screen.findByLabelText("Количество дней")
+    expect((input as HTMLInputElement).disabled).toBe(true)
+    await user.click(screen.getByRole("button", { name: "Сохранить" }))
+    expect(mocks.update).not.toHaveBeenCalled()
+  })
+
+  it("reloads the global version after a conflict before saving again", async () => {
+    const user = userEvent.setup()
+    renderCard()
+    await screen.findByLabelText("Количество дней")
+    mocks.get.mockResolvedValue({ version: 3, days: 14, createdAt: null, updatedAt: null })
+    mocks.update.mockRejectedValueOnce(new ApiError("conflict", 409))
+    await user.click(screen.getByRole("button", { name: "Сохранить" }))
+    await waitFor(() => expect((screen.getByLabelText("Количество дней") as HTMLInputElement).value).toBe("14"))
+    await user.click(screen.getByRole("button", { name: "Сохранить" }))
+    await waitFor(() => expect(mocks.update).toHaveBeenLastCalledWith("token", { expectedVersion: 3, days: 14 }))
+  })
+
 })

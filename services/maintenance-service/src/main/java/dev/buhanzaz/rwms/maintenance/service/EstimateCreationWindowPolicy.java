@@ -54,7 +54,7 @@ public final class EstimateCreationWindowPolicy {
     }
     LocalDate arrivalDate = warehouseLifecycle.localDateAt(warehouseId, arrivedAt);
     LocalDate today = warehouseLifecycle.localDateAt(warehouseId, evaluatedAt);
-    LocalDate deadline = arrivalDate.plusDays(settings.effectiveDays(warehouseId));
+    LocalDate deadline = arrivalDate.plusDays(settings.effectiveDays());
     if (today.isAfter(deadline)) {
       throw new MaintenanceValidationException(
           "ESTIMATE_CREATION_WINDOW_EXPIRED",

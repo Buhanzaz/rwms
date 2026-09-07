@@ -35,8 +35,8 @@ class ManualCapitalRepairServiceTest {
   void explicitChoiceForcesCapitalIndependentlyOfCatalogWorkFlags() {
     RepairComplexitySettingsService settings = mock(RepairComplexitySettingsService.class);
     RepairComplexityColorsService colors = mock(RepairComplexityColorsService.class);
-    when(settings.requireSettings(WAREHOUSE_ID))
-        .thenReturn(RepairComplexitySettings.create(WAREHOUSE_ID, 60, 180, 360));
+    when(settings.requireSettings())
+        .thenReturn(RepairComplexitySettings.create(60, 180, 360));
     when(colors.requireColors()).thenReturn(RepairComplexityColors.defaults());
     MaintenanceRepairModelSupport support =
         new MaintenanceRepairModelSupport(
