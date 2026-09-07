@@ -48,7 +48,7 @@ spring:
     open-in-view: false
   cloud:
     function:
-      definition: inventoryMediaFacts;inventoryAssetFacts
+      definition: inventoryMediaFacts;inventoryAssetFacts;inventoryLogisticsReturnFacts;inventoryMaintenanceEstimateFacts
     stream:
       bindings:
         inventoryMediaFacts-in-0:
@@ -59,6 +59,16 @@ spring:
         inventoryAssetFacts-in-0:
           destination: rwms.asset.rental-item.v1
           group: inventory-service-asset-membership-v1
+          consumer:
+            max-attempts: 1
+        inventoryLogisticsReturnFacts-in-0:
+          destination: rwms.logistics.return.v1
+          group: inventory-service-return-inspection-inbox-v1
+          consumer:
+            max-attempts: 1
+        inventoryMaintenanceEstimateFacts-in-0:
+          destination: rwms.maintenance.estimate.v1
+          group: inventory-service-return-inspection-inbox-v1
           consumer:
             max-attempts: 1
       kafka:
@@ -82,6 +92,14 @@ spring:
               enable-dlq: false
               start-offset: earliest
           inventoryAssetFacts-in-0:
+            consumer:
+              enable-dlq: false
+              start-offset: earliest
+          inventoryLogisticsReturnFacts-in-0:
+            consumer:
+              enable-dlq: false
+              start-offset: earliest
+          inventoryMaintenanceEstimateFacts-in-0:
             consumer:
               enable-dlq: false
               start-offset: earliest

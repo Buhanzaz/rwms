@@ -129,6 +129,9 @@ public class InventoryAssetInboxProcessor {
     if (STATE_EVENT_TYPES.contains(event.eventType())) {
       inventory.reconcileAssetMembership(
           event.assetId(),
+          event.aggregateVersion(),
+          event.warehouseId(),
+          event.status(),
           event.actor(),
           event.correlationId(),
           event.eventId(),
@@ -202,7 +205,9 @@ public class InventoryAssetInboxProcessor {
           aggregateVersion,
           correlationId,
           actor,
-          occurredAt);
+          occurredAt,
+          STATE_EVENT_TYPES.contains(eventType) ? UUID.fromString(payload.path("warehouseId").asText()) : null,
+          STATE_EVENT_TYPES.contains(eventType) ? payload.path("status").asText() : null);
     } catch (InvalidAssetEvent exception) {
       throw exception;
     } catch (RuntimeException exception) {
@@ -242,7 +247,9 @@ public class InventoryAssetInboxProcessor {
       long aggregateVersion,
       UUID correlationId,
       OpaqueActorReference actor,
-      OffsetDateTime occurredAt) {}
+      OffsetDateTime occurredAt,
+      UUID warehouseId,
+      String status) {}
 
   private static final class InvalidAssetEvent extends RuntimeException {
     private final UUID eventId;

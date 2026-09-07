@@ -1232,7 +1232,8 @@ final class InventoryPlanningService extends InventoryPlanningWorkflowSupport {
         throw InventoryException.conflict("Inventory final plan disposition evidence is stale");
       }
       if (!entry.isHasWork()) {
-        if (finding.getInspection() == InspectionState.WORK_STAGED) {
+        if (finding.getInspection() == InspectionState.WORK_STAGED
+            && entry.getDispositionKind() == InventoryCabinDispositionKind.LOCAL) {
           throw InventoryException.conflict("Inventory final plan omitted staged maintenance work");
         }
         result.add(

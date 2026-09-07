@@ -123,6 +123,16 @@ public class InventoryApplicationService {
         assetId, sourceActor, correlationId, causationId, occurredAt);
   }
 
+  /** Applies ordered membership facts independently of a possibly newer remote asset snapshot. */
+  public void reconcileAssetMembership(
+      UUID assetId, long assetVersion, UUID warehouseId, String status,
+      OpaqueActorReference sourceActor, UUID correlationId, UUID causationId,
+      OffsetDateTime occurredAt) {
+    findingService.reconcileAssetMembership(assetId,
+        new InventoryFindingService.MembershipSignal(assetVersion, warehouseId, status),
+        sourceActor, correlationId, causationId, occurredAt);
+  }
+
   /** Preserves the package-level producer seam used to verify finding event and owner-proof order. */
   void appendFindingFacts(
       InventoryFinding finding,

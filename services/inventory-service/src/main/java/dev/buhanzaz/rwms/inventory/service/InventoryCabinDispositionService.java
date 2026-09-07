@@ -296,10 +296,14 @@ final class InventoryCabinDispositionService extends InventoryTechnicalRuntimeSu
             .collect(java.util.stream.Collectors.toSet()))) {
       throw InventoryException.conflict("Inventory cabin disposition set is incomplete");
     }
+    UUID warehouseId = sessions.findById(inventoryId).orElseThrow().getWarehouseId();
     for (InventoryFinding finding : activeFindings) {
       InventoryCabinDispositionRow row = byFinding.get(finding.getId());
       long priorRevision = priorFindingRevisions.getOrDefault(finding.getId(), finding.getRevision());
-      if (row.getCandidateKind() != candidateKind(finding)) {
+      InventoryCabinDispositionCandidateKind currentKind =
+          finding.preservesOperationalState(warehouseId)
+              ? InventoryCabinDispositionCandidateKind.PRESERVE : candidateKind(finding);
+      if (row.getCandidateKind() != currentKind) {
         throw InventoryException.conflict("Inventory cabin disposition classification changed");
       }
       try {
@@ -354,7 +358,10 @@ final class InventoryCabinDispositionService extends InventoryTechnicalRuntimeSu
             "INVENTORY_CABIN_DISPOSITION_IDENTITY_MISSING",
             "Resolve every cabin identity before return and shipment review");
       }
-      InventoryCabinDispositionCandidateKind candidate = candidateKind(finding);
+      InventoryCabinDispositionCandidateKind candidate =
+          finding.preservesOperationalState(session.getWarehouseId())
+              ? InventoryCabinDispositionCandidateKind.PRESERVE
+              : candidateKind(finding);
       result.add(
           InventoryCabinDispositionRow.candidate(
               session.getId(),

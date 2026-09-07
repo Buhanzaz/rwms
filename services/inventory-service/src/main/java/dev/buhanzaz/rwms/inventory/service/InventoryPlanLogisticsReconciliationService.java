@@ -89,6 +89,7 @@ final class InventoryPlanLogisticsReconciliationService {
       List<InventoryFinalPlanEntry> entries,
       long outcomeReapplicationNo) {
     requirePlanIdentity(session, plan, entries, outcomeReapplicationNo);
+    if (entries.stream().allMatch(entry -> entry.getDispositionKind() == InventoryCabinDispositionKind.PRESERVE)) return;
     PlanRequest request = planRequest(session, plan, entries, outcomeReapplicationNo);
     InventoryPlanLogisticsEffect current =
         effects
@@ -125,7 +126,7 @@ final class InventoryPlanLogisticsReconciliationService {
    * maintenance-owned effect.
    */
   void requireApplied(InventorySession session, InventoryPublicationIntent intent) {
-    if (intent.getFinalPlanVersion() == null) return;
+    if (intent.getFinalPlanVersion() == null || intent.getDesiredAssetStatus() == null) return;
     ensureScheduledForExistingPlan(session, intent);
     EffectClaim claim = claim(session, intent);
     if (claim == null) return;
@@ -287,6 +288,7 @@ final class InventoryPlanLogisticsReconciliationService {
     request.put("finalPlanSha256", plan.getFinalPlanSha256());
     ArrayNode outcomes = request.putArray("outcomes");
     for (InventoryFinalPlanEntry entry : entries) {
+      if (entry.getDispositionKind() == InventoryCabinDispositionKind.PRESERVE) continue;
       if (entry.getAssetId() == null) {
         throw InventoryException.conflict("Inventory final-plan asset identity is missing");
       }

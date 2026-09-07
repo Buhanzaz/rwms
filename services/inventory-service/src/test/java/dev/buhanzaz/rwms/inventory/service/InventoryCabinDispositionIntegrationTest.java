@@ -599,7 +599,7 @@ class InventoryCabinDispositionIntegrationTest {
     jdbc.update(
         """
         update inventory_finding
-           set inspection='READY',
+           set inspection='READY',inspection_source='INVENTORY',
                current_warehouse_id=?,current_status='RENTED',
                current_display_canonical_number=?,current_passport_snapshot='{}'::jsonb,
                current_contents_snapshot='[]'::jsonb,current_repairs_snapshot='[]'::jsonb,

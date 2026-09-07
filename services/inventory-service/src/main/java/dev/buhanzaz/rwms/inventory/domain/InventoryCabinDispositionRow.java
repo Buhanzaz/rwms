@@ -83,6 +83,8 @@ public class InventoryCabinDispositionRow {
     value.candidateKind = candidateKind;
     if (candidateKind == InventoryCabinDispositionCandidateKind.LOCAL) {
       value.decide(InventoryCabinDispositionKind.LOCAL, localDetails);
+    } else if (candidateKind == InventoryCabinDispositionCandidateKind.PRESERVE) {
+      value.decide(InventoryCabinDispositionKind.PRESERVE, localDetails);
     }
     return value;
   }
@@ -100,6 +102,8 @@ public class InventoryCabinDispositionRow {
             && kind != InventoryCabinDispositionKind.LOCAL)
         || (candidateKind == InventoryCabinDispositionCandidateKind.MISSING
             && kind == InventoryCabinDispositionKind.LOCAL)
+        || (candidateKind == InventoryCabinDispositionCandidateKind.PRESERVE
+            && kind != InventoryCabinDispositionKind.PRESERVE)
         || (candidateKind == InventoryCabinDispositionCandidateKind.LOCAL
             && kind != InventoryCabinDispositionKind.LOCAL)) {
       throw new IllegalArgumentException("Inventory disposition does not match its candidate");

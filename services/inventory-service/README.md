@@ -42,8 +42,8 @@ unchanged.
 an active session whose live cabin membership or derived review became stale. It checks the supplied
 session revision before a fresh read-only asset capture and again under the local apply lock. Remote
 capture reads finish before the idempotent local transaction reconciles arrivals, departures and
-current snapshots through the normal membership journal. Only automatic `EXPECTED` population
-follows a later registry departure. An explicitly observed `ADDED_NEW`, `ADDED_USED` or
+current snapshots through the normal membership journal. Only uninspected automatic `EXPECTED`
+population is deactivated by a later registry departure. An inspected finding or explicitly observed `ADDED_NEW`, `ADDED_USED` or
 `UNEXPECTED_EXISTING` finding remains in the inventory table and final-plan population when a later
 capture omits it; capture eligibility cannot erase the operator's physical warehouse observation.
 Saved findings, inspection evidence, media references and movement history remain intact; only the
@@ -51,6 +51,24 @@ derived furniture review is restarted and an existing final plan is marked stale
 seeding reads the active client
 `quantity` observation and retains `observedQuantity` as compatibility for previously stored review
 facts. The public refresh contract adds no schema field.
+
+An inspected departure retains its original passport, photos and frozen work as historical evidence.
+Ordered asset-event warehouse/status facts drive the movement journal independently of a newer HTTP
+snapshot, so a departure followed by a return is not collapsed into one current-state read. The
+`PRESERVE` final-plan disposition publishes only inventory passport/photo observations and never
+changes live status, warehouse, contents, leases, logistics or maintenance work. The finding exposes
+`preserveOperationalState=true`; its clients display the current owner status, not its obsolete work.
+
+Normal rental returns are checked automatically only after logistics acceptance without an estimate,
+or after the linked maintenance estimate is actually `COMPLETED`. Creating its draft is insufficient.
+Inventory consumes the terminal event and verifies private owner proof before importing into the
+warehouse session active at completion. An immutable return-line receipt deduplicates the import.
+`inspectionSource=LOGISTICS_RETURN` carries external proof, not a fabricated inventory passport
+baseline; it is always `PRESERVE`. Older inventory evidence remains historical but is not copied into
+the imported revision or republished over return photos. No repair command is issued by this import.
+The warehouse-scoped `GET /api/inventory/v1/return-estimates/{estimateId}/inspection` reports
+`CONFIRMED` only from that receipt, including after the session closes; otherwise it reports pending
+applicability or `NOT_REQUIRED`. Clients use this read to confirm addition after completing an estimate.
 
 Finding media is immutable revision evidence. A workflow that advances a finding without editing
 its photos—live membership/snapshot reconciliation, source-asset attachment, conflict resolution,
@@ -87,12 +105,16 @@ Asset-service materializes the final status, passport and reviewed contents in o
 ordinary per-finding publication then delivers the remaining outcomes. Cancellation never
 materializes the proposal. Existing cabins created by earlier versions are not deleted or hidden.
 
-Every completed final-plan finding has one durable publication intent, including findings without
+Every non-write-off completed final-plan finding has one durable publication intent, including findings without
 maintenance work. After furniture reconciliation succeeds, the recovery scheduler first applies
-the exact completed finding through asset-service: no work means `FREE`, ordinary work means
+the exact completed local finding through asset-service: no work means `FREE`, ordinary work means
 `REPAIR`, and an explicit capital choice means `CAPITAL_REPAIR`. Asset-service owns the atomic
 release or supersession of active order-unit reservations, operation leases, presentation holds and
 transfer state. It preserves their history and rejects terminal `LOST` or `WRITTEN_OFF` cabins.
+`PRESERVE` instead sends `preserveOperationalState=true` with a null desired status, skips logistics
+and maintenance, and may update only the recorded passport/photos. New status-applying intents freeze
+the observed asset version; a later rental/transfer cannot be overwritten by delayed publication.
+Fresh departure truth also rejects a previously prepared non-preserving plan before completion.
 Each final-plan publication intent also freezes the exact finding passport observation at
 completion. The source finding revision and asset must match the immutable final-plan entry.
 `ABSENT` is sent as an explicit preserve-current instruction; `PRESENT` is normalized into the six

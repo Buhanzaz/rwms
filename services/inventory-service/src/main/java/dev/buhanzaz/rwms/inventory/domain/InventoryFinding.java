@@ -54,6 +54,25 @@ public class InventoryFinding implements Persistable<UUID> {
   private InspectionState inspection;
 
   @Enumerated(EnumType.STRING)
+  @Column(name = "inspection_source", length = 24)
+  private InspectionSource inspectionSource;
+
+  @Column(name = "external_inspection_asset_version")
+  private Long externalInspectionAssetVersion;
+
+  @Column(name = "inspection_superseded_by_departure", nullable = false)
+  private boolean inspectionSupersededByDeparture;
+
+  @Column(name = "membership_event_asset_version")
+  private Long membershipEventAssetVersion;
+
+  @Column(name = "membership_event_warehouse_id")
+  private UUID membershipEventWarehouseId;
+
+  @Column(name = "membership_event_status", length = 48)
+  private String membershipEventStatus;
+
+  @Enumerated(EnumType.STRING)
   @Column(name = "reconciliation", nullable = false, length = 24)
   private ReconciliationState reconciliation;
 
@@ -340,6 +359,9 @@ public class InventoryFinding implements Persistable<UUID> {
     value.assetId = assetId;
     value.assetVersion = assetVersion;
     value.currentWarehouseId = currentWarehouseId;
+    value.membershipEventAssetVersion = completeCurrentSnapshot ? assetVersion : null;
+    value.membershipEventWarehouseId = currentWarehouseId;
+    value.membershipEventStatus = currentStatus;
     value.currentStatus = nullableRequired(currentStatus, 48, "current status");
     value.currentTenantSnapshot = nullable(currentTenantSnapshot, 512, "current tenant");
     value.currentDisplayCanonicalNumber =
@@ -379,6 +401,68 @@ public class InventoryFinding implements Persistable<UUID> {
    */
   public boolean isExplicitObservation() {
     return origin != FindingOrigin.EXPECTED;
+  }
+
+  /** Historical and return-owned inspections never overwrite live operational state. */
+  public boolean preservesOperationalState(UUID inventoryWarehouseId) {
+    return preservesOperationalState(inventoryWarehouseId, currentWarehouseId, currentStatus);
+  }
+
+  /** Uses fresh owner truth when it is newer than this finding's event-driven projection. */
+  public boolean preservesOperationalState(UUID inventoryWarehouseId, UUID liveWarehouseId, String liveStatus) {
+    if (inspection == InspectionState.NOT_INSPECTED) return false;
+    return inspectionSource == InspectionSource.LOGISTICS_RETURN
+        || inspectionSupersededByDeparture
+        || (liveWarehouseId != null && !liveWarehouseId.equals(inventoryWarehouseId))
+        || ("RENTED".equals(liveStatus) && !"RENTED".equals(inspectionStatus))
+        || "IN_TRANSFER".equals(liveStatus);
+  }
+
+  /** Advances only from ordered event facts, never from a newer remote read snapshot. */
+  public boolean advanceMembershipEvent(long version, UUID warehouseId, String status) {
+    if (version < 0 || warehouseId == null || status == null) {
+      throw new IllegalArgumentException("Membership event facts are incomplete");
+    }
+    if (membershipEventAssetVersion != null && version <= membershipEventAssetVersion) return false;
+    membershipEventAssetVersion = version;
+    membershipEventWarehouseId = warehouseId;
+    membershipEventStatus = status;
+    return true;
+  }
+
+  /** Keeps pre-departure evidence without reactivating its obsolete operational plan. */
+  public void retainInspectionBeforeDeparture() {
+    if (inspection != InspectionState.NOT_INSPECTED) inspectionSupersededByDeparture = true;
+  }
+
+  /** Records an external inspection proof without inventing an inventory passport baseline. */
+  public void importReturnInspection(long inspectedAssetVersion, String nextActorRef) {
+    requireIdleOrCreated();
+    if (inspectedAssetVersion < 0 || assetId == null) {
+      throw new IllegalArgumentException("Return inspection asset proof is invalid");
+    }
+    inspection = InspectionState.READY;
+    inspectionSource = InspectionSource.LOGISTICS_RETURN;
+    externalInspectionAssetVersion = inspectedAssetVersion;
+    inspectionSupersededByDeparture = false;
+    inspectionAssetVersion = null;
+    inspectionWarehouseId = null;
+    inspectionStatus = null;
+    inspectionDisplayCanonicalNumber = null;
+    inspectionTenantSnapshot = null;
+    inspectionPassportSnapshot = null;
+    inspectionContentsSnapshot = null;
+    inspectionRepairsSnapshot = null;
+    passportObservationState = ObservationPresence.ABSENT;
+    passportObservation = null;
+    equipmentObservationState = ObservationPresence.ABSENT;
+    equipmentObservation = null;
+    maintenancePlanFingerprintSha256 = null;
+    inspectionComment = "";
+    coverMediaId = null;
+    reconciliation = ReconciliationState.MATCHED;
+    actorRef = required(nextActorRef, 2000, "actor reference");
+    clearConflictResolution();
   }
 
   /**
@@ -640,6 +724,9 @@ public class InventoryFinding implements Persistable<UUID> {
         || currentRepairsSnapshot == null) {
       throw new IllegalStateException("Inspection requires a complete current asset snapshot");
     }
+    inspectionSource = InspectionSource.INVENTORY;
+    externalInspectionAssetVersion = null;
+    inspectionSupersededByDeparture = false;
     inspectionAssetVersion = assetVersion;
     inspectionWarehouseId = currentWarehouseId;
     inspectionStatus = currentStatus;
@@ -774,6 +861,16 @@ public class InventoryFinding implements Persistable<UUID> {
   public UUID getInventoryId() {
     return inventoryId;
   }
+
+  public InspectionSource getInspectionSource() { return inspectionSource; }
+
+  public Long getExternalInspectionAssetVersion() { return externalInspectionAssetVersion; }
+
+  public Long getMembershipEventAssetVersion() { return membershipEventAssetVersion; }
+
+  public UUID getMembershipEventWarehouseId() { return membershipEventWarehouseId; }
+
+  public String getMembershipEventStatus() { return membershipEventStatus; }
 
   public long getRevision() {
     return revision;

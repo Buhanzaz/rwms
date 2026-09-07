@@ -74,6 +74,16 @@ final class DisabledInventoryDependencyGateway implements InventoryDependencyGat
   }
 
   @Override
+  public NormalReturnInspection normalReturnInspection(UUID returnId) {
+    throw unavailable();
+  }
+
+  @Override
+  public Optional<CompletedReturnEstimateProof> completedReturnEstimate(UUID estimateId) {
+    throw unavailable();
+  }
+
+  @Override
   public SourceAsset createSourceAsset(UUID key, JsonNode request) {
     throw unavailable();
   }

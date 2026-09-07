@@ -74,6 +74,13 @@ class HttpInventoryDependencyGatewayTest {
   private final AtomicReference<String> logisticsAuthorization = new AtomicReference<>();
   private final AtomicReference<String> logisticsIdempotencyKey = new AtomicReference<>();
   private final AtomicReference<String> logisticsBody = new AtomicReference<>();
+  private final AtomicReference<String> returnInspectionAuthorization = new AtomicReference<>();
+  private final AtomicReference<String> returnInspectionPath = new AtomicReference<>();
+  private final AtomicReference<String> returnInspectionResponse = new AtomicReference<>("null");
+  private final AtomicReference<String> completedEstimateAuthorization = new AtomicReference<>();
+  private final AtomicReference<String> completedEstimatePath = new AtomicReference<>();
+  private final AtomicReference<String> completedEstimateResponse = new AtomicReference<>("null");
+  private final AtomicInteger completedEstimateStatus = new AtomicInteger(200);
   private final AtomicReference<String> noWorkAuthorization = new AtomicReference<>();
   private final AtomicReference<String> noWorkIdempotencyKey = new AtomicReference<>();
   private final AtomicReference<String> noWorkBody = new AtomicReference<>();
@@ -107,6 +114,13 @@ class HttpInventoryDependencyGatewayTest {
     logisticsAuthorization.set(null);
     logisticsIdempotencyKey.set(null);
     logisticsBody.set(null);
+    returnInspectionAuthorization.set(null);
+    returnInspectionPath.set(null);
+    returnInspectionResponse.set("null");
+    completedEstimateAuthorization.set(null);
+    completedEstimatePath.set(null);
+    completedEstimateResponse.set("null");
+    completedEstimateStatus.set(200);
     noWorkAuthorization.set(null);
     noWorkIdempotencyKey.set(null);
     noWorkBody.set(null);
@@ -133,7 +147,12 @@ class HttpInventoryDependencyGatewayTest {
     server.createContext(
         "/api/internal/logistics/v1/inventory/outcomes", this::applyLogisticsOutcomes);
     server.createContext(
+        "/api/internal/logistics/v1/inventory/returns", this::normalReturnInspection);
+    server.createContext(
         "/api/internal/maintenance/v1/inventory/outcomes", this::applyNoWorkDisposition);
+    server.createContext(
+        "/api/internal/maintenance/v1/inventory/return-estimates",
+        this::completedReturnEstimate);
     server.createContext(
         "/api/internal/maintenance/v1/inventory/repair-snapshots", this::repairSnapshots);
     server.createContext(
@@ -360,6 +379,114 @@ class HttpInventoryDependencyGatewayTest {
 
     assetPresent.set(false);
     assertThat(gateway.currentAsset(cabinId)).isEmpty();
+  }
+
+  @Test
+  void readsNormalReturnAndCompletedEstimateProofsWithExactPrivateIdentity() {
+    UUID returnId = UUID.randomUUID();
+    UUID estimateId = UUID.randomUUID();
+    UUID lineId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    UUID repairId = UUID.randomUUID();
+    returnInspectionResponse.set(
+        """
+        {"returnId":"%s","documentVersion":7,"warehouseId":"%s",
+         "arrivedAt":"2026-09-07T08:00:00Z","completedAt":"2026-09-07T08:05:00Z",
+         "terminalState":"ESTIMATE_REQUESTED","lines":[{"lineId":"%s","assetId":"%s",
+          "assetVersion":11,"status":"WAITING_ESTIMATE_CONFIRMATION","media":[{
+           "mediaId":"%s","generation":2,"ownerType":"LOGISTICS_RETURN",
+           "ownerVerifiedAt":"2026-09-07T08:04:00Z"}]}]}
+        """
+            .formatted(returnId, warehouseId, lineId, assetId, UUID.randomUUID()));
+    completedEstimateResponse.set(
+        """
+        {"estimateId":"%s","estimateVersion":9,"estimateRevision":3,
+         "returnId":"%s","lineId":"%s","warehouseId":"%s","assetId":"%s",
+         "assetVersion":11,"arrivedAt":"2026-09-07T08:00:00Z",
+         "completedAt":"2026-09-07T08:10:00Z","completionKind":"NON_EMPTY",
+         "repairId":"%s"}
+        """
+            .formatted(estimateId, returnId, lineId, warehouseId, assetId, repairId));
+
+    InventoryDependencyGateway.NormalReturnInspection inspection =
+        gateway.normalReturnInspection(returnId);
+    InventoryDependencyGateway.CompletedReturnEstimateProof estimate =
+        gateway.completedReturnEstimate(estimateId).orElseThrow();
+
+    assertThat(inspection.lines()).singleElement().satisfies(line -> assertThat(line.lineId()).isEqualTo(lineId));
+    assertThat(estimate.returnId()).isEqualTo(returnId);
+    assertThat(estimate.repairId()).isEqualTo(repairId);
+    assertThat(returnInspectionPath.get())
+        .isEqualTo("/api/internal/logistics/v1/inventory/returns/" + returnId + "/inspection");
+    assertThat(completedEstimatePath.get())
+        .isEqualTo("/api/internal/maintenance/v1/inventory/return-estimates/" + estimateId);
+    assertThat(returnInspectionAuthorization.get()).isEqualTo("Bearer inventory-logistics-token");
+    assertThat(completedEstimateAuthorization.get())
+        .isEqualTo("Bearer inventory-maintenance-token");
+  }
+
+  @Test
+  void treatsMissingCompletedReturnEstimateProofAsAbsence() {
+    completedEstimateStatus.set(404);
+
+    assertThat(gateway.completedReturnEstimate(UUID.randomUUID())).isEmpty();
+    assertThat(completedEstimateAuthorization.get())
+        .isEqualTo("Bearer inventory-maintenance-token");
+  }
+
+  @Test
+  void rejectsNullAndMalformedNormalReturnProofs() {
+    UUID returnId = UUID.randomUUID();
+
+    assertThatThrownBy(() -> gateway.normalReturnInspection(returnId))
+        .isInstanceOf(InventoryException.class)
+        .hasMessage("Dependency returned an empty response")
+        .satisfies(
+            error ->
+                assertThat(((InventoryException) error).status().value()).isEqualTo(503));
+
+    returnInspectionResponse.set(
+        """
+        {"returnId":"%s","documentVersion":1,"warehouseId":"%s",
+         "arrivedAt":"2026-09-07T08:00:00Z","completedAt":"2026-09-07T08:05:00Z",
+         "terminalState":"ACCEPTING","lines":[]}
+        """
+            .formatted(returnId, UUID.randomUUID()));
+    assertThatThrownBy(() -> gateway.normalReturnInspection(returnId))
+        .isInstanceOf(InventoryException.class)
+        .satisfies(
+            error ->
+                assertThat(((InventoryException) error).status().value()).isEqualTo(503));
+  }
+
+  @Test
+  void rejectsNullAndMismatchedCompletedReturnEstimateProofs() {
+    UUID estimateId = UUID.randomUUID();
+
+    assertThatThrownBy(() -> gateway.completedReturnEstimate(estimateId))
+        .isInstanceOf(InventoryException.class)
+        .hasMessage("Maintenance-service returned malformed completed return estimate proof");
+
+    completedEstimateResponse.set(
+        """
+        {"estimateId":"%s","estimateVersion":1,"estimateRevision":1,
+         "returnId":"%s","lineId":"%s","warehouseId":"%s","assetId":"%s",
+         "assetVersion":1,"arrivedAt":"2026-09-07T08:00:00Z",
+         "completedAt":"2026-09-07T08:10:00Z","completionKind":"EMPTY",
+         "repairId":null}
+        """
+            .formatted(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                UUID.randomUUID()));
+    assertThatThrownBy(() -> gateway.completedReturnEstimate(estimateId))
+        .isInstanceOf(InventoryException.class)
+        .satisfies(
+            error ->
+                assertThat(((InventoryException) error).status().value()).isEqualTo(503));
   }
 
   @Test
@@ -1043,6 +1170,22 @@ class HttpInventoryDependencyGatewayTest {
         """
             .formatted(
                 path[7], request.path("finalPlanVersion").asLong(), UUID.randomUUID()));
+  }
+
+  private void normalReturnInspection(HttpExchange exchange) throws IOException {
+    returnInspectionAuthorization.set(
+        exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION));
+    returnInspectionPath.set(exchange.getRequestURI().getPath());
+    assertThat(exchange.getRequestMethod()).isEqualTo("GET");
+    respond(exchange, 200, returnInspectionResponse.get());
+  }
+
+  private void completedReturnEstimate(HttpExchange exchange) throws IOException {
+    completedEstimateAuthorization.set(
+        exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION));
+    completedEstimatePath.set(exchange.getRequestURI().getPath());
+    assertThat(exchange.getRequestMethod()).isEqualTo("GET");
+    respond(exchange, completedEstimateStatus.get(), completedEstimateResponse.get());
   }
 
   private void applyNoWorkDisposition(HttpExchange exchange) throws IOException {

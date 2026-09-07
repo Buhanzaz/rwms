@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.inventory.service;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.*;
 
 import dev.buhanzaz.rwms.inventory.domain.FinalPlanState;
+import dev.buhanzaz.rwms.inventory.domain.InventoryCabinDispositionKind;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinalPlan;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinalPlanEntry;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinding;
@@ -115,6 +116,7 @@ final class InventoryCompletionService extends InventoryCompletionWorkflowSuppor
     InventoryDependencyGateway.Validation validation = validationService.validateAssets(revisions.findings());
     List<ValidatedFinding> validatedFindings =
         validationService.validatedFindings(session, revisions.findings(), validation);
+    requireCurrentOperationalDisposition(session, revisions.findings(), finalPlan, validatedFindings);
     List<CompletionRisk> risks = validationService.risks(session, revisions.findings(), validatedFindings);
     InventoryReviewService.FurnitureCompletionFact furniture = reviewService.requireConfirmedFurnitureReview(session);
     if (risks.stream().noneMatch(risk -> "CONFLICT".equals(risk.code()))) {
@@ -149,6 +151,27 @@ final class InventoryCompletionService extends InventoryCompletionWorkflowSuppor
     transactions.executeWithoutResult(
         status -> statisticsService.persistValidation(session, validation, acknowledgement, response));
     return response;
+  }
+
+  private void requireCurrentOperationalDisposition(
+      InventorySession session,
+      List<InventoryFinding> findings,
+      InventoryPlanningService.CompletionFinalPlan finalPlan,
+      List<ValidatedFinding> validatedFindings) {
+    Map<UUID, ValidatedFinding> currentById = new LinkedHashMap<>();
+    validatedFindings.forEach(value -> currentById.put(value.findingId(), value));
+    Map<UUID, InventoryFinalPlanEntry> entriesById = new LinkedHashMap<>();
+    finalPlan.entries().forEach(value -> entriesById.put(value.getFindingId(), value));
+    for (InventoryFinding finding : findings) {
+      ValidatedFinding validated = currentById.get(finding.getId());
+      CurrentItemSnapshot current = validated == null ? null : validated.currentSnapshot();
+      if (finding.preservesOperationalState(session.getWarehouseId(),
+          current == null ? null : current.warehouseId(), current == null ? null : current.status())
+          && entriesById.get(finding.getId()).getDispositionKind() != InventoryCabinDispositionKind.PRESERVE) {
+        throw new InventoryException(HttpStatus.CONFLICT, "INVENTORY_FINAL_PLAN_STALE",
+            "Cabin departed after the final plan was prepared; refresh the inventory and prepare the plan again");
+      }
+    }
   }
 
   public SessionView complete(
@@ -195,6 +218,7 @@ final class InventoryCompletionService extends InventoryCompletionWorkflowSuppor
     }
     List<ValidatedFinding> validatedFindings =
         validationService.validatedFindings(session, revisions.findings(), fresh);
+    requireCurrentOperationalDisposition(session, revisions.findings(), finalPlan, validatedFindings);
     List<CompletionRisk> risks = validationService.risks(session, revisions.findings(), validatedFindings);
     if (!canonicalHash(semanticValidatedFindings(validatedFindings))
         .equals(

@@ -102,6 +102,34 @@ paths:
             ETag: { $ref: '#/components/headers/ETag' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/inventory/v1/return-estimates/{estimateId}/inspection:
+    parameters:
+      - { name: estimateId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { $ref: '#/components/parameters/WarehouseId' }
+    get:
+      tags: [Findings]
+      operationId: getReturnEstimateInspection
+      description: >-
+        Requires USER, rwms.read and warehouse VIEW before any maintenance proof is read.
+        CONFIRMED is returned only from a persisted return-inspection receipt and includes that
+        receipt's inventory/finding identity plus the finding's cabin number, even after the
+        session is completed. Without a receipt, a proven return estimate is PENDING only while
+        the warehouse has an active session started no later than estimate completion; otherwise
+        the state is NOT_REQUIRED. A maintenance 404 also maps to NOT_REQUIRED because an ordinary
+        non-return estimate may be queried here. A proof for another warehouse remains hidden.
+      responses:
+        '200':
+          description: Receipt-backed or currently applicable return inspection status.
+          headers:
+            X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReturnEstimateInspection' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
   /api/inventory/v1/sessions/{inventoryId}:
     parameters:
       - { $ref: '#/components/parameters/InventoryId' }
@@ -961,13 +989,13 @@ components:
     InventoryReviewStage: { type: string, enum: [CABINS, FURNITURE] }
     FurnitureReconciliationState: { type: string, enum: [NOT_REQUIRED, READY, PENDING, SUCCEEDED, TRANSIENT_FAILED, BLOCKED] }
     FindingOrigin: { type: string, enum: [EXPECTED, ADDED_NEW, ADDED_USED, UNEXPECTED_EXISTING] }
-    InspectionSource: { type: string, enum: [INVENTORY] }
+    InspectionSource: { type: string, enum: [INVENTORY, LOGISTICS_RETURN] }
     RentalItemStatus:
       type: string
       enum: [RENTED, BOOKED, REPAIR, WAITING_REPAIR_CHECK, WRITTEN_OFF, LOST, CAPITAL_REPAIR, AFTER_RENT, WAITING_ESTIMATE_CONFIRMATION, SALE, USED_SALE, RESERVED, FREE, WAREHOUSE, OWN_NEEDS, IN_TRANSFER]
     InventoryAssetOutcomeStatus: { type: string, enum: [FREE, REPAIR, CAPITAL_REPAIR, RENTED] }
     InventoryCabinDispositionReviewPhase: { type: string, enum: [RETURNS, SHIPMENTS, COMPLETED] }
-    InventoryCabinDispositionKind: { type: string, enum: [LOCAL, SHIPMENT, WRITE_OFF] }
+    InventoryCabinDispositionKind: { type: string, enum: [LOCAL, SHIPMENT, WRITE_OFF, PRESERVE] }
     InspectionState: { type: string, enum: [NOT_INSPECTED, READY, WORK_STAGED] }
     LogisticsPlanningMode: { type: string, enum: [AUTO, FIXED_DATE] }
     ReconciliationState: { type: string, enum: [MATCHED, MISSING, CONFLICT] }
@@ -1775,7 +1803,7 @@ components:
     Finding:
       type: object
       additionalProperties: false
-      required: [id, inventoryId, findingRevision, origin, inspection, inspectionSource, reconciliation, assetId, assetVersion, displayCanonicalNumber, identityMatchKey, passportObservation, equipmentObservation, mutationState, planFingerprintSha256, comment, expectedSnapshot, inspectionBaseline, currentSnapshot, conflicts, conflictResolution, frozenPlan, coverMediaId, media, publication]
+      required: [id, inventoryId, findingRevision, origin, inspection, inspectionSource, preserveOperationalState, reconciliation, assetId, assetVersion, displayCanonicalNumber, identityMatchKey, passportObservation, equipmentObservation, mutationState, planFingerprintSha256, comment, expectedSnapshot, inspectionBaseline, currentSnapshot, conflicts, conflictResolution, frozenPlan, coverMediaId, media, publication]
       properties:
         id: { type: string, format: uuid }
         inventoryId: { type: string, format: uuid }
@@ -1786,6 +1814,12 @@ components:
           oneOf:
             - { $ref: '#/components/schemas/InspectionSource' }
             - { type: 'null' }
+        preserveOperationalState:
+          type: boolean
+          description: >-
+            This finding retains historical inventory evidence or a completed logistics return
+            inspection. Completion may publish inventory passport/photo observations, but never
+            changes live status, warehouse, leases, contents, logistics or maintenance work.
         reconciliation: { $ref: '#/components/schemas/ReconciliationState' }
         assetId: { $ref: '#/components/schemas/NullableUuid' }
         assetVersion: { oneOf: [{ type: integer, format: int64, minimum: 0 }, { type: 'null' }] }
@@ -2083,7 +2117,9 @@ components:
         targetId: { $ref: '#/components/schemas/NullableUuid' }
         maintenanceEstimateId: { $ref: '#/components/schemas/NullableUuid' }
         maintenanceRepairId: { $ref: '#/components/schemas/NullableUuid' }
-        desiredAssetStatus: { $ref: '#/components/schemas/InventoryAssetOutcomeStatus' }
+        desiredAssetStatus:
+          description: Null for a passport/photo-only PRESERVE outcome; no operational status is requested.
+          oneOf: [{ $ref: '#/components/schemas/InventoryAssetOutcomeStatus' }, { type: 'null' }]
         effectiveAssetVersion:
           oneOf: [{ type: integer, format: int64, minimum: 0 }, { type: 'null' }]
         assetOutcomeResult:
@@ -2161,6 +2197,33 @@ components:
         furnitureReconciliationState: { $ref: '#/components/schemas/FurnitureReconciliationState' }
         createdPublicationCount: { type: integer, minimum: 0 }
         requeuedPublicationCount: { type: integer, minimum: 0 }
+    ReturnEstimateInspection:
+      type: object
+      additionalProperties: false
+      required: [state, inventoryId, findingId, cabinNumber]
+      properties:
+        state: { type: string, enum: [CONFIRMED, PENDING, NOT_REQUIRED] }
+        inventoryId: { $ref: '#/components/schemas/NullableUuid' }
+        findingId: { $ref: '#/components/schemas/NullableUuid' }
+        cabinNumber:
+          oneOf: [ { type: string, minLength: 1, maxLength: 128 }, { type: 'null' } ]
+      allOf:
+        - if:
+            properties:
+              state: { const: CONFIRMED }
+          then:
+            properties:
+              inventoryId: { type: string, format: uuid }
+              findingId: { type: string, format: uuid }
+              cabinNumber: { type: string, minLength: 1, maxLength: 128 }
+        - if:
+            properties:
+              state: { enum: [PENDING, NOT_REQUIRED] }
+          then:
+            properties:
+              inventoryId: { type: 'null' }
+              findingId: { type: 'null' }
+              cabinNumber: { type: 'null' }
     SessionStatistics:
       type: object
       additionalProperties: false

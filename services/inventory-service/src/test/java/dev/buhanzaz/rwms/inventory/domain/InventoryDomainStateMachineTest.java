@@ -16,6 +16,73 @@ class InventoryDomainStateMachineTest {
       """;
 
   @Test
+  void departureRetainsInspectionAndOnlyNewHumanInspectionReactivatesItsPlan() {
+    UUID warehouseId = UUID.randomUUID();
+    InventoryFinding finding = InventoryFinding.expected(UUID.randomUUID(), UUID.randomUUID(),
+        UUID.randomUUID(), 1L, warehouseId, "FREE", null, "AB-12", "AB12", ACTOR);
+    finding.saveInspection(InspectionState.WORK_STAGED, ReconciliationState.MATCHED,
+        ObservationPresence.PRESENT, "{\"number\":\"AB-12\"}",
+        ObservationPresence.ABSENT, null, "a".repeat(64), ACTOR);
+    finding.retainInspectionBeforeDeparture();
+    assertThat(finding.preservesOperationalState(warehouseId)).isTrue();
+    assertThat(finding.getInspection()).isEqualTo(InspectionState.WORK_STAGED);
+    assertThat(finding.getInspectionStatus()).isEqualTo("FREE");
+    assertThat(finding.getPassportObservation()).contains("AB-12");
+    assertThat(finding.isMembershipActive()).isTrue();
+
+    finding.saveInspection(InspectionState.READY, ReconciliationState.MATCHED,
+        ObservationPresence.ABSENT, null, ObservationPresence.ABSENT, null, null, ACTOR);
+    assertThat(finding.preservesOperationalState(warehouseId)).isFalse();
+    assertThat(finding.getInspectionSource()).isEqualTo(InspectionSource.INVENTORY);
+  }
+
+  @Test
+  void returnInspectionHasExternalProofButNoInventedPassportOrObsoletePlan() {
+    UUID warehouseId = UUID.randomUUID();
+    InventoryFinding finding = InventoryFinding.expected(UUID.randomUUID(), UUID.randomUUID(),
+        UUID.randomUUID(), 4L, warehouseId, "WAITING_ESTIMATE_CONFIRMATION", null, "AB-12", "AB12", ACTOR);
+    finding.importReturnInspection(3L, ACTOR);
+
+    assertThat(finding.getInspection()).isEqualTo(InspectionState.READY);
+    assertThat(finding.getInspectionSource()).isEqualTo(InspectionSource.LOGISTICS_RETURN);
+    assertThat(finding.getExternalInspectionAssetVersion()).isEqualTo(3L);
+    assertThat(finding.getInspectionAssetVersion()).isNull();
+    assertThat(finding.getInspectionPassportSnapshot()).isNull();
+    assertThat(finding.getMaintenancePlanFingerprintSha256()).isNull();
+    assertThat(finding.getCoverMediaId()).isNull();
+    assertThat(finding.getPassportObservationState()).isEqualTo(ObservationPresence.ABSENT);
+    assertThat(finding.preservesOperationalState(warehouseId)).isTrue();
+    assertThat(finding.getCurrentStatus()).isEqualTo("WAITING_ESTIMATE_CONFIRMATION");
+  }
+
+  @Test
+  void newerReadSnapshotDoesNotSkipOrderedDepartureAndReturnFacts() {
+    UUID warehouseId = UUID.randomUUID();
+    InventoryFinding finding = InventoryFinding.expected(UUID.randomUUID(), UUID.randomUUID(),
+        UUID.randomUUID(), 1L, warehouseId, "FREE", null, "AB-12", "AB12", ACTOR);
+    finding.refreshCurrentAsset(3L, warehouseId, "FREE", null, ReconciliationState.MATCHED);
+    assertThat(finding.advanceMembershipEvent(2L, warehouseId, "RENTED")).isTrue();
+    assertThat(finding.getMembershipEventStatus()).isEqualTo("RENTED");
+    assertThat(finding.advanceMembershipEvent(3L, warehouseId, "AFTER_RENT")).isTrue();
+    assertThat(finding.advanceMembershipEvent(2L, warehouseId, "RENTED")).isFalse();
+    assertThat(finding.getMembershipEventStatus()).isEqualTo("AFTER_RENT");
+    assertThat(finding.getCurrentStatus()).isEqualTo("FREE");
+  }
+
+  @Test
+  void preservePublicationSucceedsWithoutDesiredStatusOrMaintenanceTarget() {
+    InventoryPublicationIntent intent = InventoryPublicationIntent.readyForOutcome(
+        UUID.randomUUID(), UUID.randomUUID(), 1L, 1L, "a".repeat(64), null, null);
+    intent.request("b".repeat(64), null);
+    intent.recordAssetOutcome(5L, null, "{\"status\":\"RENTED\"}");
+    intent.succeedAssetOnly();
+    assertThat(intent.getState()).isEqualTo(PublicationState.SUCCEEDED);
+    assertThat(intent.getDesiredAssetStatus()).isNull();
+    assertThat(intent.getTargetKind()).isNull();
+    assertThat(intent.getAssetOutcomeResult()).contains("RENTED");
+  }
+
+  @Test
   void sessionHasOnlyActiveToTerminalTransitions() {
     InventorySession session = session();
 

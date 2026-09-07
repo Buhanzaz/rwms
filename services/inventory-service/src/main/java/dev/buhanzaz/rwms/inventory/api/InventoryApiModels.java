@@ -435,6 +435,7 @@ public final class InventoryApiModels {
       FindingOrigin origin,
       InspectionState inspection,
       String inspectionSource,
+      boolean preserveOperationalState,
       ReconciliationState reconciliation,
       UUID assetId,
       Long assetVersion,

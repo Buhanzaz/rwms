@@ -45,6 +45,12 @@ public interface InventoryDependencyGateway {
 
   Optional<LiveAssetSnapshot> currentAsset(UUID assetId);
 
+  /** Reads immutable logistics-owned evidence for one completed normal return inspection. */
+  NormalReturnInspection normalReturnInspection(UUID returnId);
+
+  /** Reads completed maintenance proof when the estimate originated from a normal return line. */
+  Optional<CompletedReturnEstimateProof> completedReturnEstimate(UUID estimateId);
+
   SourceAsset createSourceAsset(UUID idempotencyKey, JsonNode request);
 
   Validation validateAssets(List<UUID> assetIds);
@@ -217,6 +223,46 @@ public interface InventoryDependencyGateway {
       String tenantSnapshot,
       JsonNode passportSnapshot,
       JsonNode contentsSnapshot) {}
+
+  /** Terminal normal-return evidence; media identity remains owned by logistics-service. */
+  record NormalReturnInspection(
+      UUID returnId,
+      long documentVersion,
+      UUID warehouseId,
+      OffsetDateTime arrivedAt,
+      OffsetDateTime completedAt,
+      String terminalState,
+      List<NormalReturnInspectionLine> lines) {}
+
+  /** One settled return line from the immutable logistics proof. */
+  record NormalReturnInspectionLine(
+      UUID lineId,
+      UUID assetId,
+      long assetVersion,
+      String status,
+      List<NormalReturnInspectionMedia> media) {}
+
+  /** Exact externally owned READY media reference attached to a return line. */
+  record NormalReturnInspectionMedia(
+      UUID mediaId,
+      long generation,
+      String ownerType,
+      OffsetDateTime ownerVerifiedAt) {}
+
+  /** Immutable maintenance completion proof linked to one logistics normal-return line. */
+  record CompletedReturnEstimateProof(
+      UUID estimateId,
+      long estimateVersion,
+      int estimateRevision,
+      UUID returnId,
+      UUID lineId,
+      UUID warehouseId,
+      UUID assetId,
+      long assetVersion,
+      OffsetDateTime arrivedAt,
+      OffsetDateTime completedAt,
+      String completionKind,
+      UUID repairId) {}
 
   record NumberResolution(
       String displayCanonicalNumber, String identityMatchKey, boolean found, AssetSnapshot asset) {}

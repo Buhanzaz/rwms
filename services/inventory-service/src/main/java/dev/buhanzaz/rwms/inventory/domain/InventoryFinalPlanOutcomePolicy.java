@@ -14,6 +14,7 @@ public final class InventoryFinalPlanOutcomePolicy {
 
   /** Shipment remains rented; local evidence selects free, ordinary or capital repair. */
   public static InventoryAssetOutcomeStatus desiredAssetStatus(InventoryFinalPlanEntry entry) {
+    if (entry.getDispositionKind() == InventoryCabinDispositionKind.PRESERVE) return null;
     if (entry.getDispositionKind() == InventoryCabinDispositionKind.WRITE_OFF) {
       throw new IllegalArgumentException("Write-off decisions do not publish an asset status");
     }

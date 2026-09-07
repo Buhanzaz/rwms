@@ -300,9 +300,9 @@ first refuses to run beside a dirty furniture/final-plan draft or another finish
 the displayed session revision and a new idempotency key to inventory-service. The owner checks that
 revision, completes a fresh asset capture outside the local apply transaction, rechecks the revision
 under lock, and atomically journals target-session arrivals, departures and current snapshots. Saved
-finding inspections/media/history remain in PostgreSQL. A departure deactivates only automatically
-captured `EXPECTED` population; `ADDED_NEW`, `ADDED_USED` and `UNEXPECTED_EXISTING` are explicit
-physical observations and remain in the result even when the capture omits them. Only the derived
+finding inspections/media/history remain in PostgreSQL. A departure deactivates only uninspected
+automatically captured `EXPECTED` population. Inspected findings and the explicit `ADDED_NEW`,
+`ADDED_USED` and `UNEXPECTED_EXISTING` observations remain in the result even when capture omits them. Only the derived
 registry/furniture/final-plan projections are discarded or marked stale. The returned session replaces the detail cache and
 the panel clears only those derived query entries before the user rebuilds cabin and furniture
 review. If the rebuilt final plan contains no maintenance work, inventory sends `findings: []` and
@@ -324,7 +324,25 @@ only missing cabins known to have departed, with actual date, client and zero or
 catalog-versioned furniture quantities. Every omitted missing candidate becomes `WRITE_OFF`; an
 empty shipment submission therefore sends all missing cabins to write-off review. Only `LOCAL`
 rows proceed into warehouse furniture reconciliation. Final-plan preparation then freezes each
-row's `LOCAL`, `SHIPMENT` or `WRITE_OFF` evidence and rejects stale session/review/finding fences.
+row's `LOCAL`, `SHIPMENT`, `WRITE_OFF` or `PRESERVE` evidence and rejects stale session/review/finding fences.
+
+An inspected cabin that subsequently departs retains its inventory passport, photo and frozen-work
+history, but becomes `PRESERVE`: publication can update passport/photos, never the live operational
+state or existing work. Ordered asset-event facts maintain a separate membership cursor from the
+latest HTTP projection so an out-and-back sequence remains visible in the movement journal. Fresh
+departure truth rejects an obsolete local plan before completion; a frozen expected asset version
+also prevents late FREE/REPAIR publication from replacing a newer rental or transfer.
+
+The ordinary rental return path imports checked evidence into inventory after
+`logistics.return.accepted.v1` (no estimate), or `maintenance.estimate.completed.v1` for its linked
+return line. `logistics.return.estimate-requested.v1` only creates a draft and never marks the cabin
+checked. Inventory verifies the private logistics/maintenance proof outside its transaction, then
+locks the session active at proof completion and atomically stores the finding, immutable semantic
+receipt and processed inbox state. `LOGISTICS_RETURN` provenance has no invented inspection
+baseline and always preserves live operations; previous inventory media/work remains historical
+without being copied to the imported revision. Duplicate delivery cannot create another import.
+The public warehouse-scoped return-estimate inspection read exposes `CONFIRMED` only after the
+receipt exists, providing the client confirmation after successful estimate completion.
 
 For planning dates, inventory combines its own explicit holidays with an inclusive private
 task-board effective-calendar snapshot. The exact `inventory-service` service credential carries

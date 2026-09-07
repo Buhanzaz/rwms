@@ -206,6 +206,7 @@ final class InventoryOutcomeRecoveryService extends InventoryTechnicalRuntimeSup
         createdByFinding.put(entry.getFindingId(), false);
         requeued++;
       }
+      intent.fenceOperationalObservation(entry.getAssetVersion());
       changed.add(intent);
     }
     for (InventoryPublicationIntent intent : publications.saveAllAndFlush(changed)) {

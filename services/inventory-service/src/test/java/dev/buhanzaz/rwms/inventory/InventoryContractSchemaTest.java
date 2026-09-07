@@ -34,6 +34,7 @@ class InventoryContractSchemaTest {
             "GET /api/inventory/v1/sessions",
             "POST /api/inventory/v1/sessions",
             "GET /api/inventory/v1/sessions/active",
+            "GET /api/inventory/v1/return-estimates/{estimateId}/inspection",
             "GET /api/inventory/v1/sessions/{inventoryId}",
             "POST /api/inventory/v1/sessions/{inventoryId}/refresh",
             "GET /api/inventory/v1/sessions/{inventoryId}/findings",
@@ -93,6 +94,10 @@ class InventoryContractSchemaTest {
     assertThat(stringList(child(schemas, "RentalItemStatus").get("enum")))
         .doesNotContain("NEW")
         .contains("FREE", "RENTED", "IN_TRANSFER");
+    assertThat(stringList(child(schemas, "InspectionSource").get("enum")))
+        .containsExactly("INVENTORY", "LOGISTICS_RETURN");
+    assertThat(stringList(child(schemas, "InventoryCabinDispositionKind").get("enum")))
+        .containsExactly("LOCAL", "SHIPMENT", "WRITE_OFF", "PRESERVE");
     assertThat(child(schemas, "FrozenStatistics").get("additionalProperties")).isEqualTo(false);
     assertThat(
             stringList(
@@ -456,6 +461,7 @@ class InventoryContractSchemaTest {
               "inventoryId":"00000000-0000-0000-0000-000000000732",
               "findingRevision":3,"origin":"EXPECTED","inspection":"WORK_STAGED",
               "inspectionSource":"INVENTORY",
+              "preserveOperationalState":false,
               "reconciliation":"MATCHED",
               "assetId":"00000000-0000-0000-0000-000000000733","assetVersion":7,
               "displayCanonicalNumber":"AA-01","identityMatchKey":"AA01",

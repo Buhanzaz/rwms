@@ -256,8 +256,7 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
     for (InventoryFinalPlanEntry entry : entries) {
       if (!InventoryFinalPlanOutcomePolicy.assetPublicationRequired(entry)) continue;
       InventoryAssetOutcomeStatus desiredStatus = desiredStatus(entry);
-      created.add(
-          InventoryPublicationIntent.readyForOutcome(
+      InventoryPublicationIntent intent = InventoryPublicationIntent.readyForOutcome(
               session.getId(),
               entry.getFindingId(),
               Math.max(1, entry.getFindingRevision()),
@@ -265,7 +264,9 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
               finalPlan.getFinalPlanSha256(),
               InventoryFinalPlanOutcomePolicy.maintenanceTarget(entry),
               desiredStatus,
-              frozenPassportObservation(entry)));
+              frozenPassportObservation(entry));
+      intent.fenceOperationalObservation(entry.getAssetVersion());
+      created.add(intent);
     }
     for (InventoryPublicationIntent intent : publications.saveAllAndFlush(created)) {
       if (intent.getState() == PublicationState.READY) {
@@ -668,7 +669,15 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
     assetOutcome.put("finalPlanVersion", intent.getFinalPlanVersion());
     assetOutcome.put("finalPlanSha256", intent.getFinalPlanSha256());
     assetOutcome.put("findingRevision", entry.getFindingRevision());
-    assetOutcome.put("desiredStatus", desiredStatus.name());
+    if (desiredStatus == null) {
+      assetOutcome.putNull("desiredStatus");
+      assetOutcome.put("preserveOperationalState", true);
+    } else {
+      assetOutcome.put("desiredStatus", desiredStatus.name());
+      if (intent.getExpectedAssetVersion() != null) {
+        assetOutcome.put("expectedAssetVersion", intent.getExpectedAssetVersion());
+      }
+    }
     JsonNode dispositionDetails = read(entry.getDispositionDetails());
     if (entry.getDispositionKind() == InventoryCabinDispositionKind.SHIPMENT) {
       JsonNode furniture = dispositionDetails.path("shipment").path("furniture");
@@ -902,7 +911,8 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
           if (current.getState() != PublicationState.PENDING) return;
           current.recordAssetOutcome(
               assetOutcome.assetVersion(),
-              InventoryAssetOutcomeStatus.valueOf(assetOutcome.status()),
+              current.getDesiredAssetStatus() == null
+                  ? null : InventoryAssetOutcomeStatus.valueOf(assetOutcome.status()),
               canonicalWrite(assetOutcome.result()));
           publications.saveAndFlush(current);
         });
@@ -925,7 +935,8 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
                   session.getId(), intent.getFinalPlanVersion(), intent.getFindingId())
               .orElseThrow(
                   () -> InventoryException.conflict("Publication final-plan finding is missing"));
-      if (entry.getDispositionKind() == InventoryCabinDispositionKind.SHIPMENT) {
+      if (entry.getDispositionKind() == InventoryCabinDispositionKind.SHIPMENT
+          || entry.getDispositionKind() == InventoryCabinDispositionKind.PRESERVE) {
         return new PublicationTarget(null);
       }
       ObjectNode noWorkRequest = completedNoWorkRequest(assetRequest, assetOutcome.assetVersion());
@@ -1015,7 +1026,9 @@ final class InventoryPublicationService extends InventoryPublicationWorkflowSupp
         || !intent.getFindingId().equals(result.findingId())
         || !expectedAssetId.equals(result.assetId())
         || result.assetVersion() < 0
-        || !intent.getDesiredAssetStatus().name().equals(result.status())) {
+        || (intent.getDesiredAssetStatus() == null
+            ? !InventoryFindingWorkflowSupport.RENTAL_ITEM_STATUSES.contains(result.status())
+            : !intent.getDesiredAssetStatus().name().equals(result.status()))) {
       throw InventoryException.dependency("Asset-service returned mismatched inventory outcome");
     }
   }

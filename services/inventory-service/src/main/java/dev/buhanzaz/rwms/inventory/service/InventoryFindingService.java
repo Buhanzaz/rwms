@@ -110,6 +110,16 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
       UUID correlationId,
       UUID causationId,
       OffsetDateTime occurredAt) {
+    reconcileAssetMembership(assetId, (MembershipSignal) null, sourceActor, correlationId, causationId, occurredAt);
+  }
+
+  void reconcileAssetMembership(
+      UUID assetId,
+      MembershipSignal signal,
+      OpaqueActorReference sourceActor,
+      UUID correlationId,
+      UUID causationId,
+      OffsetDateTime occurredAt) {
     if (assetId == null
         || correlationId == null
         || causationId == null
@@ -121,7 +131,12 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
     if (current.isPresent() && !RENTAL_ITEM_STATUSES.contains(current.get().status())) {
       throw InventoryException.dependency("Asset-service returned an unknown rental-item status");
     }
+    if (signal != null && (current.isEmpty() || current.get().version() < signal.version())) {
+      throw InventoryException.dependency("Asset-service snapshot has not reached the membership event");
+    }
     OpaqueActorReference actor = normalizedAssetActor(sourceActor);
+    MembershipSignal effectiveSignal = signal != null || current.isEmpty() ? signal
+        : new MembershipSignal(current.get().version(), current.get().warehouseId(), current.get().status());
     transactions.executeWithoutResult(
         ignored ->
             reconcileAssetMembership(
@@ -130,7 +145,9 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
                 actor,
                 correlationId,
                 causationId,
-                occurredAt));
+                occurredAt,
+                null,
+                effectiveSignal));
   }
 
   /**
@@ -246,8 +263,22 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
       UUID causationId,
       OffsetDateTime occurredAt,
       UUID departureInventoryId) {
-    UUID currentWarehouseId = current == null ? null : current.warehouseId();
-    boolean eligible = current != null && CAPTURE_STATUSES.contains(current.status());
+    reconcileAssetMembership(assetId, current, actor, correlationId, causationId, occurredAt,
+        departureInventoryId, null);
+  }
+
+  private void reconcileAssetMembership(
+      UUID assetId,
+      InventoryDependencyGateway.LiveAssetSnapshot current,
+      OpaqueActorReference actor,
+      UUID correlationId,
+      UUID causationId,
+      OffsetDateTime occurredAt,
+      UUID departureInventoryId,
+      MembershipSignal signal) {
+    UUID currentWarehouseId = signal != null ? signal.warehouseId() : current == null ? null : current.warehouseId();
+    String membershipStatus = signal != null ? signal.status() : current == null ? null : current.status();
+    boolean eligible = current != null && CAPTURE_STATUSES.contains(membershipStatus);
 
     for (InventoryFinding finding :
         findings.findInActiveSessionsByAssetIdForUpdate(assetId)) {
@@ -262,10 +293,21 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
               .orElse(null);
       if (session == null) continue;
       long mediaSourceRevision = finding.getRevision();
+      UUID previousEventWarehouse = finding.getMembershipEventWarehouseId();
+      String previousEventStatus = finding.getMembershipEventStatus();
+      if (signal != null && !finding.advanceMembershipEvent(signal.version(), signal.warehouseId(), signal.status())) {
+        continue;
+      }
+      boolean previouslyPresent = session.getWarehouseId().equals(previousEventWarehouse)
+          && physicallyPresentStatus(previousEventStatus);
       boolean departed =
           current == null
               || !eligible
               || !currentWarehouseId.equals(session.getWarehouseId());
+      boolean physicalDeparture = currentWarehouseId != null
+          && (!currentWarehouseId.equals(session.getWarehouseId())
+              || "RENTED".equals(membershipStatus) || "IN_TRANSFER".equals(membershipStatus));
+      if (physicalDeparture) finding.retainInspectionBeforeDeparture();
       UUID previousWarehouseId = finding.getCurrentWarehouseId();
       String previousStatus = finding.getCurrentStatus();
       String previousTenant = finding.getCurrentTenantSnapshot();
@@ -289,9 +331,11 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
               || !storedJsonEquals(
                   finding.getCurrentContentsSnapshot(),
                   current == null ? null : current.contentsSnapshot());
-      boolean preserveExplicitObservation = finding.isExplicitObservation() && current == null;
+      boolean preserveExplicitObservation = current == null
+          && (finding.isExplicitObservation() || finding.getInspection() != InspectionState.NOT_INSPECTED);
       boolean snapshotRefreshed =
           snapshotChanged
+              && (current == null || finding.getAssetVersion() == null || current.version() >= finding.getAssetVersion())
               && !preserveExplicitObservation
               && (finding.getMutationState()
                       == dev.buhanzaz.rwms.inventory.domain.MutationState.IDLE
@@ -342,9 +386,12 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
       // Automatic EXPECTED population follows registry departures. Explicit operator observations
       // remain in the table and final-plan population: an eligibility filter or later capture may
       // not erase the fact that the cabin was physically found during this inventory.
-      boolean membershipChanged =
-          departed && !finding.isExplicitObservation() && finding.changeMembership(false);
-      if (!snapshotRefreshed && !membershipChanged) continue;
+      boolean membershipChanged = departed && !finding.isExplicitObservation()
+          && finding.getInspection() == InspectionState.NOT_INSPECTED && finding.changeMembership(false);
+      boolean departureMovement = membershipChanged || (physicalDeparture && previouslyPresent);
+      boolean arrivalMovement = signal != null && currentWarehouseId.equals(session.getWarehouseId())
+          && physicallyPresentStatus(membershipStatus) && !previouslyPresent;
+      if (!snapshotRefreshed && !membershipChanged && signal == null && !departureMovement) continue;
       InventoryFinding savedFinding = findings.saveAndFlush(finding);
       findingPersistence.carryForwardMediaReferences(
           savedFinding.getId(), mediaSourceRevision, savedFinding.getRevision());
@@ -355,7 +402,7 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
       planningService.invalidateFinalPlan(session);
       session.touch();
       sessions.saveAndFlush(session);
-      if (membershipChanged) {
+      if (departureMovement) {
         membershipMovements.saveAndFlush(
             InventoryMembershipMovement.departed(
                 session.getId(),
@@ -364,12 +411,10 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
                 finding.getOrigin(),
                 finding.getDisplayCanonicalNumber(),
                 session.getWarehouseId(),
-                current != null
-                        && current.warehouseId() != null
-                        && !current.warehouseId().equals(session.getWarehouseId())
-                    ? current.warehouseId()
+                currentWarehouseId != null && !currentWarehouseId.equals(session.getWarehouseId())
+                    ? currentWarehouseId
                     : null,
-                current == null ? previousStatus : current.status(),
+                membershipStatus == null ? previousStatus : membershipStatus,
                 current == null ? previousTenant : current.tenantSnapshot(),
                 occurredAt));
         appendFindingFacts(
@@ -379,6 +424,16 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
             "inventory.finding.membership-departed.v1",
             correlationId,
             causationId);
+      } else if (arrivalMovement) {
+        membershipMovements.saveAndFlush(InventoryMembershipMovement.arrived(
+            session.getId(), causationId, assetId, finding.getOrigin(),
+            finding.getDisplayCanonicalNumber(), previousEventWarehouse, session.getWarehouseId(),
+            membershipStatus, current.tenantSnapshot(), occurredAt));
+        appendFindingFacts(finding, session, actor, "inventory.finding.membership-refreshed.v1",
+            correlationId, causationId);
+      } else if (snapshotRefreshed) {
+        appendFindingFacts(finding, session, actor, "inventory.finding.membership-refreshed.v1",
+            correlationId, causationId);
       }
     }
 
@@ -446,9 +501,9 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
             session.getId(),
             expectedId,
             current.assetId(),
-            current.version(),
-            current.warehouseId(),
-            current.status(),
+            signal == null ? current.version() : signal.version(),
+            currentWarehouseId,
+            membershipStatus,
             current.tenantSnapshot(),
             current.displayCanonicalNumber(),
             current.identityMatchKey(),
@@ -472,7 +527,7 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
             Math.addExact(expectedItems.maximumOrder(session.getId()), 1),
             current.assetId(),
             current.version(),
-            current.status(),
+            membershipStatus,
             current.displayCanonicalNumber(),
             current.identityMatchKey(),
             current.passportSnapshot() == null ? "{}" : json(current.passportSnapshot()),
@@ -491,7 +546,7 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
             finding.getDisplayCanonicalNumber(),
             null,
             session.getWarehouseId(),
-            current.status(),
+            membershipStatus,
             current.tenantSnapshot(),
             occurredAt));
     appendFindingFacts(
@@ -514,6 +569,80 @@ final class InventoryFindingService extends InventoryFindingWorkflowSupport {
         HttpStatus.OK.value(),
         NumberResolutionView.class,
         () -> doResolveNumber(jwt, inventoryId, idempotencyKey, request));
+  }
+
+  /** Ordered producer facts remain separate from the potentially newer HTTP read projection. */
+  record MembershipSignal(long version, UUID warehouseId, String status) {}
+
+  private static boolean physicallyPresentStatus(String status) {
+    return status != null && !Set.of("RENTED", "IN_TRANSFER", "LOST", "WRITTEN_OFF").contains(status);
+  }
+
+  /**
+   * Imports logistics-owned inspection proof inside the caller's locked active-session transaction.
+   * Earlier inventory photos/plans remain historical and are never copied into this new revision.
+   */
+  InventoryFinding importNormalReturnInspection(
+      InventorySession session,
+      InventoryDependencyGateway.NormalReturnInspectionLine proofLine,
+      InventoryDependencyGateway.LiveAssetSnapshot current,
+      NormalReturnImportContext context) {
+    if (!TransactionSynchronizationManager.isActualTransactionActive()
+        || session.getLifecycle() != SessionLifecycle.ACTIVE
+        || !proofLine.assetId().equals(current.assetId())
+        || current.version() < proofLine.assetVersion()) {
+      throw new IllegalStateException("Return inspection import requires fenced current asset proof");
+    }
+    List<InventoryFinding> sessionFindings = findings.findAllByInventoryIdForUpdateOrderById(session.getId());
+    InventoryFinding finding = sessionFindings.stream()
+        .filter(value -> proofLine.assetId().equals(value.getAssetId()))
+        .sorted(Comparator.comparing(InventoryFinding::isMembershipActive).reversed())
+        .findFirst().orElse(null);
+    if (finding != null && finding.getInspection() != InspectionState.NOT_INSPECTED) {
+      Long inspectedVersion = finding.getInspectionSource() == dev.buhanzaz.rwms.inventory.domain.InspectionSource.LOGISTICS_RETURN
+          ? finding.getExternalInspectionAssetVersion() : finding.getInspectionAssetVersion();
+      if (inspectedVersion != null && inspectedVersion >= proofLine.assetVersion()) return finding;
+    }
+    boolean created = finding == null;
+    if (created) {
+      if (sessionFindings.stream().anyMatch(value -> value.isMembershipActive()
+          && value.getIdentityMatchKey().equals(current.identityMatchKey()))) {
+        throw InventoryException.conflict("Return cabin number is already bound to another inventory finding");
+      }
+      UUID expectedId = UUID.randomUUID();
+      finding = InventoryFinding.expected(session.getId(), expectedId, current.assetId(), current.version(),
+          current.warehouseId(), current.status(), current.tenantSnapshot(),
+          current.displayCanonicalNumber(), current.identityMatchKey(), write(context.actor()));
+      finding = findings.saveAndFlush(finding);
+      expectedItems.saveAndFlush(new InventoryExpectedItem(expectedId, session.getId(), finding.getId(),
+          Math.addExact(expectedItems.maximumOrder(session.getId()), 1), current.assetId(), current.version(),
+          current.status(), current.displayCanonicalNumber(), current.identityMatchKey(),
+          json(current.passportSnapshot()), json(current.contentsSnapshot())));
+      session.changeExpectedPopulation(1);
+    } else if (finding.changeMembership(true) && finding.getOrigin() == FindingOrigin.EXPECTED) {
+      session.changeExpectedPopulation(1);
+    }
+    if (finding.getAssetVersion() == null || current.version() >= finding.getAssetVersion()) {
+      finding.refreshCurrentAsset(current.version(), current.warehouseId(), current.status(),
+          current.tenantSnapshot(), current.displayCanonicalNumber(), json(current.passportSnapshot()),
+          json(current.contentsSnapshot()), finding.getCurrentRepairsSnapshot() == null ? "[]" : finding.getCurrentRepairsSnapshot(),
+          ReconciliationState.MATCHED);
+    }
+    finding.importReturnInspection(proofLine.assetVersion(), write(context.actor()));
+    finding = findings.saveAndFlush(finding);
+    reviewService.invalidateFurnitureReviewAfterCabinChange(session);
+    planningService.invalidateFinalPlan(session);
+    session.touch();
+    sessions.saveAndFlush(session);
+    if (created && !context.arrivedAt().isBefore(session.getStartedAt())) {
+      membershipMovements.saveAndFlush(InventoryMembershipMovement.arrived(session.getId(),
+          context.sourceEventId(), current.assetId(), finding.getOrigin(), finding.getDisplayCanonicalNumber(),
+          null, session.getWarehouseId(), proofLine.status(), null, context.arrivedAt()));
+    }
+    appendFindingFacts(finding, session, context.actor(),
+        created ? "inventory.finding.added.v1" : "inventory.finding.inspection-saved.v1",
+        context.correlationId(), context.sourceEventId());
+    return finding;
   }
 
   private NumberResolutionView doResolveNumber(

@@ -56,8 +56,11 @@ public class InventoryPublicationIntent {
   private FinalPlanTargetKind targetKind;
 
   @Enumerated(EnumType.STRING)
-  @Column(name = "desired_asset_status", nullable = false, length = 24)
+  @Column(name = "desired_asset_status", length = 24)
   private InventoryAssetOutcomeStatus desiredAssetStatus;
+
+  @Column(name = "expected_asset_version")
+  private Long expectedAssetVersion;
 
   @Column(name = "target_id")
   private UUID targetId;
@@ -329,6 +332,16 @@ public class InventoryPublicationIntent {
     state = PublicationState.PENDING;
   }
 
+  /** Freezes the observed version so a later shipment cannot be overwritten by delayed publication. */
+  public void fenceOperationalObservation(Long observedVersion) {
+    if (state != PublicationState.READY || observedVersion == null || observedVersion < 0) {
+      throw new IllegalStateException("Operational observation can only fence a ready outcome");
+    }
+    expectedAssetVersion = desiredAssetStatus == null ? null : observedVersion;
+  }
+
+  public Long getExpectedAssetVersion() { return expectedAssetVersion; }
+
   /** Records the asset-owner result before the optional maintenance effect is attempted. */
   public void recordAssetOutcome(
       long assetVersion, InventoryAssetOutcomeStatus appliedStatus, String canonicalResult) {
@@ -344,10 +357,11 @@ public class InventoryPublicationIntent {
     assetOutcomeResult = canonicalResult.trim();
   }
 
-  /** Completes an asset-only FREE or inventory shipment RENTED outcome. */
+  /** Completes an asset-only status outcome or an explicit passport-only publication. */
   public void succeedAssetOnly() {
     requirePending();
-    if ((desiredAssetStatus != InventoryAssetOutcomeStatus.FREE
+    if ((desiredAssetStatus != null
+            && desiredAssetStatus != InventoryAssetOutcomeStatus.FREE
             && desiredAssetStatus != InventoryAssetOutcomeStatus.RENTED)
         || targetKind != null
         || effectiveAssetVersion == null
@@ -491,7 +505,7 @@ public class InventoryPublicationIntent {
 
   private static void requireOutcomeShape(
       FinalPlanTargetKind targetKind, InventoryAssetOutcomeStatus desiredAssetStatus) {
-    if (desiredAssetStatus == null
+    if ((desiredAssetStatus == null && targetKind != null)
         || ((desiredAssetStatus == InventoryAssetOutcomeStatus.FREE
                 || desiredAssetStatus == InventoryAssetOutcomeStatus.RENTED)
             && targetKind != null)

@@ -434,7 +434,7 @@ class InventoryInspectionApiContractIntegrationTest {
   }
 
   @Test
-  void acceptedTransferredCabinIsExcludedFromFurnitureSnapshotScope() throws Exception {
+  void inspectedTransferredCabinPreservesEvidenceAndIsExcludedFromFurnitureSnapshotScope() throws Exception {
     Fixture fixture = fixture("READY");
     HttpResponse<String> inspection =
         request(
@@ -462,9 +462,20 @@ class InventoryInspectionApiContractIntegrationTest {
                 + fixture.findingId()
                 + "/conflict-resolution",
             acceptRegistry.toString());
-    assertThat(accepted.statusCode()).withFailMessage(accepted.body()).isEqualTo(200);
-    long acceptedFindingRevision =
-        mapper.readTree(accepted.body()).required("findingRevision").asLong();
+    assertThat(accepted.statusCode()).withFailMessage(accepted.body()).isEqualTo(409);
+    assertThat(mapper.readTree(accepted.body()).required("detail").asText())
+        .isEqualTo("Актуального конфликта реестра больше нет");
+    when(dependencies.currentAsset(fixture.assetId()))
+        .thenReturn(java.util.Optional.of(new InventoryDependencyGateway.LiveAssetSnapshot(
+            fixture.assetId(), 8L, destinationWarehouseId, "IN_TRANSFER", "БЫТ-API", "БЫТAPI",
+            null, mapper.createObjectNode().put("type", "БК-1"), mapper.createArrayNode())));
+    inventory.reconcileAssetMembership(fixture.assetId(), 8L, destinationWarehouseId, "IN_TRANSFER",
+        null, UUID.randomUUID(), UUID.randomUUID(), OffsetDateTime.now(ZoneOffset.UTC));
+    InventoryFinding transferred = findings.findById(fixture.findingId()).orElseThrow();
+    assertThat(transferred.getInspectionWarehouseId()).isEqualTo(fixture.warehouseId());
+    assertThat(transferred.getInspectionAssetVersion()).isEqualTo(7L);
+    assertThat(transferred.preservesOperationalState(fixture.warehouseId())).isTrue();
+    long transferredFindingRevision = transferred.getRevision();
     completeCabinDispositionReview(fixture);
 
     String emptySnapshotSha256 = "a".repeat(64);
@@ -473,12 +484,13 @@ class InventoryInspectionApiContractIntegrationTest {
             new InventoryDependencyGateway.FurnitureSnapshot(
                 fixture.warehouseId(), emptySnapshotSha256, List.of()));
     ObjectNode start = mapper.createObjectNode();
-    start.put("expectedSessionRevision", 0);
+    start.put("expectedSessionRevision", jdbc.queryForObject(
+        "select session_revision from inventory_session where id=?", Long.class, fixture.inventoryId()));
     start
         .putArray("findingRevisions")
         .addObject()
         .put("findingId", fixture.findingId().toString())
-        .put("expectedFindingRevision", acceptedFindingRevision);
+        .put("expectedFindingRevision", transferredFindingRevision);
     HttpResponse<String> started =
         post(
             "/api/inventory/v1/sessions/"

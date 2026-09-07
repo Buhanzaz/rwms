@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.inventory.service;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.ConflictView;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.CurrentItemSnapshot;
 
+import dev.buhanzaz.rwms.inventory.domain.InspectionSource;
 import dev.buhanzaz.rwms.inventory.domain.InspectionState;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinding;
 import java.util.ArrayList;
@@ -38,6 +39,18 @@ final class InventoryFindingConflictPolicy {
   List<ConflictView> conflictViews(
       InventoryFinding finding, UUID inventoryWarehouseId, CurrentItemSnapshot current) {
     if (finding.getInspection() == InspectionState.NOT_INSPECTED) {
+      return List.of();
+    }
+    if (finding.preservesOperationalState(inventoryWarehouseId,
+        current == null ? null : current.warehouseId(), current == null ? null : current.status())) {
+      if (current == null) {
+        return List.of(new ConflictView("RENTAL_ITEM_MISSING",
+            "Бытовка отсутствует в актуальном реестре", finding.getAssetId().toString(), null));
+      }
+      if (isTerminalDispositionStatus(current.status())) {
+        return List.of(new ConflictView("WRITTEN_OFF",
+            "Бытовка списана; публикация осмотра недоступна", null, current.status()));
+      }
       return List.of();
     }
     CurrentItemSnapshot baseline = inspectionBaselineSnapshot(finding);
@@ -145,7 +158,8 @@ final class InventoryFindingConflictPolicy {
   }
 
   CurrentItemSnapshot inspectionBaselineSnapshot(InventoryFinding finding) {
-    if (finding.getInspection() == InspectionState.NOT_INSPECTED) return null;
+    if (finding.getInspection() == InspectionState.NOT_INSPECTED
+        || finding.getInspectionSource() == InspectionSource.LOGISTICS_RETURN) return null;
     if (finding.getAssetId() == null
         || finding.getInspectionAssetVersion() == null
         || finding.getInspectionWarehouseId() == null

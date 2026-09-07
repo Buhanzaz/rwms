@@ -372,6 +372,53 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
   }
 
   @Override
+  public NormalReturnInspection normalReturnInspection(UUID returnId) {
+    if (returnId == null) {
+      throw new IllegalArgumentException("Return identity is required");
+    }
+    NormalReturnInspection response =
+        get(
+            logisticsBase
+                + "/api/internal/logistics/v1/inventory/returns/"
+                + returnId
+                + "/inspection",
+            NormalReturnInspection.class,
+            LOGISTICS_CLIENT,
+            LOGISTICS_SCOPE);
+    validateNormalReturnInspection(returnId, response);
+    return response;
+  }
+
+  @Override
+  public Optional<CompletedReturnEstimateProof> completedReturnEstimate(UUID estimateId) {
+    if (estimateId == null) {
+      throw new IllegalArgumentException("Estimate identity is required");
+    }
+    CompletedReturnEstimateProof response;
+    try {
+      response =
+          client
+              .get()
+              .uri(
+                  maintenanceBase
+                      + "/api/internal/maintenance/v1/inventory/return-estimates/"
+                      + estimateId)
+              .header(
+                  HttpHeaders.AUTHORIZATION,
+                  bearer(MAINTENANCE_CLIENT, MAINTENANCE_SCOPE))
+              .retrieve()
+              .body(CompletedReturnEstimateProof.class);
+    } catch (RestClientResponseException exception) {
+      if (exception.getStatusCode() == HttpStatus.NOT_FOUND) return Optional.empty();
+      throw dependencyFailure(exception);
+    } catch (RuntimeException exception) {
+      throw dependencyFailure(exception);
+    }
+    validateCompletedReturnEstimate(estimateId, response);
+    return Optional.of(response);
+  }
+
+  @Override
   public SourceAsset createSourceAsset(UUID idempotencyKey, JsonNode request) {
     SourceAsset response =
         post(
@@ -1064,6 +1111,74 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
 
   private static boolean sha256(String value) {
     return value != null && value.matches("^[0-9a-f]{64}$");
+  }
+
+  private static void validateNormalReturnInspection(
+      UUID returnId, NormalReturnInspection response) {
+    if (!returnId.equals(response.returnId())
+        || response.documentVersion() < 0
+        || response.warehouseId() == null
+        || response.arrivedAt() == null
+        || response.completedAt() == null
+        || response.completedAt().isBefore(response.arrivedAt())
+        || !Set.of("ACCEPTED", "ESTIMATE_REQUESTED").contains(response.terminalState())
+        || response.lines() == null
+        || response.lines().isEmpty()
+        || response.lines().size() > 100) {
+      throw malformed("Logistics-service returned malformed normal-return inspection proof");
+    }
+    Set<UUID> lineIds = new java.util.HashSet<>();
+    Set<UUID> assetIds = new java.util.HashSet<>();
+    String expectedStatus =
+        "ACCEPTED".equals(response.terminalState())
+            ? "FREE"
+            : "WAITING_ESTIMATE_CONFIRMATION";
+    for (NormalReturnInspectionLine line : response.lines()) {
+      if (line == null
+          || line.lineId() == null
+          || !lineIds.add(line.lineId())
+          || line.assetId() == null
+          || !assetIds.add(line.assetId())
+          || line.assetVersion() < 0
+          || !expectedStatus.equals(line.status())
+          || line.media() == null
+          || line.media().isEmpty()
+          || line.media().size() > 20) {
+        throw malformed("Logistics-service returned malformed normal-return inspection line");
+      }
+      Set<UUID> mediaIds = new java.util.HashSet<>();
+      for (NormalReturnInspectionMedia media : line.media()) {
+        if (media == null
+            || media.mediaId() == null
+            || !mediaIds.add(media.mediaId())
+            || media.generation() < 1
+            || !"LOGISTICS_RETURN".equals(media.ownerType())
+            || media.ownerVerifiedAt() == null
+            || media.ownerVerifiedAt().isAfter(response.completedAt())) {
+          throw malformed("Logistics-service returned malformed normal-return media proof");
+        }
+      }
+    }
+  }
+
+  private static void validateCompletedReturnEstimate(
+      UUID estimateId, CompletedReturnEstimateProof response) {
+    if (response == null
+        || !estimateId.equals(response.estimateId())
+        || response.estimateVersion() < 0
+        || response.estimateRevision() < 1
+        || response.returnId() == null
+        || response.lineId() == null
+        || response.warehouseId() == null
+        || response.assetId() == null
+        || response.assetVersion() < 0
+        || response.arrivedAt() == null
+        || response.completedAt() == null
+        || response.completedAt().isBefore(response.arrivedAt())
+        || !("EMPTY".equals(response.completionKind()) && response.repairId() == null
+            || "NON_EMPTY".equals(response.completionKind()) && response.repairId() != null)) {
+      throw malformed("Maintenance-service returned malformed completed return estimate proof");
+    }
   }
 
   private static void validateWorkCalendarSnapshot(
