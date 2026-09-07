@@ -442,7 +442,7 @@ internal fun CustomerStoreInputField(
                     if (value.isEmpty()) {
                         Text(
                             text = placeholder,
-                            color = if (authStyle) CustomerStoreFieldText.copy(alpha = 0.70f)
+                            color = if (authStyle) CustomerStoreFieldText.copy(alpha = 0.62f)
                                 else MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodyLarge.copy(
                                 fontFamily = if (authStyle) CustomerActionFont else MaterialTheme.typography.bodyLarge.fontFamily,

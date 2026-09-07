@@ -21,3 +21,15 @@ internal fun CustomerGreetingPreview(@PreviewParameter(CustomerGreetingPhases::c
         greetingPreviewProgress = progress,
     )
 }
+
+@Preview(name = "Fields · login", widthDp = 404, heightDp = 874, showBackground = true)
+@Composable
+internal fun CustomerLoginFieldsPreview() {
+    CustomerAuthenticationScreen(
+        message = null,
+        submitting = false,
+        onLogin = { _, _, _ -> },
+        onRegister = { _, _, _, _, _ -> },
+        initialPage = CustomerAuthenticationPage.LOGIN,
+    )
+}
