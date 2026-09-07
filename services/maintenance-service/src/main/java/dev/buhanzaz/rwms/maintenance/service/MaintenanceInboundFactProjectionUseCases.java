@@ -74,22 +74,28 @@ final class MaintenanceInboundFactProjectionUseCases {
   }
 
   void applyInboundRentalItemFact(
-      UUID rentalItemId,
-      UUID warehouseId,
-      String status,
-      long aggregateVersion) {
+      UUID rentalItemId, UUID warehouseId, String status, long aggregateVersion) {
+    applyInboundRentalItemFact(rentalItemId, warehouseId, status, aggregateVersion, null);
+  }
+
+  void applyInboundRentalItemFact(
+      UUID rentalItemId, UUID warehouseId, String status, long aggregateVersion, Boolean isolated) {
     Optional<RentalItemFactProjection> current = rentalItemFacts.findById(rentalItemId);
     if (current.isEmpty() && (warehouseId == null || status == null)) {
       throw new IllegalStateException(
           "Partial rental-item fact cannot initialize the maintenance projection");
     }
-    RentalItemFactProjection fact = current.orElseGet(() ->
-        RentalItemFactProjection.create(rentalItemId, warehouseId, status, aggregateVersion));
+    RentalItemFactProjection fact =
+        current.orElseGet(
+            () ->
+                RentalItemFactProjection.create(
+                    rentalItemId, warehouseId, status, aggregateVersion, isolated));
     if (fact.getAggregateVersion() < aggregateVersion) {
       fact.apply(
           warehouseId == null ? fact.getWarehouseId() : warehouseId,
           status == null ? fact.getAssetStatus() : status,
-          aggregateVersion);
+          aggregateVersion,
+          isolated);
     }
     rentalItemFacts.save(fact);
   }

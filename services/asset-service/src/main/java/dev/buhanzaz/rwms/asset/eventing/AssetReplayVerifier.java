@@ -94,12 +94,47 @@ public class AssetReplayVerifier {
 
   private JsonNode apply(JsonNode previous, EventRow event) {
     if (event.type() == AssetAggregateType.RENTAL_ITEM
+        && event.eventType() == AssetEventType.RENTAL_ITEM_INVENTORY_VISIBILITY_CHANGED) {
+      return inventoryVisibilityFact(read(event.payload()));
+    }
+    if (event.type() == AssetAggregateType.RENTAL_ITEM
         && (event.eventType() == AssetEventType.RENTAL_ITEM_GENERAL_COMMENT_CHANGED
         || event.eventType() == AssetEventType.RENTAL_ITEM_MANUAL_NOTE_ADDED)) {
       if (previous == null) throw new IllegalStateException("Asset replay rental stream lacks its creation fact");
       return previous;
     }
-    return read(event.payload());
+    JsonNode next = read(event.payload());
+    return event.type() == AssetAggregateType.RENTAL_ITEM
+        ? retainInventoryIsolation(previous, next)
+        : next;
+  }
+
+  /**
+   * Converts the strict six-field visibility event into rental replay state. The inventory UUID is
+   * state only while the row is held; a release event deliberately removes it.
+   */
+  private JsonNode inventoryVisibilityFact(JsonNode payload) {
+    Map<String, Object> value = new LinkedHashMap<>();
+    value.put("rentalItemId", payload.get("rentalItemId").asText());
+    value.put("warehouseId", payload.get("warehouseId").asText());
+    value.put("status", payload.get("status").asText());
+    value.put("numberSha256", payload.get("numberSha256").asText());
+    if (payload.get("isolated").booleanValue()) {
+      value.put("inventoryIsolationId", payload.get("inventoryId").asText());
+    }
+    return node(value);
+  }
+
+  /**
+   * Ordinary rental facts remain the canonical four/five-field transport shape. If one is ever
+   * emitted while an item is held, retain the already established local visibility state.
+   */
+  private JsonNode retainInventoryIsolation(JsonNode previous, JsonNode next) {
+    if (previous == null || previous.get("inventoryIsolationId") == null) return next;
+    Map<String, Object> value = new LinkedHashMap<>();
+    next.properties().forEach(entry -> value.put(entry.getKey(), entry.getValue()));
+    value.put("inventoryIsolationId", previous.get("inventoryIsolationId").asText());
+    return node(value);
   }
 
   private void verifyHead(StreamKey key, ReplayState replayed) {
@@ -133,7 +168,7 @@ public class AssetReplayVerifier {
     Map<StreamKey, JsonNode> result = new LinkedHashMap<>();
     jdbc.query(
         """
-        select id,warehouse_id,status,transfer_origin_status,
+        select id,warehouse_id,status,transfer_origin_status,inventory_isolation_id,
           display_canonical_number as number
         from rental_item
         """,
@@ -152,6 +187,10 @@ public class AssetReplayVerifier {
       String transferOriginStatus = rs.getString("transfer_origin_status");
       if (transferOriginStatus != null) {
         value.put("transferAssetStatus", transferOriginStatus);
+      }
+      UUID inventoryIsolationId = rs.getObject("inventory_isolation_id", UUID.class);
+      if (inventoryIsolationId != null) {
+        value.put("inventoryIsolationId", inventoryIsolationId.toString());
       }
       result.put(new StreamKey(AssetAggregateType.RENTAL_ITEM, id), node(value));
     });

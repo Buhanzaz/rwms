@@ -190,6 +190,7 @@ components:
                   - asset.rental-item.status-changed.v1
                   - asset.rental-item.warehouse-changed.v1
                   - asset.rental-item.logistics-effect-applied.v1
+                  - asset.rental-item.inventory-visibility-changed.v1
       x-rwms-record-key: aggregateId
     OperationLeaseFactV1:
       name: logistics.input.asset.operation-lease.v1

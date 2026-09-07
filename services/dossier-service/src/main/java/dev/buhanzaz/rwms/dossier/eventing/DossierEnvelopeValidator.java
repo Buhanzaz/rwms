@@ -15,6 +15,8 @@ import tools.jackson.databind.SerializationFeature;
 /** Validates the exact dossier source-contract surface before any raw value reaches PostgreSQL. */
 @Component
 public final class DossierEnvelopeValidator {
+  private static final String INVENTORY_VISIBILITY_EVENT =
+      "asset.rental-item.inventory-visibility-changed.v1";
   private static final Set<String> ENVELOPE_FIELDS =
       Set.of(
           "envelopeVersion",
@@ -129,6 +131,7 @@ public final class DossierEnvelopeValidator {
       }
       requireObjectFields(payload, eventPolicy.payloadFields(), eventPolicy.requiredFields());
       requireInventoryMembershipState(eventType, payload);
+      requireInventoryVisibilityState(eventType, payload);
       rejectProhibited(payload);
       eventPolicy.identityField().ifPresent(field -> require(uuid(payload, field, false).equals(aggregateId)));
 
@@ -238,6 +241,18 @@ public final class DossierEnvelopeValidator {
         "rentalItemId", "CABIN_WAREHOUSE_CHANGED", "asset.rental-item.warehouse-changed.v1");
     add(result, "rwms.asset.rental-item.v1", "RENTAL_ITEM", SubjectKind.ASSET, rental, rental,
         "rentalItemId", "CABIN_LOGISTICS_EFFECT_APPLIED", "asset.rental-item.logistics-effect-applied.v1");
+    Set<String> inventoryVisibility =
+        Set.of("rentalItemId", "warehouseId", "status", "numberSha256", "inventoryId", "isolated");
+    add(
+        result,
+        "rwms.asset.rental-item.v1",
+        "RENTAL_ITEM",
+        SubjectKind.ASSET,
+        inventoryVisibility,
+        inventoryVisibility,
+        "rentalItemId",
+        null,
+        INVENTORY_VISIBILITY_EVENT);
     Set<String> comment = Set.of("rentalItemId", "commentRevision");
     add(result, "rwms.asset.rental-item.v1", "RENTAL_ITEM", SubjectKind.ASSET, comment, comment,
         "rentalItemId", "CABIN_COMMENT_REVISION_CHANGED", "asset.rental-item.general-comment-changed.v1");
@@ -363,6 +378,12 @@ public final class DossierEnvelopeValidator {
         membershipActive != null
             && membershipActive.isBoolean()
             && membershipActive.booleanValue() == expected);
+  }
+
+  private static void requireInventoryVisibilityState(String eventType, JsonNode payload) {
+    if (!INVENTORY_VISIBILITY_EVENT.equals(eventType)) return;
+    uuid(payload, "inventoryId", false);
+    require(payload.required("isolated").isBoolean());
   }
 
   private static Set<String> logisticsEvents(String family) {

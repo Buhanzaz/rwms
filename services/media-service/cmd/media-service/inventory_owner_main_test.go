@@ -219,8 +219,9 @@ func installMainResidualMigrations(t testing.TB, ctx context.Context, pool *pgxp
 		{"media asset company boundary", "V21__media_asset_company_boundary.sql", mediamigration.V21},
 		{"task board worker profile avatar owner", "V22__task_board_worker_profile_avatar_owner.sql", mediamigration.V22},
 		{"remove media company boundary", "V23__remove_media_company_boundary.sql", mediamigration.V23},
+		{"cabin inventory visibility marker", "V24__cabin_inventory_visibility_marker.sql", mediamigration.V24},
 	}
-	versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23"}
+	versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24"}
 	for index, migration := range migrations {
 		if _, err := pool.Exec(ctx, string(migration.body)); err != nil {
 			t.Fatalf("apply command %s: %v", migration.script, err)

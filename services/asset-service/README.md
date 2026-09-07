@@ -182,6 +182,25 @@ a conflict without overwriting that cabin. Permanent source replay keeps the ori
 response, and requests without source outcomes retain the previous reconciliation fingerprint.
 Previously materialized source cabins remain real cabins; no live-data conversion is automatic.
 
+For an explicitly approved pre-proposal cohort, V52–V54 support reversible isolation of the
+existing rows without deleting UUIDs, characteristics, source receipts, events or media history.
+Ordinary repository reads/commands exclude `inventory_isolation_id`; private inventory reads
+require the exact matching inventory/finding/source receipt. Completed source publication clears
+the marker on that same row before applying its final passport/status/contents. Each isolation or
+release appends `asset.rental-item.inventory-visibility-changed.v1` to the existing ordered stream.
+Maintenance rejects ordinary commands while its projection is isolated; other consumers advance
+their checkpoints without inventing a warehouse movement or deactivating media ownership.
+
+Administrative correction is disabled by default. Deploy all affected consumers before emitting
+the new fact. Back up the affected databases, freeze the active inventory and recheck local and
+cross-service dependencies before enabling `rwms.asset.inventory-source-isolation.enabled=true`
+with `rwms.asset.inventory-source-isolation.manifest=/absolute/reviewed-manifest.json`.
+The JSON contains `inventoryId`, `warehouseId`, and explicit `sources` with `findingId`, `assetId`
+and `expectedVersion: 0`. No target discovery occurs. All targets must still be untouched `FREE`
+legacy sources without operational references; one mismatch rolls back the entire cohort.
+A permanent manifest receipt makes an exact rerun a no-op even after completion releases a cabin.
+Remove the opt-in configuration after the one-off correction; this is not a public HTTP command.
+
 `PUT /api/internal/asset/v1/inventory/outcomes/{inventoryId}/findings/{findingId}` accepts only the
 exact `inventory-service` credential and immutable completed-plan evidence. For a found,
 non-terminal cabin, the latest completed inventory is authoritative: a first or newer `FREE`,

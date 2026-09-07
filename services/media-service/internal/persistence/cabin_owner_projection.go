@@ -24,8 +24,11 @@ const (
 	cabinStatusEvent          = "asset.rental-item.status-changed.v1"
 	cabinWarehouseEvent       = "asset.rental-item.warehouse-changed.v1"
 	cabinLogisticsEffectEvent = "asset.rental-item.logistics-effect-applied.v1"
-	cabinCommentEvent         = "asset.rental-item.general-comment-changed.v1"
-	cabinNoteEvent            = "asset.rental-item.manual-note-added.v1"
+	// cabinInventoryVisibilityEvent only advances the source stream checkpoint.
+	// It must never turn private inventory visibility into CABIN media authority.
+	cabinInventoryVisibilityEvent = "asset.rental-item.inventory-visibility-changed.v1"
+	cabinCommentEvent             = "asset.rental-item.general-comment-changed.v1"
+	cabinNoteEvent                = "asset.rental-item.manual-note-added.v1"
 )
 
 // CabinOwnerProof is the authoritative asset rental-item state that binds a
@@ -433,7 +436,7 @@ func validateCabinOwnerMessage(message CabinOwnerMessage) error {
 			strings.TrimSpace(message.Proof.Status) == "" || message.Proof.OwnerRevision < 0 {
 			return ErrConflict
 		}
-	case cabinCommentEvent, cabinNoteEvent:
+	case cabinInventoryVisibilityEvent, cabinCommentEvent, cabinNoteEvent:
 		if message.Proof != nil {
 			return ErrConflict
 		}

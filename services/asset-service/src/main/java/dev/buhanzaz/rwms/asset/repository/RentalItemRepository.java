@@ -55,13 +55,84 @@ public interface RentalItemRepository extends JpaRepository<RentalItem, UUID> {
       @Param("passportJson") String passportJson,
       @Param("tagsJson") String tagsJson);
 
-  boolean existsByRentalTypeId(UUID rentalTypeId);
+  /** Includes held rows because a catalog reference cannot be deleted while history still uses it. */
+  @Query(
+      value = "select exists (select 1 from rental_item where cabin_type_id = :rentalTypeId)",
+      nativeQuery = true)
+  boolean existsByRentalTypeId(@Param("rentalTypeId") UUID rentalTypeId);
 
-  boolean existsByDimensionId(UUID dimensionId);
+  /** Includes held rows because a catalog reference cannot be deleted while history still uses it. */
+  @Query(
+      value = "select exists (select 1 from rental_item where cabin_dimension_id = :dimensionId)",
+      nativeQuery = true)
+  boolean existsByDimensionId(@Param("dimensionId") UUID dimensionId);
 
-  boolean existsByFinishingId(UUID finishingId);
+  /** Includes held rows because a catalog reference cannot be deleted while history still uses it. */
+  @Query(
+      value = "select exists (select 1 from rental_item where cabin_finishing_id = :finishingId)",
+      nativeQuery = true)
+  boolean existsByFinishingId(@Param("finishingId") UUID finishingId);
 
-  boolean existsByCategoryId(UUID categoryId);
+  /** Includes held rows because a catalog reference cannot be deleted while history still uses it. */
+  @Query(
+      value = "select exists (select 1 from rental_item where cabin_category_id = :categoryId)",
+      nativeQuery = true)
+  boolean existsByCategoryId(@Param("categoryId") UUID categoryId);
+
+  /**
+   * Reads one held pre-proposal source row only when its immutable source receipt and operation
+   * prove the exact inventory/finding/item tuple. This is intentionally not a generic held-item
+   * lookup.
+   */
+  @Query(
+      value =
+          """
+          select item.*
+          from rental_item item
+          join inventory_asset_source_operation operation
+            on operation.inventory_id = :inventoryId
+           and operation.finding_id = :findingId
+           and operation.reserved_rental_item_id = item.id
+          join inventory_asset_source source
+            on source.inventory_id = operation.inventory_id
+           and source.finding_id = operation.finding_id
+           and source.rental_item_id = item.id
+           and source.request_fingerprint = operation.request_fingerprint
+          where item.id = :assetId
+            and item.inventory_isolation_id = :inventoryId
+            and operation.source_plan is null
+          """,
+      nativeQuery = true)
+  Optional<RentalItem> findHeldLegacyInventorySource(
+      @Param("inventoryId") UUID inventoryId,
+      @Param("findingId") UUID findingId,
+      @Param("assetId") UUID assetId);
+
+  /** Same receipt-scoped held lookup while serializing completed inventory reconciliation. */
+  @Query(
+      value =
+          """
+          select item.*
+          from rental_item item
+          join inventory_asset_source_operation operation
+            on operation.inventory_id = :inventoryId
+           and operation.finding_id = :findingId
+           and operation.reserved_rental_item_id = item.id
+          join inventory_asset_source source
+            on source.inventory_id = operation.inventory_id
+           and source.finding_id = operation.finding_id
+           and source.rental_item_id = item.id
+           and source.request_fingerprint = operation.request_fingerprint
+          where item.id = :assetId
+            and item.inventory_isolation_id = :inventoryId
+            and operation.source_plan is null
+          for update of item
+          """,
+      nativeQuery = true)
+  Optional<RentalItem> findHeldLegacyInventorySourceForUpdate(
+      @Param("inventoryId") UUID inventoryId,
+      @Param("findingId") UUID findingId,
+      @Param("assetId") UUID assetId);
 
   boolean existsByWarehouseIdAndIdentityMatchKey(UUID warehouseId, String identityMatchKey);
   boolean existsByWarehouseIdAndIdentityMatchKeyAndIdNot(

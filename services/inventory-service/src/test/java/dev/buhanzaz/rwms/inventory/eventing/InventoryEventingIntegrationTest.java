@@ -6,12 +6,15 @@ import com.networknt.schema.SpecVersion;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.inventory.InventoryServiceApplication;
@@ -235,7 +238,14 @@ class InventoryEventingIntegrationTest {
 
     verify(inventory)
         .reconcileAssetMembership(
-            eq(assetId), isNull(), eq(correlationId), eq(eventId), eq(recordedAt));
+            eq(assetId),
+            eq(7L),
+            eq(warehouseId),
+            eq("AFTER_RENT"),
+            isNull(),
+            eq(correlationId),
+            eq(eventId),
+            eq(recordedAt));
     assertThat(
             jdbc.queryForObject(
                 """
@@ -264,6 +274,107 @@ class InventoryEventingIntegrationTest {
   }
 
   @Test
+  void inventoryVisibilityFactsAreProcessedWithoutApplyingAMembershipMutation() {
+    UUID eventId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    ObjectNode envelope =
+        assetFact(
+            eventId,
+            assetId,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            OffsetDateTime.now(ZoneOffset.UTC),
+            7);
+    envelope.put("eventType", "asset.rental-item.inventory-visibility-changed.v1");
+    ObjectNode payload = (ObjectNode) envelope.required("payload");
+    payload.put("inventoryId", UUID.randomUUID().toString());
+    payload.put("isolated", true);
+
+    assetInbox.initial(
+        envelope.toString().getBytes(StandardCharsets.UTF_8),
+        assetId.toString().getBytes(StandardCharsets.UTF_8));
+
+    verifyNoInteractions(inventory);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from inbox_message
+                 where consumer_group=? and event_id=? and event_type=? and status='PROCESSED'
+                """,
+                Integer.class,
+                InventoryAssetInboxProcessor.CONSUMER,
+                eventId,
+                "asset.rental-item.inventory-visibility-changed.v1"))
+        .isOne();
+  }
+
+  @Test
+  void visibilityMarkersAreAcknowledgedWithoutSkippingTheNextMembershipFact() {
+    UUID assetId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID correlationId = UUID.randomUUID();
+    OffsetDateTime recordedAt = OffsetDateTime.now(ZoneOffset.UTC);
+    UUID existingEventId = UUID.randomUUID();
+    UUID holdEventId = UUID.randomUUID();
+    UUID releaseEventId = UUID.randomUUID();
+    UUID normalEventId = UUID.randomUUID();
+
+    assetInbox.initial(
+        assetFact(existingEventId, assetId, warehouseId, correlationId, recordedAt, 0)
+            .toString()
+            .getBytes(StandardCharsets.UTF_8),
+        assetId.toString().getBytes(StandardCharsets.UTF_8));
+    assetInbox.initial(
+        inventoryVisibilityFact(holdEventId, assetId, warehouseId, correlationId, recordedAt, 1, true)
+            .toString()
+            .getBytes(StandardCharsets.UTF_8),
+        assetId.toString().getBytes(StandardCharsets.UTF_8));
+    assetInbox.initial(
+        inventoryVisibilityFact(
+                releaseEventId, assetId, warehouseId, correlationId, recordedAt, 2, false)
+            .toString()
+            .getBytes(StandardCharsets.UTF_8),
+        assetId.toString().getBytes(StandardCharsets.UTF_8));
+    assetInbox.initial(
+        assetFact(normalEventId, assetId, warehouseId, correlationId, recordedAt, 3)
+            .toString()
+            .getBytes(StandardCharsets.UTF_8),
+        assetId.toString().getBytes(StandardCharsets.UTF_8));
+
+    verify(inventory)
+        .reconcileAssetMembership(
+            eq(assetId),
+            eq(0L),
+            eq(warehouseId),
+            eq("AFTER_RENT"),
+            isNull(),
+            eq(correlationId),
+            eq(existingEventId),
+            eq(recordedAt));
+    verify(inventory)
+        .reconcileAssetMembership(
+            eq(assetId),
+            eq(3L),
+            eq(warehouseId),
+            eq("AFTER_RENT"),
+            isNull(),
+            eq(correlationId),
+            eq(normalEventId),
+            eq(recordedAt));
+    verifyNoMoreInteractions(inventory);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from inbox_message
+                 where consumer_group=? and aggregate_id=? and status='PROCESSED'
+                """,
+                Integer.class,
+                InventoryAssetInboxProcessor.CONSUMER,
+                assetId.toString()))
+        .isEqualTo(4);
+  }
+
+  @Test
   void transientAssetFailuresKeepTheRetryEnvelopeAndTerminalizeAfterThreeRetries() {
     UUID eventId = UUID.randomUUID();
     UUID assetId = UUID.randomUUID();
@@ -281,7 +392,7 @@ class InventoryEventingIntegrationTest {
     assertThat(assetRetries.scheduleInitial(body, key)).isTrue();
     doThrow(new IllegalStateException("asset membership unavailable"))
         .when(inventory)
-        .reconcileAssetMembership(any(), isNull(), any(), any(), any());
+        .reconcileAssetMembership(any(), anyLong(), any(), anyString(), isNull(), any(), any(), any());
 
     for (int failure = 0; failure < 3; failure++) {
       assertThatThrownBy(() -> assetInbox.retry(eventId))
@@ -1083,6 +1194,23 @@ class InventoryEventingIntegrationTest {
         .put("warehouseId", warehouseId.toString())
         .put("status", "AFTER_RENT")
         .put("numberSha256", "a".repeat(64));
+    return envelope;
+  }
+
+  private ObjectNode inventoryVisibilityFact(
+      UUID eventId,
+      UUID assetId,
+      UUID warehouseId,
+      UUID correlationId,
+      OffsetDateTime recordedAt,
+      long aggregateVersion,
+      boolean isolated) {
+    ObjectNode envelope =
+        assetFact(eventId, assetId, warehouseId, correlationId, recordedAt, aggregateVersion);
+    envelope.put("eventType", "asset.rental-item.inventory-visibility-changed.v1");
+    ObjectNode payload = (ObjectNode) envelope.required("payload");
+    payload.put("inventoryId", UUID.randomUUID().toString());
+    payload.put("isolated", isolated);
     return envelope;
   }
 

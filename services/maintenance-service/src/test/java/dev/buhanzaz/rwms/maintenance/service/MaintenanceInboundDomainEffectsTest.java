@@ -29,6 +29,25 @@ class MaintenanceInboundDomainEffectsTest {
       new MaintenanceInboundDomainEffects(service, repairs, taskEvidence, jdbc, mapper);
 
   @Test
+  void appliesInventoryVisibilityAsAReversibleFenceNotAnOrdinaryRentalFact() {
+    UUID id = UUID.randomUUID();
+    UUID warehouse = UUID.randomUUID();
+    var payload = mapper.createObjectNode();
+    payload.put("rentalItemId", id.toString());
+    payload.put("warehouseId", warehouse.toString());
+    payload.put("status", "FREE");
+    payload.put("numberSha256", "0".repeat(64));
+    payload.put("inventoryId", UUID.randomUUID().toString());
+    payload.put("isolated", true);
+    effects.apply(new MaintenanceInboundEffects.InboundEvent(
+        MaintenanceTransportTopics.RENTAL_ITEM, UUID.randomUUID(),
+        "asset.rental-item.inventory-visibility-changed.v1", "RENTAL_ITEM", id.toString(), 1, payload), null);
+    verify(service).applyInboundRentalItemVisibilityFact(id, warehouse, "FREE", 1, true);
+    org.mockito.Mockito.verifyNoMoreInteractions(service);
+    verifyNoInteractions(repairs, taskEvidence, jdbc);
+  }
+
+  @Test
   void ignoresCompletedTaskThatIsNotOwnedByMaintenance() throws Exception {
     UUID externalTaskId = UUID.randomUUID();
     MaintenanceInboundEffects.InboundEvent event = queueCompletion();

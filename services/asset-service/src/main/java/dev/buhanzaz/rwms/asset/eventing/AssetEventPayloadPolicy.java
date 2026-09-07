@@ -57,6 +57,21 @@ public class AssetEventPayloadPolicy {
       throw new IllegalArgumentException("Asset event payload aggregate identity mismatch");
     }
     validateSafety(payload);
+    if (type == AssetEventType.RENTAL_ITEM_INVENTORY_VISIBILITY_CHANGED) {
+      Set<String> fields = Set.of(
+          "rentalItemId", "warehouseId", "status", "numberSha256", "inventoryId", "isolated");
+      if (payload.size() != fields.size() || !fields.stream().allMatch(payload::has)) {
+        throw new IllegalArgumentException("Inventory visibility fact must have exactly six fields");
+      }
+      requireUuid(payload, "warehouseId", false);
+      requireUuid(payload, "inventoryId", false);
+      if (!payload.get("isolated").isBoolean()
+          || !payload.get("status").isTextual()
+          || !payload.get("numberSha256").isTextual()
+          || !payload.get("numberSha256").stringValue().matches("[0-9a-f]{64}")) {
+        throw new IllegalArgumentException("Invalid inventory visibility fact");
+      }
+    }
     if (aggregateType == AssetAggregateType.EQUIPMENT_MOVEMENT) {
       validateMovementContext(payload);
     }

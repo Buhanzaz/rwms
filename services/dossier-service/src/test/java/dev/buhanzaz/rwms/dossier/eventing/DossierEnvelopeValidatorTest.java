@@ -40,6 +40,35 @@ class DossierEnvelopeValidatorTest {
   }
 
   @Test
+  void journalsInventoryVisibilityWithoutCreatingAPublicCabinActivity() {
+    UUID inventoryId = UUID.fromString("40000000-0000-0000-0000-000000000017");
+    String fact =
+        envelope(
+            "asset.rental-item.inventory-visibility-changed.v1",
+            "asset-service",
+            "RENTAL_ITEM",
+            CABIN_ID,
+            """
+            {"rentalItemId":"%s","warehouseId":"%s","status":"AVAILABLE","numberSha256":"%s","inventoryId":"%s","isolated":true}
+            """
+                .formatted(CABIN_ID, WAREHOUSE_ID, "a".repeat(64), inventoryId));
+
+    DossierValidatedEvent event =
+        validator.validate(
+            "rwms.asset.rental-item.v1",
+            2,
+            20,
+            CABIN_ID.toString(),
+            fact.getBytes(StandardCharsets.UTF_8));
+
+    assertThat(event.cabinId()).isEqualTo(CABIN_ID);
+    assertThat(event.warehouseId()).isEqualTo(WAREHOUSE_ID);
+    assertThat(event.activityCode()).isNull();
+    assertThat(event.subjectCapable()).isTrue();
+    assertThat(event.payload().required("inventoryId").stringValue()).isEqualTo(inventoryId.toString());
+  }
+
+  @Test
   void acceptsTheUtf8ByteArrayKafkaKeyUsedByRealProducerRelays() {
     DossierValidatedEvent event =
         validator.validate(

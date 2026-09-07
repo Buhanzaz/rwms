@@ -14,7 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestAuthoritativeInventoryCabinPhotosCleanV1ThroughV23Integration(t *testing.T) {
+func TestAuthoritativeInventoryCabinPhotosCleanV1ThroughV24Integration(t *testing.T) {
 	databaseURL := os.Getenv("MEDIA_TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("MEDIA_TEST_DATABASE_URL is not configured")
@@ -360,6 +360,19 @@ func TestAuthoritativeInventoryCabinPhotosV12ToV13BackfillIntegration(t *testing
 		pool.Close()
 		t.Fatalf("record V23 history: %v", err)
 	}
+	started = time.Now()
+	if _, err := pool.Exec(ctx, string(mediamigration.V24)); err != nil {
+		pool.Close()
+		t.Fatalf("apply V24 upgrade: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
+		installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
+	values (26,'24','cabin inventory visibility marker','SQL',
+		'V24__cabin_inventory_visibility_marker.sql',$1,current_user,$2,true)`,
+		flywayChecksum(mediamigration.V24), int(time.Since(started)/time.Millisecond)); err != nil {
+		pool.Close()
+		t.Fatalf("record V24 history: %v", err)
+	}
 	pool.Close()
 	if galleryFolderID != folderID || activeFolderID != folderID {
 		t.Fatalf("V13 folder backfill = gallery:%s active:%s, want %s",
@@ -367,7 +380,7 @@ func TestAuthoritativeInventoryCabinPhotosV12ToV13BackfillIntegration(t *testing
 	}
 	verified, err := Open(ctx, databaseURL)
 	if err != nil {
-		t.Fatalf("Open(V23-complete upgrade) error = %v", err)
+		t.Fatalf("Open(V24-complete upgrade) error = %v", err)
 	}
 	verified.Close()
 }

@@ -44,6 +44,10 @@ reject malformed records through the existing sanitized validation DLT path.
 
 Inventory finding membership-departed, membership-refreshed and completed-observation-restored facts are validated and journaled as ordering evidence, but deliberately create no cabin activity. The additive `membershipActive` field is optional on historical added/inspection facts; lifecycle markers require the value matching their event type. Dossier therefore advances the finding checkpoint without inventing a cabin status or reopening any media owner proof.
 
+`asset.rental-item.inventory-visibility-changed.v1` is likewise journaled and advances its rental-item
+checkpoint with the source `inventoryId`, but its activity mapping is intentionally null. Temporary
+inventory isolation creates neither a public cabin activity nor a fabricated warehouse movement.
+
 Maintenance repair transfer facts are projected as `REPAIR_TRANSFER_PREPARED` and `REPAIR_TRANSFERRED`. Each activity keeps the `rentalItemId` cabin and `warehouseId` snapshot from that committed maintenance event, so departure preparation remains attached to the source warehouse and completed transfer to the target warehouse without a synchronous producer lookup. The durable mapping is defined by the [consumer contract](../../contracts/events/dossier-consumers.yaml) and enforced by [DossierEnvelopeValidator](src/main/java/dev/buhanzaz/rwms/dossier/eventing/DossierEnvelopeValidator.java).
 
 `rwms.media.cabin-photo.v1` cover facts are also journaled as media evidence. Only `media.cabin.cover-changed.v1` with a non-null `taskBoardEntryId` creates `MEDIA_TASK_EVIDENCE_ATTACHED`; direct cover changes remain journal-only and never enter the normal media lifecycle projection. The dossier API returns only the opaque `mediaId`, `generation` and `taskBoardEntryId`; a client resolves the image through its authorized task-board media owner scope at the public gateway. Dossier never stores or publishes an object-store location, signed URL or direct photo link.

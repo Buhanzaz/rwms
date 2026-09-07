@@ -295,6 +295,17 @@ passport and contents before per-finding publication continues. A conflicting re
 blocks that transaction without overwriting warehouse data. Cancelled proposals remain isolated;
 real cabins created by earlier versions are not automatically removed or hidden.
 
+An explicitly approved legacy-source correction can instead retain those exact rows under
+asset-owned `inventory_isolation_id`. An opt-in local manifest runner requires untouched version-zero
+sources, immutable source-operation/receipt identity and no operational references, then atomically
+records the cohort receipt and ordered `asset.rental-item.inventory-visibility-changed.v1` facts.
+Operators must back up, freeze the active inventory and recheck cross-service dependencies first.
+Ordinary asset reads/commands and maintenance command-source lookups exclude isolated sources;
+private inventory reads use the exact persisted inventory/finding binding. Completion releases the
+same UUID before applying the final outcome. Marker consumers preserve stream order without treating
+isolation as a physical warehouse departure or media-owner deletion. Exact repair replay cannot
+re-isolate a released cabin. Deploy all strict consumers before enabling the correction.
+
 When a MANAGE user selects **Recalculate session changes** on the panel finish surface, the panel
 first refuses to run beside a dirty furniture/final-plan draft or another finish command. It sends
 the displayed session revision and a new idempotency key to inventory-service. The owner checks that

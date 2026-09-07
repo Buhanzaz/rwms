@@ -9,6 +9,7 @@ public enum AssetEventType {
   RENTAL_ITEM_STATUS_CHANGED("asset.rental-item.status-changed.v1"),
   RENTAL_ITEM_WAREHOUSE_CHANGED("asset.rental-item.warehouse-changed.v1"),
   RENTAL_ITEM_LOGISTICS_EFFECT_APPLIED("asset.rental-item.logistics-effect-applied.v1"),
+  RENTAL_ITEM_INVENTORY_VISIBILITY_CHANGED("asset.rental-item.inventory-visibility-changed.v1"),
   RENTAL_ITEM_GENERAL_COMMENT_CHANGED("asset.rental-item.general-comment-changed.v1"),
   RENTAL_ITEM_MANUAL_NOTE_ADDED("asset.rental-item.manual-note-added.v1"),
   EQUIPMENT_CATALOG_CREATED("asset.equipment-catalog.created.v1"),

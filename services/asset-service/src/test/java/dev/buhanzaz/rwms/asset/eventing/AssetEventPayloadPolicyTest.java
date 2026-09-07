@@ -15,6 +15,66 @@ class AssetEventPayloadPolicyTest {
   private final AssetEventPayloadPolicy policy = new AssetEventPayloadPolicy(mapper);
 
   @Test
+  void inventoryVisibilityRequiresAnExactTypedFactForHoldAndRelease() {
+    UUID id = UUID.randomUUID();
+    var payload = mapper.createObjectNode();
+    payload.put("rentalItemId", id.toString());
+    payload.put("warehouseId", UUID.randomUUID().toString());
+    payload.put("status", "FREE");
+    payload.put("numberSha256", "0".repeat(64));
+    payload.put("inventoryId", UUID.randomUUID().toString());
+    for (boolean isolated : new boolean[] {true, false}) {
+      payload.put("isolated", isolated);
+      assertThatCode(
+              () ->
+                  policy.validateNode(
+                      AssetEventType.RENTAL_ITEM_INVENTORY_VISIBILITY_CHANGED.value(),
+                      AssetAggregateType.RENTAL_ITEM,
+                      id,
+                      payload))
+          .doesNotThrowAnyException();
+    }
+    payload.put("isolated", "false");
+    assertThatThrownBy(
+            () ->
+                policy.validateNode(
+                    AssetEventType.RENTAL_ITEM_INVENTORY_VISIBILITY_CHANGED.value(),
+                    AssetAggregateType.RENTAL_ITEM,
+                    id,
+                    payload))
+        .isInstanceOf(IllegalArgumentException.class);
+    payload.put("isolated", false);
+    payload.put("unexpected", true);
+    assertThatThrownBy(
+            () ->
+                policy.validateNode(
+                    AssetEventType.RENTAL_ITEM_INVENTORY_VISIBILITY_CHANGED.value(),
+                    AssetAggregateType.RENTAL_ITEM,
+                    id,
+                    payload))
+        .isInstanceOf(IllegalArgumentException.class);
+    payload.remove("unexpected");
+    payload.put("inventoryId", "not-a-uuid");
+    assertThatThrownBy(
+            () ->
+                policy.validateNode(
+                    AssetEventType.RENTAL_ITEM_INVENTORY_VISIBILITY_CHANGED.value(),
+                    AssetAggregateType.RENTAL_ITEM,
+                    id,
+                    payload))
+        .isInstanceOf(IllegalArgumentException.class);
+    payload.remove("inventoryId");
+    assertThatThrownBy(
+            () ->
+                policy.validateNode(
+                    AssetEventType.RENTAL_ITEM_INVENTORY_VISIBILITY_CHANGED.value(),
+                    AssetAggregateType.RENTAL_ITEM,
+                    id,
+                    payload))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
   void acceptsTheSanitizedRentalFact() {
     UUID id = UUID.randomUUID();
 

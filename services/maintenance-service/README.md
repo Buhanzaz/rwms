@@ -17,6 +17,12 @@ as an index, then verify any rule against current contracts and service code.
 
 ## Public and private HTTP boundary
 
+The ordered asset fact `asset.rental-item.inventory-visibility-changed.v1` maintains a reversible
+`inventory_isolated` flag in the local rental-item projection (V52). Both ordinary and locked
+command-source lookups reject isolated cabins. Ordinary asset facts preserve the flag; only a newer
+visibility release clears it. The flag and inbound checkpoint share the same transaction, preserving
+history and preventing direct repair/estimate commands for an unfinished inventory-only source.
+
 Public user operations are versioned below `/api/maintenance/v1/**`; they cover catalog, estimate,
 repair, repair-place/settings and property-disposition work. Mutable commands use the
 contract-defined idempotency key and expected-version fields. Clients must handle the canonical

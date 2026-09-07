@@ -29,6 +29,7 @@ public class AssetEventingConfiguration {
       Map.entry(AssetEventType.RENTAL_ITEM_STATUS_CHANGED, AssetAggregateType.RENTAL_ITEM),
       Map.entry(AssetEventType.RENTAL_ITEM_WAREHOUSE_CHANGED, AssetAggregateType.RENTAL_ITEM),
       Map.entry(AssetEventType.RENTAL_ITEM_LOGISTICS_EFFECT_APPLIED, AssetAggregateType.RENTAL_ITEM),
+      Map.entry(AssetEventType.RENTAL_ITEM_INVENTORY_VISIBILITY_CHANGED, AssetAggregateType.RENTAL_ITEM),
       Map.entry(AssetEventType.RENTAL_ITEM_GENERAL_COMMENT_CHANGED, AssetAggregateType.RENTAL_ITEM),
       Map.entry(AssetEventType.RENTAL_ITEM_MANUAL_NOTE_ADDED, AssetAggregateType.RENTAL_ITEM),
       Map.entry(AssetEventType.EQUIPMENT_CATALOG_CREATED, AssetAggregateType.EQUIPMENT_CATALOG),

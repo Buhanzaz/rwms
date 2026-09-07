@@ -30,6 +30,42 @@ class LogisticsInboundEnvelopeValidatorTest {
   }
 
   @Test
+  void acceptsTheExactInventoryVisibilityRentalItemFact() {
+    UUID eventId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+
+    LogisticsInboundEnvelopeValidator.ValidatedInboundEvent event =
+        validator.validate(
+            LogisticsInboundTransportTopics.RENTAL_ITEM,
+            assetId.toString(),
+            inventoryVisibilityEvent(eventId, assetId, 1, true));
+
+    assertThat(event.eventId()).isEqualTo(eventId);
+    assertThat(event.eventType())
+        .isEqualTo("asset.rental-item.inventory-visibility-changed.v1");
+    assertThat(event.aggregateVersion()).isEqualTo(1);
+  }
+
+  @Test
+  void rejectsInventoryVisibilityFactsWithANonBooleanIsolationMarker() {
+    UUID assetId = UUID.randomUUID();
+    String body =
+        new String(
+                inventoryVisibilityEvent(UUID.randomUUID(), assetId, 1, true),
+                StandardCharsets.UTF_8)
+            .replace("\"isolated\": true", "\"isolated\": \"true\"");
+
+    assertThatThrownBy(
+            () ->
+                validator.validate(
+                    LogisticsInboundTransportTopics.RENTAL_ITEM,
+                    assetId.toString(),
+                    body.getBytes(StandardCharsets.UTF_8)))
+        .isInstanceOf(LogisticsInboundValidationException.class)
+        .hasMessageContaining("isolated");
+  }
+
+  @Test
   void rejectsAnUndeclaredEventTypeEvenWhenTheEnvelopeLooksValid() {
     UUID eventId = UUID.randomUUID();
     UUID assetId = UUID.randomUUID();
@@ -179,6 +215,38 @@ class LogisticsInboundEnvelopeValidatorTest {
           }
         }
         """.formatted(eventId, assetId, version, assetId, status)
+        .getBytes(StandardCharsets.UTF_8);
+  }
+
+  static byte[] inventoryVisibilityEvent(
+      UUID eventId, UUID assetId, long version, boolean isolated) {
+    return """
+        {
+          "envelopeVersion": 2,
+          "eventId": "%s",
+          "eventType": "asset.rental-item.inventory-visibility-changed.v1",
+          "eventVersion": 1,
+          "occurredAt": null,
+          "recordedAt": "2026-07-17T08:00:00Z",
+          "producer": "asset-service",
+          "aggregateType": "RENTAL_ITEM",
+          "aggregateId": "%s",
+          "aggregateVersion": %d,
+          "correlation": {
+            "correlationId": "00000000-0000-0000-0000-000000000801",
+            "causationId": null
+          },
+          "actorRef": null,
+          "payload": {
+            "rentalItemId": "%s",
+            "warehouseId": "00000000-0000-0000-0000-000000000802",
+            "status": "FREE",
+            "numberSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "inventoryId": "00000000-0000-0000-0000-000000000803",
+            "isolated": %s
+          }
+        }
+        """.formatted(eventId, assetId, version, assetId, isolated)
         .getBytes(StandardCharsets.UTF_8);
   }
 

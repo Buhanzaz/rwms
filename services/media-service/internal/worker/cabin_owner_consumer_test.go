@@ -51,6 +51,11 @@ func TestParseCabinOwnerRecordAcceptsLifecycleProofsAndOrderingMarkers(t *testin
 	if err != nil || message.Proof != nil || message.PayloadOwnerID != note.aggregateID {
 		t.Fatalf("note marker parse = %#v, %v", message, err)
 	}
+	visibility := newCabinOwnerRecord(t, "asset.rental-item.inventory-visibility-changed.v1", 4)
+	message, err = parseCabinOwnerRecord(visibility.record)
+	if err != nil || message.Proof != nil || message.PayloadOwnerID != visibility.aggregateID {
+		t.Fatalf("inventory visibility marker parse = %#v, %v", message, err)
+	}
 }
 
 func TestParseCabinOwnerRecordPreservesOwnerMismatchForDurableQuarantine(t *testing.T) {
@@ -119,6 +124,48 @@ func TestParseCabinOwnerRecordRejectsContractViolations(t *testing.T) {
 	oversized.record.Value = []byte(strings.Repeat("x", cabinOwnerRecordLimit+1))
 	if _, err := parseCabinOwnerRecord(oversized.record); err == nil {
 		t.Fatal("oversized cabin owner record was accepted")
+	}
+}
+
+func TestParseCabinOwnerRecordRejectsInvalidInventoryVisibilityMarker(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*cabinOwnerRecordFixture)
+	}{
+		{name: "mismatched rental item", mutate: func(value *cabinOwnerRecordFixture) {
+			value.payload()["rentalItemId"] = uuid.NewString()
+		}},
+		{name: "invalid warehouse", mutate: func(value *cabinOwnerRecordFixture) {
+			value.payload()["warehouseId"] = "warehouse"
+		}},
+		{name: "invalid inventory", mutate: func(value *cabinOwnerRecordFixture) {
+			value.payload()["inventoryId"] = "inventory"
+		}},
+		{name: "blank status", mutate: func(value *cabinOwnerRecordFixture) {
+			value.payload()["status"] = "  "
+		}},
+		{name: "invalid number hash", mutate: func(value *cabinOwnerRecordFixture) {
+			value.payload()["numberSha256"] = "secret-number"
+		}},
+		{name: "non boolean isolated", mutate: func(value *cabinOwnerRecordFixture) {
+			value.payload()["isolated"] = "false"
+		}},
+		{name: "null isolated", mutate: func(value *cabinOwnerRecordFixture) {
+			value.payload()["isolated"] = nil
+		}},
+		{name: "unexpected field", mutate: func(value *cabinOwnerRecordFixture) {
+			value.payload()["private"] = true
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newCabinOwnerRecord(t, "asset.rental-item.inventory-visibility-changed.v1", 1)
+			test.mutate(fixture)
+			fixture.remarshal(t)
+			if _, err := parseCabinOwnerRecord(fixture.record); err == nil {
+				t.Fatal("parseCabinOwnerRecord() error = nil")
+			}
+		})
 	}
 }
 
@@ -207,6 +254,15 @@ func newCabinOwnerRecord(
 		"numberSha256": strings.Repeat("a", 64),
 	}
 	switch eventType {
+	case "asset.rental-item.inventory-visibility-changed.v1":
+		payload = map[string]any{
+			"rentalItemId": fixture.aggregateID.String(),
+			"warehouseId":  fixture.warehouseID.String(),
+			"status":       "FREE",
+			"numberSha256": strings.Repeat("a", 64),
+			"inventoryId":  uuid.NewString(),
+			"isolated":     true,
+		}
 	case "asset.rental-item.general-comment-changed.v1":
 		payload = map[string]any{
 			"rentalItemId": fixture.aggregateID.String(), "commentRevision": 1,

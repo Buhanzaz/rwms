@@ -181,6 +181,17 @@ type assetRentalProofPayload struct {
 	NumberSHA256 string `json:"numberSha256"`
 }
 
+// assetRentalInventoryVisibilityPayload is deliberately not an owner proof:
+// inventory isolation only preserves rental-item stream continuity here.
+type assetRentalInventoryVisibilityPayload struct {
+	RentalItemID string `json:"rentalItemId"`
+	WarehouseID  string `json:"warehouseId"`
+	Status       string `json:"status"`
+	NumberSHA256 string `json:"numberSha256"`
+	InventoryID  string `json:"inventoryId"`
+	Isolated     *bool  `json:"isolated"`
+}
+
 type assetRentalCommentPayload struct {
 	RentalItemID    string `json:"rentalItemId"`
 	CommentRevision int64  `json:"commentRevision"`
@@ -250,6 +261,24 @@ func parseCabinOwnerRecord(record *kgo.Record) (persistence.CabinOwnerMessage, e
 			WarehouseID: warehouseID, Status: payload.Status,
 			OwnerRevision: envelope.AggregateVersion, Active: payload.Status != "WRITTEN_OFF",
 		}
+	case "asset.rental-item.inventory-visibility-changed.v1":
+		if err := exactJSONFields(envelope.Payload, "rentalItemId", "warehouseId", "status",
+			"numberSha256", "inventoryId", "isolated"); err != nil {
+			return persistence.CabinOwnerMessage{}, err
+		}
+		var payload assetRentalInventoryVisibilityPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return persistence.CabinOwnerMessage{}, err
+		}
+		ownerID, ownerErr := strictUUID(payload.RentalItemID)
+		_, warehouseErr := strictUUID(payload.WarehouseID)
+		_, inventoryErr := strictUUID(payload.InventoryID)
+		if ownerErr != nil || warehouseErr != nil || inventoryErr != nil || ownerID != aggregateID ||
+			strings.TrimSpace(payload.Status) == "" || !validLowerSHA256(payload.NumberSHA256) ||
+			payload.Isolated == nil {
+			return persistence.CabinOwnerMessage{}, errors.New("invalid asset rental-item inventory visibility marker")
+		}
+		message.PayloadOwnerID = ownerID
 	case "asset.rental-item.general-comment-changed.v1":
 		if err := exactJSONFields(envelope.Payload, "rentalItemId", "commentRevision"); err != nil {
 			return persistence.CabinOwnerMessage{}, err

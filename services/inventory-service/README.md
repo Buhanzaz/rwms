@@ -55,6 +55,9 @@ facts. The public refresh contract adds no schema field.
 An inspected departure retains its original passport, photos and frozen work as historical evidence.
 Ordered asset-event warehouse/status facts drive the movement journal independently of a newer HTTP
 snapshot, so a departure followed by a return is not collapsed into one current-state read. The
+`asset.rental-item.inventory-visibility-changed.v1` marker is durably acknowledged by the
+rental-item inbox but never creates a membership or warehouse-movement mutation: temporary
+inventory isolation is not a physical departure. Its `inventoryId` remains source-scoped evidence.
 `PRESERVE` final-plan disposition publishes only inventory passport/photo observations and never
 changes live status, warehouse, contents, leases, logistics or maintenance work. The finding exposes
 `preserveOperationalState=true`; its clients display the current owner status, not its obsolete work.

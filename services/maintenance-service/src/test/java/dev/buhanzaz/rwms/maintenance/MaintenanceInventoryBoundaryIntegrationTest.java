@@ -108,6 +108,32 @@ class MaintenanceInventoryBoundaryIntegrationTest {
   private UUID catalogId;
   private UUID workNodeId;
 
+  @Test
+  void inventoryIsolationProjectionPersistsAndRollsBackWithItsInboundTransaction() {
+    UUID assetId = UUID.randomUUID();
+    TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+    transaction.executeWithoutResult(status ->
+        maintenance.applyInboundRentalItemVisibilityFact(assetId, warehouseId, "FREE", 1, true));
+    assertThat(rentalItems.findById(assetId).orElseThrow().isInventoryIsolated()).isTrue();
+
+    transaction.executeWithoutResult(status ->
+        maintenance.applyInboundRentalItemFact(assetId, warehouseId, "FREE", 2));
+    assertThat(rentalItems.findById(assetId).orElseThrow().isInventoryIsolated()).isTrue();
+    transaction.executeWithoutResult(status -> {
+      maintenance.applyInboundRentalItemVisibilityFact(assetId, warehouseId, "FREE", 3, false);
+      status.setRollbackOnly();
+    });
+    assertThat(rentalItems.findById(assetId).orElseThrow().isInventoryIsolated()).isTrue();
+    assertThat(rentalItems.findById(assetId).orElseThrow().getAggregateVersion()).isEqualTo(2);
+
+    transaction.executeWithoutResult(status ->
+        maintenance.applyInboundRentalItemVisibilityFact(assetId, warehouseId, "FREE", 3, false));
+    transaction.executeWithoutResult(status ->
+        maintenance.applyInboundRentalItemVisibilityFact(assetId, warehouseId, "FREE", 1, true));
+    assertThat(rentalItems.findById(assetId).orElseThrow().isInventoryIsolated()).isFalse();
+    assertThat(rentalItems.findById(assetId).orElseThrow().getAggregateVersion()).isEqualTo(3);
+  }
+
   private static UUID stableKey(String operation, UUID inventoryId, UUID findingId) {
     return UUID.nameUUIDFromBytes(
         (operation + ":" + inventoryId + ":" + findingId)

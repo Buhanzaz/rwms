@@ -40,6 +40,7 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 	v21 := flywayChecksum(mediamigration.V21)
 	v22 := flywayChecksum(mediamigration.V22)
 	v23 := flywayChecksum(mediamigration.V23)
+	v24 := flywayChecksum(mediamigration.V24)
 	const (
 		flyway124V1      int32 = -1307356325
 		flyway124V2      int32 = -573926044
@@ -66,6 +67,7 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 		flyway124V21     int32 = -1301109675
 		flyway124V22     int32 = -1543669809
 		flyway124V23     int32 = -1754904860
+		flyway124V24     int32 = -957538441
 	)
 	if v1 != flyway124V1 || v2 != flyway124V2 || v3 != flyway124V3 || v4 != flyway124V4 ||
 		v4Guard != flyway124V4Guard || v5 != flyway124V5 || v5Guard != flyway124V5Guard ||
@@ -133,6 +135,9 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 	if v23 != flyway124V23 {
 		t.Fatalf("Flyway 12.4 checksum drift: V23=%d (want %d)", v23, flyway124V23)
 	}
+	if v24 != flyway124V24 {
+		t.Fatalf("Flyway 12.4 checksum drift: V24=%d (want %d)", v24, flyway124V24)
+	}
 }
 
 func TestV22AddsWorkerProfileAvatarOwnerWithoutDestructiveDataChanges(t *testing.T) {
@@ -148,6 +153,31 @@ func TestV22AddsWorkerProfileAvatarOwnerWithoutDestructiveDataChanges(t *testing
 	for _, forbidden := range []string{"drop table", "truncate", "delete from media_asset"} {
 		if strings.Contains(sql, forbidden) {
 			t.Errorf("V22 contains destructive statement %q", forbidden)
+		}
+	}
+}
+
+func TestV24WidensOnlyTheCabinInboxVisibilityMarkerConstraint(t *testing.T) {
+	sql := strings.ToLower(string(mediamigration.V24))
+	for _, required := range []string{
+		"drop constraint media_cabin_owner_inbox_check2",
+		"add constraint media_cabin_owner_inbox_check2",
+		"asset.rental-item.inventory-visibility-changed.v1",
+		"asset.rental-item.created.v1",
+		"asset.rental-item.general-comment-changed.v1",
+		"asset.rental-item.manual-note-added.v1",
+		"warehouse_id is null",
+		"rental_status is null",
+		"owner_revision is null",
+		"active is null",
+	} {
+		if !strings.Contains(sql, required) {
+			t.Errorf("V24 does not contain %q", required)
+		}
+	}
+	for _, forbidden := range []string{"drop table", "truncate table", "delete from", "update media_"} {
+		if strings.Contains(sql, forbidden) {
+			t.Errorf("V24 contains destructive or data-rewriting statement %q", forbidden)
 		}
 	}
 }
@@ -290,6 +320,7 @@ func approvedMigrationHistory() []migrationHistoryRow {
 		{"21", "media asset company boundary", "V21__media_asset_company_boundary.sql", mediamigration.V21},
 		{"22", "task board worker profile avatar owner", "V22__task_board_worker_profile_avatar_owner.sql", mediamigration.V22},
 		{"23", "remove media company boundary", "V23__remove_media_company_boundary.sql", mediamigration.V23},
+		{"24", "cabin inventory visibility marker", "V24__cabin_inventory_visibility_marker.sql", mediamigration.V24},
 	}
 	history := make([]migrationHistoryRow, 0, len(migrations))
 	for _, migration := range migrations {
@@ -604,7 +635,7 @@ func TestDriverShiftMediaMigrationAddsDedicatedProofsWithoutRewritingAssets(t *t
 	}
 }
 
-func TestV18ToV23CustomerProfileDriverShiftAndWorkerProfileUpgradeIntegration(t *testing.T) {
+func TestV18ToV24CustomerProfileDriverShiftAndWorkerProfileUpgradeIntegration(t *testing.T) {
 	baseURL := os.Getenv("MEDIA_TEST_DATABASE_URL")
 	if baseURL == "" {
 		t.Skip("MEDIA_TEST_DATABASE_URL is not configured")
@@ -701,6 +732,19 @@ func TestV18ToV23CustomerProfileDriverShiftAndWorkerProfileUpgradeIntegration(t 
 		pool.Close()
 		t.Fatalf("record V23 media company removal: %v", err)
 	}
+	if _, err := pool.Exec(ctx, string(mediamigration.V24)); err != nil {
+		pool.Close()
+		t.Fatalf("apply V24 cabin visibility migration: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
+		installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
+	values ((select coalesce(max(installed_rank),0)+1 from flyway_schema_history),
+		'24','cabin inventory visibility marker','SQL',
+		'V24__cabin_inventory_visibility_marker.sql',$1,current_user,0,true)`,
+		flywayChecksum(mediamigration.V24)); err != nil {
+		pool.Close()
+		t.Fatalf("record V24 cabin visibility migration: %v", err)
+	}
 	var assetsAfter int64
 	if err := pool.QueryRow(ctx, `select count(*) from media_asset`).Scan(&assetsAfter); err != nil {
 		pool.Close()
@@ -727,7 +771,7 @@ func TestV18ToV23CustomerProfileDriverShiftAndWorkerProfileUpgradeIntegration(t 
 	pool.Close()
 	database, err := Open(ctx, databaseURL)
 	if err != nil {
-		t.Fatalf("open upgraded V23 media database: %v", err)
+		t.Fatalf("open upgraded V24 media database: %v", err)
 	}
 	database.Close()
 }

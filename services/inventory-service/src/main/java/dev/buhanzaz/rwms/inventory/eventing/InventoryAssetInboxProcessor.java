@@ -15,7 +15,9 @@ import tools.jackson.databind.ObjectMapper;
 
 /**
  * Validates and deduplicates asset rental-item facts before applying inventory membership changes.
- * Invalid or conflicting deliveries are retained in the local retry/DLT path instead of guessed.
+ * Visibility markers are durably acknowledged without being mistaken for a physical membership
+ * transition. Invalid or conflicting deliveries are retained in the local retry/DLT path instead
+ * of guessed.
  */
 @Service
 public class InventoryAssetInboxProcessor {
@@ -43,6 +45,8 @@ public class InventoryAssetInboxProcessor {
           "asset.rental-item.status-changed.v1",
           "asset.rental-item.warehouse-changed.v1",
           "asset.rental-item.logistics-effect-applied.v1");
+  private static final String INVENTORY_VISIBILITY_EVENT_TYPE =
+      "asset.rental-item.inventory-visibility-changed.v1";
   private static final Set<String> IGNORED_EVENT_TYPES =
       Set.of(
           "asset.rental-item.general-comment-changed.v1",
@@ -53,6 +57,8 @@ public class InventoryAssetInboxProcessor {
       Set.of("subjectId", "principalType", "profileRevision");
   private static final Set<String> STATE_PAYLOAD_FIELDS =
       Set.of("rentalItemId", "warehouseId", "status", "numberSha256");
+  private static final Set<String> INVENTORY_VISIBILITY_PAYLOAD_FIELDS =
+      Set.of("rentalItemId", "warehouseId", "status", "numberSha256", "inventoryId", "isolated");
   private static final Set<String> COMMENT_PAYLOAD_FIELDS =
       Set.of("rentalItemId", "commentRevision");
   private static final Set<String> NOTE_PAYLOAD_FIELDS =
@@ -155,6 +161,7 @@ public class InventoryAssetInboxProcessor {
           || !"asset-service".equals(root.path("producer").asText())
           || !"RENTAL_ITEM".equals(root.path("aggregateType").asText())
           || (!STATE_EVENT_TYPES.contains(eventType)
+              && !INVENTORY_VISIBILITY_EVENT_TYPE.equals(eventType)
               && !IGNORED_EVENT_TYPES.contains(eventType))) {
         throw invalid(eventId);
       }
@@ -177,12 +184,7 @@ public class InventoryAssetInboxProcessor {
       }
       OpaqueActorReference actor = actor(root.path("actorRef"));
       JsonNode payload = root.path("payload");
-      Set<String> payloadFields =
-          STATE_EVENT_TYPES.contains(eventType)
-              ? STATE_PAYLOAD_FIELDS
-              : "asset.rental-item.general-comment-changed.v1".equals(eventType)
-                  ? COMMENT_PAYLOAD_FIELDS
-                  : NOTE_PAYLOAD_FIELDS;
+      Set<String> payloadFields = payloadFields(eventType);
       exact(payload, payloadFields);
       if (!assetId.equals(UUID.fromString(payload.path("rentalItemId").asText()))) {
         throw invalid(eventId);
@@ -191,6 +193,14 @@ public class InventoryAssetInboxProcessor {
         UUID.fromString(payload.path("warehouseId").asText());
         if (payload.path("status").asText().isBlank()
             || !payload.path("numberSha256").asText().matches("^[0-9a-f]{64}$")) {
+          throw invalid(eventId);
+        }
+      } else if (INVENTORY_VISIBILITY_EVENT_TYPE.equals(eventType)) {
+        UUID.fromString(payload.path("warehouseId").asText());
+        UUID.fromString(payload.path("inventoryId").asText());
+        if (payload.path("status").asText().isBlank()
+            || !payload.path("numberSha256").asText().matches("^[0-9a-f]{64}$")
+            || !payload.path("isolated").isBoolean()) {
           throw invalid(eventId);
         }
       } else if ("asset.rental-item.general-comment-changed.v1".equals(eventType)) {
@@ -219,6 +229,16 @@ public class InventoryAssetInboxProcessor {
     if (value.isNull()) return null;
     exact(value, ACTOR_FIELDS);
     return mapper.treeToValue(value, OpaqueActorReference.class);
+  }
+
+  private static Set<String> payloadFields(String eventType) {
+    if (STATE_EVENT_TYPES.contains(eventType)) return STATE_PAYLOAD_FIELDS;
+    if (INVENTORY_VISIBILITY_EVENT_TYPE.equals(eventType)) {
+      return INVENTORY_VISIBILITY_PAYLOAD_FIELDS;
+    }
+    return "asset.rental-item.general-comment-changed.v1".equals(eventType)
+        ? COMMENT_PAYLOAD_FIELDS
+        : NOTE_PAYLOAD_FIELDS;
   }
 
   private void exact(JsonNode value, Set<String> fields) {

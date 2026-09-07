@@ -82,6 +82,38 @@ class LogisticsInboxProcessorIntegrationTest {
   }
 
   @Test
+  void checkpointsInventoryVisibilityFactsAsOrderedRentalItemEvidence() {
+    UUID eventId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    LogisticsInboundEnvelopeValidator.ValidatedInboundEvent created =
+        event(UUID.randomUUID(), assetId, 0, "FREE");
+    LogisticsInboundEnvelopeValidator.ValidatedInboundEvent event =
+        inventoryVisibilityEvent(eventId, assetId, 1, true);
+
+    staging.stage(created);
+    assertThat(inbox.process(created)).isEqualTo(LogisticsInboxProcessor.Outcome.PROCESSED);
+    staging.stage(event);
+    assertThat(inbox.process(event)).isEqualTo(LogisticsInboxProcessor.Outcome.PROCESSED);
+
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select last_aggregate_version from consumer_aggregate_checkpoint
+                 where consumer_group=? and aggregate_type='RENTAL_ITEM' and aggregate_id=? and not blocked
+                """,
+                Long.class,
+                LogisticsInboundTransportTopics.CONSUMER_GROUP,
+                assetId.toString()))
+        .isEqualTo(1L);
+    assertThat(
+            jdbc.queryForObject(
+                "select event_type from logistics_inbound_observation where event_id=?",
+                String.class,
+                eventId))
+        .isEqualTo("asset.rental-item.inventory-visibility-changed.v1");
+  }
+
+  @Test
   void quarantinesAVersionGapThenReplaysEveryMissingFactInOrder() {
     UUID assetId = UUID.randomUUID();
     LogisticsInboundEnvelopeValidator.ValidatedInboundEvent first =
@@ -231,6 +263,15 @@ class LogisticsInboxProcessorIntegrationTest {
         LogisticsInboundTransportTopics.RENTAL_ITEM,
         assetId.toString().getBytes(StandardCharsets.UTF_8),
         raw);
+  }
+
+  private LogisticsInboundEnvelopeValidator.ValidatedInboundEvent inventoryVisibilityEvent(
+      UUID eventId, UUID assetId, long version, boolean isolated) {
+    return validator.validate(
+        LogisticsInboundTransportTopics.RENTAL_ITEM,
+        assetId.toString().getBytes(StandardCharsets.UTF_8),
+        LogisticsInboundEnvelopeValidatorTest.inventoryVisibilityEvent(
+            eventId, assetId, version, isolated));
   }
 
   private LogisticsInboundEnvelopeValidator.ValidatedInboundEvent mediaEvent(

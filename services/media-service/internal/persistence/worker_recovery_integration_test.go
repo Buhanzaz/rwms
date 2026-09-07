@@ -104,10 +104,12 @@ func TestBoundedProcessingRecoveryMigrationTreatsAmbiguousDLTAsLegacyIntegration
 		"V22__task_board_worker_profile_avatar_owner.sql", mediamigration.V22)
 	applyResidualMigration(t, ctx, pool, 25, "23", "remove media company boundary",
 		"V23__remove_media_company_boundary.sql", mediamigration.V23)
+	applyResidualMigration(t, ctx, pool, 26, "24", "cabin inventory visibility marker",
+		"V24__cabin_inventory_visibility_marker.sql", mediamigration.V24)
 	pool.Close()
 	database, err := Open(ctx, databaseURL)
 	if err != nil {
-		t.Fatalf("open upgraded V23 ambiguous database: %v", err)
+		t.Fatalf("open upgraded V24 ambiguous database: %v", err)
 	}
 	database.Close()
 }

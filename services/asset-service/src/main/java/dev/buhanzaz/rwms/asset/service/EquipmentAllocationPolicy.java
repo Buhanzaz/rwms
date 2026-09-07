@@ -46,6 +46,7 @@ public class EquipmentAllocationPolicy {
           when balance.location_kind='STOCK' then true
           when balance.location_kind='CABIN_NON_RENTED'
             and rental.status in ('FREE','WAREHOUSE')
+            and rental.inventory_isolation_id is null
             and not exists (
               select 1
               from order_unit_reservation reservation

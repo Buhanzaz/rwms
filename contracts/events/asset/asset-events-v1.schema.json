@@ -11,6 +11,7 @@
     "eventId": {"type": "string", "format": "uuid"},
     "eventType": {"enum": [
       "asset.rental-item.created.v1", "asset.rental-item.passport-changed.v1", "asset.rental-item.status-changed.v1", "asset.rental-item.warehouse-changed.v1", "asset.rental-item.logistics-effect-applied.v1", "asset.rental-item.general-comment-changed.v1", "asset.rental-item.manual-note-added.v1",
+      "asset.rental-item.inventory-visibility-changed.v1",
       "asset.equipment-catalog.created.v1", "asset.equipment-catalog.changed.v1",
       "asset.equipment-balance.changed.v1",
       "asset.equipment-movement.transferred.v1", "asset.equipment-movement.written-off.v1", "asset.equipment-movement.lost.v1",
@@ -28,12 +29,13 @@
     "correlation": {"$ref": "#/$defs/correlation"},
     "actorRef": {"oneOf": [{"$ref": "#/$defs/actor"}, {"type": "null"}]},
     "payload": {"oneOf": [
-      {"$ref": "#/$defs/rentalFact"}, {"$ref": "#/$defs/rentalCommentFact"}, {"$ref": "#/$defs/rentalNoteFact"},
+      {"$ref": "#/$defs/rentalFact"}, {"$ref": "#/$defs/inventoryVisibilityFact"}, {"$ref": "#/$defs/rentalCommentFact"}, {"$ref": "#/$defs/rentalNoteFact"},
       {"$ref": "#/$defs/equipmentCatalogFact"}, {"$ref": "#/$defs/balanceFact"}, {"$ref": "#/$defs/movementFact"},
       {"$ref": "#/$defs/holdFact"}, {"$ref": "#/$defs/leaseFact"}, {"$ref": "#/$defs/classifierFact"}
     ]}
   },
   "oneOf": [
+    {"properties": {"aggregateType": {"const": "RENTAL_ITEM"}, "eventType": {"const": "asset.rental-item.inventory-visibility-changed.v1"}, "payload": {"$ref": "#/$defs/inventoryVisibilityFact"}}},
     {"properties": {"aggregateType": {"const": "RENTAL_ITEM"}, "eventType": {"enum": ["asset.rental-item.created.v1", "asset.rental-item.passport-changed.v1", "asset.rental-item.status-changed.v1", "asset.rental-item.warehouse-changed.v1", "asset.rental-item.logistics-effect-applied.v1"]}, "payload": {"$ref": "#/$defs/rentalFact"}}},
     {"properties": {"aggregateType": {"const": "RENTAL_ITEM"}, "eventType": {"const": "asset.rental-item.general-comment-changed.v1"}, "payload": {"$ref": "#/$defs/rentalCommentFact"}}},
     {"properties": {"aggregateType": {"const": "RENTAL_ITEM"}, "eventType": {"const": "asset.rental-item.manual-note-added.v1"}, "payload": {"$ref": "#/$defs/rentalNoteFact"}}},
@@ -47,6 +49,7 @@
   "x-rwms-topics": ["rwms.asset.rental-item.v1", "rwms.asset.equipment-catalog.v1", "rwms.asset.equipment-balance.v1", "rwms.asset.equipment-movement.v1", "rwms.asset.equipment-allocation-hold.v1", "rwms.asset.operation-lease.v1", "rwms.asset.classifier.v1"],
   "x-rwms-delivery": {"producer": "transactional-postgresql-outbox", "key": "aggregateId", "atLeastOnce": true, "retriesSeconds": [1, 2, 4], "validationFailure": "SANITIZED_DLT", "versionGap": "QUARANTINE"},
   "$defs": {
+    "inventoryVisibilityFact": {"type": "object", "additionalProperties": false, "required": ["rentalItemId", "warehouseId", "status", "numberSha256", "inventoryId", "isolated"], "properties": {"rentalItemId": {"$ref": "#/$defs/uuid"}, "warehouseId": {"$ref": "#/$defs/uuid"}, "status": {"type": "string"}, "numberSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "inventoryId": {"$ref": "#/$defs/uuid"}, "isolated": {"type": "boolean"}}},
     "uuid": {"type": "string", "format": "uuid"},
     "correlation": {"type": "object", "additionalProperties": false, "required": ["correlationId", "causationId"], "properties": {"correlationId": {"$ref": "#/$defs/uuid"}, "causationId": {"oneOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]}}},
     "actor": {"type": "object", "additionalProperties": false, "required": ["subjectId", "principalType", "profileRevision"], "properties": {"subjectId": {"$ref": "#/$defs/uuid"}, "principalType": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$"}, "profileRevision": {"oneOf": [{"type": "string", "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64})$"}, {"type": "null"}]}}},

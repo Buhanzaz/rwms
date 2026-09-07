@@ -44,6 +44,11 @@ Consumer начинает с earliest, проверяет каждый accepted 
 
 Факты inventory finding membership-departed, membership-refreshed и completed-observation-restored проходят validation и сохраняются в journal как evidence порядка, но намеренно не создают cabin activity. Additive-поле `membershipActive` необязательно в исторических added/inspection facts; lifecycle markers требуют значение, соответствующее типу event. Поэтому dossier продвигает checkpoint finding без выдуманного статуса бытовки или повторного открытия media owner proof.
 
+`asset.rental-item.inventory-visibility-changed.v1` также сохраняется в journal и продвигает
+checkpoint rental-item вместе с source `inventoryId`, но его activity mapping намеренно `null`.
+Временная изоляция инвентаризации не создаёт ни публичную activity бытовки, ни выдуманное
+перемещение склада.
+
 Maintenance repair transfer facts проецируются как `REPAIR_TRANSFER_PREPARED` и `REPAIR_TRANSFERRED`. Каждая activity сохраняет cabin из `rentalItemId` и snapshot склада из `warehouseId` зафиксированного maintenance event, поэтому подготовка отправления остаётся связана с исходным складом, а завершённая передача — с целевым без синхронного вызова producer. Durable mapping определён [consumer contract](../../contracts/events/dossier-consumers.yaml) и проверяется [DossierEnvelopeValidator](src/main/java/dev/buhanzaz/rwms/dossier/eventing/DossierEnvelopeValidator.java).
 
 Cover facts `rwms.media.cabin-photo.v1` также сохраняются как media evidence. Только `media.cabin.cover-changed.v1` с non-null `taskBoardEntryId` создаёт `MEDIA_TASK_EVIDENCE_ATTACHED`; прямые изменения cover остаются только в journal и не попадают в normal media lifecycle projection. Dossier API возвращает лишь opaque `mediaId`, `generation` и `taskBoardEntryId`; клиент получает изображение через свой authorized task-board media owner scope в public gateway. Dossier никогда не сохраняет и не публикует object-store location, signed URL или прямую ссылку на фото.

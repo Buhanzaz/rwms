@@ -331,11 +331,13 @@ final class InventoryFurnitureReconciliationService {
     List<RentalItem> persisted =
         forUpdate ? rentalItems.findAllByIdInForUpdate(assetIds) : rentalItems.findAllById(assetIds);
     List<RentalItem> selected = new ArrayList<>(persisted);
-    if (!forUpdate && persisted.size() != assetIds.size()) {
+    if (persisted.size() != assetIds.size()) {
       Set<UUID> found = persisted.stream().map(RentalItem::getId).collect(Collectors.toSet());
+      List<UUID> missing = assetIds.stream().filter(id -> !found.contains(id)).toList();
       selected.addAll(
-          sources.pendingRentalItems(
-              assetIds.stream().filter(id -> !found.contains(id)).toList()));
+          forUpdate
+              ? sources.findHeldLegacySourceItems(missing, true)
+              : sources.pendingRentalItems(missing));
     }
     if (selected.size() != assetIds.size()) {
       throw new AssetNotFoundException("Selected furniture reconciliation cabin was not found");

@@ -7,12 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	mediamigration "dev.buhanzaz.rwms/media-service/db/migration"
 	"dev.buhanzaz.rwms/media-service/internal/media"
 	"dev.buhanzaz.rwms/media-service/internal/testsupport"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestDynamicCabinOwnerProjectionAuthorizesServerCreatedCabinAndMovesWarehouseIntegration(
@@ -96,25 +99,108 @@ func TestDynamicCabinOwnerProjectionAuthorizesServerCreatedCabinAndMovesWarehous
 	assertCabinOwnerBinding(t, ctx, database, cabinID, secondWarehouseID, 1, true)
 	assertCabinOwnerCheckpoint(t, ctx, database, cabinID, 2)
 
-	writtenOff := cabinOwnerProofMessage(cabinID, cabinID, secondWarehouseID, 3,
+	visibility := cabinOwnerMarkerMessage(cabinID, 3, cabinInventoryVisibilityEvent)
+	if result, err := repository.ApplyCabinOwnerMessage(ctx, visibility); err != nil ||
+		result.Duplicate || result.Quarantined {
+		t.Fatalf("ApplyCabinOwnerMessage(inventory visibility marker) = %#v, %v", result, err)
+	}
+	assertCabinOwnerBinding(t, ctx, database, cabinID, secondWarehouseID, 1, true)
+	assertCabinOwnerCheckpoint(t, ctx, database, cabinID, 3)
+
+	writtenOff := cabinOwnerProofMessage(cabinID, cabinID, secondWarehouseID, 4,
 		cabinStatusEvent, "WRITTEN_OFF")
 	if result, err := repository.ApplyCabinOwnerMessage(ctx, writtenOff); err != nil ||
 		result.Duplicate || result.Quarantined {
 		t.Fatalf("ApplyCabinOwnerMessage(written off) = %#v, %v", result, err)
 	}
-	assertCabinOwnerBinding(t, ctx, database, cabinID, secondWarehouseID, 3, false)
+	assertCabinOwnerBinding(t, ctx, database, cabinID, secondWarehouseID, 4, false)
 	if _, _, err := repository.CreateUpload(ctx,
 		cabinUploadCommand(cabinID, secondWarehouseID, 4)); !errors.Is(err, ErrOwnerProofMissing) {
 		t.Fatalf("CreateUpload(written-off cabin) error = %v, want ErrOwnerProofMissing", err)
 	}
 
-	reactivated := cabinOwnerProofMessage(cabinID, cabinID, secondWarehouseID, 4,
+	reactivated := cabinOwnerProofMessage(cabinID, cabinID, secondWarehouseID, 5,
 		cabinStatusEvent, "FREE")
 	if result, err := repository.ApplyCabinOwnerMessage(ctx, reactivated); err != nil ||
 		!result.Quarantined {
 		t.Fatalf("ApplyCabinOwnerMessage(terminal reactivation) = %#v, %v", result, err)
 	}
 	assertOpenCabinOwnerQuarantine(t, ctx, database, cabinID, "TERMINAL_REACTIVATION")
+}
+
+func TestCabinInventoryVisibilityMarkerV23ToV24UpgradeIntegration(t *testing.T) {
+	databaseURL := os.Getenv("MEDIA_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("MEDIA_TEST_DATABASE_URL is not configured")
+	}
+	databaseURL = testsupport.NewMigratedMediaDatabaseThroughV23(t, databaseURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open V23 media database: %v", err)
+	}
+	var before string
+	if err := pool.QueryRow(ctx, `select pg_get_constraintdef(oid) from pg_constraint
+		where conrelid='media_cabin_owner_inbox'::regclass
+		  and conname='media_cabin_owner_inbox_check2'`).Scan(&before); err != nil {
+		pool.Close()
+		t.Fatalf("read V23 cabin inbox constraint: %v", err)
+	}
+	if strings.Contains(before, cabinInventoryVisibilityEvent) {
+		pool.Close()
+		t.Fatal("V23 cabin inbox constraint unexpectedly admits the visibility marker")
+	}
+
+	started := time.Now()
+	if _, err := pool.Exec(ctx, string(mediamigration.V24)); err != nil {
+		pool.Close()
+		t.Fatalf("apply V24 inventory visibility migration: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
+		installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
+	values ((select coalesce(max(installed_rank),0)+1 from flyway_schema_history),
+		'24','cabin inventory visibility marker','SQL',
+		'V24__cabin_inventory_visibility_marker.sql',$1,current_user,$2,true)`,
+		flywayChecksum(mediamigration.V24), int(time.Since(started)/time.Millisecond)); err != nil {
+		pool.Close()
+		t.Fatalf("record V24 inventory visibility migration: %v", err)
+	}
+	var name, definition string
+	var validated bool
+	if err := pool.QueryRow(ctx, `select conname,pg_get_constraintdef(oid),convalidated
+		from pg_constraint where conrelid='media_cabin_owner_inbox'::regclass
+		  and conname='media_cabin_owner_inbox_check2'`).Scan(&name, &definition, &validated); err != nil {
+		pool.Close()
+		t.Fatalf("read V24 cabin inbox constraint: %v", err)
+	}
+	if name != "media_cabin_owner_inbox_check2" || !validated ||
+		!strings.Contains(definition, cabinInventoryVisibilityEvent) {
+		pool.Close()
+		t.Fatalf("V24 cabin inbox constraint = name:%s validated:%v definition:%s",
+			name, validated, definition)
+	}
+	pool.Close()
+
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open V24 media database: %v", err)
+	}
+	defer database.Close()
+	repository := NewRepository(database.Pool)
+	cabinID, warehouseID := uuid.New(), uuid.New()
+	created := cabinOwnerProofMessage(cabinID, cabinID, warehouseID, 0, cabinCreatedEvent, "FREE")
+	if result, err := repository.ApplyCabinOwnerMessage(ctx, created); err != nil ||
+		result.Duplicate || result.Quarantined {
+		t.Fatalf("ApplyCabinOwnerMessage(created) = %#v, %v", result, err)
+	}
+	visibility := cabinOwnerMarkerMessage(cabinID, 1, cabinInventoryVisibilityEvent)
+	if result, err := repository.ApplyCabinOwnerMessage(ctx, visibility); err != nil ||
+		result.Duplicate || result.Quarantined {
+		t.Fatalf("ApplyCabinOwnerMessage(visibility marker) = %#v, %v", result, err)
+	}
+	assertCabinOwnerBinding(t, ctx, database, cabinID, warehouseID, 0, true)
+	assertCabinOwnerCheckpoint(t, ctx, database, cabinID, 1)
 }
 
 func TestDynamicCabinOwnerProjectionQuarantinesMismatchAndReconcilesGapIntegration(

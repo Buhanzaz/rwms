@@ -163,6 +163,15 @@ public class MaintenanceInboundDomainEffects implements MaintenanceInboundEffect
 
   private void applyRentalItem(InboundEvent event) {
     JsonNode payload = event.payload();
+    if ("asset.rental-item.inventory-visibility-changed.v1".equals(event.eventType())) {
+      service.applyInboundRentalItemVisibilityFact(
+          UUID.fromString(event.aggregateId()),
+          UUID.fromString(payload.required("warehouseId").stringValue()),
+          payload.required("status").stringValue(),
+          event.aggregateVersion(),
+          payload.required("isolated").booleanValue());
+      return;
+    }
     JsonNode warehouse = payload.get("warehouseId");
     JsonNode status = payload.get("status");
     service.applyInboundRentalItemFact(

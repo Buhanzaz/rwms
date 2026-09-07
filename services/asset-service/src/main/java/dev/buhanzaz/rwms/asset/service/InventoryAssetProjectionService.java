@@ -90,7 +90,11 @@ final class InventoryAssetProjectionService {
   InventoryAssetCurrentSnapshot currentAssetSnapshot(UUID assetId) {
     return snapshotTransaction.execute(
         () -> {
-          RentalItem item = rentalItems.findById(assetId).orElse(null);
+          RentalItem item =
+              rentalItems
+                  .findById(assetId)
+                  .or(() -> sources.findHeldLegacySourceItem(assetId))
+                  .orElse(null);
           if (item == null) {
             InventoryAssetCurrentSnapshot proposal = sources.currentProposal(assetId);
             if (proposal != null) return proposal;
@@ -133,6 +137,10 @@ final class InventoryAssetProjectionService {
     Map<UUID, RentalItem> current =
         rentalItems.findAllById(ids).stream()
             .collect(Collectors.toMap(RentalItem::getId, Function.identity()));
+    sources
+        .findHeldLegacySourceItems(
+            ids.stream().filter(id -> !current.containsKey(id)).toList(), false)
+        .forEach(item -> current.put(item.getId(), item));
     Map<UUID, String> tenants = activeTenantSnapshots(ids);
     Map<UUID, List<EquipmentContentResponse>> contents = contentsByRentalItem(ids);
     List<InventoryValidationItem> values =

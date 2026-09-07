@@ -14,6 +14,60 @@ class MaintenanceInboundEnvelopeValidatorTest {
       new MaintenanceInboundEnvelopeValidator(mapper);
 
   @Test
+  void acceptsExactInventoryVisibilityFactsAndRejectsUntypedOrExtraFields() {
+    UUID id = UUID.randomUUID();
+    var envelope = mapper.createObjectNode();
+    envelope.put("envelopeVersion", 2);
+    envelope.put("eventId", UUID.randomUUID().toString());
+    envelope.put("eventType", "asset.rental-item.inventory-visibility-changed.v1");
+    envelope.put("eventVersion", 1);
+    envelope.put("occurredAt", "2026-09-07T12:00:00Z");
+    envelope.put("recordedAt", "2026-09-07T12:00:00Z");
+    envelope.put("producer", "asset-service");
+    envelope.put("aggregateType", "RENTAL_ITEM");
+    envelope.put("aggregateId", id.toString());
+    envelope.put("aggregateVersion", 1);
+    var correlation = envelope.putObject("correlation");
+    correlation.put("correlationId", UUID.randomUUID().toString());
+    correlation.putNull("causationId");
+    envelope.putNull("actorRef");
+    var payload = envelope.putObject("payload");
+    payload.put("rentalItemId", id.toString());
+    payload.put("warehouseId", UUID.randomUUID().toString());
+    payload.put("status", "FREE");
+    payload.put("numberSha256", "0".repeat(64));
+    payload.put("inventoryId", UUID.randomUUID().toString());
+    for (boolean isolated : new boolean[] {true, false}) {
+      payload.put("isolated", isolated);
+      assertThat(
+              validator
+                  .validate(
+                      MaintenanceTransportTopics.RENTAL_ITEM,
+                      key(id),
+                      mapper.writeValueAsBytes(envelope))
+                  .actionable())
+          .isTrue();
+    }
+    payload.put("isolated", "false");
+    assertThatThrownBy(
+            () ->
+                validator.validate(
+                    MaintenanceTransportTopics.RENTAL_ITEM,
+                    key(id),
+                    mapper.writeValueAsBytes(envelope)))
+        .isInstanceOf(MaintenanceInboundValidationException.class);
+    payload.put("isolated", false);
+    payload.put("unexpected", true);
+    assertThatThrownBy(
+            () ->
+                validator.validate(
+                    MaintenanceTransportTopics.RENTAL_ITEM,
+                    key(id),
+                    mapper.writeValueAsBytes(envelope)))
+        .isInstanceOf(MaintenanceInboundValidationException.class);
+  }
+
+  @Test
   void acceptsCurrentCanonicalBoardTaskFactsButOnlyTerminalFactsAreActionable() {
     UUID aggregateId = UUID.randomUUID();
 

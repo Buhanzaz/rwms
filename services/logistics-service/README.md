@@ -1266,6 +1266,11 @@ is at-least-once: aggregate IDs are record keys, event IDs are dedupe identities
 local replay/version-gap handling. Durable stores and relays recover external attempts, owner proofs,
 warehouse operation marks, driver task work and sanitized failure paths.
 
+The rental-item inbound allowlist also accepts
+`asset.rental-item.inventory-visibility-changed.v1` as ordered observation evidence. It advances the
+rental-item checkpoint but does not move a warehouse, change a logistics document or infer a logistics
+transition from temporary inventory isolation.
+
 The rental-inquiry booked producer stores the strict `DomainEventEnvelopeV2` in the booking
 transaction: aggregate identity/version come from the post-flush inquiry, correlation is the
 conversation with the booking as causation, actorRef is the manager USER reference, and payload is

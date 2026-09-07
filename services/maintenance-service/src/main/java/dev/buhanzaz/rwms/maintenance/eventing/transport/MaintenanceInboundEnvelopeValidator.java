@@ -453,10 +453,18 @@ public class MaintenanceInboundEnvelopeValidator {
       requireUuid(payload, "noteId");
       return;
     }
+    boolean visibility = "asset.rental-item.inventory-visibility-changed.v1".equals(eventType);
     requireExactObject(
         payload,
-        Set.of("rentalItemId", "warehouseId", "status", "numberSha256"),
+        visibility
+            ? Set.of(
+                "rentalItemId", "warehouseId", "status", "numberSha256", "inventoryId", "isolated")
+            : Set.of("rentalItemId", "warehouseId", "status", "numberSha256"),
         "rental-item payload");
+    if (visibility) {
+      requireUuid(payload, "inventoryId");
+      requireBoolean(payload, "isolated");
+    }
     requireIdentity(payload, "rentalItemId", aggregateId);
     requireUuid(payload, "warehouseId");
     requireText(payload, "status");

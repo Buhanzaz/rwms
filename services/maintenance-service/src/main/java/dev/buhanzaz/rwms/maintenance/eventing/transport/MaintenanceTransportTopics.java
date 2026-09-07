@@ -4,9 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * Defines exact versioned Kafka topics and the canonical ordered maintenance output allow-list.
- */
+/** Defines exact versioned Kafka topics and the canonical ordered maintenance output allow-list. */
 public final class MaintenanceTransportTopics {
   public static final String CATALOG = "rwms.maintenance.catalog-version.v1";
   public static final String ESTIMATE = "rwms.maintenance.estimate.v1";
@@ -25,6 +23,7 @@ public final class MaintenanceTransportTopics {
   /** Ordered owner outputs shared by startup validation and binding initialization. */
   public static final List<String> OUTPUTS =
       List.of(CATALOG, ESTIMATE, REPAIR, PROPERTY_DISPOSITION, SANITIZED_DLT);
+
   public static final Set<String> INPUTS =
       Set.of(BOARD_TASK, QUEUE_ENTRY, TASK_EVIDENCE, MEDIA, RENTAL_ITEM, OPERATION_LEASE);
 
@@ -92,6 +91,7 @@ public final class MaintenanceTransportTopics {
               "RENTAL_ITEM",
               Set.of(
                   "asset.rental-item.created.v1",
+                  "asset.rental-item.inventory-visibility-changed.v1",
                   "asset.rental-item.passport-changed.v1",
                   "asset.rental-item.status-changed.v1",
                   "asset.rental-item.warehouse-changed.v1",
@@ -99,6 +99,7 @@ public final class MaintenanceTransportTopics {
                   "asset.rental-item.manual-note-added.v1"),
               Set.of(
                   "asset.rental-item.created.v1",
+                  "asset.rental-item.inventory-visibility-changed.v1",
                   "asset.rental-item.passport-changed.v1",
                   "asset.rental-item.status-changed.v1",
                   "asset.rental-item.warehouse-changed.v1",

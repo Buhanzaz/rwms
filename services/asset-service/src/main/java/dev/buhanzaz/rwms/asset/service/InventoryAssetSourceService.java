@@ -15,9 +15,11 @@ import dev.buhanzaz.rwms.asset.repository.InventoryAssetSourceOperationRepositor
 import dev.buhanzaz.rwms.asset.repository.InventoryAssetSourceRepository;
 import dev.buhanzaz.rwms.asset.repository.RentalItemRepository;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -37,6 +39,7 @@ final class InventoryAssetSourceService {
   private final InventoryAssetSourceOperationRepository sourceOperations;
   private final InventoryAssetSourceRepository sources;
   private final InventoryAssetBoundaryRegistrar registrar;
+  private final InventorySourceIsolationService isolation;
   private final AssetEventStore events;
   private final WarehouseRegistryClient warehouses;
   private final CabinCompositionService cabinComposition;
@@ -47,6 +50,7 @@ final class InventoryAssetSourceService {
       InventoryAssetSourceOperationRepository sourceOperations,
       InventoryAssetSourceRepository sources,
       InventoryAssetBoundaryRegistrar registrar,
+      InventorySourceIsolationService isolation,
       AssetEventStore events,
       WarehouseRegistryClient warehouses,
       CabinCompositionService cabinComposition,
@@ -55,6 +59,7 @@ final class InventoryAssetSourceService {
     this.sourceOperations = sourceOperations;
     this.sources = sources;
     this.registrar = registrar;
+    this.isolation = isolation;
     this.events = events;
     this.warehouses = warehouses;
     this.cabinComposition = cabinComposition;
@@ -154,14 +159,63 @@ final class InventoryAssetSourceService {
         List.of());
   }
 
-  /** Returns an unsaved proposal shape used only by inventory's selected furniture snapshot. */
+  /**
+   * Loads a retained legacy source only through its immutable receipt and operation tuple. This
+   * private inventory path deliberately cannot become a generic hidden-rental lookup.
+   */
+  Optional<RentalItem> findHeldLegacySourceItem(UUID assetId) {
+    InventoryAssetSourceOperation operation =
+        sourceOperations.findByReservedRentalItemId(assetId).orElse(null);
+    return findHeldLegacySourceItem(operation, assetId, false);
+  }
+
+  /**
+   * Loads only explicitly selected, receipt-proven legacy source items for private inventory work.
+   */
+  List<RentalItem> findHeldLegacySourceItems(List<UUID> assetIds, boolean forUpdate) {
+    if (assetIds.isEmpty()) return List.of();
+    Map<UUID, InventoryAssetSourceOperation> operations =
+        sourceOperations.findAllByReservedRentalItemIdIn(assetIds).stream()
+            .collect(
+                java.util.stream.Collectors.toMap(
+                    InventoryAssetSourceOperation::getReservedRentalItemId,
+                    operation -> operation,
+                    (left, right) -> left,
+                    LinkedHashMap::new));
+    List<RentalItem> result = new ArrayList<>();
+    for (UUID assetId : assetIds) {
+      findHeldLegacySourceItem(operations.get(assetId), assetId, forUpdate).ifPresent(result::add);
+    }
+    return List.copyOf(result);
+  }
+
+  /**
+   * Returns source-scoped items unavailable to ordinary asset reads: unsaved current proposals and
+   * receipt-proven held legacy sources. It is used only by explicit inventory furniture selection.
+   */
   List<RentalItem> pendingRentalItems(List<UUID> assetIds) {
     if (assetIds.isEmpty()) return List.of();
-    return sourceOperations.findAllByReservedRentalItemIdIn(assetIds).stream()
-        .filter(InventoryAssetSourceOperation::hasProposal)
-        .filter(operation -> !rentalItems.existsById(operation.getReservedRentalItemId()))
-        .map(operation -> proposalItem(operation, RentalItemStatus.FREE, null))
-        .toList();
+    Map<UUID, InventoryAssetSourceOperation> operations =
+        sourceOperations.findAllByReservedRentalItemIdIn(assetIds).stream()
+            .collect(
+                java.util.stream.Collectors.toMap(
+                    InventoryAssetSourceOperation::getReservedRentalItemId,
+                    operation -> operation,
+                    (left, right) -> left,
+                    LinkedHashMap::new));
+    List<RentalItem> result = new ArrayList<>();
+    for (UUID assetId : assetIds) {
+      InventoryAssetSourceOperation operation = operations.get(assetId);
+      if (operation == null) continue;
+      if (operation.hasProposal()) {
+        if (!rentalItems.existsById(assetId)) {
+          result.add(proposalItem(operation, RentalItemStatus.FREE, null));
+        }
+      } else {
+        findHeldLegacySourceItem(operation, assetId, false).ifPresent(result::add);
+      }
+    }
+    return List.copyOf(result);
   }
 
   /**
@@ -179,8 +233,19 @@ final class InventoryAssetSourceService {
     InventoryAssetSourceOperation operation =
         sourceOperations.findByIdForUpdate(sourceId).orElse(null);
     if (operation == null) return null;
-    if (!operation.hasProposal() || !assetId.equals(operation.getReservedRentalItemId())) {
+    if (!assetId.equals(operation.getReservedRentalItemId())) {
       throw new AssetConflictException("Inventory source outcome does not match its reserved asset");
+    }
+    if (!operation.hasProposal()) {
+      InventoryAssetSource completed = sources.findById(sourceId).orElse(null);
+      if (completed == null || !assetId.equals(completed.getRentalItemId())) {
+        throw new AssetConflictException("Inventory source is bound to another rental item");
+      }
+      if (findHeldLegacySourceItem(operation, assetId, false).isPresent()) {
+        return isolation.releaseForCompletedInventory(inventoryId, findingId, assetId);
+      }
+      return rentalItems.findByIdForUpdate(assetId).orElseThrow(
+          () -> new IllegalStateException("Completed inventory source rental item is missing"));
     }
     InventoryAssetSource completed = sources.findById(sourceId).orElse(null);
     if (completed != null) {
@@ -297,7 +362,8 @@ final class InventoryAssetSourceService {
                 .orElseThrow(
                     () -> new AssetConflictException("Inventory source proposal is incomplete"));
         if (!candidate.outcome().assetId().equals(completed.getRentalItemId())
-            || !rentalItems.existsById(completed.getRentalItemId())) {
+            || (!rentalItems.existsById(completed.getRentalItemId())
+                && findHeldLegacySourceItem(operation, completed.getRentalItemId(), false).isEmpty())) {
           throw new AssetConflictException("Completed inventory source asset is missing");
         }
       }
@@ -328,6 +394,22 @@ final class InventoryAssetSourceService {
 
   private SourcePlan plan(InventoryAssetSourceOperation operation) {
     return codec.read(operation.getSourcePlan(), SourcePlan.class);
+  }
+
+  private Optional<RentalItem> findHeldLegacySourceItem(
+      InventoryAssetSourceOperation operation, UUID assetId, boolean forUpdate) {
+    if (operation == null
+        || operation.hasProposal()
+        || operation.getReservedRentalItemId() == null
+        || !assetId.equals(operation.getReservedRentalItemId())) {
+      return Optional.empty();
+    }
+    InventoryAssetSourceId sourceId = operation.getId();
+    return forUpdate
+        ? rentalItems.findHeldLegacyInventorySourceForUpdate(
+            sourceId.getInventoryId(), sourceId.getFindingId(), assetId)
+        : rentalItems.findHeldLegacyInventorySource(
+            sourceId.getInventoryId(), sourceId.getFindingId(), assetId);
   }
 
   private SourcePlan sourcePlan(

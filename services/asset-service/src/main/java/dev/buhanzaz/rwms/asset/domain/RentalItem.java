@@ -17,6 +17,7 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import org.hibernate.annotations.SQLRestriction;
 import org.hibernate.proxy.HibernateProxy;
 
 /**
@@ -24,6 +25,7 @@ import org.hibernate.proxy.HibernateProxy;
  */
 @Entity
 @Table(name = "rental_item")
+@SQLRestriction("inventory_isolation_id is null")
 public class RentalItem {
   private static final Locale NUMBER_LOCALE = Locale.forLanguageTag("ru-RU");
   private static final String NEW_CATEGORY = "Новая";
@@ -55,6 +57,9 @@ public class RentalItem {
   @Enumerated(EnumType.STRING)
   @Column(name = "transfer_origin_status", length = 64)
   private RentalItemStatus transferOriginStatus;
+
+  @Column(name = "inventory_isolation_id")
+  private UUID inventoryIsolationId;
 
   @Column(name = "cabin_type_id")
   private UUID rentalTypeId;
@@ -432,6 +437,35 @@ public class RentalItem {
     return true;
   }
 
+  /**
+   * Removes this rental item from ordinary asset visibility under one durable inventory fence.
+   *
+   * <p>The caller owns verification that the inventory source receipt maps this exact item to the
+   * supplied inventory. A different inventory can never overwrite an existing isolation fence.
+   */
+  public boolean isolateForInventory(UUID inventoryId) {
+    if (inventoryId == null) throw new IllegalArgumentException("inventoryId is required");
+    if (inventoryIsolationId == null) {
+      inventoryIsolationId = inventoryId;
+      return true;
+    }
+    if (inventoryIsolationId.equals(inventoryId)) return false;
+    throw new IllegalStateException("Rental item is isolated by another inventory");
+  }
+
+  /**
+   * Restores ordinary asset visibility only for the inventory that created the isolation fence.
+   */
+  public boolean releaseInventoryIsolation(UUID inventoryId) {
+    if (inventoryId == null) throw new IllegalArgumentException("inventoryId is required");
+    if (inventoryIsolationId == null) return false;
+    if (!inventoryIsolationId.equals(inventoryId)) {
+      throw new IllegalStateException("Rental item isolation belongs to another inventory");
+    }
+    inventoryIsolationId = null;
+    return true;
+  }
+
   /** Bumps the aggregate revision for append-only child facts. */
   public void touchActivity() {
     updatedAt = OffsetDateTime.now(ZoneOffset.UTC);
@@ -613,6 +647,7 @@ public class RentalItem {
   public String getIdentityMatchKey() { return identityMatchKey; }
   public RentalItemStatus getStatus() { return status; }
   public RentalItemStatus getTransferOriginStatus() { return transferOriginStatus; }
+  public UUID getInventoryIsolationId() { return inventoryIsolationId; }
   public UUID getRentalTypeId() { return rentalTypeId; }
   public UUID getDimensionId() { return dimensionId; }
   public UUID getFinishingId() { return finishingId; }

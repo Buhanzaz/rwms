@@ -160,7 +160,7 @@ public class LogisticsInboundEnvelopeValidator {
       String eventType,
       JsonNode payload) {
     switch (kind) {
-      case RENTAL_ITEM -> validateRentalItem(aggregateId, payload);
+      case RENTAL_ITEM -> validateRentalItem(aggregateId, eventType, payload);
       case OPERATION_LEASE -> validateOperationLease(aggregateId, payload);
       case EQUIPMENT_ALLOCATION_HOLD -> validateEquipmentAllocationHold(aggregateId, payload);
       case BOARD_TASK -> validateBoardTask(aggregateId, payload);
@@ -169,7 +169,11 @@ public class LogisticsInboundEnvelopeValidator {
     }
   }
 
-  private void validateRentalItem(String aggregateId, JsonNode payload) {
+  private void validateRentalItem(String aggregateId, String eventType, JsonNode payload) {
+    if ("asset.rental-item.inventory-visibility-changed.v1".equals(eventType)) {
+      validateInventoryVisibilityChanged(aggregateId, payload);
+      return;
+    }
     requireExactObject(
         payload,
         Set.of("rentalItemId", "warehouseId", "status", "numberSha256"),
@@ -178,6 +182,19 @@ public class LogisticsInboundEnvelopeValidator {
     requireUuid(payload, "warehouseId");
     requireNonBlank(payload, "status", 64);
     require(SHA256.matcher(requireText(payload, "numberSha256")).matches(), "Rental item hash is invalid");
+  }
+
+  private void validateInventoryVisibilityChanged(String aggregateId, JsonNode payload) {
+    requireExactObject(
+        payload,
+        Set.of("rentalItemId", "warehouseId", "status", "numberSha256", "inventoryId", "isolated"),
+        "inventory visibility payload");
+    requireIdentity(payload, "rentalItemId", aggregateId);
+    requireUuid(payload, "warehouseId");
+    requireNonBlank(payload, "status", 64);
+    require(SHA256.matcher(requireText(payload, "numberSha256")).matches(), "Rental item hash is invalid");
+    requireUuid(payload, "inventoryId");
+    requireBoolean(payload, "isolated");
   }
 
   private void validateOperationLease(String aggregateId, JsonNode payload) {

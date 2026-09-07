@@ -20,7 +20,10 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 
-/** Applies maintenance-owned inbound media, asset, lease and task facts inside the caller's required transaction without acquiring remote dependencies. */
+/**
+ * Applies maintenance-owned inbound media, asset, lease and task facts inside the caller's required
+ * transaction without acquiring remote dependencies.
+ */
 @Service
 public class MaintenanceInboundUseCases {
   private final MaintenanceRepairRepository repairs;
@@ -91,6 +94,12 @@ public class MaintenanceInboundUseCases {
       String status,
       long aggregateVersion) {
     factProjections.applyInboundRentalItemFact(rentalItemId, warehouseId, status, aggregateVersion);
+  }
+
+  public void applyInboundRentalItemVisibilityFact(
+      UUID rentalItemId, UUID warehouseId, String status, long aggregateVersion, boolean isolated) {
+    factProjections.applyInboundRentalItemFact(
+        rentalItemId, warehouseId, status, aggregateVersion, isolated);
   }
 
   public void applyInboundLeaseFact(
@@ -277,5 +286,4 @@ public class MaintenanceInboundUseCases {
         saved.getVersion(),
         true);
   }
-
 }

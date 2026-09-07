@@ -36,7 +36,8 @@ public final class LogisticsInboundTransportTopics {
                   "asset.rental-item.passport-changed.v1",
                   "asset.rental-item.status-changed.v1",
                   "asset.rental-item.warehouse-changed.v1",
-                  "asset.rental-item.logistics-effect-applied.v1")),
+                  "asset.rental-item.logistics-effect-applied.v1",
+                  "asset.rental-item.inventory-visibility-changed.v1")),
           OPERATION_LEASE,
           new TopicPolicy(
               "asset-service",

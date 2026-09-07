@@ -167,6 +167,7 @@ components:
         asset.rental-item.status-changed.v1: CABIN_STATUS_CHANGED
         asset.rental-item.warehouse-changed.v1: CABIN_WAREHOUSE_CHANGED
         asset.rental-item.logistics-effect-applied.v1: CABIN_LOGISTICS_EFFECT_APPLIED
+        asset.rental-item.inventory-visibility-changed.v1: null
         asset.rental-item.general-comment-changed.v1: CABIN_COMMENT_REVISION_CHANGED
         asset.rental-item.manual-note-added.v1: CABIN_MANUAL_NOTE_ADDED
     MaintenanceEstimateFactV1:
@@ -335,6 +336,7 @@ components:
             - asset.rental-item.status-changed.v1
             - asset.rental-item.warehouse-changed.v1
             - asset.rental-item.logistics-effect-applied.v1
+            - asset.rental-item.inventory-visibility-changed.v1
             - asset.rental-item.general-comment-changed.v1
             - asset.rental-item.manual-note-added.v1
         eventVersion: { const: 1 }

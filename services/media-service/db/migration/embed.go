@@ -129,3 +129,9 @@ var V22 []byte
 //
 //go:embed V23__remove_media_company_boundary.sql
 var V23 []byte
+
+// V24 permits the ordered inventory-visibility CABIN stream marker without
+// treating it as an owner proof.
+//
+//go:embed V24__cabin_inventory_visibility_marker.sql
+var V24 []byte

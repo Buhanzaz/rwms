@@ -153,12 +153,13 @@ Flyway выполняется вне процесса. До запуска пр�
 `db/migration/V20__driver_shift_media_owner.sql`, затем неизменяемые уже
 применённые `db/migration/V21__media_asset_company_boundary.sql` и
 `db/migration/V22__task_board_worker_profile_avatar_owner.sql`, затем
-`db/migration/V23__remove_media_company_boundary.sql`.
+`db/migration/V23__remove_media_company_boundary.sql`, затем
+`db/migration/V24__cabin_inventory_visibility_marker.sql`.
 
 Go-приложение не выполняет миграции, baseline, repair и не принимает молча
 чужую непустую базу.
 
-- Новая local/test база мигрируется от V1 до V23.
+- Новая local/test база мигрируется от V1 до V24.
 - V21 и V22 остаются неизменяемой применённой историей. V23 — forward-миграция,
   удаляющая устаревшие platform-ownership колонки только после отказа для базы,
   где строки доказывают более одного владельца. V14 добавляет и backfill-ит
@@ -183,7 +184,10 @@ Go-приложение не выполняет миграции, baseline, repa
   proofs и версии объектов не переписываются и не удаляются. V22 additively
   добавляет owner для profile-avatar работника task-board без переписывания
   существующих assets. V23 удаляет только устаревшую platform-ownership границу
-  после single-owner preflight.
+  после single-owner preflight. V24 заменяет только
+  `media_cabin_owner_inbox_check2`, разрешая inventory-visibility marker лишь
+  с null во всех полях owner proof; существующие inbox rows, bindings и media
+  не меняются.
 - `baselineOnMigrate` должен оставаться `false`; непустая база без истории
   миграций отклоняется.
 - На старте и readiness проверяются успешные строки Flyway, их версии,
@@ -421,6 +425,10 @@ Worker продлевает lease с проверкой token на протяж�
 CABIN stream должен начинаться с `asset.rental-item.created.v1` версии 0.
 Passport, status, warehouse и logistics-effect facts несут полный
 санитизированный owner proof; comments и manual notes служат маркерами порядка.
+`asset.rental-item.inventory-visibility-changed.v1` также является строгим упорядоченным маркером:
+он продвигает checkpoint CABIN без изменения или деактивации owner binding, поэтому последующий
+release не может быть принят за terminal reactivation. Так сохраняются private inventory media
+capability и история.
 `WRITTEN_OFF` терминален и деактивирует binding. Точные дубликаты
 идемпотентны; gap, regression, конфликт identity/revision и попытка terminal
 reactivation quarantine-ят rental item и делают все public CABIN media paths

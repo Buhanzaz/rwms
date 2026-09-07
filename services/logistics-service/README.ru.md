@@ -1303,6 +1303,11 @@ at-least-once: aggregate IDs являются record keys, event IDs — dedupe 
 local replay/version-gap handling. Durable stores и relays восстанавливают external attempts, owner
 proofs, warehouse operation marks, driver task work и sanitized failure paths.
 
+Inbound allowlist rental-item также принимает
+`asset.rental-item.inventory-visibility-changed.v1` как упорядоченное evidence observation. Он
+продвигает checkpoint rental-item, но не перемещает склад, не меняет logistics document и не выводит
+переход logistics из временной изоляции инвентаризации.
+
 Producer события rental-inquiry booked сохраняет строгий `DomainEventEnvelopeV2` в booking
 transaction: aggregate identity/version берутся из inquiry после flush, correlation — conversation
 с booking как causation, actorRef — USER reference менеджера, а payload содержит ровно

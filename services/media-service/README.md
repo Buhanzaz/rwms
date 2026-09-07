@@ -149,11 +149,12 @@ Flyway is external to this process. Apply
 `db/migration/V20__driver_shift_media_owner.sql`, then the immutable applied
 `db/migration/V21__media_asset_company_boundary.sql`, then the immutable
 `db/migration/V22__task_board_worker_profile_avatar_owner.sql`, then
-`db/migration/V23__remove_media_company_boundary.sql` before starting the
+`db/migration/V23__remove_media_company_boundary.sql`, then
+`db/migration/V24__cabin_inventory_visibility_marker.sql` before starting the
 service. The Go application never migrates, baselines, repairs or silently
 adopts a database.
 
-- New local/test databases migrate through V1 to V23.
+- New local/test databases migrate through V1 to V24.
 - V21 and V22 remain immutable applied history. V23 is the forward migration
   that removes the obsolete platform-ownership columns after rejecting a
   database whose rows prove more than one owner. V14 adds
@@ -178,7 +179,10 @@ adopts a database.
   conflict quarantine; existing assets, proofs and object versions are not
   rewritten or removed. V22 additively admits the task-board worker profile
   avatar owner without rewriting existing assets. V23 only removes the
-  obsolete platform-ownership boundary after its single-owner preflight.
+  obsolete platform-ownership boundary after its single-owner preflight. V24
+  replaces only `media_cabin_owner_inbox_check2` to admit the inventory-
+  visibility marker with all owner-proof fields null; it leaves existing inbox
+  rows, bindings and media unchanged.
 - `baselineOnMigrate` must remain `false`; a non-empty unversioned database is
   rejected.
 - Startup verifies both successful Flyway history rows, their versions,
@@ -420,6 +424,9 @@ explicit retry operation.
 The CABIN stream must start with `asset.rental-item.created.v1` version 0.
 Passport, status, warehouse and logistics-effect facts carry the complete
 sanitized owner proof; comment and manual-note facts are ordering markers.
+`asset.rental-item.inventory-visibility-changed.v1` is a strict ordered marker too: it advances the
+CABIN checkpoint without changing or deactivating the owner binding, so a later release cannot be
+mistaken for terminal reactivation. This preserves private inventory media capability and history.
 `WRITTEN_OFF` is terminal and deactivates the binding. Exact duplicates are
 idempotent; gaps, regressions, identity/revision conflicts and attempted
 terminal reactivation quarantine the rental item and make every public CABIN

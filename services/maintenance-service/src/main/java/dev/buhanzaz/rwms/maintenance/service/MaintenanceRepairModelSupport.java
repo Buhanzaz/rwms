@@ -4,19 +4,19 @@ import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.*;
 
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceAggregateType;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceRepair;
+import dev.buhanzaz.rwms.maintenance.domain.RentalItemFactProjection;
 import dev.buhanzaz.rwms.maintenance.domain.RepairAcceptanceState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairComplexity;
 import dev.buhanzaz.rwms.maintenance.domain.RepairComplexityColors;
 import dev.buhanzaz.rwms.maintenance.domain.RepairExecutionState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStage;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStageState;
-import dev.buhanzaz.rwms.maintenance.domain.RentalItemFactProjection;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventStore;
 import dev.buhanzaz.rwms.maintenance.repository.InventoryRepairSourceRepository;
 import dev.buhanzaz.rwms.maintenance.repository.MaintenanceRepairRepository;
+import dev.buhanzaz.rwms.maintenance.repository.RentalItemFactProjectionRepository;
 import dev.buhanzaz.rwms.maintenance.repository.RepairStageRepository;
 import dev.buhanzaz.rwms.maintenance.repository.RepairTaskEvidenceRepository;
-import dev.buhanzaz.rwms.maintenance.repository.RentalItemFactProjectionRepository;
 import java.math.BigDecimal;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -30,8 +30,8 @@ import org.springframework.stereotype.Service;
 /**
  * Loads, locks and maps repair aggregates while preserving repair-stream version fences.
  *
- * <p>Responses present even historical source-ordered stages in the mandatory ordinary-repair
- * phase order without mutating their append-only event history.
+ * <p>Responses present even historical source-ordered stages in the mandatory ordinary-repair phase
+ * order without mutating their append-only event history.
  */
 @Service
 final class MaintenanceRepairModelSupport {
@@ -115,8 +115,8 @@ final class MaintenanceRepairModelSupport {
   }
 
   /**
-   * Locks the maintenance-owned rental-item fact used to serialize direct-repair creation.
-   * Callers must already run in the final local write transaction.
+   * Locks the maintenance-owned rental-item fact used to serialize direct-repair creation. Callers
+   * must already run in the final local write transaction.
    */
   protected RentalItemFactProjection requireRentalItemFactForUpdate(
       UUID rentalItemId, UUID warehouseId) {
@@ -129,10 +129,14 @@ final class MaintenanceRepairModelSupport {
 
   private static RentalItemFactProjection requireRentalItemWarehouse(
       RentalItemFactProjection fact, UUID warehouseId) {
-    if (!warehouseId.equals(fact.getWarehouseId())) {
+    if (fact.isInventoryIsolated()) {
       throw new MaintenanceValidationException(
           "MAINTENANCE_VALIDATION_FAILED",
-          "Rental item does not belong to the command warehouse");
+          "Rental item is isolated until its inventory is completed");
+    }
+    if (!warehouseId.equals(fact.getWarehouseId())) {
+      throw new MaintenanceValidationException(
+          "MAINTENANCE_VALIDATION_FAILED", "Rental item does not belong to the command warehouse");
     }
     return fact;
   }

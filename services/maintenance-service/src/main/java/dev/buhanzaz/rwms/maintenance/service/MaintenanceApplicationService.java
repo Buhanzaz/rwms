@@ -14,7 +14,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Owns maintenance command orchestration for catalog, estimate, repair and related recovery flows. Remote reads and effects are deliberately separated from local write transactions; versions, idempotency and durable recovery fence every mutable workflow. */
+/**
+ * Owns maintenance command orchestration for catalog, estimate, repair and related recovery flows.
+ * Remote reads and effects are deliberately separated from local write transactions; versions,
+ * idempotency and durable recovery fence every mutable workflow.
+ */
 @Service
 public class MaintenanceApplicationService {
   private final MaintenanceTransferUseCases transfers;
@@ -62,6 +66,7 @@ public class MaintenanceApplicationService {
       CompleteTransferRepairRequest request) {
     return facadeResult(transfers.completeTransferArrival(transferId, lineId, key, request));
   }
+
   @Transactional(readOnly = true)
   public List<CatalogVersionResponse> catalogVersions(UUID authorizationWarehouseId) {
     return catalogs.catalogVersions(authorizationWarehouseId);
@@ -147,6 +152,7 @@ public class MaintenanceApplicationService {
     return facadeResult(
         catalogs.activateCatalog(subjectId, key, id, routingContextWarehouseId, request));
   }
+
   @Transactional(readOnly = true)
   public PageResponse<EstimateResponse> estimates(
       UUID warehouseId, int page, int size, EstimateState lifecycle, UUID rentalItemId) {
@@ -171,10 +177,10 @@ public class MaintenanceApplicationService {
   /**
    * Creates the maintenance-owned estimate paired with one immutable logistics return source.
    *
-   * <p>The caller owns the concurrent source-key arbitration and transaction. Logistics has
-   * already validated these opaque references against the exact return-line media owner before
-   * invoking the maintenance boundary, so they are persisted without pretending that their source
-   * media owner was already the newly generated estimate ID.
+   * <p>The caller owns the concurrent source-key arbitration and transaction. Logistics has already
+   * validated these opaque references against the exact return-line media owner before invoking the
+   * maintenance boundary, so they are persisted without pretending that their source media owner
+   * was already the newly generated estimate ID.
    */
   @Transactional(propagation = Propagation.MANDATORY)
   public UUID createLogisticsReturnEstimate(
@@ -257,12 +263,12 @@ public class MaintenanceApplicationService {
 
   /**
    * Called by the logistics-only repair-place boundary after a driver has completed inbound
-   * delivery and the place is occupied. The repair remains durable and queued while it waits,
-   * but its ordinary task-board entry is intentionally absent until this point.
+   * delivery and the place is occupied. The repair remains durable and queued while it waits, but
+   * its ordinary task-board entry is intentionally absent until this point.
    *
-   * <p>The stable reconciliation key makes a replayed logistics callback harmless and also
-   * recovers a task registration if the first callback completed the place transition but failed
-   * before it could enqueue the task-board work.</p>
+   * <p>The stable reconciliation key makes a replayed logistics callback harmless and also recovers
+   * a task registration if the first callback completed the place transition but failed before it
+   * could enqueue the task-board work.
    */
   public void activateQueuedRepairAfterDelivery(UUID warehouseId, UUID repairId) {
     repairs.activateQueuedRepairAfterDelivery(warehouseId, repairId);
@@ -317,8 +323,8 @@ public class MaintenanceApplicationService {
   }
 
   /**
-   * Delegates the warehouse-fenced actionable acceptance read; all filters and pagination remain
-   * in the maintenance database.
+   * Delegates the warehouse-fenced actionable acceptance read; all filters and pagination remain in
+   * the maintenance database.
    */
   @Transactional(readOnly = true)
   public PageResponse<AcceptanceProjection> acceptance(
@@ -329,6 +335,7 @@ public class MaintenanceApplicationService {
       int size) {
     return repairs.acceptance(warehouseId, state, repairId, page, size);
   }
+
   @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
   public void applyInboundMediaFact(
       UUID mediaId,
@@ -349,6 +356,14 @@ public class MaintenanceApplicationService {
       String status,
       long aggregateVersion) {
     inbound.applyInboundRentalItemFact(rentalItemId, warehouseId, status, aggregateVersion);
+  }
+
+  /** Applies the reversible inventory fence in the same transaction as the inbound checkpoint. */
+  @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+  public void applyInboundRentalItemVisibilityFact(
+      UUID rentalItemId, UUID warehouseId, String status, long aggregateVersion, boolean isolated) {
+    inbound.applyInboundRentalItemVisibilityFact(
+        rentalItemId, warehouseId, status, aggregateVersion, isolated);
   }
 
   @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
