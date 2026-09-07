@@ -87,8 +87,10 @@ data class InventoryFindingDto(
     val currentSnapshot: InventoryCurrentSnapshotDto? = null,
     val conflicts: List<InventoryConflictDto> = emptyList(),
     val conflictResolution: InventoryConflictResolutionDto? = null,
-    /** User-facing source assigned after an inspection was persisted. */
+    /** User-facing provenance assigned after inspection evidence was persisted. */
     val inspectionSource: String? = null,
+    /** Keeps current owner state authoritative while retaining historical inspection evidence. */
+    val preserveOperationalState: Boolean = false,
     val frozenPlan: InventoryFrozenPlanDto? = null,
     val media: List<MediaReferenceDto> = emptyList(),
     val coverMediaId: String? = null,

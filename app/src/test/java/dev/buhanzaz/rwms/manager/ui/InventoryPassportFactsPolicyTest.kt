@@ -77,11 +77,25 @@ class InventoryPassportFactsPolicyTest {
             .isEqualTo(InventoryPassportFacts("БК-Реестр", "2.4x8", "ДВП", "Обычная", false))
     }
 
+    @Test
+    fun `return proof without passport uses the latest current registry passport`() {
+        val finding = finding(
+            observation = ObservationDto("ABSENT"),
+            expected = expectedSnapshot("БК-План", "2.4x5", false),
+            current = currentSnapshot("БК-Реестр", "2.4x8", true),
+            inspectionSource = "LOGISTICS_RETURN",
+        )
+
+        assertThat(finding.inventoryPassportFacts())
+            .isEqualTo(InventoryPassportFacts("БК-Реестр", "2.4x8", "ДВП", "Обычная", true))
+    }
+
     private fun finding(
         observation: ObservationDto,
         baseline: InventoryCurrentSnapshotDto? = null,
         expected: InventorySnapshotDto? = null,
         current: InventoryCurrentSnapshotDto? = null,
+        inspectionSource: String? = "INVENTORY",
     ) = InventoryFindingDto(
         id = "finding-1",
         inventoryId = "inventory-1",
@@ -98,6 +112,7 @@ class InventoryPassportFactsPolicyTest {
         expectedSnapshot = expected,
         inspectionBaseline = baseline,
         currentSnapshot = current,
+        inspectionSource = inspectionSource,
     )
 
     private fun expectedSnapshot(

@@ -19,6 +19,10 @@ const originLabel: Record<InventoryFindingDto["origin"], string> = {
 }
 
 function findingSourceLabel(finding: InventoryFindingDto) {
+  if (finding.inspectionSource === "LOGISTICS_RETURN") return "Осмотр возврата"
+  if (finding.preserveOperationalState) {
+    return "Осмотр до отгрузки; работы не применяются"
+  }
   return finding.inspectionSource === "INVENTORY" ||
     finding.inspectionStatus !== "NOT_INSPECTED"
     ? "Инвентаризация"
@@ -33,7 +37,10 @@ function FindingPublication({ finding }: { finding: InventoryFindingDto }) {
           finding.publicationStatus === "PUBLISHED" ? "default" : "secondary"
         }
       >
-        {inventoryFindingPublicationLabel[finding.publicationStatus]}
+        {finding.preserveOperationalState &&
+        finding.publicationStatus === "PUBLISHED"
+          ? "Опубликовано без изменения состояния"
+          : inventoryFindingPublicationLabel[finding.publicationStatus]}
       </Badge>
       {finding.publishedRepairTaskId ? (
         <span className="text-xs text-muted-foreground">
@@ -63,6 +70,9 @@ function findingAssetStatusSortValue(
   finding: InventoryFindingDto,
   statusMode: InventoryFindingStatusMode
 ) {
+  if (finding.preserveOperationalState) {
+    return inventorySessionStatus(finding) ?? ""
+  }
   if (
     statusMode === "COMPLETION" &&
     finding.publicationStatus === "PUBLISHED" &&
@@ -83,6 +93,10 @@ function FindingAssetStatus({
   finding: InventoryFindingDto
   statusMode: InventoryFindingStatusMode
 }) {
+  if (finding.preserveOperationalState) {
+    const status = inventorySessionStatus(finding)
+    return status ? <RentalItemStatusBadge status={status} /> : "—"
+  }
   if (
     statusMode === "COMPLETION" &&
     finding.publicationStatus === "PUBLISHED" &&
@@ -204,7 +218,7 @@ export function InventoryFindingsList({
               ? [
                   {
                     id: "publication",
-                    label: "Передача работ",
+                    label: "Публикация",
                     className: "min-w-56",
                     getSortValue: (finding: InventoryFindingDto) =>
                       finding.publicationStatus,

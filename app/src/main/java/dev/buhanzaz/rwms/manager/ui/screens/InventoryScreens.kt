@@ -86,6 +86,7 @@ import dev.buhanzaz.rwms.manager.ui.inventoryEquipmentQuantityText
 import dev.buhanzaz.rwms.manager.ui.inventoryFurnitureCatalog
 import dev.buhanzaz.rwms.manager.ui.inventoryFinishingOptions
 import dev.buhanzaz.rwms.manager.ui.inventoryInspectionLabel
+import dev.buhanzaz.rwms.manager.ui.inventoryInspectionSourceLabel
 import dev.buhanzaz.rwms.manager.ui.inventoryReinspectionOpenMode
 import dev.buhanzaz.rwms.manager.ui.inventoryPassportFacts
 import dev.buhanzaz.rwms.manager.ui.inventoryPhotoValidationError
@@ -619,7 +620,7 @@ private fun InventoryFindingCard(
         )
         if (checked) {
             Text(
-                "Источник: ${finding.inspectionSource ?: "Инвентаризация"}",
+                "Источник: ${finding.inventoryInspectionSourceLabel()}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1007,6 +1008,13 @@ fun InventoryEditorScreen(
                         }
                     }
                     Text(editor.number, style = MaterialTheme.typography.headlineSmall)
+                    editor.finding?.takeIf { it.inspection != "NOT_INSPECTED" }?.let { finding ->
+                        Text(
+                            "Источник: ${finding.inventoryInspectionSourceLabel()}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     inventoryAfterRentEstimateNotice(editor.finding?.inventoryBusinessStatus())?.let {
                         notice ->
                         Text(

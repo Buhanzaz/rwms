@@ -86,11 +86,68 @@ class InventoryConflictPolicyTest {
         ).isEqualTo("CAPITAL_REPAIR")
     }
 
+    @Test
+    fun `return inspection and preserved history use current owner status`() {
+        val free = snapshot(version = 5, status = "FREE")
+        val waiting = snapshot(version = 6, status = "WAITING_ESTIMATE_CONFIRMATION")
+        val rented = snapshot(version = 7, status = "RENTED")
+
+        assertThat(
+            finding(
+                free,
+                free,
+                inspection = "READY",
+                inspectionSource = "LOGISTICS_RETURN",
+            ).inventoryBusinessStatus(),
+        ).isEqualTo("FREE")
+        assertThat(
+            finding(
+                waiting,
+                waiting,
+                inspection = "WORK_STAGED",
+                inspectionSource = "LOGISTICS_RETURN",
+            ).inventoryBusinessStatus(),
+        ).isEqualTo("WAITING_ESTIMATE_CONFIRMATION")
+        assertThat(
+            finding(
+                snapshot(version = 4, status = "REPAIR"),
+                rented,
+                inspection = "WORK_STAGED",
+                frozenPlan = frozenPlan(forceCapitalRepair = true),
+                preserveOperationalState = true,
+            ).inventoryBusinessStatus(),
+        ).isEqualTo("RENTED")
+    }
+
+    @Test
+    fun `inspection source labels keep return provenance separate from preserved history`() {
+        val current = snapshot(version = 4)
+
+        assertThat(
+            finding(
+                current,
+                current,
+                inspectionSource = "LOGISTICS_RETURN",
+                preserveOperationalState = true,
+            ).inventoryInspectionSourceLabel(),
+        ).isEqualTo("Осмотр возврата")
+        assertThat(
+            finding(
+                current,
+                current,
+                inspectionSource = "INVENTORY",
+                preserveOperationalState = true,
+            ).inventoryInspectionSourceLabel(),
+        ).isEqualTo("Осмотр до отгрузки; работы не применяются")
+    }
+
     private fun finding(
         before: InventoryCurrentSnapshotDto,
         after: InventoryCurrentSnapshotDto,
         inspection: String = "READY",
         frozenPlan: InventoryFrozenPlanDto? = null,
+        inspectionSource: String? = "INVENTORY",
+        preserveOperationalState: Boolean = false,
     ) = InventoryFindingDto(
         id = "finding-1",
         inventoryId = "inventory-1",
@@ -106,6 +163,8 @@ class InventoryConflictPolicyTest {
         comment = "",
         inspectionBaseline = before,
         currentSnapshot = after,
+        inspectionSource = inspectionSource,
+        preserveOperationalState = preserveOperationalState,
         frozenPlan = frozenPlan,
     )
 

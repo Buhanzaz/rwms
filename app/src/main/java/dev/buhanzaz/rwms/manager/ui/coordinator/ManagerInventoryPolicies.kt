@@ -41,10 +41,16 @@ internal fun InventoryFindingDto.inspectionPassport(): Map<String, Any?> =
     when (passportObservation.presence) {
         "PRESENT" -> passportObservation.value.asStringMap()
         "EXPLICIT_EMPTY" -> emptyMap()
-        else -> inspectionBaseline?.passportSnapshot
-            ?: expectedSnapshot?.passportSnapshot
-            ?: currentSnapshot?.passportSnapshot
-            ?: emptyMap()
+        else -> if (inspectionSource == "LOGISTICS_RETURN") {
+            currentSnapshot?.passportSnapshot
+                ?: expectedSnapshot?.passportSnapshot
+                ?: emptyMap()
+        } else {
+            inspectionBaseline?.passportSnapshot
+                ?: expectedSnapshot?.passportSnapshot
+                ?: currentSnapshot?.passportSnapshot
+                ?: emptyMap()
+        }
     }
 
 /**
@@ -474,6 +480,7 @@ private fun formatInventoryRepairs(
 
 internal fun InventoryFindingDto.inventoryBusinessStatus(): String? =
     when {
+        preserveOperationalState -> currentSnapshot?.status
         inspection == "READY" -> "FREE"
         inspection == "WORK_STAGED" && frozenPlan != null ->
             if (frozenPlan.forceCapitalRepair) "CAPITAL_REPAIR" else "REPAIR"
@@ -481,6 +488,12 @@ internal fun InventoryFindingDto.inventoryBusinessStatus(): String? =
             ?: inspectionBaseline?.status
             ?: expectedSnapshot?.status
     }
+
+internal fun InventoryFindingDto.inventoryInspectionSourceLabel(): String = when {
+    inspectionSource == "LOGISTICS_RETURN" -> "Осмотр возврата"
+    preserveOperationalState -> "Осмотр до отгрузки; работы не применяются"
+    else -> "Инвентаризация"
+}
 
 internal fun inventoryBusinessStatusLabel(value: String): String = when (value) {
     "BOOKED" -> "Забронирована"

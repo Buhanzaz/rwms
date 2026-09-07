@@ -3,6 +3,22 @@ import { describe, expect, it } from "vitest"
 import { inventorySessionStatus } from "@/features/inventory/domain/inventory-session-status"
 import type { InventoryFindingDto } from "@/features/inventory/model/inventory"
 
+function snapshot(
+  status: NonNullable<InventoryFindingDto["currentSnapshot"]>["status"]
+): NonNullable<InventoryFindingDto["currentSnapshot"]> {
+  return {
+    rentalItemId: "asset-1",
+    number: "БЫТ-001",
+    canonicalNumber: "БЫТ-001",
+    warehouseId: "warehouse-1",
+    status,
+    tenant: null,
+    passportSnapshot: {},
+    contentsSnapshot: [],
+    repairsSnapshot: [],
+  }
+}
+
 function finding(
   overrides: Partial<InventoryFindingDto> = {}
 ): InventoryFindingDto {
@@ -10,9 +26,10 @@ function finding(
     inspectionStatus: "NOT_INSPECTED",
     lines: [],
     forceCapitalRepair: false,
-    currentSnapshot: { status: "WAREHOUSE" },
+    currentSnapshot: snapshot("WAREHOUSE"),
     inspectionBaseline: null,
     expectedSnapshot: null,
+    preserveOperationalState: false,
     ...overrides,
   } as InventoryFindingDto
 }
@@ -27,7 +44,7 @@ describe("inventory session status", () => {
       inventorySessionStatus(
         finding({
           inspectionStatus: "READY",
-          currentSnapshot: { status: "RENTED" },
+          currentSnapshot: snapshot("RENTED"),
         })
       )
     ).toBe("FREE")
@@ -38,7 +55,7 @@ describe("inventory session status", () => {
       inspectionStatus: "WORK_STAGED",
       repairCompletionMode: "MANUAL",
       lines: [{}] as InventoryFindingDto["lines"],
-      currentSnapshot: { status: "FREE" },
+      currentSnapshot: snapshot("FREE"),
     })
 
     expect(inventorySessionStatus(staged)).toBe("REPAIR")
@@ -52,9 +69,55 @@ describe("inventory session status", () => {
       inventorySessionStatus(
         finding({
           inspectionStatus: "WORK_STAGED",
-          currentSnapshot: { status: "FREE" },
+          currentSnapshot: snapshot("FREE"),
         })
       )
     ).toBe("FREE")
+  })
+
+  it("uses the return result while the returned cabin is still operationally current", () => {
+    expect(
+      inventorySessionStatus(
+        finding({
+          inspectionSource: "LOGISTICS_RETURN",
+          inspectionStatus: "READY",
+          currentSnapshot: snapshot("FREE"),
+        })
+      )
+    ).toBe("FREE")
+    expect(
+      inventorySessionStatus(
+        finding({
+          inspectionSource: "LOGISTICS_RETURN",
+          inspectionStatus: "WORK_STAGED",
+          currentSnapshot: snapshot("WAITING_ESTIMATE_CONFIRMATION"),
+        })
+      )
+    ).toBe("WAITING_ESTIMATE_CONFIRMATION")
+  })
+
+  it("uses only the latest owner status for a preserved historical inspection", () => {
+    expect(
+      inventorySessionStatus(
+        finding({
+          inspectionStatus: "WORK_STAGED",
+          preserveOperationalState: true,
+          currentSnapshot: snapshot("RENTED"),
+          inspectionBaseline: snapshot("REPAIR"),
+          expectedSnapshot: snapshot("FREE"),
+          repairCompletionMode: "MANUAL",
+          forceCapitalRepair: true,
+        })
+      )
+    ).toBe("RENTED")
+    expect(
+      inventorySessionStatus(
+        finding({
+          preserveOperationalState: true,
+          currentSnapshot: null,
+          inspectionBaseline: snapshot("REPAIR"),
+        })
+      )
+    ).toBeNull()
   })
 })

@@ -43,7 +43,7 @@ function inventoryFindingPrimaryStatus(
     ) {
       return { label: "Не найдено", variant: "destructive" }
     }
-    if (finding.lines.length > 0) {
+    if (finding.lines.length > 0 && !finding.preserveOperationalState) {
       return { label: "Направлено в ремонт", variant: "progress" }
     }
     return { label: "Проверено", variant: "success" }

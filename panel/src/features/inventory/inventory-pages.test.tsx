@@ -333,6 +333,7 @@ function finding(
     media: [],
     coverMediaId: null,
     inspectionSource: null,
+    preserveOperationalState: false,
     lines: [],
     repairCompletionMode: null,
     repairPriority: 3,
@@ -2273,6 +2274,10 @@ describe("InventoryHistoryDetailPage authoritative outcome recovery", () => {
     expect(
       within(dialog).getByText(/аренда, резерв, внутреннее перемещение/)
     ).toBeTruthy()
+    expect(
+      within(dialog).getByText(/Исторические осмотры с сохранением состояния/)
+        .textContent
+    ).toContain("не создадут повторные ремонты")
     expect(within(dialog).getByText(/Бытовка без работ/).textContent).toContain(
       "капитальном ремонте"
     )

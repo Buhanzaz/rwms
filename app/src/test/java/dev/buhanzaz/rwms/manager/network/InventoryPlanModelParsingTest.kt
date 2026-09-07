@@ -33,6 +33,7 @@ class InventoryPlanModelParsingTest {
                       "mutationState":"IDLE",
                       "comment":"Осмотрено",
                       "inspectionSource":"INVENTORY",
+                      "preserveOperationalState":false,
                       "coverMediaId":"44444444-4444-4444-4444-444444444444",
                       "frozenPlan":{
                         "mode":"MANUAL",
@@ -80,6 +81,7 @@ class InventoryPlanModelParsingTest {
         )
 
         assertThat(finding.inspectionSource).isEqualTo("INVENTORY")
+        assertThat(finding.preserveOperationalState).isFalse()
         assertThat(finding.coverMediaId)
             .isEqualTo("44444444-4444-4444-4444-444444444444")
         assertThat(finding.frozenPlan?.priority).isEqualTo(2)

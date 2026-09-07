@@ -136,7 +136,8 @@ export type InventoryFindingDto = {
   equipmentObservation: InventoryObservation
   media: Array<{ mediaId: string; generation: number }>
   coverMediaId: string | null
-  inspectionSource: "INVENTORY" | null
+  inspectionSource: "INVENTORY" | "LOGISTICS_RETURN" | null
+  preserveOperationalState: boolean
   lines: RepairEstimateLineDto[]
   repairCompletionMode: RepairEstimateCompletionMode | null
   repairPriority: RepairPriority

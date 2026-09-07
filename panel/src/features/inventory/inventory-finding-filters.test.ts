@@ -50,6 +50,7 @@ function finding(
     media: [],
     coverMediaId: null,
     inspectionSource: null,
+    preserveOperationalState: false,
     lines: [],
     repairCompletionMode: null,
     repairPriority: 3,

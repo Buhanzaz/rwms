@@ -59,6 +59,7 @@ import {
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type { InventoryFindingDto } from "@/features/inventory/model/inventory"
 import { ForceCapitalRepairField } from "@/features/repair-estimates/force-capital-repair-field"
+import { RentalItemStatusBadge } from "@/features/rental-items/rental-item-status-badge"
 import type {
   InventoryCollisionCandidate,
   InventoryFinalPlan,
@@ -285,6 +286,7 @@ function SortablePlanEntry({
   onOpenFinding: () => void
   onOpenCandidate: (candidate: InventoryCollisionCandidate) => void
 }) {
+  const preservesOperationalState = entry.dispositionKind === "PRESERVE"
   const {
     attributes,
     listeners,
@@ -292,7 +294,10 @@ function SortablePlanEntry({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: entry.findingId, disabled: pending })
+  } = useSortable({
+    id: entry.findingId,
+    disabled: pending || preservesOperationalState,
+  })
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -335,16 +340,18 @@ function SortablePlanEntry({
           <span>{cabinNumber}</span>
         </CardTitle>
         <CardDescription>
-          {entry.hasWork
-            ? targetKindLabel(entry.targetKind)
-            : "Осмотр без замечаний — запись остаётся только в истории инвентаризации."}
+          {preservesOperationalState
+            ? "Осмотр сохранится в истории; текущее состояние бытовки и прежние работы не изменяются."
+            : entry.hasWork
+              ? targetKindLabel(entry.targetKind)
+              : "Осмотр без замечаний — запись остаётся только в истории инвентаризации."}
         </CardDescription>
         <CardAction className="flex gap-1">
           <Button
             type="button"
             size="icon-sm"
             variant="outline"
-            disabled={pending || index === 0}
+            disabled={pending || preservesOperationalState || index === 0}
             aria-label={`Поднять бытовку ${cabinNumber}`}
             onClick={() => onMove(-1)}
           >
@@ -354,7 +361,9 @@ function SortablePlanEntry({
             type="button"
             size="icon-sm"
             variant="outline"
-            disabled={pending || index === total - 1}
+            disabled={
+              pending || preservesOperationalState || index === total - 1
+            }
             aria-label={`Опустить бытовку ${cabinNumber}`}
             onClick={() => onMove(1)}
           >
@@ -365,20 +374,36 @@ function SortablePlanEntry({
 
       <CardContent className="flex flex-col gap-6">
         <div className="flex flex-wrap gap-2">
-          <Badge variant={entry.hasWork ? "secondary" : "outline"}>
-            {entry.hasWork ? "Есть замечания" : "Без замечаний"}
+          <Badge
+            variant={
+              preservesOperationalState
+                ? "outline"
+                : entry.hasWork
+                  ? "secondary"
+                  : "outline"
+            }
+          >
+            {preservesOperationalState
+              ? "Без изменения состояния"
+              : entry.hasWork
+                ? "Есть замечания"
+                : "Без замечаний"}
           </Badge>
-          {entry.hasWork ? (
+          {entry.hasWork && !preservesOperationalState ? (
             <Badge>Из инвентаризации: новый ремонт</Badge>
           ) : null}
           {finding?.currentSnapshot?.status ? (
-            <Badge variant="outline">
-              Статус: {finding.currentSnapshot.status}
-            </Badge>
+            preservesOperationalState ? (
+              <RentalItemStatusBadge status={finding.currentSnapshot.status} />
+            ) : (
+              <Badge variant="outline">
+                Статус: {finding.currentSnapshot.status}
+              </Badge>
+            )
           ) : null}
         </div>
 
-        {entry.hasWork ? (
+        {entry.hasWork && !preservesOperationalState ? (
           <FieldGroup>
             <Field>
               <FieldLabel
@@ -503,7 +528,7 @@ function SortablePlanEntry({
           </FieldGroup>
         ) : null}
 
-        {activeCandidates.length > 0 ? (
+        {activeCandidates.length > 0 && !preservesOperationalState ? (
           <FieldSet>
             <FieldLegend variant="label">
               Сверка существующих заданий

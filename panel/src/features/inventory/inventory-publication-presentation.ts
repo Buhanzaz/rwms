@@ -28,7 +28,7 @@ const publicationLabel: Record<
 
 export function inventoryPublicationLabel(session: InventorySessionDto) {
   const workFindings = session.findings.filter(
-    (finding) => finding.lines.length > 0
+    (finding) => finding.lines.length > 0 && !finding.preserveOperationalState
   )
   if (
     session.publicationStatus === "FAILED" &&
@@ -49,7 +49,7 @@ export function inventoryPublicationNotice(
   session: InventorySessionDto
 ): InventoryPublicationNotice {
   const workFindings = session.findings.filter(
-    (finding) => finding.lines.length > 0
+    (finding) => finding.lines.length > 0 && !finding.preserveOperationalState
   )
   const published = workFindings.filter(
     (finding) => finding.publicationStatus === "PUBLISHED"
@@ -61,6 +61,12 @@ export function inventoryPublicationNotice(
     (finding) => finding.publicationStatus === "FAILED"
   ).length
 
+  if (workFindings.length === 0 && session.publicationStatus === "PUBLISHED") {
+    return {
+      kind: "success",
+      message: "Результаты опубликованы без создания новых ремонтов",
+    }
+  }
   if (session.publicationStatus === "PUBLISHED") {
     return { kind: "success", message: "Все работы переданы в ремонты" }
   }

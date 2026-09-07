@@ -342,6 +342,7 @@ export function toInventoryFindingView(
     inspectionSource:
       finding.inspectionSource ??
       (finding.inspection === "NOT_INSPECTED" ? null : "INVENTORY"),
+    preserveOperationalState: finding.preserveOperationalState,
     lines,
     repairCompletionMode: finding.frozenPlan?.mode ?? null,
     repairPriority: finding.frozenPlan?.priority ?? 3,

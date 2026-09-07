@@ -1579,7 +1579,10 @@ export function InventoryFinishPage() {
       showFurnitureReconciliationNotice(completed)
       if (
         completed.publicationStatus !== "NOT_REQUESTED" ||
-        completed.findings.some((finding) => finding.lines.length > 0)
+        completed.findings.some(
+          (finding) =>
+            finding.lines.length > 0 && !finding.preserveOperationalState
+        )
       ) {
         showPublicationNotice(completed)
       }
@@ -1768,7 +1771,7 @@ export function InventoryFinishPage() {
   )
   const unresolvedConflicts = conflictingFindings.length > 0
   const withWork = activeReviewSession.findings.filter(
-    (item) => item.lines.length > 0
+    (item) => item.lines.length > 0 && !item.preserveOperationalState
   )
   const repairMovementCount = inventoryRepairMovementCount(
     activeReviewSession.findings
@@ -2657,12 +2660,15 @@ export function InventoryHistoryDetailPage() {
                   Применить итоги завершённой инвентаризации?
                 </AlertDialogTitle>
                 <AlertDialogDescription>
-                  Завершённая инвентаризация станет текущей истиной. Активная
-                  аренда, резерв, внутреннее перемещение и прежняя привязка к
-                  ремонту могут быть заменены её результатом. Бытовка без работ
-                  станет свободной, с обычными работами — в ремонте, с
-                  принудительным капремонтом — в капитальном ремонте.
-                  Фотографии, доказательства и история сохраняются.
+                  Для применимых результатов завершённая инвентаризация станет
+                  текущей истиной. Активная аренда, резерв, внутреннее
+                  перемещение и прежняя привязка к ремонту могут быть заменены
+                  её результатом. Бытовка без работ станет свободной, с обычными
+                  работами — в ремонте, с принудительным капремонтом — в
+                  капитальном ремонте. Исторические осмотры с сохранением
+                  состояния не изменят текущий статус бытовки и не создадут
+                  повторные ремонты. Фотографии, доказательства и история
+                  сохраняются.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               {outcomeMutation.error ? (

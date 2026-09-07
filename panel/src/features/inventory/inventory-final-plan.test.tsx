@@ -135,6 +135,84 @@ afterAll(() => {
 afterEach(() => cleanup())
 
 describe("inventory final plan", () => {
+  it("renders a preserved departed inspection as history with no operational controls", async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn()
+    const preservedEntry: InventoryFinalPlan["entries"][number] = {
+      ...plan.entries[0],
+      planFingerprintSha256: "b".repeat(64),
+      targetKind: null,
+      hasWork: false,
+      priority: null,
+      movementToRepair: false,
+      movementScheduledDate: null,
+      repairScheduledDate: null,
+      collisionCandidates: [],
+      reconciliationDecision: null,
+      forceCapitalRepair: false,
+      dispositionKind: "PRESERVE",
+      dispositionDetails: {},
+    }
+    render(
+      <InventoryFinalPlanEditor
+        plan={{ ...plan, entries: [preservedEntry] }}
+        findings={[
+          {
+            ...findings[0],
+            currentSnapshot: { status: "RENTED" },
+            preserveOperationalState: true,
+          } as InventoryFindingDto,
+        ]}
+        pending={false}
+        error={null}
+        onDirtyChange={vi.fn()}
+        onOpenFinding={vi.fn()}
+        onOpenCandidate={vi.fn()}
+        onSave={onSave}
+      />
+    )
+
+    const card = screen.getByLabelText("Позиция 1, бытовка БЫТ-001")
+    expect(
+      within(card).getByText(
+        "Осмотр сохранится в истории; текущее состояние бытовки и прежние работы не изменяются."
+      )
+    ).toBeTruthy()
+    expect(within(card).getByText("Без изменения состояния")).toBeTruthy()
+    expect(within(card).getByText("Аренда")).toBeTruthy()
+    expect(
+      within(card).queryByText("Из инвентаризации: новый ремонт")
+    ).toBeNull()
+    expect(within(card).queryByRole("combobox")).toBeNull()
+    expect(within(card).queryByRole("checkbox")).toBeNull()
+    expect(
+      (
+        within(card).getByRole("button", {
+          name: "Поднять бытовку БЫТ-001",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true)
+
+    await user.click(
+      screen.getByRole("button", { name: "Сохранить итоговый план" })
+    )
+
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entries: [
+          expect.objectContaining({
+            findingId: FIRST_FINDING_ID,
+            priority: null,
+            movementToRepair: false,
+            movementScheduledDate: null,
+            repairScheduledDate: null,
+            reconciliationDecision: null,
+          }),
+        ],
+      })
+    )
+  })
+
   it("shows the full list and submits ordering, dates and an explicit replacement", async () => {
     const user = userEvent.setup()
     const onSave = vi.fn()

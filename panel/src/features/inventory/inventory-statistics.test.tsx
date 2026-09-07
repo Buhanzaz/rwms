@@ -31,6 +31,7 @@ function finding(
     media: [],
     coverMediaId: null,
     inspectionSource: "INVENTORY",
+    preserveOperationalState: false,
     lines: [
       {
         id: "work-1",
@@ -93,6 +94,21 @@ const statistics: InventoryStatisticsDto = {
 afterEach(cleanup)
 
 describe("InventoryStatistics", () => {
+  it("does not count an obsolete historical plan as a new repair movement", () => {
+    render(
+      <InventoryStatistics
+        statistics={statistics}
+        findings={[finding({ preserveOperationalState: true })]}
+      />
+    )
+
+    const movementCard = screen
+      .getByText("Перемещения на ремонт и вывозы")
+      .closest('[data-slot="card"]')
+    expect(movementCard).not.toBeNull()
+    expect(within(movementCard as HTMLElement).getByText("0")).toBeTruthy()
+  })
+
   it("counts a repair delivery and later removal as one movement", () => {
     render(
       <InventoryStatistics

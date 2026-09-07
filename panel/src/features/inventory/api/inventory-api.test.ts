@@ -121,6 +121,7 @@ const rawFinding = {
   media: [],
   coverMediaId: null,
   inspectionSource: null,
+  preserveOperationalState: false,
   publication: null,
 } satisfies InventoryFinding
 

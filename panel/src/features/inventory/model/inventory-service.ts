@@ -2,7 +2,8 @@ export type InventorySessionLifecycle = "ACTIVE" | "COMPLETED" | "CANCELLED"
 export type InventoryReviewStage = "CABINS" | "FURNITURE"
 export type InventoryCabinDispositionReviewPhase =
   "RETURNS" | "SHIPMENTS" | "COMPLETED"
-export type InventoryCabinDispositionKind = "LOCAL" | "SHIPMENT" | "WRITE_OFF"
+export type InventoryCabinDispositionKind =
+  "LOCAL" | "SHIPMENT" | "WRITE_OFF" | "PRESERVE"
 export type InventoryFurnitureReconciliationState =
   | "NOT_REQUIRED"
   | "READY"
@@ -295,7 +296,7 @@ export type InventoryPublicationIntent = {
   sourceRevision: number
   attemptCount: number
   maintenanceRepairId: string | null
-  desiredAssetStatus: InventoryAssetOutcomeStatus
+  desiredAssetStatus: InventoryAssetOutcomeStatus | null
   failureCode: string | null
 }
 
@@ -324,7 +325,8 @@ export type InventoryFinding = {
   frozenPlan: InventoryFrozenPlan | null
   media: InventoryMediaReference[]
   coverMediaId?: string | null
-  inspectionSource?: "INVENTORY" | null
+  inspectionSource: "INVENTORY" | "LOGISTICS_RETURN" | null
+  preserveOperationalState: boolean
   publication: InventoryPublicationIntent | null
 }
 

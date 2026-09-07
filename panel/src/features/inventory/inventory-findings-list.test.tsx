@@ -38,6 +38,7 @@ function finding(
     media: [],
     coverMediaId: null,
     inspectionSource: "INVENTORY",
+    preserveOperationalState: false,
     lines: [
       {
         id: `line-${id}`,
@@ -335,6 +336,68 @@ describe("inventory history publication presentation", () => {
     expect(screen.queryByText("В ремонте")).toBeNull()
   })
 
+  it("shows completed return inspections as checked with their current owner status", () => {
+    render(
+      <InventoryFindingsList
+        findings={[
+          finding("СПБ-1", "NOT_REQUIRED", {
+            inspectionStatus: "READY",
+            inspectionSource: "LOGISTICS_RETURN",
+            currentSnapshot: snapshot("СПБ-1", "FREE"),
+            lines: [],
+            repairCompletionMode: null,
+          }),
+          finding("СПБ-2", "NOT_REQUIRED", {
+            inspectionStatus: "WORK_STAGED",
+            inspectionSource: "LOGISTICS_RETURN",
+            currentSnapshot: snapshot("СПБ-2", "WAITING_ESTIMATE_CONFIRMATION"),
+            lines: [],
+            repairCompletionMode: null,
+          }),
+        ]}
+        canInspect
+        onOpen={vi.fn()}
+      />
+    )
+
+    expect(screen.getAllByText("Осмотр возврата")).toHaveLength(4)
+    expect(screen.getAllByText("Проверено")).toHaveLength(4)
+    expect(screen.getAllByText("Свободна")).toHaveLength(2)
+    expect(screen.getAllByText("Ожидает подтверждения сметы")).toHaveLength(2)
+  })
+
+  it("keeps a departed published inspection historical at the latest rented status", () => {
+    render(
+      <InventoryFindingsList
+        findings={[
+          finding("СПБ-1", "PUBLISHED", {
+            inspectionSource: "INVENTORY",
+            preserveOperationalState: true,
+            currentSnapshot: snapshot("СПБ-1", "RENTED"),
+            desiredAssetStatus: null,
+            publicationOperationKey: "publication-preserved",
+          }),
+        ]}
+        canInspect={false}
+        showPublication
+        statusMode="COMPLETION"
+        onOpen={vi.fn()}
+      />
+    )
+
+    expect(
+      screen.getAllByText("Осмотр до отгрузки; работы не применяются")
+    ).toHaveLength(2)
+    expect(screen.getAllByText("Проверено")).toHaveLength(2)
+    expect(screen.getAllByText("Аренда")).toHaveLength(2)
+    expect(
+      screen.getAllByText("Опубликовано без изменения состояния")
+    ).toHaveLength(2)
+    expect(screen.queryByText("Не применён")).toBeNull()
+    expect(screen.queryByText("Направлено в ремонт")).toBeNull()
+    expect(screen.queryByText("В ремонте")).toBeNull()
+  })
+
   it("renders localized per-finding statuses, task id, and publication error", () => {
     render(
       <InventoryFindingsList
@@ -397,6 +460,17 @@ describe("inventory history publication presentation", () => {
     expect(inventoryPublicationNotice(blocked)).toMatchObject({
       kind: "warning",
       message: expect.stringContaining("заблокирована конфликтами"),
+    })
+
+    const preserved = session("PUBLISHED", [
+      finding("СПБ-3", "PUBLISHED", {
+        preserveOperationalState: true,
+        desiredAssetStatus: null,
+      }),
+    ])
+    expect(inventoryPublicationNotice(preserved)).toEqual({
+      kind: "success",
+      message: "Результаты опубликованы без создания новых ремонтов",
     })
   })
 })

@@ -10,7 +10,9 @@ import type { RepairEstimateTaskPlanDto } from "@/features/repair-estimates/mode
  * independent movements in the completion summary.
  */
 export function inventoryRepairMovementCount(findings: InventoryFindingDto[]) {
-  return findings.filter((finding) => finding.movementToRepair).length
+  return findings.filter(
+    (finding) => finding.movementToRepair && !finding.preserveOperationalState
+  ).length
 }
 
 export function toInventoryRepairPlanSnapshot(

@@ -5,6 +5,9 @@ import type { RentalItemStatus } from "@/features/rental-items/model/rental-item
 export function inventorySessionStatus(
   finding: InventoryFindingDto
 ): RentalItemStatus | null {
+  if (finding.preserveOperationalState) {
+    return finding.currentSnapshot?.status ?? null
+  }
   if (finding.inspectionStatus === "READY") return "FREE"
   if (
     finding.inspectionStatus === "WORK_STAGED" &&

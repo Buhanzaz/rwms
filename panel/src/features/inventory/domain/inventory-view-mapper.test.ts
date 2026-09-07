@@ -147,6 +147,8 @@ const finding: InventoryFinding = {
       generation: 2,
     },
   ],
+  inspectionSource: "INVENTORY",
+  preserveOperationalState: false,
   publication: {
     id: "00000000-0000-4000-8000-000000000211",
     inventoryId: "00000000-0000-4000-8000-000000000202",
@@ -279,6 +281,8 @@ describe("inventory service view mapper", () => {
       movementToRepair: false,
       logisticsPlanningMode: "AUTO",
       logisticsScheduledDate: null,
+      inspectionSource: "INVENTORY",
+      preserveOperationalState: false,
       publicationStatus: "PUBLISHED",
       publishedRepairTaskId: "00000000-0000-4000-8000-000000000212",
       desiredAssetStatus: "CAPITAL_REPAIR",
@@ -306,6 +310,25 @@ describe("inventory service view mapper", () => {
           photoRequired: true,
         },
       ],
+    })
+  })
+
+  it("preserves return provenance and a history-only publication outcome", () => {
+    const result = toInventoryFindingView({
+      ...finding,
+      inspectionSource: "LOGISTICS_RETURN",
+      preserveOperationalState: true,
+      inspectionBaseline: null,
+      publication: finding.publication
+        ? { ...finding.publication, desiredAssetStatus: null }
+        : null,
+    })
+
+    expect(result).toMatchObject({
+      inspectionSource: "LOGISTICS_RETURN",
+      preserveOperationalState: true,
+      inspectionBaseline: null,
+      desiredAssetStatus: null,
     })
   })
 
