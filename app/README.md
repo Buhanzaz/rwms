@@ -303,6 +303,12 @@ An exact match durably completes only the inspection step; any pending idempoten
 still runs. Conflicting or unprovable results remain queued with an explicit recovery message,
 without overwriting server data. The same check also runs after a failed save or revision preflight.
 
+Inventory cards display the saved session result: `READY` is free, while a frozen
+`WORK_STAGED` plan is ordinary or capital repair according to its explicit capital-repair
+choice. This does not change warehouse status. When an upload leaves the active account,
+warehouse and inventory queue, Manager rereads the session and findings without a cached
+ETag; a pending upload is never presented as a saved inspection.
+
 The manager processes up to three cabin upload operations concurrently. Retries
 of the same scoped operation remain serialized, and final domain command reads
 and writes run one at a time to preserve shared inventory session fences.

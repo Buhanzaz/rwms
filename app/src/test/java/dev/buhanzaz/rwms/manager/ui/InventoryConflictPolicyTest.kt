@@ -3,6 +3,8 @@ package dev.buhanzaz.rwms.manager.ui
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.manager.network.InventoryCurrentSnapshotDto
 import dev.buhanzaz.rwms.manager.network.InventoryFindingDto
+import dev.buhanzaz.rwms.manager.network.InventoryFrozenPlanDto
+import dev.buhanzaz.rwms.manager.network.InventoryFrozenPlanLineDto
 import dev.buhanzaz.rwms.manager.network.ObservationDto
 import org.junit.Test
 
@@ -55,18 +57,46 @@ class InventoryConflictPolicyTest {
             InventorySemanticChange("Статус", "Свободная", "Ремонт"),
             InventorySemanticChange("Паспорт", "finishing: ДВП", "finishing: ОСБ"),
         ).inOrder()
-        assertThat(finding.inventoryBusinessStatus()).isEqualTo("REPAIR")
+        assertThat(finding.inventoryBusinessStatus()).isEqualTo("FREE")
+    }
+
+    @Test
+    fun `session status follows inspected no-work ordinary repair and capital repair outcomes`() {
+        val current = snapshot(version = 4, status = "WAREHOUSE")
+
+        assertThat(finding(current, current, inspection = "NOT_INSPECTED").inventoryBusinessStatus())
+            .isEqualTo("WAREHOUSE")
+        assertThat(finding(current, current, inspection = "READY").inventoryBusinessStatus())
+            .isEqualTo("FREE")
+        assertThat(
+            finding(
+                current,
+                current,
+                inspection = "WORK_STAGED",
+                frozenPlan = frozenPlan(),
+            ).inventoryBusinessStatus(),
+        ).isEqualTo("REPAIR")
+        assertThat(
+            finding(
+                current,
+                current,
+                inspection = "WORK_STAGED",
+                frozenPlan = frozenPlan(forceCapitalRepair = true),
+            ).inventoryBusinessStatus(),
+        ).isEqualTo("CAPITAL_REPAIR")
     }
 
     private fun finding(
         before: InventoryCurrentSnapshotDto,
         after: InventoryCurrentSnapshotDto,
+        inspection: String = "READY",
+        frozenPlan: InventoryFrozenPlanDto? = null,
     ) = InventoryFindingDto(
         id = "finding-1",
         inventoryId = "inventory-1",
         findingRevision = 3,
         origin = "EXPECTED",
-        inspection = "READY",
+        inspection = inspection,
         reconciliation = "CONFLICT",
         displayCanonicalNumber = "БЫТ-001",
         identityMatchKey = "БЫТ-001",
@@ -76,6 +106,26 @@ class InventoryConflictPolicyTest {
         comment = "",
         inspectionBaseline = before,
         currentSnapshot = after,
+        frozenPlan = frozenPlan,
+    )
+
+    private fun frozenPlan(forceCapitalRepair: Boolean = false) = InventoryFrozenPlanDto(
+        mode = "MANUAL",
+        catalogVersionId = "catalog-1",
+        fingerprintSha256 = "a".repeat(64),
+        forceCapitalRepair = forceCapitalRepair,
+        lines = listOf(
+            InventoryFrozenPlanLineDto(
+                id = "line-1",
+                sourceKind = "MANUAL",
+                lineType = "WORK",
+                description = "Ремонт",
+                unit = "шт",
+                quantity = "1",
+                unitPriceMinor = 0,
+                normativeMinutes = "1",
+            ),
+        ),
     )
 
     private fun snapshot(

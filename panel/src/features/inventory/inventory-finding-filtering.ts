@@ -3,6 +3,7 @@ import type {
   InventoryFindingOrigin,
   InventoryReconciliationStatus,
 } from "@/features/inventory/model/inventory"
+import { inventorySessionStatus } from "@/features/inventory/domain/inventory-session-status"
 import type { RentalItemStatus } from "@/features/rental-items/model/rental-item"
 
 type InventoryFindingInspectionFilter = "INSPECTED" | "NOT_INSPECTED"
@@ -32,10 +33,6 @@ export function createEmptyInventoryFindingFilters(): InventoryFindingFiltersSta
     presences: [],
     works: [],
   }
-}
-
-function getFindingStatus(finding: InventoryFindingDto) {
-  return finding.currentSnapshot?.status ?? finding.expectedSnapshot?.status
 }
 
 function includesInspection(
@@ -116,7 +113,7 @@ export function filterInventoryFindings(
   const number = filters.cabinNumber.trim().toLocaleLowerCase("ru-RU")
 
   return findings.filter((finding) => {
-    const status = getFindingStatus(finding)
+    const status = inventorySessionStatus(finding)
     const matchesNumber =
       number.length === 0 ||
       finding.cabinNumber.toLocaleLowerCase("ru-RU").includes(number) ||
@@ -127,7 +124,7 @@ export function filterInventoryFindings(
       (filters.origins.length === 0 ||
         filters.origins.includes(finding.origin)) &&
       (filters.statuses.length === 0 ||
-        (status !== undefined && filters.statuses.includes(status))) &&
+        (status !== null && filters.statuses.includes(status))) &&
       includesReconciliation(filters.reconciliations, finding) &&
       includesInspection(filters.inspections, finding) &&
       includesAddition(filters.additions, finding) &&

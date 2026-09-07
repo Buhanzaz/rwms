@@ -423,8 +423,12 @@ class ManagerViewModel(
 
     init {
         viewModelScope.launch {
+            var previousOperations = emptyList<BackgroundUploadOperation>()
             backgroundUploads.await().operations.collectLatest { operations ->
+                val previous = previousOperations
+                previousOperations = operations
                 mutableUploadOperations.value = operations
+                inventoryCoordinator.onBackgroundUploadOperationsChanged(previous, operations)
             }
         }
         viewModelScope.launch {

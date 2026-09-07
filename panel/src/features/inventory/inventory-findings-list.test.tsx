@@ -52,7 +52,7 @@ function finding(
         catalogSnapshot: null,
       },
     ],
-    repairCompletionMode: null,
+    repairCompletionMode: "MANUAL",
     repairPriority: 3,
     movementToRepair: false,
     logisticsPlanningMode: "AUTO",
@@ -276,7 +276,7 @@ describe("inventory history publication presentation", () => {
     expect(screen.queryByText("Капремонт")).toBeNull()
   })
 
-  it("keeps the active view based on the inspection snapshot", () => {
+  it("shows the staged repair status in the active session without claiming publication", () => {
     render(
       <InventoryFindingsList
         findings={[
@@ -292,10 +292,47 @@ describe("inventory history publication presentation", () => {
       />
     )
 
-    expect(screen.getAllByText("Текущий статус")).toHaveLength(2)
-    expect(screen.getAllByText("Аренда")).toHaveLength(2)
-    expect(screen.queryByText("В ремонте")).toBeNull()
+    expect(screen.getAllByText("Статус в сессии")).toHaveLength(2)
+    expect(screen.getAllByText("В ремонте")).toHaveLength(2)
+    expect(screen.queryByText("Аренда")).toBeNull()
     expect(screen.queryByText("Перемещение")).toBeNull()
+  })
+
+  it("immediately replaces the unchanged free snapshot with the saved session plan status", () => {
+    const initial = finding("СПБ-1", "NOT_REQUIRED", {
+      inspectionStatus: "NOT_INSPECTED",
+      currentSnapshot: snapshot("СПБ-1", "FREE"),
+      lines: [],
+      repairCompletionMode: null,
+      inspectionSource: null,
+    })
+    const { rerender } = render(
+      <InventoryFindingsList findings={[initial]} canInspect onOpen={vi.fn()} />
+    )
+
+    expect(screen.getAllByText("Свободна")).toHaveLength(2)
+
+    const saved = finding("СПБ-1", "NOT_REQUIRED", {
+      currentSnapshot: snapshot("СПБ-1", "FREE"),
+    })
+    rerender(
+      <InventoryFindingsList findings={[saved]} canInspect onOpen={vi.fn()} />
+    )
+
+    expect(screen.getAllByText("В ремонте")).toHaveLength(2)
+    expect(screen.queryByText("Свободна")).toBeNull()
+
+    rerender(
+      <InventoryFindingsList
+        findings={[{ ...saved, forceCapitalRepair: true }]}
+        canInspect
+        onOpen={vi.fn()}
+      />
+    )
+
+    expect(screen.getAllByText("Капремонт")).toHaveLength(2)
+    expect(screen.queryByText("Свободна")).toBeNull()
+    expect(screen.queryByText("В ремонте")).toBeNull()
   })
 
   it("renders localized per-finding statuses, task id, and publication error", () => {

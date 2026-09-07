@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.manager.ui
 
+import dev.buhanzaz.rwms.manager.auth.ManagerAuthState
 import dev.buhanzaz.rwms.manager.media.MediaOwner
 import dev.buhanzaz.rwms.manager.media.retryMediaReadAfterOwnerProof
 import dev.buhanzaz.rwms.manager.network.CatalogNodeDto
@@ -16,6 +17,7 @@ import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadArea
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadCoordinator
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadDraft
 import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadDraftScopeRegistry
+import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadOperation
 import dev.buhanzaz.rwms.manager.uploads.InventoryUploadCommand
 import dev.buhanzaz.rwms.manager.uploads.PendingBackgroundPhoto
 import dev.buhanzaz.rwms.manager.uploads.readyOwnerMediaReferencesById
@@ -122,6 +124,31 @@ internal class ManagerInventoryCoordinator(
 
     fun loadInventory() = command {
         refreshInventory()
+    }
+
+    /** Re-reads authoritative session evidence after a durable inventory upload leaves the queue. */
+    fun onBackgroundUploadOperationsChanged(
+        previous: List<BackgroundUploadOperation>,
+        current: List<BackgroundUploadOperation>,
+    ) {
+        val state = mutableState.value
+        val ownerAccountId = state.currentUser
+            ?.takeIf { state.authState == ManagerAuthState.SignedIn }
+            ?.id
+            ?: return
+        val inventoryId = state.inventorySession?.takeIf { it.lifecycle == "ACTIVE" }?.id ?: return
+        val warehouseId = state.selectedWarehouseId ?: return
+        if (
+            inventoryUploadRemovalRequiresRefresh(
+                previous,
+                current,
+                ownerAccountId,
+                inventoryId,
+                warehouseId,
+            )
+        ) {
+            command { refreshInventory(force = true) }
+        }
     }
 
     private fun persistCurrentDraft() {
@@ -1063,5 +1090,21 @@ internal class ManagerInventoryCoordinator(
                 current
             }
         }
+    }
+}
+
+internal fun inventoryUploadRemovalRequiresRefresh(
+    previous: List<BackgroundUploadOperation>,
+    current: List<BackgroundUploadOperation>,
+    ownerAccountId: String,
+    inventoryId: String,
+    warehouseId: String,
+): Boolean {
+    val currentIds = current.mapTo(mutableSetOf(), BackgroundUploadOperation::id)
+    return previous.any { operation ->
+        operation.id !in currentIds &&
+            operation.ownerAccountId == ownerAccountId &&
+            operation.warehouseId == warehouseId &&
+            operation.inventory?.inventoryId == inventoryId
     }
 }

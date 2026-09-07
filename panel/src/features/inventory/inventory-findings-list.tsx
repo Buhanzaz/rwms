@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { OperationsListGrid } from "@/components/operations-list-grid"
+import { inventorySessionStatus } from "@/features/inventory/domain/inventory-session-status"
 import type { InventoryFindingDto } from "@/features/inventory/model/inventory"
 import {
   InventoryFindingStatusBadge,
@@ -58,12 +59,6 @@ function FindingState({
   return <InventoryFindingStatusBadge finding={finding} mode={statusMode} />
 }
 
-function findingSnapshotStatus(finding: InventoryFindingDto) {
-  return (
-    finding.currentSnapshot?.status ?? finding.expectedSnapshot?.status ?? null
-  )
-}
-
 function findingAssetStatusSortValue(
   finding: InventoryFindingDto,
   statusMode: InventoryFindingStatusMode
@@ -78,7 +73,7 @@ function findingAssetStatusSortValue(
   if (statusMode === "COMPLETION" && finding.publicationOperationKey !== null) {
     return "NOT_APPLIED"
   }
-  return findingSnapshotStatus(finding) ?? ""
+  return inventorySessionStatus(finding) ?? ""
 }
 
 function FindingAssetStatus({
@@ -107,7 +102,7 @@ function FindingAssetStatus({
     return <Badge variant="secondary">Не применён</Badge>
   }
 
-  const status = findingSnapshotStatus(finding)
+  const status = inventorySessionStatus(finding)
   return status ? <RentalItemStatusBadge status={status} /> : "—"
 }
 
@@ -188,7 +183,7 @@ export function InventoryFindingsList({
               label:
                 statusMode === "COMPLETION"
                   ? "Статус по итогу"
-                  : "Текущий статус",
+                  : "Статус в сессии",
               className: "w-44",
               getSortValue: (finding) =>
                 findingAssetStatusSortValue(finding, statusMode),
@@ -249,7 +244,7 @@ export function InventoryFindingsList({
                 <dt className="text-muted-foreground">
                   {statusMode === "COMPLETION"
                     ? "Статус по итогу"
-                    : "Текущий статус"}
+                    : "Статус в сессии"}
                 </dt>
                 <dd>
                   <FindingAssetStatus

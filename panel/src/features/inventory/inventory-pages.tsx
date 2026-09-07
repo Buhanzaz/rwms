@@ -128,6 +128,7 @@ import {
   toInventoryRepairPlanSnapshot,
 } from "@/features/inventory/domain/inventory-domain"
 import { applyInventoryOutcomeRecalculation } from "@/features/inventory/domain/inventory-view-mapper"
+import { inventorySessionStatus } from "@/features/inventory/domain/inventory-session-status"
 import { formatMoneyDecimal } from "@/features/repair-estimates/domain/repair-estimate-domain"
 import type {
   InventoryFindingDto,
@@ -596,6 +597,7 @@ function FindingEditor({
     },
   })
   const snapshot = finding.currentSnapshot ?? finding.expectedSnapshot
+  const sessionStatus = inventorySessionStatus(finding)
   const inspectionSnapshot = finding.inspectionBaseline ?? snapshot
   const acceptsAfterRentWithoutEstimate =
     snapshot?.status === "AFTER_RENT" && lines.length === 0
@@ -687,7 +689,9 @@ function FindingEditor({
         warehouseId={session.warehouseId}
         findingId={finding.id}
         cabinNumber={finding.cabinNumber}
-        statusLabel={snapshot ? RENTAL_ITEM_STATUS_LABEL[snapshot.status] : "—"}
+        statusLabel={
+          sessionStatus ? RENTAL_ITEM_STATUS_LABEL[sessionStatus] : "—"
+        }
         tenant={snapshot?.tenant ?? null}
         businessDate={session.businessDate}
         comment={comment}

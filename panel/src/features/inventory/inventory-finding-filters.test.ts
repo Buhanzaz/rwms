@@ -72,6 +72,7 @@ describe("inventory finding filters", () => {
       origin: "ADDED_NEW",
       inspectionStatus: "WORK_STAGED",
       reconciliationStatus: "MATCHED",
+      repairCompletionMode: "MANUAL",
       currentSnapshot: {
         rentalItemId: "rental-007",
         number: "БЫТ-007",
@@ -99,7 +100,7 @@ describe("inventory finding filters", () => {
       ...createEmptyInventoryFindingFilters(),
       cabinNumber: "007",
       origins: ["ADDED_NEW"],
-      statuses: ["AFTER_RENT"],
+      statuses: ["REPAIR"],
       reconciliations: ["CONFLICT"],
       inspections: ["INSPECTED"],
       additions: ["ADDED"],
@@ -131,5 +132,34 @@ describe("inventory finding filters", () => {
     })
 
     expect(result).toEqual([missing])
+  })
+
+  it("filters inspected findings by their status inside the session", () => {
+    const ready = finding("015", {
+      inspectionStatus: "READY",
+      currentSnapshot: {
+        ...finding("015").currentSnapshot!,
+        status: "AFTER_RENT",
+      },
+    })
+    const capitalRepair = finding("016", {
+      inspectionStatus: "WORK_STAGED",
+      repairCompletionMode: "MANUAL",
+      lines: [{}] as InventoryFindingDto["lines"],
+      forceCapitalRepair: true,
+    })
+
+    expect(
+      filterInventoryFindings([ready, capitalRepair], {
+        ...createEmptyInventoryFindingFilters(),
+        statuses: ["FREE"],
+      })
+    ).toEqual([ready])
+    expect(
+      filterInventoryFindings([ready, capitalRepair], {
+        ...createEmptyInventoryFindingFilters(),
+        statuses: ["CAPITAL_REPAIR"],
+      })
+    ).toEqual([capitalRepair])
   })
 })

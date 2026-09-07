@@ -473,9 +473,14 @@ private fun formatInventoryRepairs(
 }.ifBlank { "Нет" }
 
 internal fun InventoryFindingDto.inventoryBusinessStatus(): String? =
-    currentSnapshot?.status
-        ?: inspectionBaseline?.status
-        ?: expectedSnapshot?.status
+    when {
+        inspection == "READY" -> "FREE"
+        inspection == "WORK_STAGED" && frozenPlan != null ->
+            if (frozenPlan.forceCapitalRepair) "CAPITAL_REPAIR" else "REPAIR"
+        else -> currentSnapshot?.status
+            ?: inspectionBaseline?.status
+            ?: expectedSnapshot?.status
+    }
 
 internal fun inventoryBusinessStatusLabel(value: String): String = when (value) {
     "BOOKED" -> "Забронирована"
