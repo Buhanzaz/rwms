@@ -33,6 +33,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useAuth } from "@/features/auth/use-auth"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { planningApi } from "./planning-api"
+import { MapSettingsCard } from "./map-settings-card"
 import {
   operationFields,
   optimizationFields,
@@ -107,6 +108,7 @@ export function PlanningSettingsPage() {
           </Select>
         </Field>
       </header>
+      <MapSettingsCard />
       <Separator />
       {error ? (
         <Alert variant="destructive">

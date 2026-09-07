@@ -54,6 +54,11 @@ Russian version: [README.ru.md](README.ru.md).
 
 ## Standalone administration
 
+- `/admin/logistics` also has a global map selector (Standard / Yandex Maps v3)
+  and a replaceable JavaScript API key, independent of the selected warehouse.
+  A blank key retains the saved value; the admin read never returns the key.
+  Saving checks the settings version and notifies open logistics tabs to reload
+  their map configuration. A conflict preserves the draft until explicit reload.
 - `/admin/logistics` edits the selected canonical warehouse's planning
   algorithm, contiguous one-to-twelve-hour tariffs and exceptional map policies.
   Representatives are selectable and keep their own configuration. Algorithm

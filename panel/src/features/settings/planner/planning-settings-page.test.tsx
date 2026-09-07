@@ -44,6 +44,9 @@ vi.mock("@/hooks/use-warehouse", () => ({
 vi.mock("./policy-zone-manager", () => ({
   default: () => <p>Редактор исключений</p>,
 }))
+vi.mock("./map-settings-card", () => ({
+  MapSettingsCard: () => <p>Глобальная карта логистики</p>,
+}))
 
 beforeEach(() => {
   state.token = "admin-token"
