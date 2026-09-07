@@ -12,6 +12,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import dev.buhanzaz.rwms.maintenance.api.CompletedReturnEstimateProofController;
+import dev.buhanzaz.rwms.maintenance.api.CompletedReturnEstimateProofResponse;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceCatalogController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceHistoricalShipmentController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.HistoricalShipmentClosureOutcome;
@@ -83,6 +85,7 @@ import dev.buhanzaz.rwms.maintenance.domain.RepairReclassificationState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStageKind;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStageState;
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
+import dev.buhanzaz.rwms.maintenance.service.CompletedReturnEstimateProofReader;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
 import dev.buhanzaz.rwms.maintenance.service.EstimateCreationWindowSettingsService;
 import dev.buhanzaz.rwms.maintenance.service.FurnitureEquipmentLinkReviewService;
@@ -158,12 +161,12 @@ class MaintenanceOpenApiParityTest {
   private static final List<OperationSpec> OPERATIONS = canonicalOperations();
 
   @Test
-  void allFiftyEightPathsAndSeventyOperationsExactlyMatchTheApprovedAcceptanceMatrix()
+  void allFiftyNinePathsAndSeventyOneOperationsExactlyMatchTheApprovedAcceptanceMatrix()
       throws Exception {
     Map<String, Object> document = openApi();
-    assertThat(child(document, "paths")).hasSize(58);
-    assertThat(openApiOperationCount(document)).isEqualTo(70);
-    assertThat(controllerOperations()).hasSize(70);
+    assertThat(child(document, "paths")).hasSize(59);
+    assertThat(openApiOperationCount(document)).isEqualTo(71);
+    assertThat(controllerOperations()).hasSize(71);
 
     for (OperationSpec expected : OPERATIONS) {
       assertOpenApiOperation(document, expected);
@@ -186,7 +189,8 @@ class MaintenanceOpenApiParityTest {
         "/api/internal/maintenance/v1/inventory/sources/{inventoryId}/findings/{findingId}",
         "/api/internal/maintenance/v1/inventory/reconciliations/preflight",
         "/api/internal/maintenance/v1/inventory/reconciliations/{inventoryId}/findings/{findingId}",
-        "/api/internal/maintenance/v1/inventory/outcomes/{inventoryId}/findings/{findingId}/no-work");
+        "/api/internal/maintenance/v1/inventory/outcomes/{inventoryId}/findings/{findingId}/no-work",
+        "/api/internal/maintenance/v1/inventory/return-estimates/{estimateId}");
     assertThat(inventoryPaths)
         .allMatch(path -> path.startsWith("/api/internal/maintenance/v1/inventory"))
         .noneMatch(path -> path.startsWith("/api/maintenance/"))
@@ -538,6 +542,8 @@ class MaintenanceOpenApiParityTest {
     InventoryPublicationReconciliationService publications = publicationsFixture();
     InventoryAuthoritativeOutcomeService authoritativeOutcomes =
         authoritativeOutcomesFixture();
+    CompletedReturnEstimateProofReader completedReturnEstimates =
+        mock(CompletedReturnEstimateProofReader.class);
     LogisticsReturnShortageService logistics = logisticsFixture();
     HistoricalShipmentRepairClosureService historicalShipmentClosures =
         mock(HistoricalShipmentRepairClosureService.class);
@@ -552,6 +558,21 @@ class MaintenanceOpenApiParityTest {
     FurnitureEquipmentLinkReviewService furnitureLinks = furnitureLinkReviewFixture();
     MaintenanceAuthorizer authorizer = mock(MaintenanceAuthorizer.class);
     when(authorizer.subjectId(null)).thenReturn(ID);
+    when(completedReturnEstimates.get(ID))
+        .thenReturn(
+            new CompletedReturnEstimateProofResponse(
+                ID,
+                1L,
+                1,
+                ID,
+                ID,
+                ID,
+                ID,
+                1L,
+                OffsetDateTime.parse("2026-09-07T10:00:00Z"),
+                OffsetDateTime.parse("2026-09-07T11:00:00Z"),
+                "EMPTY",
+                null));
     when(historicalShipmentClosures.close(any(), any(), any()))
         .thenReturn(
             new HistoricalShipmentRepairClosureService.CloseResult(
@@ -570,6 +591,7 @@ class MaintenanceOpenApiParityTest {
             new MaintenanceRepairController(service, authorizer, dispositions),
             new MaintenanceInventoryController(
                 inventory, publications, authoritativeOutcomes, service, authorizer),
+            new CompletedReturnEstimateProofController(completedReturnEstimates, authorizer),
             new PropertyDispositionController(dispositions, authorizer),
             new PropertyDispositionInventoryController(dispositions, authorizer),
             new WarehouseOperationMarkRecoveryController(operationMarkRecovery, authorizer),
@@ -593,6 +615,7 @@ class MaintenanceOpenApiParityTest {
           HttpMethod.valueOf(operation.httpMethod()), operation.path()
               .replace("{id}", ID.toString())
               .replace("{inventoryId}", ID.toString())
+              .replace("{estimateId}", ID.toString())
               .replace("{findingId}", ID.toString())
               .replace("{returnId}", ID.toString())
               .replace("{shipmentId}", ID.toString())
@@ -785,6 +808,18 @@ class MaintenanceOpenApiParityTest {
         "InventoryNoWorkOutcomeResult",
         true,
         "400", "401", "403", "404", "409", "422", "503"));
+    result.add(op("GET",
+        "/api/internal/maintenance/v1/inventory/return-estimates/{estimateId}",
+        "getCompletedReturnEstimateProof",
+        CompletedReturnEstimateProofController.class,
+        "get",
+        List.of(path("estimateId")),
+        null,
+        null,
+        "200",
+        "CompletedReturnEstimateProofResponse",
+        false,
+        "401", "403", "404", "409"));
     result.add(op("PUT",
         "/api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/estimate-source",
         "upsertLogisticsReturnEstimateSource", MaintenanceLogisticsController.class, "upsert",
@@ -1960,6 +1995,7 @@ class MaintenanceOpenApiParityTest {
   }
 
   private static String stringSample(String name) {
+    if ("completionKind".equals(name)) return "EMPTY";
     if (name.toLowerCase(Locale.ROOT).contains("sha256")
         || name.toLowerCase(Locale.ROOT).contains("fingerprint")) return "a".repeat(64);
     if (Set.of("unitPrice", "lineTotal", "total").contains(name)) return "12.00";
@@ -2028,6 +2064,9 @@ class MaintenanceOpenApiParityTest {
         HistoricalShipmentRepairClosureRequest.class,
         "HistoricalShipmentRepairClosureRequest");
     values.put(ReturnEstimateSource.class, "ReturnEstimateSource");
+    values.put(
+        CompletedReturnEstimateProofResponse.class,
+        "CompletedReturnEstimateProofResponse");
     values.put(TransferRepairRequest.class, "TransferRepairRequest");
     values.put(PrepareTransferRepairResponse.class, "PrepareTransferRepairResult");
     values.put(
@@ -2357,6 +2396,7 @@ class MaintenanceOpenApiParityTest {
         MaintenanceEstimateController.class,
         MaintenanceRepairController.class,
         MaintenanceInventoryController.class,
+        CompletedReturnEstimateProofController.class,
         MaintenanceLogisticsController.class,
         MaintenanceHistoricalShipmentController.class,
         MaintenanceTransferRepairController.class,

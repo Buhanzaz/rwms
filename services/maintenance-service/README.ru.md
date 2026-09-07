@@ -39,6 +39,14 @@
 - `/api/internal/maintenance/v1/logistics/**` обслуживает оркестрацию смет возврата и
   ремонтных мест для logistics.
 
+Inventory-service может читать
+`GET /api/internal/maintenance/v1/inventory/return-estimates/{estimateId}` только со своим точным
+service principal и единственным scope `maintenance.inventory`. Read-only ответ доказывает, что
+смета строки возврата logistics находится в `COMPLETED`, содержит ненулевое время физического
+прибытия, а её склад/бытовка и порядок source/completion согласованы. Ответ содержит только identity
+строки возврата, версии сметы и asset snapshot, completion kind и необязательный repair ID; строки
+сметы, media и паспортные данные не копируются, новая maintenance work не создаётся.
+
 В этой logistics boundary точная private-команда
 `historical-shipments/{shipmentId}/close` позволяет только logistics-service подготовить
 импортированную отгрузку аренды. Maintenance сначала фиксирует durable shipment audit identity и

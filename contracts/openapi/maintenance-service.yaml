@@ -418,6 +418,24 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationFailure' }
         '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/internal/maintenance/v1/inventory/return-estimates/{estimateId}:
+    parameters:
+      - { name: estimateId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Inventory Integration]
+      operationId: getCompletedReturnEstimateProof
+      description: >-
+        Private read-only proof boundary. Requires principal_type=SERVICE,
+        sub=client_id=inventory-service, audience rwms-services and exactly the
+        maintenance.inventory scope. Returns only a COMPLETED estimate linked to
+        one immutable logistics return line with a proven physical arrival time.
+        No estimate rows, media, passport data or work commands are exposed.
+      responses:
+        '200': { description: Verified completed return-estimate proof., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CompletedReturnEstimateProofResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/estimate-source:
     parameters:
       - { name: returnId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -1462,6 +1480,8 @@ components:
             - MAINTENANCE_VALIDATION_FAILED
             - ESTIMATE_CREATION_WINDOW_EXPIRED
             - MAINTENANCE_NOT_FOUND
+            - INCOMPLETE_ESTIMATE
+            - RETURN_ESTIMATE_PROOF_CONFLICT
             - MAINTENANCE_VERSION_CONFLICT
             - MAINTENANCE_IDEMPOTENCY_CONFLICT
             - MAINTENANCE_STATE_CONFLICT
@@ -3282,6 +3302,24 @@ components:
         estimateId: { type: string, format: uuid }
         snapshotSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
         receivedAt: { type: string, format: date-time }
+    CompletedReturnEstimateProofResponse:
+      type: object
+      additionalProperties: false
+      required: [estimateId, estimateVersion, estimateRevision, returnId, lineId, warehouseId, assetId, assetVersion, arrivedAt, completedAt, completionKind, repairId]
+      properties:
+        estimateId: { type: string, format: uuid }
+        estimateVersion: { type: integer, format: int64, minimum: 0 }
+        estimateRevision: { type: integer, format: int32, minimum: 1 }
+        returnId: { type: string, format: uuid }
+        lineId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        assetId: { type: string, format: uuid }
+        assetVersion: { type: integer, format: int64, minimum: 0 }
+        arrivedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+        completionKind: { type: string, enum: [EMPTY, NON_EMPTY] }
+        repairId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
     HistoricalShipmentRepairClosureRequest:
       type: object
       additionalProperties: false

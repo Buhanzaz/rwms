@@ -38,6 +38,14 @@ Private routes are narrow by design:
 - `/api/internal/maintenance/v1/logistics/**` supports logistics return-estimate and
   repair-place orchestration.
 
+Inventory-service may read
+`GET /api/internal/maintenance/v1/inventory/return-estimates/{estimateId}` only with its exact
+service principal and sole `maintenance.inventory` scope. The read-only response proves that a
+logistics return-line estimate is `COMPLETED`, retains a non-null physical arrival time, and has
+matching warehouse/cabin ownership and valid source/completion ordering. It exposes only the
+return-line identity, estimate and asset-snapshot versions, completion kind and optional repair ID;
+it does not copy estimate rows, media or passport data and creates no maintenance work.
+
 Within that logistics boundary, the exact private
 `historical-shipments/{shipmentId}/close` command lets only logistics-service prepare an imported
 rental shipment. Maintenance first records the durable shipment audit identity and comment
