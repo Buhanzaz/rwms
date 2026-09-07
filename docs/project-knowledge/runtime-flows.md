@@ -224,11 +224,22 @@ eligible USER account and live warehouse grants. It then selects a visible
 warehouse, activates that exact account-and-warehouse upload/catalog partition,
 restores its encrypted cache, and resumes only its pending work. Before logout,
 a replacement login or warehouse rebinding, it hides the queue, cancels and
-joins WorkManager, and waits for the worker's authentication snapshot to close.
+joins WorkManager, and waits for every worker's authentication snapshot to close.
 Each resumed worker performs a fresh `/me` check against its immutable owner and
 all warehouse IDs retained by its command or media before any side effect.
 Ownerless legacy state remains quarantined and is never adopted by the current
 session.
+
+Manager background uploads admit three cabin operations concurrently, while all
+uploaders share one image preparation slot, four logical photo transfers and six
+variant PUT streams. A batch bounds its own pending transfers so one large cabin
+does not queue all its photos ahead of the other cabins. Retries of the same
+account/warehouse operation remain exclusive; final command preflight and writes
+are serialized to preserve shared inventory session revisions. Queue schema 2,
+original file paths, accepted references and idempotency identities are retained.
+Logout drains both running workers and permit waiters before replacing the session.
+Bounded owner-proof retry exhaustion exposes a fixed recovery message and leaves
+the persisted upload available for an explicit retry.
 
 For a manager request rejected with `401`, the client submits the rejected
 access token to one mutex-serialized refresh. A valid newer token persisted by

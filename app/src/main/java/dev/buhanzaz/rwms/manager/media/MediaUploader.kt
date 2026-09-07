@@ -39,10 +39,6 @@ class MediaUploader private constructor(
     private val api: RwmsApi,
     private val payloadLoader: (String) -> MediaUploadPayload,
 ) {
-    private val encodingPermits = Semaphore(IMAGE_ENCODING_PARALLELISM)
-    private val uploadPermits = Semaphore(MEDIA_UPLOAD_PARALLELISM)
-    private val variantUploadPermits = Semaphore(IMAGE_VARIANT_UPLOAD_PARALLELISM)
-
     internal constructor(
         api: RwmsApi,
         payloadReader: PhotoPayloadReader,
@@ -278,7 +274,20 @@ class MediaUploader private constructor(
         if (failure is CancellationException) throw failure
         null
     }
+
+    private companion object {
+        // Every cabin worker has its own uploader; memory and uplink limits cover the whole process.
+        val encodingPermits = Semaphore(IMAGE_ENCODING_PARALLELISM)
+        val uploadPermits = Semaphore(MEDIA_UPLOAD_PARALLELISM)
+        val variantUploadPermits = Semaphore(IMAGE_VARIANT_UPLOAD_PARALLELISM)
+    }
 }
+
+/** Carries the fixed recovery message after bounded media owner-proof/transport retries expire. */
+internal class MediaOwnerRetryExhaustedException(
+    val userMessage: String,
+    cause: Throwable,
+) : IllegalStateException(userMessage, cause)
 
 /**
  * Executes the expensive upload transport with a small bounded parallelism, but exposes an
@@ -314,11 +323,16 @@ internal suspend fun <Input, Accepted, Output> uploadAcceptedBoundedParallelOrde
     onReady: suspend (Input, Output) -> Unit,
 ): List<Output> {
     require(parallelism > 0) { "Параллелизм загрузки должен быть положительным" }
+    val batchPermits = Semaphore(parallelism)
     return supervisorScope {
         val uploads = inputs.map { input ->
             async {
                 try {
-                    val accepted = permits.withPermit { accept(input) }
+                    // Queue only a bounded portion of this batch on the shared transport limit,
+                    // allowing other cabins to send photos before a large batch has drained.
+                    val accepted = batchPermits.withPermit {
+                        permits.withPermit { accept(input) }
+                    }
                     Result.success(complete(input, accepted))
                 } catch (cancelled: CancellationException) {
                     throw cancelled
@@ -444,7 +458,7 @@ private suspend fun <T> retryMediaOperationAfterOwnerProof(
             return operation()
         } catch (error: IOException) {
             if (failureCount >= OWNER_PROOF_MAX_RETRIES) {
-                throw IllegalStateException(exhaustedMessage, error)
+                throw MediaOwnerRetryExhaustedException(exhaustedMessage, error)
             }
             delay(ownerProofRetryDelayMillis(failureCount))
         } catch (error: HttpException) {
@@ -452,7 +466,7 @@ private suspend fun <T> retryMediaOperationAfterOwnerProof(
                 throw error
             }
             if (failureCount >= OWNER_PROOF_MAX_RETRIES) {
-                throw IllegalStateException(exhaustedMessage, error)
+                throw MediaOwnerRetryExhaustedException(exhaustedMessage, error)
             }
             delay(ownerProofRetryDelayMillis(failureCount))
         }

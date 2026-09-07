@@ -5,6 +5,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import dev.buhanzaz.rwms.manager.BuildConfig
 import dev.buhanzaz.rwms.manager.media.MediaOwner
+import dev.buhanzaz.rwms.manager.media.MediaOwnerRetryExhaustedException
 import dev.buhanzaz.rwms.manager.media.MediaUploader
 import dev.buhanzaz.rwms.manager.media.PhotoPayloadReader
 import dev.buhanzaz.rwms.manager.media.problemCode
@@ -55,28 +56,29 @@ class BackgroundUploadWorker(
     private var executionScope: BackgroundUploadScope? = null
 
     override suspend fun doWork(): Result {
-        store.initialize()
-        return operationPermit.withPermit {
-            try {
-                executeOperation()
-            } finally {
-                // Logout acquires the same permit after cancellation, so this snapshot is closed
-                // before another principal can become active.
-                backend.auth.close()
-            }
+        val operationId = inputData.getString(INPUT_OPERATION_ID)
+        val ownerAccountId = inputData.getString(INPUT_OWNER_ACCOUNT_ID)
+        val warehouseId = inputData.getString(INPUT_WAREHOUSE_ID)
+        if (operationId == null || ownerAccountId == null || warehouseId == null) {
+            backend.auth.close()
+            return Result.failure()
+        }
+        val scope = runCatching {
+            BackgroundUploadScope(ownerAccountId, warehouseId)
+        }.getOrElse {
+            backend.auth.close()
+            return Result.failure()
+        }
+        return executionGate.execute(scope, operationId, onFinished = backend.auth::close) {
+            store.initialize()
+            executeOperation(scope, operationId)
         }
     }
 
-    private suspend fun executeOperation(): Result {
-        val operationId = inputData.getString(INPUT_OPERATION_ID)
-            ?: return Result.failure()
-        val ownerAccountId = inputData.getString(INPUT_OWNER_ACCOUNT_ID)
-            ?: return Result.failure()
-        val warehouseId = inputData.getString(INPUT_WAREHOUSE_ID)
-            ?: return Result.failure()
-        val scope = runCatching {
-            BackgroundUploadScope(ownerAccountId, warehouseId)
-        }.getOrElse { return Result.failure() }
+    private suspend fun executeOperation(
+        scope: BackgroundUploadScope,
+        operationId: String,
+    ): Result {
         executionScope = scope
         val selectedPhotoId = inputData.getString(INPUT_PHOTO_ID)
         val operation = store.operation(scope, operationId) ?: return Result.success()
@@ -101,8 +103,10 @@ class BackgroundUploadWorker(
                 }
                 return Result.success()
             }
-            finalizeOperation(afterPhotos)
-            store.remove(scope, operation.id)
+            executionGate.finalize {
+                finalizeOperation(afterPhotos)
+                store.remove(scope, operation.id)
+            }
             Result.success()
         } catch (cancelled: CancellationException) {
             store.update(scope, operation.id) { current ->
@@ -751,27 +755,41 @@ class BackgroundUploadWorker(
     private fun BackgroundUploadOperation.coverMediaId(): String? =
         photos.firstOrNull(BackgroundUploadPhoto::cover)?.reference?.mediaId
 
-    private fun failureMessage(failure: Throwable): String = when (failure) {
-        is HttpException -> backend.problemMessage(failure)
-        is IOException -> "Нет соединения. Загрузка сохранена — проверьте интернет и повторите отправку."
-        else -> "Не удалось отправить данные. Загрузка сохранена — повторите отправку позже."
-    }
+    private fun failureMessage(failure: Throwable): String =
+        backgroundUploadFailureMessage(failure, backend::problemMessage)
 
     companion object {
         private const val UNACCOUNTED_FURNITURE_CONFIRMATION_REQUIRED =
             "MAINTENANCE_UNACCOUNTED_FURNITURE_CONFIRMATION_REQUIRED"
-        private val operationPermit = Semaphore(1)
+        private val executionGate = BackgroundUploadExecutionGate()
         const val INPUT_OPERATION_ID = "operation_id"
         const val INPUT_OWNER_ACCOUNT_ID = "owner_account_id"
         const val INPUT_WAREHOUSE_ID = "warehouse_id"
         const val INPUT_PHOTO_ID = "photo_id"
         const val WORK_TAG = "rwms-background-uploads"
 
-        /** Waits until the running worker has closed its account-bound authentication snapshot. */
+        /** Waits until every running or queued worker has closed its authentication snapshot. */
         internal suspend fun awaitIdle() {
-            operationPermit.withPermit { }
+            executionGate.awaitIdle()
+        }
+
+        /** Joins only the cancelled operation, preserving progress of other cabin uploads. */
+        internal suspend fun awaitOperationIdle(scope: BackgroundUploadScope, operationId: String) {
+            executionGate.awaitOperationIdle(scope, operationId)
         }
     }
+}
+
+/** Exposes only fixed recovery messages and mapped Problem Details, never arbitrary exception text. */
+internal fun backgroundUploadFailureMessage(
+    failure: Throwable,
+    problemMessage: (HttpException) -> String,
+): String = when (failure) {
+    is MediaOwnerRetryExhaustedException ->
+        "${failure.userMessage}. Фотографии сохранены в очереди."
+    is HttpException -> problemMessage(failure)
+    is IOException -> "Нет соединения. Загрузка сохранена — проверьте интернет и повторите отправку."
+    else -> "Не удалось отправить данные. Загрузка сохранена — повторите отправку позже."
 }
 
 /**

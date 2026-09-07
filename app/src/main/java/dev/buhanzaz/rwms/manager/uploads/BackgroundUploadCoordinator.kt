@@ -242,7 +242,7 @@ class BackgroundUploadCoordinator(
             val scope = requireActiveScope()
             if (store.operation(scope, operationId) == null) return@withLock
             workManager.cancelUniqueWork(workName(scope, operationId)).result.get()
-            BackgroundUploadWorker.awaitIdle()
+            BackgroundUploadWorker.awaitOperationIdle(scope, operationId)
             store.remove(scope, operationId)
         }
     }

@@ -286,13 +286,20 @@ performs one more read/rebase/save cycle. Both passes are allowed only for
 creation, or saved/repeated inspection stays fail-closed and cannot be
 overwritten by a queued retry.
 
-The manager starts at most four logical byte-heavy media uploads at once and
-preserves their source order. Image bundles additionally share a global limit
+The manager processes up to three cabin upload operations concurrently. Retries
+of the same scoped operation remain serialized, and final domain command reads
+and writes run one at a time to preserve shared inventory session fences.
+All workers share one image-encoding slot and at most four logical byte-heavy
+media uploads at once, preserving each batch's source order. Each batch queues
+only a bounded number of photos on that shared limit so other cabins can send
+before a large batch finishes. Image bundles additionally share a global limit
 of six concurrent part PUTs, so the three parts of one photo can transfer in
 parallel without unbounded fan-out across photos. Once a
 create/upload/finalize sequence is accepted, its READY polling no longer
 occupies a logical upload permit, so later files can use the uplink while the
 earlier media projection becomes visible.
+Exhausted media owner-proof retries display the specific recovery message and
+confirm that the photos remain in the queue; internal exception text stays hidden.
 
 The workspace resolves authoritative `/me`, eligible role, live warehouse
 grants, and the selected warehouse before it exposes or resumes durable work.
@@ -300,8 +307,8 @@ Queue listing, retry, cancellation, originals, WorkManager input/tags, and
 unique work names all carry the same account-and-warehouse scope. A worker
 checks `/me` against that immutable owner and every warehouse retained by its
 command/media before its first side effect. Logout and warehouse replacement
-cancel and join running upload work, including closure of the worker's auth
-snapshot, before the OAuth session can be cleared or replaced.
+cancel and join all running and waiting upload work, including closure of each
+worker's auth snapshot, before the OAuth session can be cleared or replaced.
 
 Use the contract-defined `expectedVersion`, ETag, or other fencing token for a
 mutable command, and the contract-defined idempotency key or stable external ID

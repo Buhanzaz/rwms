@@ -25,6 +25,49 @@ import retrofit2.Response
 @RunWith(JUnit4::class)
 class MediaUploaderRetryTest {
     @Test
+    fun `a large cabin batch lets another cabin send before its own remaining photos`() = runTest {
+        val permits = Semaphore(MEDIA_UPLOAD_PARALLELISM)
+        val releaseFirstWave = CompletableDeferred<Unit>()
+        val releaseOtherCabin = CompletableDeferred<Unit>()
+        val started = mutableListOf<String>()
+        val largeBatch = async {
+            uploadBoundedParallelOrdered(
+                inputs = (0..11).toList(),
+                permits = permits,
+                upload = { index ->
+                    started += "large-$index"
+                    if (index < MEDIA_UPLOAD_PARALLELISM) releaseFirstWave.await()
+                    index
+                },
+                onReady = { _, _ -> },
+            )
+        }
+        val otherCabin = async {
+            uploadBoundedParallelOrdered(
+                inputs = listOf("other"),
+                permits = permits,
+                upload = { value ->
+                    started += value
+                    releaseOtherCabin.await()
+                    value
+                },
+                onReady = { _, _ -> },
+            )
+        }
+        runCurrent()
+        assertThat(started).containsExactly("large-0", "large-1", "large-2", "large-3").inOrder()
+
+        releaseFirstWave.complete(Unit)
+        runCurrent()
+
+        assertThat(started).contains("other")
+        assertThat(started.indexOf("other")).isLessThan(started.indexOf("large-4"))
+        releaseOtherCabin.complete(Unit)
+        assertThat(largeBatch.await()).containsExactlyElementsIn((0..11).toList()).inOrder()
+        assertThat(otherCabin.await()).containsExactly("other")
+    }
+
+    @Test
     fun `parallel owner batches share one bounded upload transport limit`() = runTest {
         val permits = Semaphore(MEDIA_UPLOAD_PARALLELISM)
         val release = CompletableDeferred<Unit>()
@@ -435,7 +478,7 @@ class MediaUploaderRetryTest {
             }
         }.exceptionOrNull()
 
-        assertThat(failure).isInstanceOf(IllegalStateException::class.java)
+        assertThat(failure).isInstanceOf(MediaOwnerRetryExhaustedException::class.java)
         assertThat(failure?.message).isEqualTo(MEDIA_OWNER_RETRY_EXHAUSTED_MESSAGE)
         assertThat(attempts).isEqualTo(9)
     }
